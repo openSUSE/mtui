@@ -13,7 +13,7 @@ while (<FH>) {
         ($checksum, $srcrpm) = ($2, $3);
     }
     else {
-        if (not $package =~ /gpg-pubkey/) {
+        if (not $package =~ /^gpg-pubkey/) {
             print STDERR "WARNING: unable to decompose DISTURL \"$disturl\" from package \"$package\" ... skipped\n";
         }
         next;
