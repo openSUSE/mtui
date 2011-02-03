@@ -1,18 +1,27 @@
 #!/usr/bin/perl -w
-# need to test on
-# - 10 SP2: dax
-# - openSUSE 11.3: boxer
-# - ia64, s390x and ppc (any sle10 and sle11 and sle11sp1): 3 tests on refhosts
+#
+# check for valid VENDOR and DISTURL in installed rpm packages
+# rommel@suse.de 2011-02-03
+#
+# tested and supported products;
+# - SLES9 SP3 - SP4
+# - SLE10 SP1 - SP3
+# - SLE11 GA - SP1
 # - SLES4VMware
+# - openSUSE 11.1 - 11.3
+#
 
 use strict;
 
 my %valid_vendors = (
     "SLE" => [
-         "SUSE LINUX Products GmbH, Nuernberg, Germany"
+         "SUSE LINUX Products GmbH, Nuernberg, Germany",
+         "SuSE Linux AG, Nuernberg, Germany",
+         "IBM Corp.", # specific to ppc(64) on all SLE products
     ],
     "openSUSE" => [
-          "openSUSE",
+         "openSUSE",
+         "obs://build.suse.de/home:sndirsch:drivers",
     ],
 );
 
@@ -22,6 +31,7 @@ my %valid_disturls = (
          "obs://build.suse.de/SUSE:SLE-11:GA:Products:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA/standard/",
+         "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:Products:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:UU-DUD/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/SLE_[0-9]+_SP[0-9]+_Update/",
@@ -31,6 +41,7 @@ my %valid_disturls = (
          # obs://build.suse.de/SUSE:SLE-11:GA:Products:Test/standard/
          # obs://build.suse.de/SUSE:SLE-11:Update:Test/standard/
          # obs://build.suse.de/SUSE:SLE-11-SP1:GA/standard/
+         # obs://build.suse.de/SUSE:SLE-11-SP1:GA:Products:Test/standard/
          # obs://build.suse.de/SUSE:SLE-11-SP1:GA:UU-DUD/standard/
          # obs://build.suse.de/SUSE:SLE-11-SP1:Update:Test/standard/
          # obs://build.suse.de/SUSE:SLE-10-SP3:GA/SLE_10_SP2_Update/
@@ -40,16 +51,21 @@ my %valid_disturls = (
     "openSUSE" => [
          "obs://build.opensuse.org/openSUSE:[0-9.]+/standard/",
          "obs://build.opensuse.org/openSUSE:[0-9.]+:Update:Test/standard/",
+         "obs://build.opensuse.org/openSUSE:[0-9.]+:NonFree/standard/",
+         "obs://build.suse.de/home:sndirsch:drivers/openSUSE_[0-9.]+/",
+         "obs://build.suse.de/SUSE:openSUSE:11.1:Update:Test/standard/",
+         "srcrep:[0-9a-f]{32,}-",
          # obs://build.opensuse.org/openSUSE:11.2/standard/
          # obs://build.opensuse.org/openSUSE:11.2:Update:Test/standard/
+         # obs://build.opensuse.org/openSUSE:11.3:NonFree/standard/
+         # obs://build.suse.de/home:sndirsch:drivers/openSUSE_11.3/
+         # obs://build.suse.de/SUSE:openSUSE:11.1:Update:Test/standard/
+         # srcrep:1e79d7e8a1e89516f0d4ce57ecf3d01a-zlib
     ],
 );
 
-my $is_sle = 0;
-my $is_opensuse = 0;
-my $productclass = undef;
-
 my @sle_checks = (
+                   "test -d /var/adm/YaST/ProdDB && grep \"SUSE SLES Version 9\" /var/adm/YaST/ProdDB/prod_\*",
                    "test -x /usr/lib\*/zmd/query-pool && /usr/lib\*/zmd/query-pool products \@system | grep SUSE_SLE",
                    "test -x /usr/bin/zypper && /usr/bin/zypper search -t product --installed-only | grep SUSE_SLE",
 );
@@ -58,27 +74,25 @@ my @opensuse_checks = (
                        "test -x /usr/bin/zypper && /usr/bin/zypper search -t product --installed-only | grep openSUSE"
 );
 
+my $productclass = undef;
+
 foreach my $check (@sle_checks) {
-    my $result = `$check`;
-    if ($result =~ /\S+/) {
+    if ( `$check` =~ /\S+/) {
         $productclass = "SLE";
-        $is_sle = 1;
         last;
     }
 }
 
-if ($is_sle == 0) {
+if (not defined $productclass) {
     foreach my $check (@opensuse_checks) {
-        my $result = `$check`;
-        if ($result =~ /\S+/) {
+        if ( `$check` =~ /\S+/) {
             $productclass = "openSUSE";
-            $is_opensuse = 1;
             last;
         }
     }
 }
 
-if ($is_opensuse + $is_sle == 0) {
+if (not defined $productclass) {
    print STDERR "ERROR: detected none of openSUSE and SLE products being installed ... aborting.\n";
    exit 1;
 }
