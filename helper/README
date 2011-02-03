@@ -1,0 +1,42 @@
+
+This directory contains helper programs/additional checks that are used by the 
+Maintenance Test Update Installer.
+
+Each helper falls into exactly one of the following categories:
+
+1) to be run before and after the update
+
+These helpers look for errors in an installed system and print errors to STDERR
+and warnings and info to STDOUT (when executed by mtui STDERR and STDOUT are
+captured in the caller's current directory as *.err and *.out).
+
+The return status is undefined.
+
+A good example for such a helper is ./check_from_same_srcrpm.pl.
+
+Since some errors will always be present in a system (not fixed on purpose, fixed
+by a future update etc). these helpers should be executed before and after
+applying the update.
+ 
+2) to be run on output gathered from helpers from category 1
+
+These helpers take the output of helpers from category 1 before and after
+applying an update and look for both new errors and gone errors.
+New errors are reported on STDERR.
+Gone errors are reported on STDOUT.
+
+The return status is undefined.
+
+A good example for such a helper is ./compare_from_same_srcrpm.sh.
+
+FAQ:
+
+Q: What if I only want a script that is executed after an update ?
+A: This is a category 1 script. If executed under the control of mtui then
+   configure mtui to only run it after the update.
+
+Q: Which helpers are planned/not implemented yet?
+A: a) gathering and diffing the update of 'rpm -Va' (category 1 and 2)
+   b) inspecting the zypper install log for errors (category 1)
+
+EOF
