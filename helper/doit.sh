@@ -1,11 +1,15 @@
 #!/bin/bash
 
+usage="${0##*/} ( before | after ) <result dir>"
+
 mode="$1"
 resultdir="$2"
 
-usage="${0##*/} ( before | after ) <result dir>"
 category1="check_all_updated.pl check_from_same_srcrpm.pl check_vendor_and_disturl.pl"
 category2="comare_vendor_and_disturl.pl compare_all_updated.sh compare_from_same_srcrpm.sh"
+
+mydir="${0%/*}"
+PATH="$PATH:$mydir"
 
 if [ -z "$mode" -o -z "$resultdir" ]; then
     echo "$usage"
@@ -20,7 +24,7 @@ case "$mode" in
           progname=${helper##*/}
           echo "launching $progname"
           if [ "$progname" = "check_all_updated.pl" ]; then helper="$helper --installed"; fi
-          ./$helper 2> $resultdir/$progname.before.error > $resultdir/$progname.before.out
+          $helper 2> $resultdir/$progname.before.error > $resultdir/$progname.before.out
        done
        ;;
     after)
@@ -28,12 +32,12 @@ case "$mode" in
           progname=${helper##*/}
           echo "launching $progname"
           if [ "$progname" = "check_all_updated.pl" ]; then helper="$helper --installed"; fi
-          ./$helper 2> $resultdir/$progname.after.error > $resultdir/$progname.after.out
+          $helper 2> $resultdir/$progname.after.error > $resultdir/$progname.after.out
        done
        for helper in $category2; do
           progname=${helper##*/}
           echo "launching $progname"
-          ./$helper $resultdir/$progname.before.error $resultdir/$progname.after.error 2> $resultdir/$progname.errors > $resultdir/$progname.out
+          $helper $resultdir/$progname.before.error $resultdir/$progname.after.error 2> $resultdir/$progname.errors > $resultdir/$progname.out
        done
       ;; 
     *) echo "$usage" ;;
