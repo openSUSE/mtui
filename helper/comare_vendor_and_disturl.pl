@@ -17,20 +17,20 @@ num2=$(wc -l $temp2 | cut -d ' ' -f 1)
 
 trap "rm -f $temp1 $temp2" SIGINT SIGKILL EXIT
 
-newmismatches=$(diff -Nur "$temp1" "$temp2" | grep -E "^\+ERROR")
-gonemismatches=$(diff -Nur "$temp1" "$temp2" | grep -E "^\-ERROR")
+newerrors=$(diff -Nur "$temp1" "$temp2" | grep -E "^\+ERROR")
+goneerrors=$(diff -Nur "$temp1" "$temp2" | grep -E "^\-ERROR")
 
-if [ -n "$newmismatches" ]; then
+if [ -n "$newerrors" ]; then
    (
-   echo "ERROR: found new mismatches after update (before:$num1 vs after:$num2):" 
+   echo "ERROR: found new errors after update (before:$num1 vs after:$num2):" 
    #diff -Nur "$1" "$2"
    diff -Nur "$temp1" "$temp2" | grep -E "^\+ERROR"
    ) >&2 
    exit 1
 fi
 
-if [ -n "$gonemismatches" ]; then
-   echo "INFO: good, some mismatches disappeared after update (before:$num1 vs after:$num2):"
+if [ -n "$goneerrors" ]; then
+   echo "INFO: good, some errors disappeared after update (before:$num1 vs after:$num2):"
    #diff -Nur "$1" "$2"
    diff -Nur "$temp1" "$temp2" | grep -E "^\-ERROR"
    exit 0

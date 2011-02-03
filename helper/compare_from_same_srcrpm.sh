@@ -30,7 +30,7 @@ if [ -n "$newmismatches" ]; then
 fi
 
 if [ -n "$gonemismatches" ]; then
-   echo "INFO: good, some mismatches disappeared after after (before:$num1 vs after:$num2):"
+   echo "INFO: good, some mismatches disappeared after update (before:$num1 vs after:$num2):"
    #diff -Nur "$1" "$2"
    diff -Nur "$temp1" "$temp2" | grep -E "^\-ERROR"
    exit 0
