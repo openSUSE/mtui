@@ -39,4 +39,8 @@ Q: Which helpers are planned/not implemented yet?
 A: a) gathering and diffing the update of 'rpm -Va' (category 1 and 2)
    b) inspecting the zypper install log for errors (category 1)
 
+Q: What is doit.sh for ?
+A: A simple demonstration how available scripts should be executed - as soon as
+   mtui is in production it is not needed anymore.
+
 EOF
