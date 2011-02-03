@@ -24,7 +24,7 @@ case "$mode" in
           progname=${helper##*/}
           echo "launching $progname"
           if [ "$progname" = "check_all_updated.pl" ]; then helper="$helper --installed"; fi
-          $helper 2> $resultdir/$progname.before.error > $resultdir/$progname.before.out
+          $helper 2> $resultdir/$progname.before.err > $resultdir/$progname.before.out
        done
        ;;
     after)
@@ -32,13 +32,13 @@ case "$mode" in
           progname=${helper##*/}
           echo "launching $progname"
           if [ "$progname" = "check_all_updated.pl" ]; then helper="$helper --installed"; fi
-          $helper 2> $resultdir/$progname.after.error > $resultdir/$progname.after.out
+          $helper 2> $resultdir/$progname.after.err > $resultdir/$progname.after.out
        done
        for helper in $category2; do
           progname=${helper##*/}
           checkprog=${progname/check_/compare_}
           echo "launching $progname"
-          $helper $resultdir/$checkprog.before.error $resultdir/$checkprog.after.error 2> $resultdir/$progname.errors > $resultdir/$progname.out
+          $helper $resultdir/$checkprog.before.err $resultdir/$checkprog.after.err 2> $resultdir/$progname.err > $resultdir/$progname.out
        done
       ;; 
     *) echo "$usage" ;;
