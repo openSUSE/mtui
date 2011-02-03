@@ -99,7 +99,7 @@ if (not defined $productclass) {
 
 print "INFO: detected product class: $productclass\n";
 
-open (FH, "-|", "rpm -qa --qf \"\%{NAME} %{DISTURL} %{VENDOR}\n\"") or die;
+open (FH, "-|", "rpm -qa --qf \"\%{NAME} %{DISTURL} %{VENDOR}\n\" | sort -t - -k1,5") or die;
 while (<FH>) {
     my ($package, $disturl, @remainder) = split (/\s+/);
     my $vendor = join (" ", @remainder);
