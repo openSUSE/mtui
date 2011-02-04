@@ -39,6 +39,10 @@ case "$mode" in
           checkprog=${progname/check_/compare_}
           echo "launching $progname"
           $helper $resultdir/$checkprog.before.err $resultdir/$checkprog.after.err 2> $resultdir/$progname.err > $resultdir/$progname.out
+          echo "errors:"
+          cat $resultdir/$progname.err
+          echo "info:"
+          cat $resultdir/$progname.out
        done
       ;; 
     *) echo "$usage" ;;
