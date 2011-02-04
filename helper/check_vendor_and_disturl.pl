@@ -16,12 +16,12 @@ use strict;
 my %valid_vendors = (
     "SLE" => [
          "SUSE LINUX Products GmbH, Nuernberg, Germany",
-         "SuSE Linux AG, Nuernberg, Germany",
+         "SuSE Linux AG, Nuernberg, Germany", # packages shipped before 2004
          "IBM Corp.", # specific to ppc(64) on all SLE products
     ],
     "openSUSE" => [
          "openSUSE",
-         "obs://build.suse.de/home:sndirsch:drivers",
+         "obs://build.suse.de/home:sndirsch:drivers", # 3rd party repackaged drivers (ATI, NVIDIA)
     ],
 );
 
@@ -34,6 +34,7 @@ my %valid_disturls = (
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:Products:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:UU-DUD/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test/standard/",
+         "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/SLE_[0-9]+_SP[0-9]+_Update/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:Update:Test/standard/",
          "srcrep:[0-9a-f]{32,}-",
@@ -44,6 +45,7 @@ my %valid_disturls = (
          # obs://build.suse.de/SUSE:SLE-11-SP1:GA:Products:Test/standard/
          # obs://build.suse.de/SUSE:SLE-11-SP1:GA:UU-DUD/standard/
          # obs://build.suse.de/SUSE:SLE-11-SP1:Update:Test/standard/
+         # obs://build.suse.de/SUSE:SLE-10-SP4:GA/standard/
          # obs://build.suse.de/SUSE:SLE-10-SP3:GA/SLE_10_SP2_Update/
          # obs://build.suse.de/SUSE:SLE-10-SP3:Update:Test/standard/
          # srcrep:aff578d3a933f0942233ca29b28d5e1c-x11-tools
