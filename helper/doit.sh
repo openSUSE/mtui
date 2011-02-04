@@ -40,9 +40,9 @@ case "$mode" in
           echo "launching $progname"
           $helper $resultdir/$checkprog.before.err $resultdir/$checkprog.after.err 2> $resultdir/$progname.err > $resultdir/$progname.out
           echo "errors:"
-          cat $resultdir/$progname.err
+          test -s $resultdir/$progname.err && cat $resultdir/$progname.err || echo "(empty)"
           echo "info:"
-          cat $resultdir/$progname.out
+          test -s $resultdir/$progname.out && cat $resultdir/$progname.out || echo "(empty)"
        done
       ;; 
     *) echo "$usage" ;;
