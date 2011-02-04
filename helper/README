@@ -16,7 +16,7 @@ A good example for such a helper is ./check_from_same_srcrpm.pl.
 
 Since some errors will always be present in a system (not fixed on purpose, fixed
 by a future update etc). these helpers should be executed before and after
-applying the update to have a chances of detecting regressions/improvements. 
+applying the update to have a chance of detecting regressions/improvements. 
  
 2) to be run on output gathered from helpers from category 1
 
