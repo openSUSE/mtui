@@ -5,7 +5,7 @@
 #
 # tested and supported products;
 # - SLES9 SP3 - SP4
-# - SLE10 SP1 - SP3
+# - SLE10 SP1 - SP4
 # - SLE11 GA - SP1
 # - SLES4VMware
 # - openSUSE 11.1 - 11.3

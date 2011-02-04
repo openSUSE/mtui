@@ -36,8 +36,8 @@ A: This is a category 1 script. If executed under the control of mtui then
    configure mtui to only run it after the update.
 
 Q: Which helpers are planned/not implemented yet?
-A: a) gathering and diffing the update of 'rpm -Va' (category 1 and 2)
-   b) inspecting the zypper install log for errors (category 1)
+   a) inspecting the zypper install log for errors (category 1)
+   b) (be innovative :)
 
 Q: What is doit.sh for ?
 A: A simple demonstration how available scripts should be executed - as soon as
