@@ -1,0 +1,1 @@
+../../helper/compare_from_same_srcrpm.sh

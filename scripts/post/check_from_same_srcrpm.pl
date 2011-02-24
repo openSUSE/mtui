@@ -1,0 +1,1 @@
+../../helper/check_from_same_srcrpm.pl
