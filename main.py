@@ -5,6 +5,7 @@ import os
 import sys
 import getopt
 
+from promt import *
 from template import *
 
 def main():
@@ -53,14 +54,14 @@ def main():
 		except Exception as error:
 			print "could not add host %s to target list:" % host, error
 
-	if raw_input("should i first try to install missing packages? ").lower() in [ "y", "yes" ]:
-		print "installing"
-		ZypperPrepare(targets, metadata.get_package_list()).run()
-
 	if interactive:
 		promt = CommandPromt(targets, metadata)
 		promt.cmdloop()
 	else:
+		if raw_input("should i first try to install missing packages? ").lower() in [ "y", "yes" ]:
+			print "installing"
+			ZypperPrepare(targets, metadata.get_package_list()).run()
+
 		for host in targets:
 			not_installed = []
 			packages = targets[host].packages

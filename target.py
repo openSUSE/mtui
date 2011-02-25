@@ -7,7 +7,6 @@ import re
 
 from connection import *
 from xmlout import *
-from promt import *
 from rpm import *
 
 queue = Queue.Queue()
@@ -55,9 +54,6 @@ class Target():
 		versions = self.query_versions(package)
 
 		return versions[package]
-
-	def get_log(self):
-		return self.log
 
 	def disable_repo(self, repo):
 		self.connection.run("zypper mr -d %s" % repo)
@@ -129,6 +125,27 @@ class Packages:
 	def get_packages(self):
 		return self.packages
 
+class ThreadedMethod(threading.Thread):
+	def __init__(self, queue):
+		threading.Thread.__init__(self)
+		self.queue = queue
+
+	def run(self):
+		while True:
+			try:
+				method, parameter = self.queue.get(timeout=10)
+			except:
+				return
+
+			print "running method %s(%s)" % (method.__name__, parameter)
+
+			try:
+				method(*parameter)
+			except:
+				raise
+
+			self.queue.task_done()
+
 class FileUpload():
 	def __init__(self, targets, local, remote):
 		self.targets = targets
@@ -136,7 +153,6 @@ class FileUpload():
 		self.remote = remote
 
 	def run(self):
-		commands = []
 		for target in self.targets:
 			if self.targets[target].enabled:
 				thread = ThreadedMethod(queue)
@@ -146,6 +162,29 @@ class FileUpload():
 		for target in self.targets:
 			if self.targets[target].enabled:
 				queue.put([self.targets[target].connection.put, [self.local, self.remote]])
+
+		queue.join()
+
+class FileDownload():
+	def __init__(self, targets, remote, local, postfix=False):
+		self.targets = targets
+		self.remote = remote
+		self.local = local
+		self.postfix = postfix
+
+	def run(self):
+		for target in self.targets:
+			if self.targets[target].enabled:
+				thread = ThreadedMethod(queue)
+				thread.setDaemon(True)
+				thread.start()
+
+		for target in self.targets:
+			if self.targets[target].enabled:
+				if self.postfix:
+					queue.put([self.targets[target].connection.get, [self.remote, "%s.%s" % (self.local, target)]])
+				else:
+					queue.put([self.targets[target].connection.get, [self.remote, self.local]])
 
 		queue.join()
 
@@ -232,42 +271,6 @@ class ZypperPrepare():
 				queue.put([self.targets[target].set_repo, ["TESTING", "enable"]])
 		
 		queue.join()
-
-class ThreadedMethod(threading.Thread):
-	def __init__(self, queue):
-		threading.Thread.__init__(self)
-		self.queue = queue
-
-	def run(self):
-		while True:
-			try:
-				method, parameter = self.queue.get(timeout=10)
-			except:
-				return
-
-			print "running method %s(%s)" % (method.__name__, parameter)
-
-			method(*parameter)
-
-			self.queue.task_done()
-
-class ThreadedCommand(threading.Thread):
-	def __init__(self, queue):
-		threading.Thread.__init__(self)
-		self.queue = queue
-
-	def run(self):
-		while True:
-			try:
-				host, command = self.queue.get(timeout=10)
-			except:
-				return
-
-			client = host.connection
-
-			client.run(command)
-
-			self.queue.task_done()
 
 class Metadata:
 	def __init__(self):

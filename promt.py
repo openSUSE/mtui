@@ -4,9 +4,11 @@
 import os
 import sys
 import stat
+import errno
 import cmd
 
 from rpm import *
+from target import *
 
 class CommandPromt(cmd.Cmd):
  
@@ -55,6 +57,9 @@ class CommandPromt(cmd.Cmd):
 
 		else:
 			parse_error(self.do_delete_host, args)
+
+	def complete_delete_host(self, text, line, begidx, endidx):
+		return [i for i in self.targets if i.startswith(text)]
  
  	def do_list_hosts(self, args):
 		"""list connected hosts and current status
@@ -135,7 +140,9 @@ class CommandPromt(cmd.Cmd):
 				command = args
 
 			if target:
-				RunCommand(self.targets[target], command).run()
+				self.targets[target].run(command)
+				print "%s :" % target
+				print self.targets[target].log[-1]
 			else:
 				RunCommand(self.targets, command).run()
 
@@ -146,53 +153,56 @@ class CommandPromt(cmd.Cmd):
 		else:
 			parse_error(self.do_run, args)
 
+	def complete_run(self, text, line, begidx, endidx):
+		return [i for i in self.targets if i.startswith(text) and not line.count(',')]
+
 	def do_enable_host(self, args):
 		"""activates host for processing
 
 		enable_host <hostname>,hostname,...
 		Keyword arguments:
-		hostname -- hostname from the list
+		hostname -- hostname from the list or "all"
 
 		"""
 		if args:
-			for target in args.split(','):
-				try:
+			if args == 'all':
+				for target in self.targets:
 					self.targets[target].enabled = True
-				except KeyError:
-					print "host %s not in database" % target
+			else:
+				for target in args.split(','):
+					try:
+						self.targets[target].enabled = True
+					except KeyError:
+						print "host %s not in database" % target
 		else:
 			parse_error(self.do_enable_host, args)
+
+	def complete_enable_host(self, text, line, begidx, endidx):
+		return [i for i in self.targets if i.startswith(text) and not self.targets[i].enabled ]
 
 	def do_disable_host(self, args):
 		"""deactivates host for processing
 
 		disable_host <hostname>,hostname,...
 		Keyword arguments:
-		hostname -- hostname from the list
+		hostname -- hostname from the list or "all"
 
 		"""
 		if args:
-			for target in args.split(','):
-				try:
+			if args == 'all':
+				for target in self.targets:
 					self.targets[target].enabled = False
-				except KeyError:
-					print "host %s not in database" % target
+			else:
+				for target in args.split(','):
+					try:
+						self.targets[target].enabled = False
+					except KeyError:
+						print "host %s not in database" % target
 		else:
 			parse_error(self.do_disable_host, args)
 
-	def do_disable_all(self, args):
-		"""deactivates all hosts for processing
-
-		disable_all
-		Keyword arguments:
-		None
-
-		"""
-		if args:
-			parse_error(self.do_disable_all, args)
-		else:
-			for target in self.targets:
-				self.targets[target].enabled = False
+	def complete_disable_host(self, text, line, begidx, endidx):
+		return [i for i in self.targets if i.startswith(text) and self.targets[i].enabled ]
 
 	def do_update(self, args):
 		"""update all active hosts
@@ -250,13 +260,18 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			remote = "/tmp/" + os.path.basename(args)
 
-			for target in self.targets:
-				if self.targets[target].enabled:
-					self.targets[target].connection.put(args, remote)
+			try:
+				FileUpload(self.targets, args, remote).run()
+			except:
+				print "uploading %s to %s failed" % (args, remote)
+			else:
+				print "uploaded %s to %s" % (args, remote)
 
-					print "uploaded %s to %s on %s" % (args, remote, target)
 		else:
 			parse_error(self.do_put, args)
+
+	def complete_put(self, text, line, begidx, endidx):
+		return [i for i in os.listdir('.') if i.startswith(text)]
 
 	def do_get(self, args):
 		"""download file from all active hosts
@@ -267,19 +282,26 @@ class CommandPromt(cmd.Cmd):
 
 		"""
 		if args:
-			destination = "downloads/" + self.metadata.md5
+			destination = "downloads/" + self.metadata.md5 + '/'
+			local = destination + os.path.basename(args)
+
 			try:
-				os.mkdir(destination)
+				os.makedirs(destination)
+			except OSError as exc:
+				if exc.errno == errno.EEXIST:
+					pass
 			except Exception as error:
 				print error
 				return
 
-			for target in self.targets:
-				if self.targets[target].enabled:
-					local = destination + os.path.basename(args) + "." + target
-					self.targets[target].connection.get(args, local)
+			try:
+				FileDownload(self.targets, args, local, True).run()
+			except Exception as error:
+				print error
+				print "downloading %s to %s failed" % (args, local)
+			else:
+				print "downloaded %s to %s" % (args, local)
 
-					print "downloaded %s to %s from %s" % (args, local, target)
 		else:
 			parse_error(self.do_get, args)
 
@@ -291,21 +313,26 @@ class CommandPromt(cmd.Cmd):
 		filename -- save log as file filename
 
 		"""
-		output = XMLOutput()
-		output.add_header(self.metadata)
-		for target in self.targets:
-			output.add_target(self.targets[target])
-
 		if args:
-			try:
-				outxml = open(args.split(',')[0], "w")
-			except Exception as error:
-				print "unable to save file:", error
+			filename = args.split(',')[0]
 		else:
-			outxml = open(self.metadata.md5 + ".xml", "w")
+			filename = self.metadata.md5 + ".xml"
 
-		outxml.write(output.pretty())
-		outxml.close()
+		if os.path.exists(filename):
+			print "file %s exists." % filename,
+			if raw_input("overwrite? ").lower() in ["y", "yes" ]:	
+				try:
+					outxml = open(filename, "w")
+				except Exception as error:
+					print "unable to open file:", error
+
+				output = XMLOutput()
+				output.add_header(self.metadata)
+				for target in self.targets:
+					output.add_target(self.targets[target])
+
+				outxml.write(output.pretty())
+				outxml.close()
 
 	def do_quit(self, args):
 		"""disconnects hosts and quits programm

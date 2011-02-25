@@ -114,9 +114,11 @@ class Connection():
 		sftp = self.client.open_sftp()
 		try:
 			sftp.put(local, remote)
+			sftp.chmod(remote, stat.S_IEXEC)
 		except Exception as error:
 			print error
-		sftp.chmod(remote, stat.S_IEXEC)
+			raise
+
 		sftp.close()
 
 	def get(self, remote, local):
@@ -132,6 +134,7 @@ class Connection():
 			sftp.get(remote, local)
 		except Exception as error:
 			print error
+			raise
 
 		sftp.close()
 

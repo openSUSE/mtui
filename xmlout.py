@@ -4,14 +4,14 @@
 import xml.dom.minidom
 
 class XMLOutput:
-	def __init__(self, template=None):
+	def __init__(self, metadata=None):
 		impl = xml.dom.minidom.getDOMImplementation()
 
 		self.output = impl.createDocument(None, "update", None)
 		self.update = self.output.documentElement
 
-		if template != None:
-			self.add_header(template)
+		if metadata != None:
+			self.add_header(metadata)
 
 	def add_header(self, metadata):
 		self.update.setAttribute("md5", metadata.md5)
@@ -28,11 +28,11 @@ class XMLOutput:
 
 		statusnode = self.get_new_status_node(hostnode, "before")
 		for package in target.packages:
-			packagenode = self.get_new_package_node(statusnode, package, target.packages.get_version(package, 'before'))
+			packagenode = self.get_new_package_node(statusnode, package, str(target.packages.get_version(package, 'before')))
 
 		statusnode = self.get_new_status_node(hostnode, "after")
 		for package in target.packages:
-			packagenode = self.get_new_package_node(statusnode, package, target.packages.get_version(package, 'after'))
+			packagenode = self.get_new_package_node(statusnode, package, str(target.packages.get_version(package, 'after')))
 
 		lognode = self.get_new_log_node(hostnode)
 
