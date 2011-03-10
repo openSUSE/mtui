@@ -28,16 +28,16 @@ class XMLOutput:
 
 		statusnode = self.get_new_status_node(hostnode, "before")
 		for package in target.packages:
-			packagenode = self.get_new_package_node(statusnode, package, str(target.packages.get_version(package, 'before')))
+			packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].before))
 
 		statusnode = self.get_new_status_node(hostnode, "after")
 		for package in target.packages:
-			packagenode = self.get_new_package_node(statusnode, package, str(target.packages.get_version(package, 'after')))
+			packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].after))
 
 		lognode = self.get_new_log_node(hostnode)
 
-		for command, stdout, stderr in target.log:
-			self.get_new_command_node(lognode, command, stdout)
+		for command, stdout, stderr, exitcode in target.log:
+			self.get_new_command_node(lognode, command, "%s\n%s" % (stdout, stderr), exitcode)
 
 	def get_new_machine_node(self, hostname):
 		self.machine = self.output.createElement("host")
@@ -64,9 +64,10 @@ class XMLOutput:
 
 		return self.log
 
-	def get_new_command_node(self, parent, command, output):
+	def get_new_command_node(self, parent, command, output, exitcode):
 		node = self.output.createElement("command")
 		node.setAttribute("name", command)
+		node.setAttribute("return", str(exitcode))
 		text = self.output.createTextNode(output)
 		node.appendChild(text)
 		parent.appendChild(node)

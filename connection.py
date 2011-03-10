@@ -7,7 +7,11 @@ with warnings.catch_warnings():
 	import paramiko
 
 import stat
+import errno
 import getpass
+import logging
+
+out = logging.getLogger('mtui')
 
 class Connection():
 	"""manage SSH and SFTP connections"""
@@ -26,7 +30,9 @@ class Connection():
 		self.client.load_system_host_keys()
 		self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-		print "connecting to", self.hostname
+		#self.client.set_combine_stderr(True)
+
+		out.info("connecting to %s" % self.hostname)
 
 		try:
 			self.client.connect(self.hostname, username='root')
@@ -38,11 +44,11 @@ class Connection():
 			try:
 				self.client.connect(self.hostname, username='root', password=password)
 			except Exception as error:
-				print "connecting to %s failed:" % self.hostname, error
+				out.error("connecting to %s failed: %s" % (self.hostname, str(error)))
 				raise
 
 		except Exception as error:
-			print "connection to %s failed:" % self.hostname, error
+			out.error("connecting to %s failed: %s" % (self.hostname, str(error)))
 			raise
 
 	def run(self, command):
@@ -62,7 +68,7 @@ class Connection():
 			except:
 				raise
 		else:
-			print "connection to %s is not active, can't send command" % self.hostname
+			out.error("connection to %s is not active, can't send command" % self.hostname)
 			return -1
 
 	def stdin(self):
@@ -111,12 +117,21 @@ class Connection():
 		remote -- remote file name
 
 		"""
+		path = ""
 		sftp = self.client.open_sftp()
+
+		for subdir in remote.split('/')[:-1]:
+			path += subdir + '/'
+			try:
+				sftp.mkdir(path)
+			except:
+				pass
+
 		try:
 			sftp.put(local, remote)
 			sftp.chmod(remote, stat.S_IEXEC)
 		except Exception as error:
-			print error
+			out.error(str(error))
 			raise
 
 		sftp.close()
@@ -133,7 +148,7 @@ class Connection():
 		try:
 			sftp.get(remote, local)
 		except Exception as error:
-			print error
+			out.error(str(error))
 			raise
 
 		sftp.close()
@@ -174,5 +189,5 @@ class Connection():
 
 		"""
 		if self.is_connected():
-			print "closing connection to", self.hostname
+			out.info("closing connection to %s" % self.hostname)
 			self.client.close()

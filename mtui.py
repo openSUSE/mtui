@@ -18,14 +18,38 @@
 
 import sys
 import traceback
+import logging
+import warnings
 
-from main import *
+from log import *
+
+out = logging.getLogger('mtui')
+
+def check_modules():
+	modules = {
+		"paramiko":"python-paramiko",
+		"rpm":"rpm-python"
+	}
+
+	for module, package in modules.items():
+		try:
+			with warnings.catch_warnings():
+				warnings.filterwarnings("ignore",category=DeprecationWarning)
+				exec("import %s" % module)
+		except ImportError:
+			out.error("missing %s module. please install %s" % (module, modules[module]))
+			sys.exit(-1)
+		else:
+			exec("del %s" % module)
 
 if __name__ == "__main__":
 	try:
+		check_modules()
+
+		from main import main
 		main()
-	except:
-		print "you found a bug. please notify ckornacker@suse.de"
+	except Exception:
+		out.error("you found a bug. please notify ckornacker@suse.de")
 		print "backtrace:"
 		print '-'*60
 		traceback.print_exc(file=sys.stdout)

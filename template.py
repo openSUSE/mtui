@@ -1,8 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import logging
 import re
+
 from target import *
+
+out = logging.getLogger('mtui')
 
 class Template:
 	"""input handling of QA Maintenance template file"""
@@ -33,8 +37,8 @@ class Template:
 		try:
 			with open(self.path, 'r') as template:
 				self.parse_template(template)
-		except IOError as err:
-			print "can't open template:" , err
+		except IOError as error:
+			out.error("can't open template:" % str(error))
 
 	def parse_template(self, template):
 		"""parse maintenance template file
@@ -76,5 +80,8 @@ class Template:
 
 			match = re.search("(.*-.*) \(reference host: (.+)\)", line)
 			if match:
-				self.metadata.systems[match.group(2)] = match.group(1)
+				if match.group(2) == '???':
+					out.warning("no hostname defined for system %s" % match.group(1))
+				else:
+					self.metadata.systems[match.group(2)] = match.group(1)
 
