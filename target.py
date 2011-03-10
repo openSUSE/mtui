@@ -21,7 +21,7 @@ class Target():
 		self.packages = {}
 
 		if dryrun:
-			self.state = "dry"
+			self.state = "dryrun"
 		else:
 			self.state = "enabled"
 
@@ -94,21 +94,21 @@ class Target():
 			out.debug('running "%s" on %s' % (command, self.hostname))
 			exitcode = self.connection.run(command)
 			self.log.append([command, self.stdout(), self.stderr(), exitcode])
-		elif self.state == "dry":
+		elif self.state == "dryrun":
 			out.info('dryrun: running "%s" on %s' % (command, self.hostname))
-			self.log.append([command, "dryrun", "dryrun", 0])
+			self.log.append([command, "dryrun\n", "", 0])
 
 	def put(self, local, remote):
 		if self.state == "enabled":
 			return self.connection.put(local, remote)
-		elif self.state == "dry":
+		elif self.state == "dryrun":
 			out.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
 		
 
 	def get(self, remote, local):
 		if self.state == "enabled":
 			return self.connection.get(remote, local)
-		elif self.state == "dry":
+		elif self.state == "dryrun":
 			out.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
 
 	def lastin(self):
@@ -160,6 +160,7 @@ class Metadata:
 		self.packager = ""
 		self.packages = {}
 		self.systems = {}
+		self.bugs = {}
 
 	def get_package_list(self):
 		return self.packages.keys()

@@ -32,13 +32,16 @@ class CommandPromt(cmd.Cmd):
 		except IOError:
 			pass
 
-		with open('system.list', 'r') as f:
-			self.systems = f.readlines()
+		try:
+			with open('system.list', 'r') as f:
+				self.systems = f.readlines()
+		except:
+			pass
 
 	def do_add_host(self, args):
 		"""connect to another host and add it to the list
 
-		add_host <hostname,system>
+		add_host <hostname>,<system>
 		Keyword arguments:
 		hostname -- hostname or address of the host
 		system   -- system type, ie. sles11sp1-i386
@@ -99,7 +102,7 @@ class CommandPromt(cmd.Cmd):
 			for target in self.targets:
 				if self.targets[target].state == "enabled":
 					state = green('Enabled')
-				elif self.targets[target].state == "dry":
+				elif self.targets[target].state == "dryrun":
 					state = yellow('Dryrun')
 				else:
 					state = red('Disabled')
@@ -159,6 +162,23 @@ class CommandPromt(cmd.Cmd):
 			except Exception as error:
 				out.error(str(error))
 
+ 	def do_list_bugs(self, args):
+		"""list bugs and bugzilla URLs
+
+		list_bugs
+		Keyword arguments:
+		None
+
+		"""
+		if args:
+			parse_error(self.do_list_bugs, args)
+
+		else:
+			for bug, description in self.metadata.bugs.items():
+				print 'Bug #{0:5}: {1}'.format(bug, description)
+				print 'https://bugzilla.novell.com/show_bug.cgi?id=%s' % bug
+				print
+
 	def do_record_macro(self, args):
 		"""record macro for later use
 
@@ -212,67 +232,69 @@ class CommandPromt(cmd.Cmd):
 					if self.targets[target].lasterr():
 						print "stderr:", self.targets[target].lasterr()
 
-
+			out.info("done")
 		else:
 			parse_error(self.do_run, args)
 
 	def complete_run(self, text, line, begidx, endidx):
 		return [i for i in list(self.targets) + ['all'] if i.startswith(text) and not line.count(',')]
 
-	def do_enable_host(self, args):
-		"""activates host for processing
+	def do_set_host_state(self, args):
+		"""sets host state to enabled, disabled or dryrun
 
-		enable_host <hostname>,hostname,...
+		set_host_state <hostname>,hostname,...,<state>
 		Keyword arguments:
 		hostname -- hostname from the list
+		state    -- enabled, disabled, dryrun
 
 		"""
 		if args:
 			if 'all' in args:
 				targets = list(self.targets)
 			else:
-				targets = args.split(',')
+				targets = args.split(',')[:-1]
+
+			state = args.split(',')[-1]
+
+			if state not in ['enabled', 'disabled', 'dryrun']:
+				parse_error(self.do_set_host_state, args)
+				return
 
 			for target in targets:
 				try:
-					self.targets[target].state = "enabled"
+					self.targets[target].state = state
+
 				except KeyError:
 					out.info("host %s not in database" % target)
 					targets.remove(target)
+
 		else:
-			parse_error(self.do_enable_host, args)
+			parse_error(self.do_set_host_state, args)
 
-	def complete_enable_host(self, text, line, begidx, endidx):
-		#return [i for i in list(self.targets) + ['all'] if i.startswith(text) and not self.targets[i].enabled and i not in line]
-		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+	def complete_set_host_state(self, text, line, begidx, endidx):
+		if line.count(','):
+			return [i for i in list(self.targets) + ['enabled', 'disabled', 'dryrun'] if i.startswith(text) and i not in line]
+		else:		
+			return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
-	def do_disable_host(self, args):
-		"""deactivates host for processing
+	def do_set_log_level(self, args):
+		"""sets mtui log level (default: info)
 
-		disable_host <hostname>,hostname,...
+		set_log_level <loglevel>
 		Keyword arguments:
-		hostname -- hostname from the list
+		loglevel -- warning, info or debug
 
 		"""
-		if args:
-			if 'all' in args:
-				targets = list(self.targets)
-			else:
-				targets = args.split(',')
+		levels = {"warning":logging.WARNING, "info":logging.INFO, "debug":logging.DEBUG}
 
-			for target in targets:
-				try:
-					self.targets[target].state = "disabled"
-				except KeyError:
-					out.info("host %s not in database" % target)
-					targets.remove(target)
+		if args in levels.keys():
+			out.setLevel(level=levels[args])
 		else:
-			parse_error(self.do_disable_host, args)
+			parse_error(self.do_set_log_level, args)
 
-	def complete_disable_host(self, text, line, begidx, endidx):
-		#return [i for i in list(self.targets) + ['all'] if i.startswith(text) and self.targets[i].enabled and i not in line]
-		return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
+	def complete_set_log_level(self, text, line, begidx, endidx):
+		return [i for i in ['warning', 'info', 'debug'] if i.startswith(text) and i not in line]
+			
 	def do_disable_repo(self, args):
 		"""deactivates software repository
 
@@ -522,7 +544,20 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			filename = args.split(',')[0]
 		else:
-			filename = self.metadata.md5 + ".xml"
+			filename = "log.xml"
+
+		output_dir = "output/%s/" % self.metadata.md5
+
+		try:
+			os.makedirs(output_dir)
+		except OSError as exc:
+			if exc.errno == errno.EEXIST:
+				pass
+		except Exception as error:
+			out.error(str(error))
+			return
+
+		filename = output_dir + filename
 
 		if os.path.exists(filename):
 			out.warning("file %s exists." % filename)

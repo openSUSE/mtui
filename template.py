@@ -85,3 +85,7 @@ class Template:
 				else:
 					self.metadata.systems[match.group(2)] = match.group(1)
 
+			match = re.search("Bug #(\d+) \(\"(.*)\"\):", line)
+			if match:
+				self.metadata.bugs[match.group(1)] = match.group(2)
+
