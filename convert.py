@@ -5,11 +5,12 @@ import sys
 import os
 import re
 import getopt
+import codecs
 import xml.dom.minidom
 
 def xml_to_template(templatefile, xmlfile):
 
-	with open(templatefile, 'r') as f:
+	with codecs.open(templatefile, 'r', 'utf-8') as f:
 		t = f.readlines()
 
 	x = xml.dom.minidom.parse(xmlfile)
@@ -17,11 +18,12 @@ def xml_to_template(templatefile, xmlfile):
 	for host in x.getElementsByTagName("host"):
 		line = "%s (reference host: %s)\n" % (host.getAttribute("system"), host.getAttribute("hostname"))
 		try:
-			i = t.index(line) + 4
+			i = t.index(line)
 		except:
 			print "host section %s not found" % host.getAttribute("hostname")
 			continue
 		for state in ["before", "after"]:
+			i = t.index("      %s:\n" % state, i) + 1
 			for package in host.getElementsByTagName(state):
 				for child in package.childNodes:
 					try:
@@ -34,7 +36,6 @@ def xml_to_template(templatefile, xmlfile):
 						i += 1
 					except:
 						pass
-			i += 1
 
 	i = t.index("put here the output of the following commands:\n", 0) + 1
 	command_lines = 1
@@ -51,6 +52,7 @@ def xml_to_template(templatefile, xmlfile):
 			try:
 				if child.getAttribute("name") == t[current_line].strip("\n"):
 					t.insert(current_line + 1, str(child.childNodes[0].nodeValue).replace("\t", ""))
+					t[current_line] = "# " + t[current_line]
 			except:
 				pass
 		command_lines -= 1

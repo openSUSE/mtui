@@ -80,7 +80,7 @@ class Target():
 			parameter = '-t'
 		elif (name == 'TESTING' and state == "disable") or (name == "UPDATE" and state == "enable"):
 			out.debug("enabling UPDATE repos on %s" % self.hostname)
-			parameter = '-u'
+			parameter = '-n'
 
 		self.run("%s %s" % (command, parameter))
 
