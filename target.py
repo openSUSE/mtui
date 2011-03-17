@@ -73,6 +73,18 @@ class Target():
 		self.run("zypper mr -e %s" % repo)
 
 	def set_repo(self, name, state):
+		command = "/suse/rd-qa/bin/rep-clean.sh"
+
+		if (name == 'TESTING' and state == "enable") or (name == "UPDATE" and state == "disable"):
+			out.debug("enabling TESTING repos on %s" % self.hostname)
+			parameter = '-t'
+		elif (name == 'TESTING' and state == "disable") or (name == "UPDATE" and state == "enable"):
+			out.debug("enabling UPDATE repos on %s" % self.hostname)
+			parameter = '-u'
+
+		self.run("%s %s" % (command, parameter))
+
+		"""
 		repos = []
 		self.run("zypper lr")
 
@@ -88,6 +100,7 @@ class Target():
 				out.debug("enabled repo %s on %s" % (repo, self.hostname))
 			else:
 				out.error("setting repository to %s failed. wrong state." % state)
+		"""
 
 	def run(self, command):
 		if self.state == "enabled":
@@ -164,6 +177,18 @@ class Metadata:
 
 	def get_package_list(self):
 		return self.packages.keys()
+
+	def get_releases(self):
+		releases = []
+		systems = " ".join(self.systems.values())
+		if re.search("sle.11", systems):
+			releases.append("11")
+		if re.search("sle.10", systems):
+			releases.append("10")
+		if re.search("sle.9", systems):
+			releases.append("9")
+
+		return releases
 
 class ThreadedMethod(threading.Thread):
 	def __init__(self, queue):
@@ -251,43 +276,6 @@ class RunCommand():
 		while queue.qsize():
 			spinner()
 
-		queue.join()
-
-class ZypperPrepare():
-	def __init__(self, targets, packages):
-		self.targets = targets
-		self.packages = packages
-
-	def run(self):
-		for target in self.targets:
-			thread = ThreadedMethod(queue)
-			thread.setDaemon(True)
-			thread.start()
-
-		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["TESTING", "disable"]])
-			queue.put([self.targets[target].set_repo, ["UPDATE", "enable"]])
-
-		while queue.qsize():
-			spinner()
-
-		queue.join()
-
-		for package in self.packages:
-			command = "zypper -n in --no-recommends -y -l %s" % package
-			for target in self.targets:
-				queue.put([self.targets[target].run, [command]])
-
-		while queue.qsize():
-			spinner()
-
-		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["UPDATE", "disable"]])
-			queue.put([self.targets[target].set_repo, ["TESTING", "enable"]])
-
-		while queue.qsize():
-			spinner()
-		
 		queue.join()
 
 def spinner():

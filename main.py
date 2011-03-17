@@ -32,7 +32,6 @@ def main():
 	for parameter, argument in opts:
 		if parameter in ("-h", "--help"):
 			usage()
-			sys.exit(0)
 		elif parameter in ("-a", "--asia"):
 			team = "asia"
 		elif parameter in ("-e", "--emea"):
@@ -48,7 +47,7 @@ def main():
 		elif parameter in ("-v", "--verbose"):
 			out.setLevel(level=logging.DEBUG)
 		else:
-			assert False, "unhandled parameter"
+			usage()
 
 	if md5 == None:
 		out.error("please specify an update identifier")
@@ -76,7 +75,7 @@ def usage():
 	print "Maintenance Test Update Installer"
 	print "=" * 35
 	print
-	print sys.argv[0], "<parameter>"
+	print sys.argv[0], "[parameter] {-m|--md5 update}"
 	print
 	print "parameters:"
 	print "\t-{short},--{long:20}{description}".format(short="a", long="asia", description="use asia template")

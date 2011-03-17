@@ -129,10 +129,10 @@ class CommandPromt(cmd.Cmd):
 				except KeyError:
 					out.warning("host %s not in database" % target)
 					targets.remove(target)
-
-				print "packages on %s:" % target
-				for package in self.targets[target].packages:
-					print '{0:30}: {1}'.format(package, self.targets[target].packages[package].current)
+				else:
+					print "packages on %s:" % target
+					for package in self.targets[target].packages:
+						print '{0:30}: {1}'.format(package, self.targets[target].packages[package].current)
 
 				print
 
@@ -162,6 +162,28 @@ class CommandPromt(cmd.Cmd):
 			except Exception as error:
 				out.error(str(error))
 
+ 	def do_list_update_commands(self, args):
+		"""list commands which are invoked to apply update
+
+		list_update_commands
+		Keyword arguments:
+		None
+
+		"""
+		if args:
+			parse_error(self.do_list_update_commands, args)
+
+		else:
+			for release in self.metadata.get_releases():
+				try:
+					updater = Updater[release]
+				except KeyError:
+					out.error("no updater available for %s" % release)
+					return
+
+				print "\n".join(updater(self.targets, self.metadata.patches).commands)
+				del updater
+
  	def do_list_bugs(self, args):
 		"""list bugs and bugzilla URLs
 
@@ -178,6 +200,59 @@ class CommandPromt(cmd.Cmd):
 				print 'Bug #{0:5}: {1}'.format(bug, description)
 				print 'https://bugzilla.novell.com/show_bug.cgi?id=%s' % bug
 				print
+
+ 	def do_list_metadata(self, args):
+		"""list update metadata
+
+		list_bugs
+		Keyword arguments:
+		None
+
+		"""
+		if args:
+			parse_error(self.do_list_metadata, args)
+
+		else:
+			print '{0:15}: {1}'.format("MD5SUM", self.metadata.md5)
+			print '{0:15}: {1}'.format("SWAMP ID", self.metadata.swampid)
+			print '{0:15}: {1}'.format("Category", self.metadata.category)
+			print '{0:15}: {1}'.format("Packager", self.metadata.packager)
+			for type, id in self.metadata.patches.items():
+				print '{0:15}: {1}'.format(type.upper(), id)
+
+	def do_show_log(self, args):
+		"""show command protocol
+
+		show_log
+		Keyword arguments:
+		hostname -- hostname of the target host
+
+		"""
+		if args:
+			if 'all' in args:
+				targets = list(self.targets)
+			else:
+				targets = args.split(',')
+
+			print targets
+			for target in targets:
+				print "log from %s:" % target
+				try:
+					for line in self.targets[target].log:
+						print "%s:~> %s [%s]" % (target, line[0], line[3])
+						print "stdout:"
+						print "%s" % (line[1])
+						print "stderr:"
+						print "%s" % (line[2])
+						print
+				except KeyError:
+					out.warning("host %s not in database" % target)
+
+		else:
+			parse_error(self.do_show_log, args)
+
+	def complete_show_log(self, text, line, begidx, endidx):
+		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_record_macro(self, args):
 		"""record macro for later use
@@ -213,17 +288,10 @@ class CommandPromt(cmd.Cmd):
 
 			if 'all' in args:
 				targets = list(self.targets)
-				RunCommand(self.targets, command).run()
 			else:
-				targets = [args.split(',')[0]]
+				targets = selected_targets(self.targets, [args.split(',')[0]])
 
-				try:
-					for target in targets:
-						self.targets[target].run(command)
-
-				except KeyError:
-					out.info("host %s not in database" % target)
-					targets.remove(target)
+			RunCommand(self.targets, command).run()
 
 			for target in targets:
 				if target in self.targets and self.targets[target].state == "enabled":
@@ -313,7 +381,7 @@ class CommandPromt(cmd.Cmd):
 			name = args.split(',')[-1]
 
 			if name not in ['testing', 'update']:
-				parse_error(self.do_disable_host, args)
+				parse_error(self.do_disable_repo, args)
 				return
 
 			for target in targets:
@@ -325,7 +393,7 @@ class CommandPromt(cmd.Cmd):
 					targets.remove(target)
 
 		else:
-			parse_error(self.do_disable_host, args)
+			parse_error(self.do_disable_repo, args)
 
 	def complete_disable_repo(self, text, line, begidx, endidx):
 		if line.count(','):
@@ -351,7 +419,7 @@ class CommandPromt(cmd.Cmd):
 			name = args.split(',')[-1]
 
 			if name not in ['testing', 'update']:
-				parse_error(self.do_disable_host, args)
+				parse_error(self.do_enable_repo, args)
 				return
 
 			for target in targets:
@@ -363,7 +431,7 @@ class CommandPromt(cmd.Cmd):
 					targets.remove(target)
 
 		else:
-			parse_error(self.do_disable_host, args)
+			parse_error(self.do_enable_repo, args)
 
 	def complete_enable_repo(self, text, line, begidx, endidx):
 		return self.complete_disable_repo(text, line, begidx, endidx)
@@ -371,39 +439,36 @@ class CommandPromt(cmd.Cmd):
 	def do_prepare_hosts(self, args):
 		"""install missing packages on hosts
 
-		update
+		prepare_hosts
 		Keyword arguments:
 		None
 
 		"""
 		if args:
-			temporary_targets = {}
-
 			if 'all' in args:
-				targets = list(self.targets)
+				targets = self.targets
 			else:
-				targets = args.split(',')
+				targets = selected_targets(self.targets, args.split(','))
 
-			for target in targets:
-				try:
-					if "11" in self.targets[target].system:
-						temporary_targets[target] = self.targets[target]
+			if targets:
+				for release in self.metadata.get_releases():
+					try:
+						p = Preparer[release]
+					except KeyError:
+						out.error("no preparer available for %s" % release)
+						return
+
+					out.info("preparing")
+					try:
+						p(targets, self.metadata.get_package_list()).run()
+					except:
+						out.critical("could not prepare target systems %s", targets.keys())
+						pass
 					else:
-						out.warning("could not prepare %s: system %s is unsupported" % (target, self.targets[target].system))
-				except KeyError:
-					out.info("host %s not in database" % target)
-					targets.remove(target)
-
-			out.info("preparing")
-			try:
-				ZypperPrepare(temporary_targets, self.metadata.get_package_list()).run()
-			except:
-				out.critical("could not prepare target systems %s", temporary_targets.keys())
-			else:
-				out.info("done")
+						out.info("done")
 
 		else:
-			parse_error(self.do_disable_host, args)
+			parse_error(self.do_prepare_hosts, args)
 
 	def complete_prepare_hosts(self, text, line, begidx, endidx):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
@@ -416,10 +481,7 @@ class CommandPromt(cmd.Cmd):
 		None
 
 		"""
-		out.info("preparing")
-		if "11" in self.metadata.systems.values()[0]:
-			if raw_input("should i first try to install missing packages? (y/N) ").lower() in [ "y", "yes" ]:
-				ZypperPrepare(self.targets, self.metadata.get_package_list()).run()
+		self.do_prepare_hosts("all")
 
 		for target in self.targets:
 			not_installed = []
@@ -447,7 +509,14 @@ class CommandPromt(cmd.Cmd):
 
 		if raw_input("start update process? (y/N) ").lower() in ["y", "yes" ]:
 			out.info("updating")
-			updater = Updater.get("11")
+
+			release = self.metadata.get_releases()[0]
+			try:
+				updater = Updater[release]
+			except KeyError:
+				out.error("no updater available for %s" % release)
+				return
+
 			updater(self.targets, self.metadata.patches).run()
 
 			for target in self.targets:
@@ -469,11 +538,11 @@ class CommandPromt(cmd.Cmd):
 						if vercmp(after, required) < 0:
 							out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
 
-		if raw_input("start post update scripts? (y/N) ").lower() in ["y", "yes" ]:
-			script_hook(self.targets, "post", self.metadata.md5)
+			if raw_input("start post update scripts? (y/N) ").lower() in ["y", "yes" ]:
+				script_hook(self.targets, "post", self.metadata.md5)
 
-		if raw_input("start compare scripts? (y/N) ").lower() in ["y", "yes" ]:
-			script_hook(self.targets, "compare", self.metadata.md5)
+				if raw_input("start compare scripts? (y/N) ").lower() in ["y", "yes" ]:
+					script_hook(self.targets, "compare", self.metadata.md5)
 
 		out.info("done")
 
@@ -640,31 +709,41 @@ def script_hook(targets, which, md5):
 
 				targets[target].log.append([" ".join(command), sub.stdout.readlines(), sub.stderr.readlines(), exitcode])
 
-			return
+		else:
+			FileUpload(targets, local_file, "%s/%s" % (remote_dir, remote_file)).run()
+			RunCommand(targets, "%s/%s" % (remote_dir, remote_file)).run()
 
-		FileUpload(targets, local_file, "%s/%s" % (remote_dir, remote_file)).run()
-		RunCommand(targets, "%s/%s" % (remote_dir, remote_file)).run()
-
-		try:
-			os.makedirs(output_dir)
-		except OSError as exc:
-			if exc.errno == errno.EEXIST:
-				pass
-		except Exception as error:
-			out.error(str(error))
-			return
-
-		for target in targets:
-			filename = "%s/%s.%s" % (output_dir, remote_file, target)
 			try:
-				f = open(filename, "w")
-				f.write(targets[target].lastout())
-				f.write(targets[target].lasterr())
+				os.makedirs(output_dir)
+			except OSError as exc:
+				if exc.errno == errno.EEXIST:
+					pass
 			except Exception as error:
-				out.error("unable to write script output to %s: %s" % (filename, error))
-			else:
-				f.close()
+				out.error(str(error))
+				return
 
+			for target in targets:
+				filename = "%s/%s.%s" % (output_dir, remote_file, target)
+				try:
+					f = open(filename, "w")
+					f.write(targets[target].lastout())
+					f.write(targets[target].lasterr())
+				except Exception as error:
+					out.error("unable to write script output to %s: %s" % (filename, error))
+				else:
+					f.close()
+
+def selected_targets(targets, target_list):
+	temporary_targets = {}
+
+	for target in target_list:
+		try:
+			temporary_targets[target] = targets[target]
+		except KeyError:
+			out.info("host %s not in database" % target)
+
+	return temporary_targets
+	
 def green(text):
 	return "\033[1;32m%s\033[1;m" % text
 

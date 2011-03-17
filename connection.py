@@ -64,7 +64,13 @@ class Connection():
 		if self.is_active():
 			try:
 				self.sin, self.out, self.err = self.client.exec_command(command)
-				return self.out.channel.recv_exit_status()
+
+				exitcode = self.out.channel.recv_exit_status()
+
+				while not self.out.channel.eof_received:
+					exitcode = self.out.channel.recv_exit_status()
+
+				return exitcode
 			except:
 				raise
 		else:
