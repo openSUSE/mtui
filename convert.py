@@ -100,13 +100,13 @@ def main():
 	if output:
 		try:
 			with open(output, 'w') as f:
-				f.write("".join(template))
+				f.write("".join(l.encode("utf-8") for l in template))
 		except Exception as error:
 			print "failed to write %s: %s" % (output, str(error))
 		else:
 			print "wrote template to %s" % output
 	else:
-		print "".join(template)
+		print "".join(l.encode("utf-8") for l in template)
 
 		
 if __name__ == "__main__":
