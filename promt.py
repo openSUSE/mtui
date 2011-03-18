@@ -385,7 +385,7 @@ class CommandPromt(cmd.Cmd):
 
 			for target in targets:
 				try:
-					self.targets[target].set_repo(name.upper(), 'enable')
+					self.targets[target].set_repo(name.upper())
 
 				except KeyError:
 					out.info("host %s not in database" % target)
@@ -417,14 +417,14 @@ class CommandPromt(cmd.Cmd):
 			if targets:
 				for release in self.metadata.get_releases():
 					try:
-						p = Preparer[release]
+						preparer = Preparer[release]
 					except KeyError:
 						out.error("no preparer available for %s" % release)
 						return
 
 					out.info("preparing")
 					try:
-						p(targets, self.metadata.get_package_list()).run()
+						preparer(targets, self.metadata.get_package_list()).run()
 					except:
 						out.critical("could not prepare target systems %s", targets.keys())
 						pass
@@ -659,6 +659,9 @@ def script_hook(targets, which, md5):
 		out.info("preparing script %s" % script)
 		local_file = "scripts/%s/%s" % (which, script)
 		remote_file = "%s.%s" % (which, script)
+
+		if not os.path.isfile(local_file):
+			continue
 
 		if which == "compare":
 			for target in targets:

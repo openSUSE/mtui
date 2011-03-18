@@ -20,6 +20,7 @@ class Update():
 	def __init__(self, targets, patches):
 		self.targets = targets
 		self.patches = patches
+		self.commands = []
 
 	def run(self):
 		for target in self.targets:
@@ -28,7 +29,7 @@ class Update():
 			thread.start()
 
 		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["TESTING", "enable"]])
+			queue.put([self.targets[target].set_repo, ["TESTING"]])
 
 		while queue.qsize():
 			spinner()
@@ -126,10 +127,11 @@ Updater = {
     'OES': RugUpdate
 }
 
-class ZypperPrepare():
+class Prepare():
 	def __init__(self, targets, packages):
 		self.targets = targets
 		self.packages = packages
+		self.commands = []
 
 	def run(self):
 		for target in self.targets:
@@ -138,49 +140,40 @@ class ZypperPrepare():
 			thread.start()
 
 		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["TESTING", "disable"]])
+			queue.put([self.targets[target].set_repo, ["UPDATE"]])
 
 		while queue.qsize():
 			spinner()
 
 		queue.join()
 
-		for target in self.targets:
-			if self.targets[target].lastexit() != 0:
-				out.error("failed to disable TESTING repos on %s: zypper exit code %s" % (target, self.targets[target].lastexit()))
-				raise UpdateError("disable repo", target)
-
-		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["UPDATE", "enable"]])
-
-		while queue.qsize():
-			spinner()
-
-		queue.join()
-
-		for target in self.targets:
-			if self.targets[target].lastexit() != 0:
-				out.error("failed to enable UPDATE repos on %s: zypper exit code %s" % (target, self.targets[target].lastexit()))
-				raise UpdateError("disable repo", target)
-
-		for package in self.packages:
-			command = "zypper -n in --no-recommends -y -l %s" % package
+		for command in self.commands: 
 			for target in self.targets:
 				queue.put([self.targets[target].run, [command]])
 
-		while queue.qsize():
-			spinner()
+			while queue.qsize():
+				spinner()
 
-		queue.join()
+			queue.join()
 
 		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["UPDATE", "disable"]])
-			queue.put([self.targets[target].set_repo, ["TESTING", "enable"]])
+			queue.put([self.targets[target].set_repo, ["TESTING"]])
 
 		while queue.qsize():
 			spinner()
 		
 		queue.join()
+
+class ZypperPrepare(Prepare):
+	def __init__(self, targets, packages):
+		Prepare.__init__(self, targets, packages)
+
+		commands = []
+
+		for package in packages:
+			commands.append("zypper -n in --no-recommends -y -l %s" % package)
+
+		self.commands = commands
 
 Preparer = {
     '11': ZypperPrepare

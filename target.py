@@ -72,13 +72,13 @@ class Target():
 		out.debug("enabling repo %s on %s" % (repo, self.hostname))
 		self.run("zypper mr -e %s" % repo)
 
-	def set_repo(self, name, state):
+	def set_repo(self, name):
 		command = "/suse/rd-qa/bin/rep-clean.sh"
 
-		if (name == 'TESTING' and state == "enable") or (name == "UPDATE" and state == "disable"):
+		if name == 'TESTING':
 			out.debug("enabling TESTING repos on %s" % self.hostname)
 			parameter = '-t'
-		elif (name == 'TESTING' and state == "disable") or (name == "UPDATE" and state == "enable"):
+		elif name == "UPDATE":
 			out.debug("enabling UPDATE repos on %s" % self.hostname)
 			parameter = '-n'
 
