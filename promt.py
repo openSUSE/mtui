@@ -65,10 +65,10 @@ class CommandPromt(cmd.Cmd):
 	def complete_add_host(self, text, line, begidx, endidx):
 		return self.complete_systemlist(text, line, begidx, endidx)
 		
-	def do_delete_host(self, args):
+	def do_remove_host(self, args):
 		"""disconnect from host and remove host from list
 
-		delete_host <hostname>,hostname,...
+		remove_host <hostname>,hostname,...
 		Keyword arguments:
 		hostname -- hostname or address of the host
 
@@ -82,9 +82,9 @@ class CommandPromt(cmd.Cmd):
 					out.warning("host %s not in database" % target)
 
 		else:
-			parse_error(self.do_delete_host, args)
+			parse_error(self.do_remove_host, args)
 
-	def complete_delete_host(self, text, line, begidx, endidx):
+	def complete_remove_host(self, text, line, begidx, endidx):
 		return self.complete_hostlist(text, line, begidx, endidx)
  
  	def do_list_hosts(self, args):
@@ -234,7 +234,6 @@ class CommandPromt(cmd.Cmd):
 			else:
 				targets = args.split(',')
 
-			print targets
 			for target in targets:
 				print "log from %s:" % target
 				try:
@@ -363,10 +362,10 @@ class CommandPromt(cmd.Cmd):
 	def complete_set_log_level(self, text, line, begidx, endidx):
 		return [i for i in ['warning', 'info', 'debug'] if i.startswith(text) and i not in line]
 			
-	def do_disable_repo(self, args):
-		"""deactivates software repository
+	def do_set_repo(self, args):
+		"""sets software repository to UPDATE or TESTING
 
-		disable_repo <hostname>,hostname,...,<repository>
+		set_repo <hostname>,hostname,...,<repository>
 		Keyword arguments:
 		hostname   -- hostname from the list or "all"
 		repository -- repository, TESTING or UPDATE
@@ -381,45 +380,7 @@ class CommandPromt(cmd.Cmd):
 			name = args.split(',')[-1]
 
 			if name not in ['testing', 'update']:
-				parse_error(self.do_disable_repo, args)
-				return
-
-			for target in targets:
-				try:
-					self.targets[target].set_repo(name.upper(), 'disable')
-
-				except KeyError:
-					out.info("host %s not in database" % target)
-					targets.remove(target)
-
-		else:
-			parse_error(self.do_disable_repo, args)
-
-	def complete_disable_repo(self, text, line, begidx, endidx):
-		if line.count(','):
-			return [i for i in list(self.targets) + ['testing', 'update'] if i.startswith(text) and i not in line]
-		else:		
-			return [i for i in list(self.targets) + ['all'] if i.startswith(text) and i not in line]
-
-	def do_enable_repo(self, args):
-		"""activates software repository
-
-		enable_repo <hostname>,hostname,...,<repository>
-		Keyword arguments:
-		hostname   -- hostname from the list or "all"
-		repository -- repository, TESTING or UPDATE
-
-		"""
-		if args:
-			if 'all' in args:
-				targets = list(self.targets)
-			else:
-				targets = args.split(',')[:-1]
-
-			name = args.split(',')[-1]
-
-			if name not in ['testing', 'update']:
-				parse_error(self.do_enable_repo, args)
+				parse_error(self.do_set_repo, args)
 				return
 
 			for target in targets:
@@ -431,10 +392,13 @@ class CommandPromt(cmd.Cmd):
 					targets.remove(target)
 
 		else:
-			parse_error(self.do_enable_repo, args)
+			parse_error(self.do_set_repo, args)
 
-	def complete_enable_repo(self, text, line, begidx, endidx):
-		return self.complete_disable_repo(text, line, begidx, endidx)
+	def complete_set_repo(self, text, line, begidx, endidx):
+		if line.count(','):
+			return [i for i in list(self.targets) + ['testing', 'update'] if i.startswith(text) and i not in line]
+		else:		
+			return [i for i in list(self.targets) + ['all'] if i.startswith(text) and i not in line]
 
 	def do_prepare_hosts(self, args):
 		"""install missing packages on hosts
@@ -661,6 +625,9 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			parse_error(self.do_quit, args)
 		else:
+			if raw_input("save log? (y/N) ").lower() in ["y", "yes" ]:
+				self.do_save(None)
+
 			for target in self.targets:
 				self.targets[target].close()
 
