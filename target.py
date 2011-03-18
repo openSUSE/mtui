@@ -84,24 +84,6 @@ class Target():
 
 		self.run("%s %s" % (command, parameter))
 
-		"""
-		repos = []
-		self.run("zypper lr")
-
-		for match in re.finditer("^(\d+).*%s" % name, self.lastout(), re.M):
-			repos.append(match.group(1))
-
-		for repo in repos:
-			if state == "disable":
-				self.disable_repo(repo)
-				out.debug("disabled repo %s on %s" % (repo, self.hostname))
-			elif state == "enable":
-				self.enable_repo(repo)
-				out.debug("enabled repo %s on %s" % (repo, self.hostname))
-			else:
-				out.error("setting repository to %s failed. wrong state." % state)
-		"""
-
 	def run(self, command):
 		if self.state == "enabled":
 			out.debug('running "%s" on %s' % (command, self.hostname))
