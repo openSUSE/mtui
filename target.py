@@ -252,13 +252,19 @@ class RunCommand():
 			thread.setDaemon(True)
 			thread.start()
 
-		for target in self.targets:
-			queue.put([self.targets[target].run, [self.command]])
+		try:
+			for target in self.targets:
+				queue.put([self.targets[target].run, [self.command]])
 
-		while queue.qsize():
-			spinner()
+			while queue.qsize():
+				spinner()
 
-		queue.join()
+			queue.join()
+
+		except KeyboardInterrupt:
+			print "stopping command queue, please wait"
+			queue.join()
+			raise
 
 def spinner():
 	"""simple spinner to show some process"""

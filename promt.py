@@ -158,7 +158,8 @@ class CommandPromt(cmd.Cmd):
 			try:
 				for root, dirs, files in os.walk("scripts"):
 					for name in files:
-						print os.path.join(root, name)
+						if not ".svn" in root:
+							print os.path.join(root, name)
 			except Exception as error:
 				out.error(str(error))
 
@@ -290,7 +291,10 @@ class CommandPromt(cmd.Cmd):
 			else:
 				targets = selected_targets(self.targets, [args.split(',')[0]])
 
-			RunCommand(self.targets, command).run()
+			try:
+				RunCommand(self.targets, command).run()
+			except:
+				return
 
 			for target in targets:
 				if target in self.targets and self.targets[target].state == "enabled":
@@ -454,6 +458,9 @@ class CommandPromt(cmd.Cmd):
 			self.targets[target].query_versions()
 
 			for package in packages:
+				if self.targets[target].packages[package].before != "0":
+					continue
+
 				before = self.targets[target].packages[package].current
 				required = self.metadata.packages[package]
 
@@ -468,10 +475,10 @@ class CommandPromt(cmd.Cmd):
 			if len(not_installed):
 				out.warning("%s: these packages are not installed: %s" % (target, not_installed))
 
-		if raw_input("start pre update scripts? (y/N) ").lower() in ["y", "yes" ]:
+		if input("start pre update scripts? (y/N)", ["y", "yes" ]):
 			script_hook(self.targets, "pre", self.metadata.md5)
 
-		if raw_input("start update process? (y/N) ").lower() in ["y", "yes" ]:
+		if input("start update process? (y/N) ", ["y", "yes" ]):
 			out.info("updating")
 
 			release = self.metadata.get_releases()[0]
@@ -502,10 +509,10 @@ class CommandPromt(cmd.Cmd):
 						if vercmp(after, required) < 0:
 							out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
 
-			if raw_input("start post update scripts? (y/N) ").lower() in ["y", "yes" ]:
+			if input("start post update scripts? (y/N) ", ["y", "yes" ]):
 				script_hook(self.targets, "post", self.metadata.md5)
 
-				if raw_input("start compare scripts? (y/N) ").lower() in ["y", "yes" ]:
+				if input("start compare scripts? (y/N) ", ["y", "yes" ]):
 					script_hook(self.targets, "compare", self.metadata.md5)
 
 		out.info("done")
@@ -594,7 +601,7 @@ class CommandPromt(cmd.Cmd):
 
 		if os.path.exists(filename):
 			out.warning("file %s exists." % filename)
-			if not raw_input("should i overwrite %s? (y/N) " % filename).lower() in ["y", "yes" ]:
+			if not input("should i overwrite %s? (y/N) " % filename, ["y", "yes" ]):
 				import math
 				import time
 
@@ -625,7 +632,7 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			parse_error(self.do_quit, args)
 		else:
-			if raw_input("save log? (y/N) ").lower() in ["y", "yes" ]:
+			if input("save log? (y/N) ", ["y", "yes" ]):
 				self.do_save(None)
 
 			for target in self.targets:
@@ -656,52 +663,66 @@ def script_hook(targets, which, md5):
 	remote_dir = "/tmp/%s" % md5
 	
 	for script in os.listdir("scripts/%s" % which):
-		out.info("preparing script %s" % script)
 		local_file = "scripts/%s/%s" % (which, script)
 		remote_file = "%s.%s" % (which, script)
 
 		if not os.path.isfile(local_file):
 			continue
 
-		if which == "compare":
-			for target in targets:
-				prename = "%s/pre.%s.%s" % (output_dir, script.replace("compare_", "check_"), target)
-				postname = "%s/post.%s.%s" % (output_dir, script.replace("compare_", "check_"), target)
-				command = ["scripts/compare/%s" % script, prename, postname]
-				out.debug("running %s" % str(command))
-				sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-				exitcode = sub.wait()
+		out.info("preparing script %s" % script)
 
-				if exitcode == 1:
-					out.warning("testcase %s failed: %s" % (script, str(command))) 
-				if exitcode == 2:
-					out.warning("internal error in testcase %s: %s" % (script, str(command))) 
+		try:
+			if which == "compare":
+				for target in targets:
+					prename = "%s/pre.%s.%s" % (output_dir, script.replace("compare_", "check_"), target)
+					postname = "%s/post.%s.%s" % (output_dir, script.replace("compare_", "check_"), target)
+					command = ["scripts/compare/%s" % script, prename, postname]
+					out.debug("running %s" % str(command))
+					sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+					exitcode = sub.wait()
 
-				targets[target].log.append([" ".join(command), sub.stdout.readlines(), sub.stderr.readlines(), exitcode])
+					if exitcode == 1:
+						out.warning("testcase %s failed: %s" % (script, str(command))) 
+					if exitcode == 2:
+						out.warning("internal error in testcase %s: %s" % (script, str(command))) 
 
-		else:
-			FileUpload(targets, local_file, "%s/%s" % (remote_dir, remote_file)).run()
-			RunCommand(targets, "%s/%s" % (remote_dir, remote_file)).run()
+					targets[target].log.append([" ".join(command), sub.stdout.readlines(), sub.stderr.readlines(), exitcode])
 
-			try:
-				os.makedirs(output_dir)
-			except OSError as exc:
-				if exc.errno == errno.EEXIST:
-					pass
-			except Exception as error:
-				out.error(str(error))
-				return
+			else:
+				FileUpload(targets, local_file, "%s/%s" % (remote_dir, remote_file)).run()
+				RunCommand(targets, "%s/%s" % (remote_dir, remote_file)).run()
 
-			for target in targets:
-				filename = "%s/%s.%s" % (output_dir, remote_file, target)
 				try:
-					f = open(filename, "w")
-					f.write(targets[target].lastout())
-					f.write(targets[target].lasterr())
+					os.makedirs(output_dir)
+				except OSError as exc:
+					if exc.errno == errno.EEXIST:
+						pass
 				except Exception as error:
-					out.error("unable to write script output to %s: %s" % (filename, error))
-				else:
-					f.close()
+					out.error(str(error))
+					return
+
+				for target in targets:
+					filename = "%s/%s.%s" % (output_dir, remote_file, target)
+					try:
+						f = open(filename, "w")
+						f.write(targets[target].lastout())
+						f.write(targets[target].lasterr())
+					except Exception as error:
+						out.error("unable to write script output to %s: %s" % (filename, error))
+					else:
+						f.close()
+		except KeyboardInterrupt:
+			out.warning("skipping script %s" % script)
+			continue
+
+def input(text, options):
+	try:
+		if raw_input(text).lower() in options:
+			return True
+		else:
+			return False
+	except KeyboardInterrupt:
+		return False
 
 def selected_targets(targets, target_list):
 	temporary_targets = {}

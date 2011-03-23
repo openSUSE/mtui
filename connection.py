@@ -10,6 +10,8 @@ import stat
 import errno
 import getpass
 import logging
+import time
+import sys
 
 out = logging.getLogger('mtui')
 
@@ -66,9 +68,6 @@ class Connection():
 				self.sin, self.out, self.err = self.client.exec_command(command)
 
 				exitcode = self.out.channel.recv_exit_status()
-
-				while not self.out.channel.eof_received:
-					exitcode = self.out.channel.recv_exit_status()
 
 				return exitcode
 			except:

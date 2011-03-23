@@ -63,11 +63,14 @@ def main():
 			out.warning("could not add host %s to target list" % host)
 
 	promt = CommandPromt(targets, metadata)
-	if interactive:
-		promt.cmdloop()
-	else:
-		promt.do_update(None)
-		promt.do_save(None)
+
+	try:
+		if interactive:
+			promt.cmdloop()
+		else:
+			promt.do_update(None)
+			promt.do_quit(None)
+	except KeyboardInterrupt:
 		promt.do_quit(None)
 
 def usage():

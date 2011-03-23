@@ -6,16 +6,6 @@ import sys
 
 from target import *
 
-class UpdateError(Exception):
-	def __init__(self, type, where):
-		self.type = type
-		self.where = where
-
-		self.string = "%s failed on %" % (self.type, self.where)
-
-	def __str__(self):
-		return repr(self.string)
-
 class Update():
 	def __init__(self, targets, patches):
 		self.targets = targets
@@ -89,6 +79,10 @@ class OldZypperUpdate(Update):
 			
 		self.commands = commands
 
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		if "A ZYpp transaction is already in progress." in stderr:
+			out.error("%s: command %s failed: stdin:\n%sstderr:\n%s", target.hostname, stdin, stdout, stderr)
+
 class OnlineUpdate(Update):
 	def __init__(self, targets, patches):
 		Update.__init__(self, targets, patches)
@@ -147,6 +141,11 @@ class Prepare():
 
 		queue.join()
 
+		for target in self.targets:
+			if self.targets[target].lasterr():
+				out.error("could not prepare host %s:\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
+				return
+
 		for command in self.commands: 
 			for target in self.targets:
 				queue.put([self.targets[target].run, [command]])
@@ -156,6 +155,9 @@ class Prepare():
 
 			queue.join()
 
+			for target in self.targets:
+				self.check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+
 		for target in self.targets:
 			queue.put([self.targets[target].set_repo, ["TESTING"]])
 
@@ -163,6 +165,11 @@ class Prepare():
 			spinner()
 		
 		queue.join()
+
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		"""stub. needs to be overwritten by inherited classes"""
+
+		return
 
 class ZypperPrepare(Prepare):
 	def __init__(self, targets, packages):
@@ -175,6 +182,18 @@ class ZypperPrepare(Prepare):
 
 		self.commands = commands
 
+class OldZypperPrepare(Prepare):
+	def __init__(self, targets, packages):
+		Prepare.__init__(self, targets, packages)
+
+		commands = []
+
+		for package in packages:
+			commands.append("zypper -n in -y -l %s" % package)
+
+		self.commands = commands
+
 Preparer = {
-    '11': ZypperPrepare
+    '11': ZypperPrepare,
+    '10': OldZypperPrepare
 }
