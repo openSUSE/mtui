@@ -38,11 +38,19 @@ EOF
 exit 0
 fi
 
+TEMP=`mktemp /tmp/${0##*/}.XXXXXXXXXX`
+
 rpm -qa | sort -t - -k1,5 | while read p
 do 
-    echo "######### $p #########"
-    rpm -V $p
-done 1>&2
+    echo "INFO: working on $p"
+    rpm -V $p > $TEMP
+    if [ -s $TEMP ]; then
+       echo "ERROR: verification of $p lists these changes:"
+       cat $TEMP
+    fi 1>&2
+done
+
+rm -f $TEMP
 
 exit 0
 
