@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import re
 import xml.dom.minidom
 
 class XMLOutput:
@@ -76,4 +77,4 @@ class XMLOutput:
 		self.machine.setAttribute(name, value)
 
 	def pretty(self):
-		return self.output.toprettyxml()
+		return re.sub("\033\[[0-9;]+m", "", self.output.toprettyxml())

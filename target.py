@@ -30,10 +30,6 @@ class Target():
 		except:
 			raise
 
-		self.stdin = self.connection.stdin
-		self.stdout = self.connection.stdout
-		self.stderr = self.connection.stderr
-
 		try:
 			for package in packages:
 				self.packages[package] = Package(package)
@@ -88,7 +84,7 @@ class Target():
 		if self.state == "enabled":
 			out.debug('running "%s" on %s' % (command, self.hostname))
 			exitcode = self.connection.run(command)
-			self.log.append([command, self.stdout(), self.stderr(), exitcode])
+			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode])
 		elif self.state == "dryrun":
 			out.info('dryrun: running "%s" on %s' % (command, self.hostname))
 			self.log.append([command, "dryrun\n", "", 0])

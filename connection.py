@@ -10,8 +10,9 @@ import stat
 import errno
 import getpass
 import logging
-import time
 import sys
+import select
+import socket
 
 out = logging.getLogger('mtui')
 
@@ -63,54 +64,54 @@ class Connection():
 		command -- the command to run
 
 		"""
+		self.stdin = command
+		self.stdout = ''
+		self.stderr = ''
+		exitcode = -1
+	
 		if self.is_active():
-			try:
-				self.sin, self.out, self.err = self.client.exec_command(command)
+			transport = self.client.get_transport()
+			session = transport.open_session()
+			session.setblocking(0)
+			session.settimeout(0)
+			session.exec_command(command)
 
-				exitcode = self.out.channel.recv_exit_status()
+			while True:
+				buffer = ''
 
-				return exitcode
-			except:
-				raise
+				if select.select([session], [], [], 600) == ([],[],[]):
+					out.critical("command timed out")
+					break
+
+				try:
+					if session.recv_ready():
+						buffer = session.recv(1024)
+						self.stdout += buffer
+
+						for line in buffer.split('\n'):
+							if line: out.debug(line)
+
+					if session.recv_stderr_ready():
+						buffer = session.recv_stderr(1024)
+						self.stderr += buffer
+
+						for line in buffer.split('\n'):
+							if line: out.debug(line)
+
+					if not buffer:
+						break
+
+				except socket.timeout:
+					select.select([], [], [], 1)
+
+			exitcode = session.recv_exit_status()
+
+			session.close()
+
 		else:
 			out.error("connection to %s is not active, can't send command" % self.hostname)
-			return -1
 
-	def stdin(self):
-		"""return stdin from last command
-
-		Keyword arguments:
-		None
-
-		"""
-		try:
-			return self.sin.read()
-		except:
-			return
-
-	def stdout(self):
-		"""return stout from last command
-
-		Keyword arguments:
-		None
-
-		"""
-		try:
-			return self.out.read()
-		except:
-			return
-
-	def stderr(self):
-		"""return stderr from last command
-
-		Keyword arguments:
-		None
-
-		"""
-		try:
-			return self.err.read()
-		except:
-			return
+		return exitcode
 
 	def put(self, local, remote):
 		"""transfers file to the host over SSH channel
