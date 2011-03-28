@@ -45,7 +45,7 @@ do
     echo "INFO: working on $p"
     rpm -V $p > $TEMP
     if [ -s $TEMP ]; then
-       echo "ERROR: verification of $p lists these changes:"
+       echo "ERROR: verification of $p revealed:"
        cat $TEMP
     fi 1>&2
 done
