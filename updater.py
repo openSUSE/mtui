@@ -6,6 +6,13 @@ import sys
 
 from target import *
 
+class UpdateError(Exception):
+	def __init__(self, value):
+		self.value = value
+
+	def __str__(self):
+		return repr(self.value)
+
 class Update():
 	def __init__(self, targets, patches):
 		self.targets = targets
@@ -21,7 +28,7 @@ class Update():
 		for target in self.targets:
 			queue.put([self.targets[target].set_repo, ["TESTING"]])
 
-		while queue.qsize():
+		while queue.unfinished_tasks:
 			spinner()
 
 		queue.join()
@@ -30,7 +37,7 @@ class Update():
 			for target in self.targets:
 				queue.put([self.targets[target].run, [command]])
 
-			while queue.qsize():
+			while queue.unfinished_tasks:
 				spinner()
 
 			queue.join()
@@ -61,7 +68,8 @@ class ZypperUpdate(Update):
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		if "zypper" in stdin and exitcode == "104":
-			out.error("%s: command %s failed: stdin:\n%sstderr:\n%s", target.hostname, stdin, stdout, stderr)
+			out.error("%s: command %s failed:\nstdin:\n%sstderr:\n%s", target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname)
 
 class OldZypperUpdate(Update):
 	def __init__(self, targets, patches):
@@ -81,7 +89,8 @@ class OldZypperUpdate(Update):
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		if "A ZYpp transaction is already in progress." in stderr:
-			out.error("%s: command %s failed: stdin:\n%sstderr:\n%s", target.hostname, stdin, stdout, stderr)
+			out.error("%s: command %s failed:\nstdin:\n%sstderr:\n%s", target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname)
 
 class OnlineUpdate(Update):
 	def __init__(self, targets, patches):
@@ -136,7 +145,7 @@ class Prepare():
 		for target in self.targets:
 			queue.put([self.targets[target].set_repo, ["UPDATE"]])
 
-		while queue.qsize():
+		while queue.unfinished_tasks:
 			spinner()
 
 		queue.join()
@@ -150,7 +159,7 @@ class Prepare():
 			for target in self.targets:
 				queue.put([self.targets[target].run, [command]])
 
-			while queue.qsize():
+			while queue.unfinished_tasks:
 				spinner()
 
 			queue.join()
@@ -161,7 +170,7 @@ class Prepare():
 		for target in self.targets:
 			queue.put([self.targets[target].set_repo, ["TESTING"]])
 
-		while queue.qsize():
+		while queue.unfinished_tasks:
 			spinner()
 		
 		queue.join()

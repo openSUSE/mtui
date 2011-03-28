@@ -475,7 +475,7 @@ class CommandPromt(cmd.Cmd):
 			if len(not_installed):
 				out.warning("%s: these packages are not installed: %s" % (target, not_installed))
 
-		if input("start pre update scripts? (y/N)", ["y", "yes" ]):
+		if input("start pre update scripts? (y/N) ", ["y", "yes" ]):
 			script_hook(self.targets, "pre", self.metadata.md5)
 
 		if input("start update process? (y/N) ", ["y", "yes" ]):
@@ -488,7 +488,12 @@ class CommandPromt(cmd.Cmd):
 				out.error("no updater available for %s" % release)
 				return
 
-			updater(self.targets, self.metadata.patches).run()
+			try:
+				updater(self.targets, self.metadata.patches).run()
+			except UpdateError as error:
+				out.info("unable to update: %s" % error)
+				if input("cancel update process? (y/N) ", ["y", "yes" ]):
+					return
 
 			for target in self.targets:
 				packages = self.targets[target].packages

@@ -25,16 +25,16 @@ class Target():
 		else:
 			self.state = "enabled"
 
-		try:
-			self.connection = Connection(self.hostname)
-		except:
-			raise
+		out.info("connecting to %s" % self.hostname)
 
 		try:
-			for package in packages:
-				self.packages[package] = Package(package)
+			self.connection = Connection(self.hostname)
 		except Exception as error:
-			print error
+			out.error("connecting to %s failed: %s" % (self.hostname, str(error)))
+			raise
+
+		for package in packages:
+			self.packages[package] = Package(package)
 
 	def query_versions(self, packages=None):
 		versions = {}
@@ -82,11 +82,17 @@ class Target():
 
 	def run(self, command):
 		if self.state == "enabled":
-			out.debug('running "%s" on %s' % (command, self.hostname))
-			exitcode = self.connection.run(command)
+			out.debug('%s: running "%s"' % (self.hostname, command))
+			try:
+				exitcode = self.connection.run(command)
+			except CommandTimeout:
+				out.critical('%s: command "%s" timed out' % (self.hostname, command))
+				exitcode = -1
+
 			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode])
+
 		elif self.state == "dryrun":
-			out.info('dryrun: running "%s" on %s' % (command, self.hostname))
+			out.info('dryrun: %s running "%s"' % (self.hostname, command))
 			self.log.append([command, "dryrun\n", "", 0])
 
 	def put(self, local, remote):
@@ -115,6 +121,7 @@ class Target():
 		return self.log[-1][3]
 
 	def close(self):
+		out.info("closing connection to %s" % self.hostname)
 		return self.connection.close()
 
 class Package:
@@ -208,7 +215,7 @@ class FileUpload():
 			except:
 				raise
 
-		while queue.qsize():
+		while queue.unfinished_tasks:
 			spinner()
 
 		queue.join()
@@ -232,7 +239,7 @@ class FileDownload():
 			else:
 				queue.put([self.targets[target].get, [self.remote, self.local]])
 
-		while queue.qsize():
+		while queue.unfinished_tasks:
 			spinner()
 
 		queue.join()
@@ -252,7 +259,7 @@ class RunCommand():
 			for target in self.targets:
 				queue.put([self.targets[target].run, [self.command]])
 
-			while queue.qsize():
+			while queue.unfinished_tasks:
 				spinner()
 
 			queue.join()

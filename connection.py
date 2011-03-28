@@ -16,6 +16,13 @@ import socket
 
 out = logging.getLogger('mtui')
 
+class CommandTimeout(Exception):
+	def __init__(self, command=None):
+		self.command = command
+
+	def __str__(self):
+		return repr(self.command)
+
 class Connection():
 	"""manage SSH and SFTP connections"""
 	def __init__(self, hostname):
@@ -35,8 +42,6 @@ class Connection():
 
 		#self.client.set_combine_stderr(True)
 
-		out.info("connecting to %s" % self.hostname)
-
 		try:
 			self.client.connect(self.hostname, username='root')
 		except paramiko.AuthenticationException:
@@ -46,12 +51,10 @@ class Connection():
 
 			try:
 				self.client.connect(self.hostname, username='root', password=password)
-			except Exception as error:
-				out.error("connecting to %s failed: %s" % (self.hostname, str(error)))
+			except Exception:
 				raise
 
-		except Exception as error:
-			out.error("connecting to %s failed: %s" % (self.hostname, str(error)))
+		except Exception:
 			raise
 
 	def run(self, command):
@@ -67,49 +70,43 @@ class Connection():
 		self.stdin = command
 		self.stdout = ''
 		self.stderr = ''
-		exitcode = -1
 	
-		if self.is_active():
-			transport = self.client.get_transport()
-			session = transport.open_session()
-			session.setblocking(0)
-			session.settimeout(0)
-			session.exec_command(command)
+		transport = self.client.get_transport()
+		session = transport.open_session()
+		session.setblocking(0)
+		session.settimeout(0)
+		session.exec_command(command)
 
-			while True:
-				buffer = ''
+		while True:
+			buffer = ''
 
-				if select.select([session], [], [], 600) == ([],[],[]):
-					out.critical("command timed out")
+			if select.select([session], [], [], 600) == ([],[],[]):
+				raise CommandTimeout
+
+			try:
+				if session.recv_ready():
+					buffer = session.recv(1024)
+					self.stdout += buffer
+
+					for line in buffer.split('\n'):
+						if line: out.debug(line)
+
+				if session.recv_stderr_ready():
+					buffer = session.recv_stderr(1024)
+					self.stderr += buffer
+
+					for line in buffer.split('\n'):
+						if line: out.debug(line)
+
+				if not buffer:
 					break
 
-				try:
-					if session.recv_ready():
-						buffer = session.recv(1024)
-						self.stdout += buffer
+			except socket.timeout:
+				select.select([], [], [], 1)
 
-						for line in buffer.split('\n'):
-							if line: out.debug(line)
+		exitcode = session.recv_exit_status()
 
-					if session.recv_stderr_ready():
-						buffer = session.recv_stderr(1024)
-						self.stderr += buffer
-
-						for line in buffer.split('\n'):
-							if line: out.debug(line)
-
-					if not buffer:
-						break
-
-				except socket.timeout:
-					select.select([], [], [], 1)
-
-			exitcode = session.recv_exit_status()
-
-			session.close()
-
-		else:
-			out.error("connection to %s is not active, can't send command" % self.hostname)
+		session.close()
 
 		return exitcode
 
@@ -194,6 +191,5 @@ class Connection():
 		None
 
 		"""
-		if self.is_connected():
-			out.info("closing connection to %s" % self.hostname)
-			self.client.close()
+
+		self.client.close()

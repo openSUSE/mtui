@@ -12,7 +12,7 @@ COLORS = {
     'WARNING': YELLOW,
     'INFO': GREEN,
     'DEBUG': BLUE,
-    'CRITICAL': YELLOW,
+    'CRITICAL': RED,
     'ERROR': RED
 }
 
