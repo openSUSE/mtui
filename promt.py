@@ -9,6 +9,7 @@ import cmd
 import logging
 import readline
 import subprocess
+import glob
 
 from rpmcmp import *
 from target import *
@@ -26,7 +27,7 @@ class CommandPromt(cmd.Cmd):
 		self.metadata = metadata
 		self.systems = []
  
-		readline.set_completer_delims('`~!@#$%^&*()=+[{]}\|;:",<>/? ')
+		readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
 		try:
 			readline.read_history_file(".mtui_history")
 		except IOError:
@@ -530,21 +531,39 @@ class CommandPromt(cmd.Cmd):
 		filename -- file to upload to target hosts
 
 		"""
-		if os.path.isfile(args):
-			remote = "/tmp/" + os.path.basename(args)
+		if args:
+			for filename in glob.glob(args):
+				if os.path.isfile(filename):
+					remote = "/tmp/%s/%s" % (self.metadata.md5, os.path.basename(filename))
 
-			try:
-				FileUpload(self.targets, args, remote).run()
-			except:
-				out.error("uploading %s to %s failed" % (args, remote))
-			else:
-				out.info("uploaded %s to %s" % (args, remote))
+					try:
+						FileUpload(self.targets, filename, remote).run()
+					except:
+						out.error("uploading %s to %s failed" % (filename, remote))
+					else:
+						out.info("uploaded %s to %s" % (filename, remote))
 
 		else:
 			parse_error(self.do_put, args)
 
 	def complete_put(self, text, line, begidx, endidx):
-		return [i for i in os.listdir('.') if i.startswith(text)]
+		dirname = ""
+		filename = ""
+
+		if text.startswith("~"):
+			text = text.replace("~", os.path.expanduser('~'), 1)
+			text += "/"
+
+		if "/" in text:
+			dirname = "/".join(text.split("/")[:-1])
+			dirname += "/"
+
+		if not dirname:
+			dirname = "./"
+
+		filename = text.split("/")[-1]
+
+		return [dirname + i for i in os.listdir(dirname) if i.startswith(filename)]
 
 	def do_get(self, args):
 		"""download file from all active hosts
