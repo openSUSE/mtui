@@ -547,23 +547,7 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_put, args)
 
 	def complete_put(self, text, line, begidx, endidx):
-		dirname = ""
-		filename = ""
-
-		if text.startswith("~"):
-			text = text.replace("~", os.path.expanduser('~'), 1)
-			text += "/"
-
-		if "/" in text:
-			dirname = "/".join(text.split("/")[:-1])
-			dirname += "/"
-
-		if not dirname:
-			dirname = "./"
-
-		filename = text.split("/")[-1]
-
-		return [dirname + i for i in os.listdir(dirname) if i.startswith(filename)]
+		return self.complete_filelist(text, line, begidx, endidx)
 
 	def do_get(self, args):
 		"""download file from all active hosts
@@ -596,6 +580,34 @@ class CommandPromt(cmd.Cmd):
 
 		else:
 			parse_error(self.do_get, args)
+
+	def do_edit(self, args):
+		"""edit local file or template
+
+		edit file,<filename>
+		edit template
+
+		Keyword arguments:
+		filename -- edit filename
+		template -- edit template
+
+		"""
+		command = args.split(",")[0]
+
+		editor = os.environ.get("EDITOR", "vi")
+
+		if command == "file":
+			os.system("%s %s" % (editor, args.split(",")[1]))
+		elif command == "template":
+			os.system("%s %s" % (editor, self.metadata.path))
+		else:
+			parse_error(self.do_edit, args)
+
+	def complete_edit(self, text, line, begidx, endidx):
+		if "file," in line:
+			return self.complete_filelist(text.replace("file,", "", 1), line, begidx, endidx)
+		else:
+			return [i for i in ["file", "template"] if i.startswith(text)]
 
 	def do_save(self, args):
 		"""save testing log to XML file
@@ -664,6 +676,25 @@ class CommandPromt(cmd.Cmd):
 
 			readline.write_history_file(".mtui_history")
 			sys.exit(0)
+
+	def complete_filelist(self, text, line, begidx, endidx):
+		dirname = ""
+		filename = ""
+
+		if text.startswith("~"):
+			text = text.replace("~", os.path.expanduser('~'), 1)
+			text += "/"
+
+		if "/" in text:
+			dirname = "/".join(text.split("/")[:-1])
+			dirname += "/"
+
+		if not dirname:
+			dirname = "./"
+
+		filename = text.split("/")[-1]
+
+		return [dirname + i for i in os.listdir(dirname) if i.startswith(filename)]
 
 	def complete_systemlist(self, text, line, begidx, endidx):
 		return [i.strip('\n') for i in self.systems if i.startswith(text) and i not in line]

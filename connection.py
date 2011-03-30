@@ -34,7 +34,7 @@ class Connection():
 		hostname -- host address to connect to
 
 		"""
-		#paramiko.util.log_to_file("/tmp/paramiko.log")
+		paramiko.util.log_to_file("/tmp/paramiko.log")
 		self.hostname = hostname
 
 		self.client = paramiko.SSHClient()

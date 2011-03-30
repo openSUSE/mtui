@@ -33,6 +33,7 @@ class Template:
 
 		self.metadata = Metadata()
 		self.metadata.md5 = md5
+		self.metadata.path = self.path
 
 		try:
 			with open(self.path, 'r') as template:

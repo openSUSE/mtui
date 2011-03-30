@@ -152,6 +152,7 @@ class Package:
 class Metadata:
 	def __init__(self):
 		self.md5 = ""
+		self.path = ""
 		self.category = ""
 		self.patches = {}
 		self.swampid = ""
