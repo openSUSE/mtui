@@ -206,3 +206,20 @@ Preparer = {
     '11': ZypperPrepare,
     '10': OldZypperPrepare
 }
+
+class ZypperDowngrade(Prepare):
+	def __init__(self, targets, packages):
+		Prepare.__init__(self, targets, packages)
+
+		commands = []
+
+		for package in packages:
+			commands.append("zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact %s | grep ^v | cut -d \| -f 4 | sort -ru | head -n 1 | sed -e 's, ,,g')" % (package, package))
+
+		self.commands = commands
+
+
+Downgrader = {
+    '11': ZypperDowngrade
+}
+

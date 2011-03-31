@@ -288,23 +288,24 @@ class CommandPromt(cmd.Cmd):
 			command = ",".join(args.split(',')[1:])
 
 			if 'all' in args:
-				targets = list(self.targets)
+				targets = self.targets
 			else:
 				targets = selected_targets(self.targets, [args.split(',')[0]])
 
-			try:
-				RunCommand(self.targets, command).run()
-			except:
-				return
+			if targets:
+				try:
+					RunCommand(targets, command).run()
+				except:
+					return
 
-			for target in targets:
-				if target in self.targets and self.targets[target].state == "enabled":
-					print "%s:~> %s [%s]" % (target, self.targets[target].lastin(), self.targets[target].lastexit())
-					print self.targets[target].lastout()
-					if self.targets[target].lasterr():
-						print "stderr:", self.targets[target].lasterr()
+				for target in targets:
+					if target in self.targets and self.targets[target].state == "enabled":
+						print "%s:~> %s [%s]" % (target, self.targets[target].lastin(), self.targets[target].lastexit())
+						print self.targets[target].lastout()
+						if self.targets[target].lasterr():
+							print "stderr:", self.targets[target].lasterr()
 
-			out.info("done")
+				out.info("done")
 		else:
 			parse_error(self.do_run, args)
 
@@ -405,12 +406,50 @@ class CommandPromt(cmd.Cmd):
 		else:		
 			return [i for i in list(self.targets) + ['all'] if i.startswith(text) and i not in line]
 
+	def do_downgrade_hosts(self, args):
+		"""downgrade packages to last realeased version on hosts
+
+		downgrade_hosts <hostname>
+		Keyword arguments:
+		hostname   -- hostname from the list or "all"
+
+		"""
+		if args:
+			if 'all' in args:
+				targets = self.targets
+			else:
+				targets = selected_targets(self.targets, args.split(','))
+
+			if targets:
+				for release in self.metadata.get_releases():
+					try:
+						downgrader = Downgrader[release]
+					except KeyError:
+						out.error("no downgrader available for %s" % release)
+						return
+
+					out.info("downgrading")
+					try:
+						downgrader(targets, self.metadata.get_package_list()).run()
+					except:
+						out.critical("could not downgrade target systems %s", targets.keys())
+						#pass
+						raise
+					else:
+						out.info("done")
+
+		else:
+			parse_error(self.do_downgrade_hosts, args)
+
+	def complete_downgrade_hosts(self, text, line, begidx, endidx):
+		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+
 	def do_prepare_hosts(self, args):
 		"""install missing packages on hosts
 
-		prepare_hosts
+		prepare_hosts <hostname>
 		Keyword arguments:
-		None
+		hostname   -- hostname from the list or "all"
 
 		"""
 		if args:
@@ -459,7 +498,7 @@ class CommandPromt(cmd.Cmd):
 			self.targets[target].query_versions()
 
 			for package in packages:
-				if self.targets[target].packages[package].before != "0":
+				if self.targets[target].packages[package].before <= self.targets[target].packages[package].current:
 					continue
 
 				before = self.targets[target].packages[package].current
