@@ -86,7 +86,7 @@ class Target():
 			try:
 				exitcode = self.connection.run(command)
 			except CommandTimeout:
-				out.critical('%s: command "%s" timed out' % (self.hostname, command))
+				out.error('%s: command "%s" timed out' % (self.hostname, command))
 				exitcode = -1
 
 			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode])

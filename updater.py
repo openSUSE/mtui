@@ -7,11 +7,12 @@ import sys
 from target import *
 
 class UpdateError(Exception):
-	def __init__(self, value):
-		self.value = value
+	def __init__(self, host, reason):
+		self.host = host
+		self.reason = reason
 
 	def __str__(self):
-		return repr(self.value)
+		return repr("%s: %s" % (self.host, self.reason))
 
 class Update():
 	def __init__(self, targets, patches):
@@ -68,8 +69,8 @@ class ZypperUpdate(Update):
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		if "zypper" in stdin and exitcode == "104":
-			out.error("%s: command %s failed:\nstdin:\n%sstderr:\n%s", target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname)
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "update stack locked")
 
 class OldZypperUpdate(Update):
 	def __init__(self, targets, patches):
@@ -89,8 +90,8 @@ class OldZypperUpdate(Update):
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		if "A ZYpp transaction is already in progress." in stderr:
-			out.error("%s: command %s failed:\nstdin:\n%sstderr:\n%s", target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname)
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "update stack locked")
 
 class OnlineUpdate(Update):
 	def __init__(self, targets, patches):

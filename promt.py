@@ -498,13 +498,14 @@ class CommandPromt(cmd.Cmd):
 			self.targets[target].query_versions()
 
 			for package in packages:
-				if self.targets[target].packages[package].before <= self.targets[target].packages[package].current:
-					continue
-
-				before = self.targets[target].packages[package].current
 				required = self.metadata.packages[package]
 
-				packages[package].set_versions(before=before, required=required)
+				if vercmp(self.targets[target].packages[package].before, self.targets[target].packages[package].current) == 1:
+					packages[package].set_versions(required=required)
+				else
+					packages[package].set_versions(before=self.targets[target].packages[package].current, required=required)
+
+				before = self.targets[target].packages[package].before
 
 				if before == "0":
 					not_installed.append(package)
@@ -531,7 +532,7 @@ class CommandPromt(cmd.Cmd):
 			try:
 				updater(self.targets, self.metadata.patches).run()
 			except UpdateError as error:
-				out.info("unable to update: %s" % error)
+				out.warning("there were errors while updating: %s" % error)
 				if input("cancel update process? (y/N) ", ["y", "yes" ]):
 					return
 

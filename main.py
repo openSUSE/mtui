@@ -53,7 +53,11 @@ def main():
 		out.error("please specify an update identifier")
 		usage()
 
-	update = Template(md5, team, directory)
+	try:
+		update = Template(md5, team, directory)
+	except:
+		usage()
+
 	metadata = update.metadata
 
 	for host, system in metadata.systems.items():
