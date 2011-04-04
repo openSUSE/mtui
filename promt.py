@@ -502,7 +502,7 @@ class CommandPromt(cmd.Cmd):
 
 				if vercmp(self.targets[target].packages[package].before, self.targets[target].packages[package].current) == 1:
 					packages[package].set_versions(required=required)
-				else
+				else:
 					packages[package].set_versions(before=self.targets[target].packages[package].current, required=required)
 
 				before = self.targets[target].packages[package].before
