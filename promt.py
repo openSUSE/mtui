@@ -14,6 +14,7 @@ import glob
 from rpmcmp import *
 from target import *
 from updater import *
+from export import *
 
 out = logging.getLogger('mtui')
 
@@ -119,7 +120,7 @@ class CommandPromt(cmd.Cmd):
 
 		"""
 		if args:
-			if 'all' in args:
+			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
 			else:
 				targets = args.split(',')
@@ -231,7 +232,7 @@ class CommandPromt(cmd.Cmd):
 
 		"""
 		if args:
-			if 'all' in args:
+			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
 			else:
 				targets = args.split(',')
@@ -287,7 +288,7 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			command = ",".join(args.split(',')[1:])
 
-			if 'all' in args:
+			if args.split(',')[0] == 'all':
 				targets = self.targets
 			else:
 				targets = selected_targets(self.targets, [args.split(',')[0]])
@@ -322,7 +323,7 @@ class CommandPromt(cmd.Cmd):
 
 		"""
 		if args:
-			if 'all' in args:
+			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
 			else:
 				targets = args.split(',')[:-1]
@@ -378,7 +379,7 @@ class CommandPromt(cmd.Cmd):
 
 		"""
 		if args:
-			if 'all' in args:
+			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
 			else:
 				targets = args.split(',')[:-1]
@@ -415,7 +416,7 @@ class CommandPromt(cmd.Cmd):
 
 		"""
 		if args:
-			if 'all' in args:
+			if args.split(',')[0] == 'all':
 				targets = self.targets
 			else:
 				targets = selected_targets(self.targets, args.split(','))
@@ -453,7 +454,7 @@ class CommandPromt(cmd.Cmd):
 
 		"""
 		if args:
-			if 'all' in args:
+			if args.split(',')[0] == 'all':
 				targets = self.targets
 			else:
 				targets = selected_targets(self.targets, args.split(','))
@@ -649,6 +650,45 @@ class CommandPromt(cmd.Cmd):
 		else:
 			return [i for i in ["file", "template"] if i.startswith(text)]
 
+	def do_export(self, args):
+		"""export data to template file
+
+		export filename
+		Keyword arguments:
+		filename -- output template file name
+
+		"""
+		if args:
+			filename = args.split(',')[0]
+		else:
+			filename = self.metadata.path
+
+		output = XMLOutput()
+		output.add_header(self.metadata)
+
+		for target in self.targets:
+			output.add_target(self.targets[target])
+
+		try:
+			template = xml_to_template(self.metadata.path, output.pretty())
+		except Exception:
+			out.error("could not export XML")
+			return
+
+		if os.path.exists(filename):
+			out.warning("file %s exists." % filename)
+			if not input("should i overwrite %s? (y/N) " % filename, ["y", "yes" ]):
+				filename = add_time(filename)
+
+		out.info("exporting XML to %s" % filename)
+		try:
+			with open(filename, 'w') as f:
+				f.write("".join(l.encode("utf-8") for l in template))
+		except Exception as error:
+			print "failed to write %s: %s" % (filename, str(error))
+		else:
+			print "wrote template to %s" % filename
+
 	def do_save(self, args):
 		"""save testing log to XML file
 
@@ -678,11 +718,9 @@ class CommandPromt(cmd.Cmd):
 		if os.path.exists(filename):
 			out.warning("file %s exists." % filename)
 			if not input("should i overwrite %s? (y/N) " % filename, ["y", "yes" ]):
-				import math
-				import time
+				filename = add_time(filename)
 
-				filename += "." + str(math.trunc(time.time()))
-				out.info("saving output to %s" % filename)
+		out.info("saving output to %s" % filename)
 
 		try:
 			outxml = open(filename, "w")
@@ -809,6 +847,14 @@ def script_hook(targets, which, md5):
 		except KeyboardInterrupt:
 			out.warning("skipping script %s" % script)
 			continue
+
+def add_time(value):
+	import math
+	import time
+
+	value += "." + str(math.trunc(time.time()))
+
+	return value
 
 def input(text, options):
 	try:
