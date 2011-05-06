@@ -17,7 +17,7 @@ def main():
 
 	md5 = None
 	team = None
-	directory = "."
+	directory = os.getenv("TEMPLATEDIR", ".")
 	interactive = False
 	dryrun = False
 

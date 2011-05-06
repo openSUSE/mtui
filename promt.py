@@ -109,7 +109,8 @@ class CommandPromt(cmd.Cmd):
 				else:
 					state = red('Disabled')
 
-				print '{0:30}: {1}'.format(target, state)
+				system = "(%s)" % self.targets[target].system
+				print '{0:20} {1:20}: {2}'.format(target, system, state)
 
  	def do_list_packages(self, args):
 		"""list packages from template or from target if specified
@@ -407,10 +408,10 @@ class CommandPromt(cmd.Cmd):
 		else:		
 			return [i for i in list(self.targets) + ['all'] if i.startswith(text) and i not in line]
 
-	def do_downgrade_hosts(self, args):
+	def do_downgrade(self, args):
 		"""downgrade packages to last realeased version on hosts
 
-		downgrade_hosts <hostname>
+		downgrade <hostname>
 		Keyword arguments:
 		hostname   -- hostname from the list or "all"
 
@@ -431,7 +432,7 @@ class CommandPromt(cmd.Cmd):
 
 					out.info("downgrading")
 					try:
-						downgrader(targets, self.metadata.get_package_list()).run()
+						downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
 					except:
 						out.critical("could not downgrade target systems %s", targets.keys())
 						#pass
@@ -440,15 +441,15 @@ class CommandPromt(cmd.Cmd):
 						out.info("done")
 
 		else:
-			parse_error(self.do_downgrade_hosts, args)
+			parse_error(self.do_downgrade, args)
 
-	def complete_downgrade_hosts(self, text, line, begidx, endidx):
+	def complete_downgrade(self, text, line, begidx, endidx):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
-	def do_prepare_hosts(self, args):
+	def do_prepare(self, args):
 		"""install missing packages on hosts
 
-		prepare_hosts <hostname>
+		prepare <hostname>
 		Keyword arguments:
 		hostname   -- hostname from the list or "all"
 
@@ -477,92 +478,103 @@ class CommandPromt(cmd.Cmd):
 						out.info("done")
 
 		else:
-			parse_error(self.do_prepare_hosts, args)
+			parse_error(self.do_prepare, args)
 
-	def complete_prepare_hosts(self, text, line, begidx, endidx):
+	def complete_prepare(self, text, line, begidx, endidx):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_update(self, args):
 		"""update all active hosts
 
-		update
+		update <hostname>
 		Keyword arguments:
-		None
+		hostname   -- hostname from the list or "all"
 
 		"""
-		self.do_prepare_hosts("all")
+		if args:
+			if args.split(',')[0] == 'all':
+				targets = self.targets
+			else:
+				targets = selected_targets(self.targets, args.split(','))
 
-		for target in self.targets:
-			not_installed = []
-			packages = self.targets[target].packages
+			self.do_prepare(args)
 
-			self.targets[target].query_versions()
+			for target in targets:
+				not_installed = []
+				packages = targets[target].packages
 
-			for package in packages:
-				required = self.metadata.packages[package]
-
-				if vercmp(self.targets[target].packages[package].before, self.targets[target].packages[package].current) == 1:
-					packages[package].set_versions(required=required)
-				else:
-					packages[package].set_versions(before=self.targets[target].packages[package].current, required=required)
-
-				before = self.targets[target].packages[package].before
-
-				if before == "0":
-					not_installed.append(package)
-				else:
-					if vercmp(before, required) > -1:
-						out.warning("%s: package is already updated: %s (%s, required %s)" % (target, package, before, required))
-
-			if len(not_installed):
-				out.warning("%s: these packages are not installed: %s" % (target, not_installed))
-
-		if input("start pre update scripts? (y/N) ", ["y", "yes" ]):
-			script_hook(self.targets, "pre", self.metadata.md5)
-
-		if input("start update process? (y/N) ", ["y", "yes" ]):
-			out.info("updating")
-
-			release = self.metadata.get_releases()[0]
-			try:
-				updater = Updater[release]
-			except KeyError:
-				out.error("no updater available for %s" % release)
-				return
-
-			try:
-				updater(self.targets, self.metadata.patches).run()
-			except UpdateError as error:
-				out.warning("there were errors while updating: %s" % error)
-				if input("cancel update process? (y/N) ", ["y", "yes" ]):
-					return
-
-			for target in self.targets:
-				packages = self.targets[target].packages
-
-				self.targets[target].query_versions()
+				targets[target].query_versions()
 
 				for package in packages:
-					before = packages[package].before
-					required = packages[package].required
-					after = self.targets[target].packages[package].current
+					required = self.metadata.packages[package]
 
-					packages[package].set_versions(after=after)
+					if vercmp(targets[target].packages[package].before, targets[target].packages[package].current) == 1:
+						packages[package].set_versions(required=required)
+					else:
+						packages[package].set_versions(before=targets[target].packages[package].current, required=required)
 
-					if after != "0":
-						if vercmp(before, after) == 0:
-							out.warning("%s: package was not updated: %s (%s)" % (target, package, after))
+					before = targets[target].packages[package].before
 
-						if vercmp(after, required) < 0:
-							out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
+					if before == "0":
+						not_installed.append(package)
+					else:
+						if vercmp(before, required) > -1:
+							out.warning("%s: package is already updated: %s (%s, required %s)" % (target, package, before, required))
 
-			if input("start post update scripts? (y/N) ", ["y", "yes" ]):
-				script_hook(self.targets, "post", self.metadata.md5)
+				if len(not_installed):
+					out.warning("%s: these packages are not installed: %s" % (target, not_installed))
 
-				if input("start compare scripts? (y/N) ", ["y", "yes" ]):
-					script_hook(self.targets, "compare", self.metadata.md5)
+			if input("start pre update scripts? (y/N) ", ["y", "yes" ]):
+				script_hook(targets, "pre", self.metadata.md5)
 
-		out.info("done")
+			if input("start update process? (y/N) ", ["y", "yes" ]):
+				out.info("updating")
+
+				release = self.metadata.get_releases()[0]
+				try:
+					updater = Updater[release]
+				except KeyError:
+					out.error("no updater available for %s" % release)
+					return
+
+				try:
+					updater(targets, self.metadata.patches).run()
+				except UpdateError as error:
+					out.warning("there were errors while updating: %s" % error)
+					if input("cancel update process? (y/N) ", ["y", "yes" ]):
+						return
+
+				for target in targets:
+					packages = targets[target].packages
+
+					targets[target].query_versions()
+
+					for package in packages:
+						before = packages[package].before
+						required = packages[package].required
+						after = targets[target].packages[package].current
+
+						packages[package].set_versions(after=after)
+
+						if after != "0":
+							if vercmp(before, after) == 0:
+								out.warning("%s: package was not updated: %s (%s)" % (target, package, after))
+
+							if vercmp(after, required) < 0:
+								out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
+
+				if input("start post update scripts? (y/N) ", ["y", "yes" ]):
+					script_hook(targets, "post", self.metadata.md5)
+
+					if input("start compare scripts? (y/N) ", ["y", "yes" ]):
+						script_hook(targets, "compare", self.metadata.md5)
+
+			out.info("done")
+		else:
+			parse_error(self.do_update, args)
+
+	def complete_update(self, text, line, begidx, endidx):
+		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_put(self, args):
 		"""upload file to all active hosts

@@ -43,6 +43,9 @@ class Connection():
 
 		#self.client.set_combine_stderr(True)
 
+		self.connect()
+
+	def connect(self):
 		try:
 			self.client.connect(self.hostname, username='root')
 		except paramiko.AuthenticationException:
@@ -72,8 +75,18 @@ class Connection():
 		self.stdout = ''
 		self.stderr = ''
 	
-		transport = self.client.get_transport()
-		session = transport.open_session()
+		if not self.is_active():
+			self.connect()
+
+		try:
+			transport = self.client.get_transport()
+			session = transport.open_session()
+		except Exception:
+			select.select([], [], [], 20)
+			self.connect()
+			transport = self.client.get_transport()
+			session = transport.open_session()
+			
 		session.setblocking(0)
 		session.settimeout(0)
 		session.exec_command(command)

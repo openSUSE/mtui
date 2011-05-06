@@ -132,9 +132,10 @@ Updater = {
 }
 
 class Prepare():
-	def __init__(self, targets, packages):
+	def __init__(self, targets, packages=None, patches=None):
 		self.targets = targets
 		self.packages = packages
+		self.patches = patches
 		self.commands = []
 
 	def run(self):
@@ -209,8 +210,8 @@ Preparer = {
 }
 
 class ZypperDowngrade(Prepare):
-	def __init__(self, targets, packages):
-		Prepare.__init__(self, targets, packages)
+	def __init__(self, targets, packages, patches):
+		Prepare.__init__(self, targets, packages, patches)
 
 		commands = []
 
@@ -219,8 +220,25 @@ class ZypperDowngrade(Prepare):
 
 		self.commands = commands
 
+class OldZypperDowngrade(Prepare):
+	def __init__(self, targets, packages, patches):
+		Prepare.__init__(self, targets, packages, patches)
+
+		patch = patches['zypp']
+
+		commands = []
+
+		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -l -y -t patch $p; done" % patch)
+		for package in packages:
+			commands.append("rpm --nodeps -e %s" % package)
+
+		for package in packages:
+			commands.append("zypper -n in -y -l %s" % package)
+
+		self.commands = commands
 
 Downgrader = {
-    '11': ZypperDowngrade
+    '11': ZypperDowngrade,
+    '10': OldZypperDowngrade
 }
 
