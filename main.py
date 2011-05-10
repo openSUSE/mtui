@@ -55,6 +55,15 @@ def main():
 
 	try:
 		update = Template(md5, team, directory)
+	except IOError:
+		if raw_input("Template does not yet exist. Try to check it out? ").lower() in ["y", "yes"]:
+			os.system("cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s" % (directory, md5))
+			try:
+				update = Template(md5, team, directory)
+			except:
+				sys.exit(0)
+		else:
+			sys.exit(0)
 	except:
 		usage()
 

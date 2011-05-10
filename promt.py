@@ -576,6 +576,32 @@ class CommandPromt(cmd.Cmd):
 	def complete_update(self, text, line, begidx, endidx):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
+	def do_checkout(self, args):
+		"""update template file from svn
+
+		checkout
+		Keyword arguments:
+		none
+
+		"""
+		exitcode = os.system("cd %s; svn up" % os.path.dirname(self.metadata.path))
+
+		if exitcode != 0:
+			out.error("updating template failed, returncode: %s" % exitcode)
+
+	def do_commit(self, args):
+		"""commit template to the SVN
+
+		commit
+		Keyword arguments:
+		none
+
+		"""
+		exitcode = os.system("cd %s; svn up; svn ci" % os.path.dirname(self.metadata.path))
+
+		if exitcode != 0:
+			out.error("committing template failed, returncode: %s" % exitcode)
+
 	def do_put(self, args):
 		"""upload file to all active hosts
 

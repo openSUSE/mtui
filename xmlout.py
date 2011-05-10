@@ -77,4 +77,5 @@ class XMLOutput:
 		self.machine.setAttribute(name, value)
 
 	def pretty(self):
+		#return re.sub("\033\[[0-9;]+m", "", self.output.toprettyxml())
 		return re.sub("\033", "", self.output.toprettyxml())
