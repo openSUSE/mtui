@@ -81,7 +81,7 @@ def main():
 		if interactive:
 			promt.cmdloop()
 		else:
-			promt.do_update(None)
+			promt.do_update('all')
 			promt.do_quit(None)
 	except KeyboardInterrupt:
 		promt.do_quit(None)

@@ -1,0 +1,565 @@
+Maintenance Test Update Installer
+==================================
+
+
+Purpose
+-------------------------
+
+The Maintenance Test Update Installer (MTUI) automates common task in the
+maintenance update process and provides handy shortcuts and commands
+for update testing and verifying. While MTUI provides a framework for
+testing, updating and reporting, the tester does not need to handle
+different console terminals, hosts or package versions himself. The
+tester could now focus on the bug and regression testing while leaving
+most of the tools overhead behind. This should speed up the testing and
+make the testing workflows better comparable. All issued commands are
+stored for later processing, i.e. for completing the maintenance template
+or for reference on subsequent updates.
+
+
+Interface
+-------------------------
+
+Parameters
+-------------------------
+
+In the current state, MTUI provides a commandline interface and an
+interactive shell for command processing. Several basic information
+are set by the following command line parameter:
+
+
+	-t,--template=           template directory
+
+Specifying the template directory in which the testing directories
+are checked out from SVN. If none is given, the current directory
+is used. However, this is typically set to another directory
+like --template=~/testing/templates. For an improved usability,
+the environment variable TEMPLATEDIR is also processed. Instead of
+specifying the directory each time on the commandline, one could set
+TEMPLATEDIR="~/testing/templates" in ~/.profile. The commandline
+parameter takes precedence over the environment variable if both are given.
+
+	-a,--asia                use asia template
+	-e,--emea                use emea template
+
+Specify either -a for ASIA or -e for EMEA template files (log.asia or
+log.emea, respectively). When none is given, EMEA is default set.
+
+	-m,--md5=                md5 update identifier
+
+This parameter is mandatory and needs to be set in order to find the
+correct testing template. It simply specifies the md5 hash for the update
+which could be retrieved on the SWAMP QA view. The template path is then
+composed of the directory parameter, md5 and asia or emea
+($directory/$md5/log.[asia|emea]). If the template is not yet checked out
+from SVN, MTUI tries to fetch it.
+
+	-i,--interactive         interactive update shell
+
+When set, MTUI is run in an interactive mode with a command shell. This
+should be set by the tester as it's the primary use case of MTUI. If it's not
+set, the update procedure (see below) is run and MTUI quits with saving the
+log output.
+
+	-d,--dryrun              start in dryrun mode
+
+If this is set, no commands are actually issued to the connected hosts. MTUI
+prints the commands it would run without touching the machines. This could be
+disabled again on a running MTUI instance in the command shell with
+set_host_state (see below)
+
+	-v,--verbose             enable debugging output
+
+Enables MTUI's debugging output. There might be a use case for debug output
+when testing a command which runs for a longer time as the command output is
+then printed in realtime instead of after the command has finished. However,
+it's more reasonable to use the set_log_level (see below) command then. The
+default loglevel is INFO while -v sets it to DEBUG.
+
+	-h,--help                help
+
+Prints the parameter list
+
+Shell
+-------------------------
+The MTUI shell is comparable to a bash shell as both use the readline backend
+for command processing. For all shell commands, autocompletion and line editing
+features are enabled. Even a command history and history searching are
+available. For a short overview of procedures and help texts, the "help"
+command is also available (i.e. help add_host prints a short description of
+the add_host command). Running processes can be interrupted by pressing CTRL-C.
+However, it blocks until all currently running commands have finished.
+
+Host Management
+*****************
+- add_host
+Adds another machine to the target host list. The system type needs to be
+specified as well.
+
+                add_host <hostname>,<system>
+                Keyword arguments:
+                hostname -- address of the target host (should be the FQDN)
+                system   -- system type, ie. sles11sp1-i386
+
+
+- remove_host
+Disconnects from host and remove host from list. Warning: The host log is
+purged as well. If the tester wants to preserve the log, it's better to use
+the set_host_state command instead and set the host to "disabled". Multible
+hosts can be specified.
+
+		remove_host <hostname>,hostname,...
+		Keyword arguments:
+		hostname -- hostname from the target list
+
+
+- list_hosts
+Lists all connected hosts including the system types and their current state.
+State could be "Enabled", "Disabled" or "Dryrun".
+
+		list_hosts
+		Keyword arguments:
+		None
+
+
+- set_host_state
+Sets the host state to "Enabled", "Disabled" or "Dryrun". A host set to
+"Enabled" runs all issued commands while a "Disabled" host or a host set
+to "Dryrun" doesn't run any command on the host. The difference between
+"Disabled" and "Dryrun" is that on "Dryrun" hosts the issued commands
+are printed to the console while "Disabled" doesn't print anything. The
+commands accepts multiple hostnames followed by the wanted state.
+
+		set_host_state <hostname>,hostname,...,<state>
+		Keyword arguments:
+		hostname -- hostname from the target list
+		state    -- enabled, disabled, dryrun
+
+Update Management
+*****************
+- prepare
+Installs missing packages from the UPDATE repositories. This is also run by
+the update procedure before applying the updates.
+
+		prepare <hostname>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+
+
+- downgrade
+Downgrades all related packages to the last released version (uses the UPDATE
+channel). This does not work for SLES 9 hosts, though.
+
+		downgrade <hostname>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+
+
+- update
+Applies the testing update to the target hosts. While updating the machines,
+the pre-, post- and compare scripts are run before and after the update
+process.
+
+		update <hostname>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+
+- export
+Exports the gathered update data to template file. This includes the pre/post
+package versions and the update log. An output file could be specified, if none
+is specified, the output is written to the current testing template.
+
+		export filename
+		Keyword arguments:
+		filename -- output template file name
+
+Testing Commands
+*****************
+- run
+Runs a command on a specified host or on all enabled targets if 'all' is given
+as hostname. The command timeout is set to 10 minutes which means, if there's
+no output on stdout or stderr for 10 minutes, a timeout exception is thrown.
+The commands are run in parallel on every target. After the call returned, the
+output (including the return code) of each host is shown on the console.
+Please be aware that no interactive commands can be run with this procedure.
+
+		run <hostname,command>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+
+
+- put
+Uploads files to all enabled hosts. Multiple files can be selected with special
+patterns according to the rules used by the Unix shell (i.e. *, ?, []). The
+complete filepath on the remote hosts is shown after the upload. "put" has also
+directory completion.
+
+		put <local filename>
+		Keyword arguments:
+		filename -- file to upload to the target hosts
+
+- get
+Downloads a file from all enabled hosts. Multiple files can not be selected.
+Files are saved in the downloads/$md5/ subdirectory with the hostname as file
+extension.
+
+		get <remote filename>
+		Keyword arguments:
+		filename -- file to download from the target hosts
+
+- set_repo
+Sets the software repositories to UPDATE or TESTING. Multiple hostnames can
+be given. On the target hosts, the rep-clean.sh script is spawned to set the
+repositories accordingly.
+
+		set_repo <hostname>,hostname,...,<repository>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		repository -- repository, TESTING or UPDATE
+
+- show_log
+Prints the command protocol from the specified hosts. This might be handy for
+the tester as well, as one can simply dump the command history to the
+reproducer section of the template.
+
+		show_log [hostname]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+
+
+Metadata Commands
+*****************
+- list_metadata
+Lists patchinfo metadata like patch number, SWAMP ID or packager.
+
+		list_metadata
+		Keyword arguments:
+		None
+
+- list_bugs
+Lists related bugs and corresponding Bugzilla URLs.
+
+		list_bugs
+		Keyword arguments:
+		None
+
+- list_packages
+Lists current installed package versions from the targets if a target is
+specified. If none is specified, all required package versions which should
+be installed after the update are listed. If version 0 is shown for a package,
+the package is not installed.
+
+		list_packages [hostname]
+		Keyword arguments:
+		hostname -- hostname or address of the host
+
+- list_update_commands
+List all commands which are invoked when applying updates on the target hosts.
+
+		list_update_commands
+		Keyword arguments:
+		None
+
+- list_scripts
+List available scripts from the scripts subdirectory. This scripts are run in
+a pre updated state and in the post updated state. Afterwards the corresponding
+compare scripts are run. The subdirectory (pre/post/compare) shows in which
+state the script is run. For more information, see the User Scripts section.
+
+		list_scripts 
+		Keyword arguments:
+		None
+
+Internal Commands
+*****************
+- set_log_level 
+Changes the current default MTUI loglevel "info" to "warning" or "debug". To
+enable debug messages, one can set the loglevel to "debug". This could be handy
+for longer running commands as the output is shown in realtime. The "warning"
+loglevel prints just basic error or warning conditions. Therefore it's not
+recommended to use the "warning" loglevel.
+
+		set_log_level <loglevel>
+		Keyword arguments:
+		loglevel -- warning, info or debug
+        
+- save
+Save the testing log to a XML file. All commands and package versions are saved
+there. When no parameter is given, the XML is saved to output/$md5/log.xml. If
+that file already exists and the tester doesn't want to overwrite it, a postfix
+(current timestamp) is added to the filename. The log can be used to fill the
+required sections of the testing template after the testing has finished. This
+could be done with the convert.py script.
+
+		save [filename]
+		Keyword arguments:
+		filename -- save log as file filename
+
+- quit
+Disconnects from all hosts and exits the programm. The tester is asked to save
+the XML log when exiting MTUI.
+
+		quit
+		Keyword arguments:
+		None
+
+- help
+Prints a short help text for the requested procedure or a list of all available
+function if no parameter is given.
+
+                help [function]
+                Keyword arguments:
+                function -- print help text for this function
+
+Other Commands
+*****************
+- checkout
+Update template files from the SVN.
+
+		checkout
+		Keyword arguments:
+		none
+
+- commit
+Commits the testing template to the SVN. This can be run after the testing
+has finished an the template is in the final state.
+
+		commit
+		Keyword arguments:
+		none
+
+- edit
+Edit a local file or the testing template. The evironment variable EDITOR
+is processed to find the prefered editor. If EDITOR is empty, "vi" is set
+as default.
+
+		edit file,<filename>
+		edit template
+		Keyword arguments:
+		filename -- edit filename
+		template -- edit template
+
+
+User Scripts
+-------------------------
+In order to automate serveral steps the tester has done manually, MTUI provides
+some hooks to include user scripts for i.e. setting up the system or checking
+the system state. Some of these scripts are already available in the "helper"
+subdirectory. See the README file in that directory for further reading on how
+these scripts are working. In short: all scripts are run when invoking the
+"update" procedure. The scripts which are linked to the scripts/pre/ directory
+are run before the update is applied. All scripts in the scripts/post/
+directory are run after the update was applied. To check if there are any
+regressions introduced by the update, the scripts in scripts/compare/ are run
+with the output from the pre and post scripts as parameter. The compare scripts
+signal possible regressions with the return code. MTUI shows this errors to the
+tester who hast to decide what to do with the findings.
+
+All scripts with the same name form a testing group. For instance, if the
+tester wants to run a qa_ testcase for the update, he should write a script
+which spawns the testcase on the hosts:
+
+#!/bin/sh
+/usr/share/qa/tools/cpio-run
+
+This script (with the name check_cpio.sh) is then linked to
+scrips/pre/check_cpio.sh and scripts/post/check_cpio.sh. Now, it's run before
+the update and afterwards. The output is saved to
+output/$md5/scripts/[pre|post].check_cpio.sh.$hostname. When the post scripts
+have finished, the compare scripts are run. They need to have the same name
+("compare" prefix instead of "check", though) as the check script. In this case
+it's compare_check_cpio.sh.
+
+compare_check_cpio.sh is run with the previous results as parameter:
+compare_check_cpio.sh output/$md5/scripts/pre.check_cpio.sh.$hostname \
+  output/$md5/scripts/post.check_cpio.sh.$hostname
+
+If there are some unwanted differences, the compare script should return 1.
+Otherwise, return 0.
+
+
+Proposed Testing Workflow
+-------------------------
+Invoke mtui.py with the update md5 as parameter in interactive mode and set the
+testreports directory if it's not already set by the TEMPLATEDIR environment
+variable. The script connects then to the reference hosts mentioned in the
+template file.
+
+./mtui.py -t ~/testing/testreports/ -m 7cf90e0522b1b961e418455feb815531 -i
+info: connecting to frisch.suse.de
+info: connecting to merope.suse.de
+info: connecting to libra.suse.de
+info: connecting to sunrise.suse.de
+
+QA > 
+
+The interactive shell is now loaded and ready. First the tester could check if
+the correct package versions are installed. By running list_packages without
+parameter, the package list with the required version numbers is shown. This
+versions should be higher than the versions currently installed
+(list_packages all).
+
+QA > list_packages
+libibumad1-x86                : 1.2.3_20090314-0.12.1
+libibumad1                    : 1.2.3_20090314-0.12.1
+libibmad1                     : 1.2.3_20090314-0.12.1
+libibmad1-32bit               : 1.2.3_20090314-0.12.1
+libibumad1-32bit              : 1.2.3_20090314-0.12.1
+libibmad1-x86                 : 1.2.3_20090314-0.12.1
+
+QA > list_packages all
+packages on libra.suse.de:
+libibumad1-x86                : 0
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 0
+libibumad1-32bit              : 0
+libibmad1-x86                 : 0
+
+packages on merope.suse.de:
+libibumad1-x86                : 1.2.3_20090314-0.10.1
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 0
+libibumad1-32bit              : 0
+libibmad1-x86                 : 1.2.3_20090314-0.10.1
+
+packages on frisch.suse.de:
+libibumad1-x86                : 0
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 1.2.3_20090314-0.10.1
+libibumad1-32bit              : 1.2.3_20090314-0.10.1
+libibmad1-x86                 : 0
+
+packages on sunrise.suse.de:
+libibumad1-x86                : 0
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 1.2.3_20090314-0.10.1
+libibumad1-32bit              : 1.2.3_20090314-0.10.1
+libibmad1-x86                 : 0
+
+If all packages are in a consistent state, the first testcase could be run. In
+this case, the provides for the libraries are not correct. The output of the
+run command could later be added as reproducer to the bug section of the
+template.
+
+QA > run all,rpm -q --provides libibmad1
+libra.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1  
+libibmad.so.1(IBMAD_1.3)  
+libibmad.so.1(libibmad.so.1)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+merope.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+frisch.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+sunrise.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+info: done
+
+When all bugs are reproduced (be it with MTUI or per direct login on the
+reference host), the update process could be started. To get more information
+on the update command, please see above.
+In case of errors or warnings in the update process, the tester can stop the
+process if he's asked for the next step and resolve these issues first before
+running update again.
+
+QA > update all
+info: preparing
+info: done... [\]
+start pre update scripts? (y/N) y
+info: preparing script check_from_same_srcrpm.pl
+info: preparing script check_all_updated.pl
+info: preparing script check_vendor_and_disturl.pl
+start update process? (y/N) y
+info: updating
+start post update scripts? (y/N) y
+info: preparing script check_from_same_srcrpm.pl
+info: preparing script check_all_updated.pl
+info: preparing script check_vendor_and_disturl.pl
+start compare scripts? (y/N) y
+info: preparing script compare_from_same_srcrpm.sh
+info: preparing script compare_all_updated.sh
+info: preparing script compare_vendor_and_disturl.pl
+info: done
+
+After the update, the package versions and the update log could be exported
+to the template file for further processing.
+
+QA > export
+info: exporting XML to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log.emea
+wrote template to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log.emea
+
+To verify that the bugs are actually fixed, one can run the reproducers again.
+In this case, the provides are fixed.
+
+QA > run all,rpm -q --provides libibmad1
+libra.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1  
+libibmad.so.1(IBMAD_1.3)  
+libibmad.so.1(libibmad.so.1)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+merope.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+frisch.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+sunrise.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+info: done
+
+For regression tests the run command could be used as well. For instance,
+running a ctcs testcase with "run all,/usr/share/qa/tools/*-run".
+Now the tester could add the reproducers, regression tests and their
+output to the template file with the edit command and a little copy + paste.
+The tester just needs to set the update state to PASSED or FAILED before
+submitting the template to the SVN.
+
+QA > edit template
+QA > commit
+Revision 6824.
+
+When the testing is finished, "quit" exits MTUI and disconnects from the
+remote hosts while saving the XML output.
+QA > quit
+save log? (y/N) y
+info: closing connection to libra.suse.de
+info: closing connection to merope.suse.de
+info: closing connection to frisch.suse.de
+info: closing connection to sunrise.suse.de
+
