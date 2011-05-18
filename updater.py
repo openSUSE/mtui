@@ -154,7 +154,7 @@ class Prepare():
 
 		for target in self.targets:
 			if self.targets[target].lasterr():
-				out.error("could not prepare host %s:\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
+				out.error("could not prepare host %s. stopping.\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
 				return
 
 		for command in self.commands: 
@@ -216,7 +216,7 @@ class ZypperDowngrade(Prepare):
 		commands = []
 
 		for package in packages:
-			commands.append("zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact %s | grep ^v | cut -d \| -f 4 | sort -ru | head -n 1 | sed -e 's, ,,g')" % (package, package))
+			commands.append("zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact %s | grep -v \"(System Packages)\" | grep ^[iv] | cut -d \| -f 4 | sort -ru | head -n 1 | sed -e 's, ,,g')" % (package, package))
 
 		self.commands = commands
 

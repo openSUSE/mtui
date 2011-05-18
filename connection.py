@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import sys
+import stat
+import errno
+import select
+import socket
+import getpass
+import logging
 import warnings
+
 with warnings.catch_warnings():
 	warnings.filterwarnings("ignore",category=DeprecationWarning)
 	import paramiko
-
-import stat
-import errno
-import getpass
-import logging
-import sys
-import select
-import socket
 
 out = logging.getLogger('mtui')
 
@@ -34,7 +34,7 @@ class Connection():
 		hostname -- host address to connect to
 
 		"""
-		paramiko.util.log_to_file("/tmp/paramiko.log")
+		# paramiko.util.log_to_file("/tmp/paramiko.log")
 		self.hostname = hostname
 
 		self.client = paramiko.SSHClient()

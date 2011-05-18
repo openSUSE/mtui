@@ -11,7 +11,7 @@ class XMLOutput:
 		self.output = impl.createDocument(None, "update", None)
 		self.update = self.output.documentElement
 
-		if metadata != None:
+		if metadata is not None:
 			self.add_header(metadata)
 
 	def add_header(self, metadata):

@@ -38,7 +38,7 @@ class Target():
 
 	def query_versions(self, packages=None):
 		versions = {}
-		if packages == None:
+		if packages is None:
 			packages = self.packages.keys()
 
 		if isinstance(packages, list):
@@ -133,13 +133,13 @@ class Package:
 		self.current = "0"
 
 	def set_versions(self, before=None, after=None, required=None, current=None, versions=[]):
-		if before != None:
+		if before is not None:
 			self.before = before
-		if after  != None:
+		if after is not None:
 			self.after = after
-		if required != None:
+		if required is not None:
 			self.required = required
-		if current != None:
+		if current is not None:
 			self.current = current
 		if versions:
 			self.before = versions[0]

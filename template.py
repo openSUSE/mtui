@@ -21,12 +21,12 @@ class Template:
 		"""
 		self.md5 = md5
 
-		if directory != None:
+		if directory is not None:
 			self.path = directory + '/' + md5 + '/'
 		else:
 			self.path = './' + md5 + '/'
 
-		if team != None:
+		if team is not None:
 			self.path = self.path + 'log.' + team
 		else:
 			self.path = self.path + 'log.emea'

@@ -5,6 +5,7 @@ import os
 import sys
 import getopt
 import logging
+import shutil
 
 from log import *
 from promt import *
@@ -49,7 +50,7 @@ def main():
 		else:
 			usage()
 
-	if md5 == None:
+	if md5 is None:
 		out.error("please specify an update identifier")
 		usage()
 
@@ -75,13 +76,19 @@ def main():
 		except:
 			out.warning("could not add host %s to target list" % host)
 
+	ignored = shutil.ignore_patterns("*.svn")
+	try:
+		shutil.copytree("scripts", "%s/scripts" % os.path.dirname(metadata.path), ignore=ignored)
+	except OSError:
+		pass
+
 	promt = CommandPromt(targets, metadata)
 
 	try:
 		if interactive:
 			promt.cmdloop()
 		else:
-			promt.do_update('all')
+			promt.do_update(None)
 			promt.do_quit(None)
 	except KeyboardInterrupt:
 		promt.do_quit(None)

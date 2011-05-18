@@ -41,14 +41,16 @@ class CommandPromt(cmd.Cmd):
 			pass
 
 	def do_add_host(self, args):
-		"""connect to another host and add it to the list
-
-		add_host <hostname>,<system>
-		Keyword arguments:
-		hostname -- hostname or address of the host
-		system   -- system type, ie. sles11sp1-i386
-
 		"""
+		Adds another machine to the target host list. The system type needs
+		to be specified as well.
+
+		add_host <hostname,system>
+		Keyword arguments:
+		hostname -- address of the target host (should be the FQDN)
+		system   -- system type, ie. sles11sp1-i386
+		"""
+
 		if args:
 			try:
 				hostname, system = args.split(',')
@@ -68,13 +70,17 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_systemlist(text, line, begidx, endidx)
 		
 	def do_remove_host(self, args):
-		"""disconnect from host and remove host from list
-
-		remove_host <hostname>,hostname,...
-		Keyword arguments:
-		hostname -- hostname or address of the host
-
 		"""
+		Disconnects from host and remove host from list. Warning: The host
+		log is purged as well. If the tester wants to preserve the log, it's
+		better to use the '''''set_host_state''''' command instead and set
+		the host to "disabled". Multible hosts can be specified.
+
+		remove_host <hostname>[,hostname,...]
+		Keyword arguments:
+		hostname -- hostname from the target list
+		"""
+
 		if args:
 			for target in args.split(','):
 				try:
@@ -90,13 +96,15 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_hostlist(text, line, begidx, endidx)
  
  	def do_list_hosts(self, args):
-		"""list connected hosts and current status
+		"""
+		Lists all connected hosts including the system types and their
+		current state. State could be "Enabled", "Disabled" or "Dryrun".
 
 		list_hosts
 		Keyword arguments:
 		None
-
 		"""
+
 		if args:
 			parse_error(self.do_list_hosts, args)
 
@@ -113,13 +121,17 @@ class CommandPromt(cmd.Cmd):
 				print '{0:20} {1:20}: {2}'.format(target, system, state)
 
  	def do_list_packages(self, args):
-		"""list packages from template or from target if specified
+		"""
+		Lists current installed package versions from the targets if a
+		target is specified. If none is specified, all required package
+		versions which should be installed after the update are listed.
+		If version 0 is shown for a package, the package is not installed.
 
-		list_packages hostname
+		list_packages [hostname]
 		Keyword arguments:
 		hostname -- hostname or address of the host
-
 		"""
+
 		if args:
 			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
@@ -147,19 +159,21 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
  	def do_list_scripts(self, args):
-		"""list available scripts from the scripts subdirectory
+		"""
+		List available scripts from the scripts subdirectory. This scripts
+		are run in a pre updated state and in the post updated state.
 
-		list_scripts 
+		list_scripts
 		Keyword arguments:
 		None
-
 		"""
+
 		if args:
 			parse_error(self.do_list_scripts, args)
 
 		else:
 			try:
-				for root, dirs, files in os.walk("scripts"):
+				for root, dirs, files in os.walk("%s/scripts" % os.path.dirname(self.metadata.path)):
 					for name in files:
 						if not ".svn" in root:
 							print os.path.join(root, name)
@@ -167,13 +181,15 @@ class CommandPromt(cmd.Cmd):
 				out.error(str(error))
 
  	def do_list_update_commands(self, args):
-		"""list commands which are invoked to apply update
+		"""
+		List all commands which are invoked when applying updates on the
+		target hosts.
 
 		list_update_commands
 		Keyword arguments:
 		None
-
 		"""
+
 		if args:
 			parse_error(self.do_list_update_commands, args)
 
@@ -189,13 +205,14 @@ class CommandPromt(cmd.Cmd):
 				del updater
 
  	def do_list_bugs(self, args):
-		"""list bugs and bugzilla URLs
+		"""
+		Lists related bugs and corresponding Bugzilla URLs.
 
 		list_bugs
 		Keyword arguments:
 		None
-
 		"""
+
 		if args:
 			parse_error(self.do_list_bugs, args)
 
@@ -206,13 +223,14 @@ class CommandPromt(cmd.Cmd):
 				print
 
  	def do_list_metadata(self, args):
-		"""list update metadata
+		"""
+		Lists patchinfo metadata like patch number, SWAMP ID or packager.
 
-		list_bugs
+		list_metadata
 		Keyword arguments:
 		None
-
 		"""
+
 		if args:
 			parse_error(self.do_list_metadata, args)
 
@@ -225,13 +243,16 @@ class CommandPromt(cmd.Cmd):
 				print '{0:15}: {1}'.format(type.upper(), id)
 
 	def do_show_log(self, args):
-		"""show command protocol
-
-		show_log
-		Keyword arguments:
-		hostname -- hostname of the target host
-
 		"""
+		Prints the command protocol from the specified hosts. This might be
+		handy for the tester, as one can simply dump the command history to
+		the reproducer section of the template.
+
+		show_log [hostname]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		"""
+
 		if args:
 			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
@@ -258,7 +279,8 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_record_macro(self, args):
-		"""record macro for later use
+		"""
+		record macro for later use
 
 		record_macro <name>
 		Keyword arguments:
@@ -268,7 +290,8 @@ class CommandPromt(cmd.Cmd):
 		return
 
 	def do_play_macro(self, args):
-		"""run macro on all active hosts
+		"""
+		run macro on all active hosts
 
 		play_macro <name>
 		Keyword arguments:
@@ -278,14 +301,21 @@ class CommandPromt(cmd.Cmd):
 		return
 
 	def do_run(self, args):
-		"""run command on active hosts
+		"""
+		Runs a command on a specified host or on all enabled targets if
+		'all' is given as hostname. The command timeout is set to 10 minutes
+		which means, if there's no output on stdout or stderr for 10 minutes,
+		a timeout exception is thrown. The commands are run in parallel on
+		every target. After the call returned, the output (including the
+		return code) of each host is shown on the console.
+		Please be aware that no interactive commands can be run with this
+		procedure.
 
 		run <hostname,command>
 		Keyword arguments:
-		hostname -- hostname from the list
-		command  -- command to run on host
-
+		hostname   -- hostname from the target list or "all"
 		"""
+
 		if args:
 			command = ",".join(args.split(',')[1:])
 
@@ -315,14 +345,21 @@ class CommandPromt(cmd.Cmd):
 		return [i for i in list(self.targets) + ['all'] if i.startswith(text) and not line.count(',')]
 
 	def do_set_host_state(self, args):
-		"""sets host state to enabled, disabled or dryrun
-
-		set_host_state <hostname>,hostname,...,<state>
-		Keyword arguments:
-		hostname -- hostname from the list
-		state    -- enabled, disabled, dryrun
-
 		"""
+		Sets the host state to "Enabled", "Disabled" or "Dryrun". A host
+		set to "Enabled" runs all issued commands while a "Disabled" host
+		or a host set to "Dryrun" doesn't run any command on the host.
+		The difference between "Disabled" and "Dryrun" is that on "Dryrun"
+		hosts the issued commands are printed to the console while "Disabled"
+		doesn't print anything. The commands accepts multiple hostnames
+		followed by the wanted state.
+
+		set_host_state <hostname>[,hostname,...],<state>
+		Keyword arguments:
+		hostname -- hostname from the target list
+		state    -- enabled, disabled, dryrun
+		"""
+
 		if args:
 			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
@@ -353,13 +390,16 @@ class CommandPromt(cmd.Cmd):
 			return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_set_log_level(self, args):
-		"""sets mtui log level (default: info)
-
-		set_log_level <loglevel>
-		Keyword arguments:
-		loglevel -- warning, info or debug
-
 		"""
+		Prints the command protocol from the specified hosts. This might
+		be handy for the tester, as one can simply dump the command history
+		to the reproducer section of the template.
+
+		show_log [hostname]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		"""
+
 		levels = {"warning":logging.WARNING, "info":logging.INFO, "debug":logging.DEBUG}
 
 		if args in levels.keys():
@@ -371,14 +411,17 @@ class CommandPromt(cmd.Cmd):
 		return [i for i in ['warning', 'info', 'debug'] if i.startswith(text) and i not in line]
 			
 	def do_set_repo(self, args):
-		"""sets software repository to UPDATE or TESTING
-
-		set_repo <hostname>,hostname,...,<repository>
-		Keyword arguments:
-		hostname   -- hostname from the list or "all"
-		repository -- repository, TESTING or UPDATE
-
 		"""
+		Sets the software repositories to UPDATE or TESTING. Multiple
+		hostnames can be given. On the target hosts, the rep-clean.sh script
+		is spawned to set the repositories accordingly.
+
+		set_repo <hostname>[,hostname,...],<repository>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		repository -- repository, TESTING or UPDATE
+		"""
+
 		if args:
 			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
@@ -409,13 +452,15 @@ class CommandPromt(cmd.Cmd):
 			return [i for i in list(self.targets) + ['all'] if i.startswith(text) and i not in line]
 
 	def do_downgrade(self, args):
-		"""downgrade packages to last realeased version on hosts
+		"""
+		Downgrades all related packages to the last released version	(using
+		the UPDATE channel). This does not work for SLES 9 hosts, though.
 
 		downgrade <hostname>
 		Keyword arguments:
-		hostname   -- hostname from the list or "all"
-
+		hostname   -- hostname from the target list or "all"
 		"""
+
 		if args:
 			if args.split(',')[0] == 'all':
 				targets = self.targets
@@ -447,13 +492,15 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_prepare(self, args):
-		"""install missing packages on hosts
+		"""
+		Installs missing packages from the UPDATE repositories. This is
+		also run by the update procedure before applying the updates.
 
 		prepare <hostname>
 		Keyword arguments:
-		hostname   -- hostname from the list or "all"
-
+		hostname   -- hostname from the target list or "all"
 		"""
+
 		if args:
 			if args.split(',')[0] == 'all':
 				targets = self.targets
@@ -484,13 +531,16 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_update(self, args):
-		"""update all active hosts
+		"""
+		Applies the testing update to the target hosts. While updating the
+		machines, the pre-, post- and compare scripts are run before and
+		after the update process.
 
 		update <hostname>
 		Keyword arguments:
-		hostname   -- hostname from the list or "all"
-
+		hostname   -- hostname from the target list or "all"
 		"""
+
 		if args:
 			if args.split(',')[0] == 'all':
 				targets = self.targets
@@ -525,7 +575,7 @@ class CommandPromt(cmd.Cmd):
 					out.warning("%s: these packages are not installed: %s" % (target, not_installed))
 
 			if input("start pre update scripts? (y/N) ", ["y", "yes" ]):
-				script_hook(targets, "pre", self.metadata.md5)
+				script_hook(targets, "pre", os.path.dirname(self.metadata.path), self.metadata.md5)
 
 			if input("start update process? (y/N) ", ["y", "yes" ]):
 				out.info("updating")
@@ -564,10 +614,10 @@ class CommandPromt(cmd.Cmd):
 								out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
 
 				if input("start post update scripts? (y/N) ", ["y", "yes" ]):
-					script_hook(targets, "post", self.metadata.md5)
+					script_hook(targets, "post", os.path.dirname(self.metadata.path), self.metadata.md5)
 
 					if input("start compare scripts? (y/N) ", ["y", "yes" ]):
-						script_hook(targets, "compare", self.metadata.md5)
+						script_hook(targets, "compare", os.path.dirname(self.metadata.path), self.metadata.md5)
 
 			out.info("done")
 		else:
@@ -577,39 +627,46 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_checkout(self, args):
-		"""update template file from svn
+		"""
+		Update template files from the SVN.
 
 		checkout
 		Keyword arguments:
 		none
-
 		"""
+
 		exitcode = os.system("cd %s; svn up" % os.path.dirname(self.metadata.path))
 
 		if exitcode != 0:
 			out.error("updating template failed, returncode: %s" % exitcode)
 
 	def do_commit(self, args):
-		"""commit template to the SVN
+		"""
+		Commits the testing template to the SVN. This can be run after the
+		testing has finished an the template is in the final state.
 
 		commit
 		Keyword arguments:
 		none
-
 		"""
+
 		exitcode = os.system("cd %s; svn up; svn ci" % os.path.dirname(self.metadata.path))
 
 		if exitcode != 0:
 			out.error("committing template failed, returncode: %s" % exitcode)
 
 	def do_put(self, args):
-		"""upload file to all active hosts
+		"""
+		Uploads files to all enabled hosts. Multiple files can be selected
+		with special patterns according to the rules used by the Unix shell
+		(i.e. *, ?, []). The complete filepath on the remote hosts is shown
+		after the upload. put has also directory completion.
 
 		put <local filename>
 		Keyword arguments:
-		filename -- file to upload to target hosts
-
+		filename -- file to upload to the target hosts
 		"""
+
 		if args:
 			for filename in glob.glob(args):
 				if os.path.isfile(filename):
@@ -629,15 +686,18 @@ class CommandPromt(cmd.Cmd):
 		return self.complete_filelist(text, line, begidx, endidx)
 
 	def do_get(self, args):
-		"""download file from all active hosts
+		"""
+		Downloads a file from all enabled hosts. Multiple files can not be
+		selected. Files are saved in the downloads/$md5/ subdirectory with the
+		hostname as file extension.
 
 		get <remote filename>
 		Keyword arguments:
-		filename -- file to download from target hosts
-
+		filename -- file to download from the target hosts
 		"""
+
 		if args:
-			destination = "downloads/" + self.metadata.md5 + '/'
+			destination = os.path.dirname(self.metadata.path) + "/downloads/"
 			local = destination + os.path.basename(args)
 
 			try:
@@ -661,16 +721,18 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_get, args)
 
 	def do_edit(self, args):
-		"""edit local file or template
+		"""
+		Edit a local file or the testing template. The evironment variable
+		EDITOR is processed to find the prefered editor. If EDITOR is empty,
+		"vi" is set as default.
 
 		edit file,<filename>
 		edit template
-
 		Keyword arguments:
 		filename -- edit filename
 		template -- edit template
-
 		"""
+
 		command = args.split(",")[0]
 
 		editor = os.environ.get("EDITOR", "vi")
@@ -689,13 +751,17 @@ class CommandPromt(cmd.Cmd):
 			return [i for i in ["file", "template"] if i.startswith(text)]
 
 	def do_export(self, args):
-		"""export data to template file
+		"""
+		Exports the gathered update data to template file. This includes
+		the pre/post package versions and the update log. An output file could
+		be specified, if none is specified, the output is written to the
+		current testing template.
 
-		export filename
+		export [filename]
 		Keyword arguments:
 		filename -- output template file name
-
 		"""
+
 		if args:
 			filename = args.split(',')[0]
 		else:
@@ -728,19 +794,26 @@ class CommandPromt(cmd.Cmd):
 			print "wrote template to %s" % filename
 
 	def do_save(self, args):
-		"""save testing log to XML file
+		"""
+		Save the testing log to a XML file. All commands and package
+		versions are saved there. When no parameter is given, the XML is saved
+		to output/$md5/log.xml. If that file already exists and the tester
+		doesn't want to overwrite it, a postfix (current timestamp) is added
+		to the filename. The log can be used to fill the required sections
+		of the testing template after the testing has finished.
+		This could be done with the convert.py script.
 
-		save filename
+		save [filename]
 		Keyword arguments:
 		filename -- save log as file filename
-
 		"""
+
 		if args:
 			filename = args.split(',')[0]
 		else:
 			filename = "log.xml"
 
-		output_dir = "output/%s/" % self.metadata.md5
+		output_dir = os.path.dirname(self.metadata.path) + "/output/"
 
 		try:
 			os.makedirs(output_dir)
@@ -774,13 +847,15 @@ class CommandPromt(cmd.Cmd):
 		outxml.close()
 
 	def do_quit(self, args):
-		"""disconnects hosts and quits programm
+		"""
+		Disconnects from all hosts and exits the programm.
+		The tester is asked to save the XML log when exiting MTUI.
 
 		quit
 		Keyword arguments:
 		None
-
 		"""
+
 		if args:
 			parse_error(self.do_quit, args)
 		else:
@@ -826,15 +901,15 @@ def parse_error(method, args):
 	out.error("failed to parse command: %s %s" % (method.__name__.replace('do_',''), args))
 	print "%s: %s" % (method.__name__.replace('do_',''), method.__doc__)
 
-def script_hook(targets, which, md5):
+def script_hook(targets, which, scriptdir, md5):
 	if which not in ["post", "pre", "compare"]:
 		return
 
-	output_dir = "output/%s/scripts" % md5
+	output_dir = "%s/output/scripts" % scriptdir
 	remote_dir = "/tmp/%s" % md5
 	
-	for script in os.listdir("scripts/%s" % which):
-		local_file = "scripts/%s/%s" % (which, script)
+	for script in os.listdir("%s/scripts/%s" % (scriptdir, which)):
+		local_file = "%s/scripts/%s/%s" % (scriptdir, which, script)
 		remote_file = "%s.%s" % (which, script)
 
 		if not os.path.isfile(local_file):
@@ -847,7 +922,7 @@ def script_hook(targets, which, md5):
 				for target in targets:
 					prename = "%s/pre.%s.%s" % (output_dir, script.replace("compare_", "check_"), target)
 					postname = "%s/post.%s.%s" % (output_dir, script.replace("compare_", "check_"), target)
-					command = ["scripts/compare/%s" % script, prename, postname]
+					command = ["%s/scripts/compare/%s" % (scriptdir, script), prename, postname]
 					out.debug("running %s" % str(command))
 					sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 					exitcode = sub.wait()
