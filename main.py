@@ -57,7 +57,7 @@ def main():
 	try:
 		update = Template(md5, team, directory)
 	except IOError:
-		if raw_input("Template does not yet exist. Try to check it out? ").lower() in ["y", "yes"]:
+		if raw_input("Template does not yet exist. Try to check it out? (y/N) ").lower() in ["y", "yes"]:
 			os.system("cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s" % (directory, md5))
 			try:
 				update = Template(md5, team, directory)
@@ -88,7 +88,7 @@ def main():
 		if interactive:
 			promt.cmdloop()
 		else:
-			promt.do_update(None)
+			promt.do_update("all")
 			promt.do_quit(None)
 	except KeyboardInterrupt:
 		promt.do_quit(None)

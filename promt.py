@@ -27,10 +27,12 @@ class CommandPromt(cmd.Cmd):
 		self.targets = targets
 		self.metadata = metadata
 		self.systems = []
+		self.homedir = os.path.expanduser('~')
  
 		readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
+
 		try:
-			readline.read_history_file(".mtui_history")
+			readline.read_history_file("%s/.mtui_history" % self.homedir)
 		except IOError:
 			pass
 
@@ -688,8 +690,8 @@ class CommandPromt(cmd.Cmd):
 	def do_get(self, args):
 		"""
 		Downloads a file from all enabled hosts. Multiple files can not be
-		selected. Files are saved in the downloads/$md5/ subdirectory with the
-		hostname as file extension.
+		selected. Files are saved in the $templatedir/downloads/ subdirectory
+		with the hostname as file extension.
 
 		get <remote filename>
 		Keyword arguments:
@@ -797,10 +799,10 @@ class CommandPromt(cmd.Cmd):
 		"""
 		Save the testing log to a XML file. All commands and package
 		versions are saved there. When no parameter is given, the XML is saved
-		to output/$md5/log.xml. If that file already exists and the tester
-		doesn't want to overwrite it, a postfix (current timestamp) is added
-		to the filename. The log can be used to fill the required sections
-		of the testing template after the testing has finished.
+		to $templatedir/output/log.xml. If that file already exists and the
+		tester doesn't want to overwrite it, a postfix (current timestamp)
+		is added to the filename. The log can be used to fill the required
+		sections of the testing template after the testing has finished.
 		This could be done with the convert.py script.
 
 		save [filename]
@@ -828,7 +830,7 @@ class CommandPromt(cmd.Cmd):
 
 		if os.path.exists(filename):
 			out.warning("file %s exists." % filename)
-			if not input("should i overwrite %s? (y/N) " % filename, ["y", "yes" ]):
+			if not input("should i overwrite %s? (Y/n) " % filename, ["n", "no" ]):
 				filename = add_time(filename)
 
 		out.info("saving output to %s" % filename)
@@ -865,7 +867,7 @@ class CommandPromt(cmd.Cmd):
 			for target in self.targets:
 				self.targets[target].close()
 
-			readline.write_history_file(".mtui_history")
+			readline.write_history_file("%s/.mtui_history" % self.homedir)
 			sys.exit(0)
 
 	def complete_filelist(self, text, line, begidx, endidx):
