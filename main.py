@@ -79,8 +79,11 @@ def main():
 	ignored = shutil.ignore_patterns("*.svn")
 	try:
 		shutil.copytree("scripts", "%s/scripts" % os.path.dirname(metadata.path), ignore=ignored)
-	except OSError:
-		pass
+	except OSError, error:
+		if error.errno == 2:
+			out.warning("scripts/ dir not found, please copy manually")
+		else:
+			pass
 
 	promt = CommandPromt(targets, metadata)
 

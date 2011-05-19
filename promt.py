@@ -909,6 +909,10 @@ def script_hook(targets, which, scriptdir, md5):
 
 	output_dir = "%s/output/scripts" % scriptdir
 	remote_dir = "/tmp/%s" % md5
+
+	if not os.path.isdir("%s/scripts/%s" % (scriptdir, which)):
+		out.warning("%s scripts not found in %s/scripts/%s" % (which, scriptdir, which))
+		return
 	
 	for script in os.listdir("%s/scripts/%s" % (scriptdir, which)):
 		local_file = "%s/scripts/%s/%s" % (scriptdir, which, script)
