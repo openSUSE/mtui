@@ -3,6 +3,7 @@
 
 import os
 import sys
+import errno
 import getopt
 import logging
 import shutil
@@ -80,7 +81,7 @@ def main():
 	try:
 		shutil.copytree("scripts", "%s/scripts" % os.path.dirname(metadata.path), ignore=ignored)
 	except OSError, error:
-		if error.errno == 2:
+		if error.errno == errno.ENOENT:
 			out.warning("scripts/ dir not found, please copy manually")
 		else:
 			pass

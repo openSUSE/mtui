@@ -819,8 +819,8 @@ class CommandPromt(cmd.Cmd):
 
 		try:
 			os.makedirs(output_dir)
-		except OSError as exc:
-			if exc.errno == errno.EEXIST:
+		except OSError, error:
+			if error.errno == errno.EEXIST:
 				pass
 		except Exception as error:
 			out.error(str(error))
@@ -830,7 +830,7 @@ class CommandPromt(cmd.Cmd):
 
 		if os.path.exists(filename):
 			out.warning("file %s exists." % filename)
-			if not input("should i overwrite %s? (Y/n) " % filename, ["n", "no" ]):
+			if not input("should i overwrite %s? (y/N) " % filename, ["y", "yes" ]):
 				filename = add_time(filename)
 
 		out.info("saving output to %s" % filename)
@@ -861,7 +861,7 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			parse_error(self.do_quit, args)
 		else:
-			if input("save log? (y/N) ", ["y", "yes" ]):
+			if input("save log? (Y/n) ", ["n", "no" ]):
 				self.do_save(None)
 
 			for target in self.targets:
