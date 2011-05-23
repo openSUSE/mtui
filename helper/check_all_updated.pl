@@ -69,6 +69,9 @@ if (defined $help) {
    exit 0;
 }
 
+# work around the requirement of having arguments (sth/ mtui.py currently can not provide)
+if (not defined $build) { $installed = 'true'; }
+
 if ((not defined $installed and not defined $build) or
     (defined $installed and defined $build)) {
    print STDERR "ERROR: bad set of command line arguments\n$usagemsg";
