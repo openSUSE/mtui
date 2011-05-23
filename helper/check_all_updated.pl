@@ -267,6 +267,6 @@ while (my ($disturl, $name) = each %disturl_mapper) {
 print "INFO: $mismatches mismatches among the $consideredpackages considered packages could be detected (" . 
       int($mismatches/$consideredpackages*100) . "%)\n";
 
-print "INFO: the DISTURL of $skippedpackages packages does not point to a known update project\n";      
+print "INFO: the DISTURL of $skippedpackages packages does not point to a known update project (never updated?)\n";      
 
 exit 0;
