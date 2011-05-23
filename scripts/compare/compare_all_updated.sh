@@ -1,0 +1,1 @@
+../../helper/compare_all_updated.sh
