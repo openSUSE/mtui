@@ -5,8 +5,8 @@ usage="${0##*/} ( before | after ) <result dir>"
 mode="$1"
 resultdir="$2"
 
-category1="check_all_updated.pl check_from_same_srcrpm.pl check_vendor_and_disturl.pl run_rpm_Va.sh"
-category2="compare_vendor_and_disturl.pl compare_all_updated.sh compare_from_same_srcrpm.sh compare_rpm_Va.sh"
+category1="check_all_updated.pl check_from_same_srcrpm.pl check_vendor_and_disturl.pl run_rpm_Va.sh check_multiple-owners.sh"
+category2="compare_all_updated.sh compare_from_same_srcrpm.sh compare_vendor_and_disturl.pl compare_rpm_Va.sh compare_multiple-owners.sh"
 
 mydir="${0%/*}"
 PATH="$PATH:$mydir"
@@ -23,7 +23,6 @@ case "$mode" in
        for helper in $category1; do
           progname=${helper##*/}
           echo "launching $progname"
-          if [ "$progname" = "check_all_updated.pl" ]; then helper="$helper --installed"; fi
           $helper 2> $resultdir/$progname.before.err > $resultdir/$progname.before.out
        done
        ;;
@@ -31,7 +30,6 @@ case "$mode" in
        for helper in $category1; do
           progname=${helper##*/}
           echo "launching $progname"
-          if [ "$progname" = "check_all_updated.pl" ]; then helper="$helper --installed"; fi
           $helper 2> $resultdir/$progname.after.err > $resultdir/$progname.after.out
        done
        for helper in $category2; do
