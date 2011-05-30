@@ -78,8 +78,9 @@ def main():
 			out.warning("could not add host %s to target list" % host)
 
 	ignored = shutil.ignore_patterns("*.svn")
+
 	try:
-		shutil.copytree("scripts", "%s/scripts" % os.path.dirname(metadata.path), ignore=ignored)
+		shutil.copytree("%s/scripts" % os.path.dirname(__file__), "%s/scripts" % os.path.dirname(metadata.path), ignore=ignored)
 	except OSError, error:
 		if error.errno == errno.ENOENT:
 			out.warning("scripts/ dir not found, please copy manually")
