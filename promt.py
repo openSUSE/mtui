@@ -432,7 +432,7 @@ class CommandPromt(cmd.Cmd):
 
 			name = args.split(',')[-1]
 
-			if name not in ['testing', 'update']:
+			if name.lower() not in ['testing', 'update']:
 				parse_error(self.do_set_repo, args)
 				return
 
