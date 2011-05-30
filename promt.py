@@ -147,7 +147,7 @@ class CommandPromt(cmd.Cmd):
 					out.warning("host %s not in database" % target)
 					targets.remove(target)
 				else:
-					print "packages on %s:" % target
+					print "packages on %s (%s):" % (target, self.targets[target].system)
 					for package in self.targets[target].packages:
 						print '{0:30}: {1}'.format(package, self.targets[target].packages[package].current)
 
@@ -861,7 +861,7 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			parse_error(self.do_quit, args)
 		else:
-			if input("save log? (Y/n) ", ["n", "no" ]):
+			if not input("save log? (Y/n) ", ["n", "no" ]):
 				self.do_save(None)
 
 			for target in self.targets:
