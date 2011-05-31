@@ -92,6 +92,9 @@ class OldZypperUpdate(Update):
 		if "A ZYpp transaction is already in progress." in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError(target.hostname, "update stack locked")
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "RPM Error")
 
 class OnlineUpdate(Update):
 	def __init__(self, targets, patches):

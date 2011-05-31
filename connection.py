@@ -61,7 +61,7 @@ class Connection():
 		except Exception:
 			raise
 
-	def run(self, command):
+	def run(self, command, lock=None):
 		"""run command over SSH channel
 
 		Blocks until command terminates. Return value of issued command is returned.
@@ -94,8 +94,18 @@ class Connection():
 		while True:
 			buffer = ''
 
-			if select.select([session], [], [], 600) == ([],[],[]):
-				raise CommandTimeout
+			if select.select([session], [], [], 300) == ([],[],[]):
+				if lock is not None:
+					lock.acquire()
+
+				try:
+					if raw_input('command "%s" timed out on %s. wait? (y/N) ' % (command, self.hostname)).lower() in ["y", "yes"]:
+						continue
+					else:
+						raise CommandTimeout
+				finally:
+					if lock is not None:
+						lock.release()
 
 			try:
 				if session.recv_ready():

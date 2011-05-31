@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import sys
+import time
+import re
 import threading
 import Queue
-import re
 import logging
 
 from connection import *
@@ -37,24 +39,29 @@ class Target():
 			self.packages[package] = Package(package)
 
 	def query_versions(self, packages=None):
-		versions = {}
-		if packages is None:
-			packages = self.packages.keys()
+		if self.state == "enabled":
+			versions = {}
+			if packages is None:
+				packages = self.packages.keys()
 
-		if isinstance(packages, list):
-			packages = " ".join(packages)
+			if isinstance(packages, list):
+				packages = " ".join(packages)
 
-		self.run("rpm -q %s" % packages)
+			self.run("rpm -q %s" % packages)
 
-		for line in re.split("\n+", self.lastout()):
-			match = re.search(r"^([a-zA-Z0-9_\-\+]*)-([a-zA-Z0-9_\.]*)-([a-zA-Z0-9_\.]*)", line)
-			if match:
-				self.packages[match.group(1)].current = "%s-%s" % (match.group(2), match.group(3))
-			else:
-				match = re.search("package (.*) is not installed", line)
+			for line in re.split("\n+", self.lastout()):
+				match = re.search(r"^([a-zA-Z0-9_\-\+]*)-([a-zA-Z0-9_\.]*)-([a-zA-Z0-9_\.]*)", line)
 				if match:
-					self.packages[match.group(1)].current = "0"
-					out.debug("%s: package %s is not installed" % (self.hostname, match.group(1)))
+					self.packages[match.group(1)].current = "%s-%s" % (match.group(2), match.group(3))
+				else:
+					match = re.search("package (.*) is not installed", line)
+					if match:
+						self.packages[match.group(1)].current = "0"
+						out.debug("%s: package %s is not installed" % (self.hostname, match.group(1)))
+
+		elif self.state == "dryrun":
+			out.info('dryrun: %s running "rpm -q %s"' % packages)
+			self.log.append([command, "dryrun\n", "", 0])
 
 	def query_version(self, package):
 		self.query_versions(package)
@@ -80,11 +87,11 @@ class Target():
 
 		self.run("%s %s" % (command, parameter))
 
-	def run(self, command):
+	def run(self, command, lock=None):
 		if self.state == "enabled":
 			out.debug('%s: running "%s"' % (self.hostname, command))
 			try:
-				exitcode = self.connection.run(command)
+				exitcode = self.connection.run(command, lock)
 			except CommandTimeout:
 				out.error('%s: command "%s" timed out' % (self.hostname, command))
 				exitcode = -1
@@ -251,6 +258,8 @@ class RunCommand():
 		self.command = command
 
 	def run(self):
+		lock = threading.Lock()
+
 		for target in self.targets:
 			thread = ThreadedMethod(queue)
 			thread.setDaemon(True)
@@ -258,10 +267,10 @@ class RunCommand():
 
 		try:
 			for target in self.targets:
-				queue.put([self.targets[target].run, [self.command]])
+				queue.put([self.targets[target].run, [self.command, lock]])
 
 			while queue.unfinished_tasks:
-				spinner()
+				spinner(lock)
 
 			queue.join()
 
@@ -270,14 +279,19 @@ class RunCommand():
 			queue.join()
 			raise
 
-def spinner():
+def spinner(lock=None):
 	"""simple spinner to show some process"""
 
-	import time
-	import sys
-
 	for pos in ['|', '/', '-', '\\']:
-		sys.stdout.write("processing... [%s]\r" % pos)
-		sys.stdout.flush()
+		if lock is not None:
+			lock.acquire()
+
+		try:
+			sys.stdout.write("processing... [%s]\r" % pos)
+			sys.stdout.flush()
+		finally:
+			if lock is not None:
+				lock.release()
+
 		time.sleep(0.3)
 
