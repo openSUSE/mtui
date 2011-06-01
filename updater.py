@@ -207,6 +207,14 @@ class OldZypperPrepare(Prepare):
 
 		self.commands = commands
 
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		if "A ZYpp transaction is already in progress." in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "update stack locked")
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "RPM Error")
+
 Preparer = {
     '11': ZypperPrepare,
     '10': OldZypperPrepare
@@ -229,16 +237,31 @@ class OldZypperDowngrade(Prepare):
 
 		patch = patches['zypp']
 
+		invalid_packages = ['glibc', 'rpm', 'zypper']
+		invalid = set(packages).intersection(invalid_packages)
+		if invalid:
+			out.error("crucial package found in package list: %s. please downgrade manually" % list(invalid))
+			return
+
 		commands = []
 
 		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -l -y -t patch $p; done" % patch)
 		for package in packages:
 			commands.append("rpm --nodeps -e %s" % package)
 
+		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -l -y -t patch $p; done" % patch)
 		for package in packages:
 			commands.append("zypper -n in -y -l %s" % package)
 
 		self.commands = commands
+
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		if "A ZYpp transaction is already in progress." in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "update stack locked")
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "RPM Error")
 
 Downgrader = {
     '11': ZypperDowngrade,

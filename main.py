@@ -62,11 +62,11 @@ def main():
 			os.system("cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s" % (directory, md5))
 			try:
 				update = Template(md5, team, directory)
-			except:
+			except Exception:
 				sys.exit(0)
 		else:
 			sys.exit(0)
-	except:
+	except Exception:
 		usage()
 
 	metadata = update.metadata
@@ -74,7 +74,7 @@ def main():
 	for host, system in metadata.systems.items():
 		try:
 			targets[host] = Target(host, system, metadata.get_package_list(), dryrun=dryrun)
-		except:
+		except Exception:
 			out.warning("could not add host %s to target list" % host)
 
 	ignored = shutil.ignore_patterns("*.svn")

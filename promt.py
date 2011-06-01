@@ -39,7 +39,7 @@ class CommandPromt(cmd.Cmd):
 		try:
 			with open('system.list', 'r') as f:
 				self.systems = f.readlines()
-		except:
+		except Exception:
 			pass
 
 	def do_add_host(self, args):
@@ -62,7 +62,7 @@ class CommandPromt(cmd.Cmd):
 
 			try:
 				self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
-			except:
+			except Exception:
 				out.error("unable to add host %s to list" % hostname)
 
 		else:
@@ -480,10 +480,9 @@ class CommandPromt(cmd.Cmd):
 					out.info("downgrading")
 					try:
 						downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
-					except:
+					except Exception:
 						out.critical("could not downgrade target systems %s", targets.keys())
-						#pass
-						raise
+						pass
 					else:
 						out.info("done")
 
@@ -520,7 +519,7 @@ class CommandPromt(cmd.Cmd):
 					out.info("preparing")
 					try:
 						preparer(targets, self.metadata.get_package_list()).run()
-					except:
+					except Exception:
 						out.critical("could not prepare target systems %s", targets.keys())
 						pass
 					else:
@@ -676,7 +675,7 @@ class CommandPromt(cmd.Cmd):
 
 					try:
 						FileUpload(self.targets, filename, remote).run()
-					except:
+					except Exception:
 						out.error("uploading %s to %s failed" % (filename, remote))
 					else:
 						out.info("uploaded %s to %s" % (filename, remote))

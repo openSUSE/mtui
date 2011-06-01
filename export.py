@@ -31,7 +31,7 @@ def xml_to_template(template, xmldata):
 		line = "%s (reference host: %s)\n" % (host.getAttribute("system"), host.getAttribute("hostname"))
 		try:
 			i = t.index(line)
-		except:
+		except Exception:
 			print "host section %s not found" % host.getAttribute("hostname")
 			continue
 		for state in ["before", "after"]:
@@ -46,7 +46,7 @@ def xml_to_template(template, xmldata):
 						else:
 							t.insert(i, "\tpackage %s is not installed\n" % name)
 						i += 1
-					except:
+					except Exception:
 						pass
 
 	i = t.index("put here the output of the following commands:\n", 0) + 1
@@ -65,7 +65,7 @@ def xml_to_template(template, xmldata):
 				if child.getAttribute("name") == t[current_line].strip("\n"):
 					t.insert(current_line + 1, str(child.childNodes[0].nodeValue).replace("\t", ""))
 					t[current_line] = "# " + t[current_line]
-			except:
+			except Exception:
 				pass
 		command_lines -= 1
 

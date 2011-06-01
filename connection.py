@@ -151,7 +151,7 @@ class Connection():
 			path += subdir + '/'
 			try:
 				sftp.mkdir(path)
-			except:
+			except Exception:
 				pass
 
 		try:
