@@ -63,7 +63,7 @@ class CommandPromt(cmd.Cmd):
 			try:
 				self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
 			except Exception:
-				out.error("unable to add host %s to list" % hostname)
+				out.critical("unable to add host %s to list" % hostname)
 
 		else:
 			parse_error(self.do_add_host, args)
@@ -180,7 +180,7 @@ class CommandPromt(cmd.Cmd):
 						if not ".svn" in root:
 							print os.path.join(root, name)
 			except Exception as error:
-				out.error(str(error))
+				out.critical(str(error))
 
  	def do_list_update_commands(self, args):
 		"""
@@ -200,11 +200,35 @@ class CommandPromt(cmd.Cmd):
 				try:
 					updater = Updater[release]
 				except KeyError:
-					out.error("no updater available for %s" % release)
+					out.critical("no updater available for %s" % release)
 					return
 
 				print "\n".join(updater(self.targets, self.metadata.patches).commands)
 				del updater
+
+ 	def do_list_downgrade_commands(self, args):
+		"""
+		List all commands which are invoked when downgrading packages on the
+		target hosts.
+
+		list_downgrade_commands
+		Keyword arguments:
+		None
+		"""
+
+		if args:
+			parse_error(self.do_list_update_commands, args)
+
+		else:
+			for release in self.metadata.get_releases():
+				try:
+					downgrader = Downgrader[release]
+				except KeyError:
+					out.critical("no downgrader available for %s" % release)
+					return
+
+				print "\n".join(downgrader(self.targets, self.metadata.get_package_list(), self.metadata.patches).commands)
+				del downgrader
 
  	def do_list_bugs(self, args):
 		"""
@@ -474,14 +498,14 @@ class CommandPromt(cmd.Cmd):
 					try:
 						downgrader = Downgrader[release]
 					except KeyError:
-						out.error("no downgrader available for %s" % release)
+						out.critical("no downgrader available for %s" % release)
 						return
 
 					out.info("downgrading")
 					try:
 						downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
 					except Exception:
-						out.critical("could not downgrade target systems %s", targets.keys())
+						out.critical("could not downgrade all target systems. stopping")
 						pass
 					else:
 						out.info("done")
@@ -513,7 +537,7 @@ class CommandPromt(cmd.Cmd):
 					try:
 						preparer = Preparer[release]
 					except KeyError:
-						out.error("no preparer available for %s" % release)
+						out.critical("no preparer available for %s" % release)
 						return
 
 					out.info("preparing")
@@ -585,7 +609,7 @@ class CommandPromt(cmd.Cmd):
 				try:
 					updater = Updater[release]
 				except KeyError:
-					out.error("no updater available for %s" % release)
+					out.critical("no updater available for %s" % release)
 					return
 
 				try:
@@ -676,7 +700,7 @@ class CommandPromt(cmd.Cmd):
 					try:
 						FileUpload(self.targets, filename, remote).run()
 					except Exception:
-						out.error("uploading %s to %s failed" % (filename, remote))
+						out.critical("uploading %s to %s failed" % (filename, remote))
 					else:
 						out.info("uploaded %s to %s" % (filename, remote))
 
@@ -707,14 +731,14 @@ class CommandPromt(cmd.Cmd):
 				if exc.errno == errno.EEXIST:
 					pass
 			except Exception as error:
-				out.error(str(error))
+				out.critical(str(error))
 				return
 
 			try:
 				FileDownload(self.targets, args, local, True).run()
 			except Exception as error:
-				out.error(str(error))
-				out.error("downloading %s to %s failed" % (args, local))
+				out.critical(str(error))
+				out.critical("downloading %s to %s failed" % (args, local))
 			else:
 				out.info("downloaded %s to %s" % (args, local))
 
@@ -822,7 +846,7 @@ class CommandPromt(cmd.Cmd):
 			if error.errno == errno.EEXIST:
 				pass
 		except Exception as error:
-			out.error(str(error))
+			out.critical(str(error))
 			return
 
 		filename = output_dir + filename
@@ -949,7 +973,7 @@ def script_hook(targets, which, scriptdir, md5):
 					if exc.errno == errno.EEXIST:
 						pass
 				except Exception as error:
-					out.error(str(error))
+					out.critical(str(error))
 					return
 
 				for target in targets:

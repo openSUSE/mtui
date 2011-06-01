@@ -21,6 +21,8 @@ class Update():
 		self.commands = []
 
 	def run(self):
+		lock = threading.Lock()
+
 		for target in self.targets:
 			thread = ThreadedMethod(queue)
 			thread.setDaemon(True)
@@ -35,13 +37,7 @@ class Update():
 		queue.join()
 
 		for command in self.commands: 
-			for target in self.targets:
-				queue.put([self.targets[target].run, [command]])
-
-			while queue.unfinished_tasks:
-				spinner()
-
-			queue.join()
+			RunCommand(self.targets, command).run()
 
 			for target in self.targets:
 				self.check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
@@ -157,17 +153,11 @@ class Prepare():
 
 		for target in self.targets:
 			if self.targets[target].lasterr():
-				out.error("could not prepare host %s. stopping.\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
+				out.critical("could not prepare host %s. stopping.\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
 				return
 
 		for command in self.commands: 
-			for target in self.targets:
-				queue.put([self.targets[target].run, [command]])
-
-			while queue.unfinished_tasks:
-				spinner()
-
-			queue.join()
+			RunCommand(self.targets, command).run()
 
 			for target in self.targets:
 				self.check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
@@ -240,7 +230,7 @@ class OldZypperDowngrade(Prepare):
 		invalid_packages = ['glibc', 'rpm', 'zypper']
 		invalid = set(packages).intersection(invalid_packages)
 		if invalid:
-			out.error("crucial package found in package list: %s. please downgrade manually" % list(invalid))
+			out.critical("crucial package found in package list: %s. please downgrade manually" % list(invalid))
 			return
 
 		commands = []

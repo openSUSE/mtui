@@ -200,8 +200,8 @@ directory completion.
 
 - get
 Downloads a file from all enabled hosts. Multiple files can not be selected.
-Files are saved in the downloads/$md5/ subdirectory with the hostname as file
-extension.
+Files are saved in the $templatedir/downloads/ subdirectory with the hostname
+as file extension.
 
 		get <remote filename>
 		Keyword arguments:
@@ -260,6 +260,14 @@ List all commands which are invoked when applying updates on the target hosts.
 		Keyword arguments:
 		None
 
+- list_downgrade_commands
+List all commands which are invoked when downgrading packages on the target
+hosts.
+
+		list_update_commands
+		Keyword arguments:
+		None
+
 - list_scripts
 List available scripts from the scripts subdirectory. This scripts are run in
 a pre updated state and in the post updated state. Afterwards the corresponding
@@ -285,11 +293,11 @@ recommended to use the "warning" loglevel.
         
 - save
 Save the testing log to a XML file. All commands and package versions are saved
-there. When no parameter is given, the XML is saved to output/$md5/log.xml. If
-that file already exists and the tester doesn't want to overwrite it, a postfix
-(current timestamp) is added to the filename. The log can be used to fill the
-required sections of the testing template after the testing has finished. This
-could be done with the convert.py script.
+there. When no parameter is given, the XML is saved to
+$templatedir/output/log.xml. If that file already exists and the tester doesn't
+want to overwrite it, a postfix (current timestamp) is added to the filename.
+The log can be used to fill the required sections of the testing template after
+the testing has finished. This could be done with the convert.py script.
 
 		save [filename]
 		Keyword arguments:
@@ -346,14 +354,18 @@ In order to automate serveral steps the tester has done manually, MTUI provides
 some hooks to include user scripts for i.e. setting up the system or checking
 the system state. Some of these scripts are already available in the "helper"
 subdirectory. See the README file in that directory for further reading on how
-these scripts are working. In short: all scripts are run when invoking the
-"update" procedure. The scripts which are linked to the scripts/pre/ directory
-are run before the update is applied. All scripts in the scripts/post/
-directory are run after the update was applied. To check if there are any
-regressions introduced by the update, the scripts in scripts/compare/ are run
-with the output from the pre and post scripts as parameter. The compare scripts
-signal possible regressions with the return code. MTUI shows this errors to the
-tester who hast to decide what to do with the findings.
+these scripts are working. In short: the scripts are copied over to the
+template directory and are run when invoking the "update" procedure.
+The scripts which are linked to the scripts/pre/ directory
+are run before the update is applied. The tester should deploy own scripts to
+$templatedir/scripts. This makes sure that scripts which are specific to an
+update are not run on all other updates as well. All scripts in the
+scripts/post/ directory are run after the update was applied. To check if
+there are any regressions introduced by the update, the scripts in
+scripts/compare/ are run with the output from the pre and post scripts as
+parameter. The compare scripts signal possible regressions with the return
+code. MTUI shows this errors to the tester who hast to decide what to do with
+the findings.
 
 All scripts with the same name form a testing group. For instance, if the
 tester wants to run a qa_ testcase for the update, he should write a script
@@ -365,14 +377,15 @@ which spawns the testcase on the hosts:
 This script (with the name check_cpio.sh) is then linked to
 scrips/pre/check_cpio.sh and scripts/post/check_cpio.sh. Now, it's run before
 the update and afterwards. The output is saved to
-output/$md5/scripts/[pre|post].check_cpio.sh.$hostname. When the post scripts
-have finished, the compare scripts are run. They need to have the same name
-("compare" prefix instead of "check", though) as the check script. In this case
-it's compare_check_cpio.sh.
+$templatedir/output/scripts/[pre|post].check_cpio.sh.$hostname. When the post
+scripts have finished, the compare scripts are run. They need to have the same
+name ("compare" prefix instead of "check", though) as the check script.
+In this case it's compare_check_cpio.sh.
 
 compare_check_cpio.sh is run with the previous results as parameter:
-compare_check_cpio.sh output/$md5/scripts/pre.check_cpio.sh.$hostname \
-  output/$md5/scripts/post.check_cpio.sh.$hostname
+compare_check_cpio.sh \
+  $templatedir/output/scripts/pre.check_cpio.sh.$hostname \
+  $templatedir/output/scripts/post.check_cpio.sh.$hostname
 
 If there are some unwanted differences, the compare script should return 1.
 Otherwise, return 0.

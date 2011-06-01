@@ -32,7 +32,7 @@ class Target():
 		try:
 			self.connection = Connection(self.hostname)
 		except Exception as error:
-			out.error("connecting to %s failed: %s" % (self.hostname, str(error)))
+			out.critical("connecting to %s failed: %s" % (self.hostname, str(error)))
 			raise
 
 		for package in packages:
@@ -93,7 +93,7 @@ class Target():
 			try:
 				exitcode = self.connection.run(command, lock)
 			except CommandTimeout:
-				out.error('%s: command "%s" timed out' % (self.hostname, command))
+				out.critical('%s: command "%s" timed out' % (self.hostname, command))
 				exitcode = -1
 
 			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode])
