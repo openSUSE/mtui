@@ -417,13 +417,16 @@ class CommandPromt(cmd.Cmd):
 
 	def do_set_log_level(self, args):
 		"""
-		Prints the command protocol from the specified hosts. This might
-		be handy for the tester, as one can simply dump the command history
-		to the reproducer section of the template.
+		Changes the current default MTUI loglevel "info" to "warning"
+		or "debug". To enable debug messages, one can set the loglevel
+		to "debug". This could be handy for longer running commands as
+		the output is shown in realtime. The "warning" loglevel prints
+		just basic error or warning conditions. Therefore it's not
+		recommended to use the "warning" loglevel.
 
-		show_log [hostname]
+		set_log_level <loglevel>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		loglevel   -- warning, info or debug
 		"""
 
 		levels = {"warning":logging.WARNING, "info":logging.INFO, "debug":logging.DEBUG}

@@ -264,7 +264,7 @@ List all commands which are invoked when applying updates on the target hosts.
 List all commands which are invoked when downgrading packages on the target
 hosts.
 
-		list_update_commands
+		list_downgrade_commands
 		Keyword arguments:
 		None
 
