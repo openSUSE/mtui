@@ -25,7 +25,7 @@ class CommandTimeout(Exception):
 
 class Connection():
 	"""manage SSH and SFTP connections"""
-	def __init__(self, hostname):
+	def __init__(self, hostname, timeout):
 		"""opens SSH channel to specified host
 
 		Tries AuthKey Authentication and falls back to password mode in case of errors
@@ -36,6 +36,7 @@ class Connection():
 		"""
 		# paramiko.util.log_to_file("/tmp/paramiko.log")
 		self.hostname = hostname
+		self.timeout = timeout
 
 		self.client = paramiko.SSHClient()
 		self.client.load_system_host_keys()
@@ -94,7 +95,7 @@ class Connection():
 		while True:
 			buffer = ''
 
-			if select.select([session], [], [], 300) == ([],[],[]):
+			if select.select([session], [], [], self.timeout) == ([],[],[]):
 				if lock is not None:
 					lock.acquire()
 

@@ -22,11 +22,12 @@ def main():
 	directory = os.getenv("TEMPLATEDIR", ".")
 	interactive = False
 	dryrun = False
+	timeout = None
 
 	targets = {}
 
 	try:
-		opts, args = getopt.getopt(sys.argv[1:], "ihaedt:m:v", ["interactive", "help", "asia", "emea", "dryrun", "templates=", "md5=", "verbose"])
+		opts, args = getopt.getopt(sys.argv[1:], "ihaedt:m:vw:", ["interactive", "help", "asia", "emea", "dryrun", "templates=", "md5=", "verbose", "timeout"])
 	except getopt.GetoptError as error:
 		out.error(str(error))
 		usage()
@@ -48,6 +49,12 @@ def main():
 			interactive = True
 		elif parameter in ("-v", "--verbose"):
 			out.setLevel(level=logging.DEBUG)
+		elif parameter in ("-w", "--timeout"):
+			try:
+				timeout = int(argument)
+			except Exception:
+				out.error("wrong timeout value")
+				sys.exit(0)
 		else:
 			usage()
 
@@ -73,7 +80,7 @@ def main():
 
 	for host, system in metadata.systems.items():
 		try:
-			targets[host] = Target(host, system, metadata.get_package_list(), dryrun=dryrun)
+			targets[host] = Target(host, system, metadata.get_package_list(), dryrun=dryrun, timeout=timeout)
 		except Exception:
 			out.warning("could not add host %s to target list" % host)
 
@@ -113,6 +120,7 @@ def usage():
 	print "\t-{short},--{long:20}{description}".format(short="i", long="interactive", description="interactive update shell")
 	print "\t-{short},--{long:20}{description}".format(short="d", long="dryrun", description="start in dryrun mode")
 	print "\t-{short},--{long:20}{description}".format(short="v", long="verbose", description="enable debugging output")
+	print "\t-{short},--{long:20}{description}".format(short="w", long="timeout", description="execution timeout in seconds")
 	print
 
 	sys.exit(0)

@@ -16,21 +16,24 @@ out = logging.getLogger('mtui')
 queue = Queue.Queue()
 
 class Target():
-	def __init__(self, hostname, system, packages=[], dryrun=False):
+	def __init__(self, hostname, system, packages=[], dryrun=False, timeout=None):
 		self.hostname = hostname
 		self.system = system
-		self.log = []
 		self.packages = {}
+		self.log = []
 
 		if dryrun:
 			self.state = "dryrun"
 		else:
 			self.state = "enabled"
 
+		if timeout is None:
+			timeout = 300
+
 		out.info("connecting to %s" % self.hostname)
 
 		try:
-			self.connection = Connection(self.hostname)
+			self.connection = Connection(self.hostname, timeout)
 		except Exception as error:
 			out.critical("connecting to %s failed: %s" % (self.hostname, str(error)))
 			raise
@@ -74,6 +77,13 @@ class Target():
 	def enable_repo(self, repo):
 		out.debug("enabling repo %s on %s" % (repo, self.hostname))
 		self.run("zypper mr -e %s" % repo)
+
+	def set_timeout(self, value):
+		out.debug("setting timeout to %s on %s" % (value, self.hostname))
+		self.connection.timeout = value
+
+	def get_timeout(self):
+		return self.connection.timeout
 
 	def set_repo(self, name):
 		command = "/suse/rd-qa/bin/rep-clean.sh"

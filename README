@@ -76,6 +76,13 @@ then printed in realtime instead of after the command has finished. However,
 it's more reasonable to use the set_log_level (see below) command then. The
 default loglevel is INFO while -v sets it to DEBUG.
 
+	-w,--timeout		 
+
+Sets the execution timeout to the specified value (default: 300). When the
+timeout limit was hit the user is asked to wait for the current command to
+return or to proceed with the next one. The timeout value is set in seconds.
+To disable the timeout set it to "0".
+
 	-h,--help                help
 
 Prints the parameter list
@@ -134,6 +141,25 @@ commands accepts multiple hostnames followed by the wanted state.
 		Keyword arguments:
 		hostname -- hostname from the target list
 		state    -- enabled, disabled, dryrun
+
+
+- set_timeout
+Changes the current execution timeout for a target host. When the timeout
+limit was hit the user is asked to wait for the current command to return
+or to proceed with the next one.
+The timeout value is set in seconds. To disable the timeout set it to "0".
+
+		set_timeout <hostname,timeout>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		timeout    -- timeout value in seconds
+
+- list_timeout
+Prints the current timeout values per host in seconds.
+		
+		list_timeout <timeout>
+		Keyword arguments:
+		None
 
 Update Management
 *****************

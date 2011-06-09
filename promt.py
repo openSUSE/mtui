@@ -122,6 +122,23 @@ class CommandPromt(cmd.Cmd):
 				system = "(%s)" % self.targets[target].system
 				print '{0:20} {1:20}: {2}'.format(target, system, state)
 
+	def do_list_timeout(self, args):
+		"""
+		Prints the current timeout values per host in seconds.
+		
+		list_timeout <timeout>
+		Keyword arguments:
+		None
+		"""
+
+		if args:
+			parse_error(self.do_list_timeout, args)
+
+		for target in self.targets:
+			system = "(%s)" % self.targets[target].system
+			timeout = self.targets[target].get_timeout()
+			print '{0:20} {1:20}: {2}s'.format(target, system, timeout)
+
  	def do_list_packages(self, args):
 		"""
 		Lists current installed package versions from the targets if a
@@ -304,28 +321,6 @@ class CommandPromt(cmd.Cmd):
 	def complete_show_log(self, text, line, begidx, endidx):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
-	def do_record_macro(self, args):
-		"""
-		record macro for later use
-
-		record_macro <name>
-		Keyword arguments:
-		name     -- macro name
-
-		"""
-		return
-
-	def do_play_macro(self, args):
-		"""
-		run macro on all active hosts
-
-		play_macro <name>
-		Keyword arguments:
-		name     -- macro name
-
-		"""
-		return
-
 	def do_run(self, args):
 		"""
 		Runs a command on a specified host or on all enabled targets if
@@ -403,7 +398,7 @@ class CommandPromt(cmd.Cmd):
 					self.targets[target].state = state
 
 				except KeyError:
-					out.info("host %s not in database" % target)
+					out.warning("host %s not in database" % target)
 					targets.remove(target)
 
 		else:
@@ -438,7 +433,48 @@ class CommandPromt(cmd.Cmd):
 
 	def complete_set_log_level(self, text, line, begidx, endidx):
 		return [i for i in ['warning', 'info', 'debug'] if i.startswith(text) and i not in line]
-			
+
+	def do_set_timeout(self, args):
+		"""
+		Changes the current execution timeout for a target host.
+		When the timeout limit was hit the user is asked to wait
+		for the current command to return or to proceed with the
+		next one.
+		The timeout value is set in seconds. To disable the
+		timeout set it to "0".
+
+		set_timeout <hostname,timeout>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		timeout    -- timeout value in seconds
+		"""
+
+		if ',' in args:
+			if args.split(',')[0] == 'all':
+				targets = list(self.targets)
+			else:
+				targets = args.split(',')[:-1]
+
+			try:
+				value = int(args.split(',')[-1])
+			except Exception:
+				out.error("wrong timeout value")
+				return
+
+			for target in targets:
+				try:
+					self.targets[target].set_timeout(value)
+
+				except KeyError:
+					out.warning("host %s not in database" % target)
+					targets.remove(target)
+
+		else:
+			parse_error(self.do_set_timeout, args)
+
+	def complete_set_timeout(self, text, line, begidx, endidx):
+		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+
 	def do_set_repo(self, args):
 		"""
 		Sets the software repositories to UPDATE or TESTING. Multiple
@@ -451,7 +487,7 @@ class CommandPromt(cmd.Cmd):
 		repository -- repository, TESTING or UPDATE
 		"""
 
-		if args:
+		if ',' in args:
 			if args.split(',')[0] == 'all':
 				targets = list(self.targets)
 			else:
@@ -468,7 +504,7 @@ class CommandPromt(cmd.Cmd):
 					self.targets[target].set_repo(name.upper())
 
 				except KeyError:
-					out.info("host %s not in database" % target)
+					out.warning("host %s not in database" % target)
 					targets.remove(target)
 
 		else:
@@ -1017,7 +1053,7 @@ def selected_targets(targets, target_list):
 		try:
 			temporary_targets[target] = targets[target]
 		except KeyError:
-			out.info("host %s not in database" % target)
+			out.warning("host %s not in database" % target)
 
 	return temporary_targets
 	
