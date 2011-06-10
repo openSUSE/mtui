@@ -66,6 +66,9 @@ class Target():
 			out.info('dryrun: %s running "rpm -q %s"' % packages)
 			self.log.append([command, "dryrun\n", "", 0])
 
+		elif self.state == "disabled":
+			self.log.append(["", "", "", 0])
+
 	def query_version(self, package):
 		self.query_versions(package)
 		return self.packages[package].current
@@ -112,6 +115,9 @@ class Target():
 			out.info('dryrun: %s running "%s"' % (self.hostname, command))
 			self.log.append([command, "dryrun\n", "", 0])
 
+		elif self.state == "disabled":
+			self.log.append(["", "", "", 0])
+
 	def put(self, local, remote):
 		if self.state == "enabled":
 			return self.connection.put(local, remote)
@@ -126,16 +132,28 @@ class Target():
 			out.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
 
 	def lastin(self):
+		#try:
 		return self.log[-1][0]
+		#except:
+		#	return ""
 
 	def lastout(self):
-		return self.log[-1][1]
+		try:
+			return self.log[-1][1]
+		except:
+			return ""
 
 	def lasterr(self):
-		return self.log[-1][2]
+		try:
+			return self.log[-1][2]
+		except:
+			return ""
 
 	def lastexit(self):
-		return self.log[-1][3]
+		try:
+			return self.log[-1][3]
+		except:
+			return ""
 
 	def close(self):
 		out.info("closing connection to %s" % self.hostname)
