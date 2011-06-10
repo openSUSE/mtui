@@ -235,11 +235,16 @@ class OldZypperDowngrade(Prepare):
 
 		commands = []
 
-		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -l -y -t patch $p; done" % patch)
+		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -y -t patch $p; done" % patch)
+
 		for package in packages:
 			commands.append("rpm --nodeps -e %s" % package)
 
-		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -l -y -t patch $p; done" % patch)
+		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -y -t patch $p; done" % patch)
+
+		for package in packages:
+			commands.append("zypper rm -y -t atom %s" % package)
+
 		for package in packages:
 			commands.append("zypper -n in -y -l %s" % package)
 
