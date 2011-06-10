@@ -42,14 +42,14 @@ class Target():
 			self.packages[package] = Package(package)
 
 	def query_versions(self, packages=None):
+		versions = {}
+		if packages is None:
+			packages = self.packages.keys()
+
+		if isinstance(packages, list):
+			packages = " ".join(packages)
+
 		if self.state == "enabled":
-			versions = {}
-			if packages is None:
-				packages = self.packages.keys()
-
-			if isinstance(packages, list):
-				packages = " ".join(packages)
-
 			self.run("rpm -q %s" % packages)
 
 			for line in re.split("\n+", self.lastout()):
@@ -63,8 +63,8 @@ class Target():
 						out.debug("%s: package %s is not installed" % (self.hostname, match.group(1)))
 
 		elif self.state == "dryrun":
-			out.info('dryrun: %s running "rpm -q %s"' % packages)
-			self.log.append([command, "dryrun\n", "", 0])
+			out.info('dryrun: %s running "rpm -q %s"' % (self.hostname, packages))
+			self.log.append(["rpm -q %s" % packages, "dryrun\n", "", 0])
 
 		elif self.state == "disabled":
 			self.log.append(["", "", "", 0])
@@ -132,10 +132,10 @@ class Target():
 			out.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
 
 	def lastin(self):
-		#try:
-		return self.log[-1][0]
-		#except:
-		#	return ""
+		try:
+			return self.log[-1][0]
+		except:
+			return ""
 
 	def lastout(self):
 		try:

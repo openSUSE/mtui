@@ -152,21 +152,20 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			if args.split(',')[0] == 'all':
-				targets = list(self.targets)
-			else:
-				targets = args.split(',')
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
 
 			for target in targets:
 				try:
-					self.targets[target].query_versions()
+					targets[target].query_versions()
 				except KeyError:
 					out.warning("host %s not in database" % target)
-					targets.remove(target)
 				else:
-					print "packages on %s (%s):" % (target, self.targets[target].system)
-					for package in self.targets[target].packages:
-						print '{0:30}: {1}'.format(package, self.targets[target].packages[package].current)
+					print "packages on %s (%s):" % (target, targets[target].system)
+					for package in targets[target].packages:
+						print '{0:30}: {1}'.format(package, targets[target].packages[package].current)
 
 				print
 
@@ -175,7 +174,7 @@ class CommandPromt(cmd.Cmd):
 				print '{0:30}: {1}'.format(package, version)
 
 	def complete_list_packages(self, text, line, begidx, endidx):
-		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
  	def do_list_scripts(self, args):
 		"""
@@ -340,10 +339,10 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			command = ",".join(args.split(',')[1:])
 
-			if args.split(',')[0] == 'all':
-				targets = self.targets
-			else:
-				targets = selected_targets(self.targets, [args.split(',')[0]])
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, [args.split(',')[0]])
 
 			if targets:
 				try:
@@ -352,18 +351,17 @@ class CommandPromt(cmd.Cmd):
 					return
 
 				for target in targets:
-					if target in self.targets and self.targets[target].state == "enabled":
-						print "%s:~> %s [%s]" % (target, self.targets[target].lastin(), self.targets[target].lastexit())
-						print self.targets[target].lastout()
-						if self.targets[target].lasterr():
-							print "stderr:", self.targets[target].lasterr()
+					print "%s:~> %s [%s]" % (target, targets[target].lastin(), targets[target].lastexit())
+					print targets[target].lastout()
+					if targets[target].lasterr():
+						print "stderr:", targets[target].lasterr()
 
 				out.info("done")
 		else:
 			parse_error(self.do_run, args)
 
 	def complete_run(self, text, line, begidx, endidx):
-		return [i for i in list(self.targets) + ['all'] if i.startswith(text) and not line.count(',')]
+		return [i for i in list(enabled_targets(self.targets)) + ['all'] if i.startswith(text) and not line.count(',')]
 
 	def do_set_host_state(self, args):
 		"""
@@ -488,10 +486,10 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if ',' in args:
-			if args.split(',')[0] == 'all':
-				targets = list(self.targets)
-			else:
-				targets = args.split(',')[:-1]
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(',')[:-1])
 
 			name = args.split(',')[-1]
 
@@ -512,9 +510,9 @@ class CommandPromt(cmd.Cmd):
 
 	def complete_set_repo(self, text, line, begidx, endidx):
 		if line.count(','):
-			return [i for i in list(self.targets) + ['testing', 'update'] if i.startswith(text) and i not in line]
+			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['testing', 'update'])
 		else:		
-			return [i for i in list(self.targets) + ['all'] if i.startswith(text) and i not in line]
+			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_downgrade(self, args):
 		"""
@@ -527,10 +525,10 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			if args.split(',')[0] == 'all':
-				targets = self.targets
-			else:
-				targets = selected_targets(self.targets, args.split(','))
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
 
 			if targets:
 				for release in self.metadata.get_releases():
@@ -553,7 +551,7 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_downgrade, args)
 
 	def complete_downgrade(self, text, line, begidx, endidx):
-		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_prepare(self, args):
 		"""
@@ -566,10 +564,10 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			if args.split(',')[0] == 'all':
-				targets = self.targets
-			else:
-				targets = selected_targets(self.targets, args.split(','))
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
 
 			if targets:
 				for release in self.metadata.get_releases():
@@ -592,7 +590,7 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_prepare, args)
 
 	def complete_prepare(self, text, line, begidx, endidx):
-		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_update(self, args):
 		"""
@@ -606,10 +604,10 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			if args.split(',')[0] == 'all':
-				targets = self.targets
-			else:
-				targets = selected_targets(self.targets, args.split(','))
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
 
 			self.do_prepare(args)
 
@@ -688,7 +686,7 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_update, args)
 
 	def complete_update(self, text, line, begidx, endidx):
-		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_checkout(self, args):
 		"""
@@ -951,14 +949,17 @@ class CommandPromt(cmd.Cmd):
 
 		return [dirname + i for i in os.listdir(dirname) if i.startswith(filename)]
 
-	def complete_systemlist(self, text, line, begidx, endidx):
-		return [i.strip('\n') for i in self.systems if i.startswith(text) and i not in line]
+	def complete_systemlist(self, text, line, begidx, endidx, appendix=[]):
+		return [i.strip('\n') for i in self.systems + appendix if i.startswith(text) and i not in line]
 
-	def complete_hostlist(self, text, line, begidx, endidx):
-		return [i for i in self.targets if i.startswith(text) and i not in line]
+	def complete_hostlist(self, text, line, begidx, endidx, appendix=[]):
+		return [i for i in self.targets + appendix if i.startswith(text) and i not in line]
 
-	def complete_hostlist_with_all(self, text, line, begidx, endidx):
-		return [i for i in list(self.targets) + ['all'] if i.startswith(text) and i not in line]
+	def complete_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
+		return [i for i in list(self.targets) + ['all'] + appendix if i.startswith(text) and i not in line]
+
+	def complete_enabled_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
+		return [i for i in list(enabled_targets(self.targets)) + ['all'] + appendix if i.startswith(text) and i not in line]
 
 def parse_error(method, args):
 	print 
@@ -1045,6 +1046,18 @@ def input(text, options):
 			return False
 	except KeyboardInterrupt:
 		return False
+
+def enabled_targets(targets):
+	temporary_targets = {}
+
+	for target in targets:
+		try:
+			if targets[target].state != "disabled":
+				temporary_targets[target] = targets[target]
+		except KeyError:
+			out.warning("host %s not in database" % target)
+
+	return temporary_targets
 
 def selected_targets(targets, target_list):
 	temporary_targets = {}
