@@ -800,7 +800,10 @@ class CommandPromt(cmd.Cmd):
 		editor = os.environ.get("EDITOR", "vi")
 
 		if command == "file":
-			os.system("%s %s" % (editor, args.split(",")[1]))
+			try:
+				os.system("%s %s" % (editor, args.split(",")[1]))
+			except Exception:
+				parse_error(self.do_edit, args)
 		elif command == "template":
 			os.system("%s %s" % (editor, self.metadata.path))
 		else:
