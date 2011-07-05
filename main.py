@@ -83,6 +83,8 @@ def main():
 			targets[host] = Target(host, system, metadata.get_package_list(), dryrun=dryrun, timeout=timeout)
 		except Exception:
 			out.warning("could not add host %s to target list" % host)
+		except KeyboardInterrupt:
+			out.warning("skipping host %s" % host)
 
 	ignored = shutil.ignore_patterns("*.svn")
 

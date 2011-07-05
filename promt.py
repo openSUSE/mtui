@@ -619,13 +619,9 @@ class CommandPromt(cmd.Cmd):
 
 				for package in packages:
 					required = self.metadata.packages[package]
+					before = targets[target].packages[package].current
 
-					if vercmp(targets[target].packages[package].before, targets[target].packages[package].current) == 1:
-						packages[package].set_versions(required=required)
-					else:
-						packages[package].set_versions(before=targets[target].packages[package].current, required=required)
-
-					before = targets[target].packages[package].before
+					packages[package].set_versions(before=before, required=required)
 
 					if before == "0":
 						not_installed.append(package)

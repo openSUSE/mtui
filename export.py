@@ -27,12 +27,17 @@ def xml_to_template(template, xmldata):
 		out.error("could not parse XML data")
 		raise AttributeError("XML")
 
+	generic_testcases_pos = t.index("generic test cases:\n")
+
 	for host in x.getElementsByTagName("host"):
-		line = "%s (reference host: %s)\n" % (host.getAttribute("system"), host.getAttribute("hostname"))
+		hostname = host.getAttribute("hostname")
+		systemtype = host.getAttribute("system")
+
+		line = "%s (reference host: %s)\n" % (systemtype, hostname)
 		try:
 			i = t.index(line)
 		except Exception:
-			print "host section %s not found" % host.getAttribute("hostname")
+			out.warning("host section %s not found" % hostname)
 			continue
 		for state in ["before", "after"]:
 			i = t.index("      %s:\n" % state, i) + 1
@@ -48,6 +53,34 @@ def xml_to_template(template, xmldata):
 						i += 1
 					except Exception:
 						pass
+
+		generic_testcases_pos = t.index("generic test cases:\n") + 4
+		while t[generic_testcases_pos].strip("\n"):
+			generic_testcases_pos += 1
+		generic_testcases_pos += 1
+
+		log = host.getElementsByTagName("log")[0]
+		for child in log.childNodes:
+			try:
+				name = child.getAttribute("name")
+				exitcode = child.getAttribute("return")
+
+				if "scripts/compare/compare_" in name:
+					scriptname = os.path.basename(name.split(" ")[0])
+
+					if exitcode == "0":
+						result = "SUCCEEDED"
+					elif exitcode == "1":
+						result = "FAILED"
+					else:
+						result = "INTERNAL ERROR"
+
+					t.insert(generic_testcases_pos, "%s: %s - %s\n" % (hostname, scriptname, result))
+					generic_testcases_pos += 1
+			except Exception:
+				pass
+
+		t.insert(generic_testcases_pos, "\n")
 
 	i = t.index("put here the output of the following commands:\n", 0) + 1
 	command_lines = 1
