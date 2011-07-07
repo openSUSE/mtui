@@ -59,12 +59,19 @@ def xml_to_template(template, xmldata):
 			generic_testcases_pos += 1
 		generic_testcases_pos += 1
 
+		t.insert(generic_testcases_pos, "=== %s ===\n" % hostname)
+		generic_testcases_pos += 1
+
 		log = host.getElementsByTagName("log")[0]
 		for child in log.childNodes:
 			try:
 				name = child.getAttribute("name")
 				exitcode = child.getAttribute("return")
 
+				#if "zypper" in name and exitcode != "0":
+				#	t.insert(generic_testcases_pos, "zypper command failed: %s\n" % name)
+				#	generic_testcases_pos += 1
+					
 				if "scripts/compare/compare_" in name:
 					scriptname = os.path.basename(name.split(" ")[0])
 
@@ -75,8 +82,9 @@ def xml_to_template(template, xmldata):
 					else:
 						result = "INTERNAL ERROR"
 
-					t.insert(generic_testcases_pos, "%s: %s - %s\n" % (hostname, scriptname, result))
+					t.insert(generic_testcases_pos, "%s - %s\n" % (scriptname, result))
 					generic_testcases_pos += 1
+
 			except Exception:
 				pass
 

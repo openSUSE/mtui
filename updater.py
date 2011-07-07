@@ -227,7 +227,7 @@ class OldZypperDowngrade(Prepare):
 
 		patch = patches['zypp']
 
-		invalid_packages = ['glibc', 'rpm', 'zypper']
+		invalid_packages = ['glibc', 'rpm', 'zypper', 'readline']
 		invalid = set(packages).intersection(invalid_packages)
 		if invalid:
 			out.critical("crucial package found in package list: %s. please downgrade manually" % list(invalid))
@@ -235,18 +235,13 @@ class OldZypperDowngrade(Prepare):
 
 		commands = []
 
-		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -y -t patch $p; done" % patch)
-
 		for package in packages:
-			commands.append("rpm --nodeps -e %s" % package)
+			commands.append('line=$(zypper se --match-exact %s | grep -v "|[[:space:]]*|" | grep package | sort -ru -t \| -k 5 | head -n 1); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi' % package)
 
 		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -y -t patch $p; done" % patch)
 
 		for package in packages:
 			commands.append("zypper rm -y -t atom %s" % package)
-
-		for package in packages:
-			commands.append("zypper -n in -y -l %s" % package)
 
 		self.commands = commands
 
