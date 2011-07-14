@@ -320,11 +320,58 @@ class CommandPromt(cmd.Cmd):
 	def complete_show_log(self, text, line, begidx, endidx):
 		return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
+	def do_serialize(self, args):
+		"""
+		Runs a command on a specified host or on all enabled targets if
+		'all' is given as hostname. The command timeout is set to 5 minutes
+		which means, if there's no output on stdout or stderr for 5 minutes,
+		a timeout exception is thrown. The commands are run serialized on
+		every target. After the call returned, the output (including the
+		return code) of each host is shown on the console.
+		Please be aware that no interactive commands can be run with this
+		procedure.
+
+		serialize <hostname,command>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		"""
+
+		if args:
+			command = ",".join(args.split(',')[1:])
+
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, [args.split(',')[0]])
+
+			if targets:
+				for target in targets:
+					try:
+						host = {}
+						host[target] = targets[target]
+						RunCommand(host, command).run()
+					except:
+						return
+
+					print "%s:~> %s [%s]" % (target, targets[target].lastin(), targets[target].lastexit())
+					print targets[target].lastout()
+					if targets[target].lasterr():
+						print "stderr:", targets[target].lasterr()
+
+					input("Hit any key to proceed with the next host", "")
+
+				out.info("done")
+		else:
+			parse_error(self.do_serialize, args)
+
+	def complete_serialize(self, text, line, begidx, endidx):
+		return [i for i in list(enabled_targets(self.targets)) + ['all'] if i.startswith(text) and not line.count(',')]
+
 	def do_run(self, args):
 		"""
 		Runs a command on a specified host or on all enabled targets if
-		'all' is given as hostname. The command timeout is set to 10 minutes
-		which means, if there's no output on stdout or stderr for 10 minutes,
+		'all' is given as hostname. The command timeout is set to 5 minutes
+		which means, if there's no output on stdout or stderr for 5 minutes,
 		a timeout exception is thrown. The commands are run in parallel on
 		every target. After the call returned, the output (including the
 		return code) of each host is shown on the console.
