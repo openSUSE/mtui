@@ -921,7 +921,11 @@ class CommandPromt(cmd.Cmd):
 		else:
 			filename = "log.xml"
 
-		output_dir = os.path.dirname(self.metadata.path) + "/output/"
+		if filename.startswith("/"):
+			output_dir = os.path.dirname(filename) + "/"
+			filename = os.path.basename(filename)
+		else:
+			output_dir = os.path.dirname(self.metadata.path) + "/output/"
 
 		try:
 			os.makedirs(output_dir)
@@ -1039,15 +1043,23 @@ def script_hook(targets, which, scriptdir, md5):
 					postname = "%s/post.%s.%s" % (output_dir, script.replace("compare_", "check_"), target)
 					command = ["%s/scripts/compare/%s" % (scriptdir, script), prename, postname]
 					out.debug("running %s" % str(command))
-					sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-					exitcode = sub.wait()
+					try:
+						sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+						stdout, stderr = sub.communicate()
+						exitcode = sub.wait()
+					except Exception as error:
+						out.critical("running compare script failed: %s" % error)
+						exitcode = 1
 
 					if exitcode == 1:
-						out.warning("testcase %s failed: %s" % (script, str(command))) 
+						out.critical("testcase %s failed: %s\n%s" % (script, str(command), stdout)) 
+						if stderr:
+							print "stderr:", stderr
+
 					if exitcode == 2:
 						out.warning("internal error in testcase %s: %s" % (script, str(command))) 
 
-					targets[target].log.append([" ".join(command), sub.stdout.readlines(), sub.stderr.readlines(), exitcode])
+					targets[target].log.append([" ".join(command), stdout, stderr, exitcode])
 
 			else:
 				FileUpload(targets, local_file, "%s/%s" % (remote_dir, remote_file)).run()
