@@ -20,7 +20,7 @@ uniq -c |
 while read count path; do 
    if [ $count -gt 1 ]; then 
       if [ ! -d $path ];  then 
-         owners=`rpm -qf --qf "%{NAME} " $path | sort -t -`
+         owners=`rpm -qf --qf "%{NAME}\n" $path | sort -t - | tr [:cntrl:] ' '`
          if [ ! -L $path ]; then
             echo "ERROR: file $path owned by ($owners)" 1>&2
          else
