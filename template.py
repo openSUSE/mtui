@@ -27,8 +27,10 @@ class Template:
 			self.path = './' + md5 + '/'
 
 		if team is not None:
+			self.refhosts = "refhosts." + team
 			self.path = self.path + 'log.' + team
 		else:
+			self.refhosts = "refhosts.emea"
 			self.path = self.path + 'log.emea'
 
 		self.metadata = Metadata()
@@ -82,12 +84,28 @@ class Template:
 
 			match = re.search("(.*-.*) \(reference host: (.+)\)", line)
 			if match:
-				if match.group(2) == '???':
-					out.warning("no hostname defined for system %s" % match.group(1))
+				if '?' in match.group(2):
+					hostname = self.get_refhost(match.group(1))
+					out.warning("no hostname defined for system %s, using %s" % (match.group(1), hostname))
 				else:
-					self.metadata.systems[match.group(2)] = match.group(1)
+					hostname = match.group(2)
+
+				self.metadata.systems[hostname] = match.group(1)
 
 			match = re.search("Bug #(\d+) \(\"(.*)\"\):", line)
 			if match:
 				self.metadata.bugs[match.group(1)] = match.group(2)
 
+	def get_refhost(self, system):
+		try:
+			with open(self.refhosts, 'r') as reffile:
+				for line in reffile.readlines():
+					match = re.search('%s="(.*)"' % system, line)
+					if match:
+						return match.group(1)
+		except OSError, error:
+			if error.errno == errno.ENOENT:
+				out.warning("refhost mapping file %s not found" % self.refhosts)
+			else:
+				pass
+		

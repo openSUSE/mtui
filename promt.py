@@ -10,6 +10,7 @@ import logging
 import readline
 import subprocess
 import glob
+import re
 
 from rpmcmp import *
 from target import *
@@ -37,9 +38,14 @@ class CommandPromt(cmd.Cmd):
 			pass
 
 		try:
-			with open('system.list', 'r') as f:
-				self.systems = f.readlines()
+			with open('refhosts.emea', 'r') as f:
+				for line in f.readlines():
+					match = re.search('([^#]*)=".*"', line)
+					if match:
+						self.systems.append(match.group(1))
+					
 		except Exception:
+			out.debug("failed to parse refhost mapping file")
 			pass
 
 	def emptyline(self):
