@@ -268,10 +268,15 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_list_bugs, args)
 
 		else:
+			buglist = ""
+
 			for bug, description in self.metadata.bugs.items():
 				print 'Bug #{0:5}: {1}'.format(bug, description)
 				print 'https://bugzilla.novell.com/show_bug.cgi?id=%s' % bug
 				print
+				buglist += bug + ","
+
+			print 'Buglist: https://bugzilla.novell.com/buglist.cgi?bug_id=%s' % buglist.strip(',')
 
  	def do_list_metadata(self, args):
 		"""
