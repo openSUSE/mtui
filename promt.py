@@ -42,6 +42,9 @@ class CommandPromt(cmd.Cmd):
 		except Exception:
 			pass
 
+	def emptyline(self):
+		return
+
 	def do_add_host(self, args):
 		"""
 		Adds another machine to the target host list. The system type needs
