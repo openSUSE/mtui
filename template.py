@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import logging
 import re
 
@@ -97,8 +98,18 @@ class Template:
 				self.metadata.bugs[match.group(1)] = match.group(2)
 
 	def get_refhost(self, system):
+		"""get refhost from system name
+
+		parses refhost mapping file to get testing machine
+
+		Keyword arguments:
+		system -- requested system name
+
+		"""
+		refhostfile = os.path.dirname(__file__) + "/" + self.refhosts
+
 		try:
-			with open(self.refhosts, 'r') as reffile:
+			with open(refhostfile, 'r') as reffile:
 				for line in reffile.readlines():
 					match = re.search('%s="(.*)"' % system, line)
 					if match:

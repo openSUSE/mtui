@@ -268,15 +268,14 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_list_bugs, args)
 
 		else:
-			buglist = ""
+			buglist = ",".join(sorted(self.metadata.bugs.keys()))
 
 			for bug, description in self.metadata.bugs.items():
 				print 'Bug #{0:5}: {1}'.format(bug, description)
 				print 'https://bugzilla.novell.com/show_bug.cgi?id=%s' % bug
 				print
-				buglist += bug + ","
 
-			print 'Buglist: https://bugzilla.novell.com/buglist.cgi?bug_id=%s' % buglist.strip(',')
+			print 'Buglist: https://bugzilla.novell.com/buglist.cgi?bug_id=%s' % buglist
 
  	def do_list_metadata(self, args):
 		"""
@@ -291,12 +290,18 @@ class CommandPromt(cmd.Cmd):
 			parse_error(self.do_list_metadata, args)
 
 		else:
+			targetlist = " ".join(sorted(self.targets.keys()))
+			packagelist = " ".join(sorted(self.metadata.get_package_list()))
+
 			print '{0:15}: {1}'.format("MD5SUM", self.metadata.md5)
 			print '{0:15}: {1}'.format("SWAMP ID", self.metadata.swampid)
 			print '{0:15}: {1}'.format("Category", self.metadata.category)
 			print '{0:15}: {1}'.format("Packager", self.metadata.packager)
 			for type, id in self.metadata.patches.items():
 				print '{0:15}: {1}'.format(type.upper(), id)
+			print '{0:15}: {1}'.format("Hosts", targetlist)
+			print '{0:15}: {1}'.format("Packages", packagelist)
+
 
 	def do_show_log(self, args):
 		"""
@@ -1017,7 +1022,7 @@ class CommandPromt(cmd.Cmd):
 		return [i.strip('\n') for i in self.systems + appendix if i.startswith(text) and i not in line]
 
 	def complete_hostlist(self, text, line, begidx, endidx, appendix=[]):
-		return [i for i in self.targets + appendix if i.startswith(text) and i not in line]
+		return [i for i in list(self.targets) + appendix if i.startswith(text) and i not in line]
 
 	def complete_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
 		return [i for i in list(self.targets) + ['all'] + appendix if i.startswith(text) and i not in line]
