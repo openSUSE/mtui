@@ -1,0 +1,1 @@
+../../helper/compare_rpm_Va_nofiles.sh
