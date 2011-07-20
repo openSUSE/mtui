@@ -78,7 +78,12 @@ def xml_to_template(template, xmldata):
 			out.warning("host section %s not found" % hostname)
 			continue
 		for state in ["before", "after"]:
-			i = t.index("      %s:\n" % state, i) + 1
+			try:
+				pos = t.index("      %s:\n" % state, i) + 1
+			except ValueError:
+				pos = t.index("%s:\n" % state, i) + 1
+
+			i = pos
 			for package in host.getElementsByTagName(state):
 				for child in package.childNodes:
 					try:

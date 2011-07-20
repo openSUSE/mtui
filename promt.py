@@ -270,12 +270,11 @@ class CommandPromt(cmd.Cmd):
 		else:
 			buglist = ",".join(sorted(self.metadata.bugs.keys()))
 
+			print 'Buglist: https://bugzilla.novell.com/buglist.cgi?bug_id=%s' % buglist
 			for bug, description in self.metadata.bugs.items():
+				print
 				print 'Bug #{0:5}: {1}'.format(bug, description)
 				print 'https://bugzilla.novell.com/show_bug.cgi?id=%s' % bug
-				print
-
-			print 'Buglist: https://bugzilla.novell.com/buglist.cgi?bug_id=%s' % buglist
 
  	def do_list_metadata(self, args):
 		"""
@@ -292,6 +291,7 @@ class CommandPromt(cmd.Cmd):
 		else:
 			targetlist = " ".join(sorted(self.targets.keys()))
 			packagelist = " ".join(sorted(self.metadata.get_package_list()))
+			patchinfo = "http://hilbert.suse.de/abuildstat/patchinfo/%s/" % self.metadata.md5
 
 			print '{0:15}: {1}'.format("MD5SUM", self.metadata.md5)
 			print '{0:15}: {1}'.format("SWAMP ID", self.metadata.swampid)
@@ -301,7 +301,7 @@ class CommandPromt(cmd.Cmd):
 				print '{0:15}: {1}'.format(type.upper(), id)
 			print '{0:15}: {1}'.format("Hosts", targetlist)
 			print '{0:15}: {1}'.format("Packages", packagelist)
-			print '{0:15}: {1}'.format("Patchinfo", "http://hilbert.suse.de/abuildstat/patchinfo/%s/" % self.metadata.md5)
+			print '{0:15}: {1}'.format("Patchinfo", patchinfo)
 
 
 	def do_show_log(self, args):

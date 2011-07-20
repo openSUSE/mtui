@@ -93,9 +93,14 @@ class Template:
 
 				self.metadata.systems[hostname] = match.group(1)
 
-			match = re.search("Bug #(\d+) \(\"(.*)\"\):", line)
+			match = re.search("Bug #(\d+) \(\"(.*)\"\):", line) # deprecated
 			if match:
 				self.metadata.bugs[match.group(1)] = match.group(2)
+
+			match = re.search("Bugs: (.*)", line)
+			if match:
+				for bug in match.group(1).split(','):
+					self.metadata.bugs[bug.strip(' ')] = "Description not available"
 
 	def get_refhost(self, system):
 		"""get refhost from system name
