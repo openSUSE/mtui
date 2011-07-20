@@ -844,6 +844,43 @@ class CommandPromt(cmd.Cmd):
 		else:
 			parse_error(self.do_get, args)
 
+	def do_terms(self, args):
+		"""
+		Spawn terminal screens to all connected hosts. This command does
+		actually just run the available helper scripts.
+
+		script name should be shell.<termname>.sh
+
+		terms [termname]
+		Keyword arguments:
+		termname -- terminal emulator to spawn consoles on 
+		"""
+
+		dirname = os.path.dirname(__file__)
+
+		if args:
+			filename = "/term." + args + ".sh"
+			path = dirname + filename
+			if os.path.isfile(path):
+				try:
+					os.system("%s %s" % (path, " ".join(self.targets.keys())))
+				except Exception:
+					out.error("running %s failed" % filename)
+			else:
+				out.error("%s script not found, make sure term.%s.sh exists" % (args, args))
+				parse_error(self.do_terms, args)
+
+		else:
+			print "available terminals scripts:"
+			for filename in glob.glob(dirname + "/term.*.sh"):
+				print os.path.basename(filename).split('.')[1]
+
+	def complete_terms(self, text, line, begidx, endidx):
+		dirname = os.path.dirname(__file__)
+		terms = glob.glob(dirname + "/term.*.sh")
+		terms = map(os.path.basename, terms)
+		return [i.split('.')[1] for i in terms if i.startswith("term." + text)]
+
 	def do_edit(self, args):
 		"""
 		Edit a local file or the testing template. The evironment variable
