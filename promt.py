@@ -301,6 +301,7 @@ class CommandPromt(cmd.Cmd):
 				print '{0:15}: {1}'.format(type.upper(), id)
 			print '{0:15}: {1}'.format("Hosts", targetlist)
 			print '{0:15}: {1}'.format("Packages", packagelist)
+			print '{0:15}: {1}'.format("Patchinfo", "http://hilbert.suse.de/abuildstat/patchinfo/%s/" % self.metadata.md5)
 
 
 	def do_show_log(self, args):
