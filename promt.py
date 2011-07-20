@@ -847,7 +847,8 @@ class CommandPromt(cmd.Cmd):
 	def do_terms(self, args):
 		"""
 		Spawn terminal screens to all connected hosts. This command does
-		actually just run the available helper scripts.
+		actually just run the available helper scripts. If no termname is
+		given, all available terminal scripts are shown.
 
 		script name should be shell.<termname>.sh
 
@@ -858,12 +859,18 @@ class CommandPromt(cmd.Cmd):
 
 		dirname = os.path.dirname(__file__)
 
+		systems = {}
+		for target in self.targets:
+			systems[self.targets[target].system] = target
+
+		hosts = [ systems[key] for key in sorted(systems.iterkeys()) ]
+		
 		if args:
-			filename = "/term." + args + ".sh"
-			path = dirname + filename
+			filename = "term." + args + ".sh"
+			path = os.path.join(dirname, filename)
 			if os.path.isfile(path):
 				try:
-					os.system("%s %s" % (path, " ".join(self.targets.keys())))
+					os.system("%s %s" % (path, " ".join(hosts)))
 				except Exception:
 					out.error("running %s failed" % filename)
 			else:
