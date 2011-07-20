@@ -6,12 +6,20 @@ if [ ! -z $KDE_SESSION_VERSION ]; then
 		/usr/bin/konsole --nofork&
 		pid=$!
 		sleep 3
-		for i in $HOSTS; do
-		   session_num=`qdbus org.kde.konsole-$pid /Konsole newSession`
-		   sleep 1
-		   qdbus org.kde.konsole-$pid /Sessions/$session_num sendText "ssh -Y root@$i"
-		   sleep 1
-		   qdbus org.kde.konsole-$pid /Sessions/$session_num sendText $' '
+		session_num=1
+		qdbus org.kde.konsole-$pid /Sessions/$session_num sendText "ssh -Y root@$1"
+		sleep 1
+		qdbus org.kde.konsole-$pid /Sessions/$session_num sendText $'
+'
+		shift
+		while [ $# -gt 0 ] ; do
+			session_num=`qdbus org.kde.konsole-$pid /Konsole newSession`
+			sleep 1
+			qdbus org.kde.konsole-$pid /Sessions/$session_num sendText "ssh -Y root@$1"
+			shift
+			sleep 1
+			qdbus org.kde.konsole-$pid /Sessions/$session_num sendText $'
+'
 		done
 	fi
 else
