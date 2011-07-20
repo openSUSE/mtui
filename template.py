@@ -27,12 +27,13 @@ class Template:
 		else:
 			self.path = './' + md5 + '/'
 
-		if team is not None:
-			self.refhosts = "refhosts." + team
-			self.path = self.path + 'log.' + team
-		else:
-			self.refhosts = "refhosts.emea"
-			self.path = self.path + 'log.emea'
+		if team is None:
+			team = "emea"
+
+		self.refhosts = "refhosts." + team
+		self.path = self.path + 'log'
+		if not os.path.isfile(self.path):
+			self.path = self.path + '.' + team
 
 		self.metadata = Metadata()
 		self.metadata.md5 = md5
