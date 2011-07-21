@@ -299,9 +299,10 @@ class CommandPromt(cmd.Cmd):
 			print '{0:15}: {1}'.format("Packager", self.metadata.packager)
 			for type, id in self.metadata.patches.items():
 				print '{0:15}: {1}'.format(type.upper(), id)
+			print '{0:15}: {1}'.format("Bugs", ", ".join(self.metadata.bugs.keys()))
 			print '{0:15}: {1}'.format("Hosts", targetlist)
 			print '{0:15}: {1}'.format("Packages", packagelist)
-			print '{0:15}: {1}'.format("Patchinfo", patchinfo)
+			print '{0:15}: {1}'.format("Build", patchinfo)
 
 
 	def do_show_log(self, args):

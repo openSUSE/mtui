@@ -377,8 +377,9 @@ has finished an the template is in the final state.
 
 - terms
 Spawn terminal screens to all connected hosts. This command does actually
-just run the available helper scripts.
-script name should be shell.<termname>.sh
+just run the available helper scripts. If no termname is given, all
+available terminal scripts are shown.
+Script name should be shell.<termname>.sh
 Currently, helper scripts are available for KDE[34], GNOME and xterm.
 
 		terms [termname]
