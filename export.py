@@ -36,7 +36,7 @@ def xml_to_template(template, xmldata):
 			i = t.index(line)
 		except ValueError:
 			out.debug("host section %s not found, searching system" % hostname)
-			line = "%s (reference host: ? )\n" % systemtype
+			line = "%s (reference host: ?)\n" % systemtype
 			try:
 				i = t.index(line)
 				t[i] = "%s (reference host: %s)\n" % (systemtype, hostname)
