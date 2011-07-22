@@ -44,26 +44,31 @@ def xml_to_template(template, xmldata):
 				out.debug("system section %s not found, creating new one" % systemtype)
 				line = "Test results by product-arch:\n"
 
-				i = t.index(line) + 2
+				try:
+					i = t.index(line) + 2
+				except ValueError:
+					our.error("update results section not found")
+					break
+
 				t.insert(i, "\n")
 				i += 1
 				t.insert(i, "%s (reference host: %s)\n" % (systemtype, hostname))
 				i += 1
 				t.insert(i, "--------------\n")
 				i += 1
-				t.insert(i, "Update\n")
+				t.insert(i, "before:\n")
 				i += 1
-				t.insert(i, "      before:\n")
+				t.insert(i, "after:\n")
 				i += 1
-				t.insert(i, "      after:\n")
-				i += 1
-				t.insert(i, "\n")
-				i += 1
-				t.insert(i, "      => PASSED/FAILED\n")
+				t.insert(i, "scripts:\n")
 				i += 1
 				t.insert(i, "\n")
 				i += 1
-				t.insert(i, "      comment: (none)\n")
+				t.insert(i, "=> PASSED/FAILED\n")
+				i += 1
+				t.insert(i, "\n")
+				i += 1
+				t.insert(i, "comment: (none)\n")
 				i += 1
 				t.insert(i, "\n")
 
@@ -79,11 +84,14 @@ def xml_to_template(template, xmldata):
 			continue
 		for state in ["before", "after"]:
 			try:
-				pos = t.index("      %s:\n" % state, i) + 1
+				i = t.index("      %s:\n" % state, i) + 1
 			except ValueError:
-				pos = t.index("%s:\n" % state, i) + 1
+				try:
+					i = t.index("%s:\n" % state, i) + 1
+				except ValueError:
+					out.error("%s packages section not found" % state)
+					continue
 
-			i = pos
 			for package in host.getElementsByTagName(state):
 				for child in package.childNodes:
 					try:
@@ -96,54 +104,47 @@ def xml_to_template(template, xmldata):
 						i += 1
 					except Exception:
 						pass
+		try:
+			i = t.index("scripts:\n", i, i + 3) + 1
+		except ValueError:
+			out.debug("scripts section not found, adding one")
+			t.insert(i, "      scripts:\n")
+			i += 1
 
-	try:
-		generic_testcases_pos = t.index("generic test cases:\n") + 4
-	except ValueError:
-		out.debug('old "generic tests cases:" section not found in template')
-	try:
-		generic_testcases_pos = t.index("regression tests:\n") + 4
-	except ValueError:
-		out.debug('new "regression tests:" section not found in template')
+		log = host.getElementsByTagName("log")[0]
 
-	try:
-		generic_testcases_pos
-	except NameError:
-		out.error("regression testing section not found in template. skipping.")
-	else:
-		for host in x.getElementsByTagName("host"):
-			hostname = host.getAttribute("hostname")
-			systemtype = host.getAttribute("system")
-			while t[generic_testcases_pos].strip("\n"):
-				generic_testcases_pos += 1
-			generic_testcases_pos += 1
+		failed = 0
+		for child in log.childNodes:
+			try:
+				name = child.getAttribute("name")
+				exitcode = child.getAttribute("return")
+			except Exception:
+				continue
 
-			t.insert(generic_testcases_pos, "=== %s ===\n" % hostname)
-			generic_testcases_pos += 1
+			if "scripts/compare/compare_" in name:
+				scriptname = os.path.basename(name.split(" ")[0])
+				scriptname = scriptname.replace("compare_", "")
+				scriptname = scriptname.replace(".pl", "")
+				scriptname = scriptname.replace(".sh", "")
 
-			log = host.getElementsByTagName("log")[0]
-			for child in log.childNodes:
-				try:
-					name = child.getAttribute("name")
-					exitcode = child.getAttribute("return")
+				if exitcode == "0":
+					result = "SUCCEEDED"
+				elif exitcode == "1":
+					failed = 1
+					result = "FAILED"
+				else:
+					failed = 1
+					result = "INTERNAL ERROR"
 
-					if "scripts/compare/compare_" in name:
-						scriptname = os.path.basename(name.split(" ")[0])
+				t.insert(i, "\t%s: %s\n" % (scriptname, result))
+				i += 1
 
-						if exitcode == "0":
-							result = "SUCCEEDED"
-						elif exitcode == "1":
-							result = "FAILED"
-						else:
-							result = "INTERNAL ERROR"
-
-						t.insert(generic_testcases_pos, "%s - %s\n" % (scriptname, result))
-						generic_testcases_pos += 1
-
-				except Exception:
-					pass
-
-			t.insert(generic_testcases_pos, "\n")
+		if "PASSED/FAILED" in t[i+1]:
+			if failed == 0:
+				t[i+1] = "=> PASSED\n"
+			elif failed == 1:
+				t[i+1] = "=> FAILED\n"
+			
 
 	try:
 		i = t.index("put here the output of the following commands:\n", 0) + 1
