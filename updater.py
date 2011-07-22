@@ -67,6 +67,11 @@ class ZypperUpdate(Update):
 		if "zypper" in stdin and exitcode == "104":
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError(target.hostname, "update stack locked")
+		if "Additional rpm output" in stdout:
+			out.warning("There was additional rpm output on %s:", target.hostname)
+			start = stdout.find("Additional rpm output:")
+			end = stdout.find("Retrieving", start)
+			print stdout[start:end]
 
 class OldZypperUpdate(Update):
 	def __init__(self, targets, patches):
