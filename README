@@ -265,6 +265,25 @@ reproducer section of the template.
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 
+- testsuite_run
+Runs ctcs2 testsuite and saves logs to /var/log/qa/$md5 on the target hosts.
+Results can be submitted with the testsuite_submit command.
+
+		testsuite <hostname>,hostname,...,<testsuite>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		testsuite  -- testsuite-run command
+
+- testsuite_submit
+Submits the ctcs2 testsuite results to qadb.suse.de. The comment field is
+populated with some attributes like SWAMPID or testsuite name, but can
+also be edited before the results get submitted. Submitting results to
+qadb requires the rd-qa NIS password.
+
+		testsuite <hostname>,hostname,...,<testsuite>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		testsuite  -- testsuite-run command
 
 Metadata Commands
 *****************

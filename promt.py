@@ -11,6 +11,10 @@ import readline
 import subprocess
 import glob
 import re
+import tempfile
+import getpass
+
+from datetime import date
 
 from rpmcmp import *
 from target import *
@@ -255,6 +259,29 @@ class CommandPromt(cmd.Cmd):
 				print "\n".join(downgrader(self.targets, self.metadata.get_package_list(), self.metadata.patches).commands)
 				del downgrader
 
+	def do_list_testsuite_commands(self, args):
+		"""
+		List all commands which are invoked when running ctcs2 testsuites
+		on the target hosts.
+
+		list_testsuite_commands
+		Keyword arguments:
+		None
+		"""
+
+		if args:
+			parse_error(self.do_list_testsuite_commands, args)
+
+		else:
+			time = date.today().strftime("%d/%m/%y")
+			swampid = self.metadata.swampid
+			username = os.getlogin()
+
+			comment = "testing <testsuite> on SWAMP %s on %s" % (swampid, time)
+
+			print 'export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; <testsuite>' % self.metadata.md5
+			print '/usr/share/qa/tools/remote_qa_db_report.pl -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5, username, self.metadata.md5, comment)
+
  	def do_list_bugs(self, args):
 		"""
 		Lists related bugs and corresponding Bugzilla URLs.
@@ -379,7 +406,7 @@ class CommandPromt(cmd.Cmd):
 					if targets[target].lasterr():
 						print "stderr:", targets[target].lasterr()
 
-					input("Hit any key to proceed with the next host", "")
+					input("Press Enter key to proceed with the next host", "")
 
 				out.info("done")
 		else:
@@ -415,8 +442,10 @@ class CommandPromt(cmd.Cmd):
 			if targets:
 				try:
 					RunCommand(targets, command).run()
-				except:
+				except KeyboardInterrupt:
 					return
+				except Exception:
+					our.error("failed to run command %s" % command)
 
 				for target in targets:
 					print "%s:~> %s [%s]" % (target, targets[target].lastin(), targets[target].lastexit())
@@ -430,6 +459,129 @@ class CommandPromt(cmd.Cmd):
 
 	def complete_run(self, text, line, begidx, endidx):
 		return [i for i in list(enabled_targets(self.targets)) + ['all'] if i.startswith(text) and not line.count(',')]
+
+	def do_testsuite_run(self, args):
+		"""
+		Runs ctcs2 testsuite and saves logs to /var/log/qa/$md5 on the
+		target hosts. Results can be submitted with the testsuite_submit
+		command.
+
+		testsuite <hostname>,hostname,...,<testsuite>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		testsuite  -- testsuite-run command
+		"""
+
+		if args:
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(',')[:-1])
+
+			command = args.split(',')[-1]
+
+			if not command.startswith('/'):
+				command = os.path.join("/usr/share/qa/tools", command)
+				
+			command = "export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; %s" % (self.metadata.md5, command)
+			name = os.path.basename(command).replace('-run', '')
+
+			if targets:
+				try:
+					RunCommand(targets, command).run()
+				except KeyboardInterrupt:
+					return
+				except Exception:
+					our.error("failed to run testsuite %s" % command)
+					return
+
+				for target in targets:
+					print "%s:~> %s-testsuite [%s]" % (target, name, targets[target].lastexit())
+					print targets[target].lastout()
+					if targets[target].lasterr():
+						print targets[target].lasterr()
+
+				out.info("done")
+
+		else:
+			parse_error(self.do_testsuite_run, args)
+
+	def complete_testsuite_run(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+	def do_testsuite_submit(self, args):
+		"""
+		Submits the ctcs2 testsuite results to qadb.suse.de.
+		The comment field is populated with some attributes like SWAMPID or
+		testsuite name, but can also be edited before the results get
+		submitted. Submitting results to qadb requires the rd-qa NIS
+		password.
+
+		testsuite <hostname>,hostname,...,<testsuite>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		testsuite  -- testsuite-run command
+		"""
+
+		if args:
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(',')[:-1])
+
+			command = args.split(',')[-1]
+
+			name = os.path.basename(command).replace('-run', '')
+			time = date.today().strftime("%d/%m/%y")
+			swampid = self.metadata.swampid
+			username = os.getlogin()
+
+			comment = "testing %s (SWAMP %s) on %s" % (name, swampid, time)
+
+			comment = edit_text(comment)
+
+			if len(comment) > 100:
+				out.warning("comment strings > 100 chars are truncated by remote_qa_db_report.pl")
+
+			out.info("please specify rd-qa NIS password")
+			password = getpass.getpass()
+
+			submit = []
+			submit.append('echo \'echo -n "%s"\' > /tmp/pwdask' % password)
+			submit.append('chmod 700 /tmp/pwdask')
+			submit.append('SSH_ASKPASS=/tmp/pwdask DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5, username, self.metadata.md5, comment))
+			submit.append('rm /tmp/pwdask')
+
+			for command in submit:
+				try:
+					RunCommand(targets, command).run()
+				except KeyboardInterrupt:
+					return
+				except Exception:
+					our.error("failed to submit testresults")
+
+				if "remote_qa_db_report.pl" in command:
+					for target in targets:
+						if targets[target].lastexit() != 0:
+							out.critical("submitting testsuite results failed on %s:" % target)
+							print "%s:~> %s [%s]" % (target, name, targets[target].lastexit())
+							print targets[target].lastout()
+							if targets[target].lasterr():
+								print targets[target].lasterr()
+						else:
+							match = re.search('(http://.*/submission.php.submissionID=\d+)', targets[target].lastout())
+							if match:
+								system = self.targets[target].system
+								out.info("submission for %s (%s): %s" % (target, system, match.group(1)))
+							else:
+								out.critical("no submission found for %s. please use \"show_log %s\" to see what went wrong" % (target, target))
+
+			out.info("done")
+		else:
+			parse_error(self.do_testsuite_submit, args)
+
+	def complete_testsuite_submit(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_set_host_state(self, args):
 		"""
@@ -1192,7 +1344,34 @@ def selected_targets(targets, target_list):
 			out.warning("host %s not in database" % target)
 
 	return temporary_targets
-	
+
+def edit_text(text):
+	editor = os.environ.get("EDITOR", "vi")
+	tmpfile = tempfile.NamedTemporaryFile()
+
+	try:
+		with open(tmpfile.name, 'w') as tmp:
+			tmp.write(text)
+	except Exception:
+		out.error("failed to write temp file")
+
+	try:
+		os.system("%s %s" % (editor, tmpfile.name))
+	except Exception:
+		out.error("failed to open temp file")
+
+	try:
+		with open(tmpfile.name, 'r') as tmp:
+			text = tmp.read().strip('\n')
+			text = text.replace("'", '"')
+
+	except Exception:
+		out.error("failed to read temp file")
+
+	del tmpfile
+
+	return text
+
 def green(text):
 	return "\033[1;32m%s\033[1;m" % text
 
