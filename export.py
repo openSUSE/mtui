@@ -136,7 +136,7 @@ def xml_to_template(template, xmldata):
 					failed = 1
 					result = "INTERNAL ERROR"
 
-				t.insert(i, "\t%s: %s\n" % (scriptname, result))
+				t.insert(i, "\t%s:\t%s\n" % (scriptname, result))
 				i += 1
 
 		if "PASSED/FAILED" in t[i+1]:
