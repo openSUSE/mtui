@@ -37,8 +37,8 @@ class XMLOutput:
 
 		lognode = self.get_new_log_node(hostnode)
 
-		for command, stdout, stderr, exitcode in target.log:
-			self.get_new_command_node(lognode, command, "%s\n%s" % (stdout, stderr), exitcode)
+		for command, stdout, stderr, exitcode, runtime in target.log:
+			self.get_new_command_node(lognode, command, "%s\n%s" % (stdout, stderr), exitcode, runtime)
 
 	def get_new_machine_node(self, hostname):
 		self.machine = self.output.createElement("host")
@@ -65,10 +65,11 @@ class XMLOutput:
 
 		return self.log
 
-	def get_new_command_node(self, parent, command, output, exitcode):
+	def get_new_command_node(self, parent, command, output, exitcode, runtime):
 		node = self.output.createElement("command")
 		node.setAttribute("name", command)
 		node.setAttribute("return", str(exitcode))
+		node.setAttribute("time", str(runtime))
 		text = self.output.createTextNode(output)
 		node.appendChild(text)
 		parent.appendChild(node)

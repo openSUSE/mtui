@@ -1289,7 +1289,7 @@ def script_hook(targets, which, scriptdir, md5):
 					if exitcode == 2:
 						out.warning("internal error in testcase %s: %s" % (script, str(command))) 
 
-					targets[target].log.append([" ".join(command), stdout, stderr, exitcode])
+					targets[target].log.append([" ".join(command), stdout, stderr, exitcode, 0])
 
 			else:
 				FileUpload(targets, local_file, "%s/%s" % (remote_dir, remote_file)).run()

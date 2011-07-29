@@ -8,6 +8,8 @@ import threading
 import Queue
 import logging
 
+from datetime import datetime
+
 from connection import *
 from xmlout import *
 
@@ -64,10 +66,10 @@ class Target():
 
 		elif self.state == "dryrun":
 			out.info('dryrun: %s running "rpm -q %s"' % (self.hostname, packages))
-			self.log.append(["rpm -q %s" % packages, "dryrun\n", "", 0])
+			self.log.append(["rpm -q %s" % packages, "dryrun\n", "", 0, 0])
 
 		elif self.state == "disabled":
-			self.log.append(["", "", "", 0])
+			self.log.append(["", "", "", 0, 0])
 
 	def query_version(self, package):
 		self.query_versions(package)
@@ -104,19 +106,22 @@ class Target():
 		if self.state == "enabled":
 			out.debug('%s: running "%s"' % (self.hostname, command))
 			try:
+				time_before = datetime.now()
 				exitcode = self.connection.run(command, lock)
+				time_after = datetime.now()
 			except CommandTimeout:
 				out.critical('%s: command "%s" timed out' % (self.hostname, command))
 				exitcode = -1
 
-			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode])
+			runtime = time_after - time_before
+			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode, runtime.seconds])
 
 		elif self.state == "dryrun":
 			out.info('dryrun: %s running "%s"' % (self.hostname, command))
-			self.log.append([command, "dryrun\n", "", 0])
+			self.log.append([command, "dryrun\n", "", 0, 0])
 
 		elif self.state == "disabled":
-			self.log.append(["", "", "", 0])
+			self.log.append(["", "", "", 0, 0])
 
 	def put(self, local, remote):
 		if self.state == "enabled":
@@ -152,6 +157,12 @@ class Target():
 	def lastexit(self):
 		try:
 			return self.log[-1][3]
+		except:
+			return ""
+
+	def lastruntime(self):
+		try:
+			return self.log[-1][4]
 		except:
 			return ""
 
