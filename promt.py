@@ -824,6 +824,7 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
+			missing = False
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
@@ -844,6 +845,7 @@ class CommandPromt(cmd.Cmd):
 					packages[package].set_versions(before=before, required=required)
 
 					if before == "0":
+						missing = True
 						not_installed.append(package)
 					else:
 						if vercmp(before, required) > -1:
@@ -852,50 +854,48 @@ class CommandPromt(cmd.Cmd):
 				if len(not_installed):
 					out.warning("%s: these packages are not installed: %s" % (target, not_installed))
 
-			if input("start pre update scripts? (y/N) ", ["y", "yes" ]):
-				script_hook(targets, "pre", os.path.dirname(self.metadata.path), self.metadata.md5)
+			if missing and input("There were missing packages. Cancel update process? (y/N) ", ["y", "yes" ]):
+				return
 
-			if input("start update process? (y/N) ", ["y", "yes" ]):
-				out.info("updating")
+			script_hook(targets, "pre", os.path.dirname(self.metadata.path), self.metadata.md5)
 
-				release = self.metadata.get_releases()[0]
-				try:
-					updater = Updater[release]
-				except KeyError:
-					out.critical("no updater available for %s" % release)
+			out.info("updating")
+
+			release = self.metadata.get_releases()[0]
+			try:
+				updater = Updater[release]
+			except KeyError:
+				out.critical("no updater available for %s" % release)
+				return
+
+			try:
+				updater(targets, self.metadata.patches).run()
+			except UpdateError as error:
+				out.warning("there were errors while updating: %s" % error)
+				if input("cancel update process? (y/N) ", ["y", "yes" ]):
 					return
 
-				try:
-					updater(targets, self.metadata.patches).run()
-				except UpdateError as error:
-					out.warning("there were errors while updating: %s" % error)
-					if input("cancel update process? (y/N) ", ["y", "yes" ]):
-						return
+			for target in targets:
+				packages = targets[target].packages
 
-				for target in targets:
-					packages = targets[target].packages
+				targets[target].query_versions()
 
-					targets[target].query_versions()
+				for package in packages:
+					before = packages[package].before
+					required = packages[package].required
+					after = targets[target].packages[package].current
 
-					for package in packages:
-						before = packages[package].before
-						required = packages[package].required
-						after = targets[target].packages[package].current
+					packages[package].set_versions(after=after)
 
-						packages[package].set_versions(after=after)
+					if after != "0":
+						if vercmp(before, after) == 0:
+							out.warning("%s: package was not updated: %s (%s)" % (target, package, after))
 
-						if after != "0":
-							if vercmp(before, after) == 0:
-								out.warning("%s: package was not updated: %s (%s)" % (target, package, after))
+						if vercmp(after, required) < 0:
+							out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
 
-							if vercmp(after, required) < 0:
-								out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
-
-				if input("start post update scripts? (y/N) ", ["y", "yes" ]):
-					script_hook(targets, "post", os.path.dirname(self.metadata.path), self.metadata.md5)
-
-					if input("start compare scripts? (y/N) ", ["y", "yes" ]):
-						script_hook(targets, "compare", os.path.dirname(self.metadata.path), self.metadata.md5)
+			script_hook(targets, "post", os.path.dirname(self.metadata.path), self.metadata.md5)
+			script_hook(targets, "compare", os.path.dirname(self.metadata.path), self.metadata.md5)
 
 			out.info("done")
 		else:

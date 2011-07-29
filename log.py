@@ -23,7 +23,7 @@ class ColorFormatter(logging.Formatter):
 		logging.Formatter.__init__(self, msg)
 
 	def formatColor(self, levelname):
-		return COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
+		return "\033[2K" + COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
 
 	def format(self, record):
 		record.message = record.getMessage()
