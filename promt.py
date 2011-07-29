@@ -490,6 +490,7 @@ class CommandPromt(cmd.Cmd):
 				try:
 					RunCommand(targets, command).run()
 				except KeyboardInterrupt:
+					out.info("testsuite run canceled")
 					return
 				except Exception:
 					our.error("failed to run testsuite %s" % command)
@@ -763,7 +764,10 @@ class CommandPromt(cmd.Cmd):
 						downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
 					except Exception:
 						out.critical("could not downgrade all target systems. stopping")
-						pass
+						return
+					except KeyboardInterrupt:
+						out.info("downgrade process canceled")
+						return
 					else:
 						out.info("done")
 
@@ -802,7 +806,10 @@ class CommandPromt(cmd.Cmd):
 						preparer(targets, self.metadata.get_package_list()).run()
 					except Exception:
 						out.critical("could not prepare target systems %s", targets.keys())
-						pass
+						return
+					except KeyboardInterrupt:
+						out.info("preparation process canceled")
+						return
 					else:
 						out.info("done")
 
@@ -874,6 +881,12 @@ class CommandPromt(cmd.Cmd):
 				out.warning("there were errors while updating: %s" % error)
 				if input("cancel update process? (y/N) ", ["y", "yes" ]):
 					return
+			except Exception:
+				out.critical("could not update target systems")
+				return
+			except KeyboardInterrupt:
+				out.info("update process canceled")
+				return
 
 			for target in targets:
 				packages = targets[target].packages
