@@ -103,6 +103,7 @@ def main():
 			promt.cmdloop()
 		else:
 			promt.do_update("all")
+			promt.do_export(None)
 			promt.do_quit(None)
 	except KeyboardInterrupt:
 		promt.do_quit(None)
