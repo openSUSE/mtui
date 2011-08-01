@@ -143,6 +143,18 @@ commands accepts multiple hostnames followed by the wanted state.
 		state    -- enabled, disabled, dryrun
 
 
+- set_host_lock
+Lock host for exclusive usage. This locks all repository transactions
+like enabling or disabling the testing repository on the target hosts.
+The Hosts are locked with a timestamp, the UID and PID of the session.
+This influences the update process of concurrent instances, use with care.
+Enabled locks are automatically removed when exiting the session.
+
+		set_host_lock <hostname>[,hostname,...],<state>
+		Keyword arguments:
+		hostname -- hostname from the target list
+		state    -- enabled, disabled
+
 - set_timeout
 Changes the current execution timeout for a target host. When the timeout
 limit was hit the user is asked to wait for the current command to return

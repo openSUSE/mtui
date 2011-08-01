@@ -1,17 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import sys
-import time
 import re
 import threading
 import Queue
 import logging
 
-from datetime import datetime
-
 from connection import *
 from xmlout import *
+from utils import *
 
 out = logging.getLogger('mtui')
 
@@ -106,15 +105,15 @@ class Target():
 		if self.state == "enabled":
 			out.debug('%s: running "%s"' % (self.hostname, command))
 			try:
-				time_before = datetime.now()
+				time_before = timestamp()
 				exitcode = self.connection.run(command, lock)
-				time_after = datetime.now()
+				time_after = timestamp()
 			except CommandTimeout:
 				out.critical('%s: command "%s" timed out' % (self.hostname, command))
 				exitcode = -1
 
-			runtime = time_after - time_before
-			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode, runtime.seconds])
+			runtime = int(time_after) - int(time_before)
+			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode, runtime])
 
 		elif self.state == "dryrun":
 			out.info('dryrun: %s running "%s"' % (self.hostname, command))
@@ -165,6 +164,56 @@ class Target():
 			return self.log[-1][4]
 		except:
 			return ""
+
+	def locked(self):
+		lock = Locked(False)
+
+		if self.state == "enabled":
+			try:
+				lockfile = self.connection.open("/var/lock/mtui.lock")
+
+			except IOError as error:
+				if error.errno == errno.ENOENT:
+					return lock
+
+			line = lockfile.readline().strip()
+			try:
+				lock.timestamp, lock.user, lock.pid = line.split(':')
+			except Exception:
+				return lock
+
+			lock.locked = True
+
+			lockfile.close()
+
+		return lock
+
+	def set_locked(self):
+		if self.state == "enabled":
+			try:
+				lockfile = self.connection.open("/var/lock/mtui.lock", "w+")
+
+			except IOError as error:
+				out.error(str(error))
+				return
+
+			now = timestamp()
+			user = os.getlogin()
+			pid = os.getpid()
+			lockfile.write("%s:%s:%s" % (now, user, pid))
+			lockfile.close()
+
+	def remove_lock(self):
+		if self.state == "enabled":
+			lock = self.locked()
+
+			if lock.locked:
+				assert lock.own()
+				try:
+					self.connection.remove("/var/lock/mtui.lock")
+				except IOError as error:
+					if error.errno == errno.ENOENT:
+						out.debug("lockfile does not exist")
 
 	def close(self):
 		out.info("closing connection to %s" % self.hostname)
@@ -317,6 +366,29 @@ class RunCommand():
 			print "stopping command queue, please wait"
 			queue.join()
 			raise
+
+class Locked():
+	def __init__(self, locked=False, user="nobody", timestamp=0, pid=0):
+		self.locked = locked
+		self.user = user
+		self.timestamp = timestamp
+		self.pid = pid
+
+	def own(self):
+		if self.user == os.getlogin() and self.pid == str(os.getpid()):
+			return True
+		else:
+			return False
+
+	def time(self, style=None):
+		from datetime import datetime
+
+		if style is None:
+			style = "%A, %d.%m.%Y %H:%M"
+
+		time = datetime.fromtimestamp(float(self.timestamp))
+
+		return time.strftime(style)
 
 def spinner(lock=None):
 	"""simple spinner to show some process"""

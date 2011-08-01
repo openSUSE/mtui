@@ -1,18 +1,24 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import time
+import os
 import sys
+import time
 
 from target import *
 
 class UpdateError(Exception):
-	def __init__(self, host, reason):
-		self.host = host
+	def __init__(self, reason, host=None):
 		self.reason = reason
+		self.host = host
 
 	def __str__(self):
-		return repr("%s: %s" % (self.host, self.reason))
+		if self.host is None:
+			string = self.reason
+		else:
+			string = "%s: %s" % (self.host, self.reason)
+
+		return repr(string)
 
 class Update():
 	def __init__(self, targets, patches):
@@ -21,12 +27,21 @@ class Update():
 		self.commands = []
 
 	def run(self):
-		lock = threading.Lock()
+		skipped = False
 
 		for target in self.targets:
-			thread = ThreadedMethod(queue)
-			thread.setDaemon(True)
-			thread.start()
+			lock = self.targets[target].locked()
+			if lock.locked and not lock.own():
+				skipped = True
+				out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+			else:
+				self.targets[target].set_locked()
+				thread = ThreadedMethod(queue)
+				thread.setDaemon(True)
+				thread.start()
+		
+		if skipped:
+			raise UpdateError("Hosts locked")
 
 		for target in self.targets:
 			queue.put([self.targets[target].set_repo, ["TESTING"]])
@@ -41,6 +56,13 @@ class Update():
 
 			for target in self.targets:
 				self.check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+
+		for target in self.targets:
+			if not lock.locked:	# wasn't locked earlier by set_host_lock
+				try:
+					self.targets[target].remove_lock()
+				except AssertionError:
+					pass
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		"""stub. needs to be overwritten by inherited classes"""
@@ -66,7 +88,7 @@ class ZypperUpdate(Update):
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		if "zypper" in stdin and exitcode == "104":
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "update stack locked")
+			raise UpdateError("update stack locked", target.hostname)
 		if "Additional rpm output" in stdout:
 			out.warning("There was additional rpm output on %s:", target.hostname)
 			start = stdout.find("Additional rpm output:")
@@ -92,10 +114,10 @@ class OldZypperUpdate(Update):
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		if "A ZYpp transaction is already in progress." in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "update stack locked")
+			raise UpdateError("update stack locked", target.hostname)
 		if "Error:" in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "RPM Error")
+			raise UpdateError("RPM Error", target.hostname)
 
 class OnlineUpdate(Update):
 	def __init__(self, targets, patches):
@@ -143,10 +165,21 @@ class Prepare():
 		self.commands = []
 
 	def run(self):
+		skipped = False
+
 		for target in self.targets:
-			thread = ThreadedMethod(queue)
-			thread.setDaemon(True)
-			thread.start()
+			lock = self.targets[target].locked()
+			if lock.locked and not lock.own():
+				skipped = True
+				out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+			else:
+				self.targets[target].set_locked()
+				thread = ThreadedMethod(queue)
+				thread.setDaemon(True)
+				thread.start()
+
+		if skipped:
+			raise UpdateError("Hosts locked")
 
 		for target in self.targets:
 			queue.put([self.targets[target].set_repo, ["UPDATE"]])
@@ -174,6 +207,13 @@ class Prepare():
 			spinner()
 		
 		queue.join()
+
+		for target in self.targets:
+			if not lock.locked:	# wasn't locked earlier by set_host_lock
+				try:
+					self.targets[target].remove_lock()
+				except AssertionError:
+					pass
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		"""stub. needs to be overwritten by inherited classes"""

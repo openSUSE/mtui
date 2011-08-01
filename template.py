@@ -43,7 +43,7 @@ class Template:
 			with open(self.path, 'r') as template:
 				self.parse_template(template)
 		except IOError as error:
-			out.error("can't open template")
+			out.error("unable to open template")
 			print str(error)
 			raise
 
@@ -121,7 +121,7 @@ class Template:
 					match = re.search('%s="(.*)"' % system, line)
 					if match:
 						return match.group(1)
-		except OSError, error:
+		except OSError as error:
 			if error.errno == errno.ENOENT:
 				out.warning("refhost mapping file %s not found" % self.refhosts)
 			else:

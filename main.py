@@ -90,7 +90,7 @@ def main():
 
 	try:
 		shutil.copytree("%s/scripts" % os.path.dirname(__file__), "%s/scripts" % os.path.dirname(metadata.path), ignore=ignored)
-	except OSError, error:
+	except OSError as error:
 		if error.errno == errno.ENOENT:
 			out.warning("scripts/ dir not found, please copy manually")
 		else:

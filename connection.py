@@ -181,6 +181,20 @@ class Connection():
 
 		sftp.close()
 
+	def open(self, filename, mode='r', bufsize=-1):
+		sftp = self.client.open_sftp()
+		try:
+			return sftp.open(filename, mode, bufsize)
+		except Exception:
+			raise
+
+	def remove(self, path):
+		sftp = self.client.open_sftp()
+		try:
+			return sftp.remove(path)
+		except Exception:
+			raise
+
 	def is_connected(self):
 		"""check if connection to host is established
 
