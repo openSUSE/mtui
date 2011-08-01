@@ -92,6 +92,20 @@ class Target():
 	def set_repo(self, name):
 		command = "/suse/rd-qa/bin/rep-clean.sh"
 
+		try:
+			repclean = self.connection.open(command, "r")
+		except IOError:
+			home = os.path.dirname(__file__)
+			try:
+				self.put("%s/helper/rep-clean/rep-clean.sh" % home, "/tmp/rep-clean.sh")
+				self.put("%s/helper/rep-clean/rep-clean.conf" % home, "/tmp/rep-clean.conf")
+			except OSError:
+				out.error("missing rep-clean.sh script")
+
+			command = "/tmp/rep-clean.sh -F /tmp/rep-clean.conf"
+		else:
+			repclean.close()
+
 		if name == 'TESTING':
 			out.debug("enabling TESTING repos on %s" % self.hostname)
 			parameter = '-t'
