@@ -190,7 +190,11 @@ class Target():
 				if error.errno == errno.ENOENT:
 					return lock
 
-			line = lockfile.readline().strip()
+			try:
+				line = lockfile.readline().strip()
+			except Exception:
+				return lock
+
 			try:
 				lock.timestamp, lock.user, lock.pid = line.split(':')
 			except Exception:
@@ -282,6 +286,8 @@ class Metadata:
 			releases.append("10")
 		if re.search("sle.9", systems):
 			releases.append("9")
+		if re.search("sl11", systems):
+			releases.append("114")
 
 		return releases
 

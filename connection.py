@@ -152,6 +152,10 @@ class Connection():
 			path += subdir + '/'
 			try:
 				sftp.mkdir(path)
+			except AttributeError:
+				if not self.is_active():
+					self.connect()
+					return self.put(local, local)
 			except Exception:
 				pass
 
@@ -175,6 +179,10 @@ class Connection():
 		sftp = self.client.open_sftp()
 		try:
 			sftp.get(remote, local)
+		except AttributeError:
+			if not self.is_active():
+				self.connect()
+				return self.get(remote, local)
 		except Exception as error:
 			out.error(str(error))
 			raise
@@ -185,6 +193,10 @@ class Connection():
 		sftp = self.client.open_sftp()
 		try:
 			return sftp.open(filename, mode, bufsize)
+		except AttributeError:
+			if not self.is_active():
+				self.connect()
+				return self.open(filename, mode, bufsize)
 		except Exception:
 			raise
 
@@ -192,6 +204,10 @@ class Connection():
 		sftp = self.client.open_sftp()
 		try:
 			return sftp.remove(path)
+		except AttributeError:
+			if not self.is_active():
+				self.connect()
+				return self.remove(path)
 		except Exception:
 			raise
 

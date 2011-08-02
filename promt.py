@@ -33,6 +33,7 @@ class CommandPromt(cmd.Cmd):
 		self.metadata = metadata
 		self.systems = []
 		self.homedir = os.path.expanduser('~')
+		self.workingdir = os.path.dirname(__file__)
  
 		readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
 
@@ -42,7 +43,7 @@ class CommandPromt(cmd.Cmd):
 			pass
 
 		try:
-			with open('refhosts.emea', 'r') as f:
+			with open('%s/refhosts.emea' % self.workingdir, 'r') as f:
 				for line in f.readlines():
 					match = re.search('([^#]*)=".*"', line)
 					if match:

@@ -95,6 +95,31 @@ class ZypperUpdate(Update):
 			end = stdout.find("Retrieving", start)
 			print stdout[start:end]
 
+class openSuseUpdate(Update):
+	def __init__(self, targets, patches):
+		Update.__init__(self, targets, patches)
+
+		patch = patches['sat']
+
+		commands = []
+
+		commands.append("export LANG=")
+		commands.append("zypper -v lr")
+		commands.append("zypper pch | grep \" %s \"" % patch)
+		commands.append("zypper -v install -t patch softwaremgmt-201107=%s" % patch)
+			
+		self.commands = commands
+
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		if "zypper" in stdin and exitcode == "104":
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("update stack locked", target.hostname)
+		if "Additional rpm output" in stdout:
+			out.warning("There was additional rpm output on %s:", target.hostname)
+			start = stdout.find("Additional rpm output:")
+			end = stdout.find("Retrieving", start)
+			print stdout[start:end]
+
 class OldZypperUpdate(Update):
 	def __init__(self, targets, patches):
 		Update.__init__(self, targets, patches)
@@ -152,6 +177,7 @@ class RugUpdate(Update):
 
 Updater = {
     '11': ZypperUpdate,
+    '114': openSuseUpdate,
     '10': OldZypperUpdate,
     '9': OnlineUpdate,
     'OES': RugUpdate
@@ -252,6 +278,7 @@ class OldZypperPrepare(Prepare):
 
 Preparer = {
     '11': ZypperPrepare,
+    '114': ZypperPrepare,
     '10': OldZypperPrepare
 }
 
@@ -300,6 +327,7 @@ class OldZypperDowngrade(Prepare):
 
 Downgrader = {
     '11': ZypperDowngrade,
+    '114': ZypperDowngrade,
     '10': OldZypperDowngrade
 }
 
