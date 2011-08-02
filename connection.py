@@ -77,7 +77,10 @@ class Connection():
 		self.stderr = ''
 	
 		if not self.is_active():
-			self.connect()
+			try:
+				self.connect()
+			except Exception:
+				raise
 
 		try:
 			transport = self.client.get_transport()
@@ -155,7 +158,7 @@ class Connection():
 			except AttributeError:
 				if not self.is_active():
 					self.connect()
-					return self.put(local, local)
+					return self.put(local, remote)
 			except Exception:
 				pass
 
