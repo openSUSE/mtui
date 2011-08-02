@@ -399,8 +399,10 @@ class CommandPromt(cmd.Cmd):
 						host = {}
 						host[target] = targets[target]
 						RunCommand(host, command).run()
-					except:
+					except KeyboardInterrupt:
 						return
+					except Exception:
+						our.error("failed to run command %s" % command)
 
 					print "%s:~> %s [%s]" % (target, targets[target].lastin(), targets[target].lastexit())
 					print targets[target].lastout()
@@ -1182,7 +1184,7 @@ class CommandPromt(cmd.Cmd):
 			with open(filename, 'w') as f:
 				f.write("".join(l.encode("utf-8") for l in template))
 		except Exception as error:
-			print "failed to write %s: %s" % (filename, str(error))
+			print "failed to write %s: %s" % (filename, error.strerror)
 		else:
 			print "wrote template to %s" % filename
 
@@ -1233,7 +1235,7 @@ class CommandPromt(cmd.Cmd):
 		try:
 			outxml = open(filename, "w")
 		except Exception as error:
-			out.error("unable to open file for writing: %s" % str(error))
+			out.error("unable to open file for writing: %s" % error.strerror)
 
 		output = XMLOutput()
 		output.add_header(self.metadata)

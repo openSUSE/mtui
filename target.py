@@ -36,7 +36,7 @@ class Target():
 		try:
 			self.connection = Connection(self.hostname, timeout)
 		except Exception as error:
-			out.critical("connecting to %s failed: %s" % (self.hostname, str(error)))
+			out.critical("connecting to %s failed: %s" % (self.hostname, error.strerror))
 			raise
 
 		for package in packages:

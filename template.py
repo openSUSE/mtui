@@ -43,8 +43,7 @@ class Template:
 			with open(self.path, 'r') as template:
 				self.parse_template(template)
 		except IOError as error:
-			out.error("unable to open template")
-			print str(error)
+			out.error("unable to open template: %s" % error.strerror)
 			raise
 
 	def parse_template(self, template):

@@ -62,6 +62,16 @@ class Connection():
 		except Exception:
 			raise
 
+	def reconnect(self):
+		if self.is_active():
+			return
+
+		out.debug("lost connection, reconnecting")
+		select.select([], [], [], 20)
+		self.connect()
+
+		assert self.is_active()
+
 	def run(self, command, lock=None):
 		"""run command over SSH channel
 
@@ -75,23 +85,16 @@ class Connection():
 		self.stdin = command
 		self.stdout = ''
 		self.stderr = ''
-	
-		if not self.is_active():
-			try:
-				self.connect()
-			except Exception:
-				raise
+
+		transport = self.client.get_transport()
 
 		try:
-			transport = self.client.get_transport()
 			session = transport.open_session()
-		except Exception:
-			select.select([], [], [], 20)
-			self.connect()
-			transport = self.client.get_transport()
-			session = transport.open_session()
-			
-		session.setblocking(0)
+			session.setblocking(0)
+		except AttributeError:
+			self.reconnect()
+			return self.run(command, lock)
+
 		session.settimeout(0)
 		session.exec_command(command)
 
@@ -156,9 +159,8 @@ class Connection():
 			try:
 				sftp.mkdir(path)
 			except AttributeError:
-				if not self.is_active():
-					self.connect()
-					return self.put(local, remote)
+				self.reconnect()
+				return self.put(local, remote)
 			except Exception:
 				pass
 
@@ -183,9 +185,8 @@ class Connection():
 		try:
 			sftp.get(remote, local)
 		except AttributeError:
-			if not self.is_active():
-				self.connect()
-				return self.get(remote, local)
+			self.reconnect()
+			return self.get(remote, local)
 		except Exception as error:
 			out.error(str(error))
 			raise
@@ -197,9 +198,8 @@ class Connection():
 		try:
 			return sftp.open(filename, mode, bufsize)
 		except AttributeError:
-			if not self.is_active():
-				self.connect()
-				return self.open(filename, mode, bufsize)
+			self.reconnect()
+			return self.open(filename, mode, bufsize)
 		except Exception:
 			raise
 
@@ -208,9 +208,8 @@ class Connection():
 		try:
 			return sftp.remove(path)
 		except AttributeError:
-			if not self.is_active():
-				self.connect()
-				return self.remove(path)
+			self.reconnect()
+			return self.remove(path)
 		except Exception:
 			raise
 
@@ -239,7 +238,13 @@ class Connection():
 		if not self.is_connected():
 			return False
 
-		transport = self.client.get_transport()
+		try:
+			transport = self.client.get_transport()
+			session = transport.open_session()
+			session.setblocking(0)
+		except Exception:
+			return False
+
 		return transport.is_active()
 
 	def close(self):
