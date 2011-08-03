@@ -922,8 +922,8 @@ class CommandPromt(cmd.Cmd):
 				if len(not_installed):
 					out.warning("%s: these packages are not installed: %s" % (target, not_installed))
 
-			if missing and input("There were missing packages. Cancel update process? (y/N) ", ["y", "yes" ]):
-					return
+			if missing and input("there were missing packages. cancel update process? (y/N) ", ["y", "yes" ]):
+				return
 
 			script_hook(targets, "pre", os.path.dirname(self.metadata.path), self.metadata.md5)
 
@@ -945,6 +945,7 @@ class CommandPromt(cmd.Cmd):
 				out.info("update process canceled")
 				return
 
+			missing = False
 			for target in targets:
 				packages = targets[target].packages
 
@@ -959,10 +960,15 @@ class CommandPromt(cmd.Cmd):
 
 					if after != "0":
 						if vercmp(before, after) == 0:
+							missing = True
 							out.warning("%s: package was not updated: %s (%s)" % (target, package, after))
 
 						if vercmp(after, required) < 0:
+							missing = True
 							out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
+
+			if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ["y", "yes" ]):
+				return
 
 			script_hook(targets, "post", os.path.dirname(self.metadata.path), self.metadata.md5)
 			script_hook(targets, "compare", os.path.dirname(self.metadata.path), self.metadata.md5)
@@ -1236,6 +1242,7 @@ class CommandPromt(cmd.Cmd):
 			outxml = open(filename, "w")
 		except Exception as error:
 			out.error("unable to open file for writing: %s" % error.strerror)
+			return
 
 		output = XMLOutput()
 		output.add_header(self.metadata)
