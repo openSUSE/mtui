@@ -135,6 +135,34 @@ class CommandPromt(cmd.Cmd):
 				system = "(%s)" % self.targets[target].system
 				print '{0:20} {1:20}: {2}'.format(target, system, state)
 
+	def do_list_locks(self, args):
+		"""
+		Lists lock state of all connected hosts
+
+		list_hosts
+		Keyword arguments:
+		None
+		"""
+
+		if args:
+			self.parse_error(self.do_list_hosts, args)
+
+		else:
+			targets = enabled_targets(self.targets)
+
+			for target in targets:
+				system = "(%s)" % self.targets[target].system
+				lock = targets[target].locked()
+				if lock.locked:
+					if lock.own():
+						lockedby = "me"
+					else:
+						lockedby = lock.user
+
+					print '{0:20} {1:20}: {2}'.format(target, system, yellow("since %s by %s" % (lock.time(), lock.user)))
+				else:
+					print '{0:20} {1:20}: {2}'.format(target, system, green("not locked"))
+
 	def do_list_timeout(self, args):
 		"""
 		Prints the current timeout values per host in seconds.
@@ -829,14 +857,21 @@ class CommandPromt(cmd.Cmd):
 		"""
 		Installs missing packages from the UPDATE repositories. This is
 		also run by the update procedure before applying the updates.
+		If "force" is set, packages are forced to be installed on package
+		conflicts.
 
-		prepare <hostname>
+		prepare <hostname>[,hostname,...][,force]
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		"""
 
 		if args:
+			force = False
 			targets = enabled_targets(self.targets)
+
+			if args.split(',')[-1] == 'force':
+				force = True
+				args = args.replace(',force', '')
 
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
@@ -851,7 +886,7 @@ class CommandPromt(cmd.Cmd):
 
 					out.info("preparing")
 					try:
-						preparer(targets, self.metadata.get_package_list()).run()
+						preparer(targets, self.metadata.get_package_list(), force=force).run()
 					except Exception:
 						out.critical("failed to prepare target systems")
 						return

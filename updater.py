@@ -41,6 +41,11 @@ class Update():
 				thread.start()
 		
 		if skipped:
+			for target in self.targets:
+				try:
+					self.targets[target].remove_lock()
+				except AssertionError:
+					pass
 			raise UpdateError("Hosts locked")
 
 		for target in self.targets:
@@ -70,7 +75,7 @@ class Update():
 			raise UpdateError("update stack locked", target.hostname)
 		if "Additional rpm output" in stdout:
 			out.warning("There was additional rpm output on %s:", target.hostname)
-			start = stdout.find("Additional rpm output:")
+			start = stdout.find("Additional rpm output:") + 22
 			end = stdout.find("Retrieving", start)
 			print stdout[start:end]
 		if "A ZYpp transaction is already in progress." in stderr:
@@ -79,6 +84,9 @@ class Update():
 		if "Error:" in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError("RPM Error", target.hostname)
+		if "(c): c" in stdout:
+			out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
+			raise UpdateError("Dependency Error", target.hostname)
 
 		return self.check(target, stdin, stdout, stderr, exitcode)
 
@@ -174,10 +182,11 @@ Updater = {
 }
 
 class Prepare():
-	def __init__(self, targets, packages=None, patches=None):
+	def __init__(self, targets, packages=None, patches=None, force=False):
 		self.targets = targets
 		self.packages = packages
 		self.patches = patches
+		self.force = force
 		self.commands = []
 
 	def run(self):
@@ -195,6 +204,11 @@ class Prepare():
 				thread.start()
 
 		if skipped:
+			for target in self.targets:
+				try:
+					self.targets[target].remove_lock()
+				except AssertionError:
+					pass
 			raise UpdateError("Hosts locked")
 
 		for target in self.targets:
@@ -238,6 +252,9 @@ class Prepare():
 		if "Error:" in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError(target.hostname, "RPM Error")
+		if "(c): c" in stdout:
+			out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
+			raise UpdateError("Dependency Error", target.hostname)
 
 		return self.check(target, stdin, stdout, stderr, exitcode)
 
@@ -247,19 +264,22 @@ class Prepare():
 		return
 
 class ZypperPrepare(Prepare):
-	def __init__(self, targets, packages):
-		Prepare.__init__(self, targets, packages)
+	def __init__(self, targets, packages, force=False):
+		Prepare.__init__(self, targets, packages, force)
 
 		commands = []
 
 		for package in packages:
-			commands.append("zypper -n in --no-recommends -y -l %s" % package)
+			if force:
+				commands.append("zypper -n in --force-resolution --no-recommends -y -l %s" % package)
+			else:
+				commands.append("zypper -n in --no-recommends -y -l %s" % package)
 
 		self.commands = commands
 
 class OldZypperPrepare(Prepare):
-	def __init__(self, targets, packages):
-		Prepare.__init__(self, targets, packages)
+	def __init__(self, targets, packages, force=False):
+		Prepare.__init__(self, targets, packages, force)
 
 		commands = []
 
@@ -275,8 +295,8 @@ Preparer = {
 }
 
 class ZypperDowngrade(Prepare):
-	def __init__(self, targets, packages, patches):
-		Prepare.__init__(self, targets, packages, patches)
+	def __init__(self, targets, packages, patches, force=False):
+		Prepare.__init__(self, targets, packages, patches, force)
 
 		commands = []
 
@@ -286,8 +306,8 @@ class ZypperDowngrade(Prepare):
 		self.commands = commands
 
 class OldZypperDowngrade(Prepare):
-	def __init__(self, targets, packages, patches):
-		Prepare.__init__(self, targets, packages, patches)
+	def __init__(self, targets, packages, patches, force=False):
+		Prepare.__init__(self, targets, packages, patches, force)
 
 		patch = patches['zypp']
 

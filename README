@@ -129,6 +129,14 @@ State could be "Enabled", "Disabled" or "Dryrun".
 		None
 
 
+- list_locks
+Lists lock state of all connected hosts
+
+		list_hosts
+		Keyword arguments:
+		None
+
+
 - set_host_state
 Sets the host state to "Enabled", "Disabled" or "Dryrun". A host set to
 "Enabled" runs all issued commands while a "Disabled" host or a host set
@@ -178,8 +186,9 @@ Update Management
 - prepare
 Installs missing packages from the UPDATE repositories. This is also run by
 the update procedure before applying the updates.
+If "force" is set, packages are forced to be installed on package conflicts.
 
-		prepare <hostname>
+		prepare <hostname>[,hostname,...][,force]
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 
