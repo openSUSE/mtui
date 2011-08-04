@@ -22,9 +22,9 @@ def xml_to_template(template, xmldata):
 			x = xml.dom.minidom.parse(xmldata)
 		else:
 			x = xml.dom.minidom.parseString(xmldata)
-	except Exception as ex:
-		print repr(ex)
-		out.error("could not parse XML data")
+
+	except Exception as error:
+		out.error("failed to parse XML data: %s" % str(error))
 		raise AttributeError("XML")
 
 	for host in x.getElementsByTagName("host"):

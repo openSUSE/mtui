@@ -43,7 +43,7 @@ class Template:
 			with open(self.path, 'r') as template:
 				self.parse_template(template)
 		except IOError as error:
-			out.error("unable to open template: %s" % error.strerror)
+			out.error("failed to open template: %s" % error.strerror)
 			raise
 
 	def parse_template(self, template):
@@ -88,7 +88,6 @@ class Template:
 			if match:
 				if '?' in match.group(2):
 					hostname = self.get_refhost(match.group(1))
-					out.warning("no hostname defined for system %s, using %s" % (match.group(1), hostname))
 				else:
 					hostname = match.group(2)
 

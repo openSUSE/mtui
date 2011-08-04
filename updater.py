@@ -55,7 +55,7 @@ class Update():
 			RunCommand(self.targets, command).run()
 
 			for target in self.targets:
-				self.check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+				self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
 
 		for target in self.targets:
 			if not lock.locked:	# wasn't locked earlier by set_host_lock
@@ -63,6 +63,24 @@ class Update():
 					self.targets[target].remove_lock()
 				except AssertionError:
 					pass
+
+	def _check(self, target, stdin, stdout, stderr, exitcode):
+		if "zypper" in stdin and exitcode == "104":
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("update stack locked", target.hostname)
+		if "Additional rpm output" in stdout:
+			out.warning("There was additional rpm output on %s:", target.hostname)
+			start = stdout.find("Additional rpm output:")
+			end = stdout.find("Retrieving", start)
+			print stdout[start:end]
+		if "A ZYpp transaction is already in progress." in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("update stack locked", target.hostname)
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("RPM Error", target.hostname)
+
+		return self.check(target, stdin, stdout, stderr, exitcode)
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		"""stub. needs to be overwritten by inherited classes"""
@@ -85,16 +103,6 @@ class ZypperUpdate(Update):
 			
 		self.commands = commands
 
-	def check(self, target, stdin, stdout, stderr, exitcode):
-		if "zypper" in stdin and exitcode == "104":
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError("update stack locked", target.hostname)
-		if "Additional rpm output" in stdout:
-			out.warning("There was additional rpm output on %s:", target.hostname)
-			start = stdout.find("Additional rpm output:")
-			end = stdout.find("Retrieving", start)
-			print stdout[start:end]
-
 class openSuseUpdate(Update):
 	def __init__(self, targets, patches):
 		Update.__init__(self, targets, patches)
@@ -109,16 +117,6 @@ class openSuseUpdate(Update):
 		commands.append("zypper -v install -t patch softwaremgmt-201107=%s" % patch)
 			
 		self.commands = commands
-
-	def check(self, target, stdin, stdout, stderr, exitcode):
-		if "zypper" in stdin and exitcode == "104":
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError("update stack locked", target.hostname)
-		if "Additional rpm output" in stdout:
-			out.warning("There was additional rpm output on %s:", target.hostname)
-			start = stdout.find("Additional rpm output:")
-			end = stdout.find("Retrieving", start)
-			print stdout[start:end]
 
 class OldZypperUpdate(Update):
 	def __init__(self, targets, patches):
@@ -135,14 +133,6 @@ class OldZypperUpdate(Update):
 		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper in -l -y -t patch $p; done" % patch)
 			
 		self.commands = commands
-
-	def check(self, target, stdin, stdout, stderr, exitcode):
-		if "A ZYpp transaction is already in progress." in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError("update stack locked", target.hostname)
-		if "Error:" in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError("RPM Error", target.hostname)
 
 class OnlineUpdate(Update):
 	def __init__(self, targets, patches):
@@ -217,14 +207,14 @@ class Prepare():
 
 		for target in self.targets:
 			if self.targets[target].lasterr():
-				out.critical("could not prepare host %s. stopping.\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
+				out.critical("failed to prepare host %s. stopping.\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
 				return
 
 		for command in self.commands: 
 			RunCommand(self.targets, command).run()
 
 			for target in self.targets:
-				self.check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+				self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
 
 		for target in self.targets:
 			queue.put([self.targets[target].set_repo, ["TESTING"]])
@@ -240,6 +230,16 @@ class Prepare():
 					self.targets[target].remove_lock()
 				except AssertionError:
 					pass
+
+	def _check(self, target, stdin, stdout, stderr, exitcode):
+		if "A ZYpp transaction is already in progress." in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "update stack locked")
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "RPM Error")
+
+		return self.check(target, stdin, stdout, stderr, exitcode)
 
 	def check(self, target, stdin, stdout, stderr, exitcode):
 		"""stub. needs to be overwritten by inherited classes"""
@@ -267,14 +267,6 @@ class OldZypperPrepare(Prepare):
 			commands.append("zypper -n in -y -l %s" % package)
 
 		self.commands = commands
-
-	def check(self, target, stdin, stdout, stderr, exitcode):
-		if "A ZYpp transaction is already in progress." in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "update stack locked")
-		if "Error:" in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "RPM Error")
 
 Preparer = {
     '11': ZypperPrepare,
@@ -316,14 +308,6 @@ class OldZypperDowngrade(Prepare):
 			commands.append("zypper rm -y -t atom %s" % package)
 
 		self.commands = commands
-
-	def check(self, target, stdin, stdout, stderr, exitcode):
-		if "A ZYpp transaction is already in progress." in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "update stack locked")
-		if "Error:" in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "RPM Error")
 
 Downgrader = {
     '11': ZypperDowngrade,

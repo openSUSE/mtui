@@ -50,16 +50,18 @@ class Connection():
 		try:
 			self.client.connect(self.hostname, username='root')
 		except paramiko.AuthenticationException:
-			print "AuthKey Authentication failed on %s. Make sure your system is set up correctly" % self.hostname
+			out.warning("Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly" % self.hostname)
 			print "Trying manually, please specify root password"
 			password = getpass.getpass()
 
 			try:
 				self.client.connect(self.hostname, username='root', password=password)
-			except Exception:
+			except paramiko.AuthenticationException:
+				out.error("Authentication failed on %s: wrong password" % self.hostname)
 				raise
 
-		except Exception:
+		except paramiko.BadHostKeyException:
+			out.error("Authentication failed on %s: Hostkey did not match. Make sure your system is set up correctly" % self.hostname)
 			raise
 
 	def reconnect(self):
@@ -164,12 +166,8 @@ class Connection():
 			except Exception:
 				pass
 
-		try:
-			sftp.put(local, remote)
-			sftp.chmod(remote, stat.S_IEXEC)
-		except Exception as error:
-			out.error(str(error))
-			raise
+		sftp.put(local, remote)
+		sftp.chmod(remote, stat.S_IEXEC)
 
 		sftp.close()
 
@@ -187,9 +185,6 @@ class Connection():
 		except AttributeError:
 			self.reconnect()
 			return self.get(remote, local)
-		except Exception as error:
-			out.error(str(error))
-			raise
 
 		sftp.close()
 
@@ -200,8 +195,6 @@ class Connection():
 		except AttributeError:
 			self.reconnect()
 			return self.open(filename, mode, bufsize)
-		except Exception:
-			raise
 
 	def remove(self, path):
 		sftp = self.client.open_sftp()
@@ -210,8 +203,6 @@ class Connection():
 		except AttributeError:
 			self.reconnect()
 			return self.remove(path)
-		except Exception:
-			raise
 
 	def is_connected(self):
 		"""check if connection to host is established
@@ -242,6 +233,7 @@ class Connection():
 			transport = self.client.get_transport()
 			session = transport.open_session()
 			session.setblocking(0)
+			session.close()
 		except Exception:
 			return False
 

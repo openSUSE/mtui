@@ -39,8 +39,8 @@ class CommandPromt(cmd.Cmd):
 
 		try:
 			readline.read_history_file("%s/.mtui_history" % self.homedir)
-		except IOError:
-			pass
+		except IOError as error:
+			out.debug("failed to open history file: %s" % error.strerror)
 
 		try:
 			with open('%s/refhosts.emea' % self.workingdir, 'r') as f:
@@ -49,9 +49,8 @@ class CommandPromt(cmd.Cmd):
 					if match:
 						self.systems.append(match.group(1))
 					
-		except Exception:
-			out.debug("failed to parse refhost mapping file")
-			pass
+		except IOError as error:
+			out.debug("failed to parse refhost mapping file: %s" % error.strerror)
 
 	def emptyline(self):
 		return
@@ -77,7 +76,7 @@ class CommandPromt(cmd.Cmd):
 			try:
 				self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
 			except Exception:
-				out.critical("unable to add host %s to list" % hostname)
+				out.error("failed to add host %s to list" % hostname)
 
 		else:
 			self.parse_error(self.do_add_host, args)
@@ -204,13 +203,10 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_list_scripts, args)
 
 		else:
-			try:
-				for root, dirs, files in os.walk("%s/scripts" % os.path.dirname(self.metadata.path)):
-					for name in files:
-						if not ".svn" in root:
-							print os.path.join(root, name)
-			except Exception as error:
-				out.critical(str(error))
+			for root, dirs, files in os.walk("%s/scripts" % os.path.dirname(self.metadata.path)):
+				for name in files:
+					if not ".svn" in root:
+						print os.path.join(root, name)
 
  	def do_list_update_commands(self, args):
 		"""
@@ -401,15 +397,13 @@ class CommandPromt(cmd.Cmd):
 						RunCommand(host, command).run()
 					except KeyboardInterrupt:
 						return
-					except Exception:
-						our.error("failed to run command %s" % command)
 
 					print "%s:~> %s [%s]" % (target, targets[target].lastin(), targets[target].lastexit())
 					print targets[target].lastout()
 					if targets[target].lasterr():
 						print "stderr:", targets[target].lasterr()
 
-					input("Press Enter key to proceed with the next host", "")
+					input("press Enter key to proceed with the next host", "")
 
 				out.info("done")
 		else:
@@ -447,8 +441,6 @@ class CommandPromt(cmd.Cmd):
 					RunCommand(targets, command).run()
 				except KeyboardInterrupt:
 					return
-				except Exception:
-					our.error("failed to run command %s" % command)
 
 				for target in targets:
 					print "%s:~> %s [%s]" % (target, targets[target].lastin(), targets[target].lastexit())
@@ -494,9 +486,6 @@ class CommandPromt(cmd.Cmd):
 					RunCommand(targets, command).run()
 				except KeyboardInterrupt:
 					out.info("testsuite run canceled")
-					return
-				except Exception:
-					our.error("failed to run testsuite %s" % command)
 					return
 
 				for target in targets:
@@ -561,8 +550,6 @@ class CommandPromt(cmd.Cmd):
 					RunCommand(targets, command).run()
 				except KeyboardInterrupt:
 					return
-				except Exception:
-					our.error("failed to submit testresults")
 
 				if "remote_qa_db_report.pl" in command:
 					for target in targets:
@@ -824,7 +811,7 @@ class CommandPromt(cmd.Cmd):
 					try:
 						downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
 					except Exception:
-						out.critical("could not downgrade all target systems. stopping")
+						out.critical("failed to downgrade target systems")
 						return
 					except KeyboardInterrupt:
 						out.info("downgrade process canceled")
@@ -866,7 +853,7 @@ class CommandPromt(cmd.Cmd):
 					try:
 						preparer(targets, self.metadata.get_package_list()).run()
 					except Exception:
-						out.critical("could not prepare target systems %s", targets.keys())
+						out.critical("failed to prepare target systems")
 						return
 					except KeyboardInterrupt:
 						out.info("preparation process canceled")
@@ -939,7 +926,7 @@ class CommandPromt(cmd.Cmd):
 			try:
 				updater(targets, self.metadata.patches).run()
 			except Exception:
-				out.critical("could not update target systems")
+				out.critical("failed to update target systems")
 				return
 			except KeyboardInterrupt:
 				out.info("update process canceled")
@@ -1026,12 +1013,8 @@ class CommandPromt(cmd.Cmd):
 				if os.path.isfile(filename):
 					remote = "/tmp/%s/%s" % (self.metadata.md5, os.path.basename(filename))
 
-					try:
-						FileUpload(self.targets, filename, remote).run()
-					except Exception:
-						out.critical("uploading %s to %s failed" % (filename, remote))
-					else:
-						out.info("uploaded %s to %s" % (filename, remote))
+					FileUpload(self.targets, filename, remote).run()
+					out.info("uploaded %s to %s" % (filename, remote))
 
 		else:
 			self.parse_error(self.do_put, args)
@@ -1056,20 +1039,15 @@ class CommandPromt(cmd.Cmd):
 
 			try:
 				os.makedirs(destination)
-			except OSError as exc:
-				if exc.errno == errno.EEXIST:
+			except OSError as error:
+				if error.errno == errno.EEXIST:
 					pass
 			except Exception as error:
-				out.critical(str(error))
+				out.critical("failed to create directories: %s" % str(error))
 				return
 
-			try:
-				FileDownload(self.targets, args, local, True).run()
-			except Exception as error:
-				out.critical(str(error))
-				out.critical("downloading %s to %s failed" % (args, local))
-			else:
-				out.info("downloaded %s to %s" % (args, local))
+			FileDownload(self.targets, args, local, True).run()
+			out.info("downloaded %s to %s" % (args, local))
 
 		else:
 			self.parse_error(self.do_get, args)
@@ -1087,7 +1065,7 @@ class CommandPromt(cmd.Cmd):
 		termname -- terminal emulator to spawn consoles on 
 		"""
 
-		dirname = os.path.dirname(__file__)
+		dirname = self.workingdir
 
 		systems = {}
 		for target in self.targets:
@@ -1113,7 +1091,7 @@ class CommandPromt(cmd.Cmd):
 				print os.path.basename(filename).split('.')[1]
 
 	def complete_terms(self, text, line, begidx, endidx):
-		dirname = os.path.dirname(__file__)
+		dirname = self.workingdir
 		terms = glob.glob(dirname + "/term.*.sh")
 		terms = map(os.path.basename, terms)
 		return [i.split('.')[1] for i in terms if i.startswith("term." + text)]
@@ -1177,7 +1155,7 @@ class CommandPromt(cmd.Cmd):
 		try:
 			template = xml_to_template(self.metadata.path, output.pretty())
 		except Exception:
-			out.error("could not export XML")
+			out.error("failed to export XML")
 			return
 
 		if os.path.exists(filename):
@@ -1189,7 +1167,7 @@ class CommandPromt(cmd.Cmd):
 		try:
 			with open(filename, 'w') as f:
 				f.write("".join(l.encode("utf-8") for l in template))
-		except Exception as error:
+		except IOError as error:
 			print "failed to write %s: %s" % (filename, error.strerror)
 		else:
 			print "wrote template to %s" % filename
@@ -1226,7 +1204,7 @@ class CommandPromt(cmd.Cmd):
 			if error.errno == errno.EEXIST:
 				pass
 		except Exception as error:
-			out.critical(str(error))
+			out.critical("failed to create directories: %s" % str(error))
 			return
 
 		filename = output_dir + filename
@@ -1240,8 +1218,8 @@ class CommandPromt(cmd.Cmd):
 
 		try:
 			outxml = open(filename, "w")
-		except Exception as error:
-			out.error("unable to open file for writing: %s" % error.strerror)
+		except IOError as error:
+			out.error("failed to open file for writing: %s" % error.strerror)
 			return
 
 		output = XMLOutput()
@@ -1347,7 +1325,7 @@ def script_hook(targets, which, scriptdir, md5):
 						stdout, stderr = sub.communicate()
 						exitcode = sub.wait()
 					except Exception as error:
-						out.critical("running compare script failed: %s" % error)
+						out.critical("running compare script failed: %s" % str(error))
 						exitcode = 1
 
 					if exitcode == 1:
@@ -1366,11 +1344,11 @@ def script_hook(targets, which, scriptdir, md5):
 
 				try:
 					os.makedirs(output_dir)
-				except OSError as exc:
-					if exc.errno == errno.EEXIST:
+				except OSError as error:
+					if error.errno == errno.EEXIST:
 						pass
 				except Exception as error:
-					out.critical(str(error))
+					out.critical("failed to create directories: %s" % str(error))
 					return
 
 				for target in targets:
@@ -1379,8 +1357,8 @@ def script_hook(targets, which, scriptdir, md5):
 						f = open(filename, "w")
 						f.write(targets[target].lastout())
 						f.write(targets[target].lasterr())
-					except Exception as error:
-						out.error("unable to write script output to %s: %s" % (filename, error))
+					except IOError as error:
+						out.error("failed to write script output to %s: %s" % (filename, error.strerror))
 					else:
 						f.close()
 		except KeyboardInterrupt:

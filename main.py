@@ -29,7 +29,7 @@ def main():
 	try:
 		opts, args = getopt.getopt(sys.argv[1:], "ihaedt:m:vw:", ["interactive", "help", "asia", "emea", "dryrun", "templates=", "md5=", "verbose", "timeout"])
 	except getopt.GetoptError as error:
-		out.error(str(error))
+		out.error("failed to parse parameter: %s" % str(error))
 		usage()
 
 	for parameter, argument in opts:
@@ -82,7 +82,7 @@ def main():
 		try:
 			targets[host] = Target(host, system, metadata.get_package_list(), dryrun=dryrun, timeout=timeout)
 		except Exception:
-			out.warning("could not add host %s to target list" % host)
+			out.warning("failed to add host %s to target list" % host)
 		except KeyboardInterrupt:
 			out.warning("skipping host %s" % host)
 

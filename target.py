@@ -36,7 +36,7 @@ class Target():
 		try:
 			self.connection = Connection(self.hostname, timeout)
 		except Exception as error:
-			out.critical("connecting to %s failed: %s" % (self.hostname, error.strerror))
+			out.critical("connecting to %s failed: %s" % (self.hostname, str(error.strerror)))
 			raise
 
 		for package in packages:
@@ -138,14 +138,20 @@ class Target():
 
 	def put(self, local, remote):
 		if self.state == "enabled":
-			return self.connection.put(local, remote)
+			try:
+				return self.connection.put(local, remote)
+			except EnvironmentError as error:
+				out.error("failed to send %s: %s" % (local, error.strerror))
 		elif self.state == "dryrun":
 			out.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
 		
 
 	def get(self, remote, local):
 		if self.state == "enabled":
-			return self.connection.get(remote, local)
+			try:
+				return self.connection.get(remote, local)
+			except EnvironmentError as error:
+				out.error("failed to get %s: %s" % (remote, error.strerror))
 		elif self.state == "dryrun":
 			out.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
 
@@ -212,7 +218,7 @@ class Target():
 				lockfile = self.connection.open("/var/lock/mtui.lock", "w+")
 
 			except IOError as error:
-				out.error(str(error))
+				out.error("failed to open lockfile: %s" % error.strerror)
 				return
 
 			now = timestamp()
@@ -222,16 +228,15 @@ class Target():
 			lockfile.close()
 
 	def remove_lock(self):
-		if self.state == "enabled":
-			lock = self.locked()
+		lock = self.locked()
 
-			if lock.locked:
-				assert lock.own()
-				try:
-					self.connection.remove("/var/lock/mtui.lock")
-				except IOError as error:
-					if error.errno == errno.ENOENT:
-						out.debug("lockfile does not exist")
+		if lock.locked:
+			assert lock.own()
+			try:
+				self.connection.remove("/var/lock/mtui.lock")
+			except IOError as error:
+				if error.errno == errno.ENOENT:
+					out.debug("lockfile does not exist")
 
 	def close(self):
 		out.info("closing connection to %s" % self.hostname)
@@ -328,8 +333,8 @@ class FileUpload():
 		for target in self.targets:
 			try:
 				queue.put([self.targets[target].put, [self.local, self.remote]])
-			except:
-				raise
+			except KeyboardInterrupt:
+				pass
 
 		while queue.unfinished_tasks:
 			spinner()
@@ -350,10 +355,13 @@ class FileDownload():
 			thread.start()
 
 		for target in self.targets:
-			if self.postfix:
-				queue.put([self.targets[target].get, [self.remote, "%s.%s" % (self.local, target)]])
-			else:
-				queue.put([self.targets[target].get, [self.remote, self.local]])
+			try:
+				if self.postfix:
+					queue.put([self.targets[target].get, [self.remote, "%s.%s" % (self.local, target)]])
+				else:
+					queue.put([self.targets[target].get, [self.remote, self.local]])
+			except KeyboardInterrupt:
+				pass
 
 		while queue.unfinished_tasks:
 			spinner()
