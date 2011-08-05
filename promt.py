@@ -97,18 +97,20 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			for target in args.split(','):
-				try:
-					self.targets[target].close()
-					del self.targets[target]
-				except KeyError:
-					out.warning("host %s not in database" % target)
+			targets = self.targets
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
+
+			for target in targets:
+				targets[target].close()
+				del self.targets[target]
 
 		else:
 			self.parse_error(self.do_remove_host, args)
 
 	def complete_remove_host(self, text, line, begidx, endidx):
-		return self.complete_hostlist(text, line, begidx, endidx)
+		return self.complete_hostlist_with_all(text, line, begidx, endidx)
  
  	def do_list_hosts(self, args):
 		"""
@@ -124,15 +126,17 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_list_hosts, args)
 
 		else:
-			for target in self.targets:
-				if self.targets[target].state == "enabled":
+			targets = self.targets
+
+			for target in targets:
+				if targets[target].state == "enabled":
 					state = green('Enabled')
-				elif self.targets[target].state == "dryrun":
+				elif targets[target].state == "dryrun":
 					state = yellow('Dryrun')
 				else:
 					state = red('Disabled')
 
-				system = "(%s)" % self.targets[target].system
+				system = "(%s)" % targets[target].system
 				print '{0:20} {1:20}: {2}'.format(target, system, state)
 
 	def do_list_locks(self, args):
@@ -151,7 +155,7 @@ class CommandPromt(cmd.Cmd):
 			targets = enabled_targets(self.targets)
 
 			for target in targets:
-				system = "(%s)" % self.targets[target].system
+				system = "(%s)" % targets[target].system
 				lock = targets[target].locked()
 				if lock.locked:
 					if lock.own():
@@ -175,10 +179,13 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			self.parse_error(self.do_list_timeout, args)
 
-		for target in self.targets:
-			system = "(%s)" % self.targets[target].system
-			timeout = self.targets[target].get_timeout()
-			print '{0:20} {1:20}: {2}s'.format(target, system, timeout)
+		else:
+			targets = self.targets
+
+			for target in targets:
+				system = "(%s)" % targets[target].system
+				timeout = targets[target].get_timeout()
+				print '{0:20} {1:20}: {2}s'.format(target, system, timeout)
 
  	def do_list_packages(self, args):
 		"""
@@ -199,14 +206,10 @@ class CommandPromt(cmd.Cmd):
 				targets = selected_targets(targets, args.split(','))
 
 			for target in targets:
-				try:
-					targets[target].query_versions()
-				except KeyError:
-					out.warning("host %s not in database" % target)
-				else:
-					print "packages on %s (%s):" % (target, targets[target].system)
-					for package in targets[target].packages:
-						print '{0:30}: {1}'.format(package, targets[target].packages[package].current)
+				targets[target].query_versions()
+				print "packages on %s (%s):" % (target, targets[target].system)
+				for package in targets[target].packages:
+					print '{0:30}: {1}'.format(package, targets[target].packages[package].current)
 
 				print
 
@@ -369,29 +372,26 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			if args.split(',')[0] == 'all':
-				targets = list(self.targets)
-			else:
-				targets = args.split(',')
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
 
 			for target in targets:
 				print "log from %s:" % target
-				try:
-					for line in self.targets[target].log:
-						print "%s:~> %s [%s]" % (target, line[0], line[3])
-						print "stdout:"
-						print "%s" % (line[1])
-						print "stderr:"
-						print "%s" % (line[2])
-						print
-				except KeyError:
-					out.warning("host %s not in database" % target)
+				for line in targets[target].log:
+					print "%s:~> %s [%s]" % (target, line[0], line[3])
+					print "stdout:"
+					print "%s" % (line[1])
+					print "stderr:"
+					print "%s" % (line[2])
+					print
 
 		else:
 			self.parse_error(self.do_show_log, args)
 
 	def complete_show_log(self, text, line, begidx, endidx):
-		return self.complete_hostlist_with_all(text, line, begidx, endidx)
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_serialize(self, args):
 		"""
@@ -410,12 +410,12 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			command = ",".join(args.split(',')[1:])
+			args, _, command = args.partition(',')
 
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, [args.split(',')[0]])
+				targets = selected_targets(targets, args.split(','))
 
 			if targets:
 				for target in targets:
@@ -438,7 +438,8 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_serialize, args)
 
 	def complete_serialize(self, text, line, begidx, endidx):
-		return [i for i in list(enabled_targets(self.targets)) + ['all'] if i.startswith(text) and not line.count(',')]
+		if not line.count(','):
+			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_run(self, args):
 		"""
@@ -457,12 +458,12 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			command = ",".join(args.split(',')[1:])
+			args, _, command = args.partition(',')
 
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, [args.split(',')[0]])
+				targets = selected_targets(targets, args.split(','))
 
 			if targets:
 				try:
@@ -481,7 +482,8 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_run, args)
 
 	def complete_run(self, text, line, begidx, endidx):
-		return [i for i in list(enabled_targets(self.targets)) + ['all'] if i.startswith(text) and not line.count(',')]
+		if not line.count(','):
+			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_testsuite_run(self, args):
 		"""
@@ -496,12 +498,12 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
+			args, _, command = args.rpartition(',')
+
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, args.split(',')[:-1])
-
-			command = args.split(',')[-1]
+				targets = selected_targets(targets, args.split(','))
 
 			if not command.startswith('/'):
 				command = os.path.join("/usr/share/qa/tools", command)
@@ -545,12 +547,12 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
+			args, _, command = args.rpartition(',')
+
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, args.split(',')[:-1])
-
-			command = args.split(',')[-1]
+				targets = selected_targets(targets, args.split(','))
 
 			name = os.path.basename(command).replace('-run', '')
 			time = date.today().strftime("%d/%m/%y")
@@ -590,7 +592,7 @@ class CommandPromt(cmd.Cmd):
 						else:
 							match = re.search('(http://.*/submission.php.submissionID=\d+)', targets[target].lastout())
 							if match:
-								system = self.targets[target].system
+								system = targets[target].system
 								out.info("submission for %s (%s): %s" % (target, system, match.group(1)))
 							else:
 								out.critical("no submission found for %s. please use \"show_log %s\" to see what went wrong" % (target, target))
@@ -618,20 +620,15 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
+			args, _, state = args.rpartition(',')
+
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, args.split(',')[:-1])
-
-			state = args.split(',')[-1]
+				targets = selected_targets(targets, args.split(','))
 
 			for target in targets:
-				try:
-					lock = targets[target].locked()
-				except KeyError:
-					out.warning("host %s not in database" % target)
-					targets.remove(target)
-					continue
+				lock = targets[target].locked()
 
 				if state == "enabled":
 					if lock.locked:
@@ -652,7 +649,7 @@ class CommandPromt(cmd.Cmd):
 
 	def complete_set_host_lock(self, text, line, begidx, endidx):
 		if line.count(','):
-			return [i for i in list(self.targets) + ['enabled', 'disabled'] if i.startswith(text) and i not in line]
+			return self.complete_enabled_hostlist(text, line, begidx, endidx, ['enabled', 'disabled'])
 		else:		
 			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
@@ -673,31 +670,26 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			if args.split(',')[0] == 'all':
-				targets = list(self.targets)
-			else:
-				targets = args.split(',')[:-1]
+			args, _, state = args.rpartition(',')
 
-			state = args.split(',')[-1]
+			targets = self.targets
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
 
 			if state not in ['enabled', 'disabled', 'dryrun']:
 				self.parse_error(self.do_set_host_state, args)
 				return
 
 			for target in targets:
-				try:
-					self.targets[target].state = state
-
-				except KeyError:
-					out.warning("host %s not in database" % target)
-					targets.remove(target)
+				targets[target].state = state
 
 		else:
 			self.parse_error(self.do_set_host_state, args)
 
 	def complete_set_host_state(self, text, line, begidx, endidx):
 		if line.count(','):
-			return [i for i in list(self.targets) + ['enabled', 'disabled', 'dryrun'] if i.startswith(text) and i not in line]
+			return self.complete_hostlist(text, line, begidx, endidx, ['enabled', 'disabled', 'dryrun'])
 		else:		
 			return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
@@ -740,25 +732,23 @@ class CommandPromt(cmd.Cmd):
 		timeout    -- timeout value in seconds
 		"""
 
-		if ',' in args:
-			if args.split(',')[0] == 'all':
-				targets = list(self.targets)
-			else:
-				targets = args.split(',')[:-1]
+		if args:
+			args, _, timeout = args.rpartition(',')
+
+			targets = self.targets
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
 
 			try:
-				value = int(args.split(',')[-1])
+				value = int(timeout)
 			except Exception:
-				out.error("wrong timeout value")
+				out.error("wrong timeout value: %s" % timeout)
+				self.parse_error(self.do_set_timeout, args)
 				return
 
 			for target in targets:
-				try:
-					self.targets[target].set_timeout(value)
-
-				except KeyError:
-					out.warning("host %s not in database" % target)
-					targets.remove(target)
+				targets[target].set_timeout(value)
 
 		else:
 			self.parse_error(self.do_set_timeout, args)
@@ -778,13 +768,13 @@ class CommandPromt(cmd.Cmd):
 		repository -- repository, TESTING or UPDATE
 		"""
 
-		if ',' in args:
+		if args:
+			args, _, name = args.rpartition(',')
+
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, args.split(',')[:-1])
-
-			name = args.split(',')[-1]
+				targets = selected_targets(targets, args.split(','))
 
 			if name.lower() not in ['testing', 'update']:
 				self.parse_error(self.do_set_repo, args)
@@ -795,12 +785,7 @@ class CommandPromt(cmd.Cmd):
 				if lock.locked and not lock.own():
 					out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
 				else:
-					try:
-						self.targets[target].set_repo(name.upper())
-
-					except KeyError:
-						out.warning("host %s not in database" % target)
-						targets.remove(target)
+					targets[target].set_repo(name.upper())
 
 		else:
 			self.parse_error(self.do_set_repo, args)
@@ -810,6 +795,51 @@ class CommandPromt(cmd.Cmd):
 			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['testing', 'update'])
 		else:		
 			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+	def do_install(self, args):
+		"""
+		Installs packages from the current active repository.
+		The repository should be set with the set_repo command beforehand.
+
+		install <hostname>[,hostname,...],<package>[ package ...]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		package    -- package name
+		"""
+
+		if args:
+			args, _, packages = args.rpartition(',')
+
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
+
+			if targets:
+				for release in self.metadata.get_releases():
+					try:
+						installer = Installer[release]
+					except KeyError:
+						out.critical("no installer available for %s" % release)
+						return
+
+					out.info("installing")
+					try:
+						installer(targets, packages.split()).run()
+					except Exception:
+						out.critical("failed to install packages")
+						return
+					except KeyboardInterrupt:
+						out.info("installation process canceled")
+						return
+					else:
+						out.info("done")
+
+		else:
+			self.parse_error(self.do_install, args)
+
+	def complete_install(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_downgrade(self, args):
 		"""
@@ -853,51 +883,6 @@ class CommandPromt(cmd.Cmd):
 	def complete_downgrade(self, text, line, begidx, endidx):
 		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
-	def do_install(self, args):
-		"""
-		Installs packages from the current active repository.
-		The repository should be set with the set_repo command beforehand.
-
-		install <hostname>[,hostname,...],<package>[ package ...]
-		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
-		package    -- package name
-		"""
-
-		if args:
-			targets = enabled_targets(self.targets)
-
-			args, _, packages = args.rpartition(',')
-
-			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, args.split(','))
-
-			if targets:
-				for release in self.metadata.get_releases():
-					try:
-						installer = Installer[release]
-					except KeyError:
-						out.critical("no preparer available for %s" % release)
-						return
-
-					out.info("installing")
-					try:
-						installer(targets, packages.split()).run()
-					except Exception:
-						out.critical("failed to install packages")
-						return
-					except KeyboardInterrupt:
-						out.info("installation process canceled")
-						return
-					else:
-						out.info("done")
-
-		else:
-			self.parse_error(self.do_install, args)
-
-	def complete_install(self, text, line, begidx, endidx):
-		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
-
 	def do_prepare(self, args):
 		"""
 		Installs missing packages from the UPDATE repositories. This is
@@ -911,12 +896,13 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
+			args, _, parameter = args.rpartition(',')
+
 			force = False
 			targets = enabled_targets(self.targets)
 
-			if args.split(',')[-1] == 'force':
+			if 'force' in parameter:
 				force = True
-				args = args.replace(',force', '')
 
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
@@ -1089,11 +1075,13 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
+			targets = self.targets
+
 			for filename in glob.glob(args):
 				if os.path.isfile(filename):
 					remote = "/tmp/%s/%s" % (self.metadata.md5, os.path.basename(filename))
 
-					FileUpload(self.targets, filename, remote).run()
+					FileUpload(targets, filename, remote).run()
 					out.info("uploaded %s to %s" % (filename, remote))
 
 		else:
@@ -1114,6 +1102,8 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
+			targets = self.targets
+
 			destination = os.path.dirname(self.metadata.path) + "/downloads/"
 			local = destination + os.path.basename(args)
 
@@ -1126,7 +1116,7 @@ class CommandPromt(cmd.Cmd):
 				out.critical("failed to create directories: %s" % str(error))
 				return
 
-			FileDownload(self.targets, args, local, True).run()
+			FileDownload(targets, args, local, True).run()
 			out.info("downloaded %s to %s" % (args, local))
 
 		else:
@@ -1148,8 +1138,11 @@ class CommandPromt(cmd.Cmd):
 		dirname = self.workingdir
 
 		systems = {}
-		for target in self.targets:
-			systems[self.targets[target].system] = target
+
+		targets = self.targets
+
+		for target in targets:
+			systems[targets[target].system] = target
 
 		hosts = [ systems[key] for key in sorted(systems.iterkeys()) ]
 		
@@ -1189,13 +1182,13 @@ class CommandPromt(cmd.Cmd):
 		template -- edit template
 		"""
 
-		command = args.split(",")[0]
+		command, _, filename = args.partition(',')
 
 		editor = os.environ.get("EDITOR", "vi")
 
 		if command == "file":
 			try:
-				os.system("%s %s" % (editor, args.split(",")[1]))
+				os.system("%s %s" % (editor, filename))
 			except Exception:
 				self.parse_error(self.do_edit, args)
 		elif command == "template":
@@ -1226,11 +1219,13 @@ class CommandPromt(cmd.Cmd):
 		else:
 			filename = self.metadata.path
 
+		targets = self.targets
+
 		output = XMLOutput()
 		output.add_header(self.metadata)
 
-		for target in self.targets:
-			output.add_target(self.targets[target])
+		for target in targets:
+			output.add_target(targets[target])
 
 		try:
 			template = xml_to_template(self.metadata.path, output.pretty())
@@ -1266,6 +1261,8 @@ class CommandPromt(cmd.Cmd):
 		Keyword arguments:
 		filename -- save log as file filename
 		"""
+
+		targets = self.targets
 
 		if args:
 			filename = args.split(',')[0]
@@ -1304,8 +1301,8 @@ class CommandPromt(cmd.Cmd):
 
 		output = XMLOutput()
 		output.add_header(self.metadata)
-		for target in self.targets:
-			output.add_target(self.targets[target])
+		for target in targets:
+			output.add_target(targets[target])
 
 		outxml.write(output.pretty())
 		outxml.close()
@@ -1323,16 +1320,18 @@ class CommandPromt(cmd.Cmd):
 		if args:
 			self.parse_error(self.do_quit, args)
 		else:
+			targets = self.targets
+
 			if not input("save log? (Y/n) ", ["n", "no" ]):
 				self.do_save(None)
 
-			for target in self.targets:
+			for target in targets:
 				try:
-					self.targets[target].remove_lock()
+					targets[target].remove_lock()
 				except AssertionError:
 					pass
 
-				self.targets[target].close()
+				targets[target].close()
 
 			readline.write_history_file("%s/.mtui_history" % self.homedir)
 			sys.exit(0)
@@ -1364,6 +1363,9 @@ class CommandPromt(cmd.Cmd):
 
 	def complete_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
 		return [i for i in list(self.targets) + ['all'] + appendix if i.startswith(text) and i not in line]
+
+	def complete_enabled_hostlist(self, text, line, begidx, endidx, appendix=[]):
+		return [i for i in list(enabled_targets(self.targets)) + appendix if i.startswith(text) and i not in line]
 
 	def complete_enabled_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
 		return [i for i in list(enabled_targets(self.targets)) + ['all'] + appendix if i.startswith(text) and i not in line]
