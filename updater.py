@@ -70,7 +70,7 @@ class Update():
 					pass
 
 	def _check(self, target, stdin, stdout, stderr, exitcode):
-		if "zypper" in stdin and exitcode == "104":
+		if "zypper" in stdin and exitcode == 104:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError("update stack locked", target.hostname)
 		if "Additional rpm output" in stdout:
@@ -335,3 +335,79 @@ Downgrader = {
     '10': OldZypperDowngrade
 }
 
+class Install():
+	def __init__(self, targets, packages=None):
+		self.targets = targets
+		self.packages = packages
+
+	def run(self):
+		skipped = False
+
+		for target in self.targets:
+			lock = self.targets[target].locked()
+			if lock.locked and not lock.own():
+				skipped = True
+				out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+			else:
+				self.targets[target].set_locked()
+				thread = ThreadedMethod(queue)
+				thread.setDaemon(True)
+				thread.start()
+
+		if skipped:
+			for target in self.targets:
+				try:
+					self.targets[target].remove_lock()
+				except AssertionError:
+					pass
+			raise UpdateError("Hosts locked")
+
+		for command in self.commands: 
+			RunCommand(self.targets, command).run()
+
+			for target in self.targets:
+				self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+
+		for target in self.targets:
+			if not lock.locked:	# wasn't locked earlier by set_host_lock
+				try:
+					self.targets[target].remove_lock()
+				except AssertionError:
+					pass
+
+	def _check(self, target, stdin, stdout, stderr, exitcode):
+		if "zypper" in stdin and exitcode == 104:
+			out.critical('%s; command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "package not found")
+		if "A ZYpp transaction is already in progress." in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "update stack locked")
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "RPM Error")
+		if "(c): c" in stdout:
+			out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
+			raise UpdateError("Dependency Error", target.hostname)
+
+		return self.check(target, stdin, stdout, stderr, exitcode)
+
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		"""stub. needs to be overwritten by inherited classes"""
+
+		return
+
+class ZypperInstall(Install):
+	def __init__(self, targets, packages):
+		Install.__init__(self, targets, packages)
+
+		commands = []
+
+		commands.append("zypper -n in -y -l %s" % " ".join(packages))
+
+		self.commands = commands
+
+Installer = {
+    '11': ZypperInstall,
+    '114': ZypperInstall,
+    '10': ZypperInstall
+}

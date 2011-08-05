@@ -108,7 +108,6 @@ specified as well.
                 hostname -- address of the target host (should be the FQDN)
                 system   -- system type, ie. sles11sp1-i386
 
-
 - remove_host
 Disconnects from host and remove host from list. Warning: The host log is
 purged as well. If the tester wants to preserve the log, it's better to use
@@ -119,7 +118,6 @@ hosts can be specified.
 		Keyword arguments:
 		hostname -- hostname from the target list
 
-
 - list_hosts
 Lists all connected hosts including the system types and their current state.
 State could be "Enabled", "Disabled" or "Dryrun".
@@ -127,7 +125,6 @@ State could be "Enabled", "Disabled" or "Dryrun".
 		list_hosts
 		Keyword arguments:
 		None
-
 
 - list_locks
 Lists lock state of all connected hosts
@@ -183,6 +180,15 @@ Prints the current timeout values per host in seconds.
 
 Update Management
 *****************
+- install
+Installs packages from the current active repository.
+The repository should be set with the set_repo command beforehand.
+
+		install <hostname>[,hostname,...],<package>[ package ...]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		package    -- package name
+
 - prepare
 Installs missing packages from the UPDATE repositories. This is also run by
 the update procedure before applying the updates.
@@ -192,7 +198,6 @@ If "force" is set, packages are forced to be installed on package conflicts.
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 
-
 - downgrade
 Downgrades all related packages to the last released version (uses the UPDATE
 channel). This does not work for SLES 9 hosts, though.
@@ -200,7 +205,6 @@ channel). This does not work for SLES 9 hosts, though.
 		downgrade <hostname>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
-
 
 - update
 Applies the testing update to the target hosts. While updating the machines,
@@ -234,7 +238,6 @@ Please be aware that no interactive commands can be run with this procedure.
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 
-
 - serialize
 Runs a command on a specified host or on all enabled targets if 'all' is given
 as hostname. The command timeout is set to 5 minutes which means, if there's
@@ -246,7 +249,6 @@ Please be aware that no interactive commands can be run with this procedure.
 		serialize <hostname,command>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
-
 
 - put
 Uploads files to all enabled hosts. Multiple files can be selected with special

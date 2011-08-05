@@ -813,7 +813,7 @@ class CommandPromt(cmd.Cmd):
 
 	def do_downgrade(self, args):
 		"""
-		Downgrades all related packages to the last released version	(using
+		Downgrades all related packages to the last released version (using
 		the UPDATE channel). This does not work for SLES 9 hosts, though.
 
 		downgrade <hostname>
@@ -851,6 +851,51 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_downgrade, args)
 
 	def complete_downgrade(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+	def do_install(self, args):
+		"""
+		Installs packages from the current active repository.
+		The repository should be set with the set_repo command beforehand.
+
+		install <hostname>[,hostname,...],<package>[ package ...]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		package    -- package name
+		"""
+
+		if args:
+			targets = enabled_targets(self.targets)
+
+			args, _, packages = args.rpartition(',')
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
+
+			if targets:
+				for release in self.metadata.get_releases():
+					try:
+						installer = Installer[release]
+					except KeyError:
+						out.critical("no preparer available for %s" % release)
+						return
+
+					out.info("installing")
+					try:
+						installer(targets, packages.split()).run()
+					except Exception:
+						out.critical("failed to install packages")
+						return
+					except KeyboardInterrupt:
+						out.info("installation process canceled")
+						return
+					else:
+						out.info("done")
+
+		else:
+			self.parse_error(self.do_install, args)
+
+	def complete_install(self, text, line, begidx, endidx):
 		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_prepare(self, args):
