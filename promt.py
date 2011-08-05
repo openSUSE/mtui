@@ -1375,7 +1375,7 @@ def script_hook(targets, which, scriptdir, md5):
 
 			else:
 				FileUpload(targets, local_file, "%s/%s" % (remote_dir, remote_file)).run()
-				RunCommand(targets, "%s/%s" % (remote_dir, remote_file)).run()
+				RunCommand(targets, "%s/%s %s" % (remote_dir, remote_file, md5)).run()
 
 				try:
 					os.makedirs(output_dir)
