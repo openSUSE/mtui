@@ -39,10 +39,13 @@ exit 0
 fi
 
 TEMP=`mktemp /tmp/${0##*/}.XXXXXXXXXX`
+count=0
 
 rpm -qa | sort -t - -k1,5 | while read p
 do 
-    echo "INFO: working on $p"
+    if [ $[ count % 100 ] -eq 0 ]; then echo -n "."; fi
+    count=$[ $count + 1 ]
+    
     rpm -V $p > $TEMP
     if [ -s $TEMP ]; then
        echo "ERROR: verification of $p revealed:"

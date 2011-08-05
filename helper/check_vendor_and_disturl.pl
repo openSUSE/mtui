@@ -69,11 +69,11 @@ my %valid_disturls = (
 my @sle_checks = (
                    "test -d /var/adm/YaST/ProdDB && grep \"SUSE SLES Version 9\" /var/adm/YaST/ProdDB/prod_\*",
                    "test -x /usr/lib\*/zmd/query-pool && /usr/lib\*/zmd/query-pool products \@system | grep SUSE_SLE",
-                   "test -x /usr/bin/zypper && /usr/bin/zypper search -t product --installed-only | grep SUSE_SLE",
+                   "test -d /etc/products.d && grep \"<distribution>SUSE_SLE</distribution>\" /etc/products.d/\*",
 );
 
 my @opensuse_checks = (
-                       "test -x /usr/bin/zypper && /usr/bin/zypper search -t product --installed-only | grep openSUSE"
+                   "test -d /etc/products.d && grep \"<distribution>openSUSE</distribution>\" /etc/products.d/\*",
 );
 
 my $productclass = undef;

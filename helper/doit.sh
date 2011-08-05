@@ -1,9 +1,10 @@
 #!/bin/bash
 
-usage="${0##*/} ( before | after ) <result dir>"
+usage="${0##*/} ( before | after ) <result dir> <md5sum>"
 
 mode="$1"
 resultdir="$2"
+md5sum="$3"
 
 category1="check_all_updated.pl check_from_same_srcrpm.pl check_vendor_and_disturl.pl run_rpm_Va_nofiles.sh check_multiple-owners.sh"
 category2="compare_all_updated.sh compare_from_same_srcrpm.sh compare_vendor_and_disturl.pl compare_rpm_Va_nofiles.sh compare_multiple-owners.sh"
@@ -11,7 +12,7 @@ category2="compare_all_updated.sh compare_from_same_srcrpm.sh compare_vendor_and
 mydir="${0%/*}"
 PATH="$PATH:$mydir"
 
-if [ -z "$mode" -o -z "$resultdir" ]; then
+if [ -z "$mode" -o -z "$resultdir" -o -z "$md5sum" ]; then
     echo "$usage"
     exit 1
 fi
@@ -23,14 +24,14 @@ case "$mode" in
        for helper in $category1; do
           progname=${helper##*/}
           echo "launching $progname"
-          $helper 2> $resultdir/$progname.before.err > $resultdir/$progname.before.out
+          $helper $md5sum 2> $resultdir/$progname.before.err > $resultdir/$progname.before.out
        done
        ;;
     after)
        for helper in $category1; do
           progname=${helper##*/}
           echo "launching $progname"
-          $helper 2> $resultdir/$progname.after.err > $resultdir/$progname.after.out
+          $helper $md5sum 2> $resultdir/$progname.after.err > $resultdir/$progname.after.out
        done
        for helper in $category2; do
           progname=${helper##*/}

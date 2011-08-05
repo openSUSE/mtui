@@ -17,6 +17,7 @@ my $consideredpackages = 0;
 my $skippedpackages = 0;
 my $ibs = "https://api.suse.de/public/";
 my $obs = "https://api.opensuse.org/public/";
+my $defaultbuilddir = "http://hilbert.suse.de/abuildstat/patchinfo/";
 my %disturl_mapper;
 my %disturl_packages;
 my %buildsrcnames;
@@ -70,7 +71,14 @@ if (defined $help) {
 }
 
 # work around the requirement of having arguments (sth/ mtui.py currently can not provide)
-if (not defined $build) { $installed = 'true'; }
+if (not defined $build and not defined $installed) { 
+    my $firstarg = shift;
+    if (defined $firstarg) { 
+        $installed = 'true'; 
+        $filter = $defaultbuilddir . $firstarg;
+        print "INFO: assuming options \"--installed --filter $filter\"\n";
+    }
+}
 
 if ((not defined $installed and not defined $build) or
     (defined $installed and defined $build)) {
@@ -270,6 +278,8 @@ while (my ($disturl, $name) = each %disturl_mapper) {
 print "INFO: $mismatches mismatches among the $consideredpackages considered packages could be detected (" . 
       int($mismatches/$consideredpackages*100) . "%)\n";
 
-print "INFO: the DISTURL of $skippedpackages packages does not point to a known update project (never updated?)\n";      
+if (defined $installed) { 
+    print "INFO: the DISTURL of $skippedpackages installed packages does not point to a known update project (never updated?)\n";      
+}
 
 exit 0;
