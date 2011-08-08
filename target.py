@@ -95,14 +95,14 @@ class Target():
 		try:
 			repclean = self.connection.open(command, "r")
 		except IOError:
-			home = os.path.dirname(__file__)
+			workingdir = os.path.dirname(__file__)
 			try:
-				self.put("%s/helper/rep-clean/rep-clean.sh" % home, "/tmp/rep-clean.sh")
-				self.put("%s/helper/rep-clean/rep-clean.conf" % home, "/tmp/rep-clean.conf")
+				self.put("%s/helper/rep-clean/rep-clean.sh" % workingdir, "/tmp/rep-clean.sh")
+				self.put("%s/helper/rep-clean/rep-clean.conf" % workingdir, "/tmp/rep-clean.conf")
 			except OSError:
 				out.error("missing rep-clean.sh script")
-
-			command = "/tmp/rep-clean.sh -F /tmp/rep-clean.conf"
+			else:
+				command = "/tmp/rep-clean.sh -F /tmp/rep-clean.conf"
 		else:
 			repclean.close()
 
@@ -138,6 +138,7 @@ class Target():
 
 	def put(self, local, remote):
 		if self.state == "enabled":
+			out.debug('%s: sending "%s"' % (self.hostname, local))
 			try:
 				return self.connection.put(local, remote)
 			except EnvironmentError as error:
@@ -148,6 +149,7 @@ class Target():
 
 	def get(self, remote, local):
 		if self.state == "enabled":
+			out.debug('%s: receiving "%s"' % (self.hostname, remote))
 			try:
 				return self.connection.get(remote, local)
 			except EnvironmentError as error:
@@ -214,6 +216,7 @@ class Target():
 
 	def set_locked(self):
 		if self.state == "enabled":
+			out.debug('%s: setting lock' % self.hostname)
 			try:
 				lockfile = self.connection.open("/var/lock/mtui.lock", "w+")
 
@@ -232,6 +235,9 @@ class Target():
 
 		if lock.locked:
 			assert lock.own()
+
+			out.debug('%s: removing lock' % self.hostname)
+
 			try:
 				self.connection.remove("/var/lock/mtui.lock")
 			except IOError as error:
@@ -282,19 +288,16 @@ class Metadata:
 	def get_package_list(self):
 		return self.packages.keys()
 
-	def get_releases(self):
-		releases = []
+	def get_release(self):
 		systems = " ".join(self.systems.values())
 		if re.search("sle.11", systems):
-			releases.append("11")
+			return "11"
 		if re.search("sle.10", systems):
-			releases.append("10")
+			return "10"
 		if re.search("sle.9", systems):
-			releases.append("9")
+			return "9"
 		if re.search("sl11", systems):
-			releases.append("114")
-
-		return releases
+			return "114"
 
 class ThreadedMethod(threading.Thread):
 	def __init__(self, queue):

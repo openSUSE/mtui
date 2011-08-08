@@ -253,15 +253,16 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_list_update_commands, args)
 
 		else:
-			for release in self.metadata.get_releases():
-				try:
-					updater = Updater[release]
-				except KeyError:
-					out.critical("no updater available for %s" % release)
-					return
+			release = self.metadata.get_release()
 
-				print "\n".join(updater(self.targets, self.metadata.patches).commands)
-				del updater
+			try:
+				updater = Updater[release]
+			except KeyError:
+				out.critical("no updater available for %s" % release)
+				return
+
+			print "\n".join(updater(self.targets, self.metadata.patches).commands)
+			del updater
 
  	def do_list_downgrade_commands(self, args):
 		"""
@@ -277,15 +278,16 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_list_update_commands, args)
 
 		else:
-			for release in self.metadata.get_releases():
-				try:
-					downgrader = Downgrader[release]
-				except KeyError:
-					out.critical("no downgrader available for %s" % release)
-					return
+			release = self.metadata.get_release()
 
-				print "\n".join(downgrader(self.targets, self.metadata.get_package_list(), self.metadata.patches).commands)
-				del downgrader
+			try:
+				downgrader = Downgrader[release]
+			except KeyError:
+				out.critical("no downgrader available for %s" % release)
+				return
+
+			print "\n".join(downgrader(self.targets, self.metadata.get_package_list(), self.metadata.patches).commands)
+			del downgrader
 
 	def do_list_testsuite_commands(self, args):
 		"""
@@ -816,24 +818,24 @@ class CommandPromt(cmd.Cmd):
 				targets = selected_targets(targets, args.split(','))
 
 			if targets:
-				for release in self.metadata.get_releases():
-					try:
-						installer = Installer[release]
-					except KeyError:
-						out.critical("no installer available for %s" % release)
-						return
+				release = self.metadata.get_release()
+				try:
+					installer = Installer[release]
+				except KeyError:
+					out.critical("no installer available for %s" % release)
+					return
 
-					out.info("installing")
-					try:
-						installer(targets, packages.split()).run()
-					except Exception:
-						out.critical("failed to install packages")
-						return
-					except KeyboardInterrupt:
-						out.info("installation process canceled")
-						return
-					else:
-						out.info("done")
+				out.info("installing")
+				try:
+					installer(targets, packages.split()).run()
+				except Exception:
+					out.critical("failed to install packages")
+					return
+				except KeyboardInterrupt:
+					out.info("installation process canceled")
+					return
+				else:
+					out.info("done")
 
 		else:
 			self.parse_error(self.do_install, args)
@@ -858,24 +860,25 @@ class CommandPromt(cmd.Cmd):
 				targets = selected_targets(targets, args.split(','))
 
 			if targets:
-				for release in self.metadata.get_releases():
-					try:
-						downgrader = Downgrader[release]
-					except KeyError:
-						out.critical("no downgrader available for %s" % release)
-						return
+				release = self.metadata.get_release()
 
-					out.info("downgrading")
-					try:
-						downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
-					except Exception:
-						out.critical("failed to downgrade target systems")
-						return
-					except KeyboardInterrupt:
-						out.info("downgrade process canceled")
-						return
-					else:
-						out.info("done")
+				try:
+					downgrader = Downgrader[release]
+				except KeyError:
+					out.critical("no downgrader available for %s" % release)
+					return
+
+				out.info("downgrading")
+				try:
+					downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
+				except Exception:
+					out.critical("failed to downgrade target systems")
+					return
+				except KeyboardInterrupt:
+					out.info("downgrade process canceled")
+					return
+				else:
+					out.info("done")
 
 		else:
 			self.parse_error(self.do_downgrade, args)
@@ -896,36 +899,38 @@ class CommandPromt(cmd.Cmd):
 		"""
 
 		if args:
-			args, _, parameter = args.rpartition(',')
-
 			force = False
-			targets = enabled_targets(self.targets)
 
-			if 'force' in parameter:
-				force = True
+			if ',' in args:
+				args, _, parameter = args.rpartition(',')
+				if 'force' in parameter:
+					force = True
+
+			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
 
 			if targets:
-				for release in self.metadata.get_releases():
-					try:
-						preparer = Preparer[release]
-					except KeyError:
-						out.critical("no preparer available for %s" % release)
-						return
+				release = self.metadata.get_release()
 
-					out.info("preparing")
-					try:
-						preparer(targets, self.metadata.get_package_list(), force=force).run()
-					except Exception:
-						out.critical("failed to prepare target systems")
-						return
-					except KeyboardInterrupt:
-						out.info("preparation process canceled")
-						return
-					else:
-						out.info("done")
+				try:
+					preparer = Preparer[release]
+				except KeyError:
+					out.critical("no preparer available for %s" % release)
+					return
+
+				out.info("preparing")
+				try:
+					preparer(targets, self.metadata.get_package_list(), force=force).run()
+				except Exception:
+					out.critical("failed to prepare target systems")
+					return
+				except KeyboardInterrupt:
+					out.info("preparation process canceled")
+					return
+				else:
+					out.info("done")
 
 		else:
 			self.parse_error(self.do_prepare, args)
@@ -982,7 +987,7 @@ class CommandPromt(cmd.Cmd):
 
 			out.info("updating")
 
-			release = self.metadata.get_releases()[0]
+			release = self.metadata.get_release()
 			try:
 				updater = Updater[release]
 			except KeyError:

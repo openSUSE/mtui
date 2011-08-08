@@ -97,10 +97,17 @@ def xml_to_template(template, xmldata):
 					try:
 						name = child.getAttribute("name")
 						version = child.getAttribute("version")
-						if version != "0":
-							t.insert(i, "\t%s-%s\n" % (name, version))
+
+						if name in t[i]:
+							if version != "0":
+								t[i] = "\t%s-%s\n" % (name, version)
+							else:
+								t[i] = "\tpackage %s is not installed\n" % name
 						else:
-							t.insert(i, "\tpackage %s is not installed\n" % name)
+							if version != "0":
+								t.insert(i, "\t%s-%s\n" % (name, version))
+							else:
+								t.insert(i, "\tpackage %s is not installed\n" % name)
 						i += 1
 					except Exception:
 						pass
