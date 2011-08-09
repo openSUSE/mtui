@@ -4,6 +4,7 @@
 import os
 import time
 import tempfile
+import readline
 
 def timestamp():
 	return str(time.time()).split('.')[0]
@@ -45,11 +46,15 @@ def yellow(text):
 	return "\033[1;33m%s\033[1;m" % text
 
 def input(text, options):
+	result = False
+
 	try:
 		if raw_input(text).lower() in options:
-			return True
-		else:
-			return False
+			result = True
+
 	except KeyboardInterrupt:
-		return False
+		pass
+	finally:
+		readline.remove_history_item(readline.get_current_history_length() - 1)
+		return result
 
