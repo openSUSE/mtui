@@ -55,6 +55,9 @@ class CommandPromt(cmd.Cmd):
 	def emptyline(self):
 		return
 
+	def do_EOF(self, args):
+		self.do_quit(args)
+
 	def do_add_host(self, args):
 		"""
 		Adds another machine to the target host list. The system type needs
