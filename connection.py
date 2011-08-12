@@ -96,6 +96,10 @@ class Connection():
 		except AttributeError:
 			self.reconnect()
 			return self.run(command, lock)
+		except paramiko.ChannelException as error:
+			if error.code == 104:
+				self.reconnect()
+				return self.run(command, lock)
 
 		session.settimeout(0)
 		session.exec_command(command)

@@ -29,45 +29,49 @@ class Update():
 	def run(self):
 		skipped = False
 
-		for target in self.targets:
-			lock = self.targets[target].locked()
-			if lock.locked and not lock.own():
-				skipped = True
-				out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
-			else:
-				self.targets[target].set_locked()
-				thread = ThreadedMethod(queue)
-				thread.setDaemon(True)
-				thread.start()
+		try:
+			for target in self.targets:
+				lock = self.targets[target].locked()
+				if lock.locked and not lock.own():
+					skipped = True
+					out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+				else:
+					self.targets[target].set_locked()
+					thread = ThreadedMethod(queue)
+					thread.setDaemon(True)
+					thread.start()
 		
-		if skipped:
-			for target in self.targets:
-				try:
-					self.targets[target].remove_lock()
-				except AssertionError:
-					pass
-			raise UpdateError("Hosts locked")
-
-		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["TESTING"]])
-
-		while queue.unfinished_tasks:
-			spinner()
-
-		queue.join()
-
-		for command in self.commands: 
-			RunCommand(self.targets, command).run()
+			if skipped:
+				for target in self.targets:
+					try:
+						self.targets[target].remove_lock()
+					except AssertionError:
+						pass
+				raise UpdateError("Hosts locked")
 
 			for target in self.targets:
-				self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+				queue.put([self.targets[target].set_repo, ["TESTING"]])
 
-		for target in self.targets:
-			if not lock.locked:	# wasn't locked earlier by set_host_lock
-				try:
-					self.targets[target].remove_lock()
-				except AssertionError:
-					pass
+			while queue.unfinished_tasks:
+				spinner()
+
+			queue.join()
+
+			for command in self.commands: 
+				RunCommand(self.targets, command).run()
+
+				for target in self.targets:
+					self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+
+		except:
+			raise
+		finally:
+			for target in self.targets:
+				if not lock.locked:	# wasn't locked earlier by set_host_lock
+					try:
+						self.targets[target].remove_lock()
+					except AssertionError:
+						pass
 
 	def _check(self, target, stdin, stdout, stderr, exitcode):
 		if "zypper" in stdin and exitcode == 104:
@@ -192,58 +196,62 @@ class Prepare():
 	def run(self):
 		skipped = False
 
-		for target in self.targets:
-			lock = self.targets[target].locked()
-			if lock.locked and not lock.own():
-				skipped = True
-				out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
-			else:
-				self.targets[target].set_locked()
-				thread = ThreadedMethod(queue)
-				thread.setDaemon(True)
-				thread.start()
-
-		if skipped:
+		try:
 			for target in self.targets:
-				try:
-					self.targets[target].remove_lock()
-				except AssertionError:
-					pass
-			raise UpdateError("Hosts locked")
+				lock = self.targets[target].locked()
+				if lock.locked and not lock.own():
+					skipped = True
+					out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+				else:
+					self.targets[target].set_locked()
+					thread = ThreadedMethod(queue)
+					thread.setDaemon(True)
+					thread.start()
 
-		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["UPDATE"]])
-
-		while queue.unfinished_tasks:
-			spinner()
-
-		queue.join()
-
-		for target in self.targets:
-			if self.targets[target].lasterr():
-				out.critical("failed to prepare host %s. stopping.\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
-				return
-
-		for command in self.commands: 
-			RunCommand(self.targets, command).run()
+			if skipped:
+				for target in self.targets:
+					try:
+						self.targets[target].remove_lock()
+					except AssertionError:
+						pass
+				raise UpdateError("Hosts locked")
 
 			for target in self.targets:
-				self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+				queue.put([self.targets[target].set_repo, ["UPDATE"]])
 
-		for target in self.targets:
-			queue.put([self.targets[target].set_repo, ["TESTING"]])
+			while queue.unfinished_tasks:
+				spinner()
 
-		while queue.unfinished_tasks:
-			spinner()
-		
-		queue.join()
+			queue.join()
 
-		for target in self.targets:
-			if not lock.locked:	# wasn't locked earlier by set_host_lock
-				try:
-					self.targets[target].remove_lock()
-				except AssertionError:
-					pass
+			for target in self.targets:
+				if self.targets[target].lasterr():
+					out.critical("failed to prepare host %s. stopping.\n# %s\n%s" % (target, self.targets[target].lastin(), self.targets[target].lasterr()))
+					return
+
+			for command in self.commands: 
+				RunCommand(self.targets, command).run()
+
+				for target in self.targets:
+					self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
+
+			for target in self.targets:
+				queue.put([self.targets[target].set_repo, ["TESTING"]])
+
+			while queue.unfinished_tasks:
+				spinner()
+			
+			queue.join()
+
+		except:
+			raise
+		finally:
+			for target in self.targets:
+				if not lock.locked:	# wasn't locked earlier by set_host_lock
+					try:
+						self.targets[target].remove_lock()
+					except AssertionError:
+						pass
 
 	def _check(self, target, stdin, stdout, stderr, exitcode):
 		if "A ZYpp transaction is already in progress." in stderr:

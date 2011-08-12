@@ -56,6 +56,7 @@ class CommandPromt(cmd.Cmd):
 		return
 
 	def do_EOF(self, args):
+		print
 		self.do_quit(args)
 
 	def do_add_host(self, args):
