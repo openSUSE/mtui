@@ -8,7 +8,7 @@
 # - SLE10 SP1 - SP4
 # - SLE11 GA - SP1
 # - SLES4VMware
-# - openSUSE 11.1 - 11.3
+# - openSUSE 11.1 - 11.4
 #
 
 use strict;
@@ -34,6 +34,8 @@ my %valid_disturls = (
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:Products:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:UU-DUD/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test/standard/",
+         "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:ATK:[0-9.]+/standard/",
+         "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:ATK:[0-9.]+:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/SLE_[0-9]+_SP[0-9]+_Update/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:Update:Test/standard/",
@@ -45,6 +47,8 @@ my %valid_disturls = (
          # obs://build.suse.de/SUSE:SLE-11-SP1:GA:Products:Test/standard/
          # obs://build.suse.de/SUSE:SLE-11-SP1:GA:UU-DUD/standard/
          # obs://build.suse.de/SUSE:SLE-11-SP1:Update:Test/standard/
+         # obs://build.suse.de/SUSE:SLE-11-SP1:Update:ATK:1.2/standard
+         # obs://build.suse.de/SUSE:SLE-11-SP1:Update:ATK:1.2:Update:Test/standard
          # obs://build.suse.de/SUSE:SLE-10-SP4:GA/standard/
          # obs://build.suse.de/SUSE:SLE-10-SP3:GA/SLE_10_SP2_Update/
          # obs://build.suse.de/SUSE:SLE-10-SP3:Update:Test/standard/
