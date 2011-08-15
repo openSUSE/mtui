@@ -93,13 +93,9 @@ class Connection():
 		try:
 			session = transport.open_session()
 			session.setblocking(0)
-		except AttributeError:
+		except (AttributeError, paramiko.ChannelException):
 			self.reconnect()
 			return self.run(command, lock)
-		except paramiko.ChannelException as error:
-			if error.code == 104:
-				self.reconnect()
-				return self.run(command, lock)
 
 		session.settimeout(0)
 		session.exec_command(command)
@@ -164,7 +160,7 @@ class Connection():
 			path += subdir + '/'
 			try:
 				sftp.mkdir(path)
-			except AttributeError:
+			except (AttributeError, paramiko.ChannelException):
 				self.reconnect()
 				return self.put(local, remote)
 			except Exception:
@@ -186,7 +182,7 @@ class Connection():
 		sftp = self.client.open_sftp()
 		try:
 			sftp.get(remote, local)
-		except AttributeError:
+		except (AttributeError, paramiko.ChannelException):
 			self.reconnect()
 			return self.get(remote, local)
 
@@ -196,7 +192,7 @@ class Connection():
 		sftp = self.client.open_sftp()
 		try:
 			return sftp.open(filename, mode, bufsize)
-		except AttributeError:
+		except (AttributeError, paramiko.ChannelException):
 			self.reconnect()
 			return self.open(filename, mode, bufsize)
 
@@ -204,7 +200,7 @@ class Connection():
 		sftp = self.client.open_sftp()
 		try:
 			return sftp.remove(path)
-		except AttributeError:
+		except (AttributeError, paramiko.ChannelException):
 			self.reconnect()
 			return self.remove(path)
 
