@@ -91,7 +91,10 @@ class Template:
 				else:
 					hostname = match.group(2)
 
-				self.metadata.systems[hostname] = match.group(1)
+				if hostname:
+					self.metadata.systems[hostname] = match.group(1)
+				else:
+					out.error("no hostname found for system %s" % match.group(1))
 
 			match = re.search("Bug #(\d+) \(\"(.*)\"\):", line) # deprecated
 			if match:
