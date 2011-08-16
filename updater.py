@@ -309,7 +309,7 @@ class ZypperDowngrade(Prepare):
 		commands = []
 
 		for package in packages:
-			commands.append("zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact %s | grep -v \"(System Packages)\" | grep ^[iv] | cut -d \| -f 4 | sort -rug | head -n 1 | sed -e 's, ,,g')" % (package, package))
+			commands.append("rpm -q %s &>/dev/null && zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact %s | grep -v \"(System Packages)\" | grep ^[iv] | cut -d \| -f 4 | sort -rug | head -n 1 | sed -e 's, ,,g')" % (package, package, package))
 
 		self.commands = commands
 
@@ -328,7 +328,7 @@ class OldZypperDowngrade(Prepare):
 		commands = []
 
 		for package in packages:
-			commands.append('line=$(zypper se --match-exact %s | grep -v "|[[:space:]]*|" | grep package | sort -rug -t \| -k 5 | head -n 1); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi' % package)
+			commands.append('rpm -q %s &>/dev/null && (line=$(zypper se --match-exact %s | grep -v "|[[:space:]]*|" | grep package | sort -rug -t \| -k 5 | head -n 1); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)' % (package, package))
 
 		commands.append("for p in $(zypper patches | grep %s-0 | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper rm -y -t patch $p; done" % patch)
 
