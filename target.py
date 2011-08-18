@@ -118,14 +118,14 @@ class Target():
 	def run(self, command, lock=None):
 		if self.state == "enabled":
 			out.debug('%s: running "%s"' % (self.hostname, command))
+			time_before = timestamp()
 			try:
-				time_before = timestamp()
 				exitcode = self.connection.run(command, lock)
-				time_after = timestamp()
 			except CommandTimeout:
 				out.critical('%s: command "%s" timed out' % (self.hostname, command))
 				exitcode = -1
 
+			time_after = timestamp()
 			runtime = int(time_after) - int(time_before)
 			self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode, runtime])
 

@@ -7,7 +7,7 @@ import tempfile
 import readline
 
 def timestamp():
-	return str(time.time()).split('.')[0]
+	return str(int(time.time()))
 
 def edit_text(text):
 	editor = os.environ.get("EDITOR", "vi")
