@@ -20,14 +20,14 @@ def main():
 	md5 = None
 	team = None
 	directory = os.getenv("TEMPLATEDIR", ".")
-	interactive = False
+	interactive = True
 	dryrun = False
 	timeout = None
 
 	targets = {}
 
 	try:
-		opts, args = getopt.getopt(sys.argv[1:], "ihaedt:m:vw:", ["interactive", "help", "asia", "emea", "dryrun", "templates=", "md5=", "verbose", "timeout"])
+		opts, args = getopt.getopt(sys.argv[1:], "inhaedt:m:vw:", ["interactive", "non-interactive", "help", "asia", "emea", "dryrun", "templates=", "md5=", "verbose", "timeout"])
 	except getopt.GetoptError as error:
 		out.error("failed to parse parameter: %s" % str(error))
 		usage()
@@ -47,6 +47,8 @@ def main():
 			directory = argument
 		elif parameter in ("-i", "--interactive"):
 			interactive = True
+		elif parameter in ("-n", "--non-interactive"):
+			interactive = False
 		elif parameter in ("-v", "--verbose"):
 			out.setLevel(level=logging.DEBUG)
 		elif parameter in ("-w", "--timeout"):
@@ -117,10 +119,11 @@ def usage():
 	print
 	print "parameters:"
 	print "\t-{short},--{long:20}{description}".format(short="a", long="asia", description="use asia template")
-	print "\t-{short},--{long:20}{description}".format(short="e", long="emea", description="use emea template")
+	print "\t-{short},--{long:20}{description}".format(short="e", long="emea", description="use emea template (default)")
 	print "\t-{short},--{long:20}{description}".format(short="t", long="template=", description="template directory")
 	print "\t-{short},--{long:20}{description}".format(short="m", long="md5=", description="md5 update identifier")
-	print "\t-{short},--{long:20}{description}".format(short="i", long="interactive", description="interactive update shell")
+	print "\t-{short},--{long:20}{description}".format(short="i", long="interactive", description="interactive update shell (default)")
+	print "\t-{short},--{long:20}{description}".format(short="n", long="non-interactive", description="non-interactive update shell")
 	print "\t-{short},--{long:20}{description}".format(short="d", long="dryrun", description="start in dryrun mode")
 	print "\t-{short},--{long:20}{description}".format(short="v", long="verbose", description="enable debugging output")
 	print "\t-{short},--{long:20}{description}".format(short="w", long="timeout", description="execution timeout in seconds")
