@@ -124,6 +124,9 @@ class Target():
 			except CommandTimeout:
 				out.critical('%s: command "%s" timed out' % (self.hostname, command))
 				exitcode = -1
+			except AssertionError:
+				out.debug("zombie command terminated")
+				return
 
 			time_after = timestamp()
 			runtime = int(time_after) - int(time_before)
@@ -318,7 +321,10 @@ class ThreadedMethod(threading.Thread):
 			except:
 				raise
 			finally:
-				self.queue.task_done()
+				try:
+					self.queue.task_done()
+				except ValueError:
+					pass	# already removed by ctrl+c
 
 
 class FileUpload():
@@ -394,8 +400,17 @@ class RunCommand():
 			queue.join()
 
 		except KeyboardInterrupt:
-			print "stopping command queue, please wait"
+			print "stopping command queue, please wait."
+			try:
+				while queue.unfinished_tasks:
+					spinner(lock)
+			except KeyboardInterrupt:
+				for target in self.targets:
+					self.targets[target].connection.close_session()
+					thread.queue.task_done()
+
 			queue.join()
+			print
 			raise
 
 class Locked():

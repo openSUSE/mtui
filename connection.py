@@ -38,6 +38,7 @@ class Connection():
 		self.hostname = hostname
 		self.timeout = timeout
 
+		self.session = None
 		self.client = paramiko.SSHClient()
 		self.client.load_system_host_keys()
 		self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -69,10 +70,28 @@ class Connection():
 			return
 
 		out.debug("lost connection, reconnecting")
-		select.select([], [], [], 20)
+		select.select([], [], [], 10)
 		self.connect()
 
 		assert self.is_active()
+
+	def new_session(self):
+		try:
+			transport = self.client.get_transport()
+			transport.use_compression()
+			session = transport.open_session()
+			session.setblocking(0)
+			session.settimeout(0)
+			self.session = session
+		except Exception:
+			self.session = None
+
+		return session
+
+	def close_session(self):
+		self.session.shutdown(2)
+		self.session.close()
+		self.session = None
 
 	def run(self, command, lock=None):
 		"""run command over SSH channel
@@ -88,22 +107,20 @@ class Connection():
 		self.stdout = ''
 		self.stderr = ''
 
-		transport = self.client.get_transport()
+		session = self.new_session()
 
 		try:
-			session = transport.open_session()
-			session.setblocking(0)
-		except (AttributeError, paramiko.ChannelException):
+			session.exec_command(command)
+		except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
 			self.reconnect()
 			return self.run(command, lock)
-
-		session.settimeout(0)
-		session.exec_command(command)
 
 		while True:
 			buffer = ''
 
 			if select.select([session], [], [], self.timeout) == ([],[],[]):
+				assert self.session
+
 				if lock is not None:
 					lock.acquire()
 
@@ -139,7 +156,7 @@ class Connection():
 
 		exitcode = session.recv_exit_status()
 
-		session.close()
+		self.close_session()
 
 		return exitcode
 
@@ -204,21 +221,6 @@ class Connection():
 			self.reconnect()
 			return self.remove(path)
 
-	def is_connected(self):
-		"""check if connection to host is established
-
-		Keyword arguments:
-		None
-
-		"""
-		if not self.client:
-			return False
-
-		if self.client.get_transport():
-			return True
-		else:
-			return False
-
 	def is_active(self):
 		"""check if connection to host is still active
 
@@ -226,18 +228,13 @@ class Connection():
 		None
 
 		"""
-		if not self.is_connected():
-			return False
-
 		try:
-			transport = self.client.get_transport()
-			session = transport.open_session()
-			session.setblocking(0)
-			session.close()
+			self.new_session()
+			self.close_session()
 		except Exception:
 			return False
 
-		return transport.is_active()
+		return True
 
 	def close(self):
 		"""closes SSH channel to host and disconnects
