@@ -847,6 +847,50 @@ class CommandPromt(cmd.Cmd):
 	def complete_install(self, text, line, begidx, endidx):
 		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+	def do_uninstall(self, args):
+		"""
+		Removes packages from the system.
+
+		uninstall <hostname>[,hostname,...],<package>[ package ...]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		package    -- package name
+		"""
+
+		if args:
+			args, _, packages = args.rpartition(',')
+
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
+
+			if targets:
+				release = self.metadata.get_release()
+				try:
+					uninstaller = Uninstaller[release]
+				except KeyError:
+					out.critical("no uninstaller available for %s" % release)
+					return
+
+				out.info("removing")
+				try:
+					uninstaller(targets, packages.split()).run()
+				except Exception:
+					out.critical("failed to remove packages")
+					return
+				except KeyboardInterrupt:
+					out.info("uninstallation process canceled")
+					return
+				else:
+					out.info("done")
+
+		else:
+			self.parse_error(self.do_uninstall, args)
+
+	def complete_uninstall(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
 	def do_downgrade(self, args):
 		"""
 		Downgrades all related packages to the last released version (using

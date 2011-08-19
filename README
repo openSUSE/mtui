@@ -189,6 +189,14 @@ The repository should be set with the set_repo command beforehand.
 		hostname   -- hostname from the target list or "all"
 		package    -- package name
 
+- uninstall
+Removes packages from the system.
+
+		uninstall <hostname>[,hostname,...],<package>[ package ...]
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		package    -- package name
+
 - prepare
 Installs missing packages from the UPDATE repositories. This is also run by
 the update procedure before applying the updates.

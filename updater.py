@@ -422,3 +422,19 @@ Installer = {
     '114': ZypperInstall,
     '10': ZypperInstall
 }
+
+class ZypperUninstall(Install):
+	def __init__(self, targets, packages):
+		Install.__init__(self, targets, packages)
+
+		commands = []
+
+		commands.append("zypper -n rm %s" % " ".join(packages))
+
+		self.commands = commands
+
+Uninstaller = {
+    '11': ZypperUninstall,
+    '114': ZypperUninstall,
+    '10': ZypperUninstall
+}
