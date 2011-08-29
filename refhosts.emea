@@ -48,10 +48,10 @@ sled10sp3-x86_64="zypp.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
 sles10sp3_XEN0-i386="xena32-10.suse.de"
-sles10sp3_XENU-i386="xenu32-10.suse.de"
+sles10sp3_XENU-i386="xenu32-10o.suse.de"
 # Needs rebooting xena64-10 into existing SLES10 SP3 installation
 sles10sp3_XEN0-x86_64="xena64-10.suse.de"
-sles10sp3_XENU-x86_64="xenu64-10.suse.de"
+sles10sp3_XENU-x86_64="xenu64-10o.suse.de"
 
 sles10sp3_smt-i386="???"
 sles10sp3_smt-x86_64="qam-smt1.suse.de"
