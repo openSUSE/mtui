@@ -85,9 +85,6 @@ class Update():
 		if "A ZYpp transaction is already in progress." in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError("update stack locked", target.hostname)
-		if "Error:" in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError("RPM Error", target.hostname)
 		if "(c): c" in stdout:
 			out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
 			raise UpdateError("Dependency Error", target.hostname)
@@ -114,6 +111,11 @@ class ZypperUpdate(Update):
 		commands.append("for p in $(zypper patches | grep \" %s \" | awk 'BEGIN { FS=\"|\"; } { print $2; }'); do zypper install -l -y -t patch $p=%s; done" % (patch, patch))
 			
 		self.commands = commands
+
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("RPM Error", target.hostname)
 
 class openSuseUpdate(Update):
 	def __init__(self, targets, patches):
