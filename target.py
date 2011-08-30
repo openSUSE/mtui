@@ -254,10 +254,10 @@ class Target():
 class Package:
 	def __init__(self, name):
 		self.name = name
-		self.before = "0"
-		self.after = "0"
-		self.required = "0"
-		self.current = "0"
+		self.before = None
+		self.after = None
+		self.required = None
+		self.current = None
 
 	def set_versions(self, before=None, after=None, required=None, current=None, versions=[]):
 		if before is not None:

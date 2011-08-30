@@ -97,6 +97,8 @@ def xml_to_template(template, xmldata):
 					try:
 						name = child.getAttribute("name")
 						version = child.getAttribute("version")
+						if "None" in version:
+							break
 
 						if name in t[i]:
 							if version != "0":
