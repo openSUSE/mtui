@@ -191,6 +191,84 @@ class CommandPromt(cmd.Cmd):
 				timeout = targets[target].get_timeout()
 				print '{0:20} {1:20}: {2}s'.format(target, system, timeout)
 
+	def do_source_extract(self, args):
+		"""
+		Extracts source RPM to /tmp. If no filename is given,
+		the whole package content is extracted.
+		
+		source_extract [filename]
+		Keyword arguments:
+		filename -- filename to extract
+		"""
+
+		destination = "/tmp/%s" % self.metadata.md5
+		pattern = ""
+
+		if args:
+			pattern = args
+
+		try:
+			os.mkdir(destination)
+		except OSError:
+			pass
+
+		exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/' % (destination, self.metadata.md5))
+		if exitcode:
+			print "failed to fetch src rpm"
+			return
+		exitcode = os.system('cd %s; rpm2cpio *.src.rpm | cpio -i --unconditional --preserve-modification-time --make-directories %s' % (destination, pattern))
+		if exitcode:
+			print "failed to extract src rpm"
+			return
+
+		print "src rpm was extracted to %s" % destination
+
+	def do_source_verify(self, args):
+		"""
+		Verifies SPECFILE content. Makes sure that every Patch entry
+		is applied.
+		
+		source_verify
+		Keyword arguments:
+		None
+		"""
+
+		if args:
+			self.parse_error(self.do_source_verify, args)
+
+		patches = {}
+		destination = "/tmp/%s" % self.metadata.md5
+
+		try:
+			specfile = glob.glob(destination + "/*.spec")[0]
+		except IndexError:
+			self.do_source_extract("*.spec")
+			try:
+				specfile = glob.glob(destination + "/*.spec")[0]
+			except IndexError:
+				out.error("failed to load specfile")
+				return
+
+		with open(specfile, 'r') as spec:
+			content = spec.readlines()
+
+		for line in content:
+			match = re.search('^(Patch\d*):\W+(.*)', line)
+			if match:
+				patches[match.group(1)] = match.group(2)
+
+		if not patches:
+			out.warning("no patch entries found in specfile")
+			return
+
+		for patch in patches:
+			if re.findall('\'%%%s\W+' % patch.lower(), str(content)):
+				result = green("applied")
+			else:
+				result = red("not applied")
+
+			print '{0:35}: {1}'.format(patches[patch], result)
+
  	def do_list_packages(self, args):
 		"""
 		Lists current installed package versions from the targets if a
@@ -1224,15 +1302,19 @@ class CommandPromt(cmd.Cmd):
 
 	def do_edit(self, args):
 		"""
-		Edit a local file or the testing template. The evironment variable
-		EDITOR is processed to find the prefered editor. If EDITOR is empty,
-		"vi" is set as default.
+		Edit a local file, the testing template, the specfile or a patch.
+		The evironment variable EDITOR is processed to find the prefered
+		editor. If EDITOR is empty, "vi" is set as default.
 
 		edit file,<filename>
 		edit template
+		edit specfile
+		edit patch,<patchname>
 		Keyword arguments:
 		filename -- edit filename
 		template -- edit template
+		specfile -- edit specfile
+		patch    -- edit patch
 		"""
 
 		command, _, filename = args.partition(',')
@@ -1240,20 +1322,32 @@ class CommandPromt(cmd.Cmd):
 		editor = os.environ.get("EDITOR", "vi")
 
 		if command == "file":
-			try:
-				os.system("%s %s" % (editor, filename))
-			except Exception:
-				self.parse_error(self.do_edit, args)
+			path = filename
 		elif command == "template":
-			os.system("%s %s" % (editor, self.metadata.path))
+			path = self.metadata.path
+		elif command == "specfile":
+			path = "/tmp/%s/*.spec" % self.metadata.md5
+			if not os.path.isfile(path):
+				self.do_source_extract(None)
+		elif command == "patch":
+			path = "/tmp/%s/%s" % (self.metadata.md5, filename)
+			if not os.path.isfile(path):
+				self.do_source_extract(None)
 		else:
 			self.parse_error(self.do_edit, args)
+			return
+
+		os.system("%s %s" % (editor, path))
 
 	def complete_edit(self, text, line, begidx, endidx):
 		if "file," in line:
 			return self.complete_filelist(text.replace("file,", "", 1), line, begidx, endidx)
+		if "patch," in line:
+			specfile = glob.glob("/tmp/%s/*.spec" % self.metadata.md5)[0]
+			with open(specfile, 'r') as spec:
+				return [i for i in re.findall("Patch\d*:\W+(.*)", spec.read()) if i.startswith(text)]
 		else:
-			return [i for i in ["file", "template"] if i.startswith(text)]
+			return [i for i in ["file,", "template", "specfile", "patch,"] if i.startswith(text)]
 
 	def do_export(self, args):
 		"""

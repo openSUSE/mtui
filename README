@@ -425,6 +425,21 @@ has finished an the template is in the final state.
 		Keyword arguments:
 		none
 
+- source_extract
+Extracts source RPM to /tmp. If no filename is given, the whole package
+content is extracted.
+		
+		source_extract [filename]
+		Keyword arguments:
+		filename -- filename to extract
+
+- source_verify
+Verifies SPECFILE content. Makes sure that every Patch entry is applied.
+		
+		source_verify
+		Keyword arguments:
+		None
+
 - terms
 Spawn terminal screens to all connected hosts. This command does actually
 just run the available helper scripts. If no termname is given, all
@@ -437,15 +452,17 @@ Currently, helper scripts are available for KDE[34], GNOME and xterm.
 		termname -- terminal emulator to spawn consoles on 
 
 - edit
-Edit a local file or the testing template. The evironment variable EDITOR
-is processed to find the prefered editor. If EDITOR is empty, "vi" is set
-as default.
+Edit a local file, the testing template, the specfile or a patch.
+The evironment variable EDITOR is processed to find the prefered
+editor. If EDITOR is empty, "vi" is set as default.
 
 		edit file,<filename>
 		edit template
 		Keyword arguments:
 		filename -- edit filename
 		template -- edit template
+		specfile -- edit specfile
+		patch    -- edit patch
 
 
 User Scripts
