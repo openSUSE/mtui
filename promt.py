@@ -1096,7 +1096,7 @@ class CommandPromt(cmd.Cmd):
 
 					packages[package].set_versions(before=before, required=required)
 
-					if before == "0":
+					if before is None or before == "0":
 						missing = True
 						not_installed.append(package)
 					else:
@@ -1142,7 +1142,7 @@ class CommandPromt(cmd.Cmd):
 
 					packages[package].set_versions(after=after)
 
-					if after != "0":
+					if after is not None and after != "0":
 						if vercmp(before, after) == 0:
 							missing = True
 							out.warning("%s: package was not updated: %s (%s)" % (target, package, after))
@@ -1327,7 +1327,7 @@ class CommandPromt(cmd.Cmd):
 			path = self.metadata.path
 		elif command == "specfile":
 			path = "/tmp/%s/*.spec" % self.metadata.md5
-			if not os.path.isfile(path):
+			if not glob.glob(path):
 				self.do_source_extract(None)
 		elif command == "patch":
 			path = "/tmp/%s/%s" % (self.metadata.md5, filename)
