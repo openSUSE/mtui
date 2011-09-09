@@ -86,7 +86,7 @@ class Connection():
 		except Exception:
 			self.session = None
 
-		return session
+		return self.session
 
 	def close_session(self):
 		self.session.shutdown(2)

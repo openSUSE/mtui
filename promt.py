@@ -214,14 +214,14 @@ class CommandPromt(cmd.Cmd):
 
 		exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/' % (destination, self.metadata.md5))
 		if exitcode:
-			print "failed to fetch src rpm"
+			out.error("failed to fetch src rpm")
 			return
 		exitcode = os.system('cd %s; rpm2cpio *.src.rpm | cpio -i --unconditional --preserve-modification-time --make-directories %s' % (destination, pattern))
 		if exitcode:
-			print "failed to extract src rpm"
+			out.error("failed to extract src rpm")
 			return
 
-		print "src rpm was extracted to %s" % destination
+		out.info("src rpm was extracted to %s" % destination)
 
 	def do_source_verify(self, args):
 		"""
