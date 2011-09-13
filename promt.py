@@ -253,6 +253,10 @@ class CommandPromt(cmd.Cmd):
 			content = spec.readlines()
 
 		for line in content:
+			match = re.search('^Name:\W+(.*)', line)
+			if match:
+				name = match.group(1)
+
 			match = re.search('^(Patch\d*):\W+(.*)', line)
 			if match:
 				patches[match.group(1)] = match.group(2)
@@ -267,7 +271,7 @@ class CommandPromt(cmd.Cmd):
 			else:
 				result = red("not applied")
 
-			print '{0:35}: {1}'.format(patches[patch], result)
+			print '{0:45}: {1}'.format(patches[patch].replace("name}", name), result)
 
  	def do_list_packages(self, args):
 		"""
@@ -1345,7 +1349,9 @@ class CommandPromt(cmd.Cmd):
 		if "patch," in line:
 			specfile = glob.glob("/tmp/%s/*.spec" % self.metadata.md5)[0]
 			with open(specfile, 'r') as spec:
-				return [i for i in re.findall("Patch\d*:\W+(.*)", spec.read()) if i.startswith(text)]
+				name = re.findall('Name:\W+(.*)', spec.read())[0]
+				spec.seek(0)
+				return [i for i in [s.replace("name}", name) for s in re.findall("Patch\d*:\W+(.*)", spec.read())] if i.startswith(text)]
 		else:
 			return [i for i in ["file,", "template", "specfile", "patch,"] if i.startswith(text)]
 

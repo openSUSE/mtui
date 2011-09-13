@@ -259,9 +259,6 @@ class Prepare():
 		if "A ZYpp transaction is already in progress." in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError(target.hostname, "update stack locked")
-		if "Error:" in stderr:
-			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
-			raise UpdateError(target.hostname, "RPM Error")
 		if "(c): c" in stdout:
 			out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
 			raise UpdateError("Dependency Error", target.hostname)
@@ -281,11 +278,16 @@ class ZypperPrepare(Prepare):
 
 		for package in packages:
 			if force:
-				commands.append("zypper -n in --force-resolution --no-recommends -y -l %s" % package)
+				commands.append("rpm -q %s &>/dev/null && zypper -n in --force-resolution --no-recommends -y -l %s" % (package, package))
 			else:
-				commands.append("zypper -n in --no-recommends -y -l %s" % package)
+				commands.append("rpm -q %s &>/dev/null && zypper -n in --no-recommends -y -l %s" % (package, package))
 
 		self.commands = commands
+
+	def check(self, target, stdin, stdout, stderr, exitcode):
+		if "Error:" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError(target.hostname, "RPM Error")
 
 class OldZypperPrepare(Prepare):
 	def __init__(self, targets, packages, force=False):
@@ -294,7 +296,7 @@ class OldZypperPrepare(Prepare):
 		commands = []
 
 		for package in packages:
-			commands.append("zypper -n in -y -l %s" % package)
+			commands.append("rpm -q %s &>/dev/null && zypper -n in -y -l %s" % (package, package))
 
 		self.commands = commands
 
@@ -311,7 +313,7 @@ class ZypperDowngrade(Prepare):
 		commands = []
 
 		for package in packages:
-			commands.append("rpm -q %s &>/dev/null && zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact -t package %s | grep -v \"(System Packages)\" | grep ^[iv] | cut -d \| -f 4 | sort -rug | head -n 1 | sed -e 's, ,,g')" % (package, package, package))
+			commands.append("rpm -q %s &>/dev/null && zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact -t package %s | grep -v \"(System Packages)\" | grep ^[iv] | cut -d \| -f 4 | sort -rug | sed -n -e '1s, ,,gp')" % (package, package, package))
 
 		self.commands = commands
 
