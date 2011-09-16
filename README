@@ -168,8 +168,8 @@ The timeout value is set in seconds. To disable the timeout set it to "0".
 
 		set_timeout <hostname,timeout>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
-		timeout    -- timeout value in seconds
+		hostname -- hostname from the target list or "all"
+		timeout  -- timeout value in seconds
 
 - list_timeout
 Prints the current timeout values per host in seconds.
@@ -186,25 +186,27 @@ The repository should be set with the set_repo command beforehand.
 
 		install <hostname>[,hostname,...],<package>[ package ...]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
-		package    -- package name
+		hostname -- hostname from the target list or "all"
+		package  -- package name
 
 - uninstall
 Removes packages from the system.
 
 		uninstall <hostname>[,hostname,...],<package>[ package ...]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
-		package    -- package name
+		hostname -- hostname from the target list or "all"
+		package  -- package name
 
 - prepare
-Installs missing packages from the UPDATE repositories. This is also run by
-the update procedure before applying the updates.
-If "force" is set, packages are forced to be installed on package conflicts.
+Installs missing or outdated packages from the UPDATE repositories.
+This is also run by the update procedure before applying the updates.
+If "force" is set, packages are forced to be installed on package
+conflicts. If "installed" is set, only installed packages are
+prepared.
 
-		prepare <hostname>[,hostname,...][,force]
+		prepare <hostname>[,hostname,...][,force][,installed]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 
 - downgrade
 Downgrades all related packages to the last released version (uses the UPDATE
@@ -212,7 +214,7 @@ channel). This does not work for SLES 9 hosts, though.
 
 		downgrade <hostname>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 
 - update
 Applies the testing update to the target hosts. While updating the machines,
@@ -221,7 +223,7 @@ process.
 
 		update <hostname>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 
 - export
 Exports the gathered update data to template file. This includes the pre/post
@@ -244,7 +246,7 @@ Please be aware that no interactive commands can be run with this procedure.
 
 		run <hostname,command>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 
 - serialize
 Runs a command on a specified host or on all enabled targets if 'all' is given
@@ -256,7 +258,7 @@ Please be aware that no interactive commands can be run with this procedure.
 
 		serialize <hostname,command>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 
 - put
 Uploads files to all enabled hosts. Multiple files can be selected with special
@@ -294,13 +296,13 @@ reproducer section of the template.
 
 		show_log [hostname]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 
 - testsuite_run
 Runs ctcs2 testsuite and saves logs to /var/log/qa/$md5 on the target hosts.
 Results can be submitted with the testsuite_submit command.
 
-		testsuite <hostname>,hostname,...,<testsuite>
+		testsuite_run <hostname>,hostname,...,<testsuite>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		testsuite  -- testsuite-run command
@@ -311,7 +313,7 @@ populated with some attributes like SWAMPID or testsuite name, but can
 also be edited before the results get submitted. Submitting results to
 qadb requires the rd-qa NIS password.
 
-		testsuite <hostname>,hostname,...,<testsuite>
+		testsuite_submit <hostname>,hostname,...,<testsuite>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		testsuite  -- testsuite-run command
@@ -340,7 +342,7 @@ the package is not installed.
 
 		list_packages [hostname]
 		Keyword arguments:
-		hostname -- hostname or address of the host
+		hostname -- hostname from the target list or "all"
 
 - list_update_commands
 List all commands which are invoked when applying updates on the target hosts.
@@ -366,6 +368,14 @@ state the script is run. For more information, see the User Scripts section.
 		list_scripts 
 		Keyword arguments:
 		None
+
+- list_sessions
+Lists current active ssh sessions on target hosts.
+
+		list_sessions <hostname>
+		Keyword arguments:
+		hostname -- hostname from the target list or "all"
+
 
 Internal Commands
 *****************

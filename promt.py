@@ -282,7 +282,7 @@ class CommandPromt(cmd.Cmd):
 
 		list_packages [hostname]
 		Keyword arguments:
-		hostname -- hostname or address of the host
+		hostname -- hostname from the target list or "all"
 		"""
 
 		if args:
@@ -456,7 +456,7 @@ class CommandPromt(cmd.Cmd):
 
 		show_log [hostname]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 		"""
 
 		if args:
@@ -494,7 +494,7 @@ class CommandPromt(cmd.Cmd):
 
 		serialize <hostname,command>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 		"""
 
 		if args:
@@ -542,7 +542,7 @@ class CommandPromt(cmd.Cmd):
 
 		run <hostname,command>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 		"""
 
 		if args:
@@ -703,7 +703,7 @@ class CommandPromt(cmd.Cmd):
 
 		set_host_lock <hostname>[,hostname,...],<state>
 		Keyword arguments:
-		hostname -- hostname from the target list
+		hostname -- hostname from the target list or "all"
 		state    -- enabled, disabled
 		"""
 
@@ -753,7 +753,7 @@ class CommandPromt(cmd.Cmd):
 
 		set_host_state <hostname>[,hostname,...],<state>
 		Keyword arguments:
-		hostname -- hostname from the target list
+		hostname -- hostname from the target list or "all"
 		state    -- enabled, disabled, dryrun
 		"""
 
@@ -816,8 +816,8 @@ class CommandPromt(cmd.Cmd):
 
 		set_timeout <hostname,timeout>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
-		timeout    -- timeout value in seconds
+		hostname -- hostname from the target list or "all"
+		timeout  -- timeout value in seconds
 		"""
 
 		if args:
@@ -891,8 +891,8 @@ class CommandPromt(cmd.Cmd):
 
 		install <hostname>[,hostname,...],<package>[ package ...]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
-		package    -- package name
+		hostname -- hostname from the target list or "all"
+		package  -- package name
 		"""
 
 		if args:
@@ -935,8 +935,8 @@ class CommandPromt(cmd.Cmd):
 
 		uninstall <hostname>[,hostname,...],<package>[ package ...]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
-		package    -- package name
+		hostname -- hostname from the target list or "all"
+		package  -- package name
 		"""
 
 		if args:
@@ -980,7 +980,7 @@ class CommandPromt(cmd.Cmd):
 
 		downgrade <hostname>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 		"""
 
 		if args:
@@ -1026,7 +1026,7 @@ class CommandPromt(cmd.Cmd):
 
 		prepare <hostname>[,hostname,...][,force][,installed]
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 		"""
 
 		if args:
@@ -1082,7 +1082,7 @@ class CommandPromt(cmd.Cmd):
 
 		update <hostname>
 		Keyword arguments:
-		hostname   -- hostname from the target list or "all"
+		hostname -- hostname from the target list or "all"
 		"""
 
 		if args:
@@ -1172,6 +1172,38 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_update, args)
 
 	def complete_update(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+	def do_list_sessions(self, args):
+		"""
+		Lists current active ssh sessions on target hosts.
+
+		list_sessions <hostname>
+		Keyword arguments:
+		hostname -- hostname from the target list or "all"
+		"""
+		if args:
+			command = "netstat -t | awk '{ if (sub(\":ssh\", $4)) print substr($5, 0, index($5, \":\") - 1) }' | sort -u"
+
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
+
+			if targets:
+				try:
+					RunCommand(targets, command).run()
+				except KeyboardInterrupt:
+					return
+
+			for target in targets:
+				print "sessions on %s (%s):" % (target, targets[target].system)
+				print targets[target].lastout()
+
+		else:
+			self.parse_error(self.do_list_sessions, args)
+
+	def complete_list_sessions(self, text, line, begidx, endidx):
 		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
 	def do_checkout(self, args):
