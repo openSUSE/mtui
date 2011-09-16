@@ -274,7 +274,7 @@ class ZypperPrepare(Prepare):
 	def __init__(self, targets, packages, force=False, installed_only=False):
 		Prepare.__init__(self, targets, packages, force, installed_only)
 
-		prefix = []
+		parameter = []
 		commands = []
 
 		if force:
