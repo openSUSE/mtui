@@ -85,6 +85,9 @@ class Update():
 		if "A ZYpp transaction is already in progress." in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError("update stack locked", target.hostname)
+		if "System management is locked" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("update stack locked", target.hostname)
 		if "(c): c" in stdout:
 			out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
 			raise UpdateError("Dependency Error", target.hostname)
@@ -259,6 +262,9 @@ class Prepare():
 		if "A ZYpp transaction is already in progress." in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError(target.hostname, "update stack locked")
+		if "System management is locked" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("update stack locked", target.hostname)
 		if "(c): c" in stdout:
 			out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
 			raise UpdateError("Dependency Error", target.hostname)
@@ -405,6 +411,9 @@ class Install():
 		if "A ZYpp transaction is already in progress." in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError(target.hostname, "update stack locked")
+		if "System management is locked" in stderr:
+			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
+			raise UpdateError("update stack locked", target.hostname)
 		if "Error:" in stderr:
 			out.critical('%s: command "%s" failed:\nstdin:\n%sstderr:\n%s', target.hostname, stdin, stdout, stderr)
 			raise UpdateError(target.hostname, "RPM Error")

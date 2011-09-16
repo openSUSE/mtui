@@ -579,7 +579,7 @@ class CommandPromt(cmd.Cmd):
 		target hosts. Results can be submitted with the testsuite_submit
 		command.
 
-		testsuite <hostname>,hostname,...,<testsuite>
+		testsuite_run <hostname>,hostname,...,<testsuite>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		testsuite  -- testsuite-run command
@@ -628,7 +628,7 @@ class CommandPromt(cmd.Cmd):
 		submitted. Submitting results to qadb requires the rd-qa NIS
 		password.
 
-		testsuite <hostname>,hostname,...,<testsuite>
+		testsuite_submit <hostname>,hostname,...,<testsuite>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		testsuite  -- testsuite-run command
