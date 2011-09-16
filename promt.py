@@ -1018,24 +1018,30 @@ class CommandPromt(cmd.Cmd):
 
 	def do_prepare(self, args):
 		"""
-		Installs missing packages from the UPDATE repositories. This is
-		also run by the update procedure before applying the updates.
+		Installs missing or outdated packages from the UPDATE repositories.
+		This is also run by the update procedure before applying the updates.
 		If "force" is set, packages are forced to be installed on package
-		conflicts.
+		conflicts. If "installed" is set, only installed packages are
+		prepared.
 
-		prepare <hostname>[,hostname,...][,force]
+		prepare <hostname>[,hostname,...][,force][,installed]
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		"""
 
 		if args:
 			force = False
+			installed = False
 
-			if ',' in args:
-				args, _, parameter = args.rpartition(',')
-				if 'force' in parameter:
-					force = True
+			parameter = args.split(',')
+			if 'force' in parameter:
+				force = True
+				parameter.remove('force')
+			if 'installed' in parameter:
+				installed = True
+				parameter.remove('installed')
 
+			args = ",".join(parameter)
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
@@ -1052,7 +1058,7 @@ class CommandPromt(cmd.Cmd):
 
 				out.info("preparing")
 				try:
-					preparer(targets, self.metadata.get_package_list(), force=force).run()
+					preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed).run()
 				except Exception:
 					out.critical("failed to prepare target systems")
 					return
@@ -1066,7 +1072,7 @@ class CommandPromt(cmd.Cmd):
 			self.parse_error(self.do_prepare, args)
 
 	def complete_prepare(self, text, line, begidx, endidx):
-		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ["force", "installed"])
 
 	def do_update(self, args):
 		"""
@@ -1083,10 +1089,10 @@ class CommandPromt(cmd.Cmd):
 			missing = False
 			targets = enabled_targets(self.targets)
 
+			self.do_prepare(args)
+
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
-
-			self.do_prepare(args)
 
 			for target in targets:
 				not_installed = []

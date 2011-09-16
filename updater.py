@@ -188,7 +188,7 @@ Updater = {
 }
 
 class Prepare():
-	def __init__(self, targets, packages=None, patches=None, force=False):
+	def __init__(self, targets, packages=None, patches=None, force=False, installed_only=False):
 		self.targets = targets
 		self.packages = packages
 		self.patches = patches
@@ -271,16 +271,20 @@ class Prepare():
 		return
 
 class ZypperPrepare(Prepare):
-	def __init__(self, targets, packages, force=False):
-		Prepare.__init__(self, targets, packages, force)
+	def __init__(self, targets, packages, force=False, installed_only=False):
+		Prepare.__init__(self, targets, packages, force, installed_only)
 
+		prefix = []
 		commands = []
 
+		if force:
+			parameter = "--force-resolution"
+
 		for package in packages:
-			if force:
-				commands.append("rpm -q %s &>/dev/null && zypper -n in --force-resolution --no-recommends -y -l %s" % (package, package))
+			if installed_only:
+				commands.append("rpm -q %s &>/dev/null && zypper -n in --no-recommends -y -l %s %s" % (package, parameter, package))
 			else:
-				commands.append("rpm -q %s &>/dev/null && zypper -n in --no-recommends -y -l %s" % (package, package))
+				commands.append("zypper -n in --no-recommends -y -l %s %s" % (parameter, package))
 
 		self.commands = commands
 
@@ -290,13 +294,17 @@ class ZypperPrepare(Prepare):
 			raise UpdateError(target.hostname, "RPM Error")
 
 class OldZypperPrepare(Prepare):
-	def __init__(self, targets, packages, force=False):
-		Prepare.__init__(self, targets, packages, force)
+	def __init__(self, targets, packages, force=False, installed_only=False):
+		Prepare.__init__(self, targets, packages, force, installed_only)
 
+		prefix = []
 		commands = []
 
 		for package in packages:
-			commands.append("rpm -q %s &>/dev/null && zypper -n in -y -l %s" % (package, package))
+			if installed_only:
+				commands.append("rpm -q %s &>/dev/null && zypper -n in -y -l %s" % (package, package))
+			else:
+				commands.append("zypper -n in -y -l %s" % package)
 
 		self.commands = commands
 
@@ -307,8 +315,8 @@ Preparer = {
 }
 
 class ZypperDowngrade(Prepare):
-	def __init__(self, targets, packages, patches, force=False):
-		Prepare.__init__(self, targets, packages, patches, force)
+	def __init__(self, targets, packages, patches, force=False, installed_only=False):
+		Prepare.__init__(self, targets, packages, patches, force, installed_only)
 
 		commands = []
 
@@ -318,8 +326,8 @@ class ZypperDowngrade(Prepare):
 		self.commands = commands
 
 class OldZypperDowngrade(Prepare):
-	def __init__(self, targets, packages, patches, force=False):
-		Prepare.__init__(self, targets, packages, patches, force)
+	def __init__(self, targets, packages, patches, force=False, installed_only=False):
+		Prepare.__init__(self, targets, packages, patches, force, installed_only)
 
 		patch = patches['zypp']
 
