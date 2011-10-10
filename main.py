@@ -21,8 +21,8 @@ def main():
 	team = None
 	directory = os.getenv("TEMPLATEDIR", ".")
 	interactive = True
-	dryrun = False
-	timeout = None
+	state = "enabled"
+	timeout = 300
 
 	targets = {}
 
@@ -42,7 +42,7 @@ def main():
 		elif parameter in ("-m", "--md5"):
 			md5 = argument
 		elif parameter in ("-d", "--dryrun"):
-			dryrun = True
+			state = "dryrun"
 		elif parameter in ("-t", "--templates"):
 			directory = argument
 		elif parameter in ("-i", "--interactive"):
@@ -82,7 +82,8 @@ def main():
 
 	for host, system in metadata.systems.items():
 		try:
-			targets[host] = Target(host, system, metadata.get_package_list(), dryrun=dryrun, timeout=timeout)
+			targets[host] = Target(host, system, metadata.get_package_list(), state=state, timeout=timeout)
+			targets[host].add_history(["connect"])
 		except Exception:
 			out.warning("failed to add host %s to target list" % host)
 		except KeyboardInterrupt:

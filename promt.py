@@ -13,7 +13,7 @@ import glob
 import re
 import getpass
 
-from datetime import date
+from datetime import date, datetime
 
 from rpmcmp import *
 from target import *
@@ -106,7 +106,7 @@ class CommandPromt(cmd.Cmd):
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
 
-			for target in targets:
+			for target in targets.keys():
 				targets[target].close()
 				del self.targets[target]
 
@@ -133,6 +133,11 @@ class CommandPromt(cmd.Cmd):
 			targets = self.targets
 
 			for target in targets:
+				if targets[target].exclusive:
+					mode = "serial"
+				else:
+					mode = "parallel"
+
 				if targets[target].state == "enabled":
 					state = green('Enabled')
 				elif targets[target].state == "dryrun":
@@ -141,7 +146,65 @@ class CommandPromt(cmd.Cmd):
 					state = red('Disabled')
 
 				system = "(%s)" % targets[target].system
-				print '{0:20} {1:20}: {2}'.format(target, system, state)
+				print '{0:20} {1:20}: {2} ({3})'.format(target, system, state, mode)
+
+	def do_list_history(self, args):
+		"""
+		Lists a history of mtui events on the target hosts like installing
+		or updating packages. Date, username and event is shown.
+		Events could be filtered with the event parameter.
+
+		list_history [hostname,...][,event]
+		Keyword arguments:
+		hostname -- hostname from the target list or "all"
+		event    -- connect, disconnect, install, update, downgrade
+		None
+
+		"""
+
+		if not args:
+			args = "all"
+
+		option = []
+		parameter = args.split(',')
+		for event in ["connect", "disconnect", "install", "update", "downgrade"]:
+			if event in parameter:
+				option.append('-e ":%s"' % event)
+				parameter.remove(event)
+
+		args = ",".join(parameter)
+
+		lines = 10
+		targets = enabled_targets(self.targets)
+
+		if args.split(',')[0] != 'all':
+			lines = 50
+			targets = selected_targets(targets, args.split(','))
+
+		if targets:
+			if option:
+				RunCommand(targets, "grep %s /var/log/mtui.log" % " ".join(option)).run()
+			else:
+				RunCommand(targets, "tail -n %s /var/log/mtui.log" % lines).run()
+			
+		for target in targets:
+			print "history from %s (%s):" % (target, targets[target].system)
+			lines = targets[target].lastout().split("\n")
+			lines.reverse()
+			for line in lines:
+				try:
+					when = line.split(":")[0]
+					who = line.split(":")[1]
+					event = ":".join(line.split(":")[2:])
+				except IndexError:
+					continue
+
+				time = datetime.fromtimestamp(float(when))
+				print "%s, %s: %s" % (time.strftime("%A, %d.%m.%Y %H:%M"), who, event)
+			print
+
+	def complete_list_history(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ["connect", "disconnect", "install", "update", "downgrade"])
 
 	def do_list_locks(self, args):
 		"""
@@ -167,7 +230,11 @@ class CommandPromt(cmd.Cmd):
 					else:
 						lockedby = lock.user
 
-					print '{0:20} {1:20}: {2}'.format(target, system, yellow("since %s by %s" % (lock.time(), lock.user)))
+					print '{0:20} {1:20}: {2}'.format(target, system, yellow("since %s by %s" % (lock.time(), lock.user))),
+					if lock.comment:
+						print ': %s' % lock.comment
+					else:
+						print
 				else:
 					print '{0:20} {1:20}: {2}'.format(target, system, green("not locked"))
 
@@ -191,10 +258,42 @@ class CommandPromt(cmd.Cmd):
 				timeout = targets[target].get_timeout()
 				print '{0:20} {1:20}: {2}s'.format(target, system, timeout)
 
+	def do_source_install(self, args):
+		"""
+		Installs current source RPMs to the target hosts. 
+		
+		source_install <hostname>
+		Keyword arguments:
+		hostname -- hostname from the target list or "all"
+		"""
+
+		if args:
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
+
+			if targets:
+				destination = "/tmp/%s" % self.metadata.md5
+				fetchcmd = 'cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/' % (destination, self.metadata.md5)
+				extractcmd = 'cd %s; rpm2cpio *.src.rpm | cpio -i --unconditional --preserve-modification-time --make-directories' % destination
+				installcmd = 'cd %s; rpm -Uhv *.src.rpm' % destination
+
+				RunCommand(targets, fetchcmd).run()
+				RunCommand(targets, extractcmd).run()
+				RunCommand(targets, installcmd).run()
+
+				out.info("done")
+		else:
+			self.parse_error(self.do_source_install, args)
+
+	def complete_source_install(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
 	def do_source_extract(self, args):
 		"""
-		Extracts source RPM to /tmp. If no filename is given,
-		the whole package content is extracted.
+		Extracts current source RPMs locally to /tmp. If no filename
+		is given, the whole package content is extracted.
 		
 		source_extract [filename]
 		Keyword arguments:
@@ -447,6 +546,62 @@ class CommandPromt(cmd.Cmd):
 			print '{0:15}: {1}'.format("Packages", packagelist)
 			print '{0:15}: {1}'.format("Build", patchinfo)
 
+	def do_list_versions(self, args):
+		"""
+		Prints the package version history in chronological order.
+		The history of every test host is checked and consolidated.
+
+		list_versions 
+		Keyword arguments:
+		None
+		"""
+
+		if args:
+			self.parse_error(self.do_list_versions, args)
+			return
+
+		targets = enabled_targets(self.targets)
+
+		history = {}
+		packages = " ".join(self.metadata.get_package_list())
+
+		if targets:
+			if int(self.metadata.get_release()) > 10:
+				query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -rg | uniq" % packages
+			else:
+				query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -rg | uniq" % packages
+
+			RunCommand(targets, query).run()
+			for target in targets:
+				checksum = reduce(lambda x,y:x+y, map(ord, targets[target].lastout()))
+				try:
+					history[checksum].append(target)
+				except KeyError:
+					history[checksum] = []
+					history[checksum].append(target)
+
+			for version in history:
+				name = ""
+				release = {}
+
+				if len(history) > 1:
+					for target in history[version]:
+						print "version history from %s (%s):" % (target, targets[target].system)
+
+				lines = targets[target].lastout().split("\n")
+				for line in lines:
+					match = re.search("([^\s]+)\s+([^\s]+)", line)
+					if match:
+						name = match.group(1)
+						try:
+							release[name].append(match.group(2))
+						except KeyError:
+							release[name] = []
+							release[name].append(match.group(2))
+
+				for package in release:
+					print "%s: %s" % (package, " -> ".join(release[package]))
+				print
 
 	def do_show_log(self, args):
 		"""
@@ -481,54 +636,6 @@ class CommandPromt(cmd.Cmd):
 	def complete_show_log(self, text, line, begidx, endidx):
 		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
-	def do_serialize(self, args):
-		"""
-		Runs a command on a specified host or on all enabled targets if
-		'all' is given as hostname. The command timeout is set to 5 minutes
-		which means, if there's no output on stdout or stderr for 5 minutes,
-		a timeout exception is thrown. The commands are run serialized on
-		every target. After the call returned, the output (including the
-		return code) of each host is shown on the console.
-		Please be aware that no interactive commands can be run with this
-		procedure.
-
-		serialize <hostname,command>
-		Keyword arguments:
-		hostname -- hostname from the target list or "all"
-		"""
-
-		if args:
-			args, _, command = args.partition(',')
-
-			targets = enabled_targets(self.targets)
-
-			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, args.split(','))
-
-			if targets:
-				for target in targets:
-					try:
-						host = {}
-						host[target] = targets[target]
-						RunCommand(host, command).run()
-					except KeyboardInterrupt:
-						return
-
-					print "%s:~> %s [%s]" % (target, targets[target].lastin(), targets[target].lastexit())
-					print targets[target].lastout()
-					if targets[target].lasterr():
-						print "stderr:", targets[target].lasterr()
-
-					input("press Enter key to proceed with the next host", "")
-
-				out.info("done")
-		else:
-			self.parse_error(self.do_serialize, args)
-
-	def complete_serialize(self, text, line, begidx, endidx):
-		if not line.count(','):
-			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
-
 	def do_run(self, args):
 		"""
 		Runs a command on a specified host or on all enabled targets if
@@ -545,13 +652,19 @@ class CommandPromt(cmd.Cmd):
 		hostname -- hostname from the target list or "all"
 		"""
 
-		if args:
-			args, _, command = args.partition(',')
+		args, _, command = args.partition(',')
 
+		if args and command:
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
+
+			for target in targets.keys():
+				lock = targets[target].locked()
+				if lock.locked and lock.comment:
+					out.critical("host %s is exclusively locked by %s (%s). skipping." % (target, lock.user, lock.comment))
+					del targets[target]
 
 			if targets:
 				try:
@@ -573,21 +686,49 @@ class CommandPromt(cmd.Cmd):
 		if not line.count(','):
 			return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+	def do_testsuite_list(self, args):
+		"""
+		List available testsuites on the target hosts.
+
+		testsuite_list <hostname>
+		Keyword arguments:
+		hostname   -- hostname from the target list or "all"
+		"""
+
+		if args:
+			import itertools
+			path = "/usr/share/qa/tools"
+
+			targets = enabled_targets(self.targets)
+
+			if args.split(',')[0] != 'all':
+				targets = selected_targets(targets, args.split(','))
+
+			for target in targets:
+				print "testsuites on %s (%s):" % (target, targets[target].system)
+				print "\n".join([ i for i in sorted(targets[target].listdir(path)) if i.endswith("-run") ])
+				print
+		else:
+			self.parse_error(self.do_testsuite_list, args)
+
+	def complete_testsuite_list(self, text, line, begidx, endidx):
+		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
 	def do_testsuite_run(self, args):
 		"""
 		Runs ctcs2 testsuite and saves logs to /var/log/qa/$md5 on the
 		target hosts. Results can be submitted with the testsuite_submit
 		command.
 
-		testsuite_run <hostname>,hostname,...,<testsuite>
+		testsuite_run <hostname>[,hostname,...],<testsuite>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		testsuite  -- testsuite-run command
 		"""
 
-		if args:
-			args, _, command = args.rpartition(',')
+		args, _, command = args.rpartition(',')
 
+		if args and command:
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
@@ -596,7 +737,7 @@ class CommandPromt(cmd.Cmd):
 			if not command.startswith('/'):
 				command = os.path.join("/usr/share/qa/tools", command)
 				
-			command = "export TESTS_LOGDIR=/var/log/qa/%s/ctcs2; export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; %s" % (self.metadata.md5, self.metadata.md5, command)
+			command = "export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; export TESTS_LOGDIR=/var/log/qa/%s/ctcs2; %s" % (self.metadata.md5, self.metadata.md5, command)
 			name = os.path.basename(command).replace('-run', '')
 
 			if targets:
@@ -634,9 +775,9 @@ class CommandPromt(cmd.Cmd):
 		testsuite  -- testsuite-run command
 		"""
 
-		if args:
-			args, _, command = args.rpartition(',')
+		args, _, command = args.rpartition(',')
 
+		if args and command:
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
@@ -707,13 +848,16 @@ class CommandPromt(cmd.Cmd):
 		state    -- enabled, disabled
 		"""
 
-		if args:
-			args, _, state = args.rpartition(',')
+		args, _, state = args.rpartition(',')
 
+		if args and state:
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
+
+			if state == "enabled":
+				comment = raw_input("comment: ").strip()
 
 			for target in targets:
 				lock = targets[target].locked()
@@ -721,9 +865,12 @@ class CommandPromt(cmd.Cmd):
 				if state == "enabled":
 					if lock.locked:
 						out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+						if lock.comment:
+							out.info("%s's comment: %s" % (lock.user, lock.comment))
+
 						continue
 					else:
-						targets[target].set_locked()
+						targets[target].set_locked(comment)
 				elif state == "disabled":
 					try:
 						targets[target].remove_lock()
@@ -734,6 +881,7 @@ class CommandPromt(cmd.Cmd):
 
 		else:
 			self.parse_error(self.do_set_host_lock, args)
+			return
 
 	def complete_set_host_lock(self, text, line, begidx, endidx):
 		if line.count(','):
@@ -754,30 +902,36 @@ class CommandPromt(cmd.Cmd):
 		set_host_state <hostname>[,hostname,...],<state>
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
-		state    -- enabled, disabled, dryrun
+		state    -- enabled, disabled, dryrun, parallel, serial
 		"""
 
-		if args:
-			args, _, state = args.rpartition(',')
+		args, _, state = args.rpartition(',')
 
+		if args and state:
 			targets = self.targets
 
 			if args.split(',')[0] != 'all':
 				targets = selected_targets(targets, args.split(','))
 
-			if state not in ['enabled', 'disabled', 'dryrun']:
+			if state in ['enabled', 'disabled', 'dryrun']:
+				for target in targets:
+					targets[target].state = state
+			elif state in ['parallel', 'serial']:
+				for target in targets:
+					if state == 'serial':
+						targets[target].exclusive = True
+					else:
+						targets[target].exclusive = False
+			else:
 				self.parse_error(self.do_set_host_state, args)
 				return
-
-			for target in targets:
-				targets[target].state = state
 
 		else:
 			self.parse_error(self.do_set_host_state, args)
 
 	def complete_set_host_state(self, text, line, begidx, endidx):
 		if line.count(','):
-			return self.complete_hostlist(text, line, begidx, endidx, ['enabled', 'disabled', 'dryrun'])
+			return self.complete_hostlist(text, line, begidx, endidx, ['enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
 		else:		
 			return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
@@ -820,9 +974,9 @@ class CommandPromt(cmd.Cmd):
 		timeout  -- timeout value in seconds
 		"""
 
-		if args:
-			args, _, timeout = args.rpartition(',')
+		args, _, timeout = args.rpartition(',')
 
+		if args and timeout:
 			targets = self.targets
 
 			if args.split(',')[0] != 'all':
@@ -856,9 +1010,9 @@ class CommandPromt(cmd.Cmd):
 		repository -- repository, TESTING or UPDATE
 		"""
 
-		if args:
-			args, _, name = args.rpartition(',')
+		args, _, name = args.rpartition(',')
 
+		if args and name:
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
@@ -872,6 +1026,8 @@ class CommandPromt(cmd.Cmd):
 				lock = targets[target].locked()
 				if lock.locked and not lock.own():
 					out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+					if lock.comment:
+						out.info("%s's comment: %s" % (lock.user, lock.comment))
 				else:
 					targets[target].set_repo(name.upper())
 
@@ -895,9 +1051,9 @@ class CommandPromt(cmd.Cmd):
 		package  -- package name
 		"""
 
-		if args:
-			args, _, packages = args.rpartition(',')
+		args, _, packages = args.rpartition(',')
 
+		if args and packages:
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
@@ -912,6 +1068,9 @@ class CommandPromt(cmd.Cmd):
 					return
 
 				out.info("installing")
+				for target in targets:
+					targets[target].add_history(["install", packages])
+
 				try:
 					installer(targets, packages.split()).run()
 				except Exception:
@@ -939,9 +1098,9 @@ class CommandPromt(cmd.Cmd):
 		package  -- package name
 		"""
 
-		if args:
-			args, _, packages = args.rpartition(',')
+		args, _, packages = args.rpartition(',')
 
+		if args and packages:
 			targets = enabled_targets(self.targets)
 
 			if args.split(',')[0] != 'all':
@@ -999,6 +1158,9 @@ class CommandPromt(cmd.Cmd):
 					return
 
 				out.info("downgrading")
+				for target in targets:
+					targets[target].add_history(["downgrade", self.metadata.md5, " ".join(self.metadata.get_package_list())])
+
 				try:
 					downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
 				except Exception:
@@ -1141,6 +1303,7 @@ class CommandPromt(cmd.Cmd):
 
 			missing = False
 			for target in targets:
+				targets[target].add_history(["update", self.metadata.md5, " ".join(self.metadata.get_package_list())])
 				packages = targets[target].packages
 
 				targets[target].query_versions()
@@ -1182,26 +1345,26 @@ class CommandPromt(cmd.Cmd):
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
 		"""
-		if args:
-			command = "netstat -t | awk '{ if (sub(\":ssh\", $4)) print substr($5, 0, index($5, \":\") - 1) }' | sort -u"
 
-			targets = enabled_targets(self.targets)
+		if not args:
+			args = "all"
 
-			if args.split(',')[0] != 'all':
-				targets = selected_targets(targets, args.split(','))
+		command = "netstat -t | awk '{ if (sub(\":ssh\", $4)) print substr($5, 0, index($5, \":\") - 1) }' | sort -u"
 
-			if targets:
-				try:
-					RunCommand(targets, command).run()
-				except KeyboardInterrupt:
-					return
+		targets = enabled_targets(self.targets)
 
-			for target in targets:
-				print "sessions on %s (%s):" % (target, targets[target].system)
-				print targets[target].lastout()
+		if args.split(',')[0] != 'all':
+			targets = selected_targets(targets, args.split(','))
 
-		else:
-			self.parse_error(self.do_list_sessions, args)
+		if targets:
+			try:
+				RunCommand(targets, command).run()
+			except KeyboardInterrupt:
+				return
+
+		for target in targets:
+			print "sessions on %s (%s):" % (target, targets[target].system)
+			print targets[target].lastout()
 
 	def complete_list_sessions(self, text, line, begidx, endidx):
 		return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)

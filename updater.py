@@ -35,6 +35,8 @@ class Update():
 				if lock.locked and not lock.own():
 					skipped = True
 					out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+					if lock.comment:
+						out.info("%s's comment: %s" % (lock.user, lock.comment))
 				else:
 					self.targets[target].set_locked()
 					thread = ThreadedMethod(queue)
@@ -207,6 +209,8 @@ class Prepare():
 				if lock.locked and not lock.own():
 					skipped = True
 					out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+					if lock.comment:
+						out.info("%s's comment: %s" % (lock.user, lock.comment))
 				else:
 					self.targets[target].set_locked()
 					thread = ThreadedMethod(queue)
@@ -375,6 +379,8 @@ class Install():
 				if lock.locked and not lock.own():
 					skipped = True
 					out.warning("host %s is locked since %s by %s. skipping." % (target, lock.time(), lock.user))
+					if lock.comment:
+						out.info("%s's comment: %s" % (lock.user, lock.comment))
 				else:
 					self.targets[target].set_locked()
 					thread = ThreadedMethod(queue)

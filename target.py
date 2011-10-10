@@ -17,19 +17,14 @@ out = logging.getLogger('mtui')
 queue = Queue.Queue()
 
 class Target():
-	def __init__(self, hostname, system, packages=[], dryrun=False, timeout=None):
+	def __init__(self, hostname, system, packages=[], state="enabled", timeout=300, exclusive=False):
 		self.hostname = hostname
 		self.system = system
 		self.packages = {}
 		self.log = []
-
-		if dryrun:
-			self.state = "dryrun"
-		else:
-			self.state = "enabled"
-
-		if timeout is None:
-			timeout = 300
+		self.state = state
+		self.timeout = timeout
+		self.exclusive = exclusive
 
 		out.info("connecting to %s" % self.hostname)
 
@@ -41,6 +36,11 @@ class Target():
 
 		for package in packages:
 			self.packages[package] = Package(package)
+
+		lock = self.locked()
+
+		if lock.locked and lock.comment:
+			out.warning("%s exclusively locked by %s (%s). please hold on testing on that host." % (self.hostname, lock.user, lock.comment))
 
 	def query_versions(self, packages=None):
 		versions = {}
@@ -207,7 +207,10 @@ class Target():
 				return lock
 
 			try:
-				lock.timestamp, lock.user, lock.pid = line.split(':')
+				if len(line.split(":")) == 3:
+					lock.timestamp, lock.user, lock.pid = line.split(':')
+				else:
+					lock.timestamp, lock.user, lock.pid, lock.comment = line.split(':')
 			except Exception:
 				return lock
 
@@ -217,7 +220,7 @@ class Target():
 
 		return lock
 
-	def set_locked(self):
+	def set_locked(self, comment=None):
 		if self.state == "enabled":
 			out.debug('%s: setting lock' % self.hostname)
 			try:
@@ -230,7 +233,10 @@ class Target():
 			now = timestamp()
 			user = os.getlogin()
 			pid = os.getpid()
-			lockfile.write("%s:%s:%s" % (now, user, pid))
+			if comment:
+				lockfile.write("%s:%s:%s:%s" % (now, user, pid, comment))
+			else:
+				lockfile.write("%s:%s:%s" % (now, user, pid))
 			lockfile.close()
 
 	def remove_lock(self):
@@ -247,8 +253,28 @@ class Target():
 				if error.errno == errno.ENOENT:
 					out.debug("lockfile does not exist")
 
+	def add_history(self, comment):
+		if self.state == "enabled":
+			out.debug('%s: adding history entry' % self.hostname)
+			try:
+				historyfile = self.connection.open("/var/log/mtui.log", "a+")
+
+			except IOError as error:
+				out.error("failed to open history file: %s" % error.strerror)
+				return
+
+			now = timestamp()
+			user = os.getlogin()
+			historyfile.write("%s:%s:%s\n" % (now, user, ":".join(comment)))
+
+			historyfile.close()
+
+	def listdir(self, path):
+		return self.connection.listdir(path)
+
 	def close(self):
 		out.info("closing connection to %s" % self.hostname)
+		self.add_history(["disconnect"])
 		return self.connection.close()
 
 class Package:
@@ -383,21 +409,38 @@ class RunCommand():
 		self.command = command
 
 	def run(self):
+		parallel = {}
+		serial = {}
 		lock = threading.Lock()
 
 		for target in self.targets:
-			thread = ThreadedMethod(queue)
-			thread.setDaemon(True)
-			thread.start()
+			if self.targets[target].exclusive:
+				serial[target] = self.targets[target]
+			else:
+				parallel[target] = self.targets[target]
 
 		try:
-			for target in self.targets:
-				queue.put([self.targets[target].run, [self.command, lock]])
+			for target in parallel:
+				thread = ThreadedMethod(queue)
+				thread.setDaemon(True)
+				thread.start()
+				queue.put([parallel[target].run, [self.command, lock]])
 
 			while queue.unfinished_tasks:
 				spinner(lock)
 
 			queue.join()
+
+			for target in serial:
+				input("press Enter key to proceed with %s" % serial[target].hostname, "")
+				thread = ThreadedMethod(queue)
+				thread.setDaemon(True)
+				thread.start()
+				queue.put([serial[target].run, [self.command, lock]])
+				while queue.unfinished_tasks:
+					spinner(lock)
+
+				queue.join()
 
 		except KeyboardInterrupt:
 			print "stopping command queue, please wait."
@@ -407,18 +450,22 @@ class RunCommand():
 			except KeyboardInterrupt:
 				for target in self.targets:
 					self.targets[target].connection.close_session()
+				try:
 					thread.queue.task_done()
+				except ValueError:
+					pass
 
 			queue.join()
 			print
 			raise
 
 class Locked():
-	def __init__(self, locked=False, user="nobody", timestamp=0, pid=0):
+	def __init__(self, locked=False, user="nobody", timestamp=0, pid=0, comment=None):
 		self.locked = locked
 		self.user = user
 		self.timestamp = timestamp
 		self.pid = pid
+		self.comment = comment
 
 	def own(self):
 		if self.user == os.getlogin() and self.pid == str(os.getpid()):

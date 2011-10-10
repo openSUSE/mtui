@@ -89,9 +89,12 @@ class Connection():
 		return self.session
 
 	def close_session(self):
-		self.session.shutdown(2)
-		self.session.close()
-		self.session = None
+		try:
+			self.session.shutdown(2)
+			self.session.close()
+			self.session = None
+		except:
+			pass
 
 	def run(self, command, lock=None):
 		"""run command over SSH channel
@@ -204,6 +207,14 @@ class Connection():
 			return self.get(remote, local)
 
 		sftp.close()
+
+	def listdir(self, path='.'):
+		sftp = self.client.open_sftp()
+		try:
+			return sftp.listdir(path)
+		except (AttributeError, paramiko.ChannelException):
+			self.reconnect()
+			return self.listdir(path)
 
 	def open(self, filename, mode='r', bufsize=-1):
 		sftp = self.client.open_sftp()

@@ -49,12 +49,15 @@ def input(text, options):
 	result = False
 
 	try:
-		if raw_input(text).lower() in options:
+		response = raw_input(text).lower()
+		if response in options:
 			result = True
 
 	except KeyboardInterrupt:
 		pass
 	finally:
-		readline.remove_history_item(readline.get_current_history_length() - 1)
+		if response:
+			readline.remove_history_item(readline.get_current_history_length() - 1)
+
 		return result
 
