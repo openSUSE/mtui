@@ -642,8 +642,9 @@ class CommandPromt(cmd.Cmd):
 		'all' is given as hostname. The command timeout is set to 5 minutes
 		which means, if there's no output on stdout or stderr for 5 minutes,
 		a timeout exception is thrown. The commands are run in parallel on
-		every target. After the call returned, the output (including the
-		return code) of each host is shown on the console.
+		every target or in serial mode when set with "set_host_state".
+		After the call returned, the output (including the return code)
+		of each host is shown on the console.
 		Please be aware that no interactive commands can be run with this
 		procedure.
 
@@ -841,6 +842,8 @@ class CommandPromt(cmd.Cmd):
 		This influences the update process of concurrent instances, use with
 		care.
 		Enabled locks are automatically removed when exiting the session.
+		To lock the run command on other sessions as well, it's necessary to
+		set a comment.
 
 		set_host_lock <hostname>[,hostname,...],<state>
 		Keyword arguments:
@@ -896,8 +899,11 @@ class CommandPromt(cmd.Cmd):
 		or a host set to "Dryrun" doesn't run any command on the host.
 		The difference between "Disabled" and "Dryrun" is that on "Dryrun"
 		hosts the issued commands are printed to the console while "Disabled"
-		doesn't print anything. The commands accepts multiple hostnames
-		followed by the wanted state.
+		doesn't print anything. Additionally, the execution mode of each host
+		could be set to "parallel" (default) or "serial". All commands which
+		are designed to run in parallel are influenced by this option (like
+		to run command)
+		The commands accepts multiple hostnames followed by the wanted state.
 
 		set_host_state <hostname>[,hostname,...],<state>
 		Keyword arguments:
@@ -1349,7 +1355,7 @@ class CommandPromt(cmd.Cmd):
 		if not args:
 			args = "all"
 
-		command = "netstat -t | awk '{ if (sub(\":ssh\", $4)) print substr($5, 0, index($5, \":\") - 1) }' | sort -u"
+		command = "ss -r | awk '{ if (sub(\":ssh\", $4)) print substr($5, 0, index($5, \":\") - 1) }' | sort -u"
 
 		targets = enabled_targets(self.targets)
 

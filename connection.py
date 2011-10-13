@@ -66,8 +66,8 @@ class Connection():
 			raise
 
 	def reconnect(self):
-		if self.is_active():
-			return
+		#if self.is_active():
+		#	return
 
 		out.debug("lost connection, reconnecting")
 		select.select([], [], [], 10)
