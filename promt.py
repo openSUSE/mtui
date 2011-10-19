@@ -242,7 +242,7 @@ class CommandPromt(cmd.Cmd):
 		"""
 		Prints the current timeout values per host in seconds.
 		
-		list_timeout <timeout>
+		list_timeout
 		Keyword arguments:
 		None
 		"""
@@ -1355,7 +1355,7 @@ class CommandPromt(cmd.Cmd):
 		if not args:
 			args = "all"
 
-		command = "ss -r | awk '{ if (sub(\":ssh\", $4)) print substr($5, 0, index($5, \":\") - 1) }' | sort -u"
+		command = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\1/p' | sort -u"
 
 		targets = enabled_targets(self.targets)
 
