@@ -101,15 +101,18 @@ def main():
 
 	promt = CommandPromt(targets, metadata)
 
-	try:
-		if interactive:
-			promt.cmdloop()
-		else:
-			promt.do_update("all")
-			promt.do_export(None)
-			promt.do_quit(None)
-	except KeyboardInterrupt:
-		promt.do_quit(None)
+	while True:
+		try:
+			if interactive:
+				promt.cmdloop()
+			else:
+				promt.do_update("all")
+				promt.do_export(None)
+				promt.do_quit(None)
+		except KeyboardInterrupt:
+			print
+			#if raw_input("do you really want to quit? (y/N) ").lower() in ["y", "yes"]:
+			#	promt.do_quit(None)
 
 def usage():
 	print

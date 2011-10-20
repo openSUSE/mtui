@@ -1355,7 +1355,7 @@ class CommandPromt(cmd.Cmd):
 		if not args:
 			args = "all"
 
-		command = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\1/p' | sort -u"
+		command = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
 
 		targets = enabled_targets(self.targets)
 
