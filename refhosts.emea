@@ -3,26 +3,12 @@
 # non-kernel reference hosts #
 ##############################
 
-# code9
+# code9 (now in LTSS)
 
 sles9-i386="riker.suse.de"
 sles9-x86_64="couchant.suse.de"
-sles9-s390="s390zvc19.suse.de"
-sles9-s390x="s390zvi24.suse.de"
-sles9-ia64="sinope.suse.de"
-sles9-ppc="aal.suse.de"
-
-# sle9 sp3 LTSS
-
-sles9sp3_ltss-i386="dax.suse.de"
-sles9sp3_ltss-x86_64="dax.suse.de"
-sles9sp3_ltss-s390x="s390a28.suse.de"
-
-# sle10 sp1 LTSS
-
-sles10sp1_ltss-i386="dax.suse.de"
-sles10sp1_ltss-x86_64="dax.suse.de"
-sles10sp1_ltss-s390x="s390a29.suse.de"
+sles9-s390="s390zvi48.suse.de"
+sles9-s390x="s390zvi70.suse.de"
 
 # sle10 sp2
 
@@ -35,16 +21,11 @@ sles10sp2_ltss-i386="dax.suse.de"
 sles10sp2_ltss-x86_64="dax.suse.de"
 sles10sp2_ltss-s390x="s390zvi29.suse.de"
 
-# sle10 sp3
+# sle10 sp3 LTSS
 
-sles10sp3-i386="dawn.suse.de"
-sles10sp3-x86_64="fallada.suse.de"
-sles10sp3-ia64="miracle.suse.de"
-sles10sp3-s390x="s390t11.suse.de"
-sles10sp3-ppc="morgenrot.suse.de"
-
-sled10sp3-i386="goodfellow.suse.de"
-sled10sp3-x86_64="zypp.suse.de"
+sles10sp3_ltss-i386="dawn.suse.de"
+sles10sp3_ltss-x86_64="fallada.suse.de"
+sles10sp3_ltss-s390x="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
 sles10sp3_XEN0-i386="xena32-10.suse.de"
@@ -127,29 +108,12 @@ sl11.4-x86_64="boxer.suse.de"
 # kernel hosts #
 ################
 
-# code9
+# code9 (now in LTSS)
 
 sles9-i386-kernel="vesalius.suse.de"
-sles9-ia64-kernel="sykes.suse.de"
 sles9-x86_64-kernel="aurore.suse.de"
 sles9-s390-kernel="s390zvi48.suse.de"
 sles9-s390x-kernel="s390zvi70.suse.de"
-sles9-pseries-kernel="salmler.suse.de"
-sles9-iseries-kernel="curcuma.suse.de"
-sles9_XENU-i386-kernel="xenu32-9.suse.de"
-sles9_XENU-x86_64-kernel="xenu64-9.suse.de"
-
-# sle9 sp3 LTSS
-
-sles9sp3_ltss-i386-kernel="dax.suse.de"
-sles9sp3_ltss-x86_64-kernel="dax.suse.de"
-sles9sp3_ltss-s390x-kernel="s390a28.suse.de"
-
-# sle10 sp1 LTSS
-
-sles10sp1_ltss-i386-kernel="dax.suse.de"
-sles10sp1_ltss-x86_64-kernel="dax.suse.de"
-sles10sp1_ltss-s390x-kernel="s390a29.suse.de"
 
 # sle10 sp2
 
@@ -164,15 +128,9 @@ sles10sp2_ltss-s390x-kernel="s390zvi29.suse.de"
 
 # sle10 sp3
 
-sles10sp3-i386-kernel="chatham.suse.de"
-sles10sp3-x86_64-kernel="kempter.suse.de"
-sles10sp3-ia64-kernel="coppelius.suse.de"
-sles10sp3-s390x-kernel="s390t10.suse.de"
-sles10sp3-ppc-kernel="makrele.suse.de"
-sles10sp3-iseries-kernel="coriander.suse.de"
-
-sled10sp3-i386-kernel="goodfellow.suse.de"
-sled10sp3-x86_64-kernel="zypp.suse.de"
+sles10sp3_ltss-i386-kernel="dawn.suse.de"
+sles10sp3_ltss-x86_64-kernel="fallada.suse.de"
+sles10sp3_ltss-s390x-kernel="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
 sles10sp3_XEN0-i386-kernel="xena32-10.suse.de"
