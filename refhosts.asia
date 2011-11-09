@@ -5,8 +5,8 @@
 
 # code9 (now in LTSS)
 
-sles9-i386="riker.suse.de"
-sles9-x86_64="couchant.suse.de"
+sles9-i386="zypp.suse.de"
+sles9-x86_64="dax.suse.de"
 sles9-s390="s390zvi48.suse.de"
 sles9-s390x="s390zvi70.suse.de"
 
@@ -17,14 +17,14 @@ sles10sp2_rt-x86_64="kurk.suse.de"
 
 # sle10 sp2 LTSS
 
-sles10sp2_ltss-i386="dax.suse.de"
+sles10sp2_ltss-i386="zypp.suse.de"
 sles10sp2_ltss-x86_64="dax.suse.de"
 sles10sp2_ltss-s390x="s390zvi29.suse.de"
 
 # sle10 sp3 LTSS
 
-sles10sp3_ltss-i386="147.2.207.81"
-sles10sp3_ltss-x86_64="147.2.207.82"
+sles10sp3_ltss-i386="zypp.suse.de"
+sles10sp3_ltss-x86_64="dax.suse.de"
 sles10sp3_ltss-s390x="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
@@ -109,8 +109,8 @@ sl11.4-x86_64="???"
 
 # code9 (now in LTSS)
 
-sles9-i386-kernel="vesalius.suse.de"
-sles9-x86_64-kernel="aurore.suse.de"
+sles9-i386-kernel="zypp.suse.de"
+sles9-x86_64-kernel="dax.suse.de"
 sles9-s390-kernel="s390zvi48.suse.de"
 sles9-s390x-kernel="s390zvi70.suse.de"
 
@@ -121,14 +121,14 @@ sles10sp2_rt-x86_64-kernel="kurk.suse.de"
 
 # sle10 sp2 LTSS
 
-sles10sp2_ltss-i386-kernel="dax.suse.de"
+sles10sp2_ltss-i386-kernel="zypp.suse.de"
 sles10sp2_ltss-x86_64-kernel="dax.suse.de"
 sles10sp2_ltss-s390x-kernel="s390zvi29.suse.de"
 
 # sle10 sp3
 
-sles10sp3_ltss-i386-kernel="147.2.207.81"
-sles10sp3_ltss-x86_64-kernel="147.2.207.82"
+sles10sp3_ltss-i386-kernel="zypp.suse.de"
+sles10sp3_ltss-x86_64-kernel="dax.suse.de"
 sles10sp3_ltss-s390x-kernel="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
