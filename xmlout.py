@@ -1,82 +1,88 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 import re
 import xml.dom.minidom
 
+
 class XMLOutput:
-	def __init__(self, metadata=None):
-		impl = xml.dom.minidom.getDOMImplementation()
 
-		self.output = impl.createDocument(None, "update", None)
-		self.update = self.output.documentElement
+    def __init__(self, metadata=None):
+        impl = xml.dom.minidom.getDOMImplementation()
 
-		if metadata is not None:
-			self.add_header(metadata)
+        self.output = impl.createDocument(None, 'update', None)
+        self.update = self.output.documentElement
 
-	def add_header(self, metadata):
-		self.update.setAttribute("md5", metadata.md5)
-		for type, id in metadata.patches.items():
-			self.update.setAttribute(type, id)
+        if metadata is not None:
+            self.add_header(metadata)
 
-		self.update.setAttribute("swamp", metadata.swampid)
-		self.update.setAttribute("packager", metadata.packager)
-		self.update.setAttribute("category", metadata.category)
+    def add_header(self, metadata):
+        self.update.setAttribute('md5', metadata.md5)
+        for (type, id) in metadata.patches.items():
+            self.update.setAttribute(type, id)
 
-	def add_target(self, target):
-		hostnode = self.get_new_machine_node(target.hostname)
-		self.set_attribute(hostnode, "system", target.system)
+        self.update.setAttribute('swamp', metadata.swampid)
+        self.update.setAttribute('packager', metadata.packager)
+        self.update.setAttribute('category', metadata.category)
 
-		statusnode = self.get_new_status_node(hostnode, "before")
-		for package in target.packages:
-			packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].before))
+    def add_target(self, target):
+        hostnode = self.get_new_machine_node(target.hostname)
+        self.set_attribute(hostnode, 'system', target.system)
 
-		statusnode = self.get_new_status_node(hostnode, "after")
-		for package in target.packages:
-			packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].after))
+        statusnode = self.get_new_status_node(hostnode, 'before')
+        for package in target.packages:
+            packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].before))
 
-		lognode = self.get_new_log_node(hostnode)
+        statusnode = self.get_new_status_node(hostnode, 'after')
+        for package in target.packages:
+            packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].after))
 
-		for command, stdout, stderr, exitcode, runtime in target.log:
-			self.get_new_command_node(lognode, command, "%s\n%s" % (stdout, stderr), exitcode, runtime)
+        lognode = self.get_new_log_node(hostnode)
 
-	def get_new_machine_node(self, hostname):
-		self.machine = self.output.createElement("host")
-		self.machine.setAttribute("hostname", hostname)
-		self.update.appendChild(self.machine)
+        for (command, stdout, stderr, exitcode, runtime) in target.log:
+            self.get_new_command_node(lognode, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
 
-		return self.machine
+    def get_new_machine_node(self, hostname):
+        self.machine = self.output.createElement('host')
+        self.machine.setAttribute('hostname', hostname)
+        self.update.appendChild(self.machine)
 
-	def get_new_status_node(self, parent, which):
-		node = self.output.createElement(which)
-		self.machine.appendChild(node)
+        return self.machine
 
-		return node
+    def get_new_status_node(self, parent, which):
+        node = self.output.createElement(which)
+        self.machine.appendChild(node)
 
-	def get_new_package_node(self, parent, name, version):
-		package = self.output.createElement("package")
-		package.setAttribute("name", name)
-		package.setAttribute("version", version)
-		parent.appendChild(package)
+        return node
 
-	def get_new_log_node(self, parent):
-		self.log = self.output.createElement("log")
-		self.machine.appendChild(self.log)
+    def get_new_package_node(self, parent, name, version):
+        package = self.output.createElement('package')
+        package.setAttribute('name', name)
+        package.setAttribute('version', version)
+        parent.appendChild(package)
 
-		return self.log
+    def get_new_log_node(self, parent):
+        self.log = self.output.createElement('log')
+        self.machine.appendChild(self.log)
 
-	def get_new_command_node(self, parent, command, output, exitcode, runtime):
-		node = self.output.createElement("command")
-		node.setAttribute("name", command)
-		node.setAttribute("return", str(exitcode))
-		node.setAttribute("time", str(runtime))
-		text = self.output.createTextNode(output)
-		node.appendChild(text)
-		parent.appendChild(node)
+        return self.log
 
-	def set_attribute(self, node, name, value):
-		self.machine.setAttribute(name, value)
+    def get_new_command_node(self, parent, command, output, exitcode, runtime):
+        node = self.output.createElement('command')
+        node.setAttribute('name', command)
+        node.setAttribute('return', str(exitcode))
+        node.setAttribute('time', str(runtime))
+        text = self.output.createTextNode(output)
+        node.appendChild(text)
+        parent.appendChild(node)
 
-	def pretty(self):
-		#return re.sub("\033\[[0-9;]+m", "", self.output.toprettyxml())
-		return re.sub("\033", "", self.output.toprettyxml())
+    def set_attribute(self, node, name, value):
+        self.machine.setAttribute(name, value)
+
+    def pretty(self):
+
+        # return re.sub("\033\[[0-9;]+m", "", self.output.toprettyxml())
+
+        return re.sub("\033", '', self.output.toprettyxml())
+
+

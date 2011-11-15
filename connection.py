@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 import sys
@@ -11,248 +11,264 @@ import logging
 import warnings
 
 with warnings.catch_warnings():
-	warnings.filterwarnings("ignore",category=DeprecationWarning)
-	import paramiko
+    warnings.filterwarnings('ignore', category=DeprecationWarning)
+    import paramiko
 
 out = logging.getLogger('mtui')
 
+
 class CommandTimeout(Exception):
-	def __init__(self, command=None):
-		self.command = command
 
-	def __str__(self):
-		return repr(self.command)
+    def __init__(self, command=None):
+        self.command = command
 
-class Connection():
-	"""manage SSH and SFTP connections"""
-	def __init__(self, hostname, timeout):
-		"""opens SSH channel to specified host
+    def __str__(self):
+        return repr(self.command)
 
-		Tries AuthKey Authentication and falls back to password mode in case of errors
 
-		Keyword arguments:
-		hostname -- host address to connect to
+class Connection:
 
-		"""
-		# paramiko.util.log_to_file("/tmp/paramiko.log")
-		self.hostname = hostname
-		self.timeout = timeout
+    """manage SSH and SFTP connections"""
 
-		self.session = None
-		self.client = paramiko.SSHClient()
-		self.client.load_system_host_keys()
-		self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    def __init__(self, hostname, timeout):
+        """opens SSH channel to specified host
 
-		#self.client.set_combine_stderr(True)
+        Tries AuthKey Authentication and falls back to password mode in case of errors
 
-		self.connect()
+        Keyword arguments:
+        hostname -- host address to connect to
 
-	def connect(self):
-		try:
-			self.client.connect(self.hostname, username='root')
-		except paramiko.AuthenticationException:
-			out.warning("Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly" % self.hostname)
-			print "Trying manually, please specify root password"
-			password = getpass.getpass()
+        """
 
-			try:
-				self.client.connect(self.hostname, username='root', password=password)
-			except paramiko.AuthenticationException:
-				out.error("Authentication failed on %s: wrong password" % self.hostname)
-				raise
+        # paramiko.util.log_to_file("/tmp/paramiko.log")
 
-		except paramiko.BadHostKeyException:
-			out.error("Authentication failed on %s: Hostkey did not match. Make sure your system is set up correctly" % self.hostname)
-			raise
+        self.hostname = hostname
+        self.timeout = timeout
 
-	def reconnect(self):
-		#if self.is_active():
-		#	return
+        self.session = None
+        self.client = paramiko.SSHClient()
+        self.client.load_system_host_keys()
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-		out.debug("lost connection, reconnecting")
-		select.select([], [], [], 10)
-		self.connect()
+        # self.client.set_combine_stderr(True)
 
-		assert self.is_active()
+        self.connect()
 
-	def new_session(self):
-		try:
-			transport = self.client.get_transport()
-			transport.use_compression()
-			session = transport.open_session()
-			session.setblocking(0)
-			session.settimeout(0)
-			self.session = session
-		except Exception:
-			self.session = None
+    def connect(self):
+        try:
+            self.client.connect(self.hostname, username='root')
+        except paramiko.AuthenticationException:
+            out.warning('Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly' % self.hostname)
+            print 'Trying manually, please specify root password'
+            password = getpass.getpass()
 
-		return self.session
+            try:
+                self.client.connect(self.hostname, username='root', password=password)
+            except paramiko.AuthenticationException:
+                out.error('Authentication failed on %s: wrong password' % self.hostname)
+                raise
+        except paramiko.BadHostKeyException:
 
-	def close_session(self):
-		try:
-			self.session.shutdown(2)
-			self.session.close()
-			self.session = None
-		except:
-			pass
+            out.error('Authentication failed on %s: Hostkey did not match. Make sure your system is set up correctly' % self.hostname)
+            raise
 
-	def run(self, command, lock=None):
-		"""run command over SSH channel
+    def reconnect(self):
 
-		Blocks until command terminates. Return value of issued command is returned.
-		In case of errors, -1 is returned.
+        # if self.is_active():
+        #    return
 
-		Keyword arguments:
-		command -- the command to run
+        out.debug('lost connection, reconnecting')
+        select.select([], [], [], 10)
+        self.connect()
 
-		"""
-		self.stdin = command
-		self.stdout = ''
-		self.stderr = ''
+        assert self.is_active()
 
-		session = self.new_session()
+    def new_session(self):
+        try:
+            transport = self.client.get_transport()
+            transport.use_compression()
+            session = transport.open_session()
+            session.setblocking(0)
+            session.settimeout(0)
+            self.session = session
+        except Exception:
+            self.session = None
 
-		try:
-			session.exec_command(command)
-		except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-			self.reconnect()
-			return self.run(command, lock)
+        return self.session
 
-		while True:
-			buffer = ''
+    def close_session(self):
+        try:
+            self.session.shutdown(2)
+            self.session.close()
+            self.session = None
+        except:
+            pass
 
-			if select.select([session], [], [], self.timeout) == ([],[],[]):
-				assert self.session
+    def run(self, command, lock=None):
+        """run command over SSH channel
 
-				if lock is not None:
-					lock.acquire()
+        Blocks until command terminates. Return value of issued command is returned.
+        In case of errors, -1 is returned.
 
-				try:
-					if raw_input('command "%s" timed out on %s. wait? (y/N) ' % (command, self.hostname)).lower() in ["y", "yes"]:
-						continue
-					else:
-						raise CommandTimeout
-				finally:
-					if lock is not None:
-						lock.release()
+        Keyword arguments:
+        command -- the command to run
 
-			try:
-				if session.recv_ready():
-					buffer = session.recv(1024)
-					self.stdout += buffer
+        """
 
-					for line in buffer.split('\n'):
-						if line: out.debug(line)
+        self.stdin = command
+        self.stdout = ''
+        self.stderr = ''
 
-				if session.recv_stderr_ready():
-					buffer = session.recv_stderr(1024)
-					self.stderr += buffer
+        session = self.new_session()
 
-					for line in buffer.split('\n'):
-						if line: out.debug(line)
+        try:
+            session.exec_command(command)
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            self.reconnect()
+            return self.run(command, lock)
 
-				if not buffer:
-					break
+        while True:
+            buffer = ''
 
-			except socket.timeout:
-				select.select([], [], [], 1)
+            if select.select([session], [], [], self.timeout) == ([], [], []):
+                assert self.session
 
-		exitcode = session.recv_exit_status()
+                if lock is not None:
+                    lock.acquire()
 
-		self.close_session()
+                try:
+                    if raw_input('command "%s" timed out on %s. wait? (y/N) ' % (command, self.hostname)).lower() in ['y', 'yes']:
+                        continue
+                    else:
+                        raise CommandTimeout
+                finally:
+                    if lock is not None:
+                        lock.release()
 
-		return exitcode
+            try:
+                if session.recv_ready():
+                    buffer = session.recv(1024)
+                    self.stdout += buffer
 
-	def put(self, local, remote):
-		"""transfers file to the host over SSH channel
+                    for line in buffer.split('\n'):
+                        if line:
+                            out.debug(line)
 
-		File is made executable
+                if session.recv_stderr_ready():
+                    buffer = session.recv_stderr(1024)
+                    self.stderr += buffer
 
-		Keyword arguments:
-		local  -- local file name
-		remote -- remote file name
+                    for line in buffer.split('\n'):
+                        if line:
+                            out.debug(line)
 
-		"""
-		path = ""
-		sftp = self.client.open_sftp()
+                if not buffer:
+                    break
+            except socket.timeout:
 
-		for subdir in remote.split('/')[:-1]:
-			path += subdir + '/'
-			try:
-				sftp.mkdir(path)
-			except (AttributeError, paramiko.ChannelException):
-				self.reconnect()
-				return self.put(local, remote)
-			except Exception:
-				pass
+                select.select([], [], [], 1)
 
-		sftp.put(local, remote)
-		sftp.chmod(remote, stat.S_IEXEC)
+        exitcode = session.recv_exit_status()
 
-		sftp.close()
+        self.close_session()
 
-	def get(self, remote, local):
-		"""transfers file from the host over SSH channel 
+        return exitcode
 
-		Keyword arguments:
-		remote -- remote file name
-		local  -- local file name
+    def put(self, local, remote):
+        """transfers file to the host over SSH channel
 
-		"""
-		sftp = self.client.open_sftp()
-		try:
-			sftp.get(remote, local)
-		except (AttributeError, paramiko.ChannelException):
-			self.reconnect()
-			return self.get(remote, local)
+        File is made executable
 
-		sftp.close()
+        Keyword arguments:
+        local  -- local file name
+        remote -- remote file name
 
-	def listdir(self, path='.'):
-		sftp = self.client.open_sftp()
-		try:
-			return sftp.listdir(path)
-		except (AttributeError, paramiko.ChannelException):
-			self.reconnect()
-			return self.listdir(path)
+        """
 
-	def open(self, filename, mode='r', bufsize=-1):
-		sftp = self.client.open_sftp()
-		try:
-			return sftp.open(filename, mode, bufsize)
-		except (AttributeError, paramiko.ChannelException):
-			self.reconnect()
-			return self.open(filename, mode, bufsize)
+        path = ''
+        sftp = self.client.open_sftp()
 
-	def remove(self, path):
-		sftp = self.client.open_sftp()
-		try:
-			return sftp.remove(path)
-		except (AttributeError, paramiko.ChannelException):
-			self.reconnect()
-			return self.remove(path)
+        for subdir in remote.split('/')[:-1]:
+            path += subdir + '/'
+            try:
+                sftp.mkdir(path)
+            except (AttributeError, paramiko.ChannelException):
+                self.reconnect()
+                return self.put(local, remote)
+            except Exception:
+                pass
 
-	def is_active(self):
-		"""check if connection to host is still active
+        sftp.put(local, remote)
+        sftp.chmod(remote, stat.S_IEXEC)
 
-		Keyword arguments:
-		None
+        sftp.close()
 
-		"""
-		try:
-			self.new_session()
-			self.close_session()
-		except Exception:
-			return False
+    def get(self, remote, local):
+        """transfers file from the host over SSH channel 
 
-		return True
+        Keyword arguments:
+        remote -- remote file name
+        local  -- local file name
 
-	def close(self):
-		"""closes SSH channel to host and disconnects
+        """
 
-		Keyword arguments:
-		None
+        sftp = self.client.open_sftp()
+        try:
+            sftp.get(remote, local)
+        except (AttributeError, paramiko.ChannelException):
+            self.reconnect()
+            return self.get(remote, local)
 
-		"""
+        sftp.close()
 
-		self.client.close()
+    def listdir(self, path='.'):
+        sftp = self.client.open_sftp()
+        try:
+            return sftp.listdir(path)
+        except (AttributeError, paramiko.ChannelException):
+            self.reconnect()
+            return self.listdir(path)
+
+    def open(self, filename, mode='r', bufsize=-1):
+        sftp = self.client.open_sftp()
+        try:
+            return sftp.open(filename, mode, bufsize)
+        except (AttributeError, paramiko.ChannelException):
+            self.reconnect()
+            return self.open(filename, mode, bufsize)
+
+    def remove(self, path):
+        sftp = self.client.open_sftp()
+        try:
+            return sftp.remove(path)
+        except (AttributeError, paramiko.ChannelException):
+            self.reconnect()
+            return self.remove(path)
+
+    def is_active(self):
+        """check if connection to host is still active
+
+        Keyword arguments:
+        None
+
+        """
+
+        try:
+            self.new_session()
+            self.close_session()
+        except Exception:
+            return False
+
+        return True
+
+    def close(self):
+        """closes SSH channel to host and disconnects
+
+        Keyword arguments:
+        None
+
+        """
+
+        self.client.close()
+
+

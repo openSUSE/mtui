@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python
 # -*- coding: utf-8 -*-
 
 import os
@@ -9,126 +9,133 @@ from target import *
 
 out = logging.getLogger('mtui')
 
+
 class Template:
-	"""input handling of QA Maintenance template file"""
-	def __init__(self, md5, team=None, directory=None):
-		"""open and parse maintenance template file
 
-		Keyword arguments:
-		md5       -- md5 checksum of patchinfo
-		team      -- team suffix (emea or asia) of template file
-		directory -- QA maintenance update directory
+    """input handling of QA Maintenance template file"""
 
-		"""
-		self.md5 = md5
+    def __init__(self, md5, team=None, directory=None):
+        """open and parse maintenance template file
 
-		if directory is not None:
-			self.path = directory + '/' + md5 + '/'
-		else:
-			self.path = './' + md5 + '/'
+        Keyword arguments:
+        md5       -- md5 checksum of patchinfo
+        team      -- team suffix (emea or asia) of template file
+        directory -- QA maintenance update directory
 
-		if team is None:
-			team = "emea"
+        """
 
-		self.refhosts = "refhosts." + team
-		self.path = self.path + 'log'
-		if not os.path.isfile(self.path):
-			self.path = self.path + '.' + team
+        self.md5 = md5
 
-		self.metadata = Metadata()
-		self.metadata.md5 = md5
-		self.metadata.path = self.path
+        if directory is not None:
+            self.path = directory + '/' + md5 + '/'
+        else:
+            self.path = './' + md5 + '/'
 
-		try:
-			with open(self.path, 'r') as template:
-				self.parse_template(template)
-		except IOError as error:
-			out.error("failed to open template: %s" % error.strerror)
-			raise
+        if team is None:
+            team = 'emea'
 
-	def parse_template(self, template):
-		"""parse maintenance template file
+        self.refhosts = 'refhosts.' + team
+        self.path = self.path + 'log'
+        if not os.path.isfile(self.path):
+            self.path = self.path + '.' + team
 
-		parses metadata from QA maintenance template file
+        self.metadata = Metadata()
+        self.metadata.md5 = md5
+        self.metadata.path = self.path
 
-		Keyword arguments:
-		template -- template file contents
+        try:
+            with open(self.path, 'r') as template:
+                self.parse_template(template)
+        except IOError, error:
+            out.error('failed to open template: %s' % error.strerror)
+            raise
 
-		"""
-		for line in template.readlines():
-			match = re.search("Category: (.+)", line)
-			if match:
-				self.metadata.category = match.group(1)
+    def parse_template(self, template):
+        """parse maintenance template file
 
-			match = re.search("YOU Patch No: (\d+)", line)
-			if match:
-				self.metadata.patches["you"] = match.group(1)
+        parses metadata from QA maintenance template file
 
-			match = re.search("ZYPP Patch No: (\d+)", line)
-			if match:
-				self.metadata.patches["zypp"] = match.group(1)
+        Keyword arguments:
+        template -- template file contents
 
-			match = re.search("SAT Patch No: (\d+)", line)
-			if match:
-				self.metadata.patches["sat"] = match.group(1)
+        """
 
-			match = re.search("SUBSWAMPID: (\d+)", line)
-			if match:
-				self.metadata.swampid = match.group(1)
+        for line in template.readlines():
+            match = re.search('Category: (.+)', line)
+            if match:
+                self.metadata.category = match.group(1)
 
-			match = re.search("Packager: (.+)", line)
-			if match:
-				self.metadata.packager = match.group(1)
+            match = re.search("YOU Patch No: (\d+)", line)
+            if match:
+                self.metadata.patches['you'] = match.group(1)
 
-			match = re.search("Packages: (.+)", line)
-			if match:
-				self.metadata.packages = dict([(pack.split()[0],pack.split()[2]) for pack in match.group(1).split(",")])
+            match = re.search("ZYPP Patch No: (\d+)", line)
+            if match:
+                self.metadata.patches['zypp'] = match.group(1)
 
-			match = re.search("Suggested Test Plan Reviewers: (.+)", line)
-			if match:
-				self.metadata.reviewer = match.group(1)
+            match = re.search("SAT Patch No: (\d+)", line)
+            if match:
+                self.metadata.patches['sat'] = match.group(1)
 
-			match = re.search("(.*-.*) \(reference host: (.+)\)", line)
-			if match:
-				if '?' in match.group(2):
-					hostname = self.get_refhost(match.group(1))
-				else:
-					hostname = match.group(2)
+            match = re.search("SUBSWAMPID: (\d+)", line)
+            if match:
+                self.metadata.swampid = match.group(1)
 
-				if hostname:
-					self.metadata.systems[hostname] = match.group(1)
-				else:
-					out.error("no hostname found for system %s" % match.group(1))
+            match = re.search('Packager: (.+)', line)
+            if match:
+                self.metadata.packager = match.group(1)
 
-			match = re.search("Bug #(\d+) \(\"(.*)\"\):", line) # deprecated
-			if match:
-				self.metadata.bugs[match.group(1)] = match.group(2)
+            match = re.search('Packages: (.+)', line)
+            if match:
+                self.metadata.packages = dict([(pack.split()[0], pack.split()[2]) for pack in match.group(1).split(',')])
 
-			match = re.search("Bugs: (.*)", line)
-			if match:
-				for bug in match.group(1).split(','):
-					self.metadata.bugs[bug.strip(' ')] = "Description not available"
+            match = re.search('Suggested Test Plan Reviewers: (.+)', line)
+            if match:
+                self.metadata.reviewer = match.group(1)
 
-	def get_refhost(self, system):
-		"""get refhost from system name
+            match = re.search("(.*-.*) \(reference host: (.+)\)", line)
+            if match:
+                if '?' in match.group(2):
+                    hostname = self.get_refhost(match.group(1))
+                else:
+                    hostname = match.group(2)
 
-		parses refhost mapping file to get testing machine
+                if hostname:
+                    self.metadata.systems[hostname] = match.group(1)
+                else:
+                    out.error('no hostname found for system %s' % match.group(1))
 
-		Keyword arguments:
-		system -- requested system name
+            match = re.search("Bug #(\d+) \(\"(.*)\"\):", line)  # deprecated
+            if match:
+                self.metadata.bugs[match.group(1)] = match.group(2)
 
-		"""
-		refhostfile = os.path.dirname(__file__) + "/" + self.refhosts
+            match = re.search('Bugs: (.*)', line)
+            if match:
+                for bug in match.group(1).split(','):
+                    self.metadata.bugs[bug.strip(' ')] = 'Description not available'
 
-		try:
-			with open(refhostfile, 'r') as reffile:
-				for line in reffile.readlines():
-					match = re.search('%s="(.*)"' % system, line)
-					if match:
-						return match.group(1)
-		except OSError as error:
-			if error.errno == errno.ENOENT:
-				out.warning("refhost mapping file %s not found" % self.refhosts)
-			else:
-				pass
-		
+    def get_refhost(self, system):
+        """get refhost from system name
+
+        parses refhost mapping file to get testing machine
+
+        Keyword arguments:
+        system -- requested system name
+
+        """
+
+        refhostfile = os.path.dirname(__file__) + '/' + self.refhosts
+
+        try:
+            with open(refhostfile, 'r') as reffile:
+                for line in reffile.readlines():
+                    match = re.search('%s="(.*)"' % system, line)
+                    if match:
+                        return match.group(1)
+        except OSError, error:
+            if error.errno == errno.ENOENT:
+                out.warning('refhost mapping file %s not found' % self.refhosts)
+            else:
+                pass
+
+
