@@ -6,6 +6,8 @@ import logging
 import codecs
 import xml.dom.minidom
 
+from rpmver import *
+
 out = logging.getLogger('mtui')
 
 def xml_to_template(template, xmldata):
@@ -73,6 +75,7 @@ def xml_to_template(template, xmldata):
 				t.insert(i, "\n")
 
 	for host in x.getElementsByTagName("host"):
+		versions = {}
 		hostname = host.getAttribute("hostname")
 		systemtype = host.getAttribute("system")
 
@@ -83,6 +86,7 @@ def xml_to_template(template, xmldata):
 			out.warning("host section %s not found" % hostname)
 			continue
 		for state in ["before", "after"]:
+			versions[state] = {}
 			try:
 				i = t.index("      %s:\n" % state, i) + 1
 			except ValueError:
@@ -97,6 +101,8 @@ def xml_to_template(template, xmldata):
 					try:
 						name = child.getAttribute("name")
 						version = child.getAttribute("version")
+						versions[state].update({ name: version })
+
 						if "None" in version:
 							break
 
@@ -123,6 +129,12 @@ def xml_to_template(template, xmldata):
 		log = host.getElementsByTagName("log")[0]
 
 		failed = 0
+		for package in versions["before"].keys():
+			if RPMVersion(versions["before"][package]) >= RPMVersion(versions["after"][package]):
+				failed = 1
+		if failed == 1:
+			out.warning("installation test result on %s set to FAILED as some packages were not updated. please override manually." % hostname)
+
 		for child in log.childNodes:
 			try:
 				name = child.getAttribute("name")

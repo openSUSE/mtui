@@ -244,14 +244,6 @@ class Prepare():
 				for target in self.targets:
 					self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(), self.targets[target].lasterr(), self.targets[target].lastexit())
 
-			for target in self.targets:
-				queue.put([self.targets[target].set_repo, ["TESTING"]])
-
-			while queue.unfinished_tasks:
-				spinner()
-			
-			queue.join()
-
 		except:
 			raise
 		finally:

@@ -15,7 +15,7 @@ import getpass
 
 from datetime import date, datetime
 
-from rpmcmp import *
+from rpmver import *
 from target import *
 from updater import *
 from export import *
@@ -315,12 +315,77 @@ class CommandPromt(cmd.Cmd):
 		if exitcode:
 			out.error("failed to fetch src rpm")
 			return
-		exitcode = os.system('cd %s; rpm2cpio *.src.rpm | cpio -i --unconditional --preserve-modification-time --make-directories %s' % (destination, pattern))
+		exitcode = os.system('cd %s; for i in *.src.rpm; do rpm2cpio $i | cpio -i --unconditional --preserve-modification-time --make-directories %s; done' % (destination, pattern))
 		if exitcode:
 			out.error("failed to extract src rpm")
 			return
 
 		out.info("src rpm was extracted to %s" % destination)
+
+	def do_source_diff(self, args):
+		"""
+		Creates a source diff between the update package and the installed
+		package. The osc command line client needs to be installed and
+		configured first.
+		
+		source_diff
+		Keyword arguments:
+		None
+		"""
+		if args:
+			self.parse_error(self.do_source_verify, args)
+
+		try:
+			import osc
+			from osc import commandline
+		except:
+			out.error("missing osc module. please install osc and setup an account.")
+			return
+
+		try:
+			osc.conf.get_config()
+		except:
+			out.error("osc account not found. please check ~/.oscrc")
+			return
+
+		targets = enabled_targets(self.targets)
+		self.do_source_extract("")
+
+		updated = {}
+		installed = {}
+		destination = "/tmp/%s" % self.metadata.md5
+
+		for rpmfile in glob.glob(destination + "/*.src.rpm"):
+			match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", RPMFile(rpmfile).disturl())
+			if match:
+				project = match.group(1)
+				commit = match.group(2)
+				name = match.group(3)
+				updated[name] = { "project":project, "commit":commit }
+
+		for name in updated.keys():
+			RunCommand(targets, 'rpm -q --qf "%%{DISTURL}\n" %s' % name).run()
+
+			for target in targets:
+				lines = targets[target].lastout().split("\n")
+				for line in lines:
+					match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", line)
+					if match:
+						project = match.group(1)
+						commit = match.group(2)
+						name = match.group(3)
+						installed[name] = { "project":project, "commit":commit }
+
+			try:
+				if installed[name]["commit"] == updated[name]["commit"]:
+					out.warning('package %s already updated. skipping' % name)
+				else:
+					diff = "%s/%s-osc.diff" % (destination, name)
+					with open(diff, "w+") as f:
+						f.write(osc.core.server_diff("https://api.suse.de", installed[name]["project"], name, installed[name]["commit"], updated[name]["project"], name, updated[name]["commit"], unified=True))
+					out.info("wrote diff to %s" % diff)
+			except KeyError:
+				out.warning('package %s not installed on target hosts. skipping.' % name)
 
 	def do_source_verify(self, args):
 		"""
@@ -538,6 +603,7 @@ class CommandPromt(cmd.Cmd):
 			print '{0:15}: {1}'.format("MD5SUM", self.metadata.md5)
 			print '{0:15}: {1}'.format("SWAMP ID", self.metadata.swampid)
 			print '{0:15}: {1}'.format("Category", self.metadata.category)
+			print '{0:15}: {1}'.format("Reviewer", self.metadata.reviewer)
 			print '{0:15}: {1}'.format("Packager", self.metadata.packager)
 			for type, id in self.metadata.patches.items():
 				print '{0:15}: {1}'.format(type.upper(), id)
@@ -550,26 +616,28 @@ class CommandPromt(cmd.Cmd):
 		"""
 		Prints the package version history in chronological order.
 		The history of every test host is checked and consolidated.
+		If no packages are specified, the version history of the
+		update packages are shown.
 
-		list_versions 
+		list_versions [package,...,package]
 		Keyword arguments:
-		None
+		package  -- packagename to show version history
 		"""
 
 		if args:
-			self.parse_error(self.do_list_versions, args)
-			return
+			packages = args.replace(',', ' ')
+		else:
+			packages = " ".join(self.metadata.get_package_list())
 
 		targets = enabled_targets(self.targets)
 
 		history = {}
-		packages = " ".join(self.metadata.get_package_list())
 
 		if targets:
 			if int(self.metadata.get_release()) > 10:
-				query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -rg | uniq" % packages
+				query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | uniq" % packages
 			else:
-				query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -rg | uniq" % packages
+				query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | uniq" % packages
 
 			RunCommand(targets, query).run()
 			for target in targets:
@@ -580,13 +648,15 @@ class CommandPromt(cmd.Cmd):
 					history[checksum] = []
 					history[checksum].append(target)
 
-			for version in history:
+			for path in history:
 				name = ""
 				release = {}
 
 				if len(history) > 1:
-					for target in history[version]:
-						print "version history from %s (%s):" % (target, targets[target].system)
+					print "version history from:"
+					for target in history[path]:
+						print "  %s (%s)" % (target, targets[target].system)
+				print
 
 				lines = targets[target].lastout().split("\n")
 				for line in lines:
@@ -600,8 +670,12 @@ class CommandPromt(cmd.Cmd):
 							release[name].append(match.group(2))
 
 				for package in release:
-					print "%s: %s" % (package, " -> ".join(release[package]))
-				print
+					print "%s:" % package
+					indent = 0
+					for version in sorted(release[package], key=RPMVersion, reverse=True):
+						print "  " * indent + "-> %s" % version
+						indent = indent + 1
+					print
 
 	def do_show_log(self, args):
 		"""
@@ -1278,7 +1352,7 @@ class CommandPromt(cmd.Cmd):
 						missing = True
 						not_installed.append(package)
 					else:
-						if vercmp(before, required) > -1:
+						if RPMVersion(before) >= RPMVersion(required):
 							out.warning("%s: package is already updated: %s (%s, required %s)" % (target, package, before, required))
 
 				if len(not_installed):
@@ -1322,11 +1396,11 @@ class CommandPromt(cmd.Cmd):
 					packages[package].set_versions(after=after)
 
 					if after is not None and after != "0":
-						if vercmp(before, after) == 0:
+						if RPMVersion(before) == RPMVersion(after):
 							missing = True
 							out.warning("%s: package was not updated: %s (%s)" % (target, package, after))
 
-						if vercmp(after, required) < 0:
+						if RPMVersion(after) < RPMVersion(required):
 							missing = True
 							out.warning("%s: package does not match required version: %s (%s, required %s)" % (target, package, after, required))
 

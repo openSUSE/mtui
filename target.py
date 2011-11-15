@@ -311,6 +311,7 @@ class Metadata:
 		self.swampid = ""
 		self.packager = ""
 		self.packages = {}
+		self.reviewer = ""
 		self.systems = {}
 		self.bugs = {}
 

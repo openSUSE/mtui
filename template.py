@@ -84,6 +84,10 @@ class Template:
 			if match:
 				self.metadata.packages = dict([(pack.split()[0],pack.split()[2]) for pack in match.group(1).split(",")])
 
+			match = re.search("Suggested Test Plan Reviewers: (.+)", line)
+			if match:
+				self.metadata.reviewer = match.group(1)
+
 			match = re.search("(.*-.*) \(reference host: (.+)\)", line)
 			if match:
 				if '?' in match.group(2):

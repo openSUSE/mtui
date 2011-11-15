@@ -126,6 +126,17 @@ State could be "Enabled", "Disabled" or "Dryrun".
 		Keyword arguments:
 		None
 
+- list_history
+Lists a history of mtui events on the target hosts like installing or
+updating packages. Date, username and event is shown.
+Events could be filtered with the event parameter.
+
+                list_history [hostname,...][,event]
+                Keyword arguments:
+                hostname -- hostname from the target list or "all"
+                event    -- connect, disconnect, install, update, downgrade
+                None
+
 - list_locks
 Lists lock state of all connected hosts
 
@@ -136,16 +147,19 @@ Lists lock state of all connected hosts
 
 - set_host_state
 Sets the host state to "Enabled", "Disabled" or "Dryrun". A host set to
-"Enabled" runs all issued commands while a "Disabled" host or a host set
-to "Dryrun" doesn't run any command on the host. The difference between
-"Disabled" and "Dryrun" is that on "Dryrun" hosts the issued commands
-are printed to the console while "Disabled" doesn't print anything. The
-commands accepts multiple hostnames followed by the wanted state.
+"Enabled" runs all issued commands while a "Disabled" host or a host set to
+"Dryrun" doesn't run any command on the host. The difference between
+"Disabled" and "Dryrun" is that on "Dryrun" hosts the issued commands are
+printed to the console while "Disabled" doesn't print anything.
+Additionally, the execution mode of each host could be set to "parallel"
+(default) or "serial". All commands which are designed to run in parallel are
+influenced by this option (like to run command)
+The commands accepts multiple hostnames followed by the wanted state.
 
 		set_host_state <hostname>,hostname,...,<state>
 		Keyword arguments:
 		hostname -- hostname from the target list
-		state    -- enabled, disabled, dryrun
+		state    -- enabled, disabled, dryrun, parallel, serial
 
 
 - set_host_lock
@@ -176,7 +190,7 @@ The timeout value is set in seconds. To disable the timeout set it to "0".
 - list_timeout
 Prints the current timeout values per host in seconds.
 		
-		list_timeout
+		list_timeout <timeout>
 		Keyword arguments:
 		None
 
@@ -242,9 +256,11 @@ Testing Commands
 Runs a command on a specified host or on all enabled targets if 'all' is given
 as hostname. The command timeout is set to 5 minutes which means, if there's
 no output on stdout or stderr for 5 minutes, a timeout exception is thrown.
-The commands are run in parallel on every target. After the call returned, the
-output (including the return code) of each host is shown on the console.
-Please be aware that no interactive commands can be run with this procedure.
+The commands are run in parallel on every target or in serial mode when set
+with "set_host_state". After the call returned, the output (including the
+return code) of each host is shown on the console.
+Please be aware that no interactive commands can be run with this
+procedure.
 
 		run <hostname,command>
 		Keyword arguments:
@@ -341,6 +357,16 @@ the package is not installed.
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
 
+- list_versions
+Prints the package version history in chronological order.
+The history of every test host is checked and consolidated.
+If no packages are specified, the version history of the
+update packages are shown.
+
+		list_versions [package,...,package]
+		Keyword arguments:
+		package  -- packagename to show version history
+
 - list_update_commands
 List all commands which are invoked when applying updates on the target hosts.
 
@@ -386,7 +412,7 @@ recommended to use the "warning" loglevel.
 		set_log_level <loglevel>
 		Keyword arguments:
 		loglevel -- warning, info or debug
-        
+
 - save
 Save the testing log to a XML file. All commands and package versions are saved
 there. When no parameter is given, the XML is saved to
@@ -411,9 +437,9 @@ the XML log when exiting MTUI.
 Prints a short help text for the requested procedure or a list of all available
 function if no parameter is given.
 
-                help [function]
-                Keyword arguments:
-                function -- print help text for this function
+		help [function]
+		Keyword arguments:
+		function -- print help text for this function
 
 Other Commands
 *****************
@@ -440,6 +466,15 @@ content is extracted.
 		Keyword arguments:
 		filename -- filename to extract
 
+- source_diff
+Creates a source diff between the update package and the installed
+package. The osc command line client needs to be installed and
+configured first.
+		
+		source_diff
+		Keyword arguments:
+		None
+
 - source_verify
 Verifies SPECFILE content. Makes sure that every Patch entry is applied.
 		
@@ -449,7 +484,7 @@ Verifies SPECFILE content. Makes sure that every Patch entry is applied.
 
 - source_install
 Installs current source RPMs to the target hosts. 
-		
+
 		source_install <hostname>
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
