@@ -338,8 +338,7 @@ class CommandPromt(cmd.Cmd):
         This creates a diff between the patched build directories and
         is usually architecture dependend.
 
-        The osc command line client needs to be installed and
-        configured first.
+        The osc command line client needs to be installed first.
 
         source_diff <type>
         Keyword arguments:
@@ -354,11 +353,11 @@ class CommandPromt(cmd.Cmd):
                 out.error('missing osc module. please install osc and setup an account.')
                 return
 
-            try:
-                osc.conf.get_config()
-            except:
-                out.error('osc account not found. please check ~/.oscrc')
-                return
+            api_config_options = {'https://api.suse.de': {'http_headers': [], 'sslcertck': True, 'user': 'qa', 'pass': 'qa'}}
+            osc.conf.config['api_host_options'] = api_config_options
+            osc.conf.config['debug'] = 0
+            osc.conf.config['verbose'] = 0
+            osc.conf.config['http_debug'] = 0
 
             targets = enabled_targets(self.targets)
             self.do_source_extract('')
@@ -380,15 +379,14 @@ class CommandPromt(cmd.Cmd):
                 RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % name).run()
 
                 for target in targets:
-                    lines = targets[target].lastout().split('\n')
-                    for line in lines:
-                        match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", line)
-                        if match:
-                            disturl = match.group(0)
-                            project = match.group(1)
-                            commit = match.group(2)
-                            name = match.group(3)
-                            installed[name] = {'project': project, 'commit': commit, 'disturl': disturl}
+                    line = targets[target].lastout().split('\n')[0]
+                    match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", line)
+                    if match:
+                        disturl = match.group(0)
+                        project = match.group(1)
+                        commit = match.group(2)
+                        name = match.group(3)
+                        installed[name] = {'project': project, 'commit': commit, 'disturl': disturl}
 
                 try:
                     if installed[name]['commit'] == updated[name]['commit']:
@@ -408,14 +406,10 @@ class CommandPromt(cmd.Cmd):
                                 else:
                                     disturl = installed[name]['disturl']
 
-                                for target in targets.keys():
-                                    if ".oscrc" not in targets[target].listdir("."):
-                                        out.warning("no osc configuration found on %s. skipping." % target)
-                                        del targets[target]
-
+                                RunCommand(targets, 'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui').run()
                                 RunCommand(targets, 'mkdir -p %s' % builddir).run()
-                                RunCommand(targets, 'cd %s; osc -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
-                                RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec' 
+                                RunCommand(targets, 'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
+                                RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
                                         % (sourcedir, name, builddir, sourcedir, name)).run()
 
                             RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
@@ -426,7 +420,7 @@ class CommandPromt(cmd.Cmd):
                             out.info('wrote diff remotely to %s' % diff)
 
                 except KeyError:
-                    out.warning('package %s not installed on target hosts. skipping.' % name)
+                    out.warning('osc disturl not found for package %s. skipping.' % name)
         else:
             self.parse_error(self.do_source_diff, args)
 

@@ -478,8 +478,7 @@ If diff type "build" is set, a build diff is created.
 This creates a diff between the patched build directories and
 is usually architecture dependend.
 
-The osc command line client needs to be installed and
-configured first.
+The osc command line client needs to be installed first.
 
 		source_diff <type>
 		Keyword arguments:
