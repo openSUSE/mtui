@@ -5,7 +5,7 @@ import re
 import xml.dom.minidom
 
 
-class XMLOutput:
+class XMLOutput(object):
 
     def __init__(self, metadata=None):
         impl = xml.dom.minidom.getDOMImplementation()

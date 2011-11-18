@@ -190,7 +190,7 @@ The timeout value is set in seconds. To disable the timeout set it to "0".
 - list_timeout
 Prints the current timeout values per host in seconds.
 		
-		list_timeout <timeout>
+		list_timeout
 		Keyword arguments:
 		None
 
@@ -467,13 +467,23 @@ content is extracted.
 		filename -- filename to extract
 
 - source_diff
-Creates a source diff between the update package and the installed
-package. The osc command line client needs to be installed and
+Creates a source diff between the update package and the currently
+installed package. If the diff needs to be against the latest
+released package, make sure to run "prepare" first.
+
+If diff type "source" is set, a package source diff is created.
+This creates usually a diff of the specfile and new patchfiles.
+
+If diff type "build" is set, a build diff is created.
+This creates a diff between the patched build directories and
+is usually architecture dependend.
+
+The osc command line client needs to be installed and
 configured first.
-		
-		source_diff
+
+		source_diff <type>
 		Keyword arguments:
-		None
+		type     -- "build" or "source" diff
 
 - source_verify
 Verifies SPECFILE content. Makes sure that every Patch entry is applied.

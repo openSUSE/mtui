@@ -3,6 +3,9 @@
 
 import os
 import time
+import fcntl
+import struct
+import termios
 import tempfile
 import readline
 
@@ -31,7 +34,6 @@ def edit_text(text):
             text = tmp.read().strip('\n')
             text = text.replace("'", '"')
     except Exception:
-
         out.error('failed to read temp file')
 
     del tmpfile
@@ -56,10 +58,9 @@ def input(text, options):
 
     try:
         response = raw_input(text).lower()
-        if response in options:
+        if response and response in options:
             result = True
     except KeyboardInterrupt:
-
         pass
     finally:
         if response:
@@ -67,4 +68,47 @@ def input(text, options):
 
         return result
 
+
+def termsize():
+    height, width = struct.unpack('hh', fcntl.ioctl(0, termios.TIOCGWINSZ, '1234'))
+
+    return width, height
+
+
+def page(text):
+
+    prompt = "Press any key to continue... (q to quit)"
+
+    width, height = termsize()
+
+    text.reverse()
+
+    try:
+        line = text.pop().rstrip('\r\n')
+    except IndexError:
+        return
+
+    while True:
+        linesleft = height - 1
+        while linesleft:
+            linelist = [line[i:i+width] for i in xrange(0, len(line), width)]
+            if not linelist:
+                linelist = ['']
+            lines2print = min(len(linelist), linesleft)
+            for i in range(lines2print):
+                print linelist[i]
+            linesleft -= lines2print
+            linelist = linelist[lines2print:]
+
+            if linelist:
+                line = ''.join(linelist)
+                continue
+            else:
+                try:
+                    line = text.pop().rstrip('\r\n')
+                except IndexError:
+                    return
+
+        if input(prompt, "q"):
+            return
 

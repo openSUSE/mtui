@@ -26,7 +26,7 @@ class CommandTimeout(Exception):
         return repr(self.command)
 
 
-class Connection:
+class Connection(object):
 
     """manage SSH and SFTP connections"""
 
@@ -68,7 +68,6 @@ class Connection:
                 out.error('Authentication failed on %s: wrong password' % self.hostname)
                 raise
         except paramiko.BadHostKeyException:
-
             out.error('Authentication failed on %s: Hostkey did not match. Make sure your system is set up correctly' % self.hostname)
             raise
 
@@ -165,7 +164,6 @@ class Connection:
                 if not buffer:
                     break
             except socket.timeout:
-
                 select.select([], [], [], 1)
 
         exitcode = session.recv_exit_status()

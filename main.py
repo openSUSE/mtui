@@ -9,7 +9,7 @@ import logging
 import shutil
 
 from log import *
-from promt import *
+from prompt import *
 from template import *
 
 out = logging.getLogger('mtui')
@@ -101,22 +101,18 @@ def main():
         else:
             pass
 
-    promt = CommandPromt(targets, metadata)
+    prompt = CommandPromt(targets, metadata)
 
     while True:
         try:
             if interactive:
-                promt.cmdloop()
+                prompt.cmdloop()
             else:
-                promt.do_update('all')
-                promt.do_export(None)
-                promt.do_quit(None)
+                prompt.do_update('all')
+                prompt.do_export(None)
+                prompt.do_quit(None)
         except KeyboardInterrupt:
             print
-
-
-            # if raw_input("do you really want to quit? (y/N) ").lower() in ["y", "yes"]:
-            #    promt.do_quit(None)
 
 
 def usage():

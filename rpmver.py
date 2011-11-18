@@ -5,22 +5,18 @@ import os
 import rpm
 
 
-class RPMFile:
+class RPMFile(object):
 
     def __init__(self, filename):
         ts = rpm.ts()
         fdno = os.open(filename, os.O_RDONLY)
-        self.hdr = ts.hdrFromFdno(fdno)
+        hdr = ts.hdrFromFdno(fdno)
         os.close(fdno)
 
-    def disturl(self):
-        return self.hdr[rpm.RPMTAG_DISTURL]
-
-    def version(self):
-        return self.hdr[rpm.RPMTAG_DISTURL]
-
-    def release(self):
-        return self.hdr[rpm.RPMTAG_DISTURL]
+        self.disturl = hdr[rpm.RPMTAG_DISTURL]
+        self.version = hdr[rpm.RPMTAG_VERSION]
+        self.release = hdr[rpm.RPMTAG_RELEASE]
+        self.name = hdr[rpm.RPMTAG_NAME]
 
 
 class RPMVersion(object):

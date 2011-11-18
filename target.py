@@ -17,7 +17,7 @@ out = logging.getLogger('mtui')
 queue = Queue.Queue()
 
 
-class Target:
+class Target(object):
 
     def __init__(self, hostname, system, packages=[], state='enabled', timeout=300, exclusive=False):
         self.hostname = hostname
@@ -199,7 +199,6 @@ class Target:
             try:
                 lockfile = self.connection.open('/var/lock/mtui.lock')
             except IOError, error:
-
                 if error.errno == errno.ENOENT:
                     return lock
 
@@ -228,7 +227,6 @@ class Target:
             try:
                 lockfile = self.connection.open('/var/lock/mtui.lock', 'w+')
             except IOError, error:
-
                 out.error('failed to open lockfile: %s' % error.strerror)
                 return
 
@@ -261,7 +259,6 @@ class Target:
             try:
                 historyfile = self.connection.open('/var/log/mtui.log', 'a+')
             except IOError, error:
-
                 out.error('failed to open history file: %s' % error.strerror)
                 return
 
@@ -280,7 +277,7 @@ class Target:
         return self.connection.close()
 
 
-class Package:
+class Package(object):
 
     def __init__(self, name):
         self.name = name
@@ -307,7 +304,7 @@ class Package:
         return [self.before, self.after, self.required]
 
 
-class Metadata:
+class Metadata(object):
 
     def __init__(self):
         self.md5 = ''
@@ -362,7 +359,7 @@ class ThreadedMethod(threading.Thread):
                     pass  # already removed by ctrl+c
 
 
-class FileUpload:
+class FileUpload(object):
 
     def __init__(self, targets, local, remote):
         self.targets = targets
@@ -387,7 +384,7 @@ class FileUpload:
         queue.join()
 
 
-class FileDownload:
+class FileDownload(object):
 
     def __init__(self, targets, remote, local, postfix=False):
         self.targets = targets
@@ -416,7 +413,7 @@ class FileDownload:
         queue.join()
 
 
-class RunCommand:
+class RunCommand(object):
 
     def __init__(self, targets, command):
         self.targets = targets
@@ -456,7 +453,6 @@ class RunCommand:
 
                 queue.join()
         except KeyboardInterrupt:
-
             print 'stopping command queue, please wait.'
             try:
                 while queue.unfinished_tasks:
@@ -474,7 +470,7 @@ class RunCommand:
             raise
 
 
-class Locked:
+class Locked(object):
 
     def __init__(self, locked=False, user='nobody', timestamp=0, pid=0, comment=None):
         self.locked = locked

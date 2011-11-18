@@ -23,7 +23,7 @@ class UpdateError(Exception):
         return repr(string)
 
 
-class Update:
+class Update(object):
 
     def __init__(self, targets, patches):
         self.targets = targets
@@ -70,7 +70,6 @@ class Update:
                     self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
                                 self.targets[target].lasterr(), self.targets[target].lastexit())
         except:
-
             raise
         finally:
             for target in self.targets:
@@ -82,10 +81,7 @@ class Update:
 
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'zypper' in stdin and exitcode == 104:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('update stack locked', target.hostname)
         if 'Additional rpm output' in stdout:
             out.warning('There was additional rpm output on %s:', target.hostname)
@@ -93,16 +89,10 @@ stdin:
             end = stdout.find('Retrieving', start)
             print stdout[start:end]
         if 'A ZYpp transaction is already in progress.' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('update stack locked', target.hostname)
         if 'System management is locked' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('update stack locked', target.hostname)
         if '(c): c' in stdout:
             out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
@@ -136,10 +126,7 @@ class ZypperUpdate(Update):
 
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('RPM Error', target.hostname)
 
 
@@ -217,7 +204,7 @@ class RugUpdate(Update):
 Updater = {'11': ZypperUpdate, '114': openSuseUpdate, '10': OldZypperUpdate, '9': OnlineUpdate, 'OES': RugUpdate}
 
 
-class Prepare:
+class Prepare(object):
 
     def __init__(self, targets, packages=None, patches=None, force=False, installed_only=False):
         self.targets = targets
@@ -261,9 +248,7 @@ class Prepare:
 
             for target in self.targets:
                 if self.targets[target].lasterr():
-                    out.critical('''failed to prepare host %s. stopping.
-# %s
-%s''' % (target, self.targets[target].lastin(),
+                    out.critical('failed to prepare host %s. stopping.\n# %s\n%s' % (target, self.targets[target].lastin(),
                                  self.targets[target].lasterr()))
                     return
 
@@ -274,7 +259,6 @@ class Prepare:
                     self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
                                 self.targets[target].lasterr(), self.targets[target].lastexit())
         except:
-
             raise
         finally:
             for target in self.targets:
@@ -286,16 +270,10 @@ class Prepare:
 
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'A ZYpp transaction is already in progress.' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError(target.hostname, 'update stack locked')
         if 'System management is locked' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('update stack locked', target.hostname)
         if '(c): c' in stdout:
             out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
@@ -330,10 +308,7 @@ class ZypperPrepare(Prepare):
 
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError(target.hostname, 'RPM Error')
 
 
@@ -402,7 +377,7 @@ class OldZypperDowngrade(Prepare):
 Downgrader = {'11': ZypperDowngrade, '114': ZypperDowngrade, '10': OldZypperDowngrade}
 
 
-class Install:
+class Install(object):
 
     def __init__(self, targets, packages=None):
         self.targets = targets
@@ -451,28 +426,16 @@ class Install:
 
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'zypper' in stdin and exitcode == 104:
-            out.critical('''%s; command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError(target.hostname, 'package not found')
         if 'A ZYpp transaction is already in progress.' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError(target.hostname, 'update stack locked')
         if 'System management is locked' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('update stack locked', target.hostname)
         if 'Error:' in stderr:
-            out.critical('''%s: command "%s" failed:
-stdin:
-%sstderr:
-%s''', target.hostname, stdin, stdout, stderr)
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError(target.hostname, 'RPM Error')
         if '(c): c' in stdout:
             out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
@@ -514,3 +477,4 @@ class ZypperUninstall(Install):
 
 
 Uninstaller = {'11': ZypperUninstall, '114': ZypperUninstall, '10': ZypperUninstall}
+

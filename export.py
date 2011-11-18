@@ -26,7 +26,6 @@ def xml_to_template(template, xmldata):
         else:
             x = xml.dom.minidom.parseString(xmldata)
     except Exception, error:
-
         out.error('failed to parse XML data: %s' % str(error))
         raise AttributeError('XML')
 
@@ -131,7 +130,7 @@ def xml_to_template(template, xmldata):
 
         failed = 0
         for package in versions['before'].keys():
-            if RPMVersion(versions['before'][package]) >= RPMVersion(versions['after'][package]):
+            if versions['after'][package] != '0' and RPMVersion(versions['before'][package]) >= RPMVersion(versions['after'][package]):
                 failed = 1
         if failed == 1:
             out.warning('installation test result on %s set to FAILED as some packages were not updated. please override manually.'

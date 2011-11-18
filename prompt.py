@@ -50,7 +50,6 @@ class CommandPromt(cmd.Cmd):
                     if match:
                         self.systems.append(match.group(1))
         except IOError, error:
-
             out.debug('failed to parse refhost mapping file: %s' % error.strerror)
 
     def emptyline(self):
@@ -93,7 +92,7 @@ class CommandPromt(cmd.Cmd):
         """
         Disconnects from host and remove host from list. Warning: The host
         log is purged as well. If the tester wants to preserve the log, it's
-        better to use the '''''set_host_state''''' command instead and set
+        better to use the "set_host_state" command instead and set
         the host to "disabled". Multible hosts can be specified.
 
         remove_host <hostname>[,hostname,...]
@@ -205,8 +204,8 @@ class CommandPromt(cmd.Cmd):
             print
 
     def complete_list_history(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['connect', 'disconnect', 'install', 'update',
-                                                       'downgrade'])
+        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx,
+                ['connect', 'disconnect', 'install', 'update', 'downgrade'])
 
     def do_list_locks(self, args):
         """
@@ -232,7 +231,7 @@ class CommandPromt(cmd.Cmd):
                     else:
                         lockedby = lock.user
 
-                    print '{0:20} {1:20}: {2}'.format(target, system, yellow('since %s by %s' % (lock.time(), lock.user))),
+                    print '{0:20} {1:20}: {2}'.format(target, system, yellow('since %s by %s' % (lock.time(), lockedby))),
                     if lock.comment:
                         print ': %s' % lock.comment
                     else:
@@ -243,7 +242,7 @@ class CommandPromt(cmd.Cmd):
     def do_list_timeout(self, args):
         """
         Prints the current timeout values per host in seconds.
-        
+
         list_timeout
         Keyword arguments:
         None
@@ -263,7 +262,7 @@ class CommandPromt(cmd.Cmd):
     def do_source_install(self, args):
         """
         Installs current source RPMs to the target hosts. 
-        
+
         source_install <hostname>
         Keyword arguments:
         hostname -- hostname from the target list or "all"
@@ -279,12 +278,9 @@ class CommandPromt(cmd.Cmd):
                 destination = '/tmp/%s' % self.metadata.md5
                 fetchcmd = 'cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/' \
                     % (destination, self.metadata.md5)
-                extractcmd = 'cd %s; rpm2cpio *.src.rpm | cpio -i --unconditional --preserve-modification-time --make-directories' \
-                    % destination
                 installcmd = 'cd %s; rpm -Uhv *.src.rpm' % destination
 
                 RunCommand(targets, fetchcmd).run()
-                RunCommand(targets, extractcmd).run()
                 RunCommand(targets, installcmd).run()
 
                 out.info('done')
@@ -298,7 +294,7 @@ class CommandPromt(cmd.Cmd):
         """
         Extracts current source RPMs locally to /tmp. If no filename
         is given, the whole package content is extracted.
-        
+
         source_extract [filename]
         Keyword arguments:
         filename -- filename to extract
@@ -331,76 +327,117 @@ class CommandPromt(cmd.Cmd):
 
     def do_source_diff(self, args):
         """
-        Creates a source diff between the update package and the installed
-        package. The osc command line client needs to be installed and
+        Creates a source diff between the update package and the currently
+        installed package. If the diff needs to be against the latest
+        released package, make sure to run "prepare" first.
+
+        If diff type "source" is set, a package source diff is created.
+        This creates usually a diff of the specfile and new patchfiles.
+
+        If diff type "build" is set, a build diff is created.
+        This creates a diff between the patched build directories and
+        is usually architecture dependend.
+
+        The osc command line client needs to be installed and
         configured first.
-        
-        source_diff
+
+        source_diff <type>
         Keyword arguments:
-        None
+        type     -- "build" or "source" diff
         """
 
-        if args:
-            self.parse_error(self.do_source_verify, args)
-
-        try:
-            import osc
-            from osc import commandline
-        except:
-            out.error('missing osc module. please install osc and setup an account.')
-            return
-
-        try:
-            osc.conf.get_config()
-        except:
-            out.error('osc account not found. please check ~/.oscrc')
-            return
-
-        targets = enabled_targets(self.targets)
-        self.do_source_extract('')
-
-        updated = {}
-        installed = {}
-        destination = '/tmp/%s' % self.metadata.md5
-
-        for rpmfile in glob.glob(destination + '/*.src.rpm'):
-            match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", RPMFile(rpmfile).disturl())
-            if match:
-                project = match.group(1)
-                commit = match.group(2)
-                name = match.group(3)
-                updated[name] = {'project': project, 'commit': commit}
-
-        for name in updated.keys():
-            RunCommand(targets, 'rpm -q --qf "%%{DISTURL}\n" %s' % name).run()
-
-            for target in targets:
-                lines = targets[target].lastout().split('\n')
-                for line in lines:
-                    match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", line)
-                    if match:
-                        project = match.group(1)
-                        commit = match.group(2)
-                        name = match.group(3)
-                        installed[name] = {'project': project, 'commit': commit}
+        if args in ['source', 'build']:
+            try:
+                import osc
+                from osc import commandline
+            except:
+                out.error('missing osc module. please install osc and setup an account.')
+                return
 
             try:
-                if installed[name]['commit'] == updated[name]['commit']:
-                    out.warning('package %s already updated. skipping' % name)
-                else:
-                    diff = '%s/%s-osc.diff' % (destination, name)
-                    with open(diff, 'w+') as f:
-                        f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name, installed[name]['commit'],
-                                updated[name]['project'], name, updated[name]['commit'], unified=True))
-                    out.info('wrote diff to %s' % diff)
-            except KeyError:
-                out.warning('package %s not installed on target hosts. skipping.' % name)
+                osc.conf.get_config()
+            except:
+                out.error('osc account not found. please check ~/.oscrc')
+                return
+
+            targets = enabled_targets(self.targets)
+            self.do_source_extract('')
+
+            updated = {}
+            installed = {}
+            destination = '/tmp/%s' % self.metadata.md5
+
+            for rpmfile in glob.glob(destination + '/*.src.rpm'):
+                match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", RPMFile(rpmfile).disturl)
+                if match:
+                    disturl = match.group(0)
+                    project = match.group(1)
+                    commit = match.group(2)
+                    name = match.group(3)
+                    updated[name] = {'project': project, 'commit': commit, 'disturl': disturl}
+
+            for name in updated.keys():
+                RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % name).run()
+
+                for target in targets:
+                    lines = targets[target].lastout().split('\n')
+                    for line in lines:
+                        match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", line)
+                        if match:
+                            disturl = match.group(0)
+                            project = match.group(1)
+                            commit = match.group(2)
+                            name = match.group(3)
+                            installed[name] = {'project': project, 'commit': commit, 'disturl': disturl}
+
+                try:
+                    if installed[name]['commit'] == updated[name]['commit']:
+                        out.warning('package %s already updated. skipping' % name)
+                    else:
+                        diff = '%s/%s-%s.diff' % (destination, name, args)
+                        if args == 'source':
+                            with open(diff, 'w+') as f:
+                                f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
+                                        installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
+                        elif args == 'build':
+                            for state in ["new", "old"]:
+                                sourcedir = "%s/%s/%s" % (destination, name, state)
+                                builddir = "%s/%s/%s/BUILD" % (destination, name, state)
+                                if state == "new":
+                                    disturl = updated[name]['disturl']
+                                else:
+                                    disturl = installed[name]['disturl']
+
+                                for target in targets.keys():
+                                    if ".oscrc" not in targets[target].listdir("."):
+                                        out.warning("no osc configuration found on %s. skipping." % target)
+                                        del targets[target]
+
+                                RunCommand(targets, 'mkdir -p %s' % builddir).run()
+                                RunCommand(targets, 'cd %s; osc -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
+                                RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec' 
+                                        % (sourcedir, name, builddir, sourcedir, name)).run()
+
+                            RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
+
+                        if args == 'source':
+                            out.info('wrote diff locally to %s' % diff)
+                        elif args == 'build':
+                            out.info('wrote diff remotely to %s' % diff)
+
+                except KeyError:
+                    out.warning('package %s not installed on target hosts. skipping.' % name)
+        else:
+            self.parse_error(self.do_source_diff, args)
+
+    def complete_source_diff(self, text, line, begidx, endidx):
+        return [i for i in ['source', 'build'] if i.startswith(text)]
 
     def do_source_verify(self, args):
         """
         Verifies SPECFILE content. Makes sure that every Patch entry
         is applied.
-        
+
         source_verify
         Keyword arguments:
         None
@@ -651,6 +688,7 @@ class CommandPromt(cmd.Cmd):
                 query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | uniq" % packages
 
             RunCommand(targets, query).run()
+
             for target in targets:
                 checksum = reduce(lambda x, y: x + y, map(ord, targets[target].lastout()))
                 try:
@@ -705,15 +743,19 @@ class CommandPromt(cmd.Cmd):
             if args.split(',')[0] != 'all':
                 targets = selected_targets(targets, args.split(','))
 
+            output = []
+
             for target in targets:
-                print 'log from %s:' % target
+                output.append('log from %s:' % target)
                 for line in targets[target].log:
-                    print '%s:~> %s [%s]' % (target, line[0], line[3])
-                    print 'stdout:'
-                    print '%s' % line[1]
-                    print 'stderr:'
-                    print '%s' % line[2]
-                    print
+                    output.append('%s:~> %s [%s]' % (target, line[0], line[3]))
+                    output.append('stdout:')
+                    map(output.append, line[1].split('\n'))
+                    output.append('stderr:')
+                    map(output.append, line[2].split('\n'))
+
+            page(output)
+
         else:
 
             self.parse_error(self.do_show_log, args)
@@ -758,12 +800,15 @@ class CommandPromt(cmd.Cmd):
                 except KeyboardInterrupt:
                     return
 
-                for target in targets:
-                    print '%s:~> %s [%s]' % (target, targets[target].lastin(), targets[target].lastexit())
-                    print targets[target].lastout()
-                    if targets[target].lasterr():
-                        print 'stderr:', targets[target].lasterr()
+                output = []
 
+                for target in targets:
+                    output.append('%s:~> %s [%s]' % (target, targets[target].lastin(), targets[target].lastexit()))
+                    map(output.append, targets[target].lastout().split('\n'))
+                    if targets[target].lasterr():
+                        map(output.append, ['stderr:'] + targets[target].lasterr().split('\n'))
+
+                page(output)
                 out.info('done')
         else:
             self.parse_error(self.do_run, args)

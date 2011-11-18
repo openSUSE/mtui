@@ -10,7 +10,7 @@ from target import *
 out = logging.getLogger('mtui')
 
 
-class Template:
+class Template(object):
 
     """input handling of QA Maintenance template file"""
 
