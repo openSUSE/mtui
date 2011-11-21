@@ -39,6 +39,7 @@ my %valid_disturls = (
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/SLE_[0-9]+_SP[0-9]+_Update/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:Update:Test/standard/",
+         "obs://build.suse.de/SUSE:SLE-10-SP2:Update:Test/SLE_10_SP2_Update/",
          "srcrep:[0-9a-f]{32,}-",
          # obs://build.suse.de/SUSE:SLE-11:GA/standard/
          # obs://build.suse.de/SUSE:SLE-11:GA:Products:Test/standard/
@@ -52,6 +53,7 @@ my %valid_disturls = (
          # obs://build.suse.de/SUSE:SLE-10-SP4:GA/standard/
          # obs://build.suse.de/SUSE:SLE-10-SP3:GA/SLE_10_SP2_Update/
          # obs://build.suse.de/SUSE:SLE-10-SP3:Update:Test/standard/
+         # obs://build.suse.de/SUSE:SLE-10-SP2:Update:Test/SLE_10_SP2_Update/08c17ef9c795fbf824ac98ab17059d4a-bind
          # srcrep:aff578d3a933f0942233ca29b28d5e1c-x11-tools
     ],
     "openSUSE" => [
