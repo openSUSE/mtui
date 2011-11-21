@@ -9,6 +9,7 @@ import socket
 import getpass
 import logging
 import warnings
+import logging
 
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -86,6 +87,8 @@ class Connection(object):
         try:
             transport = self.client.get_transport()
             transport.use_compression()
+            sshlog = logging.getLogger(transport.get_log_channel())
+            sshlog.addHandler(logging.NullHandler())
             session = transport.open_session()
             session.setblocking(0)
             session.settimeout(0)
@@ -190,7 +193,7 @@ class Connection(object):
             path += subdir + '/'
             try:
                 sftp.mkdir(path)
-            except (AttributeError, paramiko.ChannelException):
+            except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
                 self.reconnect()
                 return self.put(local, remote)
             except Exception:
@@ -213,7 +216,7 @@ class Connection(object):
         sftp = self.client.open_sftp()
         try:
             sftp.get(remote, local)
-        except (AttributeError, paramiko.ChannelException):
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
             return self.get(remote, local)
 
@@ -223,7 +226,7 @@ class Connection(object):
         sftp = self.client.open_sftp()
         try:
             return sftp.listdir(path)
-        except (AttributeError, paramiko.ChannelException):
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
             return self.listdir(path)
 
@@ -231,7 +234,7 @@ class Connection(object):
         sftp = self.client.open_sftp()
         try:
             return sftp.open(filename, mode, bufsize)
-        except (AttributeError, paramiko.ChannelException):
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
             return self.open(filename, mode, bufsize)
 
@@ -239,7 +242,7 @@ class Connection(object):
         sftp = self.client.open_sftp()
         try:
             return sftp.remove(path)
-        except (AttributeError, paramiko.ChannelException):
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
             return self.remove(path)
 
