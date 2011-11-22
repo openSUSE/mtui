@@ -43,7 +43,7 @@ sles10sp3_rt-x86_64="kurk.suse.de"
 # sle10sp4
 
 sles10sp4-i386="oes.suse.de"
-sles10sp4-x86_64="picard.suse.de"
+sles10sp4-x86_64="aurore.suse.de"
 sles10sp4-ia64="iceland.suse.de"
 sles10sp4-s390x="s390a26.suse.de"
 sles10sp4-ppc="dusk.suse.de"
@@ -96,11 +96,11 @@ sles11_smt-s390x="s390zvc45.suse.de"
 
 # sle11 sp2
 
-sles11sp2-i386="fallada.suse.de"
+sles11sp2-i386="dawn.suse.de"
 sles11sp2-ia64="miracle.suse.de"
 sles11sp2-ppc64="morgenrot.suse.de"
 sles11sp2-s390x="s390t10.suse.de"
-sles11sp2-x86_64="aurore.suse.de"
+sles11sp2-x86_64="sol.suse.de"
 
 sled11sp2-i386="???"
 sled11sp2-x86_64="???"
@@ -112,12 +112,12 @@ sles11sp2_XENU-x86_64="xenu64-11.suse.de"
 
 # box
 
-sl11.2-i386="boxer.suse.de"
 sl11.3-i386="boxer.suse.de"
 sl11.4-i386="boxer.suse.de"
-sl11.2-x86_64="boxer.suse.de"
+sl12.1-i386="boxer.suse.de"
 sl11.3-x86_64="boxer.suse.de"
 sl11.4-x86_64="boxer.suse.de"
+sl12.1-x86_64="boxer.suse.de"
 
 
 ################
@@ -163,7 +163,7 @@ sles10sp3_rt-x86_64-kernel="kurk.suse.de"
 
 # sle10sp4
 
-sles10sp4-i386-kernel="tpol.suse.de"
+sles10sp4-i386-kernel="couchant.suse.de"
 sles10sp4-x86_64-kernel="maestrale.suse.de"
 sles10sp4-ia64-kernel="fermium.suse.de"
 sles10sp4-s390x-kernel="s390a27.suse.de"
@@ -217,11 +217,11 @@ sles11_smt-s390x-kernel="s390zvc45.suse.de"
 
 # sle11 sp2
 
-sles11sp2-i386-kernel="dawn.suse.de"
+sles11sp2-i386-kernel="fallada.suse.de"
 sles11sp2-ia64-kernel="coppelius.suse.de"
 sles11sp2-ppc64-kernel="makrele.suse.de"
 sles11sp2-s390x-kernel="s390a28.suse.de"
-sles11sp2-x86_64-kernel="kempter.suse.de"
+sles11sp2-x86_64-kernel="merkur.suse.de"
 
 sled11sp2-i386-kernel="???"
 sled11sp2-x86_64-kernel="???"
@@ -233,11 +233,11 @@ sles11sp2_XENU-x86_64-kernel="xenu64-11.suse.de"
 
 # box
 
-sl11.2-i386-kernel="boxer.suse.de"
 sl11.3-i386-kernel="boxer.suse.de"
 sl11.4-i386-kernel="boxer.suse.de"
-sl11.2-x86_64-kernel="boxer.suse.de"
+sl12.1-i386-kernel="boxer.suse.de"
 sl11.3-x86_64-kernel="boxer.suse.de"
 sl11.4-x86_64-kernel="boxer.suse.de"
+sl12.1-x86_64-kernel="boxer.suse.de"
 
 # EOF

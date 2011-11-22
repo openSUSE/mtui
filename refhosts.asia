@@ -112,12 +112,12 @@ sles11sp2_XENU-x86_64="xenu64-11.suse.de"
 
 # box
 
-sl11.2-i386="???"
 sl11.3-i386="???"
 sl11.4-i386="???"
-sl11.2-x86_64="???"
+sl12.1-i386="???"
 sl11.3-x86_64="???"
 sl11.4-x86_64="???"
+sl12.1-x86_64="???"
 
 ################
 # kernel hosts #
@@ -232,11 +232,11 @@ sles11sp2_XENU-x86_64-kernel="xenu64-11.suse.de"
 
 # box
 
-sl11.2-i386-kernel="???"
 sl11.3-i386-kernel="???"
 sl11.4-i386-kernel="???"
-sl11.2-x86_64-kernel="???"
+sl12.1-i386-kernel="???"
 sl11.3-x86_64-kernel="???"
 sl11.4-x86_64-kernel="???"
+sl12.1-x86_64-kernel="???"
 
 # EOF
