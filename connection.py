@@ -71,6 +71,9 @@ class Connection(object):
         except paramiko.BadHostKeyException:
             out.error('Authentication failed on %s: Hostkey did not match. Make sure your system is set up correctly' % self.hostname)
             raise
+        except paramiko.SSHException, error:
+            out.error('SSHException while connecting to %s' % self.hostname)
+            raise
 
     def reconnect(self):
 
@@ -87,8 +90,11 @@ class Connection(object):
         try:
             transport = self.client.get_transport()
             transport.use_compression()
-            sshlog = logging.getLogger(transport.get_log_channel())
-            sshlog.addHandler(logging.NullHandler())
+            try:
+                sshlog = logging.getLogger(transport.get_log_channel())
+                sshlog.addHandler(logging.NullHandler())
+            except:
+                pass
             session = transport.open_session()
             session.setblocking(0)
             session.settimeout(0)

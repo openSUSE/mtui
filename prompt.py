@@ -1821,7 +1821,11 @@ class CommandPromt(cmd.Cmd):
 
                 targets[target].close()
 
-            readline.write_history_file('%s/.mtui_history' % self.homedir)
+            try:
+                readline.write_history_file('%s/.mtui_history' % self.homedir)
+            except:
+                pass
+
             sys.exit(0)
 
     def complete_filelist(self, text, line, begidx, endidx):
