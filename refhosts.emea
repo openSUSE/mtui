@@ -98,9 +98,9 @@ sles11_smt-s390x="s390zvc45.suse.de"
 
 sles11sp2-i386="dawn.suse.de"
 sles11sp2-ia64="miracle.suse.de"
-sles11sp2-ppc64="morgenrot.suse.de"
+sles11sp2-ppc64="aal.suse.de"
 sles11sp2-s390x="s390t10.suse.de"
-sles11sp2-x86_64="sol.suse.de"
+sles11sp2-x86_64="merkur.suse.de"
 
 sled11sp2-i386="???"
 sled11sp2-x86_64="???"
@@ -219,9 +219,9 @@ sles11_smt-s390x-kernel="s390zvc45.suse.de"
 
 sles11sp2-i386-kernel="fallada.suse.de"
 sles11sp2-ia64-kernel="coppelius.suse.de"
-sles11sp2-ppc64-kernel="makrele.suse.de"
+sles11sp2-ppc64-kernel="salmler.suse.de"
 sles11sp2-s390x-kernel="s390a28.suse.de"
-sles11sp2-x86_64-kernel="merkur.suse.de"
+sles11sp2-x86_64-kernel="sol.suse.de"
 
 sled11sp2-i386-kernel="???"
 sled11sp2-x86_64-kernel="???"
