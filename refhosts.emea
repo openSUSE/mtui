@@ -97,7 +97,7 @@ sles11_smt-s390x="s390zvc45.suse.de"
 # sle11 sp2
 
 sles11sp2-i386="dawn.suse.de"
-sles11sp2-ia64="miracle.suse.de"
+sles11sp2-ia64="sinope.suse.de"
 sles11sp2-ppc64="aal.suse.de"
 sles11sp2-s390x="s390t10.suse.de"
 sles11sp2-x86_64="merkur.suse.de"
