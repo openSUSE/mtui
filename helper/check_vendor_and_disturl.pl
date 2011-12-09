@@ -60,12 +60,14 @@ my %valid_disturls = (
          "obs://build.opensuse.org/openSUSE:[0-9.]+:NonFree/standard/",
          "obs://build.suse.de/home:sndirsch:drivers/openSUSE_[0-9.]+/",
          "obs://build.suse.de/SUSE:openSUSE:11.1:Update:Test/standard/",
+         "obs://build.opensuse.org/openSUSE:Maintenance:",
          "srcrep:[0-9a-f]{32,}-",
          # obs://build.opensuse.org/openSUSE:11.2/standard/
          # obs://build.opensuse.org/openSUSE:11.2:Update:Test/standard/
          # obs://build.opensuse.org/openSUSE:11.3:NonFree/standard/
          # obs://build.suse.de/home:sndirsch:drivers/openSUSE_11.3/
          # obs://build.suse.de/SUSE:openSUSE:11.1:Update:Test/standard/
+         # obs://build.opensuse.org/openSUSE:Maintenance:25/openSUSE_12.1_standard/f967c9dd1d403fd0275a13b87a2f5d56-bind.openSUSE_12.1
          # srcrep:1e79d7e8a1e89516f0d4ce57ecf3d01a-zlib
     ],
 );

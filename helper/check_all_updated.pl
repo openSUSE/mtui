@@ -18,6 +18,7 @@ my $skippedpackages = 0;
 my $ibs = "https://api.suse.de/public/";
 my $obs = "https://api.opensuse.org/public/";
 my $defaultbuilddir = "http://hilbert.suse.de/abuildstat/patchinfo/";
+my $defaultbuilddir_opensuse_org = "http://download.opensuse.org/repositories/openSUSE:/Maintenance:/";
 my %disturl_mapper;
 my %disturl_packages;
 my %buildsrcnames;
@@ -75,7 +76,8 @@ if (not defined $build and not defined $installed) {
     my $firstarg = shift;
     if (defined $firstarg) { 
         $installed = 'true'; 
-        $filter = $defaultbuilddir . $firstarg;
+        if (length($firstarg) >= 32) { $filter = $defaultbuilddir . $firstarg; }
+        else { $filter = $defaultbuilddir_opensuse_org . $firstarg . "/standard/"; }
         print "INFO: assuming options \"--installed --filter $filter\"\n";
     }
 }
