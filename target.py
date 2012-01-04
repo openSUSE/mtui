@@ -60,7 +60,7 @@ class Target(object):
             self.run('rpm -q %s' % packages)
 
             for line in re.split('\n+', self.lastout()):
-                match = re.search(r"^([a-zA-Z0-9_\-\+]*)-([a-zA-Z0-9_\.]*)-([a-zA-Z0-9_\.]*)", line)
+                match = re.search(r"^([a-zA-Z0-9_\-\+\.]*)-([a-zA-Z0-9_\.]*)-([a-zA-Z0-9_\.]*)", line)
                 if match:
                     self.packages[match.group(1)].current = '%s-%s' % (match.group(2), match.group(3))
                 else:

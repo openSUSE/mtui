@@ -71,7 +71,7 @@ class Connection(object):
         except paramiko.BadHostKeyException:
             out.error('Authentication failed on %s: Hostkey did not match. Make sure your system is set up correctly' % self.hostname)
             raise
-        except paramiko.SSHException, error:
+        except paramiko.SSHException:
             out.error('SSHException while connecting to %s' % self.hostname)
             raise
 

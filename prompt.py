@@ -684,7 +684,11 @@ class CommandPromt(cmd.Cmd):
             RunCommand(targets, query).run()
 
             for target in targets:
-                checksum = reduce(lambda x, y: x + y, map(ord, targets[target].lastout()))
+                try:
+                    checksum = reduce(lambda x, y: x + y, map(ord, targets[target].lastout()))
+                except TypeError:
+                    continue
+
                 try:
                     history[checksum].append(target)
                 except KeyError:
@@ -784,7 +788,7 @@ class CommandPromt(cmd.Cmd):
 
             for target in targets.keys():
                 lock = targets[target].locked()
-                if lock.locked and lock.comment:
+                if lock.locked and lock.comment and not lock.own():
                     out.critical('host %s is exclusively locked by %s (%s). skipping.' % (target, lock.user, lock.comment))
                     del targets[target]
 
