@@ -599,7 +599,7 @@ class CommandPromt(cmd.Cmd):
 
             comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
 
-            print 'export TESTS_LOGDIR=/var/log/qa/%s/ctcs2; export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; <testsuite>' \
+            print 'export TESTS_LOGDIR=/var/log/qa/%s; export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; <testsuite>' \
                 % (self.metadata.md5, self.metadata.md5)
             print '/usr/share/qa/tools/remote_qa_db_report.pl -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
                     username, self.metadata.md5, comment)
@@ -862,7 +862,7 @@ class CommandPromt(cmd.Cmd):
             if not command.startswith('/'):
                 command = os.path.join('/usr/share/qa/tools', command)
 
-            command = 'export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; export TESTS_LOGDIR=/var/log/qa/%s/ctcs2; %s' % (self.metadata.md5,
+            command = 'export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5,
                     self.metadata.md5, command)
             name = os.path.basename(command).replace('-run', '')
 
