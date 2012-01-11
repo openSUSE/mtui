@@ -245,10 +245,12 @@ process.
 Exports the gathered update data to template file. This includes the pre/post
 package versions and the update log. An output file could be specified, if none
 is specified, the output is written to the current testing template.
+To export a specific updatelog, provide the hostname as parameter.
 
-		export filename
+		export [filename][,hostname]
 		Keyword arguments:
 		filename -- output template file name
+		hostname -- host update log to export
 
 Testing Commands
 *****************

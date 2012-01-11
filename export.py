@@ -11,7 +11,7 @@ from rpmver import *
 out = logging.getLogger('mtui')
 
 
-def xml_to_template(template, xmldata):
+def xml_to_template(template, xmldata, updatehost=None):
     """
     simple method to export package versions and
     update log from the log to the template file
@@ -179,7 +179,13 @@ def xml_to_template(template, xmldata):
 
         current_line = i + command_lines
 
-        log = x.getElementsByTagName('log')[0]
+        if updatehost is not None:
+            for host in x.getElementsByTagName('host'):
+                if host.getAttribute('hostname') == updatehost:
+                    log = host.getElementsByTagName('log')[0]
+        else:
+            log = x.getElementsByTagName('log')[0]
+
         while command_lines:
             current_line = i + command_lines
             for child in log.childNodes:

@@ -395,8 +395,13 @@ class CommandPromt(cmd.Cmd):
                         diff = '%s/%s-%s.diff' % (destination, name, args)
                         if args == 'source':
                             with open(diff, 'w+') as f:
-                                f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
+                                try:
+                                    f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
                                         installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
+                                except Exception, error:
+                                    out.error("failed to diff packages: %s", error)
+                                    return
+
                         elif args == 'build':
                             for state in ["new", "old"]:
                                 sourcedir = "%s/%s/%s" % (destination, name, state)
@@ -1700,16 +1705,25 @@ class CommandPromt(cmd.Cmd):
         the pre/post package versions and the update log. An output file could
         be specified, if none is specified, the output is written to the
         current testing template.
+        To export a specific updatelog, provide the hostname as parameter.
 
-        export [filename]
+        export [filename][,hostname]
         Keyword arguments:
         filename -- output template file name
+        hostname -- host update log to export
         """
 
+        filename = ""
+        hostname = None
+
         if args:
-            filename = args.split(',')[0]
-        else:
+            filename,hostname = args.partition(',')[::2]
+
+        if not filename:
             filename = self.metadata.path
+
+        if not hostname:
+            hostname = None
 
         targets = self.targets
 
@@ -1720,7 +1734,7 @@ class CommandPromt(cmd.Cmd):
             output.add_target(targets[target])
 
         try:
-            template = xml_to_template(self.metadata.path, output.pretty())
+            template = xml_to_template(self.metadata.path, output.pretty(), hostname)
         except Exception:
             out.error('failed to export XML')
             return
@@ -1738,6 +1752,10 @@ class CommandPromt(cmd.Cmd):
             print 'failed to write %s: %s' % (filename, error.strerror)
         else:
             print 'wrote template to %s' % filename
+
+    def complete_export(self, text, line, begidx, endidx):
+        if line.count(',') == 1:
+            return self.complete_hostlist(text, line, begidx, endidx)
 
     def do_save(self, args):
         """
