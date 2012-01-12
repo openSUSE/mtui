@@ -311,13 +311,13 @@ class CommandPromt(cmd.Cmd):
         except OSError:
             pass
 
-        exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/'
+        exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/'
                              % (destination, self.metadata.md5))
         if exitcode:
             out.error('failed to fetch src rpm')
             return
         exitcode = \
-            os.system('cd %s; for i in *.src.rpm; do rpm2cpio $i | cpio -i --unconditional --preserve-modification-time --make-directories %s; done'
+            os.system('cd %s; for i in *src.rpm; do name=$(rpm -qp --queryformat "%%{NAME}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories %s; cd ..; done'
                        % (destination, pattern))
         if exitcode:
             out.error('failed to extract src rpm')
@@ -449,38 +449,40 @@ class CommandPromt(cmd.Cmd):
         destination = '/tmp/%s' % self.metadata.md5
 
         try:
-            specfile = glob.glob(destination + '/*.spec')[0]
+            specfiles = glob.glob(destination + '/*/*.spec')
         except IndexError:
             self.do_source_extract('*.spec')
             try:
-                specfile = glob.glob(destination + '/*.spec')[0]
+                specfiles = glob.glob(destination + '/*/*.spec')
             except IndexError:
                 out.error('failed to load specfile')
                 return
 
-        with open(specfile, 'r') as spec:
-            content = spec.readlines()
+        for specfile in specfiles:
+            with open(specfile, 'r') as spec:
+                content = spec.readlines()
 
-        for line in content:
-            match = re.search('^Name:\W+(.*)', line)
-            if match:
-                name = match.group(1)
+            for line in content:
+                match = re.search('^Name:\W+(.*)', line)
+                if match:
+                    name = match.group(1)
 
-            match = re.search('^(Patch\d*):\W+(.*)', line)
-            if match:
-                patches[match.group(1)] = match.group(2)
+                match = re.search('^(Patch\d*):\W+(.*)', line)
+                if match:
+                    patches[match.group(1)] = match.group(2)
 
-        if not patches:
-            out.warning('no patch entries found in specfile')
-            return
+            if not patches:
+                out.warning('no patch entries found in specfile')
+                return
 
-        for patch in patches:
-            if re.findall('\'%%%s\W+' % patch.lower(), str(content)):
-                result = green('applied')
-            else:
-                result = red('not applied')
+            print "Patches in %s:" % specfile
+            for patch in patches:
+                if re.findall('\'%%%s\W+' % patch.lower(), str(content)):
+                    result = green('applied')
+                else:
+                    result = red('not applied')
 
-            print '{0:45}: {1}'.format(patches[patch].replace('name}', name), result)
+                print '{0:45}: {1}'.format(patches[patch].replace('name}', name), result)
 
     def do_list_packages(self, args):
         """
@@ -1674,12 +1676,12 @@ class CommandPromt(cmd.Cmd):
         elif command == 'template':
             path = self.metadata.path
         elif command == 'specfile':
-            path = '/tmp/%s/*.spec' % self.metadata.md5
+            path = '/tmp/%s/*/*.spec' % self.metadata.md5
             if not glob.glob(path):
                 self.do_source_extract(None)
         elif command == 'patch':
-            path = '/tmp/%s/%s' % (self.metadata.md5, filename)
-            if not os.path.isfile(path):
+            path = '/tmp/%s/*/%s' % (self.metadata.md5, filename)
+            if not glob.glob(path):
                 self.do_source_extract(None)
         else:
             self.parse_error(self.do_edit, args)
@@ -1691,7 +1693,7 @@ class CommandPromt(cmd.Cmd):
         if 'file,' in line:
             return self.complete_filelist(text.replace('file,', '', 1), line, begidx, endidx)
         if 'patch,' in line:
-            specfile = glob.glob('/tmp/%s/*.spec' % self.metadata.md5)[0]
+            specfile = glob.glob('/tmp/%s/*/*.spec' % self.metadata.md5)[0]
             with open(specfile, 'r') as spec:
                 name = re.findall('Name:\W+(.*)', spec.read())[0]
                 spec.seek(0)
