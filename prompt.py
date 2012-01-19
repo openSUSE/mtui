@@ -448,13 +448,12 @@ class CommandPromt(cmd.Cmd):
         patches = {}
         destination = '/tmp/%s' % self.metadata.md5
 
-        try:
-            specfiles = glob.glob(destination + '/*/*.spec')
-        except IndexError:
+        specfiles = glob.glob(destination + '/*/*.spec')
+
+        if not specfiles:
             self.do_source_extract('*.spec')
-            try:
-                specfiles = glob.glob(destination + '/*/*.spec')
-            except IndexError:
+            specfiles = glob.glob(destination + '/*/*.spec')
+            if not specfiles:
                 out.error('failed to load specfile')
                 return
 
@@ -737,7 +736,7 @@ class CommandPromt(cmd.Cmd):
         handy for the tester, as one can simply dump the command history to
         the reproducer section of the template.
 
-        show_log [hostname]
+        show_log <hostname>
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
@@ -1360,17 +1359,17 @@ class CommandPromt(cmd.Cmd):
                     preparer = Preparer[release]
                 except KeyError:
                     out.critical('no preparer available for %s' % release)
-                    return
+                    return True
 
                 out.info('preparing')
                 try:
                     preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed).run()
                 except Exception:
                     out.critical('failed to prepare target systems')
-                    return
+                    return False
                 except KeyboardInterrupt:
                     out.info('preparation process canceled')
-                    return
+                    return False
                 else:
                     out.info('done')
         else:
@@ -1395,7 +1394,8 @@ class CommandPromt(cmd.Cmd):
             missing = False
             targets = enabled_targets(self.targets)
 
-            self.do_prepare(args)
+            if self.do_prepare(args) is False:
+                return
 
             if args.split(',')[0] != 'all':
                 targets = selected_targets(targets, args.split(','))
