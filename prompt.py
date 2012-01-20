@@ -1401,6 +1401,15 @@ class CommandPromt(cmd.Cmd):
                 targets = selected_targets(targets, args.split(','))
 
             for target in targets:
+                lock = targets[target].locked()
+                if lock.locked and not lock.own():
+                    out.warning('host %s is locked since %s by %s. aborting.' % (target, lock.time(), lock.user))
+                    if lock.comment:
+                        out.info("%s's comment: %s" % (lock.user, lock.comment))
+                    return
+
+            for target in targets:
+                targets[target].set_locked()
                 not_installed = []
                 packages = targets[target].packages
 
@@ -1423,6 +1432,9 @@ class CommandPromt(cmd.Cmd):
                     out.warning('%s: these packages are not installed: %s' % (target, not_installed))
 
             if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes']):
+                for target in targets:
+                    if not lock.locked:
+                        targets[target].remove_lock()
                 return
 
             script_hook(targets, 'pre', os.path.dirname(self.metadata.path), self.metadata.md5)
@@ -1434,15 +1446,24 @@ class CommandPromt(cmd.Cmd):
                 updater = Updater[release]
             except KeyError:
                 out.critical('no updater available for %s' % release)
+                for target in targets:
+                    if not lock.locked:
+                        targets[target].remove_lock()
                 return
 
             try:
                 updater(targets, self.metadata.patches).run()
             except Exception:
                 out.critical('failed to update target systems')
+                for target in targets:
+                    if not lock.locked:
+                        targets[target].remove_lock()
                 return
             except KeyboardInterrupt:
                 out.info('update process canceled')
+                for target in targets:
+                    if not lock.locked:
+                        targets[target].remove_lock()
                 return
 
             missing = False
@@ -1470,10 +1491,17 @@ class CommandPromt(cmd.Cmd):
                                         required))
 
             if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes']):
+                for target in targets:
+                    if not lock.locked:
+                        targets[target].remove_lock()
                 return
 
             script_hook(targets, 'post', os.path.dirname(self.metadata.path), self.metadata.md5)
             script_hook(targets, 'compare', os.path.dirname(self.metadata.path), self.metadata.md5)
+
+            for target in targets:
+                if not lock.locked:
+                    targets[target].remove_lock()
 
             out.info('done')
         else:
