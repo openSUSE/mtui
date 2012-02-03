@@ -435,6 +435,12 @@ the XML log when exiting MTUI.
 		Keyword arguments:
 		None
 
+- exit
+Same as "quit".
+		exit
+		Keyword arguments:
+		None
+
 - help
 Prints a short help text for the requested procedure or a list of all available
 function if no parameter is given.

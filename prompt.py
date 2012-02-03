@@ -55,10 +55,6 @@ class CommandPromt(cmd.Cmd):
     def emptyline(self):
         return
 
-    def do_EOF(self, args):
-        print
-        self.do_quit(args)
-
     def do_add_host(self, args):
         """
         Adds another machine to the target host list. The system type needs
@@ -1879,6 +1875,9 @@ class CommandPromt(cmd.Cmd):
                 pass
 
             sys.exit(0)
+
+    do_exit = do_quit
+    do_EOF = do_quit
 
     def complete_filelist(self, text, line, begidx, endidx):
         dirname = ''
