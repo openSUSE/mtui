@@ -155,14 +155,15 @@ class Template(object):
                 for line in reffile.readlines():
                     match = re.search('%s="(.*)"' % system, line)
                     if match:
-                        if host and host != match.group(1):
+                        try:
+                            assert(host != match.group(1))
                             out.critical("%s != %s for system %s. please report to ckornacker" % (host, match.group(1), system))
+                        except:
+                            pass
                         return match.group(1)
         except OSError, error:
             if error.errno == errno.ENOENT:
                 out.warning('refhost mapping file %s not found' % self.refhosts)
             else:
                 pass
-
-
 

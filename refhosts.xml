@@ -269,7 +269,7 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="i386" name="xena32-11sp1.suse.de">
       <product name="sles">
@@ -643,7 +643,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="s390x" name="s390zvi29.suse.de">
       <product name="sles">
@@ -672,7 +672,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="x86_64" name="dax.suse.de">
       <product name="sles">
@@ -710,7 +710,7 @@
           <minor>sp3</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="i386" name="zypp.suse.de">
       <product name="sles">
@@ -779,7 +779,7 @@
           <minor>sp3</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
