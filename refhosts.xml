@@ -191,7 +191,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <addon name="webyast12" property="weak"/>
+      <addon name="webyast12"/>
     </host>
     <host arch="i386" name="leo.suse.de">
       <product name="sles">
@@ -481,7 +481,7 @@
           <minor>sp4</minor>
         </version>
       </product>
-      <kernel property="weak">true</kernel>
+      <kernel>true</kernel>
     </host>
     <host arch="i386" name="xena32-10.suse.de">
       <product name="sles">

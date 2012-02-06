@@ -118,6 +118,17 @@ hosts can be specified.
 		Keyword arguments:
 		hostname -- hostname from the target list
 
+- autoadd_host
+* EXPERIMENTAL * may not add the correct host
+Adds another machine to the target host list. The host is mapped by the
+specified attributes. A attribute tag could also be a system type name
+like sles11sp1-i386.
+
+		autoadd_host <system>,<attribute> [attribute ...]
+		Keyword arguments:
+		system   -- system type, ie. sles11sp1-i386
+		attribute-- host attributes like architecture or product
+
 - list_hosts
 Lists all connected hosts including the system types and their current state.
 State could be "Enabled", "Disabled" or "Dryrun".
@@ -415,6 +426,13 @@ recommended to use the "warning" loglevel.
 		Keyword arguments:
 		loglevel -- warning, info or debug
 
+- set_location
+Change current reference host location to another site.
+
+		set_location <site>
+		Keyword arguments:
+		site     -- location name
+
 - save
 Save the testing log to a XML file. All commands and package versions are saved
 there. When no parameter is given, the XML is saved to
@@ -436,7 +454,7 @@ the XML log when exiting MTUI.
 		None
 
 - exit
-Same as "quit".
+Alias for "quit".
 		exit
 		Keyword arguments:
 		None

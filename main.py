@@ -20,6 +20,7 @@ def main():
 
     md5 = None
     team = None
+    location = 'default'
     directory = os.getenv('TEMPLATEDIR', '.')
     interactive = True
     state = 'enabled'
@@ -28,8 +29,8 @@ def main():
     targets = {}
 
     try:
-        (opts, args) = getopt.getopt(sys.argv[1:], 'inhaedt:m:vw:', ['interactive', 'non-interactive', 'help', 'asia', 'emea', 'dryrun',
-                                     'templates=', 'md5=', 'verbose', 'timeout'])
+        (opts, args) = getopt.getopt(sys.argv[1:], 'inhaedl:t:m:vw:', ['interactive', 'non-interactive', 'help', 'asia', 'emea', 'dryrun',
+                                     'location=', 'templates=', 'md5=', 'verbose', 'timeout'])
     except getopt.GetoptError, error:
         out.error('failed to parse parameter: %s' % str(error))
         usage()
@@ -45,6 +46,8 @@ def main():
             md5 = argument
         elif parameter in ('-d', '--dryrun'):
             state = 'dryrun'
+        elif parameter in ('-l', '--location'):
+            location = argument
         elif parameter in ('-t', '--templates'):
             directory = argument
         elif parameter in ('-i', '--interactive'):
@@ -67,7 +70,7 @@ def main():
         usage()
 
     try:
-        update = Template(md5, team, directory)
+        update = Template(md5, team, location, directory)
     except IOError:
         if raw_input('Template does not yet exist. Try to check it out? (y/N) ').lower() in ['y', 'yes']:
             os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
@@ -125,6 +128,7 @@ def usage():
     print 'parameters:'
     print '\t-{short},--{long:20}{description}'.format(short='a', long='asia', description='use asia template')
     print '\t-{short},--{long:20}{description}'.format(short='e', long='emea', description='use emea template (default)')
+    print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
     print '\t-{short},--{long:20}{description}'.format(short='t', long='template=', description='template directory')
     print '\t-{short},--{long:20}{description}'.format(short='m', long='md5=', description='md5 update identifier')
     print '\t-{short},--{long:20}{description}'.format(short='i', long='interactive', description='interactive update shell (default)')

@@ -77,7 +77,7 @@ def termsize():
 
 def page(text):
 
-    prompt = "Press any key to continue... (q to quit)"
+    prompt = "Press Enter to continue... (q to quit)"
 
     width, height = termsize()
 

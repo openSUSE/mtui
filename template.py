@@ -6,6 +6,7 @@ import logging
 import re
 
 from target import *
+from refhost import *
 
 out = logging.getLogger('mtui')
 
@@ -14,12 +15,13 @@ class Template(object):
 
     """input handling of QA Maintenance template file"""
 
-    def __init__(self, md5, team=None, directory=None):
+    def __init__(self, md5, team=None, location='default', directory=None):
         """open and parse maintenance template file
 
         Keyword arguments:
         md5       -- md5 checksum of patchinfo
         team      -- team suffix (emea or asia) of template file
+        location  -- reference host location name
         directory -- QA maintenance update directory
 
         """
@@ -42,6 +44,10 @@ class Template(object):
         self.metadata = Metadata()
         self.metadata.md5 = md5
         self.metadata.path = self.path
+        if team == 'asia':
+            self.metadata.location = 'beijing'
+        else:
+            self.metadata.location = location
 
         try:
             with open(self.path, 'r') as template:
@@ -65,19 +71,19 @@ class Template(object):
             if match:
                 self.metadata.category = match.group(1)
 
-            match = re.search("YOU Patch No: (\d+)", line)
+            match = re.search('YOU Patch No: (\d+)', line)
             if match:
                 self.metadata.patches['you'] = match.group(1)
 
-            match = re.search("ZYPP Patch No: (\d+)", line)
+            match = re.search('ZYPP Patch No: (\d+)', line)
             if match:
                 self.metadata.patches['zypp'] = match.group(1)
 
-            match = re.search("SAT Patch No: (\d+)", line)
+            match = re.search('SAT Patch No: (\d+)', line)
             if match:
                 self.metadata.patches['sat'] = match.group(1)
 
-            match = re.search("SUBSWAMPID: (\d+)", line)
+            match = re.search('SUBSWAMPID: (\d+)', line)
             if match:
                 self.metadata.swampid = match.group(1)
 
@@ -93,7 +99,7 @@ class Template(object):
             if match:
                 self.metadata.reviewer = match.group(1)
 
-            match = re.search("(.*-.*) \(reference host: (.+)\)", line)
+            match = re.search('(.*-.*) \(reference host: (.+)\)', line)
             if match:
                 if '?' in match.group(2):
                     hostname = self.get_refhost(match.group(1))
@@ -105,7 +111,7 @@ class Template(object):
                 else:
                     out.error('no hostname found for system %s' % match.group(1))
 
-            match = re.search("Bug #(\d+) \(\"(.*)\"\):", line)  # deprecated
+            match = re.search('Bug #(\d+) \("(.*)"\):', line)  # deprecated
             if match:
                 self.metadata.bugs[match.group(1)] = match.group(2)
 
@@ -124,6 +130,24 @@ class Template(object):
 
         """
 
+        """ new engine """
+        try:
+            hosts = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+
+            try:
+                hosts.set_attributes_from_system(system)
+            except Exception:
+                out.warning("system %s not found." % system)
+
+            host = hosts.search()[0]
+        except Exception:
+            import traceback
+            out.critical('nonfatal error. please report to ckornacker and proceed with testing')
+            traceback.print_exc()
+            host = ""
+
+        """ old engine """
+
         refhostfile = os.path.dirname(__file__) + '/' + self.refhosts
 
         try:
@@ -131,11 +155,14 @@ class Template(object):
                 for line in reffile.readlines():
                     match = re.search('%s="(.*)"' % system, line)
                     if match:
+                        if host and host != match.group(1):
+                            out.critical("%s != %s for system %s. please report to ckornacker" % (host, match.group(1), system))
                         return match.group(1)
         except OSError, error:
             if error.errno == errno.ENOENT:
                 out.warning('refhost mapping file %s not found' % self.refhosts)
             else:
                 pass
+
 
 

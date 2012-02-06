@@ -20,6 +20,7 @@ from target import *
 from updater import *
 from export import *
 from utils import *
+from refhost import *
 
 out = logging.getLogger('mtui')
 
@@ -55,6 +56,96 @@ class CommandPromt(cmd.Cmd):
     def emptyline(self):
         return
 
+    def do_autoadd_host(self, args):
+        """
+        * EXPERIMENTAL * may not add the correct host
+        Adds another machine to the target host list. The host is mapped
+        by the specified attributes. A attribute tag could also be a
+        system type name like sles11sp1-i386.
+
+        autoadd_host <system>[,attribute] [attribute ...]
+        Keyword arguments:
+        system   -- system type, ie. sles11sp1-i386
+        attribute-- host attributes like architecture or product
+        """
+
+        if args:
+            out.warning("=== EXPERIMENTAL: may not add the correct host ===")
+            host = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+            attributes = Attributes()
+
+            (system, _, tags) = args.partition(',')
+
+            if not tags:
+                try:
+                    attributes=None
+                    host.set_attributes_from_system(system)
+                except Exception:
+                    out.warning("system %s not found." % system)
+                    return
+
+            for _tag in tags.split(' '):
+                tag = _tag.lower()
+                if tag in ['sled', 'sles', 'opensuse', 'rt', 'studio', 'studio12', 'smt', 'slms', 'slms12']:
+                    attributes.product = tag
+                if tag in ['webyast', 'webyast12']:
+                    attributes.addons.append(tag)
+                if tag in ['kernel']:
+                    attributes.kernel = True
+                if tag in ['ltss']:
+                    attributes.ltss = True
+                if tag in ['i386', 'x86_64', 'ppc', 's390', 'ia64']:
+                    attributes.arch = tag
+                if tag == 'xenu':
+                    attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
+                if tag == 'xen0':
+                    attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
+                if tag == 'xen':
+                    attributes.virtual.update({'hypervisor':'xen'})
+                if tag == 'kvm':
+                    attributes.virtual.update({'hypervisor':'kvm'})
+                if tag == 'host':
+                    attributes.virtual.update({'mode':'host'})
+                if tag == 'guest':
+                    attributes.virtual.update({'mode':'guest'})
+                if tag in ['9', '10', '11', '12']:
+                    attributes.major = tag
+                if tag in ['sp1', 'sp2', 'sp3', 'sp4']:
+                    attributes.minor = tag
+                if tag in self.systems:
+                    attributes=None
+                    try:
+                        host.set_attributes_from_system(tag)
+                    except Exception:
+                        out.warning("system %s not found." % tag)
+
+            hosts = host.search(attributes)
+
+            if len(hosts) > 1:
+                hostname = hosts[0]
+                out.info('found hosts:\n%s' % '\n'.join(set(hosts)))
+            elif len(hosts) == 1:
+                hostname = hosts[0]
+                out.info('found host: %s' % ' '.join(set(hosts)))
+            else:
+                out.error('no host found matching the specified criteria')
+                return
+
+            try:
+                out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
+            except KeyError:
+                try:
+                    self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
+                except Exception:
+                    out.error('failed to add host %s to list' % hostname)
+
+        else:
+            self.parse_error(self.do_autoadd_host, args)
+
+    def complete_autoadd_host(self, text, line, begidx, endidx):
+        if not line.count(','):
+            return self.complete_systemlist(text, line, begidx, endidx)
+
     def do_add_host(self, args):
         """
         Adds another machine to the target host list. The system type needs
@@ -74,11 +165,13 @@ class CommandPromt(cmd.Cmd):
                 return
 
             try:
-                self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
-            except Exception:
-                out.error('failed to add host %s to list' % hostname)
+                out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
+            except KeyError:
+                try:
+                    self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
+                except Exception:
+                    out.error('failed to add host %s to list' % hostname)
         else:
-
             self.parse_error(self.do_add_host, args)
 
     def complete_add_host(self, text, line, begidx, endidx):
@@ -356,14 +449,16 @@ class CommandPromt(cmd.Cmd):
             osc.conf.config['http_debug'] = 0
 
             targets = enabled_targets(self.targets)
-            self.do_source_extract('')
 
             updated = {}
             installed = {}
             destination = '/tmp/%s' % self.metadata.md5
 
+            if not glob.glob('%s/*/*.spec' % destination):
+                self.do_source_extract('')
+
             for rpmfile in glob.glob(destination + '/*.src.rpm'):
-                match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", RPMFile(rpmfile).disturl)
+                match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
                 if match:
                     disturl = match.group(0)
                     project = match.group(1)
@@ -376,7 +471,7 @@ class CommandPromt(cmd.Cmd):
 
                 for target in targets:
                     line = targets[target].lastout().split('\n')[0]
-                    match = re.search("obs://.*/(.*)/.*/(\w+)-(.*)", line)
+                    match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', line)
                     if match:
                         disturl = match.group(0)
                         project = match.group(1)
@@ -395,14 +490,14 @@ class CommandPromt(cmd.Cmd):
                                     f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
                                         installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
                                 except Exception, error:
-                                    out.error("failed to diff packages: %s", error)
+                                    out.error('failed to diff packages: %s', error)
                                     return
 
                         elif args == 'build':
-                            for state in ["new", "old"]:
-                                sourcedir = "%s/%s/%s" % (destination, name, state)
-                                builddir = "%s/%s/%s/BUILD" % (destination, name, state)
-                                if state == "new":
+                            for state in ['new', 'old']:
+                                sourcedir = '%s/%s/%s' % (destination, name, state)
+                                builddir = '%s/%s/%s/BUILD' % (destination, name, state)
+                                if state == 'new':
                                     disturl = updated[name]['disturl']
                                 else:
                                     disturl = installed[name]['disturl']
@@ -470,7 +565,7 @@ class CommandPromt(cmd.Cmd):
                 out.warning('no patch entries found in specfile')
                 return
 
-            print "Patches in %s:" % specfile
+            print 'Patches in %s:' % specfile
             for patch in patches:
                 if re.findall('\'%%%s\W+' % patch.lower(), str(content)):
                     result = green('applied')
@@ -709,7 +804,7 @@ class CommandPromt(cmd.Cmd):
 
                 lines = targets[target].lastout().split('\n')
                 for line in lines:
-                    match = re.search("([^\s]+)\s+([^\s]+)", line)
+                    match = re.search('([^\s]+)\s+([^\s]+)', line)
                     if match:
                         name = match.group(1)
                         try:
@@ -966,6 +1061,21 @@ class CommandPromt(cmd.Cmd):
 
     def complete_testsuite_submit(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+    def do_set_location(self, args):
+        """
+        Change current reference host location to another site.
+
+        set_location <site>
+        Keyword arguments:
+        site     -- location name
+        """
+
+        if args:
+            out.info('changed location from "%s" to "%s"' % (self.metadata.location, args))
+            self.metadata.location = args
+        else:
+            self.parse_error(self.do_set_location, args)
 
     def do_set_host_lock(self, args):
         """
@@ -1721,7 +1831,7 @@ class CommandPromt(cmd.Cmd):
             with open(specfile, 'r') as spec:
                 name = re.findall('Name:\W+(.*)', spec.read())[0]
                 spec.seek(0)
-                return [i for i in [s.replace('name}', name) for s in re.findall("Patch\d*:\W+(.*)", spec.read())] if i.startswith(text)]
+                return [i for i in [s.replace('name}', name) for s in re.findall('Patch\d*:\W+(.*)', spec.read())] if i.startswith(text)]
         else:
             return [i for i in ['file,', 'template', 'specfile', 'patch,'] if i.startswith(text)]
 
