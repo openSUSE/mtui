@@ -136,10 +136,10 @@ class Template(object):
 
             try:
                 hosts.set_attributes_from_system(system)
+                host = hosts.search()[0]
             except Exception:
-                out.warning("system %s not found." % system)
+                out.warning("system %s not found in refhosts.xml. please report to ckornacker." % system)
 
-            host = hosts.search()[0]
         except Exception:
             import traceback
             out.critical('nonfatal error. please report to ckornacker and proceed with testing')
