@@ -78,46 +78,47 @@ class CommandPromt(cmd.Cmd):
 
             if not tags:
                 try:
-                    attributes=None
                     host.set_attributes_from_system(system)
+                    attributes = None
                 except Exception:
                     out.warning("system %s not found." % system)
                     return
-
-            for _tag in tags.split(' '):
-                tag = _tag.lower()
-                if tag in ['sled', 'sles', 'opensuse', 'rt', 'studio', 'studio12', 'smt', 'slms', 'slms12']:
-                    attributes.product = tag
-                if tag in ['webyast', 'webyast12']:
-                    attributes.addons.append(tag)
-                if tag in ['kernel']:
-                    attributes.kernel = True
-                if tag in ['ltss']:
-                    attributes.ltss = True
-                if tag in ['i386', 'x86_64', 'ppc', 's390', 'ia64']:
-                    attributes.arch = tag
-                if tag == 'xenu':
-                    attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
-                if tag == 'xen0':
-                    attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
-                if tag == 'xen':
-                    attributes.virtual.update({'hypervisor':'xen'})
-                if tag == 'kvm':
-                    attributes.virtual.update({'hypervisor':'kvm'})
-                if tag == 'host':
-                    attributes.virtual.update({'mode':'host'})
-                if tag == 'guest':
-                    attributes.virtual.update({'mode':'guest'})
-                if tag in ['9', '10', '11', '12']:
-                    attributes.major = tag
-                if tag in ['sp1', 'sp2', 'sp3', 'sp4']:
-                    attributes.minor = tag
-                if tag in self.systems:
-                    attributes=None
-                    try:
-                        host.set_attributes_from_system(tag)
-                    except Exception:
-                        out.warning("system %s not found." % tag)
+            else:
+                for _tag in tags.split(' '):
+                    tag = _tag.lower()
+                    if tag in attributes.tags['products']:
+                        attributes.product = tag
+                    if tag in attributes.tags['archs']:
+                        attributes.arch = tag
+                    if tag in attributes.tags['addons']:
+                        attributes.addons.append(tag)
+                    if tag in attributes.tags['major']:
+                        attributes.major = tag
+                    if tag in attributes.tags['minor']:
+                        attributes.minor = tag
+                    if tag == 'kernel':
+                        attributes.kernel = True
+                    if tag == 'ltss':
+                        attributes.ltss = True
+                    if tag == 'xenu':
+                        attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
+                    if tag == 'xen0':
+                        attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
+                    if tag == 'xen':
+                        attributes.virtual.update({'hypervisor':'xen'})
+                    if tag == 'kvm':
+                        attributes.virtual.update({'hypervisor':'kvm'})
+                    if tag == 'host':
+                        attributes.virtual.update({'mode':'host'})
+                    if tag == 'guest':
+                        attributes.virtual.update({'mode':'guest'})
+                    if tag in self.systems:
+                        try:
+                            host.set_attributes_from_system(tag)
+                            attributes = None
+                        except Exception:
+                            out.warning("system %s not found." % tag)
+                        break
 
             hosts = host.search(attributes)
 
@@ -145,6 +146,9 @@ class CommandPromt(cmd.Cmd):
     def complete_autoadd_host(self, text, line, begidx, endidx):
         if not line.count(','):
             return self.complete_systemlist(text, line, begidx, endidx)
+        else:
+            attributes = Attributes()
+            return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
 
     def do_add_host(self, args):
         """

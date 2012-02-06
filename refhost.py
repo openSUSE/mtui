@@ -10,6 +10,15 @@ out = logging.getLogger('mtui')
 
 class Attributes(object):
 
+    tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'studio12', 'smt', 'slms', 'slms12'],
+             'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64'],
+             'major':['9', '10', '11', '12'],
+             'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
+             'addons':['webyast', 'webyast12'],
+             'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm'],
+             'tags':['kernel', 'ltss']
+            }
+
     def __init__(self):
         self.product = ""
         self.arch = ""
@@ -20,6 +29,7 @@ class Attributes(object):
         self.kernel = False
         self.ltss = False
         self.virtual = {'mode':'', 'hypervisor':''}
+
 
 class Refhost(object):
 
@@ -54,22 +64,20 @@ class Refhost(object):
         return hosts
 
     def check_attributes(self, element):
-        if self.attributes.arch and element.getAttribute('arch') != self.attributes.arch:
-            return False
-
-        if self.attributes.product and element.getElementsByTagName('product')[0].getAttribute('name') != self.attributes.product:
-            return False
-
-        for addon in self.attributes.addons:
-            if addon not in map(self.extract_name, element.getElementsByTagName('addon')):
-                return False
-
-        for node in element.getElementsByTagName('addon'):
-            prop = node.getAttribute('property')
-            if self.extract_name(node) not in self.attributes.addons and not prop == 'weak':
-                return False
-
         try:
+            if self.attributes.arch:
+                assert(element.getAttribute('arch') == self.attributes.arch)
+
+            if self.attributes.product:
+                assert(element.getElementsByTagName('product')[0].getAttribute('name') == self.attributes.product)
+
+            for addon in self.attributes.addons:
+                assert(addon in map(self.extract_name, element.getElementsByTagName('addon')))
+
+            for node in element.getElementsByTagName('addon'):
+                if node.getAttribute('property') != 'weak':
+                    assert(self.extract_name(node) in self.attributes.addons)
+
             node = element.getElementsByTagName('product')[0]
             major = node.getElementsByTagName('major')[0].firstChild.data
             try:
@@ -81,50 +89,47 @@ class Refhost(object):
             except:
                 release = None
 
-            if self.attributes.major and self.attributes.major != major:
-                return False
-            if self.attributes.minor and self.attributes.minor != minor:
-                return False
-            if self.attributes.release and self.attributes.release != release:
-                return False
-        except:
+            if self.attributes.major:
+                assert(self.attributes.major == major)
+            if self.attributes.minor:
+                assert(self.attributes.minor == minor)
+            if self.attributes.release:
+                assert(self.attributes.release == release)
+
+            try:
+                node = element.getElementsByTagName('kernel')[0]
+                if self.attributes.kernel:
+                    assert(node.firstChild.data == 'true')
+                else:
+                    assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
+            except IndexError:
+                assert(self.attributes.kernel is False)
+
+            try:
+                node = element.getElementsByTagName('ltss')[0]
+                prop = node.getAttribute('property')
+                if self.attributes.ltss:
+                    assert(node.firstChild.data == 'true')
+                else:
+                    assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
+            except IndexError:
+                assert(self.attributes.ltss is False)
+
+            try:
+                node = element.getElementsByTagName('virtual')[0]
+                prop = node.getAttribute('property')
+                mode = node.getAttribute('mode')
+                if self.attributes.virtual['mode']:
+                    assert(self.attributes.virtual['mode'] == mode)
+                if self.attributes.virtual['hypervisor']:
+                    assert(self.attributes.virtual['hypervisor'] == node.firstChild.data)
+                if not self.attributes.virtual['mode'] and not self.attributes.virtual['hypervisor']:
+                    assert(node.getAttribute('property') == 'weak')
+            except IndexError:
+                assert(not self.attributes.virtual['mode'] and not self.attributes.virtual['hypervisor'])
+
+        except AssertionError:
             return False
-
-        try:
-            node = element.getElementsByTagName('kernel')[0]
-            prop = node.getAttribute('property')
-            if self.attributes.kernel and not node.firstChild.data == 'true':
-                return False
-            if not self.attributes.kernel and node.firstChild.data == 'true' and not prop == 'weak':
-                return False
-        except:
-            if self.attributes.kernel:
-                return False
-
-        try:
-            node = element.getElementsByTagName('ltss')[0]
-            prop = node.getAttribute('property')
-            if self.attributes.ltss and not node.firstChild.data == 'true':
-                return False
-            if not self.attributes.ltss and node.firstChild.data == 'true' and not prop == 'weak':
-                return False
-        except:
-            if self.attributes.ltss:
-                return False
-
-        try:
-            node = element.getElementsByTagName('virtual')[0]
-            prop = node.getAttribute('property')
-            mode = node.getAttribute('mode')
-            if self.attributes.virtual['mode'] and self.attributes.virtual['mode'] != mode:
-                return False
-            if self.attributes.virtual['hypervisor'] and self.attributes.virtual['hypervisor'] != node.firstChild.data:
-                return False
-            if not self.attributes.virtual['mode'] and not self.attributes.virtual['hypervisor'] and not prop == 'weak':
-                return False
-        except:
-            if self.attributes.virtual['mode'] or self.attributes.virtual['hypervisor']:
-                return False
 
         return True
 
@@ -174,9 +179,9 @@ class Refhost(object):
                 attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
             if addon == 'ltss':
                 attributes.ltss = True
-            if addon in ['rt', 'studio', 'studio12', 'smt', 'slms', 'slms12']:
+            if addon in attributes.tags['products']:
                 attributes.product = addon
-            if addon in ['webyast', 'webyast12']:
+            if addon in attributes.tags['addons']:
                 attributes.addon.append(addon)
 
         self.attributes = attributes

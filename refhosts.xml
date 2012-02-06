@@ -152,7 +152,7 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="x86_64" name="xenu64-11b.suse.de">
       <product name="sles">
