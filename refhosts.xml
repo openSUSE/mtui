@@ -146,10 +146,10 @@
       <kernel>true</kernel>
     </host>
     <host arch="x86_64" name="cetur.suse.de">
-      <product name="studio12">
+      <product name="studio">
         <version>
-          <major>11</major>
-          <minor>sp1</minor>
+          <major>1</major>
+          <minor>2</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
@@ -247,17 +247,17 @@
     <host arch="x86_64" name="poincare.suse.de">
       <product name="studio">
         <version>
-          <major>11</major>
-          <minor>sp1</minor>
+          <major>1</major>
+          <minor>1</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
     </host>
     <host arch="x86_64" name="qam-slms2.suse.de">
-      <product name="slms12">
+      <product name="slms">
         <version>
-          <major>11</major>
-          <minor>sp1</minor>
+          <major>1</major>
+          <minor>2</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
@@ -303,8 +303,8 @@
     <host arch="x86_64" name="qam-slms1.suse.de">
       <product name="slms">
         <version>
-          <major>11</major>
-          <minor>sp1</minor>
+          <major>1</major>
+          <minor>1</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
@@ -431,19 +431,19 @@
       <kernel property="weak">true</kernel>
     </host>
     <host arch="x86_64" name="qam-s4v-i41-64.suse.de">
-      <product name="sles">
+      <product name="vmware">
         <version>
-          <major>4</major>
-          <minor>vmware11sp1</minor>
+          <major>11</major>
+          <minor>sp1</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
     </host>
     <host arch="i386" name="qam-s4v-i41-32.suse.de">
-      <product name="sles">
+      <product name="vmware">
         <version>
-          <major>4</major>
-          <minor>vmware11sp1</minor>
+          <major>11</major>
+          <minor>sp1</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
@@ -625,7 +625,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="i386" name="riker.suse.de">
       <product name="sled">
@@ -634,7 +634,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
     </host>
     <host arch="x86_64" name="kurk.suse.de">
       <product name="rt">
@@ -653,7 +653,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss>true</ltss>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="i386" name="zypp.suse.de">
       <product name="sles">
@@ -663,7 +663,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss>true</ltss>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="i386" name="sulu.suse.de">
       <product name="rt">
@@ -682,7 +682,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss>true</ltss>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="x86_64" name="qam-smt1.suse.de">
       <product name="smt">
@@ -720,7 +720,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss>true</ltss>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="x86_64" name="dax.suse.de">
       <product name="sles">
@@ -730,7 +730,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss>true</ltss>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="x86_64" name="xenu64-10o.suse.de">
       <product name="sles">
@@ -760,7 +760,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss>true</ltss>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="i386" name="xenu32-10o.suse.de">
       <product name="sles">

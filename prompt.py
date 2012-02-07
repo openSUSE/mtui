@@ -56,6 +56,77 @@ class CommandPromt(cmd.Cmd):
     def emptyline(self):
         return
 
+    def do_search_hosts(self, args):
+        """
+        * EXPERIMENTAL * may not add the correct host
+        Seach hosts by by the specified attributes. A attribute tag could also be a
+        system type name like sles11sp1-i386.
+
+        search_hosts <attribute> [attribute ...]
+        Keyword arguments:
+        attribute-- host attributes like architecture or product
+        """
+
+        if args:
+            out.warning("=== EXPERIMENTAL: may not add the correct host ===")
+            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+            attributes = Attributes()
+
+            for _tag in args.split(' '):
+                tag = _tag.lower()
+                match = re.search('(\d+)\.(\d+)', tag)
+                if match:
+                    attributes.major = match.group(1)
+                    attributes.minor = match.group(2)
+                if tag in attributes.tags['products']:
+                    attributes.product = tag
+                if tag in attributes.tags['archs']:
+                    attributes.arch = tag
+                if tag in attributes.tags['addons']:
+                    attributes.addons.append(tag)
+                if tag in attributes.tags['major']:
+                    attributes.major = tag
+                if tag in attributes.tags['minor']:
+                    attributes.minor = tag
+                if tag == 'kernel':
+                    attributes.kernel = True
+                if tag == 'ltss':
+                    attributes.ltss = True
+                if tag == 'xenu':
+                    attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
+                if tag == 'xen0':
+                    attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
+                if tag == 'xen':
+                    attributes.virtual.update({'hypervisor':'xen'})
+                if tag == 'kvm':
+                    attributes.virtual.update({'hypervisor':'kvm'})
+                if tag == 'host':
+                    attributes.virtual.update({'mode':'host'})
+                if tag == 'guest':
+                    attributes.virtual.update({'mode':'guest'})
+                if tag in self.systems:
+                    try:
+                        refhost.set_attributes_from_system(tag)
+                        attributes = None
+                    except Exception:
+                        out.warning("system %s not found." % tag)
+                    break
+
+            hosts = refhost.search(attributes)
+
+            for hostname in set(hosts):
+                hosttags = refhost.get_host_attributes(hostname)
+                print '{0:25}: {1}'.format(hostname, hosttags)
+
+            return hosts
+
+        else:
+            self.parse_error(self.do_search_hosts, args)
+
+    def complete_search_hosts(self, text, line, begidx, endidx):
+        attributes = Attributes()
+        return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
+
     def do_autoadd_host(self, args):
         """
         * EXPERIMENTAL * may not add the correct host
@@ -70,65 +141,16 @@ class CommandPromt(cmd.Cmd):
         """
 
         if args:
-            out.warning("=== EXPERIMENTAL: may not add the correct host ===")
-            host = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
-            attributes = Attributes()
-
             (system, _, tags) = args.partition(',')
 
             if not tags:
-                try:
-                    host.set_attributes_from_system(system)
-                    attributes = None
-                except Exception:
-                    out.warning("system %s not found." % system)
-                    return
+                hosts = self.do_search_hosts(system)
             else:
-                for _tag in tags.split(' '):
-                    tag = _tag.lower()
-                    if tag in attributes.tags['products']:
-                        attributes.product = tag
-                    if tag in attributes.tags['archs']:
-                        attributes.arch = tag
-                    if tag in attributes.tags['addons']:
-                        attributes.addons.append(tag)
-                    if tag in attributes.tags['major']:
-                        attributes.major = tag
-                    if tag in attributes.tags['minor']:
-                        attributes.minor = tag
-                    if tag == 'kernel':
-                        attributes.kernel = True
-                    if tag == 'ltss':
-                        attributes.ltss = True
-                    if tag == 'xenu':
-                        attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
-                    if tag == 'xen0':
-                        attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
-                    if tag == 'xen':
-                        attributes.virtual.update({'hypervisor':'xen'})
-                    if tag == 'kvm':
-                        attributes.virtual.update({'hypervisor':'kvm'})
-                    if tag == 'host':
-                        attributes.virtual.update({'mode':'host'})
-                    if tag == 'guest':
-                        attributes.virtual.update({'mode':'guest'})
-                    if tag in self.systems:
-                        try:
-                            host.set_attributes_from_system(tag)
-                            attributes = None
-                        except Exception:
-                            out.warning("system %s not found." % tag)
-                        break
+                hosts = self.do_search_hosts(tags)
 
-            hosts = host.search(attributes)
-
-            if len(hosts) > 1:
+            try:
                 hostname = hosts[0]
-                out.info('found hosts:\n%s' % '\n'.join(set(hosts)))
-            elif len(hosts) == 1:
-                hostname = hosts[0]
-                out.info('found host: %s' % ' '.join(set(hosts)))
-            else:
+            except IndexError:
                 out.error('no host found matching the specified criteria')
                 return
 
@@ -600,11 +622,21 @@ class CommandPromt(cmd.Cmd):
                 targets[target].query_versions()
                 print 'packages on %s (%s):' % (target, targets[target].system)
                 for package in targets[target].packages:
-                    print '{0:30}: {1}'.format(package, targets[target].packages[package].current)
+                    current = targets[target].packages[package].current
+                    required = self.metadata.packages[package]
+                    if current == '0':
+                        state = yellow('not installed')
+                    elif RPMVersion(current) > RPMVersion(required):
+                        state = red('too recent')
+                    elif RPMVersion(current) < RPMVersion(required):
+                        state = yellow('update needed')
+                    else:
+                        state = green('updated')
+
+                    print '{0:30}: {1:15} {2}'.format(package, targets[target].packages[package].current, state)
 
                 print
         else:
-
             for (package, version) in self.metadata.packages.items():
                 print '{0:30}: {1}'.format(package, version)
 

@@ -10,7 +10,7 @@ out = logging.getLogger('mtui')
 
 class Attributes(object):
 
-    tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'studio12', 'smt', 'slms', 'slms12'],
+    tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'smt', 'slms', 'vmware'],
              'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64'],
              'major':['9', '10', '11', '12'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
@@ -30,6 +30,31 @@ class Attributes(object):
         self.ltss = False
         self.virtual = {'mode':'', 'hypervisor':''}
 
+    def __str__(self):
+        version = ''
+        kernel = ''
+        ltss = ''
+        addons = ''
+
+        if self.major:
+            version = self.major
+        if self.minor:
+            version = version + self.minor
+        if version.isdigit():
+            version = "%s.%s" % (self.major, self.minor)
+        if self.release:
+            version = version + self.release
+        if self.kernel:
+            kernel = 'kernel'
+        if self.ltss:
+            ltss = 'ltss'
+
+        for addon in self.addons:
+            addons = " ".join([addons, addon])
+
+        rep = ' '.join([self.product, version, self.arch, kernel, ltss, self.virtual['mode'], self.virtual['hypervisor'], addons])
+        return ' '.join(rep.split())
+
 
 class Refhost(object):
 
@@ -43,10 +68,10 @@ class Refhost(object):
         self.data = minidom.parse(hostmap)
 
         try:
-            self.location_element = filter(self.get_location_element, self.data.getElementsByTagName('location'))[0]
+            self.location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
         except:
             out.warning('location "%s" not found in %s. falling back to "default"' % (location, hostmap))
-            self.location_element = filter(self.get_default_location_element, self.data.getElementsByTagName('location'))[0]
+            self.location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
 
     def extract_name(self, element):
         return element.getAttribute('name')
@@ -58,7 +83,7 @@ class Refhost(object):
         hosts = map(self.extract_name, filter(self.check_attributes, self.location_element.getElementsByTagName('host')))
 
         if not hosts:
-            default_location = filter(self.get_default_location_element, self.data.getElementsByTagName('location'))[0]
+            default_location = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
             hosts = map(self.extract_name, filter(self.check_attributes, default_location.getElementsByTagName('host')))
 
         return hosts
@@ -133,17 +158,50 @@ class Refhost(object):
 
         return True
 
-    def get_location_element(self, element):
+    def is_location_element(self, element):
         if element.getAttribute('name') == self.location:
             return True
         else:
             return False
 
-    def get_default_location_element(self, element):
+    def is_default_location_element(self, element):
         if element.getAttribute('name') == 'default':
             return True
         else:
             return False
+
+    def get_host_attributes(self, hostname):
+        attributes = Attributes()
+
+        nodes = filter(lambda x: x.getAttribute('name') == hostname, self.location_element.getElementsByTagName('host'))
+
+        for node in nodes:
+            for element in node.getElementsByTagName('product'):
+                attributes.product = element.getAttribute('name')
+                for major in element.getElementsByTagName('major'):
+                    attributes.major = major.firstChild.data
+                for minor in element.getElementsByTagName('minor'):
+                    attributes.minor = minor.firstChild.data
+                for release in element.getElementsByTagName('release'):
+                    attributes.release = release.firstChild.data
+
+            attributes.arch = node.getAttribute('arch')
+
+            for addons in node.getElementsByTagName('addon'):
+                attributes.addons.append(addons.getAttribute('name'))
+
+            for element in node.getElementsByTagName('kernel'):
+                if element.firstChild.data == 'true':
+                    attributes.kernel = True
+
+            for element in node.getElementsByTagName('ltss'):
+                if element.firstChild.data == 'true':
+                    attributes.ltss = True
+
+            for element in node.getElementsByTagName('virtual'):
+                attributes.virtual = {'mode':element.getAttribute('mode'), 'hypervisor':element.firstChild.data}
+
+        return attributes
 
     def set_attributes_from_system(self, system):
         attributes = Attributes()
