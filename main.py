@@ -75,7 +75,7 @@ def main():
         if raw_input('Template does not yet exist. Try to check it out? (y/N) ').lower() in ['y', 'yes']:
             os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
             try:
-                update = Template(md5, team, directory)
+                update = Template(md5, team, location, directory)
             except Exception:
                 sys.exit(0)
         else:
