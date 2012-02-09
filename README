@@ -83,6 +83,10 @@ timeout limit was hit the user is asked to wait for the current command to
 return or to proceed with the next one. The timeout value is set in seconds.
 To disable the timeout set it to "0".
 
+	-s,--search-host	search host
+
+Adds machines to the target host list based on comma separated search tags.
+
 	-h,--help                help
 
 Prints the parameter list

@@ -29,8 +29,8 @@ def main():
     targets = {}
 
     try:
-        (opts, args) = getopt.getopt(sys.argv[1:], 'inhaedl:t:m:vw:', ['interactive', 'non-interactive', 'help', 'asia', 'emea', 'dryrun',
-                                     'location=', 'templates=', 'md5=', 'verbose', 'timeout'])
+        (opts, args) = getopt.getopt(sys.argv[1:], 'inhaedl:s:t:m:vw:', ['interactive', 'non-interactive', 'help', 'asia', 'emea', 'dryrun',
+                                     'location=', 'templates=', 'md5=', 'search-hosts=', 'verbose', 'timeout'])
     except getopt.GetoptError, error:
         out.error('failed to parse parameter: %s' % str(error))
         usage()
@@ -54,6 +54,8 @@ def main():
             interactive = True
         elif parameter in ('-n', '--non-interactive'):
             interactive = False
+        elif parameter in ('-s', '--search-hosts'):
+            attributes = argument.replace(',', ' ')
         elif parameter in ('-v', '--verbose'):
             out.setLevel(level=logging.DEBUG)
         elif parameter in ('-w', '--timeout'):
@@ -109,6 +111,7 @@ def main():
     while True:
         try:
             if interactive:
+                prompt.do_autoadd_all(attributes)
                 prompt.cmdloop()
             else:
                 prompt.do_update('all')
@@ -136,6 +139,7 @@ def usage():
     print '\t-{short},--{long:20}{description}'.format(short='d', long='dryrun', description='start in dryrun mode')
     print '\t-{short},--{long:20}{description}'.format(short='v', long='verbose', description='enable debugging output')
     print '\t-{short},--{long:20}{description}'.format(short='w', long='timeout', description='execution timeout in seconds')
+    print '\t-{short},--{long:20}{description}'.format(short='s', long='search-hosts=', description='search for hosts matching comma separated tags')
     print
 
     sys.exit(0)

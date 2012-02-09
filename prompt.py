@@ -172,6 +172,33 @@ class CommandPromt(cmd.Cmd):
             attributes = Attributes()
             return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
 
+    def do_autoadd_all(self, args):
+        """
+        * EXPERIMENTAL * may not add the correct host
+        Adds machines to the target host list, based on search
+        tags.
+
+        autoadd_all <attribute> [attribute ...]
+        attribute-- host attributes like architecture or product
+        """
+        if args:
+            try:
+                hosts = self.do_search_hosts(args)
+            except ValueError:
+                self.parse_error(self.do_autoadd_all, args)
+                return
+
+            for hostname in hosts:
+                try:
+                    out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
+                except KeyError:
+                    try:
+                        self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
+                    except Exception:
+                        out.error('failed to add host %s to list' % hostname)
+        else:
+            self.parse_error(self.do_autoadd_all, args)
+
     def do_add_host(self, args):
         """
         Adds another machine to the target host list. The system type needs
