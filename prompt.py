@@ -69,8 +69,8 @@ class CommandPromt(cmd.Cmd):
 
         if args:
             out.warning("=== EXPERIMENTAL: may not add the correct host ===")
-            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
             attributes = Attributes()
+            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
 
             for _tag in args.split(' '):
                 tag = _tag.lower()
@@ -136,14 +136,14 @@ class CommandPromt(cmd.Cmd):
         autoadd <attribute> [attribute ...]
         attribute-- host attributes like architecture or product
         """
+
         if args:
-            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
             attributes = Attributes()
+            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
             hosts = self.do_search_hosts(args)
 
             for hostname in hosts:
                 attributes = refhost.get_host_attributes(hostname)
-
                 try:
                     out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
                 except KeyError:

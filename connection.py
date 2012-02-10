@@ -193,7 +193,10 @@ class Connection(object):
         """
 
         path = ''
-        sftp = self.client.open_sftp()
+        try:
+            sftp = self.client.open_sftp()
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            return
 
         for subdir in remote.split('/')[:-1]:
             path += subdir + '/'
@@ -219,8 +222,8 @@ class Connection(object):
 
         """
 
-        sftp = self.client.open_sftp()
         try:
+            sftp = self.client.open_sftp()
             sftp.get(remote, local)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
@@ -229,24 +232,24 @@ class Connection(object):
         sftp.close()
 
     def listdir(self, path='.'):
-        sftp = self.client.open_sftp()
         try:
+            sftp = self.client.open_sftp()
             return sftp.listdir(path)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
             return self.listdir(path)
 
     def open(self, filename, mode='r', bufsize=-1):
-        sftp = self.client.open_sftp()
         try:
+            sftp = self.client.open_sftp()
             return sftp.open(filename, mode, bufsize)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
             return self.open(filename, mode, bufsize)
 
     def remove(self, path):
-        sftp = self.client.open_sftp()
         try:
+            sftp = self.client.open_sftp()
             return sftp.remove(path)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()

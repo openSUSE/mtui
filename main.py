@@ -108,12 +108,12 @@ def main():
             pass
 
     prompt = CommandPromt(targets, metadata)
+    if attributes:
+        prompt.do_autoadd(attributes)
 
     while True:
         try:
             if interactive:
-                if attributes:
-                    prompt.do_autoadd(attributes)
                 prompt.cmdloop()
             else:
                 prompt.do_update('all')
