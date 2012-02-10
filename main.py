@@ -113,7 +113,7 @@ def main():
         try:
             if interactive:
                 if attributes:
-                    prompt.do_autoadd_all(attributes)
+                    prompt.do_autoadd(attributes)
                 prompt.cmdloop()
             else:
                 prompt.do_update('all')

@@ -122,15 +122,14 @@ hosts can be specified.
 		Keyword arguments:
 		hostname -- hostname from the target list
 
-- autoadd_host
+- autoadd
 * EXPERIMENTAL * may not add the correct host
 Adds another machine to the target host list. The host is mapped by the
 specified attributes. A attribute tag could also be a system type name
 like sles11sp1-i386.
 
-		autoadd_host <system>,<attribute> [attribute ...]
+		autoadd <attribute> [attribute ...]
 		Keyword arguments:
-		system   -- system type, ie. sles11sp1-i386
 		attribute-- host attributes like architecture or product
 
 - list_hosts

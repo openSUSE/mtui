@@ -127,77 +127,37 @@ class CommandPromt(cmd.Cmd):
         attributes = Attributes()
         return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
 
-    def do_autoadd_host(self, args):
-        """
-        * EXPERIMENTAL * may not add the correct host
-        Adds another machine to the target host list. The host is mapped
-        by the specified attributes. A attribute tag could also be a
-        system type name like sles11sp1-i386.
-
-        autoadd_host <system>[,attribute] [attribute ...]
-        Keyword arguments:
-        system   -- system type, ie. sles11sp1-i386
-        attribute-- host attributes like architecture or product
-        """
-
-        if args:
-            (system, _, tags) = args.partition(',')
-
-            if not tags:
-                hosts = self.do_search_hosts(system)
-            else:
-                hosts = self.do_search_hosts(tags)
-
-            try:
-                hostname = hosts[0]
-            except IndexError:
-                out.error('no host found matching the specified criteria')
-                return
-
-            try:
-                out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
-            except KeyError:
-                try:
-                    self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
-                except Exception:
-                    out.error('failed to add host %s to list' % hostname)
-
-        else:
-            self.parse_error(self.do_autoadd_host, args)
-
-    def complete_autoadd_host(self, text, line, begidx, endidx):
-        if not line.count(','):
-            return self.complete_systemlist(text, line, begidx, endidx)
-        else:
-            attributes = Attributes()
-            return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
-
-    def do_autoadd_all(self, args):
+    def do_autoadd(self, args):
         """
         * EXPERIMENTAL * may not add the correct host
         Adds machines to the target host list, based on search
         tags.
 
-        autoadd_all <attribute> [attribute ...]
+        autoadd <attribute> [attribute ...]
         attribute-- host attributes like architecture or product
         """
         if args:
-            try:
-                hosts = self.do_search_hosts(args)
-            except ValueError:
-                self.parse_error(self.do_autoadd_all, args)
-                return
+            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+            attributes = Attributes()
+            hosts = self.do_search_hosts(args)
 
             for hostname in hosts:
+                attributes = refhost.get_host_attributes(hostname)
+
                 try:
                     out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
                 except KeyError:
                     try:
+                        system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.arch)
                         self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
                     except Exception:
                         out.error('failed to add host %s to list' % hostname)
         else:
-            self.parse_error(self.do_autoadd_all, args)
+            self.parse_error(self.do_autoadd, args)
+
+    def complete_autoadd(self, text, line, begidx, endidx):
+        attributes = Attributes()
+        return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
 
     def do_add_host(self, args):
         """
