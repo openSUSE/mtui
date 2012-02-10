@@ -25,6 +25,7 @@ def main():
     interactive = True
     state = 'enabled'
     timeout = 300
+    attributes = ''
 
     targets = {}
 
@@ -111,7 +112,8 @@ def main():
     while True:
         try:
             if interactive:
-                prompt.do_autoadd_all(attributes)
+                if attributes:
+                    prompt.do_autoadd_all(attributes)
                 prompt.cmdloop()
             else:
                 prompt.do_update('all')
