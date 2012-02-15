@@ -138,7 +138,6 @@ class CommandPromt(cmd.Cmd):
         """
 
         if args:
-            attributes = Attributes()
             refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
             hosts = self.do_search_hosts(args)
 
