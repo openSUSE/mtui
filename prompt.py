@@ -470,7 +470,12 @@ class CommandPromt(cmd.Cmd):
                 self.do_source_extract('')
 
             for rpmfile in glob.glob(destination + '/*.src.rpm'):
-                match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
+                try:
+                    match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
+                except Exception, error:
+                    out.critical('failed to open %s: %s' % (rpmfile, error))
+                    continue
+
                 if match:
                     disturl = match.group(0)
                     project = match.group(1)
@@ -718,8 +723,7 @@ class CommandPromt(cmd.Cmd):
 
             comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
 
-            print 'export TESTS_LOGDIR=/var/log/qa/%s; export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; <testsuite>' \
-                % (self.metadata.md5, self.metadata.md5)
+            print 'export TESTS_LOGDIR=/var/log/qa/%s; <testsuite>' % self.metadata.md5
             print '/usr/share/qa/tools/remote_qa_db_report.pl -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
                     username, self.metadata.md5, comment)
 
@@ -985,8 +989,7 @@ class CommandPromt(cmd.Cmd):
             if not command.startswith('/'):
                 command = os.path.join('/usr/share/qa/tools', command)
 
-            command = 'export CTCS2_LOGDIR=/var/log/qa/%s/ctcs2; export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5,
-                    self.metadata.md5, command)
+            command = 'export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5, command)
             name = os.path.basename(command).replace('-run', '')
 
             if targets:
@@ -1054,14 +1057,15 @@ class CommandPromt(cmd.Cmd):
                            % (self.metadata.md5, username, self.metadata.md5, comment))
             submit.append('rm /tmp/pwdask')
 
-            for command in submit:
-                try:
-                    RunCommand(targets, command).run()
-                except KeyboardInterrupt:
-                    return
+            for target in targets:
+                for command in submit:
+                    try:
+                        temp = {target:targets[target]}
+                        RunCommand(temp, command).run()
+                    except KeyboardInterrupt:
+                        return
 
-                if 'remote_qa_db_report.pl' in command:
-                    for target in targets:
+                    if 'remote_qa_db_report.pl' in command:
                         if targets[target].lastexit() != 0:
                             out.critical('submitting testsuite results failed on %s:' % target)
                             print '%s:~> %s [%s]' % (target, name, targets[target].lastexit())

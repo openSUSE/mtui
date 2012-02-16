@@ -4,6 +4,8 @@
 import re
 import xml.dom.minidom
 
+from utils import *
+
 
 class XMLOutput(object):
 
@@ -80,9 +82,6 @@ class XMLOutput(object):
         self.machine.setAttribute(name, value)
 
     def pretty(self):
-
-        # return re.sub("\033\[[0-9;]+m", "", self.output.toprettyxml())
-
-        return re.sub("\033", '', self.output.toprettyxml())
+        return filter_ansi(self.output.toprettyxml())
 
 

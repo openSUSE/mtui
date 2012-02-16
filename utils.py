@@ -8,6 +8,7 @@ import struct
 import termios
 import tempfile
 import readline
+import re
 
 
 def timestamp():
@@ -75,6 +76,14 @@ def termsize():
     return width, height
 
 
+def filter_ansi(text):
+    text = re.sub(chr(27), '', text)
+    text = re.sub('\[[0-9;]*[mA]', '', text)
+    text = re.sub('\[K', '', text)
+
+    return text
+
+
 def page(text):
 
     prompt = "Press Enter to continue... (q to quit)"
@@ -84,7 +93,7 @@ def page(text):
     text.reverse()
 
     try:
-        line = text.pop().rstrip('\r\n')
+        line = filter_ansi(text.pop().rstrip('\r\n'))
     except IndexError:
         return
 
@@ -105,7 +114,7 @@ def page(text):
                 continue
             else:
                 try:
-                    line = text.pop().rstrip('\r\n')
+                    line = filter_ansi(text.pop().rstrip('\r\n'))
                 except IndexError:
                     return
 
