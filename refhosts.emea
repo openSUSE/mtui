@@ -75,8 +75,8 @@ sles11sp1_XENU-x86_64="xenu64-11b.suse.de"
 
 sles11sp1_rt-x86_64="kurk.suse.de"
 
-sles4vmware11sp1-i386="qam-s4v-i41-32.suse.de"
-sles4vmware11sp1-x86_64="qam-s4v-i41-64.suse.de"
+sles4vmware11sp1-i386=""
+sles4vmware11sp1-x86_64=""
 
 sles11sp1_studio-x86_64="poincare.suse.de"
 sles11sp1_studio12-x86_64="cetur.suse.de"
@@ -196,8 +196,8 @@ sles11sp1_XENU-x86_64-kernel="xenu64-11b.suse.de"
 
 sles11sp1_rt-x86_64-kernel="kurk.suse.de"
 
-sles4vmware11sp1-i386-kernel="qam-s4v-i41-32.suse.de"
-sles4vmware11sp1-x86_64-kernel="qam-s4v-i41-64.suse.de"
+sles4vmware11sp1-i386-kernel=""
+sles4vmware11sp1-x86_64-kernel=""
 
 sles11sp1_studio-x86_64-kernel="poincare.suse.de"
 sles11sp1_studio12-x86_64-kernel="cetur.suse.de"

@@ -430,24 +430,6 @@
       </product>
       <kernel property="weak">true</kernel>
     </host>
-    <host arch="x86_64" name="qam-s4v-i41-64.suse.de">
-      <product name="vmware">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-    </host>
-    <host arch="i386" name="qam-s4v-i41-32.suse.de">
-      <product name="vmware">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-    </host>
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
         <version>
