@@ -764,6 +764,7 @@ class CommandPromt(cmd.Cmd):
             targetlist = ' '.join(sorted(self.targets.keys()))
             packagelist = ' '.join(sorted(self.metadata.get_package_list()))
             patchinfo = 'http://hilbert.suse.de/abuildstat/patchinfo/%s/' % self.metadata.md5
+            report = 'http://qam.suse.de/testreports/%s/log' % self.metadata.md5
 
             print '{0:15}: {1}'.format('MD5SUM', self.metadata.md5)
             print '{0:15}: {1}'.format('SWAMP ID', self.metadata.swampid)
@@ -776,6 +777,7 @@ class CommandPromt(cmd.Cmd):
             print '{0:15}: {1}'.format('Hosts', targetlist)
             print '{0:15}: {1}'.format('Packages', packagelist)
             print '{0:15}: {1}'.format('Build', patchinfo)
+            print '{0:15}: {1}'.format('Testreport', report)
 
     def do_list_versions(self, args):
         """

@@ -483,9 +483,11 @@ class Locked(object):
         self.comment = comment
 
     def own(self):
-        if self.user == os.getlogin() and self.pid == str(os.getpid()):
+        try:
+            assert(self.user == os.getlogin())
+            assert(self.pid == str(os.getpid()))
             return True
-        else:
+        except Exception:
             return False
 
     def time(self, style=None):

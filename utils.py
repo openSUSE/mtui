@@ -56,6 +56,7 @@ def yellow(text):
 
 def input(text, options):
     result = False
+    response = False
 
     try:
         response = raw_input(text).lower()
