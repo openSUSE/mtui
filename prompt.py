@@ -719,7 +719,7 @@ class CommandPromt(cmd.Cmd):
 
             time = date.today().strftime('%d/%m/%y')
             swampid = self.metadata.swampid
-            username = os.getlogin()
+            username = getpass.getuser()
 
             comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
 
@@ -1040,7 +1040,7 @@ class CommandPromt(cmd.Cmd):
             name = os.path.basename(command).replace('-run', '')
             time = date.today().strftime('%d/%m/%y')
             swampid = self.metadata.swampid
-            username = os.getlogin()
+            username = getpass.getuser()
 
             comment = 'testing %s (SWAMP %s) on %s' % (name, swampid, time)
 

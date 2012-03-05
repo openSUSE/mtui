@@ -7,6 +7,7 @@ import re
 import threading
 import Queue
 import logging
+import getpass
 
 from connection import *
 from xmlout import *
@@ -234,7 +235,7 @@ class Target(object):
                 return
 
             now = timestamp()
-            user = os.getlogin()
+            user = getpass.getuser()
             pid = os.getpid()
             if comment:
                 lockfile.write('%s:%s:%s:%s' % (now, user, pid, comment))
@@ -266,7 +267,7 @@ class Target(object):
                 return
 
             now = timestamp()
-            user = os.getlogin()
+            user = getpass.getuser()
             historyfile.write('%s:%s:%s\n' % (now, user, ':'.join(comment)))
 
             historyfile.close()
@@ -487,7 +488,7 @@ class Locked(object):
 
     def own(self):
         try:
-            assert(self.user == os.getlogin())
+            assert(self.user == getpass.getuser())
             assert(self.pid == str(os.getpid()))
             return True
         except Exception:
