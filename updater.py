@@ -87,7 +87,8 @@ class Update(object):
             raise UpdateError('update stack locked', target.hostname)
         if 'Additional rpm output' in stdout:
             out.warning('There was additional rpm output on %s:', target.hostname)
-            start = stdout.find('Additional rpm output:') + 22
+            marker = 'Additional rpm output:'
+            start = stdout.find(marker) + len(marker)
             end = stdout.find('Retrieving', start)
             print stdout[start:end]
         if 'A ZYpp transaction is already in progress.' in stderr:
@@ -130,6 +131,12 @@ class ZypperUpdate(Update):
         if 'Error:' in stderr:
             out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('RPM Error', target.hostname)
+        if 'The following package is not supported by its vendor' in stdout:
+            out.critical('%s: package support has changed:', target.hostname)
+            marker = 'The following package is not supported by its vendor:\n'
+            start = stdout.find(marker)
+            end = stdout.find('\n\n', start)
+            print stdout[start:end]
 
 
 class openSuseUpdate(Update):
