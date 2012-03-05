@@ -4,8 +4,10 @@
 import os
 import sys
 import time
+import re
 
 from target import *
+from rpmver import *
 
 
 class UpdateError(Exception):
@@ -332,28 +334,153 @@ class OldZypperPrepare(Prepare):
 Preparer = {'11': ZypperPrepare, '114': ZypperPrepare, '10': OldZypperPrepare}
 
 
-class ZypperDowngrade(Prepare):
+class Downgrade(object):
+
+    def __init__(self, targets, packages=None, patches=None, force=False, installed_only=False):
+        self.targets = targets
+        self.packages = packages
+        self.force = force
+        self.commands = {}
+        self.install_command = None
+        self.list_command = None
+        self.pre_commands = []
+        self.post_commands = []
+
+    def run(self):
+        skipped = False
+        versions = {}
+
+        try:
+            for target in self.targets:
+                lock = self.targets[target].locked()
+                if lock.locked and not lock.own():
+                    skipped = True
+                    out.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
+                    if lock.comment:
+                        out.info("%s's comment: %s" % (lock.user, lock.comment))
+                else:
+                    self.targets[target].set_locked()
+                    thread = ThreadedMethod(queue)
+                    thread.setDaemon(True)
+                    thread.start()
+
+            if skipped:
+                for target in self.targets:
+                    try:
+                        self.targets[target].remove_lock()
+                    except AssertionError:
+                        pass
+                raise UpdateError('Hosts locked')
+
+            for target in self.targets:
+                queue.put([self.targets[target].set_repo, ['UPDATE']])
+
+            while queue.unfinished_tasks:
+                spinner()
+
+            queue.join()
+
+            for target in self.targets:
+                if self.targets[target].lasterr():
+                    out.critical('failed to downgrade host %s. stopping.\n# %s\n%s' % (target, self.targets[target].lastin(),
+                                 self.targets[target].lasterr()))
+                    return
+
+            RunCommand(self.targets, self.list_command).run()
+            for target in self.targets:
+                lines = self.targets[target].lastout().split('\n')
+                release = {}
+                for line in lines:
+                    match = re.search('(.*) = (.*)', line)
+                    if match:
+                        name = match.group(1)
+                        version = match.group(2)
+                        try:
+                            release[name].append(version)
+                        except KeyError:
+                            release[name] = []
+                            release[name].append(version)
+
+                for name in release:
+                    version = sorted(release[name], key=RPMVersion, reverse=True)[0]
+                    try:
+                        versions[target].update({name:version})
+                    except KeyError:
+                        versions[target] = {}
+                        versions[target].update({name:version})
+
+            for command in self.pre_commands:
+                RunCommand(self.targets, command).run()
+
+            for package in self.packages:
+                temp = self.targets.copy()
+                for target in self.targets:
+                    try:
+                        command = self.install_command % (package, package, versions[target][package])
+                        self.commands.update({target:command})
+                    except KeyError:
+                        del temp[target]
+
+                RunCommand(temp, self.commands).run()
+
+                for target in self.targets:
+                    self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
+                                self.targets[target].lasterr(), self.targets[target].lastexit())
+
+            for command in self.post_commands:
+                RunCommand(self.targets, command).run()
+
+        except:
+            raise
+        finally:
+            for target in self.targets:
+                if not lock.locked:  # wasn't locked earlier by set_host_lock
+                    try:
+                        self.targets[target].remove_lock()
+                    except AssertionError:
+                        pass
+
+    def _check(self, target, stdin, stdout, stderr, exitcode):
+        if 'A ZYpp transaction is already in progress.' in stderr:
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
+            raise UpdateError(target.hostname, 'update stack locked')
+        if 'System management is locked' in stderr:
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
+            raise UpdateError('update stack locked', target.hostname)
+        if '(c): c' in stdout:
+            out.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
+            raise UpdateError('Dependency Error', target.hostname)
+        if exitcode == 104:
+            out.critical('%s: zypper returned with errorcode 104:\n%s', target.hostname, stderr)
+            raise UpdateError('Unspecified Error', target.hostname)
+
+        return self.check(target, stdin, stdout, stderr, exitcode)
+
+    def check(self, target, stdin, stdout, stderr, exitcode):
+        """stub. needs to be overwritten by inherited classes"""
+
+        return
+
+
+class ZypperDowngrade(Downgrade):
 
     def __init__(self, targets, packages, patches, force=False, installed_only=False):
-        Prepare.__init__(self, targets, packages, patches, force, installed_only)
+        Downgrade.__init__(self, targets, packages, patches, force, installed_only)
 
-        commands = []
-
-        for package in packages:
-            commands.append('rpm -q %s &>/dev/null && zypper -n in --force-resolution -y -l %s=$(zypper se -s --match-exact -t package %s | grep -v "(System Packages)" | grep ^[iv] | awk -F "|" \'{ print $4 }\' | sort -rg | sed -n -e "1s, ,,gp")'
-                             % (package, package, package))
-            commands.append('rpm -q %s &>/dev/null && zypper -n in --force -y -l %s=$(zypper se -s --match-exact -t package %s | grep -v "(System Packages)" | grep ^[iv] | awk -F "|" \'{ print $4 }\' | sort -rg | sed -n -e "1s, ,,gp")'
-                             % (package, package, package))
-
-        self.commands = commands
+        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System Packages)" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(packages)
+        self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
 
 
-class OldZypperDowngrade(Prepare):
+class OldZypperDowngrade(Downgrade):
 
     def __init__(self, targets, packages, patches, force=False, installed_only=False):
-        Prepare.__init__(self, targets, packages, patches, force, installed_only)
+        Downgrade.__init__(self, targets, packages, patches, force, installed_only)
+
+        self.list_command = 'zypper se --match-exact -t package %s | grep -v "(System Packages)" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(packages)
+        self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
 
         patch = patches['zypp']
+        commands = []
 
         invalid_packages = ['glibc', 'rpm', 'zypper', 'readline']
         invalid = set(packages).intersection(invalid_packages)
@@ -361,19 +488,13 @@ class OldZypperDowngrade(Prepare):
             out.critical('crucial package found in package list: %s. please downgrade manually' % list(invalid))
             return
 
-        commands = []
-
-        for package in packages:
-            commands.append('rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep -v "|[[:space:]]*|" | grep package | sort -rug -t \| -k 5 | head -n 1); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
-                             % (package, package))
-
         commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper rm -y -t patch $p; done'
                          % patch)
 
         for package in packages:
             commands.append('zypper rm -y -t atom %s' % package)
 
-        self.commands = commands
+        self.post_commands = commands
 
 
 Downgrader = {'11': ZypperDowngrade, '114': ZypperDowngrade, '10': OldZypperDowngrade}

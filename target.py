@@ -438,7 +438,10 @@ class RunCommand(object):
                 thread = ThreadedMethod(queue)
                 thread.setDaemon(True)
                 thread.start()
-                queue.put([parallel[target].run, [self.command, lock]])
+                if type(self.command) == dict:
+                    queue.put([parallel[target].run, [self.command[target], lock]])
+                elif type(self.command) == str:
+                    queue.put([parallel[target].run, [self.command, lock]])
 
             while queue.unfinished_tasks:
                 spinner(lock)
