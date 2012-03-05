@@ -476,7 +476,7 @@ class OldZypperDowngrade(Downgrade):
     def __init__(self, targets, packages, patches, force=False, installed_only=False):
         Downgrade.__init__(self, targets, packages, patches, force, installed_only)
 
-        self.list_command = 'zypper se --match-exact -t package %s | grep -v "(System Packages)" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(packages)
+        self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(packages)
         self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
 
         patch = patches['zypp']
