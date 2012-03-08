@@ -96,14 +96,14 @@ sles11_smt-s390x="s390zvc45.suse.de"
 
 # sle11 sp2
 
-sles11sp2-i386="???"
+sles11sp2-i386="147.2.207.81"
 sles11sp2-ia64="sinope.suse.de"
 sles11sp2-ppc64="aal.suse.de"
 sles11sp2-s390x="s390t10.suse.de"
-sles11sp2-x86_64="???"
+sles11sp2-x86_64="147.2.207.82"
 
-sled11sp2-i386="???"
-sled11sp2-x86_64="???"
+sled11sp2-i386="147.2.207.83"
+sled11sp2-x86_64="147.2.207.84"
 
 sles11sp2_XEN0-i386="xena32-11.suse.de"
 sles11sp2_XENU-i386="xenu32-11.suse.de"
@@ -216,14 +216,14 @@ sles11_smt-s390x-kernel="s390zvc45.suse.de"
 
 # sle11 sp2
 
-sles11sp2-i386-kernel="???"
+sles11sp2-i386-kernel="147.2.207.81"
 sles11sp2-ia64-kernel="coppelius.suse.de"
 sles11sp2-ppc64-kernel="salmler.suse.de"
 sles11sp2-s390x-kernel="s390a28.suse.de"
-sles11sp2-x86_64-kernel="???"
+sles11sp2-x86_64-kernel="147.2.207.82"
 
-sled11sp2-i386-kernel="???"
-sled11sp2-x86_64-kernel="???"
+sled11sp2-i386-kernel="147.2.207.83"
+sled11sp2-x86_64-kernel="147.2.207.84"
 
 sles11sp2_XEN0-i386-kernel="xena32-11.suse.de"
 sles11sp2_XENU-i386-kernel="xenu32-11.suse.de"

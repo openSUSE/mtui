@@ -801,6 +801,24 @@
       </product>
       <kernel property="weak">true</kernel>
     </host>
+    <host arch="x86_64" name="147.2.207.82">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+    </host>
+    <host arch="i386" name="147.2.207.81">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+    </host>
     <host arch="i386" name="147.2.207.87">
       <product name="sled">
         <version>
@@ -851,6 +869,24 @@
         <version>
           <major>11</major>
           <minor>sp1</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+    </host>
+    <host arch="x86_64" name="147.2.207.84">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+    </host>
+    <host arch="i386" name="147.2.207.83">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
