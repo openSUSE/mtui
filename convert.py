@@ -16,7 +16,7 @@ def usage():
     print sys.argv[0], '{-t|--template file} {-x|--xml file} [-o|--output file]'
     print
 
-    sys.exit(0)
+    sys.exit(1)
 
 
 def main():
