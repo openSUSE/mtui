@@ -7,6 +7,7 @@ import errno
 import getopt
 import logging
 import shutil
+import re
 
 from log import *
 from prompt import *
@@ -45,6 +46,11 @@ def main():
             team = 'emea'
         elif parameter in ('-m', '--md5'):
             md5 = argument
+            match = re.match(r"([a-fA-F\d]{32})", argument)
+            try:
+                md5 = match.group(1)
+            except AttributeError:
+                pass
         elif parameter in ('-d', '--dryrun'):
             state = 'dryrun'
         elif parameter in ('-l', '--location'):
@@ -69,7 +75,7 @@ def main():
             usage()
 
     if md5 is None:
-        out.error('please specify an update identifier')
+        out.error('please specify a valid update identifier')
         usage()
 
     try:
