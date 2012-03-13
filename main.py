@@ -45,8 +45,7 @@ def main():
         elif parameter in ('-e', '--emea'):
             team = 'emea'
         elif parameter in ('-m', '--md5'):
-            md5 = argument
-            match = re.match(r"([a-fA-F\d]{32})", argument)
+            match = re.match(r'([a-fA-F\d]{32})', argument)
             try:
                 md5 = match.group(1)
             except AttributeError:

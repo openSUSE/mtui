@@ -233,21 +233,21 @@ class CommandPromt(cmd.Cmd):
 
             targets = self.targets
 
-            for target in targets:
-                if targets[target].exclusive:
+            for host in sorted(targets.values()):
+                if host.exclusive:
                     mode = 'serial'
                 else:
                     mode = 'parallel'
 
-                if targets[target].state == 'enabled':
+                if host.state == 'enabled':
                     state = green('Enabled')
-                elif targets[target].state == 'dryrun':
+                elif host.state == 'dryrun':
                     state = yellow('Dryrun')
                 else:
                     state = red('Disabled')
 
-                system = '(%s)' % targets[target].system
-                print '{0:20} {1:20}: {2} ({3})'.format(target, system, state, mode)
+                system = '(%s)' % host.system
+                print '{0:20} {1:20}: {2} ({3})'.format(host.hostname, system, state, mode)
 
     def do_list_history(self, args):
         """
@@ -288,9 +288,9 @@ class CommandPromt(cmd.Cmd):
             else:
                 RunCommand(targets, 'tail -n %s /var/log/mtui.log' % lines).run()
 
-        for target in targets:
-            print 'history from %s (%s):' % (target, targets[target].system)
-            lines = targets[target].lastout().split('\n')
+        for host in sorted(targets.values()):
+            print 'history from %s (%s):' % (host.hostname, host.system)
+            lines = host.lastout().split('\n')
             lines.reverse()
             for line in lines:
                 try:
@@ -323,22 +323,22 @@ class CommandPromt(cmd.Cmd):
 
             targets = enabled_targets(self.targets)
 
-            for target in targets:
-                system = '(%s)' % targets[target].system
-                lock = targets[target].locked()
+            for host in sorted(targets.values()):
+                system = '(%s)' % host.system
+                lock = host.locked()
                 if lock.locked:
                     if lock.own():
                         lockedby = 'me'
                     else:
                         lockedby = lock.user
 
-                    print '{0:20} {1:20}: {2}'.format(target, system, yellow('since %s by %s' % (lock.time(), lockedby))),
+                    print '{0:20} {1:20}: {2}'.format(host.hostname, system, yellow('since %s by %s' % (lock.time(), lockedby))),
                     if lock.comment:
                         print ': %s' % lock.comment
                     else:
                         print
                 else:
-                    print '{0:20} {1:20}: {2}'.format(target, system, green('not locked'))
+                    print '{0:20} {1:20}: {2}'.format(host.hostname, system, green('not locked'))
 
     def do_list_timeout(self, args):
         """
@@ -355,10 +355,10 @@ class CommandPromt(cmd.Cmd):
 
             targets = self.targets
 
-            for target in targets:
-                system = '(%s)' % targets[target].system
-                timeout = targets[target].get_timeout()
-                print '{0:20} {1:20}: {2}s'.format(target, system, timeout)
+            for host in sorted(targets.values()):
+                system = '(%s)' % host.system
+                timeout = host.get_timeout()
+                print '{0:20} {1:20}: {2}s'.format(host.hostname, system, timeout)
 
     def do_source_install(self, args):
         """
@@ -609,11 +609,11 @@ class CommandPromt(cmd.Cmd):
             if args.split(',')[0] != 'all':
                 targets = selected_targets(targets, args.split(','))
 
-            for target in targets:
-                targets[target].query_versions()
-                print 'packages on %s (%s):' % (target, targets[target].system)
-                for package in targets[target].packages:
-                    current = targets[target].packages[package].current
+            for host in sorted(targets.values()):
+                host.query_versions()
+                print 'packages on %s (%s):' % (host.hostname, host.system)
+                for package in host.packages:
+                    current = host.packages[package].current
                     required = self.metadata.packages[package]
                     if current == '0':
                         state = yellow('not installed')
@@ -624,7 +624,7 @@ class CommandPromt(cmd.Cmd):
                     else:
                         state = green('updated')
 
-                    print '{0:30}: {1:15} {2}'.format(package, targets[target].packages[package].current, state)
+                    print '{0:30}: {1:15} {2}'.format(package, host.packages[package].current, state)
 
                 print
         else:
@@ -868,10 +868,10 @@ class CommandPromt(cmd.Cmd):
 
             output = []
 
-            for target in targets:
-                output.append('log from %s:' % target)
-                for line in targets[target].log:
-                    output.append('%s:~> %s [%s]' % (target, line[0], line[3]))
+            for host in sorted(targets.values()):
+                output.append('log from %s:' % host.hostname)
+                for line in host.log:
+                    output.append('%s:~> %s [%s]' % (host.hostname, line[0], line[3]))
                     output.append('stdout:')
                     map(output.append, line[1].split('\n'))
                     output.append('stderr:')
@@ -1669,9 +1669,9 @@ class CommandPromt(cmd.Cmd):
             except KeyboardInterrupt:
                 return
 
-        for target in targets:
-            print 'sessions on %s (%s):' % (target, targets[target].system)
-            print targets[target].lastout()
+        for host in sorted(targets.values()):
+            print 'sessions on %s (%s):' % (host.hostname, host.system)
+            print host.lastout()
 
     def complete_list_sessions(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1784,10 +1784,7 @@ class CommandPromt(cmd.Cmd):
 
         targets = self.targets
 
-        for target in targets:
-            systems[targets[target].system] = target
-
-        hosts = [systems[key] for key in sorted(systems.iterkeys())]
+        hosts = [host.hostname for host in sorted(targets.values())]
 
         if args:
             filename = 'term.' + args + '.sh'

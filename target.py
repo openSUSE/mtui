@@ -49,6 +49,18 @@ class Target(object):
             out.warning('%s exclusively locked by %s (%s). please hold on testing on that host.' % (self.hostname, lock.user,
                         lock.comment))
 
+    def __lt__(self, other):
+        return sorted([self.system, other.system])[0] == self.system
+
+    def __gt__(self, other):
+        return sorted([self.system, other.system])[0] == other.system
+
+    def __eq__(self, other):
+        return self.system == other.system
+
+    def __ne__(self, other):
+        return self.system != other.system
+
     def query_versions(self, packages=None):
         versions = {}
         if packages is None:
