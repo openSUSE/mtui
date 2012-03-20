@@ -83,7 +83,7 @@ class CommandPromt(cmd.Cmd):
                 if tag in attributes.tags['archs']:
                     attributes.arch = tag
                 if tag in attributes.tags['addons']:
-                    attributes.addons.append(tag)
+                    attributes.addons.update({tag:{}})
                 if tag in attributes.tags['major']:
                     attributes.major = tag
                 if tag in attributes.tags['minor']:
@@ -147,7 +147,7 @@ class CommandPromt(cmd.Cmd):
                     out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
                 except KeyError:
                     try:
-                        system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.arch)
+                        system = refhost.get_host_systemname(hostname)
                         self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
                     except Exception:
                         out.error('failed to add host %s to list' % hostname)

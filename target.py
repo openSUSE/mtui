@@ -217,6 +217,9 @@ class Target(object):
             except IOError, error:
                 if error.errno == errno.ENOENT:
                     return lock
+            except Exception, error:
+                out.error('failed to open lockfile: %s' % error)
+                return lock
 
             try:
                 line = lockfile.readline().strip()
@@ -242,8 +245,8 @@ class Target(object):
             out.debug('%s: setting lock' % self.hostname)
             try:
                 lockfile = self.connection.open('/var/lock/mtui.lock', 'w+')
-            except IOError, error:
-                out.error('failed to open lockfile: %s' % error.strerror)
+            except Exception, error:
+                out.error('failed to open lockfile: %s' % error)
                 return
 
             now = timestamp()
@@ -268,24 +271,31 @@ class Target(object):
             except IOError, error:
                 if error.errno == errno.ENOENT:
                     out.debug('lockfile does not exist')
+            except Exception, error:
+                out.error('failed to remove lockfile: %s' % error)
 
     def add_history(self, comment):
         if self.state == 'enabled':
             out.debug('%s: adding history entry' % self.hostname)
             try:
                 historyfile = self.connection.open('/var/log/mtui.log', 'a+')
-            except IOError, error:
-                out.error('failed to open history file: %s' % error.strerror)
+            except Exception, error:
+                out.error('failed to open history file: %s' % error)
                 return
 
             now = timestamp()
             user = getpass.getuser()
-            historyfile.write('%s:%s:%s\n' % (now, user, ':'.join(comment)))
-
-            historyfile.close()
+            try:
+                historyfile.write('%s:%s:%s\n' % (now, user, ':'.join(comment)))
+                historyfile.close()
+            except Exception:
+                pass
 
     def listdir(self, path):
-        return self.connection.listdir(path)
+        try:
+            return self.connection.listdir(path)
+        except Exception:
+            return
 
     def close(self):
         out.info('closing connection to %s' % self.hostname)
@@ -478,7 +488,10 @@ class RunCommand(object):
                     spinner(lock)
             except KeyboardInterrupt:
                 for target in self.targets:
-                    self.targets[target].connection.close_session()
+                    try:
+                        self.targets[target].connection.close_session()
+                    except Exception:
+                        pass
                 try:
                     thread.queue.task_done()
                 except ValueError:

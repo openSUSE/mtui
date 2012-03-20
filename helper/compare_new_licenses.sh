@@ -17,5 +17,6 @@ if [ -s $temp ]; then
    exit 1
 fi
 
+rm $temp
 exit 0
 

@@ -49,8 +49,12 @@ def xml_to_template(template, xmldata, updatehost=None):
                 try:
                     i = t.index(line) + 2
                 except ValueError:
-                    our.error('update results section not found')
-                    break
+                    try:
+                        line = 'Test results by test platform:\n'
+                        i = t.index(line) + 2
+                    except ValueError:
+                        out.error('update results section not found')
+                        break
 
                 t.insert(i, '\n')
                 i += 1

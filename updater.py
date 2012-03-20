@@ -119,7 +119,7 @@ class ZypperUpdate(Update):
         commands = []
 
         commands.append('export LANG=')
-        commands.append('zypper lr -pu')
+        commands.append('zypper lr -puU')
         commands.append('zypper refresh')
         commands.append('zypper patches | grep " %s "' % patch)
         commands.append('for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper install -l -y -t patch $p=%s; done'

@@ -14,15 +14,15 @@ class Attributes(object):
              'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64'],
              'major':['9', '10', '11', '12'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
-             'addons':['webyast', 'webyast12'],
+             'addons':['webyast', 'webyast', 'webyast11', 'webyast12', 'sdk', 'hae'],
              'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm'],
              'tags':['kernel', 'ltss']
             }
 
     def __init__(self):
         self.product = ""
-        self.arch = ""
-        self.addons = []
+        self.archs = []
+        self.addons = {}
         self.major = None
         self.minor = None
         self.release = None
@@ -50,9 +50,20 @@ class Attributes(object):
             ltss = 'ltss'
 
         for addon in self.addons:
-            addons = " ".join([addons, addon])
+            try:
+                major = self.addons[addon]['major']
+            except KeyError:
+                major = ''
+            try:
+                minor = self.addons[addon]['minor']
+            except KeyError:
+                minor = ''
 
-        rep = ' '.join([self.product, version, self.arch, kernel, ltss, self.virtual['mode'], self.virtual['hypervisor'], addons])
+            addons = ' '.join([addons, "%s%s%s" % (addon, major, minor)])
+
+        archs = ' '.join(self.archs)
+
+        rep = ' '.join([self.product, version, archs, kernel, ltss, self.virtual['mode'], self.virtual['hypervisor'], addons])
         return ' '.join(rep.split())
 
 
@@ -65,7 +76,11 @@ class Refhost(object):
             self.location = location
 
         self.attributes = attributes
-        self.data = minidom.parse(hostmap)
+        try:
+            self.data = minidom.parse(hostmap)
+        except Exception, error:
+            out.error('failed to parse refhosts.xml: %s' % error)
+            return
 
         try:
             self.location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
@@ -90,8 +105,9 @@ class Refhost(object):
 
     def check_attributes(self, element):
         try:
-            if self.attributes.arch:
-                assert(element.getAttribute('arch') == self.attributes.arch)
+            hostname = element.getAttribute('name')
+            if self.attributes.archs:
+                assert(element.getAttribute('arch') in self.attributes.archs)
 
             if self.attributes.product:
                 assert(element.getElementsByTagName('product')[0].getAttribute('name') == self.attributes.product)
@@ -100,8 +116,27 @@ class Refhost(object):
                 assert(addon in map(self.extract_name, element.getElementsByTagName('addon')))
 
             for node in element.getElementsByTagName('addon'):
+                name = self.extract_name(node)
                 if node.getAttribute('property') != 'weak':
-                    assert(self.extract_name(node) in self.attributes.addons)
+                    assert(name in self.attributes.addons)
+                if name == 'sdk':
+                    continue
+                try:
+                    major = node.getElementsByTagName('major')[0].firstChild.data
+                except:
+                    major = ''
+                try:
+                    minor = node.getElementsByTagName('minor')[0].firstChild.data
+                except:
+                    minor = ''
+                try:
+                    assert(self.attributes.addons[name]['major'] == major)
+                except KeyError:
+                    pass
+                try:
+                    assert(self.attributes.addons[name]['minor'] == minor)
+                except KeyError:
+                    pass
 
             node = element.getElementsByTagName('product')[0]
             major = node.getElementsByTagName('major')[0].firstChild.data
@@ -142,6 +177,10 @@ class Refhost(object):
 
             try:
                 node = element.getElementsByTagName('virtual')[0]
+            except IndexError:
+                assert(not self.attributes.virtual['mode'])
+                assert(not self.attributes.virtual['hypervisor'])
+            else:
                 prop = node.getAttribute('property')
                 mode = node.getAttribute('mode')
                 if self.attributes.virtual['mode']:
@@ -150,8 +189,6 @@ class Refhost(object):
                     assert(self.attributes.virtual['hypervisor'] == node.firstChild.data)
                 if not self.attributes.virtual['mode'] and not self.attributes.virtual['hypervisor']:
                     assert(node.getAttribute('property') == 'weak')
-            except IndexError:
-                assert(not self.attributes.virtual['mode'] and not self.attributes.virtual['hypervisor'])
 
         except AssertionError:
             return False
@@ -185,10 +222,18 @@ class Refhost(object):
                 for release in element.getElementsByTagName('release'):
                     attributes.release = release.firstChild.data
 
-            attributes.arch = node.getAttribute('arch')
+            attributes.archs.append(node.getAttribute('arch'))
 
             for addons in node.getElementsByTagName('addon'):
-                attributes.addons.append(addons.getAttribute('name'))
+                try:
+                    major = addons.getElementsByTagName('major')[0].firstChild.data
+                except:
+                    minor = ''
+                try:
+                    minor = addons.getElementsByTagName('minor')[0].firstChild.data
+                except:
+                    minor = ''
+                attributes.addons.update({addons.getAttribute('name'):{'major':major, 'minor':minor}})
 
             for element in node.getElementsByTagName('kernel'):
                 if element.firstChild.data == 'true':
@@ -203,13 +248,23 @@ class Refhost(object):
 
         return attributes
 
+    def get_host_systemname(self, hostname):
+        attributes = self.get_host_attributes(hostname)
+        addons = "_".join(set(attributes.addons.keys()).difference(['sdk']))
+        if addons:
+            system = '%s%s%s_%s-%s' % (attributes.product, attributes.major, attributes.minor, addons, attributes.archs[0])
+        else:
+            system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+
+        return system
+
     def set_attributes_from_system(self, system):
         attributes = Attributes()
 
         addons = []
         tags = system.split('-')
         name = tags[0]
-        attributes.arch = tags[1]
+        attributes.archs.append(tags[1])
         if len(tags) == 3 and tags[2] == 'kernel':
             attributes.kernel = True
 
@@ -241,6 +296,69 @@ class Refhost(object):
                 attributes.product = addon
             if addon in attributes.tags['addons']:
                 attributes.addon.append(addon)
+
+        self.attributes = attributes
+
+    def set_attributes_from_testplatform(self, testplatform):
+        requests = {}
+        attributes = Attributes()
+
+        patterns = testplatform.split(';')
+        for pattern in patterns:
+            name, content = pattern.split('=', 1)
+            matches = re.findall('(\w+)\(([^\)]+)\)', content)
+            for match in matches:
+                    subpattern = match[0]
+                    parameters = match[1]
+                    for parameter in parameters.split(','):
+                        key, value = parameter.split('=', 1)
+                        try:
+                            requests[name][subpattern].update({key:value})
+                        except KeyError, error:
+                            if error.message == name:
+                                requests[name] = {subpattern:{key:value}}
+                            else:
+                                requests[name][subpattern] = {key:value}
+            if name == 'arch':
+                match = re.search('\[(.*)\]', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+            if name == 'tags':
+                match = re.search('\((.*)\)', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+
+        attributes.archs = requests['arch']
+        attributes.product = requests['base'].keys()[0]
+        attributes.major = requests['base'][attributes.product]['major']
+        attributes.minor = requests['base'][attributes.product]['minor']
+
+        try:
+            tags = requests['tags']
+        except KeyError:
+            tags = []
+
+        for tag in tags:
+            if tag == 'xen':
+                attributes.virtual.update({'hypervisor':'xen'})
+            if tag == 'kernel':
+                attributes.kernel = True
+            if tag == 'ltss':
+                attributes.ltss = True
+
+        try:
+            for addon in requests['addon']:
+                try:
+                    major = requests['addon'][addon]['major']
+                except:
+                    major = ''
+                try:
+                    minor = requests['addon'][addon]['minor']
+                except:
+                    minor = ''
+                attributes.addons.update({addon:{'major':major,'minor':minor}})
+        except KeyError:
+            pass
 
         self.attributes = attributes
 

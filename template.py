@@ -99,10 +99,15 @@ class Template(object):
             if match:
                 self.metadata.reviewer = match.group(1)
 
+            match = re.search('Testplatform: (.*)', line)
+            if match:
+                hosts = self.get_refhosts_from_testplatform(match.group(1))
+                self.metadata.systems.update(hosts)
+
             match = re.search('(.*-.*) \(reference host: (.+)\)', line)
             if match:
                 if '?' in match.group(2):
-                    hostname = self.get_refhost(match.group(1))
+                    hostname = self.get_refhosts_from_system(match.group(1))
                 else:
                     hostname = match.group(2)
 
@@ -120,7 +125,7 @@ class Template(object):
                 for bug in match.group(1).split(','):
                     self.metadata.bugs[bug.strip(' ')] = 'Description not available'
 
-    def get_refhost(self, system):
+    def get_refhosts_from_system(self, system):
         """get refhost from system name
 
         parses refhost mapping file to get testing machine
@@ -132,11 +137,11 @@ class Template(object):
 
         """ new engine """
         try:
-            hosts = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
 
             try:
-                hosts.set_attributes_from_system(system)
-                host = hosts.search()[0]
+                refhost.set_attributes_from_system(system)
+                host = refhost.search()[0]
             except Exception:
                 out.warning("system %s not found in refhosts.xml. please report to ckornacker." % system)
 
@@ -166,4 +171,32 @@ class Template(object):
                 out.warning('refhost mapping file %s not found' % self.refhosts)
             else:
                 pass
+
+    def get_refhosts_from_testplatform(self, testplatform):
+        """get refhost from testplatform string
+
+        parses refhost mapping file to get testing machines
+
+        Keyword arguments:
+        testplatform -- requested testplatform string
+
+        """
+
+        hosts = {}
+        refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+
+        try:
+            refhost.set_attributes_from_testplatform(testplatform)
+            hostnames = refhost.search()
+            if not hostnames:
+                out.warning('nothing found for testplatform %s' % testplatform)
+
+            for hostname in hostnames:
+                system = refhost.get_host_systemname(hostname)
+                hosts[hostname] = system
+            return hosts
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            out.warning("failed to resolve testplatform %s. please report to ckornacker." % testplatform)
 
