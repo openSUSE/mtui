@@ -81,7 +81,7 @@ class CommandPromt(cmd.Cmd):
                 if tag in attributes.tags['products']:
                     attributes.product = tag
                 if tag in attributes.tags['archs']:
-                    attributes.arch = tag
+                    attributes.archs.append(tag)
                 if tag in attributes.tags['addons']:
                     attributes.addons.update({tag:{}})
                 if tag in attributes.tags['major']:

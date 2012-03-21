@@ -225,14 +225,16 @@ class Refhost(object):
             attributes.archs.append(node.getAttribute('arch'))
 
             for addons in node.getElementsByTagName('addon'):
+                major = ''
+                minor = ''
                 try:
                     major = addons.getElementsByTagName('major')[0].firstChild.data
                 except:
-                    minor = ''
+                    pass
                 try:
                     minor = addons.getElementsByTagName('minor')[0].firstChild.data
                 except:
-                    minor = ''
+                    pass
                 attributes.addons.update({addons.getAttribute('name'):{'major':major, 'minor':minor}})
 
             for element in node.getElementsByTagName('kernel'):

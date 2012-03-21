@@ -8,6 +8,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="sinope.suse.de">
       <product name="sles">
@@ -16,6 +17,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xena32-11.suse.de">
       <product name="sles">
@@ -26,6 +28,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xenu64-11.suse.de">
       <product name="sles">
@@ -36,6 +39,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xenu32-11.suse.de">
       <product name="sles">
@@ -46,6 +50,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc64" name="aal.suse.de">
       <product name="sles">
@@ -54,6 +59,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="sol.suse.de">
       <product name="sles">
@@ -63,6 +69,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="merkur.suse.de">
       <product name="sles">
@@ -71,6 +78,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc64" name="salmler.suse.de">
       <product name="sles">
@@ -80,6 +88,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="dawn.suse.de">
       <product name="sles">
@@ -88,6 +97,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="fallada.suse.de">
       <product name="sles">
@@ -97,6 +107,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="coppelius.suse.de">
       <product name="sles">
@@ -106,6 +117,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xena64-11.suse.de">
       <product name="sles">
@@ -116,6 +128,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390a28.suse.de">
       <product name="sles">
@@ -125,6 +138,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xenu32-11b.suse.de">
       <product name="sles">
@@ -135,6 +149,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="scott.suse.de">
       <product name="sles">
@@ -144,6 +159,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="cetur.suse.de">
       <product name="studio">
@@ -153,6 +169,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xenu64-11b.suse.de">
       <product name="sles">
@@ -163,6 +180,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xena64-11sp1.suse.de">
       <product name="sles">
@@ -173,6 +191,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390t25.suse.de">
       <product name="sles">
@@ -182,6 +201,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390s21.suse.de">
       <product name="sles">
@@ -191,7 +211,13 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <addon name="webyast12"/>
+      <addon name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="leo.suse.de">
       <product name="sles">
@@ -200,6 +226,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390t26.suse.de">
       <product name="sles">
@@ -208,6 +235,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="kirk.suse.de">
       <product name="sles">
@@ -217,6 +245,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="merope.suse.de">
       <product name="sles">
@@ -225,6 +254,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc64" name="sunrise.suse.de">
       <product name="sles">
@@ -233,6 +263,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-webyast11-64.suse.de">
       <product name="sles">
@@ -242,7 +273,13 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <addon name="webyast"/>
+      <addon name="webyast">
+        <version>
+          <major>1</major>
+          <minor>1</minor>
+        </version>
+      </addon>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="poincare.suse.de">
       <product name="studio">
@@ -252,6 +289,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-slms2.suse.de">
       <product name="slms">
@@ -261,6 +299,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="kurk.suse.de">
       <product name="rt">
@@ -270,6 +309,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xena32-11sp1.suse.de">
       <product name="sles">
@@ -280,6 +320,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="qam-webyast11-32.suse.de">
       <product name="sles">
@@ -289,7 +330,13 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <addon name="webyast"/>
+      <addon name="webyast">
+        <version>
+          <major>1</major>
+          <minor>1</minor>
+        </version>
+      </addon>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="leonard.suse.de">
       <product name="sles">
@@ -299,6 +346,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-slms1.suse.de">
       <product name="slms">
@@ -308,6 +356,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="frisch.suse.de">
       <product name="sles">
@@ -316,6 +365,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-webyast12-64.suse.de">
       <product name="sles">
@@ -325,7 +375,13 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <addon name="webyast12"/>
+      <addon name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc64" name="abendrot.suse.de">
       <product name="sles">
@@ -335,6 +391,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="qam-webyast12-32.suse.de">
       <product name="sles">
@@ -344,7 +401,13 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <addon name="webyast12"/>
+      <addon name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-smt2.suse.de">
       <product name="smt">
@@ -353,6 +416,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390zvc45.suse.de">
       <product name="smt">
@@ -361,6 +425,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="ceres.suse.de">
       <product name="sled">
@@ -370,6 +435,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="uranus.suse.de">
       <product name="sled">
@@ -379,6 +445,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="obrien.suse.de">
       <product name="sled">
@@ -388,6 +455,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="worf.suse.de">
       <product name="sled">
@@ -397,6 +465,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="zypp.suse.de">
       <product name="sles">
@@ -405,6 +474,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390zvi70.suse.de">
       <product name="sles">
@@ -413,6 +483,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="dax.suse.de">
       <product name="sles">
@@ -421,6 +492,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390" name="s390zvi48.suse.de">
       <product name="sles">
@@ -429,6 +501,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
@@ -438,6 +511,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="boxer.suse.de">
       <product name="opensuse">
@@ -447,6 +521,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="aurore.suse.de">
       <product name="sles">
@@ -455,6 +530,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="fermium.suse.de">
       <product name="sles">
@@ -464,6 +540,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xena32-10.suse.de">
       <product name="sles">
@@ -474,6 +551,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390a26.suse.de">
       <product name="sles">
@@ -482,6 +560,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc" name="twilight.suse.de">
       <product name="sles">
@@ -491,6 +570,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="maestrale.suse.de">
       <product name="sles">
@@ -500,6 +580,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc" name="dusk.suse.de">
       <product name="sles">
@@ -508,6 +589,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xena64-10.suse.de">
       <product name="sles">
@@ -518,6 +600,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="iceland.suse.de">
       <product name="sles">
@@ -526,6 +609,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xenu64-10.suse.de">
       <product name="sles">
@@ -536,6 +620,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xenu32-10.suse.de">
       <product name="sles">
@@ -546,6 +631,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="iseries" name="saffron.suse.de">
       <product name="sles">
@@ -555,6 +641,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="oes.suse.de">
       <product name="sles">
@@ -563,6 +650,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="couchant.suse.de">
       <product name="sles">
@@ -572,6 +660,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390a27.suse.de">
       <product name="sles">
@@ -581,6 +670,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
@@ -590,6 +680,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="boxer.suse.de">
       <product name="opensuse">
@@ -599,6 +690,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="levante.suse.de">
       <product name="sled">
@@ -608,6 +700,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="riker.suse.de">
       <product name="sled">
@@ -617,6 +710,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="kurk.suse.de">
       <product name="rt">
@@ -626,6 +720,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390zvi29.suse.de">
       <product name="sles">
@@ -636,6 +731,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="zypp.suse.de">
       <product name="sles">
@@ -646,6 +742,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="sulu.suse.de">
       <product name="rt">
@@ -655,6 +752,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="dax.suse.de">
       <product name="sles">
@@ -665,6 +763,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-smt1.suse.de">
       <product name="smt">
@@ -674,6 +773,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xena32-10.suse.de">
       <product name="sles">
@@ -684,6 +784,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="kurk.suse.de">
       <product name="rt">
@@ -693,6 +794,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="zypp.suse.de">
       <product name="sles">
@@ -703,6 +805,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="dax.suse.de">
       <product name="sles">
@@ -713,6 +816,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xenu64-10o.suse.de">
       <product name="sles">
@@ -723,6 +827,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xena64-10.suse.de">
       <product name="sles">
@@ -733,6 +838,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="s390x" name="s390t11.suse.de">
       <product name="sles">
@@ -743,6 +849,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xenu32-10o.suse.de">
       <product name="sles">
@@ -753,6 +860,7 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="sulu.suse.de">
       <product name="rt">
@@ -762,6 +870,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
@@ -771,6 +880,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="boxer.suse.de">
       <product name="opensuse">
@@ -780,6 +890,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
   </location>
   <location name="beijing">
@@ -791,6 +902,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.89">
       <product name="sles">
@@ -800,6 +912,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="147.2.207.82">
       <product name="sles">
@@ -809,6 +922,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.81">
       <product name="sles">
@@ -818,6 +932,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.87">
       <product name="sled">
@@ -827,6 +942,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="147.2.207.88">
       <product name="sled">
@@ -836,6 +952,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.85">
       <product name="sles">
@@ -845,6 +962,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="147.2.207.86">
       <product name="sles">
@@ -854,6 +972,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="147.2.207.92">
       <product name="sled">
@@ -863,6 +982,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.91">
       <product name="sled">
@@ -872,6 +992,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="147.2.207.84">
       <product name="sled">
@@ -881,6 +1002,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.83">
       <product name="sled">
@@ -890,6 +1012,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
     </host>
   </location>
 </definitions>
