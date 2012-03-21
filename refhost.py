@@ -26,8 +26,8 @@ class Attributes(object):
         self.major = None
         self.minor = None
         self.release = None
-        self.kernel = False
-        self.ltss = False
+        self.kernel = None
+        self.ltss = None
         self.virtual = {'mode':'', 'hypervisor':''}
 
     def __str__(self):
@@ -153,20 +153,20 @@ class Refhost(object):
                 node = element.getElementsByTagName('kernel')[0]
                 if self.attributes.kernel:
                     assert(node.firstChild.data == 'true')
-                else:
+                elif self.attributes.kernel is False:
                     assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
             except IndexError:
-                assert(self.attributes.kernel is False)
+                assert(not self.attributes.kernel)
 
             try:
                 node = element.getElementsByTagName('ltss')[0]
                 prop = node.getAttribute('property')
                 if self.attributes.ltss:
                     assert(node.firstChild.data == 'true')
-                else:
+                elif self.attributes.ltss is False:
                     assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
             except IndexError:
-                assert(self.attributes.ltss is False)
+                assert(not self.attributes.ltss)
 
             try:
                 node = element.getElementsByTagName('virtual')[0]
@@ -261,6 +261,8 @@ class Refhost(object):
 
     def set_attributes_from_system(self, system):
         attributes = Attributes()
+        attributes.kernel = False
+        attributes.ltss = False
 
         addons = []
         tags = system.split('-')
@@ -303,6 +305,8 @@ class Refhost(object):
     def set_attributes_from_testplatform(self, testplatform):
         requests = {}
         attributes = Attributes()
+        attributes.kernel = False
+        attributes.ltss = False
 
         patterns = testplatform.split(';')
         for pattern in patterns:
