@@ -40,8 +40,8 @@ class Attributes(object):
             version = self.major
         if self.minor:
             version = version + self.minor
-        if version.isdigit():
-            version = "%s.%s" % (self.major, self.minor)
+            if version.isdigit():
+                version = '%s.%s' % (self.major, self.minor)
         if self.release:
             version = version + self.release
         if self.kernel:
@@ -50,18 +50,15 @@ class Attributes(object):
             ltss = 'ltss'
 
         for addon in self.addons:
-            try:
-                major = self.addons[addon]['major']
-            except KeyError:
-                major = ''
-            try:
-                minor = self.addons[addon]['minor']
-            except KeyError:
-                minor = ''
+            addons = ' '.join([addons, addon])
 
-            addons = ' '.join([addons, "%s%s%s" % (addon, major, minor)])
+            major = self.addons[addon]['major']
+            minor = self.addons[addon]['minor']
+            if major or minor:
+                addons = ' '.join([addons, '%s.%s' % (major, minor)])
 
-        archs = ' '.join(self.archs)
+
+        archs = ' '.join(set(self.archs))
 
         rep = ' '.join([self.product, version, archs, kernel, ltss, self.virtual['mode'], self.virtual['hypervisor'], addons])
         return ' '.join(rep.split())
@@ -82,12 +79,6 @@ class Refhost(object):
             out.error('failed to parse refhosts.xml: %s' % error)
             return
 
-        try:
-            self.location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
-        except:
-            out.warning('location "%s" not found in %s. falling back to "default"' % (location, hostmap))
-            self.location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
-
     def extract_name(self, element):
         return element.getAttribute('name')
 
@@ -95,11 +86,13 @@ class Refhost(object):
         if attributes is not None:
             self.attributes = attributes
 
-        hosts = map(self.extract_name, filter(self.check_attributes, self.location_element.getElementsByTagName('host')))
-
-        if not hosts:
-            default_location = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
-            hosts = map(self.extract_name, filter(self.check_attributes, default_location.getElementsByTagName('host')))
+        try:
+            location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
+            hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
+            assert(hosts)
+        except (AssertionError, IndexError):
+            location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
+            hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
 
         return hosts
 
@@ -119,7 +112,7 @@ class Refhost(object):
                 name = self.extract_name(node)
                 if node.getAttribute('property') != 'weak':
                     assert(name in self.attributes.addons)
-                if name == 'sdk':
+                if name in ['sdk', 'hae']:
                     continue
                 try:
                     major = node.getElementsByTagName('major')[0].firstChild.data
@@ -210,7 +203,13 @@ class Refhost(object):
     def get_host_attributes(self, hostname):
         attributes = Attributes()
 
-        nodes = filter(lambda x: x.getAttribute('name') == hostname, self.location_element.getElementsByTagName('host'))
+        try:
+            location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
+            nodes = filter(lambda x: x.getAttribute('name') == hostname, location_element.getElementsByTagName('host'))
+            assert(nodes)
+        except (AssertionError, IndexError):
+            location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
+            nodes = filter(lambda x: x.getAttribute('name') == hostname, location_element.getElementsByTagName('host'))
 
         for node in nodes:
             for element in node.getElementsByTagName('product'):
@@ -252,7 +251,7 @@ class Refhost(object):
 
     def get_host_systemname(self, hostname):
         attributes = self.get_host_attributes(hostname)
-        addons = "_".join(set(attributes.addons.keys()).difference(['sdk']))
+        addons = "_".join(set(attributes.addons.keys()).difference(['sdk', 'hae']))
         if addons:
             system = '%s%s%s_%s-%s' % (attributes.product, attributes.major, attributes.minor, addons, attributes.archs[0])
         else:
