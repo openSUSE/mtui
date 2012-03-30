@@ -66,6 +66,8 @@ class Template(object):
 
         """
 
+        platforms = {}
+
         for line in template.readlines():
             match = re.search('Category: (.+)', line)
             if match:
@@ -102,7 +104,8 @@ class Template(object):
             match = re.search('Testplatform: (.*)', line)
             if match:
                 hosts = self.get_refhosts_from_testplatform(match.group(1))
-                self.metadata.systems.update(hosts)
+                #self.metadata.systems.update(hosts)
+                platforms.update(hosts)
 
             match = re.search('(.*-.*) \(reference host: (.+)\)', line)
             if match:
@@ -124,6 +127,12 @@ class Template(object):
             if match:
                 for bug in match.group(1).split(','):
                     self.metadata.bugs[bug.strip(' ')] = 'Description not available'
+
+        if platforms and platforms != self.metadata.systems:
+            out.error("Testplatform tags expanded to wrong hostnames. Please send this dump to ckornacker@suse.de and continue testing:")
+            print "template md5: %s" % self.metadata.md5
+            print "platforms:\n%s" % platforms
+            print "systems:\n%s" % self.metadata.systems
 
     def get_refhosts_from_system(self, system):
         """get refhost from system name

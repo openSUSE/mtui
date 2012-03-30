@@ -92,6 +92,10 @@ class CommandPromt(cmd.Cmd):
                     attributes.kernel = True
                 if tag == 'ltss':
                     attributes.ltss = True
+                if tag == '!kernel':
+                    attributes.kernel = False
+                if tag == '!ltss':
+                    attributes.ltss = False
                 if tag == 'xenu':
                     attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
                 if tag == 'xen0':
