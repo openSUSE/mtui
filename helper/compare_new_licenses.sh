@@ -12,7 +12,8 @@ diff -Naur "$1" "$2" > $temp
 
 if [ -s $temp ]; then
    (
-   echo "ERROR: found new rpm license texts (before:$1 vs after:$2):" 
+   echo "ERROR: found new rpm license texts (before:$1 vs after:$2):"
+   cat $temp 
    ) >&2 
    exit 1
 fi
