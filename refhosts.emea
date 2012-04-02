@@ -110,6 +110,12 @@ sles11sp2_XENU-i386="xenu32-11.suse.de"
 sles11sp2_XEN0-x86_64="xena64-11.suse.de"
 sles11sp2_XENU-x86_64="xenu64-11.suse.de"
 
+sles11sp2_webyast12-i386="dawn.suse.de"
+sles11sp2_webyast12-ia64="sinope.suse.de"
+sles11sp2_webyast12-ppc64="aal.suse.de"
+sles11sp2_webyast12-s390x="s390t10.suse.de"
+sles11sp2_webyast12-x86_64="merkur.suse.de"
+
 # box
 
 sl11.3-i386="boxer.suse.de"
