@@ -215,11 +215,9 @@ Updater = {'11': ZypperUpdate, '114': openSuseUpdate, '10': OldZypperUpdate, '9'
 
 class Prepare(object):
 
-    def __init__(self, targets, packages=None, patches=None, force=False, installed_only=False):
+    def __init__(self, targets, testing):
         self.targets = targets
-        self.packages = packages
-        self.patches = patches
-        self.force = force
+        self.testing = testing
         self.commands = []
 
     def run(self):
@@ -248,7 +246,10 @@ class Prepare(object):
                 raise UpdateError('Hosts locked')
 
             for target in self.targets:
-                queue.put([self.targets[target].set_repo, ['UPDATE']])
+                if self.testing:
+                    queue.put([self.targets[target].set_repo, ['TESTING']])
+                else:
+                    queue.put([self.targets[target].set_repo, ['UPDATE']])
 
             while queue.unfinished_tasks:
                 spinner()
@@ -298,8 +299,8 @@ class Prepare(object):
 
 class ZypperPrepare(Prepare):
 
-    def __init__(self, targets, packages, force=False, installed_only=False):
-        Prepare.__init__(self, targets, packages, force, installed_only)
+    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
+        Prepare.__init__(self, targets, testing)
 
         parameter = ''
         commands = []
@@ -323,8 +324,8 @@ class ZypperPrepare(Prepare):
 
 class OldZypperPrepare(Prepare):
 
-    def __init__(self, targets, packages, force=False, installed_only=False):
-        Prepare.__init__(self, targets, packages, force, installed_only)
+    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
+        Prepare.__init__(self, targets, testing)
 
         prefix = []
         commands = []
@@ -343,10 +344,9 @@ Preparer = {'11': ZypperPrepare, '114': ZypperPrepare, '10': OldZypperPrepare}
 
 class Downgrade(object):
 
-    def __init__(self, targets, packages=None, patches=None, force=False, installed_only=False):
+    def __init__(self, targets, packages=None):
         self.targets = targets
         self.packages = packages
-        self.force = force
         self.commands = {}
         self.install_command = None
         self.list_command = None
@@ -471,8 +471,8 @@ class Downgrade(object):
 
 class ZypperDowngrade(Downgrade):
 
-    def __init__(self, targets, packages, patches, force=False, installed_only=False):
-        Downgrade.__init__(self, targets, packages, patches, force, installed_only)
+    def __init__(self, targets, packages, patches):
+        Downgrade.__init__(self, targets, packages)
 
         self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System Packages)" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(packages)
         self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
@@ -480,8 +480,8 @@ class ZypperDowngrade(Downgrade):
 
 class OldZypperDowngrade(Downgrade):
 
-    def __init__(self, targets, packages, patches, force=False, installed_only=False):
-        Downgrade.__init__(self, targets, packages, patches, force, installed_only)
+    def __init__(self, targets, packages, patches):
+        Downgrade.__init__(self, targets, packages)
 
         self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(packages)
         self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'

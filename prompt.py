@@ -1465,9 +1465,10 @@ class CommandPromt(cmd.Cmd):
         This is also run by the update procedure before applying the updates.
         If "force" is set, packages are forced to be installed on package
         conflicts. If "installed" is set, only installed packages are
-        prepared.
+        prepared. If "testing" is set, packages are installed from the TESTING
+        repositories.
 
-        prepare <hostname>[,hostname,...][,force][,installed]
+        prepare <hostname>[,hostname,...][,force][,installed][,testing]
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
@@ -1475,6 +1476,7 @@ class CommandPromt(cmd.Cmd):
         if args:
             force = False
             installed = False
+            testing = False
 
             parameter = args.split(',')
             if 'force' in parameter:
@@ -1483,6 +1485,9 @@ class CommandPromt(cmd.Cmd):
             if 'installed' in parameter:
                 installed = True
                 parameter.remove('installed')
+            if 'testing' in parameter:
+                testing = True
+                parameter.remove('testing')
 
             args = ','.join(parameter)
             targets = enabled_targets(self.targets)
@@ -1501,7 +1506,7 @@ class CommandPromt(cmd.Cmd):
 
                 out.info('preparing')
                 try:
-                    preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed).run()
+                    preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed, testing=testing).run()
                 except Exception:
                     out.critical('failed to prepare target systems')
                     return False
@@ -1515,7 +1520,7 @@ class CommandPromt(cmd.Cmd):
             self.parse_error(self.do_prepare, args)
 
     def complete_prepare(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed'])
+        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed', 'testing'])
 
     def do_update(self, args):
         """

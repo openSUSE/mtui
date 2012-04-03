@@ -232,9 +232,10 @@ Installs missing or outdated packages from the UPDATE repositories.
 This is also run by the update procedure before applying the updates.
 If "force" is set, packages are forced to be installed on package
 conflicts. If "installed" is set, only installed packages are
-prepared.
+prepared. If "testing" is set, packages are installed from the TESTING
+repositories.
 
-		prepare <hostname>[,hostname,...][,force][,installed]
+		prepare <hostname>[,hostname,...][,force][,installed][,testing]
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
 
