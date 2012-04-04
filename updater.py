@@ -8,6 +8,7 @@ import re
 
 from target import *
 from rpmver import *
+from utils import *
 
 
 class UpdateError(Exception):
@@ -90,7 +91,7 @@ class Update(object):
             marker = 'Additional rpm output:'
             start = stdout.find(marker) + len(marker)
             end = stdout.find('Retrieving', start)
-            print stdout[start:end]
+            print stdout[start:end].replace('warning', yellow('warning'))
         if 'A ZYpp transaction is already in progress.' in stderr:
             out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('update stack locked', target.hostname)

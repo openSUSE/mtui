@@ -11,7 +11,7 @@ out = logging.getLogger('mtui')
 class Attributes(object):
 
     tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'smt', 'slms', 'vmware'],
-             'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64'],
+             'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64', 'iseries'],
              'major':['9', '10', '11', '12'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
              'addons':['webyast', 'webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner'],
