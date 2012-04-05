@@ -310,6 +310,8 @@ class ZypperPrepare(Prepare):
             parameter = '--force-resolution'
 
         for package in packages:
+            if 'branding-upstream' in package:
+                continue
             if installed_only:
                 commands.append('rpm -q %s &>/dev/null && zypper -n in --no-recommends -y -l %s %s' % (package, parameter, package))
             else:
@@ -332,6 +334,8 @@ class OldZypperPrepare(Prepare):
         commands = []
 
         for package in packages:
+            if 'branding-upstream' in package:
+                continue
             if installed_only:
                 commands.append('rpm -q %s &>/dev/null && zypper -n in -y -l %s' % (package, package))
             else:
