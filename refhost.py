@@ -63,6 +63,12 @@ class Attributes(object):
         rep = ' '.join([self.product, version, archs, kernel, ltss, self.virtual['mode'], self.virtual['hypervisor'], addons])
         return ' '.join(rep.split())
 
+    def __nonzero__(self):
+        if self.__str__():
+            return True
+        else:
+            return False
+
 
 class Refhost(object):
 
@@ -252,10 +258,12 @@ class Refhost(object):
     def get_host_systemname(self, hostname):
         attributes = self.get_host_attributes(hostname)
         addons = "_".join(set(attributes.addons.keys()).difference(['sdk', 'hae']))
-        if addons:
-            system = '%s%s%s_%s-%s' % (attributes.product, attributes.major, attributes.minor, addons, attributes.archs[0])
-        else:
-            system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+        # don't add addon names to the systemname for now
+        #if addons:
+        #    system = '%s%s%s_%s-%s' % (attributes.product, attributes.major, attributes.minor, addons, attributes.archs[0])
+        #else:
+        #    system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+        system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
 
         return system
 
@@ -320,7 +328,7 @@ class Refhost(object):
                         try:
                             requests[name][subpattern].update({key:value})
                         except KeyError, error:
-                            if error.message == name:
+                            if name == error.args[0]:
                                 requests[name] = {subpattern:{key:value}}
                             else:
                                 requests[name][subpattern] = {key:value}

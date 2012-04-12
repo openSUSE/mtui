@@ -1,6 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <definitions>
   <location name="default">
+    <host arch="ppc64" name="sunset.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <addon name="hae"/>
+    </host>
+    <host arch="ppc64" name="makrele.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <addon name="hae"/>
+    </host>
+    <host arch="s390x" name="s390a20.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <addon name="hae"/>
+    </host>
     <host arch="s390x" name="s390z03.suse.de">
       <product name="sles">
         <version>
@@ -23,6 +50,13 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
+      <addon property="weak" name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
     </host>
     <host arch="ia64" name="sinope.suse.de">
       <product name="sles">
@@ -32,6 +66,13 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
+      <addon property="weak" name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
     </host>
     <host arch="i386" name="xena32-11.suse.de">
       <product name="sles">
@@ -74,6 +115,13 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
+      <addon property="weak" name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
     </host>
     <host arch="x86_64" name="sol.suse.de">
       <product name="sles">
@@ -93,6 +141,13 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
+      <addon property="weak" name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
     </host>
     <host arch="ppc64" name="salmler.suse.de">
       <product name="sles">
@@ -112,6 +167,13 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
+      <addon property="weak" name="webyast">
+        <version>
+          <major>1</major>
+          <minor>2</minor>
+        </version>
+      </addon>
     </host>
     <host arch="i386" name="fallada.suse.de">
       <product name="sles">
@@ -216,6 +278,7 @@
       </product>
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="s390x" name="s390s21.suse.de">
       <product name="sles">
@@ -225,6 +288,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <addon property="weak" name="hae"/>
       <addon name="webyast">
         <version>
           <major>1</major>
@@ -241,6 +305,7 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="s390x" name="s390t26.suse.de">
       <product name="sles">
@@ -250,6 +315,7 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="i386" name="kirk.suse.de">
       <product name="sles">
@@ -269,6 +335,7 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="ppc64" name="sunrise.suse.de">
       <product name="sles">
@@ -278,6 +345,7 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="x86_64" name="qam-webyast11-64.suse.de">
       <product name="sles">
@@ -324,6 +392,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="i386" name="xena32-11sp1.suse.de">
       <product name="sles">
@@ -380,6 +449,7 @@
         </version>
       </product>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="x86_64" name="qam-webyast12-64.suse.de">
       <product name="sles">
