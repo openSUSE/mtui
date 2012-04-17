@@ -60,7 +60,7 @@ class CommandPromt(cmd.Cmd):
         """
         * EXPERIMENTAL * may not add the correct host
         Seach hosts by by the specified attributes. A attribute tag could also be a
-        system type name like sles11sp1-i386.
+        system type name like sles11sp1-i386 or a hostname.
 
         search_hosts <attribute> [attribute ...]
         Keyword arguments:
@@ -138,8 +138,9 @@ class CommandPromt(cmd.Cmd):
     def do_autoadd(self, args):
         """
         * EXPERIMENTAL * may not add the correct host
-        Adds machines to the target host list, based on search
-        tags.
+        Adds hosts to the target host list. The host is mapped by the
+        specified attributes. A attribute tag could also be a system type name
+        like sles11sp1-i386 or a hostname.
 
         autoadd <attribute> [attribute ...]
         attribute-- host attributes like architecture or product
@@ -1530,15 +1531,24 @@ class CommandPromt(cmd.Cmd):
         """
         Applies the testing update to the target hosts. While updating the
         machines, the pre-, post- and compare scripts are run before and
-        after the update process.
+        after the update process. If the update adds new packages to the
+        channel, the "newpackage" parameter triggers the package installation
+        right after the update.
 
-        update <hostname>
+        update <hostname>[,newpackage]
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
 
         if args:
             missing = False
+            newpackage = False
+
+            parameter = args.split(',')
+            if 'newpackage' in parameter:
+                newpackage = True
+                parameter.remove('newpackage')
+
             targets = enabled_targets(self.targets)
 
             if self.do_prepare(args) is False:
@@ -1613,6 +1623,9 @@ class CommandPromt(cmd.Cmd):
                         targets[target].remove_lock()
                 return
 
+            if newpackage:
+                self.do_prepare('%s,testing' % args)
+
             missing = False
             for target in targets:
                 targets[target].add_history(['update', self.metadata.md5, ' '.join(self.metadata.get_package_list())])
@@ -1655,7 +1668,7 @@ class CommandPromt(cmd.Cmd):
             self.parse_error(self.do_update, args)
 
     def complete_update(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage'])
 
     def do_list_sessions(self, args):
         """

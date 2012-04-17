@@ -1,5 +1,10 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+#
+# export testlog from log.xml to a maintenance template
+#
+# this is deprecated, please use the "export" command of mtui instead
+#
 
 import sys
 import os

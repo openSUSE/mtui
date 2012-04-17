@@ -124,11 +124,20 @@ hosts can be specified.
 
 - autoadd
 * EXPERIMENTAL * may not add the correct host
-Adds another machine to the target host list. The host is mapped by the
-specified attributes. A attribute tag could also be a system type name
-like sles11sp1-i386.
+Adds hosts to the target host list. The host is mapped by the specified
+attributes. A attribute tag could also be a system type name like
+sles11sp1-i386 or a hostname.
 
 		autoadd <attribute> [attribute ...]
+		Keyword arguments:
+		attribute-- host attributes like architecture or product
+
+- search_hosts
+* EXPERIMENTAL * may not add the correct host
+Seach hosts by by the specified attributes. A attribute tag could also be a
+system type name like sles11sp1-i386 or a hostname.
+
+		search_hosts <attribute> [attribute ...]
 		Keyword arguments:
 		attribute-- host attributes like architecture or product
 
@@ -250,9 +259,10 @@ channel). This does not work for SLES 9 hosts, though.
 - update
 Applies the testing update to the target hosts. While updating the machines,
 the pre-, post- and compare scripts are run before and after the update
-process.
+process. If the update adds new packages to the channel, the "newpackage"
+parameter triggers the package installation right after the update.
 
-		update <hostname>
+		update <hostname>[,newpackage]
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
 
