@@ -28,11 +28,11 @@ sles10sp3_ltss-x86_64="dax.suse.de"
 sles10sp3_ltss-s390x="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-i386="xena32-10.suse.de"
-sles10sp3_XENU-i386="xenu32-10o.suse.de"
+sles10sp3_XEN0-i386="xena32-10.qam.suse.de"
+sles10sp3_XENU-i386="xenu32-10o.qam.suse.de"
 # Needs rebooting xena64-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-x86_64="xena64-10.suse.de"
-sles10sp3_XENU-x86_64="xenu64-10o.suse.de"
+sles10sp3_XEN0-x86_64="xena64-10.qam.suse.de"
+sles10sp3_XENU-x86_64="xenu64-10o.qam.suse.de"
 
 sles10sp3_smt-i386="???"
 sles10sp3_smt-x86_64="qam-smt1.suse.de"
@@ -148,11 +148,11 @@ sles10sp3_ltss-x86_64-kernel="dax.suse.de"
 sles10sp3_ltss-s390x-kernel="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-i386-kernel="xena32-10.suse.de"
-sles10sp3_XENU-i386-kernel="xenu32-10o.suse.de"
+sles10sp3_XEN0-i386-kernel="xena32-10.qam.suse.de"
+sles10sp3_XENU-i386-kernel="xenu32-10o.qam.suse.de"
 # Needs rebooting xena64-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-x86_64-kernel="xena64-10.suse.de"
-sles10sp3_XENU-x86_64-kernel="xenu64-10o.suse.de"
+sles10sp3_XEN0-x86_64-kernel="xena64-10.qam.suse.de"
+sles10sp3_XENU-x86_64-kernel="xenu64-10o.qam.suse.de"
 
 sles10sp3_smt-i386-kernel="???"
 sles10sp3_smt-x86_64-kernel="qam-smt1.suse.de"

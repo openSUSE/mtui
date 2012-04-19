@@ -626,7 +626,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="xena32-10.suse.de">
+    <host arch="i386" name="xena32-10.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -675,7 +675,7 @@
       </product>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xena64-10.suse.de">
+    <host arch="x86_64" name="xena64-10.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -695,7 +695,7 @@
       </product>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xenu64-10.suse.de">
+    <host arch="x86_64" name="xenu64-10.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -706,7 +706,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="xenu32-10.suse.de">
+    <host arch="i386" name="xenu32-10.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -859,7 +859,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="xena32-10.suse.de">
+    <host arch="i386" name="xena32-10.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -902,7 +902,7 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xenu64-10o.suse.de">
+    <host arch="x86_64" name="xenu64-10o.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -913,7 +913,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xena64-10.suse.de">
+    <host arch="x86_64" name="xena64-10.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -935,7 +935,7 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="xenu32-10o.suse.de">
+    <host arch="i386" name="xenu32-10o.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
