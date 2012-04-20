@@ -1,5 +1,9 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+#
+# target host management. this is right above the ssh/transmission layer and
+# below the abstractions layer (like updating, preparing, etc.)
+#
 
 import os
 import sys

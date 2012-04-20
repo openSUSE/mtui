@@ -32,6 +32,7 @@ class ColorFormatter(logging.Formatter):
         return logging.Formatter.format(self, record)
 
 
+# set default loglevel to INFO
 out.setLevel(level=logging.INFO)
 handler = logging.StreamHandler()
 formatter = ColorFormatter('%(levelname)s: %(message)s')

@@ -207,11 +207,13 @@ def xml_to_template(template, xmldata, updatehost=None):
             #                       1 FAILED
             #                       2 INTERNAL ERROR
             try:
+                # name == command, exitcode == exitcode
                 name = child.getAttribute('name')
                 exitcode = child.getAttribute('return')
             except Exception:
                 continue
 
+                # check if command is a compare_* script
             if 'scripts/compare/compare_' in name:
                 scriptname = os.path.basename(name.split(' ')[0])
                 scriptname = scriptname.replace('compare_', '')
@@ -247,9 +249,13 @@ def xml_to_template(template, xmldata, updatehost=None):
         # read update commands from the template and search for them in
         # the xml log. if they were found, add them just below the commands
         # in the template
+
+        # increment command_lines if a update command was found in the template
+        # ie. if we are in the command section, and the current line is not empty
         while t[i + command_lines] != '\n':
             command_lines += 1
 
+        # go to the next newline after the last command in the template
         current_line = i + command_lines
 
         # if an updatehost was set, search for the update log of that specific host.
@@ -261,6 +267,9 @@ def xml_to_template(template, xmldata, updatehost=None):
         else:
             log = x.getElementsByTagName('log')[0]
 
+        # add the output of each command from bottom to top of the commandlist.
+        # other than from top to bottom, we save some arithmetics with the
+        # current_line/command_lines values this way round.
         while command_lines:
             current_line = i + command_lines
             for child in log.childNodes:
