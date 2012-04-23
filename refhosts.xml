@@ -58,7 +58,7 @@
         </version>
       </addon>
     </host>
-    <host arch="ia64" name="sinope.suse.de">
+    <host arch="ia64" name="sinope.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -133,7 +133,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="merkur.suse.de">
+    <host arch="x86_64" name="merkur.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -159,7 +159,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="dawn.suse.de">
+    <host arch="i386" name="dawn.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -297,7 +297,7 @@
       </addon>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="leo.suse.de">
+    <host arch="i386" name="leo.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -327,7 +327,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ia64" name="merope.suse.de">
+    <host arch="ia64" name="merope.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -383,7 +383,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="kurk.suse.de">
+    <host arch="x86_64" name="kurk.qam.suse.de">
       <product name="rt">
         <version>
           <major>11</major>
@@ -441,7 +441,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="frisch.suse.de">
+    <host arch="x86_64" name="frisch.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -511,7 +511,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="ceres.suse.de">
+    <host arch="i386" name="ceres.qam.suse.de">
       <product name="sled">
         <version>
           <major>11</major>
@@ -521,7 +521,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="uranus.suse.de">
+    <host arch="x86_64" name="uranus.qam.suse.de">
       <product name="sled">
         <version>
           <major>11</major>
@@ -531,7 +531,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="obrien.suse.de">
+    <host arch="i386" name="obrien.qam.suse.de">
       <product name="sled">
         <version>
           <major>10</major>
@@ -541,7 +541,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="worf.suse.de">
+    <host arch="x86_64" name="worf.qam.suse.de">
       <product name="sled">
         <version>
           <major>10</major>
@@ -551,7 +551,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="zypp.suse.de">
+    <host arch="i386" name="zypp.qam.suse.de">
       <product name="sles">
         <version>
           <major>9</major>
@@ -569,7 +569,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="dax.suse.de">
+    <host arch="x86_64" name="dax.qam.suse.de">
       <product name="sles">
         <version>
           <major>9</major>
@@ -607,7 +607,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="aurore.suse.de">
+    <host arch="x86_64" name="aurore.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -686,7 +686,7 @@
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ia64" name="iceland.suse.de">
+    <host arch="ia64" name="iceland.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -727,7 +727,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="oes.suse.de">
+    <host arch="i386" name="oes.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -776,7 +776,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="levante.suse.de">
+    <host arch="x86_64" name="levante.qam.suse.de">
       <product name="sled">
         <version>
           <major>11</major>
@@ -786,7 +786,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="riker.suse.de">
+    <host arch="i386" name="riker.qam.suse.de">
       <product name="sled">
         <version>
           <major>11</major>
@@ -796,7 +796,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="kurk.suse.de">
+    <host arch="x86_64" name="kurk.qam.suse.de">
       <product name="rt">
         <version>
           <major>10</major>
@@ -817,7 +817,7 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="zypp.suse.de">
+    <host arch="i386" name="zypp.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -828,7 +828,7 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="sulu.suse.de">
+    <host arch="i386" name="sulu.qam.suse.de">
       <product name="rt">
         <version>
           <major>10</major>
@@ -838,7 +838,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="dax.suse.de">
+    <host arch="x86_64" name="dax.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -870,7 +870,7 @@
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="kurk.suse.de">
+    <host arch="x86_64" name="kurk.qam.suse.de">
       <product name="rt">
         <version>
           <major>10</major>
@@ -880,7 +880,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="zypp.suse.de">
+    <host arch="i386" name="zypp.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -891,7 +891,7 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="dax.suse.de">
+    <host arch="x86_64" name="dax.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -946,7 +946,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="sulu.suse.de">
+    <host arch="i386" name="sulu.qam.suse.de">
       <product name="rt">
         <version>
           <major>10</major>

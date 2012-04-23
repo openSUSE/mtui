@@ -5,26 +5,26 @@
 
 # code9 (now in LTSS)
 
-sles9-i386="zypp.suse.de"
-sles9-x86_64="dax.suse.de"
+sles9-i386="zypp.qam.suse.de"
+sles9-x86_64="dax.qam.suse.de"
 sles9-s390="s390zvi48.suse.de"
 sles9-s390x="s390zvi70.suse.de"
 
 # sle10 sp2
 
-sles10sp2_rt-i386="sulu.suse.de"
-sles10sp2_rt-x86_64="kurk.suse.de"
+sles10sp2_rt-i386="sulu.qam.suse.de"
+sles10sp2_rt-x86_64="kurk.qam.suse.de"
 
 # sle10 sp2 LTSS
 
-sles10sp2_ltss-i386="zypp.suse.de"
-sles10sp2_ltss-x86_64="dax.suse.de"
+sles10sp2_ltss-i386="zypp.qam.suse.de"
+sles10sp2_ltss-x86_64="dax.qam.suse.de"
 sles10sp2_ltss-s390x="s390zvi29.suse.de"
 
 # sle10 sp3 LTSS
 
-sles10sp3_ltss-i386="zypp.suse.de"
-sles10sp3_ltss-x86_64="dax.suse.de"
+sles10sp3_ltss-i386="zypp.qam.suse.de"
+sles10sp3_ltss-x86_64="dax.qam.suse.de"
 sles10sp3_ltss-s390x="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
@@ -37,19 +37,19 @@ sles10sp3_XENU-x86_64="xenu64-10o.qam.suse.de"
 sles10sp3_smt-i386="???"
 sles10sp3_smt-x86_64="qam-smt1.suse.de"
 
-sles10sp3_rt-i386="sulu.suse.de"
-sles10sp3_rt-x86_64="kurk.suse.de"
+sles10sp3_rt-i386="sulu.qam.suse.de"
+sles10sp3_rt-x86_64="kurk.qam.suse.de"
 
 # sle10sp4
 
-sles10sp4-i386="oes.suse.de"
-sles10sp4-x86_64="aurore.suse.de"
-sles10sp4-ia64="iceland.suse.de"
+sles10sp4-i386="oes.qam.suse.de"
+sles10sp4-x86_64="aurore.qam.suse.de"
+sles10sp4-ia64="iceland.qam.suse.de"
 sles10sp4-s390x="s390a26.suse.de"
 sles10sp4-ppc="dusk.suse.de"
 
-sled10sp4-i386="obrien.suse.de" 
-sled10sp4-x86_64="worf.suse.de"
+sled10sp4-i386="obrien.qam.suse.de" 
+sled10sp4-x86_64="worf.qam.suse.de"
 
 # Note: main role of these XEN hosts is that of kernel reference host
 sles10sp4_XEN0-i386="xena32-10.qam.suse.de"
@@ -59,21 +59,21 @@ sles10sp4_XENU-x86_64="xenu64-10.qam.suse.de"
 
 # sle11 sp1
 
-sles11sp1-i386="leo.suse.de"
-sles11sp1-ia64="merope.suse.de"
+sles11sp1-i386="leo.qam.suse.de"
+sles11sp1-ia64="merope.qam.suse.de"
 sles11sp1-ppc64="sunrise.suse.de"
 sles11sp1-s390x="s390t26.suse.de"
-sles11sp1-x86_64="frisch.suse.de"
+sles11sp1-x86_64="frisch.qam.suse.de"
 
-sled11sp1-i386="ceres.suse.de"
-sled11sp1-x86_64="uranus.suse.de"
+sled11sp1-i386="ceres.qam.suse.de"
+sled11sp1-x86_64="uranus.qam.suse.de"
 
 sles11sp1_XEN0-i386="xena32-11sp1.suse.de"
 sles11sp1_XENU-i386="xenu32-11b.suse.de"
 sles11sp1_XEN0-x86_64="xena64-11sp1.suse.de"
 sles11sp1_XENU-x86_64="xenu64-11b.suse.de"
 
-sles11sp1_rt-x86_64="kurk.suse.de"
+sles11sp1_rt-x86_64="kurk.qam.suse.de"
 
 sles4vmware11sp1-i386=""
 sles4vmware11sp1-x86_64=""
@@ -96,25 +96,25 @@ sles11_smt-s390x="s390zvc45.suse.de"
 
 # sle11 sp2
 
-sles11sp2-i386="dawn.suse.de"
-sles11sp2-ia64="sinope.suse.de"
+sles11sp2-i386="dawn.qam.suse.de"
+sles11sp2-ia64="sinope.qam.suse.de"
 sles11sp2-ppc64="aal.suse.de"
 sles11sp2-s390x="s390t10.suse.de"
-sles11sp2-x86_64="merkur.suse.de"
+sles11sp2-x86_64="merkur.qam.suse.de"
 
-sled11sp2-i386="riker.suse.de"
-sled11sp2-x86_64="levante.suse.de"
+sled11sp2-i386="riker.qam.suse.de"
+sled11sp2-x86_64="levante.qam.suse.de"
 
 sles11sp2_XEN0-i386="xena32-11.suse.de"
 sles11sp2_XENU-i386="xenu32-11.suse.de"
 sles11sp2_XEN0-x86_64="xena64-11.suse.de"
 sles11sp2_XENU-x86_64="xenu64-11.suse.de"
 
-sles11sp2_webyast12-i386="dawn.suse.de"
-sles11sp2_webyast12-ia64="sinope.suse.de"
+sles11sp2_webyast12-i386="dawn.qam.suse.de"
+sles11sp2_webyast12-ia64="sinope.qam.suse.de"
 sles11sp2_webyast12-ppc64="aal.suse.de"
 sles11sp2_webyast12-s390x="s390t10.suse.de"
-sles11sp2_webyast12-x86_64="merkur.suse.de"
+sles11sp2_webyast12-x86_64="merkur.qam.suse.de"
 
 # box
 
@@ -132,26 +132,26 @@ sl12.1-x86_64="boxer.suse.de"
 
 # code9 (now in LTSS)
 
-sles9-i386-kernel="zypp.suse.de"
-sles9-x86_64-kernel="dax.suse.de"
+sles9-i386-kernel="zypp.qam.suse.de"
+sles9-x86_64-kernel="dax.qam.suse.de"
 sles9-s390-kernel="s390zvi48.suse.de"
 sles9-s390x-kernel="s390zvi70.suse.de"
 
 # sle10 sp2
 
-sles10sp2_rt-i386-kernel="sulu.suse.de"
-sles10sp2_rt-x86_64-kernel="kurk.suse.de"
+sles10sp2_rt-i386-kernel="sulu.qam.suse.de"
+sles10sp2_rt-x86_64-kernel="kurk.qam.suse.de"
 
 # sle10 sp2 LTSS
 
-sles10sp2_ltss-i386-kernel="zypp.suse.de"
-sles10sp2_ltss-x86_64-kernel="dax.suse.de"
+sles10sp2_ltss-i386-kernel="zypp.qam.suse.de"
+sles10sp2_ltss-x86_64-kernel="dax.qam.suse.de"
 sles10sp2_ltss-s390x-kernel="s390zvi29.suse.de"
 
 # sle10 sp3
 
-sles10sp3_ltss-i386-kernel="zypp.suse.de"
-sles10sp3_ltss-x86_64-kernel="dax.suse.de"
+sles10sp3_ltss-i386-kernel="zypp.qam.suse.de"
+sles10sp3_ltss-x86_64-kernel="dax.qam.suse.de"
 sles10sp3_ltss-s390x-kernel="s390t11.suse.de"
 
 # Needs rebooting xena32-10 into existing SLES10 SP3 installation
@@ -164,8 +164,8 @@ sles10sp3_XENU-x86_64-kernel="xenu64-10o.qam.suse.de"
 sles10sp3_smt-i386-kernel="???"
 sles10sp3_smt-x86_64-kernel="qam-smt1.suse.de"
 
-sles10sp3_rt-i386-kernel="sulu.suse.de"
-sles10sp3_rt-x86_64-kernel="kurk.suse.de"
+sles10sp3_rt-i386-kernel="sulu.qam.suse.de"
+sles10sp3_rt-x86_64-kernel="kurk.qam.suse.de"
 
 # sle10sp4
 
@@ -176,8 +176,8 @@ sles10sp4-s390x-kernel="s390a27.suse.de"
 sles10sp4-ppc-kernel="twilight.suse.de"
 sles10sp4-iseries-kernel="saffron.suse.de"
 
-sled10sp4-i386-kernel="obrien.suse.de"
-sled10sp4-x86_64-kernel="worf.suse.de"
+sled10sp4-i386-kernel="obrien.qam.suse.de"
+sled10sp4-x86_64-kernel="worf.qam.suse.de"
 
 sles10sp4_XEN0-i386-kernel="xena32-10.qam.suse.de"
 sles10sp4_XENU-i386-kernel="xenu32-10.qam.suse.de"
@@ -192,15 +192,15 @@ sles11sp1-ppc64-kernel="abendrot.suse.de"
 sles11sp1-s390x-kernel="s390t25.suse.de"
 sles11sp1-x86_64-kernel="scott.suse.de"
 
-sled11sp1-i386-kernel="ceres.suse.de"
-sled11sp1-x86_64-kernel="uranus.suse.de"
+sled11sp1-i386-kernel="ceres.qam.suse.de"
+sled11sp1-x86_64-kernel="uranus.qam.suse.de"
 
 sles11sp1_XEN0-i386-kernel="xena32-11sp1.suse.de"
 sles11sp1_XENU-i386-kernel="xenu32-11b.suse.de"
 sles11sp1_XEN0-x86_64-kernel="xena64-11sp1.suse.de"
 sles11sp1_XENU-x86_64-kernel="xenu64-11b.suse.de"
 
-sles11sp1_rt-x86_64-kernel="kurk.suse.de"
+sles11sp1_rt-x86_64-kernel="kurk.qam.suse.de"
 
 sles4vmware11sp1-i386-kernel=""
 sles4vmware11sp1-x86_64-kernel=""
@@ -229,8 +229,8 @@ sles11sp2-ppc64-kernel="salmler.suse.de"
 sles11sp2-s390x-kernel="s390a28.suse.de"
 sles11sp2-x86_64-kernel="sol.suse.de"
 
-sled11sp2-i386-kernel="riker.suse.de"
-sled11sp2-x86_64-kernel="levante.suse.de"
+sled11sp2-i386-kernel="riker.qam.suse.de"
+sled11sp2-x86_64-kernel="levante.qam.suse.de"
 
 sles11sp2_XEN0-i386-kernel="xena32-11.suse.de"
 sles11sp2_XENU-i386-kernel="xenu32-11.suse.de"
