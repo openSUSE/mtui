@@ -114,7 +114,7 @@ class Template(object):
                 else:
                     hostname = match.group(2)
 
-                if hostname:
+                if hostname and hostname != '???':
                     self.metadata.systems[hostname] = match.group(1)
                 else:
                     out.error('no hostname found for system %s' % match.group(1))
@@ -208,4 +208,5 @@ class Template(object):
             import traceback
             traceback.print_exc()
             out.warning("failed to resolve testplatform %s. please report to ckornacker." % testplatform)
+
 

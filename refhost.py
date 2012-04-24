@@ -19,11 +19,11 @@ class Attributes(object):
 
     """
 
-    tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'smt', 'slms', 'vmware'],
+    tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'slms', 'vmware'],
              'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64', 'iseries'],
              'major':['9', '10', '11', '12'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
-             'addons':['webyast', 'webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner'],
+             'addons':['webyast', 'webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner', 'smt'],
              'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm'],
              'tags':['kernel', 'ltss']
             }
@@ -451,7 +451,7 @@ class Refhost(object):
             if addon in attributes.tags['products']:
                 attributes.product = addon
             if addon in attributes.tags['addons']:
-                attributes.addon.append(addon)
+                attributes.addons.update({addon:{}})
 
         # set the attributes of the current object. consider returning
         # the attributes object as well
@@ -514,8 +514,14 @@ class Refhost(object):
         attributes.archs = requests['arch']
         # currently, just one base product is supported
         attributes.product = requests['base'].keys()[0]
-        attributes.major = requests['base'][attributes.product]['major']
-        attributes.minor = requests['base'][attributes.product]['minor']
+        try:
+            attributes.major = requests['base'][attributes.product]['major']
+        except KeyError:
+            pass
+        try:
+            attributes.minor = requests['base'][attributes.product]['minor']
+        except KeyError:
+            pass
 
         try:
             tags = requests['tags']

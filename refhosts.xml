@@ -494,22 +494,34 @@
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-smt2.suse.de">
-      <product name="smt">
+      <product name="sles">
         <version>
           <major>11</major>
+          <minor>sp2</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon name="smt">
+        <version>
+          <major>11</major>
+        </version>
+      </addon>
     </host>
     <host arch="s390x" name="s390zvc45.suse.de">
-      <product name="smt">
+      <product name="sles">
         <version>
           <major>11</major>
+          <minor>sp1</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon name="smt">
+        <version>
+          <major>11</major>
+        </version>
+      </addon>
     </host>
     <host arch="i386" name="ceres.qam.suse.de">
       <product name="sled">
@@ -850,14 +862,19 @@
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-smt1.suse.de">
-      <product name="smt">
+      <product name="sles">
         <version>
           <major>10</major>
-          <minor>sp3</minor>
+          <minor>sp4</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon name="smt">
+        <version>
+          <major>10</major>
+        </version>
+      </addon>
     </host>
     <host arch="i386" name="xena32-10.qam.suse.de">
       <product name="sles">
