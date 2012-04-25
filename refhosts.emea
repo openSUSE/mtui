@@ -35,7 +35,7 @@ sles10sp3_XEN0-x86_64="xena64-10.qam.suse.de"
 sles10sp3_XENU-x86_64="xenu64-10o.qam.suse.de"
 
 sles10sp3_smt-i386="???"
-sles10sp3_smt-x86_64="qam-smt1.suse.de"
+sles10sp3_smt-x86_64="qam-smt1.qam.suse.de"
 
 sles10sp3_rt-i386="sulu.qam.suse.de"
 sles10sp3_rt-x86_64="kurk.qam.suse.de"
@@ -78,11 +78,11 @@ sles11sp1_rt-x86_64="kurk.qam.suse.de"
 sles4vmware11sp1-i386=""
 sles4vmware11sp1-x86_64=""
 
-sles11sp1_studio-x86_64="poincare.suse.de"
-sles11sp1_studio12-x86_64="cetur.suse.de"
+sles11sp1_studio-x86_64="poincare.qam.suse.de"
+sles11sp1_studio12-x86_64="cetur.qam.suse.de"
 sles11sp1_studiorunner12-s390x="s390z03.suse.de"
-sles11sp1_slms-x86_64="qam-slms1.suse.de"
-sles11sp1_slms12-x86_64="qam-slms2.suse.de"
+sles11sp1_slms-x86_64="qam-slms1.qam.suse.de"
+sles11sp1_slms12-x86_64="qam-slms2.qam.suse.de"
 sles11sp1_webyast-i386="qam-webyast11-32.suse.de"
 sles11sp1_webyast-x86_64="qam-webyast11-64.suse.de"
 sles11sp1_webyast12-i386="qam-webyast12-32.suse.de"
@@ -91,7 +91,7 @@ sles11sp1_webyast12-s390x="s390s21.suse.de"
 
 # these are addons based on SLES 11 GA but now running on SLES 11 SP1
 sles11_smt-i386="???"
-sles11_smt-x86_64="qam-smt2.suse.de"
+sles11_smt-x86_64="qam-smt2.qam.suse.de"
 sles11_smt-s390x="s390zvc45.suse.de"
 
 # sle11 sp2
@@ -162,16 +162,16 @@ sles10sp3_XEN0-x86_64-kernel="xena64-10.qam.suse.de"
 sles10sp3_XENU-x86_64-kernel="xenu64-10o.qam.suse.de"
 
 sles10sp3_smt-i386-kernel="???"
-sles10sp3_smt-x86_64-kernel="qam-smt1.suse.de"
+sles10sp3_smt-x86_64-kernel="qam-smt1.qam.suse.de"
 
 sles10sp3_rt-i386-kernel="sulu.qam.suse.de"
 sles10sp3_rt-x86_64-kernel="kurk.qam.suse.de"
 
 # sle10sp4
 
-sles10sp4-i386-kernel="couchant.suse.de"
-sles10sp4-x86_64-kernel="maestrale.suse.de"
-sles10sp4-ia64-kernel="fermium.suse.de"
+sles10sp4-i386-kernel="couchant.qam.suse.de"
+sles10sp4-x86_64-kernel="maestrale.qam.suse.de"
+sles10sp4-ia64-kernel="fermium.qam.suse.de"
 sles10sp4-s390x-kernel="s390a27.suse.de"
 sles10sp4-ppc-kernel="twilight.suse.de"
 sles10sp4-iseries-kernel="saffron.suse.de"
@@ -186,11 +186,11 @@ sles10sp4_XENU-x86_64-kernel="xenu64-10.qam.suse.de"
 
 # sle11 sp1
 
-sles11sp1-i386-kernel="kirk.suse.de"
-sles11sp1-ia64-kernel="leonard.suse.de"
+sles11sp1-i386-kernel="kirk.qam.suse.de"
+sles11sp1-ia64-kernel="leonard.qam.suse.de"
 sles11sp1-ppc64-kernel="abendrot.suse.de"
 sles11sp1-s390x-kernel="s390t25.suse.de"
-sles11sp1-x86_64-kernel="scott.suse.de"
+sles11sp1-x86_64-kernel="scott.qam.suse.de"
 
 sled11sp1-i386-kernel="ceres.qam.suse.de"
 sled11sp1-x86_64-kernel="uranus.qam.suse.de"
@@ -205,11 +205,11 @@ sles11sp1_rt-x86_64-kernel="kurk.qam.suse.de"
 sles4vmware11sp1-i386-kernel=""
 sles4vmware11sp1-x86_64-kernel=""
 
-sles11sp1_studio-x86_64-kernel="poincare.suse.de"
-sles11sp1_studio12-x86_64-kernel="cetur.suse.de"
+sles11sp1_studio-x86_64-kernel="poincare.qam.suse.de"
+sles11sp1_studio12-x86_64-kernel="cetur.qam.suse.de"
 sles11sp1_studiorunner12-s390x-kernel="s390z03.suse.de"
-sles11sp1_slms-x86_64-kernel="qam-slms1.suse.de"
-sles11sp1_slms12-x86_64-kernel="qam-slms2.suse.de"
+sles11sp1_slms-x86_64-kernel="qam-slms1.qam.suse.de"
+sles11sp1_slms12-x86_64-kernel="qam-slms2.qam.suse.de"
 sles11sp1_webyast-i386-kernel="qam-webyast11-32.suse.de"
 sles11sp1_webyast-x86_64-kernel="qam-webyast11-64.suse.de"
 sles11sp1_webyast12-i386-kernel="qam-webyast12-32.suse.de"
@@ -218,16 +218,16 @@ sles11sp1_webyast12-s390x-kernel="s390s21.suse.de"
 
 # these are addons based on SLES 11 GA but now running on SLES 11 SP1
 sles11_smt-i386-kernel="???"
-sles11_smt-x86_64-kernel="qam-smt2.suse.de"
+sles11_smt-x86_64-kernel="qam-smt2.qam.suse.de"
 sles11_smt-s390x-kernel="s390zvc45.suse.de"
 
 # sle11 sp2
 
-sles11sp2-i386-kernel="fallada.suse.de"
-sles11sp2-ia64-kernel="coppelius.suse.de"
+sles11sp2-i386-kernel="fallada.qam.suse.de"
+sles11sp2-ia64-kernel="coppelius.qam.suse.de"
 sles11sp2-ppc64-kernel="salmler.suse.de"
 sles11sp2-s390x-kernel="s390a28.suse.de"
-sles11sp2-x86_64-kernel="sol.suse.de"
+sles11sp2-x86_64-kernel="sol.qam.suse.de"
 
 sled11sp2-i386-kernel="riker.qam.suse.de"
 sled11sp2-x86_64-kernel="levante.qam.suse.de"

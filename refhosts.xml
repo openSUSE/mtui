@@ -123,7 +123,7 @@
         </version>
       </addon>
     </host>
-    <host arch="x86_64" name="sol.suse.de">
+    <host arch="x86_64" name="sol.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -175,7 +175,7 @@
         </version>
       </addon>
     </host>
-    <host arch="i386" name="fallada.suse.de">
+    <host arch="i386" name="fallada.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -185,7 +185,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ia64" name="coppelius.suse.de">
+    <host arch="ia64" name="coppelius.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -227,7 +227,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="scott.suse.de">
+    <host arch="x86_64" name="scott.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -237,7 +237,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="cetur.suse.de">
+    <host arch="x86_64" name="cetur.qam.suse.de">
       <product name="studio">
         <version>
           <major>1</major>
@@ -317,7 +317,7 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="i386" name="kirk.suse.de">
+    <host arch="i386" name="kirk.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -363,7 +363,7 @@
       </addon>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="poincare.suse.de">
+    <host arch="x86_64" name="poincare.qam.suse.de">
       <product name="studio">
         <version>
           <major>1</major>
@@ -373,7 +373,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="qam-slms2.suse.de">
+    <host arch="x86_64" name="qam-slms2.qam.suse.de">
       <product name="slms">
         <version>
           <major>1</major>
@@ -421,7 +421,7 @@
       </addon>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ia64" name="leonard.suse.de">
+    <host arch="ia64" name="leonard.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -431,7 +431,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="qam-slms1.suse.de">
+    <host arch="x86_64" name="qam-slms1.qam.suse.de">
       <product name="slms">
         <version>
           <major>1</major>
@@ -493,7 +493,7 @@
       </addon>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="qam-smt2.suse.de">
+    <host arch="x86_64" name="qam-smt2.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -628,7 +628,7 @@
       </product>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ia64" name="fermium.suse.de">
+    <host arch="ia64" name="fermium.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -668,7 +668,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="maestrale.suse.de">
+    <host arch="x86_64" name="maestrale.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -748,7 +748,7 @@
       </product>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="couchant.suse.de">
+    <host arch="i386" name="couchant.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -861,7 +861,7 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="qam-smt1.suse.de">
+    <host arch="x86_64" name="qam-smt1.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
