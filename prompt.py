@@ -1583,7 +1583,8 @@ class CommandPromt(cmd.Cmd):
                         not_installed.append(package)
                     else:
                         if RPMVersion(before) >= RPMVersion(required):
-                            out.warning('%s: package is already updated: %s (%s, required %s)' % (target, package, before, required))
+                            out.error('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
+                            return
 
                 if len(not_installed):
                     out.warning('%s: these packages are not installed: %s' % (target, not_installed))
