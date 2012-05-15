@@ -69,9 +69,9 @@ sled11sp1-i386="147.2.207.91"
 sled11sp1-x86_64="147.2.207.92"
 
 sles11sp1_XEN0-i386="xena32-11sp1.qam.suse.de"
-sles11sp1_XENU-i386="xenu32-11b.qam.suse.de"
+sles11sp1_XENU-i386="xenu32-11-1.qam.suse.de"
 sles11sp1_XEN0-x86_64="xena64-11sp1.qam.suse.de"
-sles11sp1_XENU-x86_64="xenu64-11b.qam.suse.de"
+sles11sp1_XENU-x86_64="xenu64-11-1.qam.suse.de"
 
 sles11sp1_rt-x86_64="kurk.qam.suse.de"
 
@@ -106,9 +106,9 @@ sled11sp2-i386="147.2.207.83"
 sled11sp2-x86_64="147.2.207.84"
 
 sles11sp2_XEN0-i386="xena32-11.qam.suse.de"
-sles11sp2_XENU-i386="xenu32-11.qam.suse.de"
+sles11sp2_XENU-i386="xenu32-11-2.qam.suse.de"
 sles11sp2_XEN0-x86_64="xena64-11.qam.suse.de"
-sles11sp2_XENU-x86_64="xenu64-11.qam.suse.de"
+sles11sp2_XENU-x86_64="xenu64-11-2.qam.suse.de"
 
 sles11sp2_webyast12-i386="dawn.qam.suse.de"
 sles11sp2_webyast12-ia64="sinope.qam.suse.de"
@@ -196,9 +196,9 @@ sled11sp1-i386-kernel="147.2.207.91"
 sled11sp1-x86_64-kernel="147.2.207.92"
 
 sles11sp1_XEN0-i386-kernel="xena32-11sp1.qam.suse.de"
-sles11sp1_XENU-i386-kernel="xenu32-11b.qam.suse.de"
+sles11sp1_XENU-i386-kernel="xenu32-11-1.qam.suse.de"
 sles11sp1_XEN0-x86_64-kernel="xena64-11sp1.qam.suse.de"
-sles11sp1_XENU-x86_64-kernel="xenu64-11b.qam.suse.de"
+sles11sp1_XENU-x86_64-kernel="xenu64-11-1.qam.suse.de"
 
 sles11sp1_rt-x86_64-kernel="kurk.qam.suse.de"
 
@@ -233,9 +233,9 @@ sled11sp2-i386-kernel="147.2.207.83"
 sled11sp2-x86_64-kernel="147.2.207.84"
 
 sles11sp2_XEN0-i386-kernel="xena32-11.qam.suse.de"
-sles11sp2_XENU-i386-kernel="xenu32-11.qam.suse.de"
+sles11sp2_XENU-i386-kernel="xenu32-11-2.qam.suse.de"
 sles11sp2_XEN0-x86_64-kernel="xena64-11.qam.suse.de"
-sles11sp2_XENU-x86_64-kernel="xenu64-11.qam.suse.de"
+sles11sp2_XENU-x86_64-kernel="xenu64-11-2.qam.suse.de"
 
 
 # box
