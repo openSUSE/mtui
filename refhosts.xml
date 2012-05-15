@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <definitions>
   <location name="default">
-    <host arch="ppc64" name="sunset.suse.de">
+    <host arch="ppc64" name="sunset.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -10,7 +10,7 @@
       </product>
       <addon name="hae"/>
     </host>
-    <host arch="ppc64" name="makrele.suse.de">
+    <host arch="ppc64" name="makrele.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -74,7 +74,7 @@
         </version>
       </addon>
     </host>
-    <host arch="i386" name="xena32-11.suse.de">
+    <host arch="i386" name="xena32-11.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -85,7 +85,7 @@
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xenu64-11.suse.de">
+    <host arch="x86_64" name="xenu64-11.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -96,7 +96,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="xenu32-11.suse.de">
+    <host arch="i386" name="xenu32-11.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -107,7 +107,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ppc64" name="aal.suse.de">
+    <host arch="ppc64" name="aal.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -149,7 +149,7 @@
         </version>
       </addon>
     </host>
-    <host arch="ppc64" name="salmler.suse.de">
+    <host arch="ppc64" name="salmler.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -195,7 +195,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xena64-11.suse.de">
+    <host arch="x86_64" name="xena64-11.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -216,7 +216,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="xenu32-11b.suse.de">
+    <host arch="i386" name="xenu32-11b.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -247,7 +247,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xenu64-11b.suse.de">
+    <host arch="x86_64" name="xenu64-11b.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -258,7 +258,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="xena64-11sp1.suse.de">
+    <host arch="x86_64" name="xena64-11sp1.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -337,7 +337,7 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="ppc64" name="sunrise.suse.de">
+    <host arch="ppc64" name="sunrise.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -347,7 +347,7 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="x86_64" name="qam-webyast11-64.suse.de">
+    <host arch="x86_64" name="qam-webyast11-64.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -394,7 +394,7 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="i386" name="xena32-11sp1.suse.de">
+    <host arch="i386" name="xena32-11sp1.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -405,7 +405,7 @@
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="qam-webyast11-32.suse.de">
+    <host arch="i386" name="qam-webyast11-32.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -451,7 +451,7 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="x86_64" name="qam-webyast12-64.suse.de">
+    <host arch="x86_64" name="qam-webyast12-64.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -467,7 +467,7 @@
       </addon>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ppc64" name="abendrot.suse.de">
+    <host arch="ppc64" name="abendrot.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -477,7 +477,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="qam-webyast12-32.suse.de">
+    <host arch="i386" name="qam-webyast12-32.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -658,7 +658,7 @@
       </product>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ppc" name="twilight.suse.de">
+    <host arch="ppc" name="twilight.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -678,7 +678,7 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="ppc" name="dusk.suse.de">
+    <host arch="ppc" name="dusk.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>

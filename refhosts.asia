@@ -46,32 +46,32 @@ sles10sp4-i386="147.2.207.85"
 sles10sp4-x86_64="147.2.207.86"
 sles10sp4-ia64="iceland.qam.suse.de"
 sles10sp4-s390x="s390a26.suse.de"
-sles10sp4-ppc="dusk.suse.de"
+sles10sp4-ppc="dusk.qam.suse.de"
 
 sled10sp4-i386="147.2.207.87"
 sled10sp4-x86_64="147.2.207.88"
 
 # Note: main role of these XEN hosts is that of kernel reference host
-sles10sp4_XEN0-i386="???"
-sles10sp4_XENU-i386="???"
-sles10sp4_XEN0-x86_64="???"
-sles10sp4_XENU-x86_64="???"
+sles10sp4_XEN0-i386="xena32-10.qam.suse.de"
+sles10sp4_XENU-i386="xenu32-10.qam.suse.de"
+sles10sp4_XEN0-x86_64="xena64-10.qam.suse.de"
+sles10sp4_XENU-x86_64="xenu64-10.qam.suse.de"
 
 # sle11 sp1
 
 sles11sp1-i386="147.2.207.89"
 sles11sp1-x86_64="147.2.207.90"
 sles11sp1-ia64="merope.qam.suse.de"
-sles11sp1-ppc64="sunrise.suse.de"
+sles11sp1-ppc64="sunrise.qam.suse.de"
 sles11sp1-s390x="s390t26.suse.de"
 
 sled11sp1-i386="147.2.207.91"
 sled11sp1-x86_64="147.2.207.92"
 
-sles11sp1_XEN0-i386="xena32-11sp1.suse.de"
-sles11sp1_XENU-i386="xenu32-11b.suse.de"
-sles11sp1_XEN0-x86_64="xena64-11sp1.suse.de"
-sles11sp1_XENU-x86_64="xenu64-11b.suse.de"
+sles11sp1_XEN0-i386="xena32-11sp1.qam.suse.de"
+sles11sp1_XENU-i386="xenu32-11b.qam.suse.de"
+sles11sp1_XEN0-x86_64="xena64-11sp1.qam.suse.de"
+sles11sp1_XENU-x86_64="xenu64-11b.qam.suse.de"
 
 sles11sp1_rt-x86_64="kurk.qam.suse.de"
 
@@ -83,10 +83,10 @@ sles11sp1_studio12-x86_64="cetur.qam.suse.de"
 sles11sp1_studiorunner12-s390x="s390z03.suse.de"
 sles11sp1_slms-x86_64="qam-slms1.qam.suse.de"
 sles11sp1_slms12-x86_64="qam-slms2.qam.suse.de"
-sles11sp1_webyast-i386="qam-webyast11-32.suse.de"
-sles11sp1_webyast-x86_64="qam-webyast11-64.suse.de"
-sles11sp1_webyast12-i386="qam-webyast12-32.suse.de"
-sles11sp1_webyast12-x86_64="qam-webyast12-64.suse.de"
+sles11sp1_webyast-i386="qam-webyast11-32.qam.suse.de"
+sles11sp1_webyast-x86_64="qam-webyast11-64.qam.suse.de"
+sles11sp1_webyast12-i386="qam-webyast12-32.qam.suse.de"
+sles11sp1_webyast12-x86_64="qam-webyast12-64.qam.suse.de"
 sles11sp1_webyast12-s390x="s390s21.suse.de"
 
 # these are addons based on SLES 11 GA but now running on SLES 11 SP1
@@ -98,17 +98,24 @@ sles11_smt-s390x="s390zvc45.suse.de"
 
 sles11sp2-i386="147.2.207.81"
 sles11sp2-ia64="sinope.qam.suse.de"
-sles11sp2-ppc64="aal.suse.de"
+sles11sp2-ppc64="aal.qam.suse.de"
 sles11sp2-s390x="s390t10.suse.de"
 sles11sp2-x86_64="147.2.207.82"
 
 sled11sp2-i386="147.2.207.83"
 sled11sp2-x86_64="147.2.207.84"
 
-sles11sp2_XEN0-i386="xena32-11.suse.de"
-sles11sp2_XENU-i386="xenu32-11.suse.de"
-sles11sp2_XEN0-x86_64="xena64-11.suse.de"
-sles11sp2_XENU-x86_64="xenu64-11.suse.de"
+sles11sp2_XEN0-i386="xena32-11.qam.suse.de"
+sles11sp2_XENU-i386="xenu32-11.qam.suse.de"
+sles11sp2_XEN0-x86_64="xena64-11.qam.suse.de"
+sles11sp2_XENU-x86_64="xenu64-11.qam.suse.de"
+
+sles11sp2_webyast12-i386="dawn.qam.suse.de"
+sles11sp2_webyast12-ia64="sinope.qam.suse.de"
+sles11sp2_webyast12-ppc64="aal.qam.suse.de"
+sles11sp2_webyast12-s390x="s390t10.suse.de"
+sles11sp2_webyast12-x86_64="merkur.qam.suse.de"
+
 
 # box
 
@@ -166,32 +173,32 @@ sles10sp4-i386-kernel="147.2.207.85"
 sles10sp4-x86_64-kernel="147.2.207.86"
 sles10sp4-ia64-kernel="fermium.qam.suse.de"
 sles10sp4-s390x-kernel="s390a27.suse.de"
-sles10sp4-ppc-kernel="twilight.suse.de"
+sles10sp4-ppc-kernel="twilight.qam.suse.de"
 sles10sp4-iseries-kernel="saffron.suse.de"
 
 sled10sp4-i386-kernel="147.2.207.87"
 sled10sp4-x86_64-kernel="147.2.207.88"
 
-sles10sp4_XEN0-i386-kernel="???"
-sles10sp4_XENU-i386-kernel="???"
-sles10sp4_XEN0-x86_64-kernel="???"
-sles10sp4_XENU-x86_64-kernel="???"
+sles10sp4_XEN0-i386-kernel="xena32-10.qam.suse.de"
+sles10sp4_XENU-i386-kernel="xenu32-10.qam.suse.de"
+sles10sp4_XEN0-x86_64-kernel="xena64-10.qam.suse.de"
+sles10sp4_XENU-x86_64-kernel="xenu64-10.qam.suse.de"
 
 # sle11 sp1
 
 sles11sp1-i386-kernel="147.2.207.89"
 sles11sp1-x86_64-kernel="147.2.207.90"
 sles11sp1-ia64-kernel="leonard.qam.suse.de"
-sles11sp1-ppc64-kernel="abendrot.suse.de"
+sles11sp1-ppc64-kernel="abendrot.qam.suse.de"
 sles11sp1-s390x-kernel="s390t25.suse.de"
 
 sled11sp1-i386-kernel="147.2.207.91"
 sled11sp1-x86_64-kernel="147.2.207.92"
 
-sles11sp1_XEN0-i386-kernel="xena32-11sp1.suse.de"
-sles11sp1_XENU-i386-kernel="xenu32-11b.suse.de"
-sles11sp1_XEN0-x86_64-kernel="xena64-11sp1.suse.de"
-sles11sp1_XENU-x86_64-kernel="xenu64-11b.suse.de"
+sles11sp1_XEN0-i386-kernel="xena32-11sp1.qam.suse.de"
+sles11sp1_XENU-i386-kernel="xenu32-11b.qam.suse.de"
+sles11sp1_XEN0-x86_64-kernel="xena64-11sp1.qam.suse.de"
+sles11sp1_XENU-x86_64-kernel="xenu64-11b.qam.suse.de"
 
 sles11sp1_rt-x86_64-kernel="kurk.qam.suse.de"
 
@@ -203,10 +210,10 @@ sles11sp1_studio12-x86_64-kernel="cetur.qam.suse.de"
 sles11sp1_studiorunner12-s390x-kernel="s390z03.suse.de"
 sles11sp1_slms-x86_64-kernel="qam-slms1.qam.suse.de"
 sles11sp1_slms12-x86_64-kernel="qam-slms2.qam.suse.de"
-sles11sp1_webyast-i386-kernel="qam-webyast11-32.suse.de"
-sles11sp1_webyast-x86_64-kernel="qam-webyast11-64.suse.de"
-sles11sp1_webyast12-i386-kernel="qam-webyast12-32.suse.de"
-sles11sp1_webyast12-x86_64-kernel="qam-webyast12-64.suse.de"
+sles11sp1_webyast-i386-kernel="qam-webyast11-32.qam.suse.de"
+sles11sp1_webyast-x86_64-kernel="qam-webyast11-64.qam.suse.de"
+sles11sp1_webyast12-i386-kernel="qam-webyast12-32.qam.suse.de"
+sles11sp1_webyast12-x86_64-kernel="qam-webyast12-64.qam.suse.de"
 sles11sp1_webyast12-s390x-kernel="s390s21.suse.de"
 
 # these are addons based on SLES 11 GA but now running on SLES 11 SP1
@@ -218,23 +225,18 @@ sles11_smt-s390x-kernel="s390zvc45.suse.de"
 
 sles11sp2-i386-kernel="147.2.207.81"
 sles11sp2-ia64-kernel="coppelius.qam.suse.de"
-sles11sp2-ppc64-kernel="salmler.suse.de"
+sles11sp2-ppc64-kernel="salmler.qam.suse.de"
 sles11sp2-s390x-kernel="s390a28.suse.de"
 sles11sp2-x86_64-kernel="147.2.207.82"
 
 sled11sp2-i386-kernel="147.2.207.83"
 sled11sp2-x86_64-kernel="147.2.207.84"
 
-sles11sp2_XEN0-i386-kernel="xena32-11.suse.de"
-sles11sp2_XENU-i386-kernel="xenu32-11.suse.de"
-sles11sp2_XEN0-x86_64-kernel="xena64-11.suse.de"
-sles11sp2_XENU-x86_64-kernel="xenu64-11.suse.de"
+sles11sp2_XEN0-i386-kernel="xena32-11.qam.suse.de"
+sles11sp2_XENU-i386-kernel="xenu32-11.qam.suse.de"
+sles11sp2_XEN0-x86_64-kernel="xena64-11.qam.suse.de"
+sles11sp2_XENU-x86_64-kernel="xenu64-11.qam.suse.de"
 
-sles11sp2_webyast12-i386="dawn.qam.suse.de"
-sles11sp2_webyast12-ia64="sinope.qam.suse.de"
-sles11sp2_webyast12-ppc64="aal.suse.de"
-sles11sp2_webyast12-s390x="s390t10.suse.de"
-sles11sp2_webyast12-x86_64="merkur.qam.suse.de"
 
 # box
 
