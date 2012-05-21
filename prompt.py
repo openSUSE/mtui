@@ -1084,7 +1084,7 @@ class CommandPromt(cmd.Cmd):
                             if targets[target].lasterr():
                                 print targets[target].lasterr()
                         else:
-                            match = re.search('(http://.*/submission.php.submissionID=\d+)', targets[target].lastout())
+                            match = re.search('(http://.*/submission.php.submission_id=\d+)', targets[target].lastout())
                             if match:
                                 system = targets[target].system
                                 out.info('submission for %s (%s): %s' % (target, system, match.group(1)))
