@@ -347,22 +347,6 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="x86_64" name="qam-webyast11-64.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon name="webyast">
-        <version>
-          <major>1</major>
-          <minor>1</minor>
-        </version>
-      </addon>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="x86_64" name="poincare.qam.suse.de">
       <product name="studio">
         <version>
@@ -403,22 +387,6 @@
       </product>
       <kernel>true</kernel>
       <virtual mode="host">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="qam-webyast11-32.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon name="webyast">
-        <version>
-          <major>1</major>
-          <minor>1</minor>
-        </version>
-      </addon>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="leonard.qam.suse.de">
