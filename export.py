@@ -195,7 +195,10 @@ def xml_to_template(template, xmldata, updatehost=None):
         failed = 0
         for package in versions['before'].keys():
             # check if the packages have a higher version after the update
-            if versions['after'][package] != '0' and RPMVersion(versions['before'][package]) >= RPMVersion(versions['after'][package]):
+            try:
+                if versions['after'][package] != '0':
+                    assert(RPMVersion(versions['before'][package]) < RPMVersion(versions['after'][package]))
+            except Exception:
                 failed = 1
         if failed == 1:
             out.warning('installation test result on %s set to FAILED as some packages were not updated. please override manually.'
@@ -229,7 +232,12 @@ def xml_to_template(template, xmldata, updatehost=None):
                     failed = 1
                     result = 'INTERNAL ERROR'
 
-                t.insert(i, '\t{0:25}: {1}\n'.format(scriptname, result))
+                scriptline = '\t{0:25}: {1}\n'.format(scriptname, result)
+                if scriptname in t[i]:
+                    t[i] = scriptline
+                else:
+                    t.insert(i, scriptline)
+
                 i += 1
 
         if 'PASSED/FAILED' in t[i + 1]:
