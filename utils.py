@@ -54,6 +54,10 @@ def yellow(text):
     return "\033[1;33m%s\033[1;m" % text
 
 
+def blue(text):
+    return "\033[1;34m%s\033[1;m" % text
+
+
 def input(text, options):
     result = False
     response = False

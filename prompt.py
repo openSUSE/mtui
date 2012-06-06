@@ -625,7 +625,7 @@ class CommandPromt(cmd.Cmd):
                     current = host.packages[package].current
                     required = self.metadata.packages[package]
                     if current == '0':
-                        state = yellow('not installed')
+                        state = blue('not installed')
                     elif RPMVersion(current) > RPMVersion(required):
                         state = red('too recent')
                     elif RPMVersion(current) < RPMVersion(required):
