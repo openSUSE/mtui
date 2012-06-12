@@ -21,24 +21,29 @@ sles10sp2_ltss-i386="zypp.qam.suse.de"
 sles10sp2_ltss-x86_64="dax.qam.suse.de"
 sles10sp2_ltss-s390x="s390zvi29.suse.de"
 
-# sle10 sp3 LTSS
+sles10sp2_ltss_XEN0-i386="zypp.qam.suse.de"
+sles10sp2_ltss_XENU-i386="xenu32-10sp2.qam.suse.de"
+sles10sp2_ltss_XEN0-x86_64="dax.qam.suse.de"
+sles10sp2_ltss_XENU-x86_64="xenu64-10sp2.qam.suse.de"
 
-sles10sp3_ltss-i386="zypp.qam.suse.de"
-sles10sp3_ltss-x86_64="dax.qam.suse.de"
-sles10sp3_ltss-s390x="s390t11.suse.de"
-
-# Needs rebooting xena32-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-i386="xena32-10.qam.suse.de"
-sles10sp3_XENU-i386="xenu32-10o.qam.suse.de"
-# Needs rebooting xena64-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-x86_64="xena64-10.qam.suse.de"
-sles10sp3_XENU-x86_64="xenu64-10o.qam.suse.de"
+# sle10 sp3
 
 sles10sp3_smt-i386="???"
 sles10sp3_smt-x86_64="qam-smt1.qam.suse.de"
 
 sles10sp3_rt-i386="sulu.qam.suse.de"
 sles10sp3_rt-x86_64="kurk.qam.suse.de"
+
+# sle10 sp3 LTSS
+
+sles10sp3_ltss-i386="zypp.qam.suse.de"
+sles10sp3_ltss-x86_64="dax.qam.suse.de"
+sles10sp3_ltss-s390x="s390t11.suse.de"
+
+sles10sp3_ltss_XEN0-i386="zypp.qam.suse.de"
+sles10sp3_ltss_XENU-i386="xenu32-10sp3.qam.suse.de"
+sles10sp3_ltss_XEN0-x86_64="dax.qam.suse.de"
+sles10sp3_ltss_XENU-x86_64="xenu64-10sp3.qam.suse.de"
 
 # sle10sp4
 
@@ -146,24 +151,29 @@ sles10sp2_ltss-i386-kernel="zypp.qam.suse.de"
 sles10sp2_ltss-x86_64-kernel="dax.qam.suse.de"
 sles10sp2_ltss-s390x-kernel="s390zvi29.suse.de"
 
+sles10sp2_ltss_XEN0-i386-kernel="zypp.qam.suse.de"
+sles10sp2_ltss_XENU-i386-kernel="xenu32-10sp2.qam.suse.de"
+sles10sp2_ltss_XEN0-x86_64-kernel="dax.qam.suse.de"
+sles10sp2_ltss_XENU-x86_64-kernel="xenu64-10sp2.qam.suse.de"
+
 # sle10 sp3
-
-sles10sp3_ltss-i386-kernel="zypp.qam.suse.de"
-sles10sp3_ltss-x86_64-kernel="dax.qam.suse.de"
-sles10sp3_ltss-s390x-kernel="s390t11.suse.de"
-
-# Needs rebooting xena32-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-i386-kernel="xena32-10.qam.suse.de"
-sles10sp3_XENU-i386-kernel="xenu32-10o.qam.suse.de"
-# Needs rebooting xena64-10 into existing SLES10 SP3 installation
-sles10sp3_XEN0-x86_64-kernel="xena64-10.qam.suse.de"
-sles10sp3_XENU-x86_64-kernel="xenu64-10o.qam.suse.de"
 
 sles10sp3_smt-i386-kernel="???"
 sles10sp3_smt-x86_64-kernel="qam-smt1.qam.suse.de"
 
 sles10sp3_rt-i386-kernel="sulu.qam.suse.de"
 sles10sp3_rt-x86_64-kernel="kurk.qam.suse.de"
+
+# sle10 sp3 LTSS
+
+sles10sp3_ltss-i386-kernel="zypp.qam.suse.de"
+sles10sp3_ltss-x86_64-kernel="dax.qam.suse.de"
+sles10sp3_ltss-s390x-kernel="s390t11.suse.de"
+
+sles10sp3_ltss_XEN0-i386-kernel="zypp.qam.suse.de"
+sles10sp3_ltss_XENU-i386-kernel="xenu32-10sp3.qam.suse.de"
+sles10sp3_ltss_XEN0-x86_64-kernel="dax.qam.suse.de"
+sles10sp3_ltss_XENU-x86_64-kernel="xenu64-10sp3.qam.suse.de"
 
 # sle10sp4
 
