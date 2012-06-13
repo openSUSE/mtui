@@ -1,0 +1,1 @@
+../../helper/check_dependencies.sh

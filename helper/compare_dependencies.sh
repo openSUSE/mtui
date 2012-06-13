@@ -8,11 +8,11 @@ if [ -z "$1" -o -z "$2" ]; then
 fi
 
 temp1=$(mktemp /tmp/$progname.XXXXXX)
-test -s "$1" && grep -E "^ERROR:" "$1"  > $temp1
+test -s "$1" && grep -E "^Unsatisfied" "$1"  > $temp1
 num1=$(wc -l $temp1 | cut -d ' ' -f 1)
 
 temp2=$(mktemp /tmp/$progname.XXXXXX)
-test -s "$2" && grep -E "^ERROR:" "$2"  > $temp2
+test -s "$2" && grep -E "^Unsatisfied" "$2"  > $temp2
 num2=$(wc -l $temp2 | cut -d ' ' -f 1)
 
 trap "rm -f $temp1 $temp2" SIGINT SIGKILL EXIT

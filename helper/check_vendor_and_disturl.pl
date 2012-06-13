@@ -13,6 +13,12 @@
 
 use strict;
 
+my $defaultbuilddir = "http://hilbert.suse.de/abuildstat/patchinfo/";
+my $query;
+my $url;
+
+if ($ARGV[0] =~ /^[0-9a-f]{32}$/i) { $url = $defaultbuilddir . $ARGV[0]; }
+
 my %valid_vendors = (
     "SLE" => [
          "SUSE LINUX Products GmbH, Nuernberg, Germany",
@@ -107,8 +113,41 @@ if (not defined $productclass) {
 
 print "INFO: detected product class: $productclass\n";
 
-open (FH, "-|", "rpm -qa --qf \"\%{NAME} %{DISTURL} %{VENDOR}\n\" | sort -t - -k1,5") or die;
+sub getpackagelist {
+    my $url = shift or return;
+    my %packages;
+
+    open (IN, "-|", "w3m -dump $url");
+    while (<IN>) {
+        if (/\[DIR\]\s+(\S+)\//i) {
+            my $subdir = $1;
+            open (INS, "-|", "w3m -dump $url/$subdir");
+            while (<INS>) {
+                next if /\.delta\./;
+                if (m/] (.+)-([^-]+)-([^-]+)\.(\w+)\.rpm/i) {
+                    $packages{$1} = "";
+                }
+            }
+           close (INS);
+        }
+     }
+     close (IN);
+
+     return %packages;
+}
+
+my @packages = getpackagelist($url);
+
+# if no packages were returned, check all installed packages
+if (@packages) {
+    $query = "@packages";
+} else {
+    $query = "-a";
+}
+
+open (FH, "-|", "rpm -q --qf \"\%{NAME} %{DISTURL} %{VENDOR}\n\" $query | sort -t - -k1,5") or die;
 while (<FH>) {
+    next if /is not installed/; 
     my ($package, $disturl, @remainder) = split (/\s+/);
     my $vendor = join (" ", @remainder);
 

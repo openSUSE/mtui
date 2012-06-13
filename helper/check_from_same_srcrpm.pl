@@ -2,10 +2,48 @@
 
 use strict;
 
+my $query;
 my %checksums;
+my $defaultbuilddir = "http://hilbert.suse.de/abuildstat/patchinfo/";
+my $url;
 
-open (FH, "/bin/rpm -qa --queryformat \"%{NAME} %{DISTURL}\n\" | sort -t - -k1,5 |");
+if ($ARGV[0] =~ /^[0-9a-f]{32}$/i) { $url = $defaultbuilddir . $ARGV[0]; }
+
+sub getpackagelist {
+    my $url = shift or return;
+    my %packages;
+
+    open (IN, "-|", "w3m -dump $url");
+    while (<IN>) {
+        if (/\[DIR\]\s+(\S+)\//i) {
+            my $subdir = $1;
+            open (INS, "-|", "w3m -dump $url/$subdir");
+            while (<INS>) {
+                next if /\.delta\./;
+                if (m/] (.+)-([^-]+)-([^-]+)\.(\w+)\.rpm/i) {
+                    $packages{$1} = "";
+                }
+            }
+           close (INS);
+        }
+    }
+    close (IN);
+
+    return %packages;
+}
+
+my @packages = getpackagelist($url);
+
+# if no packages were returned, check all installed packages
+if (@packages) {
+    $query = "@packages";
+} else {
+    $query = "-a";
+}
+
+open (FH, "/bin/rpm -q --queryformat \"%{NAME} %{DISTURL}\n\" $query | sort -t - -k1,5 |");
 while (<FH>) {
+    next if /is not installed/;
     my ($package, $disturl) = split (/\s+/);
     my ($srcrpm, $checksum);
 
