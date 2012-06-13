@@ -181,7 +181,7 @@ def xml_to_template(template, xmldata, updatehost=None):
                         pass
         try:
             # search for scripts starting point
-            i = t.index('scripts:\n', i, i + 3) + 1
+            i = t.index('scripts:\n', i-1) + 1
         except ValueError:
             # if no scripts section is found, add a new one
             out.debug('scripts section not found, adding one')
