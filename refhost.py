@@ -477,7 +477,12 @@ class Refhost(object):
         for pattern in patterns:
             # get assignements for each pattern, like name = 'base',
             # content = sled(major=10,minor=sp4)
-            name, content = pattern.split('=', 1)
+            try:
+                name, content = pattern.split('=', 1)
+            except ValueError:
+                out.error('error when parsing line "%s"' % testplatform)
+                continue
+
             # get all subpatterns and parameters, like subpattern = 'sled'
             # parameters = major=10,minor=sp4
             matches = re.findall('(\w+)\(([^\)]+)\)', content)
@@ -506,6 +511,11 @@ class Refhost(object):
                     requests[name] = match.group(1).split(',')
             # add all required tags to the dict (like kernel or ltss)
             if name == 'tags':
+                match = re.search('\((.*)\)', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+            # add all required virtual descriptors to the dict (like "mode" or "hypervisor")
+            if name == 'virtual':
                 match = re.search('\((.*)\)', content)
                 if match:
                     requests[name] = match.group(1).split(',')
@@ -550,6 +560,17 @@ class Refhost(object):
                 except:
                     minor = ''
                 attributes.addons.update({addon:{'major':major,'minor':minor}})
+        except KeyError:
+            pass
+
+        try:
+            # add virtual descriptors to the attributes (may overwrite xen tag)
+            for descriptor in requests['virtual']:
+                for parameter in descriptor.split(','):
+                    key = parameter.split('=')[0]
+                    value = parameter.split('=')[1]
+
+                    attributes.virtual.update({key:value})
         except KeyError:
             pass
 

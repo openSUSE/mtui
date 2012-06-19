@@ -58,9 +58,12 @@ def blue(text):
     return "\033[1;34m%s\033[1;m" % text
 
 
-def input(text, options):
+def input(text, options, default=False):
     result = False
     response = False
+
+    if default:
+        return False
 
     try:
         response = raw_input(text).lower()
