@@ -133,7 +133,7 @@ class ZypperUpdate(Update):
             out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError('RPM Error', target.hostname)
         if 'The following package is not supported by its vendor' in stdout:
-            out.critical('%s: package support has changed:', target.hostname)
+            out.critical('%s: package support is uncertain:', target.hostname)
             marker = 'The following package is not supported by its vendor:\n'
             start = stdout.find(marker)
             end = stdout.find('\n\n', start)
