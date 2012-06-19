@@ -1106,4 +1106,126 @@
       <addon property="weak" name="sdk"/>
     </host>
   </location>
+  <location name="emeavirt">
+    <host arch="i386" name="teladi.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="boronen.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="argonen.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="split.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="paraniden.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="xenon.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="khaak.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="pirates.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="goner.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="terran.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="julian.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="kyle.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+  </location>
 </definitions>
