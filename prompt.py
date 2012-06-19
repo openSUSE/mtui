@@ -1584,6 +1584,9 @@ class CommandPromt(cmd.Cmd):
                     else:
                         if RPMVersion(before) >= RPMVersion(required):
                             out.error('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
+                            for target in targets:
+                                if not lock.locked:
+                                    targets[target].remove_lock()
                             return
 
                 if len(not_installed):

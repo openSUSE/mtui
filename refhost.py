@@ -264,7 +264,7 @@ class Refhost(object):
             except IndexError:
                 # no virtual element found for the host. make sure we don't search
                 # for virtualized hosts or hipervisors.
-                assert(not self.attributes.virtual['mode'])
+                assert((not self.attributes.virtual['mode']) or self.attributes.virtual['mode'] == "none")
                 assert(not self.attributes.virtual['hypervisor'])
             else:
                 # if a virtual element was found, make sure it matches our search
