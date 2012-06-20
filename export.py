@@ -275,6 +275,11 @@ def xml_to_template(template, xmldata, updatehost=None):
         else:
             log = x.getElementsByTagName('log')[0]
 
+        # add hostname to indicate from which host the log was exported
+        updatehost = log.parentNode.getAttribute('hostname')
+        t.insert(current_line + 1, "log from %s\n" % updatehost)
+        current_line += 1
+
         # add the output of each command from bottom to top of the commandlist.
         # other than from top to bottom, we save some arithmetics with the
         # current_line/command_lines values this way round.

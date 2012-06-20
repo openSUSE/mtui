@@ -109,17 +109,15 @@ def main():
         update = Template(md5, team, location, directory)
     except IOError:
         # in case the template doesn't exist, try to check it out
-        if raw_input('Template does not yet exist. Try to check it out? (y/N) ').lower() in ['y', 'yes']:
-            # checkout the current testing template. we could do this with the
-            # python svn module, but for now it's simpler calling just system()
-            os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
-            try:
-                update = Template(md5, team, location, directory)
-            except Exception:
-                # if the template still doesn't exist, it's probably the wrong
-                # template path.
-                sys.exit(0)
-        else:
+        out.info('Testreport %s does not yet exist. Checking out.' % md5)
+        # checkout the current testing template. we could do this with the
+        # python svn module, but for now it's simpler calling just system()
+        os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
+        try:
+            update = Template(md5, team, location, directory)
+        except Exception:
+            # if the template still doesn't exist, it's probably the wrong
+            # template path.
             sys.exit(0)
     except Exception:
         usage()
