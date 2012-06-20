@@ -19,12 +19,12 @@ class Attributes(object):
 
     """
 
-    tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'slms', 'vmware'],
+    tags = {'products':['sled', 'sles', 'opensuse', 'rt', 'studio', 'slms', 'sles4vmware'],
              'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64', 'iseries'],
              'major':['9', '10', '11', '12'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
              'addons':['webyast', 'webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner', 'smt'],
-             'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm'],
+             'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm', 'vmware'],
              'tags':['kernel', 'ltss']
             }
 
@@ -558,6 +558,8 @@ class Refhost(object):
 
         # if we found tags in the testplatform string, add them to the attributes
         for tag in tags:
+            if tag == 'vmware':
+                attributes.virtual.update({'hypervisor':'vmware'})
             if tag == 'xen':
                 attributes.virtual.update({'hypervisor':'xen'})
             if tag == 'kernel':

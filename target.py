@@ -353,6 +353,10 @@ class Metadata(object):
 
     def get_release(self):
         systems = ' '.join(self.systems.values())
+        if re.search('11sp1', systems):
+            return '11'
+        if re.search('11sp2', systems):
+            return '11'
         if re.search('sle.11', systems):
             return '11'
         if re.search('sle.10', systems):
