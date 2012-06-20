@@ -139,24 +139,38 @@ class Refhost(object):
 
         """
 
+        results = []
         # if no attributes were set, search by the default attributes
         if attributes is not None:
             self.attributes = attributes
 
+        archs = self.attributes.archs
         # if we don't get a matching host on the location, search for the
         # same host in our default location
-        try:
-            # get correct location element from a list of location elements
-            location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
-            # extract hostname on all hosts matching the filter criteria
-            hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
-            assert(hosts)
-        except (AssertionError, IndexError):
-            # host not found in specified location, try again in default location
-            location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
-            hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
 
-        return hosts
+        # workaround for multiple-arch-searches since the default location
+        # isn't used if the overlay location returns at least one host.
+        # example: searching for i386 and s390x doesn't search for s390x
+        # in the default location if a host is returned for i386 from the
+        # overlay location.
+        for arch in archs:
+            self.attributes.archs = [arch]
+            try:
+                # get correct location element from a list of location elements
+                location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
+                # extract hostname on all hosts matching the filter criteria
+                hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
+                assert(hosts)
+            except (AssertionError, IndexError):
+                # host not found in specified location, try again in default location
+                location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
+                hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
+
+            if hosts:
+                results = results + hosts
+
+        self.attributes.archs = archs
+        return results
 
     def check_attributes(self, element):
         """check attributes of a specific host xml element
@@ -381,6 +395,7 @@ class Refhost(object):
         """
 
         attributes = self.get_host_attributes(hostname)
+
         # don't add addon names to the systemname for now since this would
         # be incompatible to our legacy systemnames
         #addons = "_".join(set(attributes.addons.keys()).difference(['sdk', 'hae']))
@@ -388,7 +403,10 @@ class Refhost(object):
         #    system = '%s%s%s_%s-%s' % (attributes.product, attributes.major, attributes.minor, addons, attributes.archs[0])
         #else:
         #    system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
-        system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+        if attributes:
+            system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+        else:
+            system = 'host_not_found'
 
         return system
 
