@@ -265,18 +265,21 @@ class Target(object):
     def remove_lock(self):
         lock = self.locked()
 
-        if lock.locked:
-            assert lock.own()
+        try:
+            if lock.locked:
+                assert lock.own()
 
-            out.debug('%s: removing lock' % self.hostname)
+                out.debug('%s: removing lock' % self.hostname)
 
-            try:
-                self.connection.remove('/var/lock/mtui.lock')
-            except IOError, error:
-                if error.errno == errno.ENOENT:
-                    out.debug('lockfile does not exist')
-            except Exception, error:
-                out.error('failed to remove lockfile: %s' % error)
+                try:
+                    self.connection.remove('/var/lock/mtui.lock')
+                except IOError, error:
+                    if error.errno == errno.ENOENT:
+                        out.debug('lockfile does not exist')
+                except Exception, error:
+                    out.error('failed to remove lockfile: %s' % error)
+        except AssertionError:
+            out.error('unable to remove lock from %s. lock is probably not held by this session' % self.hostname)
 
     def add_history(self, comment):
         if self.state == 'enabled':
@@ -353,9 +356,7 @@ class Metadata(object):
 
     def get_release(self):
         systems = ' '.join(self.systems.values())
-        if re.search('11sp1', systems):
-            return '11'
-        if re.search('11sp2', systems):
+        if re.search('sles4vmware11', systems):
             return '11'
         if re.search('sle.11', systems):
             return '11'
