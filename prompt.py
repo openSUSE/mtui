@@ -31,6 +31,7 @@ class CommandPromt(cmd.Cmd):
 
     def __init__(self, targets, metadata):
         cmd.Cmd.__init__(self)
+        self.interactive = True
         self.targets = targets
         self.metadata = metadata
         self.systems = []
@@ -1592,7 +1593,7 @@ class CommandPromt(cmd.Cmd):
                 if len(not_installed):
                     out.warning('%s: these packages are not installed: %s' % (target, not_installed))
 
-            if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes']):
+            if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
                 for target in targets:
                     if not lock.locked:
                         targets[target].remove_lock()
@@ -1654,7 +1655,7 @@ class CommandPromt(cmd.Cmd):
                             out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
                                         required))
 
-            if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes']):
+            if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
                 for target in targets:
                     if not lock.locked:
                         targets[target].remove_lock()
@@ -1662,6 +1663,7 @@ class CommandPromt(cmd.Cmd):
 
             script_hook(targets, 'post', os.path.dirname(self.metadata.path), self.metadata.md5)
             script_hook(targets, 'compare', os.path.dirname(self.metadata.path), self.metadata.md5)
+            FileDelete(targets, '/tmp/%s' % self.metadata.md5).run()
 
             for target in targets:
                 if not lock.locked:
@@ -1932,7 +1934,7 @@ class CommandPromt(cmd.Cmd):
 
         if os.path.exists(filename):
             out.warning('file %s exists.' % filename)
-            if not input('should i overwrite %s? (y/N) ' % filename, ['y', 'yes']):
+            if not input('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
                 filename += '.' + timestamp()
 
         out.info('exporting XML to %s' % filename)
@@ -1989,7 +1991,7 @@ class CommandPromt(cmd.Cmd):
 
         if os.path.exists(filename):
             out.warning('file %s exists.' % filename)
-            if not input('should i overwrite %s? (y/N) ' % filename, ['y', 'yes']):
+            if not input('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
                 filename += '.' + timestamp()
 
         out.info('saving output to %s' % filename)
@@ -2023,7 +2025,7 @@ class CommandPromt(cmd.Cmd):
         else:
             targets = self.targets
 
-            if not input('save log? (Y/n) ', ['n', 'no']):
+            if not input('save log? (Y/n) ', ['n', 'no'], self.interactive):
                 self.do_save(None)
 
             for target in targets:

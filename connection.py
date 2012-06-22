@@ -365,6 +365,21 @@ class Connection(object):
             # as recursion. this is a really bad idea and needs fixing.
             return self.remove(path)
 
+    def rmdir(self, path):
+        """delete remote directory"""
+
+        try:
+            sftp = self.client.open_sftp()
+            items = self.listdir(path)
+            for item in items:
+                self.remove("%s/%s" % (path, item))
+            return sftp.rmdir(path)
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            self.reconnect()
+            # currently removing a directory after reconnection is implemented
+            # as recursion. this is a really bad idea and needs fixing.
+            return self.rmdir(path)
+
     def is_active(self):
         """check if connection to host is still active
 

@@ -279,7 +279,7 @@ class Target(object):
                 except Exception, error:
                     out.error('failed to remove lockfile: %s' % error)
         except AssertionError:
-            out.error('unable to remove lock from %s. lock is probably not held by this session' % self.hostname)
+            out.debug('unable to remove lock from %s. lock is probably not held by this session' % self.hostname)
 
     def add_history(self, comment):
         if self.state == 'enabled':
@@ -303,6 +303,19 @@ class Target(object):
             return self.connection.listdir(path)
         except Exception:
             return
+
+    def remove(self, path):
+        try:
+            self.connection.remove(path)
+        except IOError, error:
+            if error.errno == errno.ENOENT:
+                out.debug('path %s does not exist on %s' % (path, self.hostname))
+            else:
+                try:
+                    # might be a directory
+                    self.connection.rmdir(path)
+                except IOError:
+                    out.warning('unable to remove %s on %s' % (path, self.hostname))
 
     def close(self):
         out.info('closing connection to %s' % self.hostname)
@@ -392,6 +405,30 @@ class ThreadedMethod(threading.Thread):
                     self.queue.task_done()
                 except ValueError:
                     pass  # already removed by ctrl+c
+
+
+class FileDelete(object):
+
+    def __init__(self, targets, path):
+        self.targets = targets
+        self.path = path
+
+    def run(self):
+        for target in self.targets:
+            thread = ThreadedMethod(queue)
+            thread.setDaemon(True)
+            thread.start()
+
+        for target in self.targets:
+            try:
+                queue.put([self.targets[target].remove, [self.path]])
+            except KeyboardInterrupt:
+                pass
+
+        while queue.unfinished_tasks:
+            spinner()
+
+        queue.join()
 
 
 class FileUpload(object):

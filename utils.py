@@ -58,11 +58,12 @@ def blue(text):
     return "\033[1;34m%s\033[1;m" % text
 
 
-def input(text, options, default=False):
+def input(text, options, interactive=True):
     result = False
     response = False
 
-    if default:
+    if not interactive:
+        print text
         return False
 
     try:

@@ -164,6 +164,7 @@ def main():
             else:
                 # if we are not in interactive mode, apply the update, export
                 # logs to the template and exit saving the template.
+                prompt.interactive = False
                 prompt.do_update('all')
                 prompt.do_export(None)
                 prompt.do_quit(None)
