@@ -15,12 +15,11 @@ class Template(object):
 
     """input handling of QA Maintenance template file"""
 
-    def __init__(self, md5, team=None, location='default', directory=None):
+    def __init__(self, md5, location='default', directory=None):
         """open and parse maintenance template file
 
         Keyword arguments:
         md5       -- md5 checksum of patchinfo
-        team      -- team suffix (emea or asia) of template file
         location  -- reference host location name
         directory -- QA maintenance update directory
 
@@ -33,7 +32,9 @@ class Template(object):
         else:
             self.path = './' + md5 + '/'
 
-        if team is None:
+        if location == 'beijing':
+            team = 'asia'
+        else:
             team = 'emea'
 
         self.refhosts = 'refhosts.' + team
@@ -44,10 +45,7 @@ class Template(object):
         self.metadata = Metadata()
         self.metadata.md5 = md5
         self.metadata.path = self.path
-        if team == 'asia':
-            self.metadata.location = 'beijing'
-        else:
-            self.metadata.location = location
+        self.metadata.location = location
 
         try:
             with open(self.path, 'r') as template:

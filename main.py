@@ -23,7 +23,6 @@ def main():
     """parsing parameter list and initializing template metadata"""
 
     md5 = None
-    team = None
 
     # default refhosts location. could be an arbitrary string, matches agains
     # the location tags in refhosts.xml
@@ -43,6 +42,9 @@ def main():
     timeout = 300
     attributes = ''
 
+    # run commands from file before running the cmdloop
+    prerun = []
+
     targets = {}
 
     try:
@@ -51,8 +53,8 @@ def main():
         # parameter takes an argument) and the long parameter list by the
         # full name of the parameter (and an equal sign if the parameter takes
         # an argument. for further information read the python getopt manual.
-        (opts, args) = getopt.getopt(sys.argv[1:], 'inhaedl:s:t:m:vw:', ['interactive', 'non-interactive', 'help', 'asia', 'emea', 'dryrun',
-                                     'location=', 'templates=', 'md5=', 'search-hosts=', 'verbose', 'timeout'])
+        (opts, args) = getopt.getopt(sys.argv[1:], 'inhaedl:s:p:t:m:vw:', ['interactive', 'non-interactive', 'help', 'asia', 'emea', 'dryrun',
+                                     'location=', 'templates=', 'md5=', 'search-hosts=', 'prerun=', 'verbose', 'timeout'])
     except getopt.GetoptError, error:
         # catch unkown parameters and show usage
         out.error('failed to parse parameter: %s' % str(error))
@@ -62,9 +64,9 @@ def main():
         if parameter in ('-h', '--help'):
             usage()
         elif parameter in ('-a', '--asia'):
-            team = 'asia'
+            location = 'beijing'
         elif parameter in ('-e', '--emea'):
-            team = 'emea'
+            location = 'default'
         elif parameter in ('-m', '--md5'):
             # match for a alphanumeric string with a length of 32 chars.
             # if it looks like a duck, swims like a duck, and quacks like
@@ -88,6 +90,13 @@ def main():
             # just in case someone specified a comma separated list instead
             # of space separated
             attributes = argument.replace(',', ' ')
+        elif parameter in ('-p', '--prerun'):
+            try:
+                with open(argument, 'r') as script:
+                    prerun = script.readlines()
+            except Exception:
+                out.error('failed to open prerun script')
+                sys.exit(0)
         elif parameter in ('-v', '--verbose'):
             out.setLevel(level=logging.DEBUG)
         elif parameter in ('-w', '--timeout'):
@@ -106,7 +115,7 @@ def main():
         usage()
 
     try:
-        update = Template(md5, team, location, directory)
+        update = Template(md5, location, directory)
     except IOError:
         # in case the template doesn't exist, try to check it out
         out.info('Testreport %s does not yet exist. Checking out.' % md5)
@@ -114,7 +123,7 @@ def main():
         # python svn module, but for now it's simpler calling just system()
         os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
         try:
-            update = Template(md5, team, location, directory)
+            update = Template(md5, location, directory)
         except Exception:
             # if the template still doesn't exist, it's probably the wrong
             # template path.
@@ -155,6 +164,16 @@ def main():
     if attributes:
         prompt.do_autoadd(attributes)
 
+    prompt.interactive = interactive
+
+    for line in prerun:
+        if line.startswith('#'):
+            continue
+        line = line.rstrip()
+        method, _, args = line.partition(' ')
+        print 'QA > %s' % line
+        getattr(prompt, 'do_%s' % method)(args)
+
     while True:
         try:
             if interactive:
@@ -164,7 +183,6 @@ def main():
             else:
                 # if we are not in interactive mode, apply the update, export
                 # logs to the template and exit saving the template.
-                prompt.interactive = False
                 prompt.do_update('all')
                 prompt.do_export(None)
                 prompt.do_quit(None)
@@ -186,8 +204,8 @@ def usage():
     print sys.argv[0], '[parameter] {-m|--md5 update}'
     print
     print 'parameters:'
-    print '\t-{short},--{long:20}{description}'.format(short='a', long='asia', description='use asia template')
-    print '\t-{short},--{long:20}{description}'.format(short='e', long='emea', description='use emea template (default)')
+    print '\t-{short},--{long:20}{description}'.format(short='a', long='asia', description='use asia template (deprecated)')
+    print '\t-{short},--{long:20}{description}'.format(short='e', long='emea', description='use emea template (default)(deprecated)')
     print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
     print '\t-{short},--{long:20}{description}'.format(short='t', long='template=', description='template directory')
     print '\t-{short},--{long:20}{description}'.format(short='m', long='md5=', description='md5 update identifier')
@@ -197,6 +215,7 @@ def usage():
     print '\t-{short},--{long:20}{description}'.format(short='v', long='verbose', description='enable debugging output')
     print '\t-{short},--{long:20}{description}'.format(short='w', long='timeout', description='execution timeout in seconds')
     print '\t-{short},--{long:20}{description}'.format(short='s', long='search-hosts=', description='search for hosts matching comma separated tags')
+    print '\t-{short},--{long:20}{description}'.format(short='p', long='prerun=', description='script with a set of commands to run at start')
     print
 
     sys.exit(0)

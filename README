@@ -54,12 +54,11 @@ composed of the directory parameter, md5 and asia or emea
 ($directory/$md5/log.[asia|emea]). If the template is not yet checked out
 from SVN, MTUI tries to fetch it.
 
-	-i,--interactive         interactive update shell
+	-n,--non-interactive         non-interactive update
 
-When set, MTUI is run in an interactive mode with a command shell. This
-should be set by the tester as it's the primary use case of MTUI. If it's not
-set, the update procedure (see below) is run and MTUI quits with saving the
-log output.
+When set, MTUI is run in an non-interactive mode without a command shell.
+MTUI automatically applies the update and exports the results to the
+maintenance template before it quits. User input is not required.
 
 	-d,--dryrun              start in dryrun mode
 
@@ -86,6 +85,11 @@ To disable the timeout set it to "0".
 	-s,--search-host	search host
 
 Adds machines to the target host list based on comma separated search tags.
+
+	-p,--prerun		path to prerun script
+
+Runs MTUI commands prior to starting the interactive shell or the update
+process. User input is not required if in non-interactive mode (-n parameter).
 
 	-h,--help                help
 
