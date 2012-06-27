@@ -19,7 +19,7 @@ my $skippedpackages = 0;
 my $installedpackages = 0;
 my $ibs = "https://api.suse.de/public/";
 my $obs = "https://api.opensuse.org/public/";
-my $defaultbuilddir = "http://hilbert.suse.de/abuildstat/patchinfo/";
+my $defaultbuilddir = "http://hilbert.nue.suse.com/abuildstat/patchinfo/";
 my $defaultbuilddir_opensuse_org = "http://download.opensuse.org/repositories/openSUSE:/Maintenance:/";
 my $defaultptfdir = "http://euklid.suse.de/mirror/SuSE/support.suse.de/";
 my %disturl_mapper;
@@ -38,10 +38,10 @@ Additionaly, if you specify the option --filter then the list of installed packa
 
 When using --build then all packages located in the build dir are checked if source in the update project exists that superseeds the built packages.  This is totally independent from the installed packages.
 
-The argument to --build and --filter can be either a web url (like http://hilbert.suse.de/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/) or a local path (like /mounts/work/built/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839) or one of the following short cuts:
+The argument to --build and --filter can be either a web url (like http://hilbert.nue.suse.com/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/) or a local path (like /mounts/work/built/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839) or one of the following short cuts:
 
    ad8b1800d6dc90608d0c5a7103bc1839 
-   expanded to http://hilbert.suse.de/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/
+   expanded to http://hilbert.nue.suse.com/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/
 
    177/openSUSE_12.1_Update/
    expanded to http://download.opensuse.org/repositories/openSUSE:/Maintenance:/177/openSUSE_12.1_Update/

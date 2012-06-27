@@ -13,7 +13,7 @@
 
 use strict;
 
-my $defaultbuilddir = "http://hilbert.suse.de/abuildstat/patchinfo/";
+my $defaultbuilddir = "http://hilbert.nue.suse.com/abuildstat/patchinfo/";
 my $query;
 my $url;
 

@@ -12,7 +12,7 @@ exit 0
 fi
 
 MD5=$1
-PATCHINFO_URL="http://hilbert.suse.de/abuildstat/patchinfo/$MD5"
+PATCHINFO_URL="http://hilbert.nue.suse.com/abuildstat/patchinfo/$MD5"
 
 list=""
 

@@ -145,6 +145,9 @@ class Refhost(object):
             self.attributes = attributes
 
         archs = self.attributes.archs
+        if not archs:
+            archs = attributes.tags['archs']
+
         # if we don't get a matching host on the location, search for the
         # same host in our default location
 

@@ -4,7 +4,7 @@ use strict;
 
 my $query;
 my %checksums;
-my $defaultbuilddir = "http://hilbert.suse.de/abuildstat/patchinfo/";
+my $defaultbuilddir = "http://hilbert.nue.suse.com/abuildstat/patchinfo/";
 my $url;
 
 if ($ARGV[0] =~ /^[0-9a-f]{32}$/i) { $url = $defaultbuilddir . $ARGV[0]; }

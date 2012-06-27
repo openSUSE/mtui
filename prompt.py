@@ -123,6 +123,7 @@ class CommandPromt(cmd.Cmd):
 
                 hosts = refhost.search(attributes)
 
+            print attributes
             for hostname in set(hosts):
                 hosttags = refhost.get_host_attributes(hostname)
                 print '{0:25}: {1}'.format(hostname, hosttags)
@@ -387,7 +388,7 @@ class CommandPromt(cmd.Cmd):
 
             if targets:
                 destination = '/tmp/%s' % self.metadata.md5
-                fetchcmd = 'cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/' \
+                fetchcmd = 'cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/' \
                     % (destination, self.metadata.md5)
                 installcmd = 'cd %s; rpm -Uhv *.src.rpm' % destination
 
@@ -422,7 +423,7 @@ class CommandPromt(cmd.Cmd):
         except OSError:
             pass
 
-        exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*src.rpm" http://hilbert.suse.de/abuildstat/patchinfo/%s/'
+        exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*src.rpm" http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/'
                              % (destination, self.metadata.md5))
         if exitcode:
             out.error('failed to fetch src rpm')
@@ -773,7 +774,7 @@ class CommandPromt(cmd.Cmd):
 
             targetlist = ' '.join(sorted(self.targets.keys()))
             packagelist = ' '.join(sorted(self.metadata.get_package_list()))
-            patchinfo = 'http://hilbert.suse.de/abuildstat/patchinfo/%s/' % self.metadata.md5
+            patchinfo = 'http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/' % self.metadata.md5
             report = 'http://qam.suse.de/testreports/%s/log' % self.metadata.md5
 
             print '{0:15}: {1}'.format('MD5SUM', self.metadata.md5)
@@ -999,7 +1000,7 @@ class CommandPromt(cmd.Cmd):
                 targets = selected_targets(targets, args.split(','))
 
             if not command.startswith('/'):
-                command = os.path.join('/usr/share/qa/tools', command)
+                command = os.path.join('/usr/share/qa/tools', command.strip())
 
             command = 'export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5, command)
             name = os.path.basename(command).replace('-run', '')

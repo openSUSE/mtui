@@ -170,7 +170,7 @@ class OldZypperUpdate(Update):
         commands.append('zypper sl')
         commands.append('zypper refresh')
         commands.append('zypper patches | grep %s-0' % patch)
-        commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper in -l -y -t patch $p; done'
+        commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n in -l -y -t patch $p; done'
                          % patch)
 
         self.commands = commands
@@ -500,11 +500,11 @@ class OldZypperDowngrade(Downgrade):
             out.critical('crucial package found in package list: %s. please downgrade manually' % list(invalid))
             return
 
-        commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper rm -y -t patch $p; done'
+        commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n rm -y -t patch $p; done'
                          % patch)
 
         for package in packages:
-            commands.append('zypper rm -y -t atom %s' % package)
+            commands.append('zypper -n rm -y -t atom %s' % package)
 
         self.post_commands = commands
 
