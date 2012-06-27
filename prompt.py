@@ -109,6 +109,8 @@ class CommandPromt(cmd.Cmd):
                         attributes.virtual.update({'hypervisor':'xen'})
                     if tag == 'kvm':
                         attributes.virtual.update({'hypervisor':'kvm'})
+                    if tag == 'vmware':
+                        attributes.virtual.update({'hypervisor':'vmware'})
                     if tag == 'host':
                         attributes.virtual.update({'mode':'host'})
                     if tag == 'guest':
@@ -123,7 +125,6 @@ class CommandPromt(cmd.Cmd):
 
                 hosts = refhost.search(attributes)
 
-            print attributes
             for hostname in set(hosts):
                 hosttags = refhost.get_host_attributes(hostname)
                 print '{0:25}: {1}'.format(hostname, hosttags)

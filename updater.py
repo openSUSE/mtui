@@ -123,7 +123,7 @@ class ZypperUpdate(Update):
         commands.append('zypper lr -puU')
         commands.append('zypper refresh')
         commands.append('zypper patches | grep " %s "' % patch)
-        commands.append('for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper install -l -y -t patch $p=%s; done'
+        commands.append('for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n install -l -y -t patch $p=%s; done'
                          % (patch, patch))
 
         self.commands = commands
@@ -150,7 +150,7 @@ class openSuseUpdate(Update):
         commands = []
 
         commands.append('export LANG=')
-        commands.append('zypper -v lr')
+        commands.append('zypper -v lr -puU')
         commands.append('zypper pch | grep " %s "' % patch)
         commands.append('zypper -v install -t patch softwaremgmt-201107=%s' % patch)
 
