@@ -1127,24 +1127,13 @@
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="argonen.qam.suse.de">
+    <host arch="s390x" name="s390s21.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
-          <minor>sp2</minor>
+          <minor>sp1</minor>
         </version>
       </product>
-      <virtual property="weak" mode="guest">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="split.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="paraniden.qam.suse.de">
@@ -1165,6 +1154,35 @@
         </version>
       </product>
       <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="argonen.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="split.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="s390x" name="s390a20.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="khaak.qam.suse.de">
@@ -1205,6 +1223,15 @@
         </version>
       </product>
       <virtual property="weak" mode="guest">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="s390x" name="s390zvi12.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="julian.qam.suse.de">
