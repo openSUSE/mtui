@@ -1,0 +1,281 @@
+Q: How do I install the updated packages without running through the update
+   and check_scripts sequences again?
+A: The prepare command installs all packages from the testing repositories
+   if the "testing" parameter is set.
+
+   Example:
+
+   QA > prepare dawn.qam.suse.de,testing
+   info: preparing
+   info: done
+
+Q: How do I edit the maintenance testing template within MTUI?
+A: The edit command offers several handy parameter to edit update related
+   files.
+
+   Example:
+
+   QA > edit template
+
+Q: How do I get a diff between the old packages and the new testing packages?
+A: Make sure that the old package versions are installed on the reference
+   hosts. Run the "source_diff source" command to get a diff of the source rpm
+   (build service) content or run "source_diff binary" to get a architecture
+   dependent diff with all patches applied to the sources. In case of already
+   updated reference hosts, use the downgrade command to get the accurate
+   packages first.
+   With the edit command and the printed diff path, it's easy to open the
+   diff within MTUI.
+
+   Example:
+
+   QA > source_diff source
+   348 blocks
+   info: src rpm was extracted to /tmp/079ad960654954493d434c03dc3c5543
+   info: wrote diff locally to /tmp/079ad960654954493d434c03dc3c5543/kdump-source.diff
+
+   QA > edit file,/tmp/079ad960654954493d434c03dc3c5543/kdump-source.diff
+
+Q: How do I get a list of all available hosts matching a specific criteria?
+A: The search_hosts command offers a search interface to the refhosts.xml.
+   The command knows several keywords concerning host features.
+
+   Example:
+   search for all SLES 11 SP2 hosts which have webyast installed
+
+   QA > search_hosts sles 11 sp2 webyast
+   merkur.qam.suse.de       : sles 11sp2 x86_64 hae webyast 1.2 sdk
+   s390t10.suse.de          : sles 11sp2 s390x hae webyast 1.2 sdk
+   sinope.qam.suse.de       : sles 11sp2 ia64 hae webyast 1.2 sdk
+   aal.qam.suse.de          : sles 11sp2 ppc64 hae webyast 1.2 sdk
+   dawn.qam.suse.de         : sles 11sp2 i386 hae webyast 1.2 sdk
+
+Q: How do I add an additional host to the list?
+A: The autoadd command can add a specific host to the list if a existing
+   hostname (in refhosts.xml) was set, or a list of hosts if attributes were
+   supplied.
+
+   Example:
+
+   QA > autoadd merkur.qam.suse.de
+   merkur.qam.suse.de       : sles 11sp2 x86_64 hae webyast 1.2 sdk
+   info: connecting to merkur.qam.suse.de
+
+   QA > autoadd i386 x86_64 sles 11 sp2 webyast
+   merkur.qam.suse.de       : sles 11sp2 x86_64 hae webyast 1.2 sdk
+   dawn.qam.suse.de         : sles 11sp2 i386 hae webyast 1.2 sdk
+   info: connecting to dawn.qam.suse.de
+   info: connecting to merkur.qam.suse.de
+
+Q: How do I export the update log from a specific reference host instead of
+   the first host in the list?
+A: Simply add the hostname as second parameter to the export command.
+
+   Example:
+
+   QA > export ,dawn.qam.suse.de
+   warning: file /suse/ckornacker/testing/testreports//079ad960654954493d434c03dc3c5543/log exists.
+   should i overwrite /suse/ckornacker/testing/testreports//079ad960654954493d434c03dc3c5543/log? (y/N) y
+   info: exporting XML to /suse/ckornacker/testing/testreports//079ad960654954493d434c03dc3c5543/log
+   wrote template to /suse/ckornacker/testing/testreports//079ad960654954493d434c03dc3c5543/log
+
+
+Q: How do I get the URL to the maintenace testreport (to easily forward it to
+   i.e. the reviewer)?
+A: Gived the current testing template was already commited to the svn, the
+   list_metadata command lists the template URL, among other things.
+
+   Example:
+
+   QA > list_metadata
+   MD5SUM         : 079ad960654954493d434c03dc3c5543
+   SWAMP ID       : 47727
+   Category       : recommended
+   Reviewer       : 
+   Packager       : ptesarik@suse.com
+   SAT            : 6410
+   Bugs           : 718684, 765175
+   Hosts          : dawn.qam.suse.de merkur.qam.suse.de
+   Packages       : kdump
+   Build          : http://hilbert.nue.suse.com/abuildstat/patchinfo/079ad960654954493d434c03dc3c5543/
+   Testreport     : http://qam.suse.de/testreports/079ad960654954493d434c03dc3c5543/log
+
+Q: How do I run a QA ctcs2 testsuite within MTUI?
+A: The testsuite_* commandset offers several options to run testsuites and
+   manage the submission to qadb.
+
+   Example:
+   list available testsuites on a reference host
+
+   QA > testsuite_list merkur.qam.suse.de
+   testsuites on merkur.qam.suse.de (sles11sp2-x86_64):
+   glibc-run
+   test_php53-run
+   test_postfix-run
+   test_samba-run
+   test_tiff-run
+
+   run a specific testsuite
+
+   QA > testsuite_run dawn.qam.suse.de,test_tiff-run
+   dawn.qam.suse.de:~> test_tiff-testsuite [0]
+   INFO: Variable TESTS_LOGDIR is set, logs will be stored in /var/log/qa/079ad960654954493d434c03dc3c5543/ctcs2.
+   Initializing test run for control file qa_tiff.tcf...
+   Current time: Fri Jun 29 18:21:15 CEST 2012
+   **** Test in progress ****
+   **** Test run complete ****
+   Current time: Fri Jun 29 18:22:32 CEST 2012
+   Exiting test run..
+   Displaying report...
+   Total test time: 1m17s
+   Tests skipped:
+   tiffcrop-R90-logluv-3c-16b.sh ran 1 times in 1s, had skipped on 1 attempts.
+   Tests passed:
+   bmp2tiff_palette.sh bmp2tiff_rgb.sh common.sh gif2tiff.sh ppm2tiff_pbm.sh
+
+   submit the testsuite results to qadb
+
+   QA > testsuite_submit dawn.qam.suse.de,test_tiff-run
+   info: please specify rd-qa NIS password
+   Password: 
+   info: submission for dawn.qam.suse.de (sles11sp2-i386): http://qadb.ext.suse.de/qadb/submission.php?submission_id=12495
+   info: done
+
+Q: How do I force the installation of a package if the package conflicts with
+   another package providing the same functionality?
+A: The package installation can be forced either with the prepare command and
+   the "force" parameter or the update command and the "force" parameter.
+
+   Example:
+
+   QA > prepare all,force
+   info: preparing
+   info: done
+
+Q: How do I avoid installing packages which are listed in the patchinfo but
+   are not installable due to several reasons i.e. due to package conflicts?
+A: To avoid installing additional packages, add the "installed" parameter
+   either to the prepare or the update command.
+
+   Example:
+
+   QA > update all,installed
+   info: preparing
+   info: done
+   info: updating
+   info: done
+
+Q: How do I remove dangling locks due to an error in MTUI?
+A: Run MTUI on the same hosts again and remove the locks using the run command.
+
+   Example:
+
+   QA > run all,rm /var/lock/mtui.lock
+
+Q: How do I make sure that the update results of a specific host is not
+   exported to the testing template?
+A: MTUI exports the results of all hosts from the list to the template,
+   even the disabled once. This means that all hosts which are for example
+   temporary added to the session need to be removed in order to not add them
+   to the template.
+
+   Example:
+
+   QA > remove_host merkur.qam.suse.de
+   info: closing connection to merkur.qam.suse.de
+
+Q: How do I change my location to get another set of reference hosts?
+A: Changing the current location is possible using the set_location command.
+
+   Example:
+
+   QA > search_hosts sles 11 sp1 xen guest 
+   xenu32-11-1.qam.suse.de  : sles 11sp1 i386 kernel guest xen sdk
+   xenu64-11-1.qam.suse.de  : sles 11sp1 x86_64 kernel guest xen sdk
+
+   QA > set_location emeavirt
+   info: changed location from "default" to "emeavirt"
+
+   QA > search_hosts sles 11 sp1 xen guest 
+   boronen.qam.suse.de      : sles 11sp1 x86_64 guest xen sdk
+   teladi.qam.suse.de       : sles 11sp1 i386 guest xen sdk
+
+Q: How do I switch from TESTING repositories to UPDATE and vice versa?
+A: The set_repo command uses rep-clean.sh to switch between TESTING and
+   UPDATE repos on the reference hosts. The repositories need to be
+   correctly named on the hosts.
+
+   Example:
+
+   QA > set_repo all,testing
+
+Q: How do I make sure that all patches mentioned in the specfile are applied?
+A: The source_verify command gives a hint if the mentioned patches are applied.
+   To be completely sure, a manual check is recommended.
+
+   Example:
+   QA > source_verify
+   Patches in /tmp/03fe7308f8c5df7a1dcf4f9036872052/udev/udev.spec:
+   0005-cdrom_id-retry-to-open-the-device-if-EBUSY.patch: applied
+   0334-keymap-Fix-invalid-map-line.patch       : applied
+   0335-keymap-include-linux-limits.h.patch     : applied
+   0336-keymap-linux-input.h-get-absolute-include-path-from-.patch: applied
+
+Q: How do I spawn my favority terminal emulator on all reference hosts?
+A: MTUI offers an interface for the tester to add his own script to spawn a
+   terminal emulator on the reference hosts. MTUI passes the hostnames
+   to the script and the script should connect a shell to that hosts.
+   Currently, scripts for gnome-terminal (GNOME), konsole (KDE) and xterm are
+   available.
+
+   Example:
+
+   QA > terms gnome
+
+Q: How do I install a non-update related package to the reference hosts?
+A: MTUI manages install and uninstall operations with the respective commands.
+   The repositories are not changed during the installation.
+
+   Example:
+
+   QA > install all,gnome-js-common
+   info: installing
+   info: done
+
+   QA > uninstall all,gnome-js-common
+   info: removing
+   info: done
+
+Q: How do I disable some hosts to run commands only on a subset of the
+   hostlist?
+A: From time to time it may be useful to update, downgrade or run a command
+   only on a subset of reference hosts while staying connected to the others.
+   The set_host_state command temporary disables and/or enables specific hosts.
+
+   Example:
+
+   QA > list_hosts
+   dawn.qam.suse.de     (sles11sp2-i386)    : Enabled (parallel)
+   sinope.qam.suse.de   (sles11sp2-ia64)    : Enabled (parallel)
+   aal.qam.suse.de      (sles11sp2-ppc64)   : Enabled (parallel)
+   s390t10.suse.de      (sles11sp2-s390x)   : Enabled (parallel)
+   merkur.qam.suse.de   (sles11sp2-x86_64)  : Enabled (parallel)
+
+   QA > set_host_state sinope.qam.suse.de,dawn.qam.suse.de,merkur.qam.suse.de,disabled
+
+   QA > list_hosts
+   dawn.qam.suse.de     (sles11sp2-i386)    : Disabled (parallel)
+   sinope.qam.suse.de   (sles11sp2-ia64)    : Disabled (parallel)
+   aal.qam.suse.de      (sles11sp2-ppc64)   : Enabled (parallel)
+   s390t10.suse.de      (sles11sp2-s390x)   : Enabled (parallel)
+   merkur.qam.suse.de   (sles11sp2-x86_64)  : Disabled (parallel)
+
+   QA > set_host_state all,enabled
+
+   QA > list_hosts
+   dawn.qam.suse.de     (sles11sp2-i386)    : Enabled (parallel)
+   sinope.qam.suse.de   (sles11sp2-ia64)    : Enabled (parallel)
+   aal.qam.suse.de      (sles11sp2-ppc64)   : Enabled (parallel)
+   s390t10.suse.de      (sles11sp2-s390x)   : Enabled (parallel)
+   merkur.qam.suse.de   (sles11sp2-x86_64)  : Enabled (parallel)
+
