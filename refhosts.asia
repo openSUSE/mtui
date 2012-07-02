@@ -57,9 +57,9 @@ sled10sp4-i386="147.2.207.87"
 sled10sp4-x86_64="147.2.207.88"
 
 # Note: main role of these XEN hosts is that of kernel reference host
-sles10sp4_XEN0-i386="xena32-10.qam.suse.de"
+sles10sp4_XEN0-i386="xena32-11sp1.qam.suse.de"
 sles10sp4_XENU-i386="xenu32-10.qam.suse.de"
-sles10sp4_XEN0-x86_64="xena64-10.qam.suse.de"
+sles10sp4_XEN0-x86_64="xena64-11sp1.qam.suse.de"
 sles10sp4_XENU-x86_64="xenu64-10.qam.suse.de"
 
 # sle11 sp1
@@ -187,9 +187,9 @@ sles10sp4-iseries-kernel="saffron.suse.de"
 sled10sp4-i386-kernel="147.2.207.87"
 sled10sp4-x86_64-kernel="147.2.207.88"
 
-sles10sp4_XEN0-i386-kernel="xena32-10.qam.suse.de"
+sles10sp4_XEN0-i386-kernel="xena32-11sp1.qam.suse.de"
 sles10sp4_XENU-i386-kernel="xenu32-10.qam.suse.de"
-sles10sp4_XEN0-x86_64-kernel="xena64-10.qam.suse.de"
+sles10sp4_XEN0-x86_64-kernel="xena64-11sp1.qam.suse.de"
 sles10sp4_XENU-x86_64-kernel="xenu64-10.qam.suse.de"
 
 # sle11 sp1
