@@ -42,6 +42,9 @@ def main():
     timeout = 300
     attributes = ''
 
+    # overwrites the hostnames set in the template
+    refhosts = {}
+
     # run commands from file before running the cmdloop
     prerun = []
 
@@ -53,8 +56,8 @@ def main():
         # parameter takes an argument) and the long parameter list by the
         # full name of the parameter (and an equal sign if the parameter takes
         # an argument. for further information read the python getopt manual.
-        (opts, args) = getopt.getopt(sys.argv[1:], 'inhaedl:s:p:t:m:vw:', ['interactive', 'non-interactive', 'help', 'asia', 'emea', 'dryrun',
-                                     'location=', 'templates=', 'md5=', 'search-hosts=', 'prerun=', 'verbose', 'timeout'])
+        (opts, args) = getopt.getopt(sys.argv[1:], 'nhaedl:s:p:t:m:vw:o:', ['non-interactive', 'help', 'asia', 'emea', 'dryrun',
+                                     'location=', 'templates=', 'md5=', 'search-hosts=', 'prerun=', 'overwrite=', 'verbose', 'timeout'])
     except getopt.GetoptError, error:
         # catch unkown parameters and show usage
         out.error('failed to parse parameter: %s' % str(error))
@@ -64,8 +67,11 @@ def main():
         if parameter in ('-h', '--help'):
             usage()
         elif parameter in ('-a', '--asia'):
-            location = 'beijing'
+            out.error('please use parameter "-l beijing" instead of %s' % parameter)
+            sys.exit(0)
         elif parameter in ('-e', '--emea'):
+            out.error('please omit parameter %s or use parameter "-l default" instead of %s' % (parameter, parameter))
+            sys.exit(0)
             location = 'default'
         elif parameter in ('-m', '--md5'):
             # match for a alphanumeric string with a length of 32 chars.
@@ -82,14 +88,16 @@ def main():
             location = argument
         elif parameter in ('-t', '--templates'):
             directory = argument
-        elif parameter in ('-i', '--interactive'):
-            interactive = True
         elif parameter in ('-n', '--non-interactive'):
             interactive = False
         elif parameter in ('-s', '--search-hosts'):
             # just in case someone specified a comma separated list instead
             # of space separated
             attributes = argument.replace(',', ' ')
+        elif parameter in ('-o', '--overwrite'):
+            for value in argument.split():
+                hostname, _, system = value.partition(',')
+                refhosts[hostname] = system
         elif parameter in ('-p', '--prerun'):
             try:
                 with open(argument, 'r') as script:
@@ -133,7 +141,10 @@ def main():
 
     metadata = update.metadata
 
-    for (host, system) in metadata.systems.items():
+    if not refhosts:
+        refhosts = metadata.systems
+
+    for (host, system) in refhosts.items():
         try:
             targets[host] = Target(host, system, metadata.get_package_list(), state=state, timeout=timeout)
             targets[host].add_history(['connect'])
@@ -160,6 +171,7 @@ def main():
         else:
             pass
 
+    # create QA prompt and add hosts by attributes
     prompt = CommandPromt(targets, metadata)
     if attributes:
         prompt.do_autoadd(attributes)
@@ -204,18 +216,16 @@ def usage():
     print sys.argv[0], '[parameter] {-m|--md5 update}'
     print
     print 'parameters:'
-    print '\t-{short},--{long:20}{description}'.format(short='a', long='asia', description='use asia template (deprecated)')
-    print '\t-{short},--{long:20}{description}'.format(short='e', long='emea', description='use emea template (default)(deprecated)')
     print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
     print '\t-{short},--{long:20}{description}'.format(short='t', long='template=', description='template directory')
     print '\t-{short},--{long:20}{description}'.format(short='m', long='md5=', description='md5 update identifier')
-    print '\t-{short},--{long:20}{description}'.format(short='i', long='interactive', description='interactive update shell (default)')
     print '\t-{short},--{long:20}{description}'.format(short='n', long='non-interactive', description='non-interactive update shell')
     print '\t-{short},--{long:20}{description}'.format(short='d', long='dryrun', description='start in dryrun mode')
+    print '\t-{short},--{long:20}{description}'.format(short='s', long='search-hosts=', description='search for hosts matching comma separated tags')
+    print '\t-{short},--{long:20}{description}'.format(short='o', long='overwrite=', description='overwrite template hostlist ("hostname,system hostname,system")')
+    print '\t-{short},--{long:20}{description}'.format(short='p', long='prerun=', description='script with a set of MTUI commands to run at start')
     print '\t-{short},--{long:20}{description}'.format(short='v', long='verbose', description='enable debugging output')
     print '\t-{short},--{long:20}{description}'.format(short='w', long='timeout', description='execution timeout in seconds')
-    print '\t-{short},--{long:20}{description}'.format(short='s', long='search-hosts=', description='search for hosts matching comma separated tags')
-    print '\t-{short},--{long:20}{description}'.format(short='p', long='prerun=', description='script with a set of commands to run at start')
     print
 
     sys.exit(0)

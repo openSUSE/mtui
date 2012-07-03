@@ -25,7 +25,8 @@ queue = Queue.Queue()
 class Target(object):
 
     def __init__(self, hostname, system, packages=[], state='enabled', timeout=300, exclusive=False):
-        self.hostname = hostname
+
+        self.hostname, _, self.port = hostname.partition(':')
         self.system = system
         self.packages = {}
         self.log = []
@@ -33,10 +34,13 @@ class Target(object):
         self.timeout = timeout
         self.exclusive = exclusive
 
-        out.info('connecting to %s' % self.hostname)
+        if self.port:
+            out.info('connecting to %s:%s' % (self.hostname, self.port))
+        else:
+            out.info('connecting to %s' % self.hostname)
 
         try:
-            self.connection = Connection(self.hostname, timeout)
+            self.connection = Connection(self.hostname, self.port, self.timeout)
         except Exception, error:
             try:
                 out.critical('connecting to %s failed: %s' % (self.hostname, str(error.strerror)))

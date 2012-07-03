@@ -41,7 +41,7 @@ class Connection(object):
 
     """manage SSH and SFTP connections"""
 
-    def __init__(self, hostname, timeout):
+    def __init__(self, hostname, port, timeout):
         """opens SSH channel to specified host
 
         Tries AuthKey Authentication and falls back to password mode in case of errors.
@@ -60,6 +60,12 @@ class Connection(object):
         # paramiko.util.log_to_file("/tmp/paramiko.log")
 
         self.hostname = hostname
+
+        if port:
+            self.port = int(port)
+        else:
+            self.port = 22
+
         self.timeout = timeout
 
         self.session = None
@@ -82,7 +88,7 @@ class Connection(object):
             # if this fails, the user most likely has none or an outdated
             # hostkey for the specified host. checking back with a manual
             # "ssh root@..." invocation helps in most cases.
-            self.client.connect(self.hostname, username='root')
+            self.client.connect(self.hostname, self.port, username='root')
         except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
             # if public key auth fails, fallback to a password prompt.
             # other than ssh, mtui asks only once for a password. this could

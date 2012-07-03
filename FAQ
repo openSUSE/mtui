@@ -279,3 +279,76 @@ A: From time to time it may be useful to update, downgrade or run a command
    s390t10.suse.de      (sles11sp2-s390x)   : Enabled (parallel)
    merkur.qam.suse.de   (sles11sp2-x86_64)  : Enabled (parallel)
 
+Q: How do I load my own hostlist instead of the hosts mentioned in the testing
+   template?
+A: Usually it's sufficient to simply load the hosts from the template and add
+   or remove reference hosts with the respecting commands. For some
+   corner-cases, like exclusive automated testing on virtual machines, the
+   hostlist could be overwritten with the "-o" CLI parameter.
+
+   Example:
+
+   # mtui -o "d51.suse.de,sle11test d122.suse.de,sp2test" -m 079ad960654954493d434c03dc3c5543
+   info: connecting to d51.suse.de
+   info: connecting to d122.suse.de
+   QA >
+
+Q: How do I set the template directory without passing it as command line
+   parameter every time I run MTUI?
+A: The $TEMPLATEDIR environment variable is used to find the template
+   directory as well. Simply adding the variable to ~/.bashrc or ~/.profile
+   makes it available on every login.
+
+   Example:
+
+   # echo 'export TEMPLATEDIR="/tmp/testing/testreports/"' >> ~/.profile
+
+Q: How do I change the default editor for the edit command to emacs,nano,...?
+A: The $EDITOR environment variable is used to get the editor and defaults to
+   vi. For the commit command, svn checks for the $SVN_EDITOR variable.
+
+   Example:
+
+   # EDITOR=nano mtui -m 079ad960654954493d434c03dc3c5543
+
+Q: How do I run MTUI in a non-interactive mode without user interaction?
+A: To simply run an update on the testhosts and export the log, it's
+   sufficient to pass the "-n" or "--non-interactive" parameter to MTUI.
+   However, there is an extension to this when also setting a prerun script
+   with the "-p" (--prerun) parameter. MTUI runs then a user-defined,
+   non-interactive session.
+
+   Example:
+
+   # cat prerun.example
+   # this is a prerun example file
+   run all,uname -a
+   list_hosts
+   quit
+
+   # mtui -n -p prerun.example -m 3abae703e3caa9c58bc38f6d04a2387b
+   info: connecting to merkur.qam.suse.de
+   info: connecting to s390t10.suse.de
+   info: connecting to dawn.qam.suse.de
+   QA > run all,uname -a
+   merkur.qam.suse.de:~> uname -a [0]
+   Linux merkur 3.0.31-0.9-default #1 SMP Tue May 22 21:44:30 UTC 2012 (2dc3831) x86_64 x86_64 x86_64 GNU/Linux
+
+   s390t10.suse.de:~> uname -a [0]
+   Linux s390t10 3.0.34-0.7-default #1 SMP Tue Jun 19 09:56:30 UTC 2012 (fbfc70c) s390x s390x s390x GNU/Linux
+
+   dawn.qam.suse.de:~> uname -a [0]
+   Linux dawn 3.0.31-0.9-pae #1 SMP Tue May 22 21:44:30 UTC 2012 (2dc3831) i686 i686 i386 GNU/Linux
+
+   info: done
+   QA > list_hosts
+   dawn.qam.suse.de     (sles11sp2-i386)    : Enabled (parallel)
+   s390t10.suse.de      (sles11sp2-s390x)   : Enabled (parallel)
+   merkur.qam.suse.de   (sles11sp2-x86_64)  : Enabled (parallel)
+   QA > quit
+   save log? (Y/n) 
+   info: saving output to /suse/ckornacker/testing/testreports//3abae703e3caa9c58bc38f6d04a2387b/output/log.xml
+   info: closing connection to merkur.qam.suse.de
+   info: closing connection to s390t10.suse.de
+   info: closing connection to dawn.qam.suse.de
+
