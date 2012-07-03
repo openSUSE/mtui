@@ -23,5 +23,5 @@ for subdir in $(wget -q "$PATCHINFO_URL" -O - | grep DIR | sed -e 's,.*href="\([
 done
 
 for package in $(echo $list | tr " " "\n" | sed -e 's,\(.\+\)-[^-]\+-[^-]\+\.\w\+\.rpm,\1,g' | sort -u); do
-   rpm -q $package &>/dev/null && rpm -q --queryformat '%{LICENSE}\n' $package
+   rpm -q $package &>/dev/null && rpm -q --queryformat '%{NAME}: %{LICENSE}\n' $package
 done
