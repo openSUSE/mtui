@@ -54,7 +54,7 @@ composed of the directory parameter, md5 and asia or emea
 ($directory/$md5/log.[asia|emea]). If the template is not yet checked out
 from SVN, MTUI tries to fetch it.
 
-	-n,--non-interactive         non-interactive update
+	-n,--non-interactive     non-interactive update
 
 When set, MTUI is run in an non-interactive mode without a command shell.
 MTUI automatically applies the update and exports the results to the
@@ -127,7 +127,6 @@ hosts can be specified.
 		hostname -- hostname from the target list
 
 - autoadd
-* EXPERIMENTAL * may not add the correct host
 Adds hosts to the target host list. The host is mapped by the specified
 attributes. A attribute tag could also be a system type name like
 sles11sp1-i386 or a hostname.
@@ -137,7 +136,6 @@ sles11sp1-i386 or a hostname.
 		attribute-- host attributes like architecture or product
 
 - search_hosts
-* EXPERIMENTAL * may not add the correct host
 Seach hosts by by the specified attributes. A attribute tag could also be a
 system type name like sles11sp1-i386 or a hostname.
 
@@ -280,6 +278,7 @@ To export a specific updatelog, provide the hostname as parameter.
 		Keyword arguments:
 		filename -- output template file name
 		hostname -- host update log to export
+		force    -- overwrite template if it exists
 
 Testing Commands
 *****************
@@ -498,9 +497,9 @@ Update template files from the SVN.
 Commits the testing template to the SVN. This can be run after the testing
 has finished an the template is in the final state.
 
-		commit
+		commit [message]
 		Keyword arguments:
-		none
+		message  -- commit message
 
 - source_extract
 Extracts source RPM to /tmp. If no filename is given, the whole package

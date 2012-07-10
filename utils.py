@@ -93,7 +93,9 @@ def filter_ansi(text):
     return text
 
 
-def page(text):
+def page(text, interactive=True):
+    if not interactive:
+        return
 
     prompt = "Press Enter to continue... (q to quit)"
 

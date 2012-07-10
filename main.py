@@ -95,7 +95,7 @@ def main():
             # of space separated
             attributes = argument.replace(',', ' ')
         elif parameter in ('-o', '--overwrite'):
-            for value in argument.split():
+            for value in argument.replace(';', ' ').split():
                 hostname, _, system = value.partition(',')
                 refhosts[hostname] = system
         elif parameter in ('-p', '--prerun'):
@@ -184,7 +184,12 @@ def main():
         line = line.rstrip()
         method, _, args = line.partition(' ')
         print 'QA > %s' % line
-        getattr(prompt, 'do_%s' % method)(args)
+        try:
+            getattr(prompt, 'do_%s' % method)(args)
+        except KeyboardInterrupt:
+            interactive = True
+            prompt.interactive = interactive
+            break
 
     while True:
         try:

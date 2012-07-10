@@ -59,7 +59,6 @@ class CommandPromt(cmd.Cmd):
 
     def do_search_hosts(self, args):
         """
-        * EXPERIMENTAL * may not add the correct host
         Seach hosts by by the specified attributes. A attribute tag could also be a
         system type name like sles11sp1-i386 or a hostname.
 
@@ -69,12 +68,13 @@ class CommandPromt(cmd.Cmd):
         """
 
         if args:
-            out.warning("=== EXPERIMENTAL: may not add the correct host ===")
             attributes = Attributes()
             refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
 
-            hosttags = refhost.get_host_attributes(args)
-            if hosttags:
+            if 'Testplatform:' in args:
+                refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
+                hosts = refhost.search()
+            elif refhost.get_host_attributes(args):
                 hosts = [args]
             else:
                 for _tag in args.split(' '):
@@ -140,7 +140,6 @@ class CommandPromt(cmd.Cmd):
 
     def do_autoadd(self, args):
         """
-        * EXPERIMENTAL * may not add the correct host
         Adds hosts to the target host list. The host is mapped by the
         specified attributes. A attribute tag could also be a system type name
         like sles11sp1-i386 or a hostname.
@@ -214,16 +213,8 @@ class CommandPromt(cmd.Cmd):
         """
 
         if args:
-            targets = self.targets
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            for target in targets.keys():
-                targets[target].close()
-                del self.targets[target]
+            [ self.targets.pop(x) for x in set(args.split(',')) & set(self.targets)]
         else:
-
             self.parse_error(self.do_remove_host, args)
 
     def complete_remove_host(self, text, line, begidx, endidx):
@@ -275,46 +266,45 @@ class CommandPromt(cmd.Cmd):
 
         """
 
-        if not args:
-            args = 'all'
+        if args:
+            filters = ['connect', 'disconnect', 'install', 'update', 'downgrade']
 
-        option = []
-        parameter = args.split(',')
-        for event in ['connect', 'disconnect', 'install', 'update', 'downgrade']:
-            if event in parameter:
-                option.append('-e ":%s"' % event)
-                parameter.remove(event)
+            option = []
+            parameters = args.split(',')
+            [ option.append('-e ":%s"' % x) for x in set(parameters) & set(filters)]
 
-        args = ','.join(parameter)
+            hosts = ','.join(set(parameters) & set(list(self.targets) + ['all']))
 
-        lines = 10
-        targets = enabled_targets(self.targets)
+            count = 10
+            targets = enabled_targets(self.targets)
 
-        if args.split(',')[0] != 'all':
-            lines = 50
-            targets = selected_targets(targets, args.split(','))
+            if hosts.split(',')[0] != 'all':
+                count = 50
+                targets = selected_targets(targets, hosts.split(','))
 
-        if targets:
-            if option:
-                RunCommand(targets, 'grep %s /var/log/mtui.log' % ' '.join(option)).run()
-            else:
-                RunCommand(targets, 'tail -n %s /var/log/mtui.log' % lines).run()
+            if targets:
+                if option:
+                    RunCommand(targets, 'tac /var/log/mtui.log | grep -m %s %s | tac' % (count, ' '.join(option))).run()
+                else:
+                    RunCommand(targets, 'tail -n %s /var/log/mtui.log' % count).run()
 
-        for host in sorted(targets.values()):
-            print 'history from %s (%s):' % (host.hostname, host.system)
-            lines = host.lastout().split('\n')
-            lines.reverse()
-            for line in lines:
-                try:
-                    when = line.split(':')[0]
-                    who = line.split(':')[1]
-                    event = ':'.join(line.split(':')[2:])
-                except IndexError:
-                    continue
+            for host in sorted(targets.values()):
+                print 'history from %s (%s):' % (host.hostname, host.system)
+                lines = host.lastout().split('\n')
+                lines.reverse()
+                for line in lines:
+                    try:
+                        when = line.split(':')[0]
+                        who = line.split(':')[1]
+                        event = ':'.join(line.split(':')[2:])
+                    except IndexError:
+                        continue
 
-                time = datetime.fromtimestamp(float(when))
-                print '%s, %s: %s' % (time.strftime('%A, %d.%m.%Y %H:%M'), who, event)
-            print
+                    time = datetime.fromtimestamp(float(when))
+                    print '%s, %s: %s' % (time.strftime('%A, %d.%m.%Y %H:%M'), who, event)
+                print
+        else:
+            self.parse_error(self.do_list_history, args)
 
     def complete_list_history(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx,
@@ -889,7 +879,7 @@ class CommandPromt(cmd.Cmd):
                     output.append('stderr:')
                     map(output.append, line[2].split('\n'))
 
-            page(output)
+            page(output, self.interactive)
 
         else:
 
@@ -943,7 +933,7 @@ class CommandPromt(cmd.Cmd):
                     if targets[target].lasterr():
                         map(output.append, ['stderr:'] + targets[target].lasterr().split('\n'))
 
-                page(output)
+                page(output, self.interactive)
                 out.info('done')
         else:
             self.parse_error(self.do_run, args)
@@ -962,7 +952,6 @@ class CommandPromt(cmd.Cmd):
         """
 
         if args:
-            import itertools
             path = '/usr/share/qa/tools'
 
             targets = enabled_targets(self.targets)
@@ -1551,6 +1540,7 @@ class CommandPromt(cmd.Cmd):
             if 'newpackage' in parameter:
                 newpackage = True
                 parameter.remove('newpackage')
+                args = ','.join(parameter)
 
             targets = enabled_targets(self.targets)
 
@@ -1729,12 +1719,16 @@ class CommandPromt(cmd.Cmd):
         Commits the testing template to the SVN. This can be run after the
         testing has finished an the template is in the final state.
 
-        commit
+        commit [message]
         Keyword arguments:
-        none
+        message  -- commit message
         """
 
-        exitcode = os.system('cd %s; svn up; svn ci' % os.path.dirname(self.metadata.path))
+        message = ''
+        if args:
+            message = '-m "%s"' % args
+
+        exitcode = os.system('cd %s; svn up; svn ci %s' % (os.path.dirname(self.metadata.path), message))
 
         if exitcode != 0:
             out.error('committing template failed, returncode: %s' % exitcode)
@@ -1902,23 +1896,28 @@ class CommandPromt(cmd.Cmd):
         current testing template.
         To export a specific updatelog, provide the hostname as parameter.
 
-        export [filename][,hostname]
+        export [filename][,hostname][,force]
         Keyword arguments:
         filename -- output template file name
         hostname -- host update log to export
+        force    -- overwrite template if it exists
         """
 
-        filename = ""
+        force = False
         hostname = None
+        filename = self.metadata.path
 
-        if args:
-            filename,hostname = args.partition(',')[::2]
+        parameters = filter(None, args.split(','))
+        for parameter in list(parameters):
+            if parameter in ['force']:
+                force = True
+                parameters.remove('force')
+            if parameter in self.targets:
+                hostname = parameter
+                parameters.remove(hostname)
 
-        if not filename:
-            filename = self.metadata.path
-
-        if not hostname:
-            hostname = None
+        if parameters:
+            filename = parameters[0]
 
         targets = self.targets
 
@@ -1934,7 +1933,7 @@ class CommandPromt(cmd.Cmd):
             out.error('failed to export XML')
             return
 
-        if os.path.exists(filename):
+        if os.path.exists(filename) and not force:
             out.warning('file %s exists.' % filename)
             if not input('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
                 filename += '.' + timestamp()
@@ -1949,8 +1948,7 @@ class CommandPromt(cmd.Cmd):
             print 'wrote template to %s' % filename
 
     def complete_export(self, text, line, begidx, endidx):
-        if line.count(',') == 1:
-            return self.complete_hostlist(text, line, begidx, endidx)
+        return self.complete_hostlist(text, line, begidx, endidx, ['force'])
 
     def do_save(self, args):
         """
@@ -2025,18 +2023,10 @@ class CommandPromt(cmd.Cmd):
         if args:
             self.parse_error(self.do_quit, args)
         else:
-            targets = self.targets
-
             if not input('save log? (Y/n) ', ['n', 'no'], self.interactive):
                 self.do_save(None)
 
-            for target in targets:
-                try:
-                    targets[target].remove_lock()
-                except AssertionError:
-                    pass
-
-                targets[target].close()
+            [ self.targets.pop(x) for x in set(self.targets)]
 
             try:
                 readline.write_history_file('%s/.mtui_history' % self.homedir)

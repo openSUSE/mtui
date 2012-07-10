@@ -25,8 +25,8 @@ queue = Queue.Queue()
 class Target(object):
 
     def __init__(self, hostname, system, packages=[], state='enabled', timeout=300, exclusive=False):
-
-        self.hostname, _, self.port = hostname.partition(':')
+        self.host, _, self.port = hostname.partition(':')
+        self.hostname = hostname
         self.system = system
         self.packages = {}
         self.log = []
@@ -34,13 +34,10 @@ class Target(object):
         self.timeout = timeout
         self.exclusive = exclusive
 
-        if self.port:
-            out.info('connecting to %s:%s' % (self.hostname, self.port))
-        else:
-            out.info('connecting to %s' % self.hostname)
+        out.info('connecting to %s' % self.hostname)
 
         try:
-            self.connection = Connection(self.hostname, self.port, self.timeout)
+            self.connection = Connection(self.host, self.port, self.timeout)
         except Exception, error:
             try:
                 out.critical('connecting to %s failed: %s' % (self.hostname, str(error.strerror)))
@@ -56,6 +53,9 @@ class Target(object):
         if lock.locked and lock.comment:
             out.warning('%s exclusively locked by %s (%s). please hold on testing on that host.' % (self.hostname, lock.user,
                         lock.comment))
+
+    def __del__(self):
+        self.close()
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
@@ -323,7 +323,13 @@ class Target(object):
 
     def close(self):
         out.info('closing connection to %s' % self.hostname)
+
         self.add_history(['disconnect'])
+        try:
+            self.remove_lock()
+        except:
+            pass
+
         return self.connection.close()
 
 

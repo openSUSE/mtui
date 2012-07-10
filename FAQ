@@ -9,6 +9,34 @@ A: The prepare command installs all packages from the testing repositories
    info: preparing
    info: done
 
+Q: How do I install new packages which are introduced by the update, most
+   likely on a feature update?
+A: In case the update introduces new packages which are only available in the
+   TESTING repositories (which is the case on almost every feature update),
+   the packages aren't installed by prepare since they are not yet available.
+   However, the "newpackage" flag of the update command installs all packages
+   right before the post-check scripts are run. With the "newpackage" flag
+   applied, the tester doesn't need to install these packages manually.
+   
+   Example:
+
+   QA > update all,newpackage
+   info: preparing
+   info: done
+   info: preparing script check_vendor_and_disturl.pl
+   info: preparing script check_dependencies.sh
+   info: preparing script check_new_licenses.sh
+   info: updating
+   info: preparing
+   info: done
+   info: preparing script check_vendor_and_disturl.pl
+   info: preparing script check_dependencies.sh
+   info: preparing script check_new_licenses.sh
+   info: preparing script compare_vendor_and_disturl.pl
+   info: preparing script compare_dependencies.sh
+   info: preparing script compare_new_licenses.sh
+   info: done
+
 Q: How do I edit the maintenance testing template within MTUI?
 A: The edit command offers several handy parameter to edit update related
    files.
@@ -73,7 +101,7 @@ A: Simply add the hostname as second parameter to the export command.
 
    Example:
 
-   QA > export ,dawn.qam.suse.de
+   QA > export dawn.qam.suse.de
    warning: file /suse/ckornacker/testing/testreports//079ad960654954493d434c03dc3c5543/log exists.
    should i overwrite /suse/ckornacker/testing/testreports//079ad960654954493d434c03dc3c5543/log? (y/N) y
    info: exporting XML to /suse/ckornacker/testing/testreports//079ad960654954493d434c03dc3c5543/log
@@ -82,7 +110,7 @@ A: Simply add the hostname as second parameter to the export command.
 
 Q: How do I get the URL to the maintenace testreport (to easily forward it to
    i.e. the reviewer)?
-A: Gived the current testing template was already commited to the svn, the
+A: Given the current testing template was already commited to the svn, the
    list_metadata command lists the template URL, among other things.
 
    Example:
@@ -214,6 +242,7 @@ A: The source_verify command gives a hint if the mentioned patches are applied.
    To be completely sure, a manual check is recommended.
 
    Example:
+
    QA > source_verify
    Patches in /tmp/03fe7308f8c5df7a1dcf4f9036872052/udev/udev.spec:
    0005-cdrom_id-retry-to-open-the-device-if-EBUSY.patch: applied
