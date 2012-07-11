@@ -33,6 +33,7 @@ class Target(object):
         self.state = state
         self.timeout = timeout
         self.exclusive = exclusive
+        self.connection = None
 
         out.info('connecting to %s' % self.hostname)
 
@@ -55,7 +56,14 @@ class Target(object):
                         lock.comment))
 
     def __del__(self):
-        self.close()
+        # object may exist but not necessarily be connected
+        if self.connection is None:
+            return
+
+        try:
+            self.close()
+        except AttributeError:
+            pass
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
