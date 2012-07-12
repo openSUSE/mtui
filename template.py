@@ -32,15 +32,7 @@ class Template(object):
         else:
             self.path = './' + md5 + '/'
 
-        if location == 'beijing':
-            team = 'asia'
-        else:
-            team = 'emea'
-
-        self.refhosts = 'refhosts.' + team
         self.path = self.path + 'log'
-        if not os.path.isfile(self.path):
-            self.path = self.path + '.' + team
 
         self.metadata = Metadata()
         self.metadata.md5 = md5
@@ -63,8 +55,6 @@ class Template(object):
         template -- template file contents
 
         """
-
-        platforms = {}
 
         for line in template.readlines():
             match = re.search('Category: (.+)', line)
@@ -102,35 +92,17 @@ class Template(object):
             match = re.search('Testplatform: (.*)', line)
             if match:
                 hosts = self.get_refhosts_from_testplatform(match.group(1))
-                #self.metadata.systems.update(hosts)
-                platforms.update(hosts)
+                self.metadata.systems.update(hosts)
 
-            match = re.search('(.*-.*) \(reference host: (.+)\)', line)
+            match = re.search('(.*-.*) \(reference host: (\S+).*\)', line)
             if match:
-                if '?' in match.group(2):
-                    hostname = self.get_refhosts_from_system(match.group(1))
-                else:
-                    hostname = match.group(2)
-
-                if hostname and hostname != '???':
-                    self.metadata.systems[hostname] = match.group(1)
-                else:
-                    out.error('no hostname found for system %s' % match.group(1))
-
-            match = re.search('Bug #(\d+) \("(.*)"\):', line)  # deprecated
-            if match:
-                self.metadata.bugs[match.group(1)] = match.group(2)
+                if '?' not in match.group(2):
+                    self.metadata.systems[match.group(2)] = match.group(1)
 
             match = re.search('Bugs: (.*)', line)
             if match:
                 for bug in match.group(1).split(','):
                     self.metadata.bugs[bug.strip(' ')] = 'Description not available'
-
-        if platforms and platforms != self.metadata.systems:
-            out.error("Testplatform tags expanded to wrong hostnames. Please send this dump to ckornacker@suse.de and continue testing:")
-            print "template md5: %s" % self.metadata.md5
-            print "platforms:\n%s" % platforms
-            print "systems:\n%s" % self.metadata.systems
 
     def get_refhosts_from_system(self, system):
         """get refhost from system name
@@ -142,7 +114,6 @@ class Template(object):
 
         """
 
-        """ new engine """
         try:
             refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
 
@@ -157,27 +128,6 @@ class Template(object):
             out.critical('nonfatal error. please report to ckornacker and proceed with testing')
             traceback.print_exc()
             host = ""
-
-        """ old engine """
-
-        refhostfile = os.path.dirname(__file__) + '/' + self.refhosts
-
-        try:
-            with open(refhostfile, 'r') as reffile:
-                for line in reffile.readlines():
-                    match = re.search('%s="(.*)"' % system, line)
-                    if match:
-                        try:
-                            assert(host != match.group(1))
-                            out.critical("%s != %s for system %s. please report to ckornacker" % (host, match.group(1), system))
-                        except:
-                            pass
-                        return match.group(1)
-        except OSError, error:
-            if error.errno == errno.ENOENT:
-                out.warning('refhost mapping file %s not found' % self.refhosts)
-            else:
-                pass
 
     def get_refhosts_from_testplatform(self, testplatform):
         """get refhost from testplatform string

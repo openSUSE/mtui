@@ -34,7 +34,6 @@ class CommandPromt(cmd.Cmd):
         self.interactive = True
         self.targets = targets
         self.metadata = metadata
-        self.systems = []
         self.homedir = os.path.expanduser('~')
         self.workingdir = os.path.dirname(__file__)
 
@@ -44,15 +43,6 @@ class CommandPromt(cmd.Cmd):
             readline.read_history_file('%s/.mtui_history' % self.homedir)
         except IOError, error:
             out.debug('failed to open history file: %s' % error.strerror)
-
-        try:
-            with open('%s/refhosts.emea' % self.workingdir, 'r') as f:
-                for line in f.readlines():
-                    match = re.search('([^#]*)=".*"', line)
-                    if match:
-                        self.systems.append(match.group(1))
-        except IOError, error:
-            out.debug('failed to parse refhost mapping file: %s' % error.strerror)
 
     def emptyline(self):
         return
@@ -115,13 +105,6 @@ class CommandPromt(cmd.Cmd):
                         attributes.virtual.update({'mode':'host'})
                     if tag == 'guest':
                         attributes.virtual.update({'mode':'guest'})
-                    if tag in self.systems:
-                        try:
-                            refhost.set_attributes_from_system(tag)
-                            attributes = None
-                        except Exception:
-                            out.warning("system %s not found." % tag)
-                        break
 
                 hosts = refhost.search(attributes)
 
@@ -196,9 +179,6 @@ class CommandPromt(cmd.Cmd):
                     out.error('failed to add host %s to list' % hostname)
         else:
             self.parse_error(self.do_add_host, args)
-
-    def complete_add_host(self, text, line, begidx, endidx):
-        return self.complete_systemlist(text, line, begidx, endidx)
 
     def do_remove_host(self, args):
         """
@@ -2056,9 +2036,6 @@ class CommandPromt(cmd.Cmd):
         filename = text.split('/')[-1]
 
         return [dirname + i for i in os.listdir(dirname) if i.startswith(filename)]
-
-    def complete_systemlist(self, text, line, begidx, endidx, appendix=[]):
-        return [i.strip('\n') for i in self.systems + appendix if i.startswith(text) and i not in line]
 
     def complete_hostlist(self, text, line, begidx, endidx, appendix=[]):
         return [i for i in list(self.targets) + appendix if i.startswith(text) and i not in line]

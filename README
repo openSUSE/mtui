@@ -39,19 +39,19 @@ specifying the directory each time on the commandline, one could set
 TEMPLATEDIR="~/testing/templates" in ~/.profile. The commandline
 parameter takes precedence over the environment variable if both are given.
 
-	-a,--asia                use asia template
-	-e,--emea                use emea template
+	-l,--location            set the refhost location
 
-Specify either -a for ASIA or -e for EMEA template files (log.asia or
-log.emea, respectively). When none is given, EMEA is default set.
+Specify the refhost location defined in refhosts.xml. If the location itself
+doesn't exist, the default location is used instead. If a required system
+doesn't exist, the respecting system is loaded from the default location.
 
 	-m,--md5=                md5 update identifier
 
 This parameter is mandatory and needs to be set in order to find the
 correct testing template. It simply specifies the md5 hash for the update
 which could be retrieved on the SWAMP QA view. The template path is then
-composed of the directory parameter, md5 and asia or emea
-($directory/$md5/log.[asia|emea]). If the template is not yet checked out
+composed of the directory parameter and md5 update hash.
+($directory/$md5/log). If the template is not yet checked out
 from SVN, MTUI tries to fetch it.
 
 	-n,--non-interactive     non-interactive update
@@ -737,8 +737,8 @@ After the update, the package versions and the update log could be exported
 to the template file for further processing.
 
 QA > export
-info: exporting XML to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log.emea
-wrote template to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log.emea
+info: exporting XML to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log
+wrote template to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log
 
 To verify that the bugs are actually fixed, one can run the reproducers again.
 In this case, the provides are fixed.
