@@ -108,6 +108,11 @@ class CommandPromt(cmd.Cmd):
 
                 hosts = refhost.search(attributes)
 
+                # check if some tags were passed to the attributes object which has
+                # all archs set by default
+                if not set(str(attributes).split()) ^ set(attributes.tags["archs"]):
+                    return []
+
             for hostname in set(hosts):
                 hosttags = refhost.get_host_attributes(hostname)
                 print '{0:25}: {1}'.format(hostname, hosttags)
@@ -193,7 +198,10 @@ class CommandPromt(cmd.Cmd):
         """
 
         if args:
-            [ self.targets.pop(x) for x in set(args.split(',')) & set(self.targets)]
+            if args == 'all':
+                [ self.targets.pop(x) for x in set(self.targets)]
+            else:
+                [ self.targets.pop(x) for x in set(args.split(',')) & set(self.targets)]
         else:
             self.parse_error(self.do_remove_host, args)
 

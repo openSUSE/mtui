@@ -99,7 +99,7 @@ class Connection(object):
 
             try:
                 # try again with password auth instead of public/private key
-                self.client.connect(self.hostname, username='root', password=password)
+                self.client.connect(self.hostname, self.port, username='root', password=password)
             except paramiko.AuthenticationException:
                 # if a wrong password was set, don't connect to the host and
                 # reraise the exception hoping it's catched somewhere in an
