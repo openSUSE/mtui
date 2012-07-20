@@ -642,11 +642,11 @@ class CommandPromt(cmd.Cmd):
                 try:
                     for state in ['pre', 'post']:
                         dest = os.path.join(destdir, state, script)
-                        shutil.copyfile(src, dest)
+                        shutil.copy(src, dest)
 
                     dest = os.path.join(destdir, 'compare', script.replace('check_', 'compare_'))
                     try:
-                        shutil.copyfile(src, dest)
+                        shutil.copy(src, dest)
                     except IOError:
                         # ignore missing compare scripts
                         pass
@@ -678,17 +678,13 @@ class CommandPromt(cmd.Cmd):
 
                 try:
                     for state in ['pre', 'post']:
-                        os.remove(os.path.join(directory, state, script))
+                            os.remove(os.path.join(directory, state, script))
 
                     compare = os.path.join(directory, 'compare', script.replace('check_', 'compare_'))
-                    try:
-                        os.remove(compare)
-                    except IOError:
-                        # ignore missing compare scripts
-                        pass
+                    os.remove(compare)
 
-                except IOError:
-                    out.error('failed to remove script %s' % script)
+                except (IOError, OSError):
+                    out.debug('failed to remove script %s' % script)
                 else:
                     out.info('done')
 
