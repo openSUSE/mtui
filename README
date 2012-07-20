@@ -422,6 +422,20 @@ state the script is run. For more information, see the User Scripts section.
 		Keyword arguments:
 		None
 
+- add_scripts
+Add check script from the pre/post testruns
+
+        add_scripts <script>[,script,...]
+        Keyword arguments:
+        script   -- script name to add to the testrun
+
+- remove_scripts
+Remove check script from the pre/post testruns
+
+        remove_scripts <script>[,script,...]
+        Keyword arguments:
+        script   -- script name to remove from the testrun
+
 - list_sessions
 Lists current active ssh sessions on target hosts.
 

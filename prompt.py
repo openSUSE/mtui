@@ -12,6 +12,7 @@ import subprocess
 import glob
 import re
 import getpass
+import shutil
 
 from datetime import date, datetime
 
@@ -623,6 +624,81 @@ class CommandPromt(cmd.Cmd):
 
     def complete_list_packages(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+    def do_add_scripts(self, args):
+        """
+        Add check script to the pre/post testruns
+
+        add_scripts <script>[,script,...]
+        Keyword arguments:
+        script   -- script name to add to the testrun
+        """
+
+        if args:
+            for script in args.split(','):
+                src = '%s/helper/%s' % (os.path.dirname(__file__), script)
+                destdir = '%s/scripts' % (os.path.dirname(self.metadata.path))
+
+                try:
+                    for state in ['pre', 'post']:
+                        dest = os.path.join(destdir, state, script)
+                        shutil.copyfile(src, dest)
+
+                    dest = os.path.join(destdir, 'compare', script.replace('check_', 'compare_'))
+                    try:
+                        shutil.copyfile(src, dest)
+                    except IOError:
+                        # ignore missing compare scripts
+                        pass
+
+                except IOError:
+                    out.error('failed to copy script %s' % script)
+                else:
+                    out.info('done')
+
+        else:
+            self.parse_error(self.do_add_scripts, args)
+
+    def complete_add_scripts(self, text, line, begidx, endidx):
+        scripts = os.listdir('%s/helper' % os.path.dirname(__file__))
+        return [script for script in scripts if script.startswith(text) and 'check' in script and script not in line]
+
+    def do_remove_scripts(self, args):
+        """
+        Remove check script from the pre/post testruns
+
+        add_scripts <script>[,script,...]
+        Keyword arguments:
+        script   -- script name to remove from the testrun
+        """
+
+        if args:
+            for script in args.split(','):
+                directory = '%s/scripts' % (os.path.dirname(self.metadata.path))
+
+                try:
+                    for state in ['pre', 'post']:
+                        os.remove(os.path.join(directory, state, script))
+
+                    compare = os.path.join(directory, 'compare', script.replace('check_', 'compare_'))
+                    try:
+                        os.remove(compare)
+                    except IOError:
+                        # ignore missing compare scripts
+                        pass
+
+                except IOError:
+                    out.error('failed to remove script %s' % script)
+                else:
+                    out.info('done')
+
+        else:
+            self.parse_error(self.do_remove_scripts, args)
+
+    def complete_remove_scripts(self, text, line, begidx, endidx):
+        pre = os.listdir('%s/scripts/pre' % os.path.dirname(self.metadata.path))
+        post = os.listdir('%s/scripts/post' % os.path.dirname(self.metadata.path))
+        return [script for script in set(pre) & set(post) if script.startswith(text) and 'check' in script and script not in line]
 
     def do_list_scripts(self, args):
         """
