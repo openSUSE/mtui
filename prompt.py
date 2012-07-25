@@ -200,9 +200,9 @@ class CommandPromt(cmd.Cmd):
 
         if args:
             if args == 'all':
-                [ self.targets.pop(x) for x in set(self.targets)]
+                [ self.targets[x].close() for x in set(self.targets)]
             else:
-                [ self.targets.pop(x) for x in set(args.split(',')) & set(self.targets)]
+                [ self.targets[x].close() for x in set(args.split(',')) & set(self.targets)]
         else:
             self.parse_error(self.do_remove_host, args)
 
@@ -2086,7 +2086,7 @@ class CommandPromt(cmd.Cmd):
             if not input('save log? (Y/n) ', ['n', 'no'], self.interactive):
                 self.do_save(None)
 
-            [ self.targets.pop(x) for x in set(self.targets)]
+            [ self.targets[x].close() for x in set(self.targets)]
 
             try:
                 readline.write_history_file('%s/.mtui_history' % self.homedir)

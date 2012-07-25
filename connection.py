@@ -397,7 +397,7 @@ class Connection(object):
         try:
             # if the channel is active, we should get a new session.
             # if not, the channel is probable not active.
-            self.new_session()
+            assert(self.new_session())
             self.close_session()
         except Exception:
             return False

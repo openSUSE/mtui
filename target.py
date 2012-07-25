@@ -56,14 +56,7 @@ class Target(object):
                         lock.comment))
 
     def __del__(self):
-        # object may exist but not necessarily be connected
-        if self.connection is None:
-            return
-
-        try:
-            self.close()
-        except AttributeError:
-            pass
+        self.close()
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
@@ -330,15 +323,21 @@ class Target(object):
                     out.warning('unable to remove %s on %s' % (path, self.hostname))
 
     def close(self):
-        out.info('closing connection to %s' % self.hostname)
-
-        self.add_history(['disconnect'])
         try:
-            self.remove_lock()
-        except:
+            assert(self.connection)
+
+            if self.connection.is_active():
+                self.add_history(['disconnect'])
+                self.remove_lock()
+
+                out.info('closing connection to %s' % self.hostname)
+                self.connection.close()
+        except Exception:
             pass
 
-        return self.connection.close()
+        self.connection = None
+
+        return
 
 
 class Package(object):
