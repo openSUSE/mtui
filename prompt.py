@@ -465,6 +465,10 @@ class CommandPromt(cmd.Cmd):
                     match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
                 except Exception, error:
                     out.critical('failed to open %s: %s' % (rpmfile, error))
+                    if unicode(error) == u'public key not available':
+                        out.critical('Public key is not available.')
+                        out.critical('In order to import new keys, you should run the following command as root:')
+                        out.critical('cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
                     continue
 
                 if match:
