@@ -15,6 +15,7 @@ if [ -s $temp ]; then
    echo "ERROR: found new rpm license texts (before:$1 vs after:$2):"
    cat $temp 
    ) >&2 
+   rm $temp
    exit 1
 fi
 

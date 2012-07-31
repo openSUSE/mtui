@@ -27,7 +27,7 @@ def xml_to_template(template, xmldata, updatehost=None):
 
     """
 
-    with codecs.open(template, 'r', 'utf-8') as f:
+    with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
         t = f.readlines()
 
     try:
