@@ -579,7 +579,10 @@ class CommandPromt(cmd.Cmd):
 
             print 'Patches in %s:' % specfile
             for patch in patches:
+                num = filter(str.isdigit, patch) or 0
                 if re.findall('\'%%%s\W+' % patch.lower(), str(content)):
+                    result = green('applied')
+                if re.findall('patch.*%%{P:%s}' % num, str(content)):
                     result = green('applied')
                 else:
                     result = red('not applied')
@@ -648,6 +651,7 @@ class CommandPromt(cmd.Cmd):
                         dest = os.path.join(destdir, state, script)
                         shutil.copy(src, dest)
 
+                    src = '%s/helper/%s' % (os.path.dirname(__file__), script.replace('check_', 'compare_'))
                     dest = os.path.join(destdir, 'compare', script.replace('check_', 'compare_'))
                     try:
                         shutil.copy(src, dest)
