@@ -16,6 +16,7 @@ import getpass
 from connection import *
 from xmlout import *
 from utils import *
+from config import *
 
 out = logging.getLogger('mtui')
 
@@ -34,6 +35,7 @@ class Target(object):
         self.timeout = timeout
         self.exclusive = exclusive
         self.connection = None
+        self.config = Config()
 
         out.info('connecting to %s' % self.hostname)
 
@@ -259,7 +261,7 @@ class Target(object):
                 return
 
             now = timestamp()
-            user = getpass.getuser()
+            user = self.config.get_user()
             pid = os.getpid()
             if comment:
                 lockfile.write('%s:%s:%s:%s' % (now, user, pid, comment))
@@ -296,7 +298,7 @@ class Target(object):
                 return
 
             now = timestamp()
-            user = getpass.getuser()
+            user = self.config.get_user()
             try:
                 historyfile.write('%s:%s:%s\n' % (now, user, ':'.join(comment)))
                 historyfile.close()
@@ -573,10 +575,11 @@ class Locked(object):
         self.timestamp = timestamp
         self.pid = pid
         self.comment = comment
+        self.config = Config()
 
     def own(self):
         try:
-            assert(self.user == getpass.getuser())
+            assert(self.user == self.config.get_user())
             assert(self.pid == str(os.getpid()))
             return True
         except Exception:

@@ -22,6 +22,7 @@ from updater import *
 from export import *
 from utils import *
 from refhost import *
+from config import *
 
 out = logging.getLogger('mtui')
 
@@ -37,6 +38,7 @@ class CommandPromt(cmd.Cmd):
         self.metadata = metadata
         self.homedir = os.path.expanduser('~')
         self.workingdir = os.path.dirname(__file__)
+        self.config = Config()
 
         readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
 
@@ -789,7 +791,7 @@ class CommandPromt(cmd.Cmd):
 
             time = date.today().strftime('%d/%m/%y')
             swampid = self.metadata.swampid
-            username = getpass.getuser()
+            username = self.config.get_user()
 
             comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
 
@@ -1109,7 +1111,7 @@ class CommandPromt(cmd.Cmd):
             name = os.path.basename(command).replace('-run', '')
             time = date.today().strftime('%d/%m/%y')
             swampid = self.metadata.swampid
-            username = getpass.getuser()
+            username = self.config.get_user()
 
             comment = 'testing %s (SWAMP %s) on %s' % (name, swampid, time)
 
