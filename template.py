@@ -89,6 +89,10 @@ class Template(object):
             if match:
                 self.metadata.reviewer = match.group(1)
 
+            match = re.search('Bug #(\d+) \("(.*)"\):', line)  # deprecated
+            if match:
+                self.metadata.bugs[match.group(1)] = match.group(2)
+
             match = re.search('Testplatform: (.*)', line)
             if match:
                 hosts = self.get_refhosts_from_testplatform(match.group(1))
