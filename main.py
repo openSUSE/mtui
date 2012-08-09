@@ -141,10 +141,10 @@ def main():
 
     metadata = update.metadata
 
-    if not refhosts:
-        refhosts = metadata.systems
+    if refhosts:
+        metadata.systems = refhosts
 
-    for (host, system) in refhosts.items():
+    for (host, system) in metadata.systems.items():
         try:
             targets[host] = Target(host, system, metadata.get_package_list(), state=state, timeout=timeout)
             targets[host].add_history(['connect'])

@@ -202,9 +202,9 @@ class CommandPromt(cmd.Cmd):
 
         if args:
             if args == 'all':
-                [ self.targets[x].close() for x in set(self.targets)]
+                [ self.targets[x].close() or self.targets.pop(x) for x in set(self.targets)]
             else:
-                [ self.targets[x].close() for x in set(args.split(',')) & set(self.targets)]
+                [ self.targets[x].close() or self.targets.pop(x) for x in set(args.split(',')) & set(self.targets)]
         else:
             self.parse_error(self.do_remove_host, args)
 
@@ -584,7 +584,7 @@ class CommandPromt(cmd.Cmd):
                 num = filter(str.isdigit, patch) or 0
                 if re.findall('\'%%%s\W+' % patch.lower(), str(content)):
                     result = green('applied')
-                if re.findall('patch.*%%{P:%s}' % num, str(content)):
+                elif re.findall('patch.*%%{P:%s}' % num, str(content)):
                     result = green('applied')
                 else:
                     result = red('not applied')
