@@ -2,7 +2,7 @@
 
 progname=${0##*/}
 
-if [ -z "$1" -o -z "$2" ]; then
+if [ -f "$1" -o -f "$2" ]; then
    echo "usage: $progname <logfile before the update> <logfile after the update>"
    exit 2
 fi

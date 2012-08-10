@@ -2168,9 +2168,13 @@ def script_hook(targets, which, scriptdir, md5):
         try:
             if which == 'compare':
                 for target in targets:
+                    suffix = script.rpartition('.')[2]
                     prename = '%s/pre.%s.%s' % (output_dir, script.replace('compare_', 'check_'), target)
                     postname = '%s/post.%s.%s' % (output_dir, script.replace('compare_', 'check_'), target)
+                    prename = glob.glob(prename.replace('.%s.' % suffix, '*'))[0]
+                    postname = glob.glob(postname.replace('.%s.' % suffix, '*'))[0]
                     command = ['%s/scripts/compare/%s' % (scriptdir, script), prename, postname]
+
                     out.debug('running %s' % str(command))
                     try:
                         sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -2209,10 +2213,9 @@ def script_hook(targets, which, scriptdir, md5):
                         f = open(filename, 'w')
                         f.write(targets[target].lastout())
                         f.write(targets[target].lasterr())
+                        f.close()
                     except IOError, error:
                         out.error('failed to write script output to %s: %s' % (filename, error.strerror))
-                    else:
-                        f.close()
         except KeyboardInterrupt:
             out.warning('skipping script %s' % script)
             continue

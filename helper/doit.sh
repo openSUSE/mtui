@@ -6,8 +6,8 @@ mode="$1"
 resultdir="$2"
 md5sum="$3"
 
-category1="check_new_licenses.sh check_all_updated.pl check_from_same_srcrpm.pl check_vendor_and_disturl.pl check_dependencies.sh check_multiple-owners.sh"
-category2="compare_new_licenses.sh compare_all_updated.sh compare_from_same_srcrpm.sh compare_vendor_and_disturl.pl compare_dependencies.sh compare_multiple-owners.sh"
+category1="check_new_licenses.sh check_all_updated.pl check_from_same_srcrpm.pl check_vendor_and_disturl.pl run_rpm_Va_nofiles.sh check_multiple-owners.sh"
+category2="compare_new_licenses.sh compare_all_updated.sh compare_from_same_srcrpm.sh compare_vendor_and_disturl.sh compare_rpm_Va_nofiles.sh compare_multiple-owners.sh"
 
 mydir="${0%/*}"
 PATH="$PATH:$mydir"
