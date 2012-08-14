@@ -2082,28 +2082,31 @@ class CommandPromt(cmd.Cmd):
 
     def do_quit(self, args):
         """
-        Disconnects from all hosts and exits the programm.
+        Disconnects from all hosts and exits the programm. If a bootarg
+        argument is set, the hosts are either rebooted or powered off.
         The tester is asked to save the XML log when exiting MTUI.
 
-        quit
+        quit [bootarg]
         Keyword arguments:
-        None
+        bootarg  -- reboot or poweroff
         """
 
-        if args:
-            self.parse_error(self.do_quit, args)
+        if not input('save log? (Y/n) ', ['n', 'no'], self.interactive):
+            self.do_save(None)
+
+        if args == 'reboot':
+            [ self.targets[x].reboot() or self.targets.pop(x) for x in set(self.targets)]
+        elif args == 'poweroff':
+            [ self.targets[x].poweroff() or self.targets.pop(x) for x in set(self.targets)]
         else:
-            if not input('save log? (Y/n) ', ['n', 'no'], self.interactive):
-                self.do_save(None)
+            [ self.targets[x].close() or self.targets.pop(x) for x in set(self.targets)]
 
-            [ self.targets[x].close() for x in set(self.targets)]
+        try:
+            readline.write_history_file('%s/.mtui_history' % self.homedir)
+        except:
+            pass
 
-            try:
-                readline.write_history_file('%s/.mtui_history' % self.homedir)
-            except:
-                pass
-
-            sys.exit(0)
+        sys.exit(0)
 
     do_exit = do_quit
     do_EOF = do_quit

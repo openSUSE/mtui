@@ -477,12 +477,13 @@ the testing has finished. This could be done with the convert.py script.
 		filename -- save log as file filename
 
 - quit
-Disconnects from all hosts and exits the programm. The tester is asked to save
-the XML log when exiting MTUI.
+Disconnects from all hosts and exits the programm. If a bootarg
+argument is set, the hosts are either rebooted or powered off.
+The tester is asked to save the XML log when exiting MTUI.
 
 		quit
 		Keyword arguments:
-		None
+		bootarg  -- reboot or poweroff
 
 - exit
 Alias for "quit".

@@ -123,7 +123,7 @@ class Connection(object):
         # if self.is_active():
         #    return
 
-        out.info('lost connection to %s, reconnecting' % self.hostname)
+        out.debug('lost connection to %s:%s, reconnecting' % (self.hostname, self.port))
 
         # wait 10s and try to reconnect
         select.select([], [], [], 10)

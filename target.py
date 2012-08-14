@@ -346,6 +346,42 @@ class Target(object):
 
         return
 
+    def reboot(self):
+        out.info('rebooting %s' % self.hostname)
+        try:
+            assert(self.connection)
+
+            if self.connection.is_active():
+                self.add_history(['disconnect'])
+                self.remove_lock()
+        except Exception:
+            pass
+        finally:
+            self.run('reboot')
+            self.connection.close()
+
+        self.connection = None
+
+        return
+
+    def poweroff(self):
+        out.info('powering off %s' % self.hostname)
+        try:
+            assert(self.connection)
+
+            if self.connection.is_active():
+                self.add_history(['disconnect'])
+                self.remove_lock()
+        except Exception:
+            pass
+        finally:
+            self.run('halt')
+            self.connection.close()
+
+        self.connection = None
+
+        return
+
 
 class Package(object):
 
