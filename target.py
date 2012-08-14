@@ -58,6 +58,7 @@ class Target(object):
                         lock.comment))
 
     def __del__(self):
+        out.debug('%s: deleting Target object' % self.hostname)
         self.close()
 
     def __lt__(self, other):
@@ -101,19 +102,20 @@ class Target(object):
             self.log.append(['', '', '', 0, 0])
 
     def query_version(self, package):
+        out.debug('%s: querying current %s version' % (self.hostname, package))
         self.query_versions(package)
         return self.packages[package].current
 
     def disable_repo(self, repo):
-        out.debug('disabling repo %s on %s' % (repo, self.hostname))
+        out.debug('%s: disabling repo %s' % (self.hostname, repo))
         self.run('zypper mr -d %s' % repo)
 
     def enable_repo(self, repo):
-        out.debug('enabling repo %s on %s' % (repo, self.hostname))
+        out.debug('%s: enabling repo %s' % (self.hostname, repo))
         self.run('zypper mr -e %s' % repo)
 
     def set_timeout(self, value):
-        out.debug('setting timeout to %s on %s' % (value, self.hostname))
+        out.debug('%s: setting timeout to %s' % (self.hostname, value))
         self.connection.timeout = value
 
     def get_timeout(self):
@@ -137,10 +139,10 @@ class Target(object):
             repclean.close()
 
         if name == 'TESTING':
-            out.debug('enabling TESTING repos on %s' % self.hostname)
+            out.debug('%s: enabling TESTING repos' % self.hostname)
             parameter = '-t'
         elif name == 'UPDATE':
-            out.debug('enabling UPDATE repos on %s' % self.hostname)
+            out.debug('%s: enabling UPDATE repos' % self.hostname)
             parameter = '-n'
 
         self.run('%s %s' % (command, parameter))
@@ -220,6 +222,7 @@ class Target(object):
             return ''
 
     def locked(self):
+        out.debug('%s: getting mtui lock state' % self.hostname)
         lock = Locked(False)
 
         if self.state == 'enabled':
@@ -235,6 +238,7 @@ class Target(object):
             try:
                 line = lockfile.readline().strip()
             except Exception:
+                lockfile.close()
                 return lock
 
             try:
@@ -243,6 +247,7 @@ class Target(object):
                 else:
                     (lock.timestamp, lock.user, lock.pid, lock.comment) = line.split(':')
             except Exception:
+                lockfile.close()
                 return lock
 
             lock.locked = True
@@ -282,7 +287,7 @@ class Target(object):
                     self.connection.remove('/var/lock/mtui.lock')
                 except IOError, error:
                     if error.errno == errno.ENOENT:
-                        out.debug('lockfile does not exist')
+                        out.debug('%s: lockfile does not exist' % self.hostname)
                 except Exception, error:
                     out.error('failed to remove lockfile: %s' % error)
         except AssertionError:
@@ -316,7 +321,7 @@ class Target(object):
             self.connection.remove(path)
         except IOError, error:
             if error.errno == errno.ENOENT:
-                out.debug('path %s does not exist on %s' % (path, self.hostname))
+                out.debug('%s: path %s does not exist' % (self.hostname, path))
             else:
                 try:
                     # might be a directory

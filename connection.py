@@ -61,9 +61,9 @@ class Connection(object):
 
         self.hostname = hostname
 
-        if port:
+        try:
             self.port = int(port)
-        else:
+        except Exception:
             self.port = 22
 
         self.timeout = timeout
@@ -85,6 +85,7 @@ class Connection(object):
         """connect to the remote host using paramiko as ssh subsystem"""
 
         try:
+            out.debug('connecting to %s:%s' % (self.hostname, self.port))
             # if this fails, the user most likely has none or an outdated
             # hostkey for the specified host. checking back with a manual
             # "ssh root@..." invocation helps in most cases.
@@ -94,7 +95,7 @@ class Connection(object):
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.
             out.warning('Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly' % self.hostname)
-            print 'Trying manually, please specify root password'
+            print 'Trying manually, please enter the root password'
             password = getpass.getpass()
 
             try:
@@ -122,7 +123,7 @@ class Connection(object):
         # if self.is_active():
         #    return
 
-        out.debug('lost connection, reconnecting')
+        out.info('lost connection to %s, reconnecting' % self.hostname)
 
         # wait 10s and try to reconnect
         select.select([], [], [], 10)
@@ -150,6 +151,7 @@ class Connection(object):
         self.close_session()
         """
 
+        out.debug('creating new session at %s:%s' % (self.hostname, self.port))
         try:
             transport = self.client.get_transport()
 
@@ -177,6 +179,7 @@ class Connection(object):
     def close_session(self):
         """close the current session"""
 
+        out.debug('closing session at %s:%s' % (self.hostname, self.port))
         try:
             self.session.shutdown(2)
             self.session.close()
@@ -301,6 +304,7 @@ class Connection(object):
             except Exception:
                 pass
 
+        out.debug('transmitting %s to %s:%s:%s' % (local, self.hostname, self.port, remote))
         sftp.put(local, remote)
 
         # make file executable since it's probably a script which needs to be run
@@ -321,6 +325,7 @@ class Connection(object):
 
         try:
             sftp = self.client.open_sftp()
+            out.debug('transmitting %s:%s:%s to %s' % (self.hostname, self.port, remote, local))
             sftp.get(remote, local)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
@@ -338,6 +343,7 @@ class Connection(object):
 
         """
 
+        out.debug('getting %s:%s:%s listing' % (self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             return sftp.listdir(path)
@@ -350,6 +356,7 @@ class Connection(object):
     def open(self, filename, mode='r', bufsize=-1):
         """open remote file for reading"""
 
+        out.debug('opening file %s:%s:%s (%s)' % (self.hostname, self.port, filename, mode))
         try:
             sftp = self.client.open_sftp()
             return sftp.open(filename, mode, bufsize)
@@ -362,6 +369,7 @@ class Connection(object):
     def remove(self, path):
         """delete remote file"""
 
+        out.debug('deleting file %s:%s:%s' % (self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             return sftp.remove(path)
@@ -374,6 +382,7 @@ class Connection(object):
     def rmdir(self, path):
         """delete remote directory"""
 
+        out.debug('deleting dir %s:%s:%s' % (self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             items = self.listdir(path)
@@ -412,6 +421,7 @@ class Connection(object):
 
         """
 
+        out.debug('closing connection to %s:%s' % (self.hostname, self.port))
         self.client.close()
 
 

@@ -4,6 +4,8 @@
 # implementation of a logging.Formatter to enable color output
 #
 
+import os
+import inspect
 import logging
 
 (BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE) = range(8)
@@ -22,7 +24,13 @@ class ColorFormatter(logging.Formatter):
         logging.Formatter.__init__(self, msg)
 
     def formatColor(self, levelname):
-        return "\033[2K" + COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
+        if levelname == 'DEBUG':
+            caller = inspect.currentframe()
+            frame, filename, line, function, _, _ = inspect.getouterframes(caller)[9]
+            return "\033[2K" + COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ + \
+                ' [%s:%s]' % (os.path.basename(filename), function)
+        else:
+            return "\033[2K" + COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
 
     def format(self, record):
         record.message = record.getMessage()
