@@ -65,8 +65,12 @@ class CommandPromt(cmd.Cmd):
             refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
 
             if 'Testplatform:' in args:
-                refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
-                hosts = refhost.search()
+                try:
+                    refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
+                    hosts = refhost.search()
+                except ValueError:
+                    hosts = []
+                    out.error('failed to parse Testplatform string')
             elif refhost.get_host_attributes(args):
                 hosts = [args]
             else:
@@ -151,6 +155,7 @@ class CommandPromt(cmd.Cmd):
                     try:
                         system = refhost.get_host_systemname(hostname)
                         self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
+                        self.metadata.systems[hostname] = system
                     except Exception:
                         out.error('failed to add host %s to list' % hostname)
         else:
@@ -183,6 +188,7 @@ class CommandPromt(cmd.Cmd):
             except KeyError:
                 try:
                     self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
+                    self.metadata.systems[hostname] = system
                 except Exception:
                     out.error('failed to add host %s to list' % hostname)
         else:
@@ -2107,6 +2113,9 @@ class CommandPromt(cmd.Cmd):
             pass
 
         sys.exit(0)
+
+    def complete_quit(self, text, line, begidx, endidx, appendix=[]):
+        return [i for i in ["reboot", "poweroff"] if i.startswith(text)]
 
     do_exit = do_quit
     do_EOF = do_quit
