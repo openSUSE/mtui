@@ -228,9 +228,6 @@ class Target(object):
         if self.state == 'enabled':
             try:
                 lockfile = self.connection.open('/var/lock/mtui.lock')
-            except IOError, error:
-                if error.errno == errno.ENOENT:
-                    return lock
             except Exception, error:
                 out.error('failed to open lockfile: %s' % error)
                 return lock
