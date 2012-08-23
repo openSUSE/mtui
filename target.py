@@ -229,7 +229,10 @@ class Target(object):
             try:
                 lockfile = self.connection.open('/var/lock/mtui.lock')
             except Exception, error:
-                out.error('failed to open lockfile: %s' % error)
+                try:
+                    assert(error.errno == errno.ENOENT)
+                except Exception:
+                    out.error('failed to open lockfile: %s' % error)
                 return lock
 
             try:
