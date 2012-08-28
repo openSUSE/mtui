@@ -68,7 +68,7 @@ class CommandPromt(cmd.Cmd):
                 try:
                     refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
                     hosts = refhost.search()
-                except ValueError:
+                except (ValueError, KeyError):
                     hosts = []
                     out.error('failed to parse Testplatform string')
             elif refhost.get_host_attributes(args):

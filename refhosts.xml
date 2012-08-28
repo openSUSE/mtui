@@ -9,6 +9,7 @@
         </version>
       </product>
       <virtual mode="guest">vmware</virtual>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="x86_64" name="s4v-11sp1-a50-64.qam.suse.de">
       <product name="sles4vmware">
@@ -18,6 +19,7 @@
         </version>
       </product>
       <virtual mode="guest">vmware</virtual>
+      <ltss property="weak">true</ltss>
     </host>
     <host arch="i386" name="s4v-11sp2-a50-32.qam.suse.de">
       <product name="sles4vmware">
@@ -44,6 +46,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon name="hae"/>
     </host>
     <host arch="ppc64" name="makrele.qam.suse.de">
@@ -71,6 +74,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon name="studiorunner">
         <version>
           <major>1</major>
@@ -260,6 +264,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
@@ -271,6 +276,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="cetur.qam.suse.de">
@@ -291,6 +297,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
@@ -302,6 +309,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
@@ -313,6 +321,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
@@ -324,6 +333,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="hae"/>
       <addon name="webyast">
         <version>
@@ -340,6 +350,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
@@ -350,6 +361,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
@@ -361,6 +373,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="merope.qam.suse.de">
@@ -370,6 +383,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
@@ -380,6 +394,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
@@ -411,6 +426,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
@@ -422,6 +438,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
@@ -433,6 +450,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-slms1.qam.suse.de">
@@ -452,6 +470,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
@@ -463,6 +482,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon name="webyast">
         <version>
           <major>1</major>
@@ -479,6 +499,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="qam-webyast12-32.qam.suse.de">
@@ -489,6 +510,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon name="webyast">
         <version>
           <major>1</major>
@@ -520,6 +542,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon name="smt">
         <version>
@@ -535,6 +558,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="uranus.qam.suse.de">
@@ -545,6 +569,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="obrien.qam.suse.de">
@@ -1029,6 +1054,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.89">
@@ -1039,6 +1065,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="147.2.207.82">
@@ -1109,6 +1136,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="147.2.207.91">
@@ -1119,6 +1147,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="147.2.207.84">
@@ -1150,6 +1179,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1160,6 +1190,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1170,6 +1201,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="paraniden.qam.suse.de">
@@ -1179,6 +1211,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1189,6 +1222,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
