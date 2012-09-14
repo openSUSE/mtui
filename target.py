@@ -429,6 +429,8 @@ class Metadata(object):
 
     def get_release(self):
         systems = ' '.join(self.systems.values())
+        if re.search('mgr', systems):
+            return '11'
         if re.search('sles4vmware11', systems):
             return '11'
         if re.search('sle.11', systems):
