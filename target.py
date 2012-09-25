@@ -159,6 +159,10 @@ class Target(object):
             except AssertionError:
                 out.debug('zombie command terminated')
                 return
+            except Exception:
+                # failed to run command
+                out.error('%s: failed to run command "%s"' % (self.hostname, command))
+                exitcode = -1
 
             time_after = timestamp()
             runtime = int(time_after) - int(time_before)
@@ -432,6 +436,8 @@ class Metadata(object):
         if re.search('mgr', systems):
             return '11'
         if re.search('sles4vmware11', systems):
+            return '11'
+        if re.search('studio12', systems):
             return '11'
         if re.search('sle.11', systems):
             return '11'
