@@ -6,8 +6,8 @@ mode="$1"
 resultdir="$2"
 md5sum="$3"
 
-category1="check_new_licenses.sh check_all_updated.pl check_from_same_srcrpm.pl check_vendor_and_disturl.pl run_rpm_Va.sh check_multiple-owners.sh"
-category2="compare_new_licenses.sh compare_all_updated.sh compare_from_same_srcrpm.sh compare_vendor_and_disturl.sh compare_rpm_Va.sh compare_multiple-owners.sh"
+category1="check_affected_updates.sh check_all_updated.pl check_dependencies.sh check_from_same_srcrpm.pl check_multiple-owners.sh check_new_licenses.sh check_vendor_and_disturl.pl"
+category2="compare_affected_updates.sh compare_all_updated.sh compare_dependencies.sh compare_from_same_srcrpm.sh compare_multiple-owners.sh compare_new_licenses.sh compare_rpm_Va.sh compare_vendor_and_disturl.sh"
 
 mydir="${0%/*}"
 PATH="$PATH:$mydir"
@@ -35,10 +35,9 @@ case "$mode" in
        done
        for helper in $category2; do
           progname=${helper##*/}
-          checkprog=${progname/check_/compare_}
-          checkprog=${checkprog/run_/compare_}
+          checkprog=${progname/compare_/check_}
           echo "launching $progname"
-          $helper $resultdir/$checkprog.before.err $resultdir/$checkprog.after.err 2> $resultdir/$progname.err > $resultdir/$progname.out
+          $helper $resultdir/${checkprog%.*}*.before.err $resultdir/${checkprog%.*}*.after.err 2> $resultdir/$progname.err > $resultdir/$progname.out
           echo "errors:"
           test -s $resultdir/$progname.err && cat $resultdir/$progname.err || echo "(empty)"
           echo "info:"
