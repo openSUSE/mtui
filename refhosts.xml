@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <definitions>
   <location name="default">
-    <host arch="i386" name="s4v-11sp1-a50-32.qam.suse.de">
+    <host arch="i386" name="s4v-11sp1-a51-32.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
@@ -11,7 +11,7 @@
       <virtual mode="guest">vmware</virtual>
       <ltss property="weak">true</ltss>
     </host>
-    <host arch="x86_64" name="s4v-11sp1-a50-64.qam.suse.de">
+    <host arch="x86_64" name="s4v-11sp1-a51-64.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
@@ -21,7 +21,7 @@
       <virtual mode="guest">vmware</virtual>
       <ltss property="weak">true</ltss>
     </host>
-    <host arch="i386" name="s4v-11sp2-a50-32.qam.suse.de">
+    <host arch="i386" name="s4v-11sp2-a51-32.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
@@ -30,7 +30,7 @@
       </product>
       <virtual mode="guest">vmware</virtual>
     </host>
-    <host arch="x86_64" name="s4v-11sp2-a50-64.qam.suse.de">
+    <host arch="x86_64" name="s4v-11sp2-a51-64.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
