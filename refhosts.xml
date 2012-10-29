@@ -534,11 +534,11 @@
         </version>
       </addon>
     </host>
-    <host arch="s390x" name="s390zvc45.suse.de">
+    <host arch="s390x" name="s390ctc45.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>sp2</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>

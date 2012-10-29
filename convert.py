@@ -53,6 +53,8 @@ def main():
     try:
         template = xml_to_template(t, x)
     except Exception:
+	import traceback
+	traceback.print_exc()
         print 'error: could not convert XML'
         return
 
