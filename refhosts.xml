@@ -313,7 +313,7 @@
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390x" name="s390t25.suse.de">
+    <host arch="s390x" name="390vsw067.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -619,7 +619,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390" name="s390zvi48.suse.de">
+    <host arch="s390" name="s390icv048.suse.de">
       <product name="sles">
         <version>
           <major>9</major>
