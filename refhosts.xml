@@ -598,6 +598,7 @@
           <major>9</major>
         </version>
       </product>
+      <ltss>true</ltss>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -607,6 +608,7 @@
           <major>9</major>
         </version>
       </product>
+      <ltss>true</ltss>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -618,6 +620,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <ltss>true</ltss>
     </host>
     <host arch="s390" name="s390icv048.suse.de">
       <product name="sles">
@@ -627,6 +630,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <ltss>true</ltss>
     </host>
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
