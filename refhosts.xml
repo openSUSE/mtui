@@ -1178,7 +1178,7 @@
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390x" name="s390s21.suse.de">
+    <host arch="s390x" name="390vsw073.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
