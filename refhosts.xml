@@ -354,7 +354,7 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="s390x" name="s390t26.suse.de">
+    <host arch="s390x" name="s390vsw068.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -831,7 +831,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390x" name="s390zvi29.suse.de">
+    <host arch="s390x" name="s390icv029.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
