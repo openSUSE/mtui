@@ -501,7 +501,7 @@ class CommandPromt(cmd.Cmd):
 
                 try:
                     if installed[name]['commit'] == updated[name]['commit']:
-                        out.warning('package %s already updated. skipping' % name)
+                        out.warning('revision of package %s hasn\'t changed, it\'s most likely aready updated. skipping' % name)
                     else:
                         diff = '%s/%s-%s.diff' % (destination, name, args)
                         if args == 'source':
@@ -1166,6 +1166,22 @@ class CommandPromt(cmd.Cmd):
 
     def complete_testsuite_submit(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+    def do_set_session_name(self, args):
+        """
+        Set optional mtui session name as part of the prompt string.
+        This should help finding the corrent mtui session if multiple
+        sessions are active.
+
+        set_session_name [name]
+        Keyword arguments:
+        name     -- session name
+        """
+
+        if args:
+            self.prompt = 'QA:%s > ' % args
+        else:
+            self.prompt = 'QA > '
 
     def do_set_location(self, args):
         """

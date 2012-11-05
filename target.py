@@ -433,6 +433,10 @@ class Metadata(object):
 
     def get_release(self):
         systems = ' '.join(self.systems.values())
+        if re.search('manager-client', systems):
+            # SUSE Manager hosts should have the sle11 zypper stack,
+            # even on sle10 installations
+            return '11'
         if re.search('mgr', systems):
             return '11'
         if re.search('sles4vmware11', systems):

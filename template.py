@@ -147,8 +147,12 @@ class Template(object):
         refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
 
         try:
-            refhost.set_attributes_from_testplatform(testplatform)
-            hostnames = refhost.search()
+            try:
+                refhost.set_attributes_from_testplatform(testplatform)
+                hostnames = refhost.search()
+            except (ValueError, KeyError):
+                hostnames = []
+                out.error('failed to parse Testplatform string')
             if not hostnames:
                 out.warning('nothing found for testplatform %s' % testplatform)
 

@@ -381,3 +381,16 @@ A: To simply run an update on the testhosts and export the log, it's
    info: closing connection to s390t10.suse.de
    info: closing connection to dawn.qam.suse.de
 
+Q: How do I distinguish between different MTUI sessions if multiple are
+   active?
+A: From time to time it's feasible to have multiple MTUI sessions with
+   different updates active. Usability might suffer in this case since there
+   is no easy way to distinguishe different sessions at first glance.
+   With the set_session_name command, each MTUI session can be named as part
+   of the prompt string.
+
+   Example:
+
+   QA >
+   QA > set_session_name sle10-bind
+   QA:sle10-bind >

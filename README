@@ -446,6 +446,14 @@ Lists current active ssh sessions on target hosts.
 
 Internal Commands
 *****************
+- set_session_name
+Set optional mtui session name as part of the prompt string. This should help
+finding the corrent mtui session if multiple sessions are active.
+
+		set_session_name [name]
+		Keyword arguments:
+		name     -- session name
+
 - set_log_level 
 Changes the current default MTUI loglevel "info" to "warning" or "debug". To
 enable debug messages, one can set the loglevel to "debug". This could be handy
