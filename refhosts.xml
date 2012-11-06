@@ -82,7 +82,7 @@
         </version>
       </addon>
     </host>
-    <host arch="s390x" name="s390t10.suse.de">
+    <host arch="s390x" name="s390vsw116.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
@@ -662,7 +662,7 @@
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390x" name="s390a26.suse.de">
+    <host arch="s390x" name="s390vsw136.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -965,7 +965,7 @@
       <virtual mode="host">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390x" name="s390t11.suse.de">
+    <host arch="s390x" name="s390vsw117.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
@@ -1230,7 +1230,7 @@
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390x" name="s390a20.suse.de">
+    <host arch="s390x" name="s390vsw136.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
