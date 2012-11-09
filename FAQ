@@ -394,3 +394,29 @@ A: From time to time it's feasible to have multiple MTUI sessions with
    QA >
    QA > set_session_name sle10-bind
    QA:sle10-bind >
+
+Q: How do I connect to a remote shell within MTUI?
+A: The "shell" command invokes a remote login shell on the target host.
+
+   Example:
+
+   QA > shell merkur.qam.suse.de
+   Last login: Fri Nov  9 16:40:28 2012 from f167.suse.de
+   --------------------------------------------------------------------
+   M A I N T E N A N C E    U P D A T E    R E F E R E N C E    H O S T
+   * * * * *    O n l y   a u t h o r i z e d   s t a f f   * * * * * *
+   --------------------------------------------------------------------
+
+   This is the reference host for
+
+   Product:      SLES 11 SP2
+   Architecture: x86_64
+
+   Don't change anything on this system, if you're not allowed to do so.
+
+   Make sure you are familiar with
+   https://wiki.innerweb.novell.com/index.php/RD-OPS_QA/HowTos/reference_host_setup
+   ---------------------------------------------------------------------
+
+   merkur:~ #
+

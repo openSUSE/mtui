@@ -27,7 +27,7 @@ from config import *
 out = logging.getLogger('mtui')
 
 
-class CommandPromt(cmd.Cmd):
+class CommandPrompt(cmd.Cmd):
 
     prompt = 'QA > '
 
@@ -963,6 +963,29 @@ class CommandPromt(cmd.Cmd):
 
     def complete_show_log(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+
+    def do_shell(self, args):
+        """
+        Invokes a remote root shell on the target host.
+        The terminal size is set once, but isn't adapted on subsequent changes.
+
+        shell <hostname>
+        Keyword arguments:
+        hostname -- hostname from the target list
+        """
+
+        if args:
+            targets = selected_targets(self.targets, [args])
+
+            for target in targets.keys():
+                targets[target].shell()
+
+        else:
+            self.parse_error(self.do_shell, args)
+
+    def complete_shell(self, text, line, begidx, endidx):
+        if not line.count(','):
+            return self.complete_hostlist(text, line, begidx, endidx)
 
     def do_run(self, args):
         """

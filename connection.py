@@ -10,6 +10,8 @@ import stat
 import errno
 import select
 import socket
+import termios
+import tty
 import getpass
 import logging
 import warnings
@@ -18,6 +20,8 @@ import logging
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore', category=DeprecationWarning)
     import paramiko
+
+from utils import *
 
 out = logging.getLogger('mtui')
 
@@ -146,7 +150,7 @@ class Connection(object):
 
         session = self.new_session()
         session.exec_command(command)
-        self.close_session()
+        self.close_session(session)
 
         or
 
@@ -180,7 +184,7 @@ class Connection(object):
 
         return self.session
 
-    def close_session(self):
+    def close_session(self, session=None):
         """close the current session"""
 
         out.debug('closing session at %s:%s' % (self.hostname, self.port))
@@ -188,6 +192,7 @@ class Connection(object):
             self.session.shutdown(2)
             self.session.close()
             self.session = None
+            session = None
         except:
             # pass all exceptions since the session is already closed or broken
             pass
@@ -272,9 +277,61 @@ class Connection(object):
         # save the exitcode of the last command and return it
         exitcode = session.recv_exit_status()
 
-        self.close_session()
+        self.close_session(session)
 
         return exitcode
+
+    def shell(self):
+        """invoke remote shell
+
+        Spawns a root shell on the target host.
+        TTY attributes are re-set after leaving the remote shell.
+
+        Keyword arguments:
+        None
+
+        """
+
+        oldtty = termios.tcgetattr(sys.stdin)
+
+        session = self.new_session()
+        width, height = termsize()
+
+        try:
+            session.get_pty('xterm', width, height)
+            session.invoke_shell()
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            # reconnect if the channel is lost
+            self.reconnect()
+            # currently rerunning a command after reconnection is implemented
+            # as recursion. this is a really bad idea and needs fixing.
+            return self.shell()
+
+        try:
+            tty.setraw(sys.stdin.fileno())
+            tty.setcbreak(sys.stdin.fileno())
+
+            while True:
+                r, w, e = select.select([session, sys.stdin], [], [])
+                if session in r:
+                    try:
+                        x = session.recv(1024)
+                        if len(x) == 0:
+                            break
+                        sys.stdout.write(x)
+                        sys.stdout.flush()
+                    except socket.timeout:
+                        pass
+                if sys.stdin in r:
+                    x = sys.stdin.read(1)
+                    if len(x) == 0:
+                        break
+                    session.send(x)
+
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
+
+        self.close_session(session)
 
     def put(self, local, remote):
         """transfers a file to the remote host over SFTP
@@ -410,8 +467,9 @@ class Connection(object):
         try:
             # if the channel is active, we should get a new session.
             # if not, the channel is probable not active.
-            assert(self.new_session())
-            self.close_session()
+            session = self.new_session()
+            assert(session)
+            self.close_session(session)
         except Exception:
             return False
 
@@ -427,5 +485,4 @@ class Connection(object):
 
         out.debug('closing connection to %s:%s' % (self.hostname, self.port))
         self.client.close()
-
 

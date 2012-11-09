@@ -172,7 +172,7 @@ def main():
             pass
 
     # create QA prompt and add hosts by attributes
-    prompt = CommandPromt(targets, metadata)
+    prompt = CommandPrompt(targets, metadata)
     if attributes:
         prompt.do_autoadd(attributes)
 

@@ -175,6 +175,15 @@ class Target(object):
 
             self.log.append(['', '', '', 0, 0])
 
+    def shell(self):
+        out.debug('%s: spawning shell' % self.hostname)
+
+        try:
+            self.connection.shell()
+        except Exception:
+            # failed to spawn shell
+            out.error('%s: failed to spawn shell')
+
     def put(self, local, remote):
         if self.state == 'enabled':
             out.debug('%s: sending "%s"' % (self.hostname, local))

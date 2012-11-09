@@ -296,6 +296,14 @@ procedure.
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
 
+- shell
+Invokes a remote root shell on the target host.
+The terminal size is set once, but isn't adapted on subsequent changes.
+
+		shell <hostname>
+		Keyword arguments:
+		hostname -- hostname from the target list
+
 - put
 Uploads files to all enabled hosts. Multiple files can be selected with special
 patterns according to the rules used by the Unix shell (i.e. *, ?, []). The
