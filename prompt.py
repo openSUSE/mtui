@@ -588,7 +588,7 @@ class CommandPromt(cmd.Cmd):
             print 'Patches in %s:' % specfile
             for patch in patches:
                 num = filter(str.isdigit, patch) or 0
-                if re.findall('\'%%%s\W+' % patch.lower(), str(content)):
+                if re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
                     result = green('applied')
                 elif re.findall('patch.*%%{P:%s}' % num, str(content)):
                     result = green('applied')
