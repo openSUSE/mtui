@@ -420,3 +420,10 @@ A: The "shell" command invokes a remote login shell on the target host.
 
    merkur:~ #
 
+Q: Could I run MTUI without loading a testing template?
+A: Yes, with the current MTUI version loading a template at start isn't
+   mandatory anymore. After startup, a bare shell is able to run remote
+   commands on all connected hosts. Since no hosts are loaded at start, adding
+   hosts to the session could either be done with the -s parameter or the
+   corresponding MTUI commands.
+

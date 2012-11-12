@@ -56,7 +56,7 @@ def main():
         # parameter takes an argument) and the long parameter list by the
         # full name of the parameter (and an equal sign if the parameter takes
         # an argument. for further information read the python getopt manual.
-        (opts, args) = getopt.getopt(sys.argv[1:], 'nhaedl:s:p:t:m:vw:o:', ['non-interactive', 'help', 'asia', 'emea', 'dryrun',
+        (opts, args) = getopt.getopt(sys.argv[1:], 'nhdl:s:p:t:m:vw:o:', ['non-interactive', 'help', 'dryrun',
                                      'location=', 'templates=', 'md5=', 'search-hosts=', 'prerun=', 'overwrite=', 'verbose', 'timeout'])
     except getopt.GetoptError, error:
         # catch unkown parameters and show usage
@@ -66,13 +66,6 @@ def main():
     for (parameter, argument) in opts:
         if parameter in ('-h', '--help'):
             usage()
-        elif parameter in ('-a', '--asia'):
-            out.error('please use parameter "-l beijing" instead of %s' % parameter)
-            sys.exit(0)
-        elif parameter in ('-e', '--emea'):
-            out.error('please omit parameter %s or use parameter "-l default" instead of %s' % (parameter, parameter))
-            sys.exit(0)
-            location = 'default'
         elif parameter in ('-m', '--md5'):
             # match for a alphanumeric string with a length of 32 chars.
             # if it looks like a duck, swims like a duck, and quacks like
@@ -116,30 +109,31 @@ def main():
         else:
             usage()
 
-    if md5 is None:
-        # no upda md5 was set. for future use, we could load an update
-        # within a mtui session and start without hosts.
-        out.error('please specify a valid update identifier')
-        usage()
-
-    try:
-        update = Template(md5, location, directory)
-    except IOError:
-        # in case the template doesn't exist, try to check it out
-        out.info('Testreport %s does not yet exist. Checking out.' % md5)
-        # checkout the current testing template. we could do this with the
-        # python svn module, but for now it's simpler calling just system()
-        os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
+    if md5 is not None:
         try:
             update = Template(md5, location, directory)
+        except IOError:
+            # in case the template doesn't exist, try to check it out
+            out.info('Testreport %s does not yet exist. Checking out.' % md5)
+            # checkout the current testing template. we could do this with the
+            # python svn module, but for now it's simpler calling just system()
+            os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
+            try:
+                update = Template(md5, location, directory)
+            except Exception:
+                # if the template still doesn't exist, it's probably the wrong
+                # template path.
+                sys.exit(0)
         except Exception:
-            # if the template still doesn't exist, it's probably the wrong
-            # template path.
-            sys.exit(0)
-    except Exception:
-        usage()
+            usage()
 
-    metadata = update.metadata
+        metadata = update.metadata
+    else:
+        # if metadata isn't filled with data from the template,
+        # populate it with the required fields
+        metadata = Metadata()
+        metadata.location = location
+        metadata.directory = directory
 
     if refhosts:
         metadata.systems = refhosts
@@ -187,6 +181,7 @@ def main():
         try:
             getattr(prompt, 'do_%s' % method)(args)
         except KeyboardInterrupt:
+            # stop non-interactive command execution on CTRL-C
             interactive = True
             prompt.interactive = interactive
             break
@@ -218,7 +213,7 @@ def usage():
     print 'Maintenance Test Update Installer'
     print '=' * 35
     print
-    print sys.argv[0], '[parameter] {-m|--md5 update}'
+    print sys.argv[0], '[parameter]'
     print
     print 'parameters:'
     print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')

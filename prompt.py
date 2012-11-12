@@ -18,6 +18,7 @@ from datetime import date, datetime
 
 from rpmver import *
 from target import *
+from template import *
 from updater import *
 from export import *
 from utils import *
@@ -368,6 +369,10 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
+
         if args:
             targets = enabled_targets(self.targets)
 
@@ -399,6 +404,10 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         filename -- filename to extract
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         destination = '/tmp/%s' % self.metadata.md5
         pattern = ''
@@ -444,6 +453,10 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         type     -- "build" or "source" diff
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         if args in ['source', 'build']:
             try:
@@ -553,6 +566,10 @@ class CommandPrompt(cmd.Cmd):
         None
         """
 
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
+
         if args:
             self.parse_error(self.do_source_verify, args)
 
@@ -649,6 +666,10 @@ class CommandPrompt(cmd.Cmd):
         script   -- script name to add to the testrun
         """
 
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
+
         if args:
             for script in args.split(','):
                 src = '%s/helper/%s' % (os.path.dirname(__file__), script)
@@ -688,6 +709,10 @@ class CommandPrompt(cmd.Cmd):
         script   -- script name to remove from the testrun
         """
 
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
+
         if args:
             for script in args.split(','):
                 directory = '%s/scripts' % (os.path.dirname(self.metadata.path))
@@ -722,6 +747,10 @@ class CommandPrompt(cmd.Cmd):
         None
         """
 
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
+
         if args:
             self.parse_error(self.do_list_scripts, args)
         else:
@@ -740,6 +769,10 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         None
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         if args:
             self.parse_error(self.do_list_update_commands, args)
@@ -765,6 +798,10 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         None
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         if args:
             self.parse_error(self.do_list_update_commands, args)
@@ -841,8 +878,9 @@ class CommandPrompt(cmd.Cmd):
 
             targetlist = ' '.join(sorted(self.targets.keys()))
             packagelist = ' '.join(sorted(self.metadata.get_package_list()))
-            patchinfo = 'http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/' % self.metadata.md5
-            report = 'http://qam.suse.de/testreports/%s/log' % self.metadata.md5
+            if self.metadata.md5:
+                patchinfo = 'http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/' % self.metadata.md5
+                report = 'http://qam.suse.de/testreports/%s/log' % self.metadata.md5
 
             print '{0:15}: {1}'.format('MD5SUM', self.metadata.md5)
             print '{0:15}: {1}'.format('SWAMP ID', self.metadata.swampid)
@@ -854,8 +892,11 @@ class CommandPrompt(cmd.Cmd):
             print '{0:15}: {1}'.format('Bugs', ', '.join(self.metadata.bugs.keys()))
             print '{0:15}: {1}'.format('Hosts', targetlist)
             print '{0:15}: {1}'.format('Packages', packagelist)
-            print '{0:15}: {1}'.format('Build', patchinfo)
-            print '{0:15}: {1}'.format('Testreport', report)
+            try:
+                print '{0:15}: {1}'.format('Build', patchinfo)
+                print '{0:15}: {1}'.format('Testreport', report)
+            except UnboundLocalError:
+                pass
 
     def do_list_versions(self, args):
         """
@@ -1206,6 +1247,83 @@ class CommandPrompt(cmd.Cmd):
         else:
             self.prompt = 'QA > '
 
+    def do_load_template(self, args):
+        """
+        Load QA Maintenance template by md5 identifier. All changes and logs
+        from an already loaded template are lost if not saved previously.
+        Already connected hosts are kept and extended by the reference hosts
+        defined in the template file.
+
+        load_template <md5>
+        Keyword arguments:
+        md5      -- md5 update identifier
+        """
+
+        # check if args is a valid md5 hash
+        match = re.match(r'([a-fA-F\d]{32})', args)
+        try:
+            md5 = match.group(1)
+        except AttributeError:
+            out.error('md5 hash "%s" not valid' % args)
+            self.parse_error(self.do_load_template, args)
+            return
+
+        # overriding already loaded templates (currently) not supported
+        if self.metadata.md5:
+            if not input('should i overwrite already loaded session %s? (y/N) ' % self.metadata.md5, ['y', 'yes'], self.interactive):
+                return
+
+        try:
+            update = Template(md5, self.metadata.location, self.metadata.directory)
+        except IOError:
+            # in case the template doesn't exist, try to check it out
+            out.info('Testreport %s does not yet exist. Checking out.' % md5)
+            # checkout the current testing template. we could do this with the
+            # python svn module, but for now it's simpler calling just system()
+            os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (self.metadata.directory, md5))
+            try:
+                update = Template(md5, self.metadata.location, self.metadata.directory)
+            except Exception:
+                # if the template still doesn't exist, it's probably the wrong
+                # template path.
+                out.error('failed to load template')
+                return
+
+        metadata = update.metadata
+
+        # reload hosts to which we already have a connection
+        for (hostname, system) in self.metadata.systems.items():
+            out.info('reloading legacy host %s' % hostname)
+            try:
+                self.targets[hostname].close() or self.targets.pop(hostname)
+            except KeyError:
+                pass
+            try:
+                self.targets[hostname] = Target(hostname, system, metadata.get_package_list())
+                self.targets[hostname].add_history(['connect'])
+            except Exception:
+                out.warning('failed to add host %s to target list' % hostname)
+            metadata.systems[hostname] = system
+
+        for (hostname, system) in metadata.systems.items():
+            try:
+                try:
+                    self.targets[hostname]
+                except KeyError:
+                    self.targets[hostname] = Target(hostname, system, metadata.get_package_list())
+                    self.targets[hostname].add_history(['connect'])
+                else:
+                    out.debug('host %s already connected. skipping.' % hostname)
+            except Exception:
+                out.warning('failed to add host %s to target list' % hostname)
+            except KeyboardInterrupt:
+                # skip adding the reference host if CTRL-C was pressed. this might
+                # not work if we are somewhere deep in the network/ssh code where
+                # KeyboardInterrupt is not thrown.
+                out.warning('skipping host %s' % hostname)
+
+        self.metadata = metadata
+
     def do_set_location(self, args):
         """
         Change current reference host location to another site.
@@ -1535,6 +1653,10 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
+
         if args:
             targets = enabled_targets(self.targets)
 
@@ -1584,6 +1706,10 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         if args:
             force = False
@@ -1646,6 +1772,10 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         if args:
             missing = False
@@ -1824,6 +1954,10 @@ class CommandPrompt(cmd.Cmd):
         none
         """
 
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
+
         exitcode = os.system('cd %s; svn up' % os.path.dirname(self.metadata.path))
 
         if exitcode != 0:
@@ -1838,6 +1972,10 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         message  -- commit message
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         message = ''
         if args:
@@ -1973,6 +2111,12 @@ class CommandPrompt(cmd.Cmd):
 
         editor = os.environ.get('EDITOR', 'vi')
 
+        # all but the file command needs template data. skip if template
+        # isn't loaded
+        if not self.metadata.md5 and command != 'file':
+            out.error('no testing template loaded')
+            return
+
         if command == 'file':
             path = filename
         elif command == 'template':
@@ -2017,6 +2161,10 @@ class CommandPrompt(cmd.Cmd):
         hostname -- host update log to export
         force    -- overwrite template if it exists
         """
+
+        if not self.metadata.md5:
+            out.error('no testing template loaded')
+            return
 
         force = False
         hostname = None

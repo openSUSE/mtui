@@ -115,7 +115,11 @@ class ZypperUpdate(Update):
     def __init__(self, targets, patches):
         Update.__init__(self, targets, patches)
 
-        patch = patches['sat']
+        try:
+            patch = patches['sat']
+        except KeyError:
+            out.critical('required SAT patch number for zypper update not found')
+            return
 
         commands = []
 
@@ -145,7 +149,11 @@ class openSuseUpdate(Update):
     def __init__(self, targets, patches):
         Update.__init__(self, targets, patches)
 
-        patch = patches['sat']
+        try:
+            patch = patches['sat']
+        except KeyError:
+            out.critical('required SAT patch number for zypper update not found')
+            return
 
         commands = []
 
@@ -162,7 +170,11 @@ class OldZypperUpdate(Update):
     def __init__(self, targets, patches):
         Update.__init__(self, targets, patches)
 
-        patch = patches['zypp']
+        try:
+            patch = patches['zypp']
+        except KeyError:
+            out.critical('required ZYPP patch number for zypper update not found')
+            return
 
         commands = []
 
@@ -181,7 +193,11 @@ class OnlineUpdate(Update):
     def __init__(self, targets, patches):
         Update.__init__(self, targets, patches)
 
-        patch = patches['you']
+        try:
+            patch = patches['you']
+        except KeyError:
+            out.critical('required YOU patch number for online_update update not found')
+            return
 
         commands = []
 
@@ -198,7 +214,11 @@ class RugUpdate(Update):
     def __init__(self, targets, patches):
         Update.__init__(self, targets, patches)
 
-        patch = patches['you']
+        try:
+            patch = patches['you']
+        except KeyError:
+            out.critical('required YOU patch number for rug update not found')
+            return
 
         commands = []
 
@@ -488,10 +508,15 @@ class OldZypperDowngrade(Downgrade):
     def __init__(self, targets, packages, patches):
         Downgrade.__init__(self, targets, packages)
 
+        try:
+            patch = patches['zypp']
+        except KeyError:
+            out.critical('required ZYPP patch number for zypper downgrade not found')
+            return
+
         self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(packages)
         self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
 
-        patch = patches['zypp']
         commands = []
 
         invalid_packages = ['glibc', 'rpm', 'zypper', 'readline']

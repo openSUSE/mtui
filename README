@@ -47,12 +47,12 @@ doesn't exist, the respecting system is loaded from the default location.
 
 	-m,--md5=                md5 update identifier
 
-This parameter is mandatory and needs to be set in order to find the
-correct testing template. It simply specifies the md5 hash for the update
+This parameter simply specifies the md5 hash for the update
 which could be retrieved on the SWAMP QA view. The template path is then
 composed of the directory parameter and md5 update hash.
 ($directory/$md5/log). If the template is not yet checked out
-from SVN, MTUI tries to fetch it.
+from SVN, MTUI tries to fetch it. When starting MTUI without -m parameter,
+a template could be loaded with the load_template command afterwards.
 
 	-n,--non-interactive     non-interactive update
 
@@ -371,6 +371,16 @@ List available testsuites on the target hosts.
 
 Metadata Commands
 *****************
+- load_template
+Load QA Maintenance template by md5 identifier. All changes and logs from an
+already loaded template are lost if not saved previously. Already connected
+hosts are kept and extended by the reference hosts defined in the
+template file.
+
+		load_template <md5>
+		Keyword arguments:
+		md5      -- md5 update identifier
+
 - list_metadata
 Lists patchinfo metadata like patch number, SWAMP ID or packager.
 

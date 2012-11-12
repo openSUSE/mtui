@@ -38,12 +38,13 @@ class Template(object):
         self.metadata.md5 = md5
         self.metadata.path = self.path
         self.metadata.location = location
+        self.metadata.directory = directory
 
         try:
             with open(self.path, 'r') as template:
                 self.parse_template(template)
         except IOError, error:
-            out.error('failed to open template: %s' % error.strerror)
+            out.error('failed to open template file: %s' % error.strerror)
             raise
 
     def parse_template(self, template):

@@ -428,6 +428,8 @@ class Metadata(object):
     def __init__(self):
         self.md5 = ''
         self.path = ''
+        self.location = ''
+        self.directory = ''
         self.category = ''
         self.patches = {}
         self.swampid = ''
