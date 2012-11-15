@@ -35,7 +35,6 @@ class Target(object):
         self.timeout = timeout
         self.exclusive = exclusive
         self.connection = None
-        self.config = Config()
 
         out.info('connecting to %s' % self.hostname)
 
@@ -122,19 +121,25 @@ class Target(object):
         return self.connection.timeout
 
     def set_repo(self, name):
-        command = '/suse/rd-qa/bin/rep-clean.sh'
+        command = config.repclean_path
 
         try:
             repclean = self.connection.open(command, 'r')
         except IOError:
-            workingdir = os.path.dirname(__file__)
+            # copy over local rep-clean script if rep-clean isn't found
+            datadir = config.datadir
+            tempdir = config.target_tempdir
             try:
-                self.put('%s/helper/rep-clean/rep-clean.sh' % workingdir, '/tmp/rep-clean.sh')
-                self.put('%s/helper/rep-clean/rep-clean.conf' % workingdir, '/tmp/rep-clean.conf')
+                for item in ['rep-clean.sh', 'rep-clean.conf']:
+                    filename = os.path.join(datadir, 'helper', 'rep-clean', item)
+                    destination = os.path.join(tempdir, item)
+                    self.put(filename, destination)
             except OSError:
                 out.error('missing rep-clean.sh script')
             else:
-                command = '/tmp/rep-clean.sh -F /tmp/rep-clean.conf'
+                scriptfile = os.path.join(tempdir, 'rep-clean.sh')
+                conffile = os.path.join(tempdir, 'rep-clean.conf')
+                command = '%s -F %s' % (scriptfile, conffile)
         else:
             repclean.close()
 
@@ -240,7 +245,8 @@ class Target(object):
 
         if self.state == 'enabled':
             try:
-                lockfile = self.connection.open('/var/lock/mtui.lock')
+                filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
+                lockfile = self.connection.open(filename)
             except Exception, error:
                 try:
                     assert(error.errno == errno.ENOENT)
@@ -273,13 +279,14 @@ class Target(object):
         if self.state == 'enabled':
             out.debug('%s: setting lock' % self.hostname)
             try:
-                lockfile = self.connection.open('/var/lock/mtui.lock', 'w+')
+                filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
+                lockfile = self.connection.open(filename, 'w+')
             except Exception, error:
                 out.error('failed to open lockfile: %s' % error)
                 return
 
             now = timestamp()
-            user = self.config.get_user()
+            user = config.session_user
             pid = os.getpid()
             if comment:
                 lockfile.write('%s:%s:%s:%s' % (now, user, pid, comment))
@@ -297,7 +304,8 @@ class Target(object):
                 out.debug('%s: removing lock' % self.hostname)
 
                 try:
-                    self.connection.remove('/var/lock/mtui.lock')
+                    filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
+                    self.connection.remove(filename)
                 except IOError, error:
                     if error.errno == errno.ENOENT:
                         out.debug('%s: lockfile does not exist' % self.hostname)
@@ -310,13 +318,14 @@ class Target(object):
         if self.state == 'enabled':
             out.debug('%s: adding history entry' % self.hostname)
             try:
-                historyfile = self.connection.open('/var/log/mtui.log', 'a+')
+                filename = os.path.join('/', 'var', 'log', 'mtui.log')
+                historyfile = self.connection.open(filename, 'a+')
             except Exception, error:
                 out.error('failed to open history file: %s' % error)
                 return
 
             now = timestamp()
-            user = self.config.get_user()
+            user = config.session_user
             try:
                 historyfile.write('%s:%s:%s\n' % (now, user, ':'.join(comment)))
                 historyfile.close()
@@ -639,11 +648,10 @@ class Locked(object):
         self.timestamp = timestamp
         self.pid = pid
         self.comment = comment
-        self.config = Config()
 
     def own(self):
         try:
-            assert(self.user == self.config.get_user())
+            assert(self.user == config.session_user)
             assert(self.pid == str(os.getpid()))
             return True
         except Exception:

@@ -38,8 +38,7 @@ class CommandPrompt(cmd.Cmd):
         self.targets = targets
         self.metadata = metadata
         self.homedir = os.path.expanduser('~')
-        self.workingdir = os.path.dirname(__file__)
-        self.config = Config()
+        self.datadir = config.datadir
 
         readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
 
@@ -63,7 +62,8 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             attributes = Attributes()
-            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+
+            refhost = Refhost(config.refhosts_xml, self.metadata.location)
 
             if 'Testplatform:' in args:
                 try:
@@ -145,7 +145,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+            refhost = Refhost(config.refhosts_xml, self.metadata.location)
             hosts = self.do_search_hosts(args)
 
             for hostname in hosts:
@@ -256,7 +256,7 @@ class CommandPrompt(cmd.Cmd):
         or updating packages. Date, username and event is shown.
         Events could be filtered with the event parameter.
 
-        list_history [hostname,...][,event]
+        list_history <hostname>[,...][,event]
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         event    -- connect, disconnect, install, update, downgrade
@@ -380,9 +380,10 @@ class CommandPrompt(cmd.Cmd):
                 targets = selected_targets(targets, args.split(','))
 
             if targets:
-                destination = '/tmp/%s' % self.metadata.md5
-                fetchcmd = 'cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/' \
-                    % (destination, self.metadata.md5)
+                patchinfo = '/'.join([config.patchinfo_url, self.metadata.md5])
+                destination = '/'.join([config.target_tempdir, self.metadata.md5])
+                fetchcmd = 'mkdir -p %s; cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" %s/' \
+                    % (destination, destination, lelf.metadata.md5)
                 installcmd = 'cd %s; rpm -Uhv *.src.rpm' % destination
 
                 RunCommand(targets, fetchcmd).run()
@@ -397,8 +398,8 @@ class CommandPrompt(cmd.Cmd):
 
     def do_source_extract(self, args):
         """
-        Extracts current source RPMs locally to /tmp. If no filename
-        is given, the whole package content is extracted.
+        Extracts current source RPMs to a local temporary directory.
+        If no filename is given, the whole package content is extracted.
 
         source_extract [filename]
         Keyword arguments:
@@ -409,19 +410,25 @@ class CommandPrompt(cmd.Cmd):
             out.error('no testing template loaded')
             return
 
-        destination = '/tmp/%s' % self.metadata.md5
+        destination = os.path.join(config.local_tempdir, self.metadata.md5)
         pattern = ''
 
         if args:
             pattern = args
 
         try:
-            os.mkdir(destination)
-        except OSError:
-            pass
+            os.makedirs(destination)
+        except OSError, error:
+            if error.errno == errno.EEXIST:
+                pass
+        except Exception, error:
+            out.critical('failed to create temp directory: %s' % str(error))
+            return
 
-        exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*src.rpm" http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/'
-                             % (destination, self.metadata.md5))
+        patchinfo = '/'.join([config.patchinfo_url, self.metadata.md5])
+
+        exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*src.rpm" %s/'
+                             % (destination, patchinfo))
         if exitcode:
             out.error('failed to fetch src rpm')
             return
@@ -476,12 +483,12 @@ class CommandPrompt(cmd.Cmd):
 
             updated = {}
             installed = {}
-            destination = '/tmp/%s' % self.metadata.md5
+            destination = os.path.join(config.local_tempdir, self.metadata.md5)
 
-            if not glob.glob('%s/*/*.spec' % destination):
+            if not glob.glob(os.path.join(destination, '*', '*.spec')):
                 self.do_source_extract('')
 
-            for rpmfile in glob.glob(destination + '/*.src.rpm'):
+            for rpmfile in glob.glob(os.path.join(destination, '*.src.rpm')):
                 try:
                     match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
                 except Exception, error:
@@ -516,7 +523,7 @@ class CommandPrompt(cmd.Cmd):
                     if installed[name]['commit'] == updated[name]['commit']:
                         out.warning('revision of package %s hasn\'t changed, it\'s most likely aready updated. skipping' % name)
                     else:
-                        diff = '%s/%s-%s.diff' % (destination, name, args)
+                        diff = os.path.join(destination, '%s-%s.diff' % (name, args))
                         if args == 'source':
                             with open(diff, 'w+') as f:
                                 try:
@@ -528,8 +535,8 @@ class CommandPrompt(cmd.Cmd):
 
                         elif args == 'build':
                             for state in ['new', 'old']:
-                                sourcedir = '%s/%s/%s' % (destination, name, state)
-                                builddir = '%s/%s/%s/BUILD' % (destination, name, state)
+                                sourcedir = os.path.join(destination, name, state)
+                                builddir = os.path.join(destination, name, state, 'BUILD')
                                 if state == 'new':
                                     disturl = updated[name]['disturl']
                                 else:
@@ -574,13 +581,13 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_source_verify, args)
 
         patches = {}
-        destination = '/tmp/%s' % self.metadata.md5
+        destination = os.path.join(config.local_tempdir, self.metadata.md5)
 
-        specfiles = glob.glob(destination + '/*/*.spec')
+        specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
 
         if not specfiles:
             self.do_source_extract('*.spec')
-            specfiles = glob.glob(destination + '/*/*.spec')
+            specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
             if not specfiles:
                 out.error('failed to load specfile')
                 return
@@ -672,15 +679,15 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             for script in args.split(','):
-                src = '%s/helper/%s' % (os.path.dirname(__file__), script)
-                destdir = '%s/scripts' % (os.path.dirname(self.metadata.path))
+                src = os.path.join(self.datadir, 'helper', script)
+                destdir = os.path.join(os.path.dirname(self.metadata.path), 'scripts')
 
                 try:
                     for state in ['pre', 'post']:
                         dest = os.path.join(destdir, state, script)
                         shutil.copy(src, dest)
 
-                    src = '%s/helper/%s' % (os.path.dirname(__file__), script.replace('check_', 'compare_'))
+                    src = os.path.join(self.datadir, 'helper', script.replace('check_', 'compare_'))
                     dest = os.path.join(destdir, 'compare', script.replace('check_', 'compare_'))
                     try:
                         shutil.copy(src, dest)
@@ -697,7 +704,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_add_scripts, args)
 
     def complete_add_scripts(self, text, line, begidx, endidx):
-        scripts = os.listdir('%s/helper' % os.path.dirname(__file__))
+        scripts = os.listdir(os.path.join(self.datadir, 'helper'))
         return [script for script in scripts if script.startswith(text) and 'check' in script and script not in line]
 
     def do_remove_scripts(self, args):
@@ -715,11 +722,11 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             for script in args.split(','):
-                directory = '%s/scripts' % (os.path.dirname(self.metadata.path))
+                directory = os.path.join(os.path.dirname(self.metadata.path), 'scripts')
 
                 try:
                     for state in ['pre', 'post']:
-                            os.remove(os.path.join(directory, state, script))
+                        os.remove(os.path.join(directory, state, script))
 
                     compare = os.path.join(directory, 'compare', script.replace('check_', 'compare_'))
                     os.remove(compare)
@@ -733,8 +740,8 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_remove_scripts, args)
 
     def complete_remove_scripts(self, text, line, begidx, endidx):
-        pre = os.listdir('%s/scripts/pre' % os.path.dirname(self.metadata.path))
-        post = os.listdir('%s/scripts/post' % os.path.dirname(self.metadata.path))
+        pre = os.listdir(os.path.join(os.path.dirname(self.metadata.path), 'scripts', 'pre'))
+        post = os.listdir(os.path.join(os.path.dirname(self.metadata.path), 'scripts', 'post'))
         return [script for script in set(pre) & set(post) if script.startswith(text) and 'check' in script and script not in line]
 
     def do_list_scripts(self, args):
@@ -755,7 +762,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_scripts, args)
         else:
 
-            for (root, dirs, files) in os.walk('%s/scripts' % os.path.dirname(self.metadata.path)):
+            for (root, dirs, files) in os.walk(os.path.join(os.path.dirname(self.metadata.path), 'scripts')):
                 for name in files:
                     if not '.svn' in root:
                         print os.path.join(root, name)
@@ -834,7 +841,7 @@ class CommandPrompt(cmd.Cmd):
 
             time = date.today().strftime('%d/%m/%y')
             swampid = self.metadata.swampid
-            username = self.config.get_user()
+            username = config.session_user
 
             comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
 
@@ -857,11 +864,13 @@ class CommandPrompt(cmd.Cmd):
 
             buglist = ','.join(sorted(self.metadata.bugs.keys()))
 
-            print 'Buglist: https://bugzilla.novell.com/buglist.cgi?bug_id=%s' % buglist
+            url = config.bugzilla_url
+
+            print 'Buglist: %s/buglist.cgi?bug_id=%s' % (url, buglist)
             for (bug, description) in self.metadata.bugs.items():
                 print
                 print 'Bug #{0:5}: {1}'.format(bug, description)
-                print 'https://bugzilla.novell.com/show_bug.cgi?id=%s' % bug
+                print '%s/show_bug.cgi?id=%s' % (url, bug)
 
     def do_list_metadata(self, args):
         """
@@ -879,8 +888,8 @@ class CommandPrompt(cmd.Cmd):
             targetlist = ' '.join(sorted(self.targets.keys()))
             packagelist = ' '.join(sorted(self.metadata.get_package_list()))
             if self.metadata.md5:
-                patchinfo = 'http://hilbert.nue.suse.com/abuildstat/patchinfo/%s/' % self.metadata.md5
-                report = 'http://qam.suse.de/testreports/%s/log' % self.metadata.md5
+                patchinfo = '/'.join([config.patchinfo_url, self.metadata.md5])
+                report = '/'.join([config.reports_url, self.metadata.md5, 'log'])
 
             print '{0:15}: {1}'.format('MD5SUM', self.metadata.md5)
             print '{0:15}: {1}'.format('SWAMP ID', self.metadata.swampid)
@@ -1092,7 +1101,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            path = '/usr/share/qa/tools'
+            path = config.target_testsuitedir
 
             targets = enabled_targets(self.targets)
 
@@ -1130,7 +1139,7 @@ class CommandPrompt(cmd.Cmd):
                 targets = selected_targets(targets, args.split(','))
 
             if not command.startswith('/'):
-                command = os.path.join('/usr/share/qa/tools', command.strip())
+                command = os.path.join(config.target_testsuitedir, command.strip())
 
             command = 'export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5, command)
             name = os.path.basename(command).replace('-run', '')
@@ -1181,7 +1190,7 @@ class CommandPrompt(cmd.Cmd):
             name = os.path.basename(command).replace('-run', '')
             time = date.today().strftime('%d/%m/%y')
             swampid = self.metadata.swampid
-            username = self.config.get_user()
+            username = config.session_user
 
             comment = 'testing %s (SWAMP %s) on %s' % (name, swampid, time)
 
@@ -1280,7 +1289,8 @@ class CommandPrompt(cmd.Cmd):
             out.info('Testreport %s does not yet exist. Checking out.' % md5)
             # checkout the current testing template. we could do this with the
             # python svn module, but for now it's simpler calling just system()
-            os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (self.metadata.directory, md5))
+            svnpath = '/'.join([config.svn_path, md5])
+            os.system('cd %s; svn co %s' % (self.metadata.directory, svnpath))
             try:
                 update = Template(md5, self.metadata.location, self.metadata.directory)
             except Exception:
@@ -1292,7 +1302,8 @@ class CommandPrompt(cmd.Cmd):
         metadata = update.metadata
 
         # reload hosts to which we already have a connection
-        for (hostname, system) in self.metadata.systems.items():
+        for hostname in self.targets:
+            system = self.targets[hostname].system
             out.info('reloading legacy host %s' % hostname)
             try:
                 self.targets[hostname].close() or self.targets.pop(hostname)
@@ -1321,6 +1332,23 @@ class CommandPrompt(cmd.Cmd):
                 # not work if we are somewhere deep in the network/ssh code where
                 # KeyboardInterrupt is not thrown.
                 out.warning('skipping host %s' % hostname)
+
+        # ignore svn metadata files when copying the testscripts to
+        # the correspondend directories
+        ignored = shutil.ignore_patterns('*.svn')
+
+        try:
+            # copy check_* and compare_* scripts to the template directory
+            sourcedir = os.path.join(self.datadir, 'scripts')
+            destdir = os.path.join(os.path.dirname(metadata.path), 'scripts')
+            shutil.copytree(sourcedir, destdir, ignore=ignored)
+        except OSError, error:
+            # this should not happen but was already noticed once or twice.
+            # probable due to nfs timeouts if mtui was checked out to a nfs mount.
+            if error.errno == errno.ENOENT:
+                out.warning('scripts/ dir not found, please copy manually')
+            else:
+                pass
 
         self.metadata = metadata
 
@@ -1900,7 +1928,7 @@ class CommandPrompt(cmd.Cmd):
 
             script_hook(targets, 'post', os.path.dirname(self.metadata.path), self.metadata.md5)
             script_hook(targets, 'compare', os.path.dirname(self.metadata.path), self.metadata.md5)
-            FileDelete(targets, '/tmp/%s' % self.metadata.md5).run()
+            FileDelete(targets, os.path.join(config.target_tempdir, self.metadata.md5)).run()
 
             for target in targets:
                 if not lock.locked:
@@ -2003,7 +2031,7 @@ class CommandPrompt(cmd.Cmd):
 
             for filename in glob.glob(args):
                 if os.path.isfile(filename):
-                    remote = '/tmp/%s/%s' % (self.metadata.md5, os.path.basename(filename))
+                    remote = os.path.join(config.target_tempdir, self.metadata.md5, os.path.basename(filename))
 
                     FileUpload(targets, filename, remote).run()
                     out.info('uploaded %s to %s' % (filename, remote))
@@ -2028,8 +2056,8 @@ class CommandPrompt(cmd.Cmd):
         if args:
             targets = self.targets
 
-            destination = os.path.dirname(self.metadata.path) + '/downloads/'
-            local = destination + os.path.basename(args)
+            destination = os.path.join(os.path.dirname(self.metadata.path), 'downloads')
+            local = os.path.join(destination, os.path.basename(args))
 
             try:
                 os.makedirs(destination)
@@ -2059,10 +2087,8 @@ class CommandPrompt(cmd.Cmd):
         termname -- terminal emulator to spawn consoles on 
         """
 
-        dirname = self.workingdir
-
         systems = {}
-
+        dirname = self.datadir
         targets = self.targets
 
         hosts = [host.hostname for host in sorted(targets.values())]
@@ -2081,12 +2107,12 @@ class CommandPrompt(cmd.Cmd):
         else:
 
             print 'available terminals scripts:'
-            for filename in glob.glob(dirname + '/term.*.sh'):
+            for filename in glob.glob(os.path.join(dirname, 'term.*.sh')):
                 print os.path.basename(filename).split('.')[1]
 
     def complete_terms(self, text, line, begidx, endidx):
-        dirname = self.workingdir
-        terms = glob.glob(dirname + '/term.*.sh')
+        dirname = self.datadir
+        terms = glob.glob(os.path.join(dirname, 'term.*.sh'))
         terms = map(os.path.basename, terms)
         return [i.split('.')[1] for i in terms if i.startswith('term.' + text)]
 
@@ -2122,11 +2148,11 @@ class CommandPrompt(cmd.Cmd):
         elif command == 'template':
             path = self.metadata.path
         elif command == 'specfile':
-            path = '/tmp/%s/*/*.spec' % self.metadata.md5
+            path = os.path.join(config.local_tempdir, self.metadata.md5, '*', '*.spec')
             if not glob.glob(path):
                 self.do_source_extract(None)
         elif command == 'patch':
-            path = '/tmp/%s/*/%s' % (self.metadata.md5, filename)
+            path = os.path.join(config.local_tempdir, self.metadata.md5, '*', filename)
             if not glob.glob(path):
                 self.do_source_extract(None)
         else:
@@ -2139,7 +2165,7 @@ class CommandPrompt(cmd.Cmd):
         if 'file,' in line:
             return self.complete_filelist(text.replace('file,', '', 1), line, begidx, endidx)
         if 'patch,' in line:
-            specfile = glob.glob('/tmp/%s/*/*.spec' % self.metadata.md5)[0]
+            specfile = glob.glob(os.path.join(config.local_tempdir, self.metadata.md5, '*', '*.spec'))
             with open(specfile, 'r') as spec:
                 name = re.findall('Name:\W+(.*)', spec.read())[0]
                 spec.seek(0)
@@ -2236,10 +2262,10 @@ class CommandPrompt(cmd.Cmd):
             filename = 'log.xml'
 
         if filename.startswith('/'):
-            output_dir = os.path.dirname(filename) + '/'
+            output_dir = os.path.dirname(filename)
             filename = os.path.basename(filename)
         else:
-            output_dir = os.path.dirname(self.metadata.path) + '/output/'
+            output_dir = os.path.join(os.path.dirname(self.metadata.path), 'output')
 
         try:
             os.makedirs(output_dir)
@@ -2250,7 +2276,7 @@ class CommandPrompt(cmd.Cmd):
             out.critical('failed to create directories: %s' % str(error))
             return
 
-        filename = output_dir + filename
+        filename = os.path.join(output_dir, filename)
 
         if os.path.exists(filename):
             out.warning('file %s exists.' % filename)
@@ -2344,19 +2370,23 @@ class CommandPrompt(cmd.Cmd):
         print '%s: %s' % (method.__name__.replace('do_', ''), method.__doc__)
 
 
-def script_hook(targets, which, scriptdir, md5):
+def script_hook(targets, which, templatedir, md5):
+    # this hook seriously needs a rewrite
+
     if which not in ['post', 'pre', 'compare']:
         return
 
-    output_dir = '%s/output/scripts' % scriptdir
-    remote_dir = '/tmp/%s' % md5
+    output_dir = os.path.join(templatedir, 'output', 'scripts')
+    remote_dir = os.path.join(config.target_tempdir, md5)
 
-    if not os.path.isdir('%s/scripts/%s' % (scriptdir, which)):
-        out.warning('%s scripts not found in %s/scripts/%s' % (which, scriptdir, which))
+    scriptdir = os.path.join(templatedir, 'scripts', which)
+
+    if not os.path.isdir(scriptdir):
+        out.warning('%s scripts not found in %s' % (which, scriptdir))
         return
 
-    for script in os.listdir('%s/scripts/%s' % (scriptdir, which)):
-        local_file = '%s/scripts/%s/%s' % (scriptdir, which, script)
+    for script in os.listdir(scriptdir):
+        local_file = os.path.join(scriptdir, script)
         remote_file = '%s.%s' % (which, script)
 
         if not os.path.isfile(local_file):
@@ -2372,7 +2402,8 @@ def script_hook(targets, which, scriptdir, md5):
                     postname = '%s/post.%s.%s' % (output_dir, script.replace('compare_', 'check_'), target)
                     prename = glob.glob(prename.replace('.%s.' % suffix, '*'))[0]
                     postname = glob.glob(postname.replace('.%s.' % suffix, '*'))[0]
-                    command = ['%s/scripts/compare/%s' % (scriptdir, script), prename, postname]
+                    comparescript = os.path.join(templatedir, 'scripts', 'compare', script)
+                    command = [comparescript, prename, postname]
 
                     out.debug('running %s' % str(command))
                     try:
@@ -2394,7 +2425,7 @@ def script_hook(targets, which, scriptdir, md5):
                     targets[target].log.append([' '.join(command), stdout, stderr, exitcode, 0])
             else:
 
-                FileUpload(targets, local_file, '%s/%s' % (remote_dir, remote_file)).run()
+                FileUpload(targets, local_file, os.path.join(remote_dir, remote_file)).run()
                 RunCommand(targets, '%s/%s %s' % (remote_dir, remote_file, md5)).run()
 
                 try:
@@ -2407,7 +2438,7 @@ def script_hook(targets, which, scriptdir, md5):
                     return
 
                 for target in targets:
-                    filename = '%s/%s.%s' % (output_dir, remote_file, target)
+                    filename = os.path.join(output_dir, '%s.%s' % (remote_file, target))
                     try:
                         f = open(filename, 'w')
                         f.write(targets[target].lastout())

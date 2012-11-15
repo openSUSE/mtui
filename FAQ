@@ -427,3 +427,33 @@ A: Yes, with the current MTUI version loading a template at start isn't
    hosts to the session could either be done with the -s parameter or the
    corresponding MTUI commands.
 
+   Example:
+   
+   # mtui 
+   QA > list_metadata
+   MD5SUM         : 
+   SWAMP ID       : 
+   Category       : 
+   Reviewer       : 
+   Packager       : 
+   Bugs           : 
+   Hosts          : 
+   Packages       : 
+   QA > load_template e65aa2ec57d9176e397c320d3d69a370
+   info: connecting to merkur.qam.suse.de
+   info: connecting to s390vsw116.suse.de
+   info: connecting to s390vsw020.suse.de
+   info: connecting to dawn.qam.suse.de
+   QA > list_metadata
+   MD5SUM         : e65aa2ec57d9176e397c320d3d69a370
+   SWAMP ID       : 49275
+   Category       : security
+   Reviewer       : 
+   Packager       : mrueckert@suse.com
+   SAT            : 6833
+   Bugs           : 775649, 775653
+   Hosts          : dawn.qam.suse.de merkur.qam.suse.de s390vsw020.suse.de s390vsw116.suse.de
+   Packages       : hawk hawk-templates
+   Build          : http://hilbert.nue.suse.com/abuildstat/patchinfo/e65aa2ec57d9176e397c320d3d69a370/
+   Testreport     : http://qam.suse.de/testreports/e65aa2ec57d9176e397c320d3d69a370/log
+

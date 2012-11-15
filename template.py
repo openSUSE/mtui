@@ -5,6 +5,7 @@ import os
 import logging
 import re
 
+from config import *
 from target import *
 from refhost import *
 
@@ -27,12 +28,7 @@ class Template(object):
 
         self.md5 = md5
 
-        if directory is not None:
-            self.path = directory + '/' + md5 + '/'
-        else:
-            self.path = './' + md5 + '/'
-
-        self.path = self.path + 'log'
+        self.path = os.path.join(directory, md5, 'log')
 
         self.metadata = Metadata()
         self.metadata.md5 = md5
@@ -120,7 +116,7 @@ class Template(object):
         """
 
         try:
-            refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
+            refhost = Refhost(config.refhosts_xml, self.metadata.location)
 
             try:
                 refhost.set_attributes_from_system(system)
@@ -144,8 +140,8 @@ class Template(object):
 
         """
 
+        refhost = Refhost(config.refhosts_xml, self.metadata.location)
         hosts = {}
-        refhost = Refhost(os.path.dirname(__file__) + '/' + 'refhosts.xml', self.metadata.location)
 
         try:
             try:

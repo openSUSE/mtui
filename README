@@ -95,6 +95,13 @@ process. User input is not required if in non-interactive mode (-n parameter).
 
 Prints the parameter list
 
+Configuration File
+-------------------------
+MTUI configuration files can either be stored in /etc/ or the user's home
+directory. As a general rule, command line parameters take precedence over
+configuration file values. Additionally, values in /etc/mtui.cfg are
+overridden by the tester's personal file in ~/.mtuirc.
+
 Shell
 -------------------------
 The MTUI shell is comparable to a bash shell as both use the readline backend

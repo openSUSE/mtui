@@ -5,6 +5,7 @@
 # almost all exceptions here are passed to the upper layer.
 #
 
+import os
 import sys
 import stat
 import errno
@@ -448,7 +449,8 @@ class Connection(object):
             sftp = self.client.open_sftp()
             items = self.listdir(path)
             for item in items:
-                self.remove("%s/%s" % (path, item))
+                filename = os.path.join(path, item)
+                self.remove(filename)
             return sftp.rmdir(path)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()

@@ -13,6 +13,7 @@ import shutil
 import re
 
 from log import *
+from config import *
 from prompt import *
 from template import *
 
@@ -26,21 +27,21 @@ def main():
 
     # default refhosts location. could be an arbitrary string, matches agains
     # the location tags in refhosts.xml
-    location = 'default'
+    location = config.location
 
     # template dir could be as well be set in the environment instead of
     # passing it as command line parameter
-    directory = os.getenv('TEMPLATEDIR', '.')
+    directory = config.template_dir
+
+    # default socket timeout in seconds
+    timeout = config.connection_timeout
+    attributes = ''
 
     # default mtui mode is interactive with the QA> shell
     interactive = True
 
     # default hosts state is enabled instead of disabled or dry-run
     state = 'enabled'
-
-    # default socket timeout in seconds
-    timeout = 300
-    attributes = ''
 
     # overwrites the hostnames set in the template
     refhosts = {}
@@ -99,6 +100,7 @@ def main():
                 out.error('failed to open prerun script')
                 sys.exit(0)
         elif parameter in ('-v', '--verbose'):
+            print "setting debug"
             out.setLevel(level=logging.DEBUG)
         elif parameter in ('-w', '--timeout'):
             try:
@@ -109,6 +111,18 @@ def main():
         else:
             usage()
 
+    # make sure that the testreport directory exists
+    try:
+        os.makedirs(directory)
+    except OSError, error:
+        if error.errno == errno.EEXIST:
+            pass
+    except Exception, error:
+        out.critical('failed to create testreport directory: %s' % str(error))
+        return
+    else:
+        out.debug('created testreport directory')
+
     if md5 is not None:
         try:
             update = Template(md5, location, directory)
@@ -117,7 +131,8 @@ def main():
             out.info('Testreport %s does not yet exist. Checking out.' % md5)
             # checkout the current testing template. we could do this with the
             # python svn module, but for now it's simpler calling just system()
-            os.system('cd %s; svn co svn+ssh://svn@qam.suse.de/testreports/%s' % (directory, md5))
+            svnpath = '/'.join([config.svn_path, md5])
+            os.system('cd %s; svn co %s' % (directory, svnpath))
             try:
                 update = Template(md5, location, directory)
             except Exception:
@@ -155,8 +170,11 @@ def main():
     ignored = shutil.ignore_patterns('*.svn')
 
     try:
+        assert(metadata.path)
         # copy check_* and compare_* scripts to the template directory
-        shutil.copytree('%s/scripts' % os.path.dirname(__file__), '%s/scripts' % os.path.dirname(metadata.path), ignore=ignored)
+        sourcedir = os.path.join(config.datadir, 'scripts')
+        destdir = os.path.join(os.path.dirname(metadata.path), 'scripts')
+        shutil.copytree(sourcedir, destdir, ignore=ignored)
     except OSError, error:
         # this should not happen but was already noticed once or twice.
         # probable due to nfs timeouts if mtui was checked out to a nfs mount.
@@ -164,6 +182,11 @@ def main():
             out.warning('scripts/ dir not found, please copy manually')
         else:
             pass
+    except AssertionError:
+        # metadata path not set. most likely run without template.
+        # don't copy anything
+        out.debug('running without template, not copying scripts directory')
+        pass
 
     # create QA prompt and add hosts by attributes
     prompt = CommandPrompt(targets, metadata)
