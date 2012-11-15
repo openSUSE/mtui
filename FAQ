@@ -457,3 +457,16 @@ A: Yes, with the current MTUI version loading a template at start isn't
    Build          : http://hilbert.nue.suse.com/abuildstat/patchinfo/e65aa2ec57d9176e397c320d3d69a370/
    Testreport     : http://qam.suse.de/testreports/e65aa2ec57d9176e397c320d3d69a370/log
 
+Q: How do I change the default refhosts location?
+A: In case you don't want to use the "default" refhost location, i.e. if you
+   have a local or virtual set of reference hosts, you can set your personal
+   location in the ~/.mtuirc configuration file. This eliminates the need to
+   use the -l/--location command line parameter on each mtui run.
+
+   Example:
+
+   # cat ~/.mtuirc
+   # MTUI user configuration file
+   [mtui]
+   location=emeavirt
+
