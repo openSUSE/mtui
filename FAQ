@@ -324,13 +324,17 @@ A: Usually it's sufficient to simply load the hosts from the template and add
 
 Q: How do I set the template directory without passing it as command line
    parameter every time I run MTUI?
-A: The $TEMPLATEDIR environment variable is used to find the template
-   directory as well. Simply adding the variable to ~/.bashrc or ~/.profile
-   makes it available on every login.
+A: The template directory can be set in the MTUI user configuration file
+   in either /etc/mtui.cfg or ~/.mtuirc. Additionally, setting the template
+   directory with $TEMPLATEDIR still works but is superseded by the
+   templatedir option in the configuration file.
 
    Example:
 
-   # echo 'export TEMPLATEDIR="/tmp/testing/testreports/"' >> ~/.profile
+   # cat ~/.mtuirc
+   # MTUI user configuration file
+   [mtui]
+   templatedir=/tmp/testing/testreports/
 
 Q: How do I change the default editor for the edit command to emacs,nano,...?
 A: The $EDITOR environment variable is used to get the editor and defaults to
