@@ -471,6 +471,8 @@ class Metadata(object):
             return '9'
         if re.search('sl11', systems):
             return '114'
+        if re.search('rhel', systems):
+            return 'YUM'
 
 
 class ThreadedMethod(threading.Thread):

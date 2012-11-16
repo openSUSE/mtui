@@ -612,7 +612,9 @@ class CommandPrompt(cmd.Cmd):
             print 'Patches in %s:' % specfile
             for patch in patches:
                 num = filter(str.isdigit, patch) or 0
-                if re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
+                if num == 0 and re.findall('\'%patch\W+', str(content)):
+                    result = green('applied')
+                elif re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
                     result = green('applied')
                 elif re.findall('patch.*%%{P:%s}' % num, str(content)):
                     result = green('applied')
@@ -793,7 +795,7 @@ class CommandPrompt(cmd.Cmd):
                 out.critical('no updater available for %s' % release)
                 return
 
-            print '\n'.join(updater(self.targets, self.metadata.patches).commands)
+            print '\n'.join(updater(self.targets, self.metadata.patches, self.metadata.get_package_list()).commands)
             del updater
 
     def do_list_downgrade_commands(self, args):
@@ -1879,7 +1881,7 @@ class CommandPrompt(cmd.Cmd):
                 return
 
             try:
-                updater(targets, self.metadata.patches).run()
+                updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
             except Exception:
                 out.critical('failed to update target systems')
                 for target in targets:

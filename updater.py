@@ -28,7 +28,7 @@ class UpdateError(Exception):
 
 class Update(object):
 
-    def __init__(self, targets, patches):
+    def __init__(self, targets, patches, packages):
         self.targets = targets
         self.patches = patches
         self.commands = []
@@ -112,8 +112,8 @@ class Update(object):
 
 class ZypperUpdate(Update):
 
-    def __init__(self, targets, patches):
-        Update.__init__(self, targets, patches)
+    def __init__(self, targets, patches, packages):
+        Update.__init__(self, targets, patches, packages)
 
         try:
             patch = patches['sat']
@@ -146,8 +146,8 @@ class ZypperUpdate(Update):
 
 class openSuseUpdate(Update):
 
-    def __init__(self, targets, patches):
-        Update.__init__(self, targets, patches)
+    def __init__(self, targets, patches, packages):
+        Update.__init__(self, targets, patches, packages)
 
         try:
             patch = patches['sat']
@@ -167,8 +167,8 @@ class openSuseUpdate(Update):
 
 class OldZypperUpdate(Update):
 
-    def __init__(self, targets, patches):
-        Update.__init__(self, targets, patches)
+    def __init__(self, targets, patches, packages):
+        Update.__init__(self, targets, patches, packages)
 
         try:
             patch = patches['zypp']
@@ -190,8 +190,8 @@ class OldZypperUpdate(Update):
 
 class OnlineUpdate(Update):
 
-    def __init__(self, targets, patches):
-        Update.__init__(self, targets, patches)
+    def __init__(self, targets, patches, packages):
+        Update.__init__(self, targets, patches, packages)
 
         try:
             patch = patches['you']
@@ -211,8 +211,8 @@ class OnlineUpdate(Update):
 
 class RugUpdate(Update):
 
-    def __init__(self, targets, patches):
-        Update.__init__(self, targets, patches)
+    def __init__(self, targets, patches, packages):
+        Update.__init__(self, targets, patches, packages)
 
         try:
             patch = patches['you']
@@ -231,7 +231,21 @@ class RugUpdate(Update):
         self.commands = commands
 
 
-Updater = {'11': ZypperUpdate, '114': openSuseUpdate, '10': OldZypperUpdate, '9': OnlineUpdate, 'OES': RugUpdate}
+class RedHatUpdate(Update):
+
+    def __init__(self, targets, patches, packages):
+        Update.__init__(self, targets, patches, packages)
+
+        commands = []
+
+        commands.append('export LANG=')
+        commands.append('yum repolist')
+        commands.append('yum -y update %s' % ' '.join(packages))
+
+        self.commands = commands
+
+
+Updater = {'11': ZypperUpdate, '114': openSuseUpdate, '10': OldZypperUpdate, '9': OnlineUpdate, 'OES': RugUpdate, 'YUM': RedHatUpdate}
 
 
 class Prepare(object):
@@ -350,10 +364,10 @@ class OldZypperPrepare(Prepare):
     def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
         Prepare.__init__(self, targets, testing)
 
-        prefix = []
         commands = []
 
         for package in packages:
+            # do not install upstream-branding packages
             if 'branding-upstream' in package:
                 continue
             if installed_only:
@@ -363,8 +377,27 @@ class OldZypperPrepare(Prepare):
 
         self.commands = commands
 
+class RedHatPrepare(Prepare):
 
-Preparer = {'11': ZypperPrepare, '114': ZypperPrepare, '10': OldZypperPrepare}
+    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
+        Prepare.__init__(self, targets, testing)
+
+        parameter = ''
+        commands = []
+
+        if not testing:
+            parameter = '--disablerepo=*testing*'
+
+        for package in packages:
+            if installed_only:
+                commands.append('rpm -q %s &>/dev/null && yum -y %s install %s' % (package, parameter, package))
+            else:
+                commands.append('yum -y %s install %s' % (parameter, package))
+
+        self.commands = commands
+
+
+Preparer = {'11': ZypperPrepare, '114': ZypperPrepare, '10': OldZypperPrepare, 'YUM': RedHatPrepare}
 
 
 class Downgrade(object):
@@ -533,8 +566,19 @@ class OldZypperDowngrade(Downgrade):
 
         self.post_commands = commands
 
+class RedHatDowngrade(Downgrade):
 
-Downgrader = {'11': ZypperDowngrade, '114': ZypperDowngrade, '10': OldZypperDowngrade}
+    def __init__(self, targets, packages, patches):
+        Downgrade.__init__(self, targets, packages)
+
+        commands = []
+
+        commands.append('yum -y downgrade %s' % ' '.join(packages))
+
+        self.commands = commands
+
+
+Downgrader = {'11': ZypperDowngrade, '114': ZypperDowngrade, '10': OldZypperDowngrade, 'YUM': RedHatDowngrade}
 
 
 class Install(object):
@@ -620,8 +664,19 @@ class ZypperInstall(Install):
 
         self.commands = commands
 
+class RedHatInstall(Install):
 
-Installer = {'11': ZypperInstall, '114': ZypperInstall, '10': ZypperInstall}
+    def __init__(self, targets, packages):
+        Install.__init__(self, targets, packages)
+
+        commands = []
+
+        commands.append('yum -y install %s' % ' '.join(packages))
+
+        self.commands = commands
+
+
+Installer = {'11': ZypperInstall, '114': ZypperInstall, '10': ZypperInstall, 'YUM': RedHatInstall}
 
 
 class ZypperUninstall(Install):
@@ -635,6 +690,17 @@ class ZypperUninstall(Install):
 
         self.commands = commands
 
+class RedHatUninstall(Install):
 
-Uninstaller = {'11': ZypperUninstall, '114': ZypperUninstall, '10': ZypperUninstall}
+    def __init__(self, targets, packages):
+        Install.__init__(self, targets, packages)
+
+        commands = []
+
+        commands.append('yum -y remove %s' % ' '.join(packages))
+
+        self.commands = commands
+
+
+Uninstaller = {'11': ZypperUninstall, '114': ZypperUninstall, '10': ZypperUninstall, 'YUM': RedHatUninstall}
 

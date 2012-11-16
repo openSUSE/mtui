@@ -70,6 +70,10 @@ class Template(object):
             if match:
                 self.metadata.patches['sat'] = match.group(1)
 
+            match = re.search('RES Patch No: (\d+)', line)
+            if match:
+                self.metadata.patches['res'] = match.group(1)
+
             match = re.search('SUBSWAMPID: (\d+)', line)
             if match:
                 self.metadata.swampid = match.group(1)

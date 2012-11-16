@@ -100,7 +100,6 @@ def main():
                 out.error('failed to open prerun script')
                 sys.exit(0)
         elif parameter in ('-v', '--verbose'):
-            print "setting debug"
             out.setLevel(level=logging.DEBUG)
         elif parameter in ('-w', '--timeout'):
             try:
