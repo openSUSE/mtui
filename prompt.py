@@ -24,6 +24,7 @@ from export import *
 from utils import *
 from refhost import *
 from config import *
+from notification import *
 
 out = logging.getLogger('mtui')
 
@@ -39,6 +40,8 @@ class CommandPrompt(cmd.Cmd):
         self.metadata = metadata
         self.homedir = os.path.expanduser('~')
         self.datadir = config.datadir
+
+        self.session = self.metadata.md5
 
         readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
 
@@ -1254,8 +1257,10 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            self.prompt = 'QA:%s > ' % args
+            self.session = args
+            self.prompt = 'QA:%s > ' % self.session
         else:
+            self.session = self.metadata.md5
             self.prompt = 'QA > '
 
     def do_load_template(self, args):
@@ -1887,6 +1892,7 @@ class CommandPrompt(cmd.Cmd):
                 for target in targets:
                     if not lock.locked:
                         targets[target].remove_lock()
+                Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
                 return
             except KeyboardInterrupt:
                 out.info('update process canceled')
@@ -1936,6 +1942,7 @@ class CommandPrompt(cmd.Cmd):
                 if not lock.locked:
                     targets[target].remove_lock()
 
+            Notification('MTUI', 'updating %s finished' % self.session).show()
             out.info('done')
         else:
             self.parse_error(self.do_update, args)
