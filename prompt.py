@@ -1856,11 +1856,7 @@ class CommandPrompt(cmd.Cmd):
                         not_installed.append(package)
                     else:
                         if RPMVersion(before) >= RPMVersion(required):
-                            out.error('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
-                            for target in targets:
-                                if not lock.locked:
-                                    targets[target].remove_lock()
-                            return
+                            out.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
 
                 if len(not_installed):
                     out.warning('%s: these packages are not installed: %s' % (target, not_installed))
