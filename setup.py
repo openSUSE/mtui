@@ -21,5 +21,6 @@ setup(name='mtui',
       download_url = 'http://qam.suse.de/infrastructure/mtui/',
       packages = ['mtui'],
       scripts = ['mtui.py', 'convert.py'],
-      data_files = data_files,
+      data_files = data_files
+      )
 

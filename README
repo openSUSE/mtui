@@ -36,7 +36,7 @@ is used. However, this is typically set to another directory
 like --template=~/testing/templates. For an improved usability,
 the environment variable TEMPLATEDIR is also processed. Instead of
 specifying the directory each time on the commandline, one could set
-TEMPLATEDIR="~/testing/templates" in ~/.profile. The commandline
+templatedir="~/testing/templates" in ~/.mtuirc. The commandline
 parameter takes precedence over the environment variable if both are given.
 
 	-l,--location            set the refhost location
@@ -661,8 +661,8 @@ Proposed Testing Workflow
 -------------------------
 Invoke mtui.py with the update md5 as parameter in interactive mode and set the
 testreports directory if it's not already set by the TEMPLATEDIR environment
-variable. The script connects then to the reference hosts mentioned in the
-template file.
+variable or the configuration file.
+The script connects then to the reference hosts mentioned in the template file.
 
 ./mtui.py -t ~/testing/testreports/ -m 7cf90e0522b1b961e418455feb815531 -i
 info: connecting to frisch.suse.de
