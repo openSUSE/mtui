@@ -30,7 +30,8 @@ class Config(object):
         try:
             self.datadir = os.path.expanduser(self._get_option('mtui', 'datadir'))
         except Exception:
-            self.datadir = os.path.dirname(__file__)
+            # datadir is in parent directory
+            self.datadir = os.path.dirname(os.path.dirname(__file__))
         out.debug('config.datadir set to "%s"' % self.datadir)
 
         try:

@@ -86,7 +86,7 @@ class Template(object):
             if match:
                 self.metadata.packages = dict([(pack.split()[0], pack.split()[2]) for pack in match.group(1).split(',')])
 
-            match = re.search('Suggested Test Plan Reviewers: (.+)', line)
+            match = re.search('Test Plan Reviewers: (.+)', line)
             if match:
                 self.metadata.reviewer = match.group(1)
 

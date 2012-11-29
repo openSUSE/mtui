@@ -26,7 +26,7 @@ import traceback
 import logging
 import warnings
 
-from log import *
+from mtui.log import *
 
 out = logging.getLogger('mtui')
 
@@ -64,7 +64,7 @@ if __name__ == '__main__':
     try:
         check_modules()
 
-        from main import main
+        from mtui.main import main
         main()
     except Exception:
         # all uncatched exceptions end up here and generate a nice backtrace

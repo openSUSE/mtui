@@ -10,7 +10,7 @@ import sys
 import os
 import getopt
 
-from export import *
+from mtui.export import *
 
 
 def usage():
