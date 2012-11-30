@@ -1,5 +1,7 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
+#
+# occasionally used functions which don't match anywhere else
+#
 
 import os
 import time

@@ -1,5 +1,7 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
+#
+# template parser
+#
 
 import os
 import logging
@@ -120,7 +122,11 @@ class Template(object):
         """
 
         try:
-            refhost = Refhost(config.refhosts_xml, self.metadata.location)
+            try:
+                refhost = Refhost(config.refhosts_xml, self.metadata.location)
+            except Exception:
+                out.error('failed to load reference hosts data')
+                return
 
             try:
                 refhost.set_attributes_from_system(system)
@@ -144,7 +150,12 @@ class Template(object):
 
         """
 
-        refhost = Refhost(config.refhosts_xml, self.metadata.location)
+        try:
+            refhost = Refhost(config.refhosts_xml, self.metadata.location)
+        except Exception:
+            out.error('failed to load reference hosts data')
+            return
+
         hosts = {}
 
         try:

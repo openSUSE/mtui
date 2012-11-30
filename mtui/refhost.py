@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
 #
 # managing and parsing of the refhosts.xml file
@@ -119,7 +118,7 @@ class Refhost(object):
         except Exception, error:
             # nothing to do for us if we can't load the hosts
             out.error('failed to parse refhosts.xml: %s' % error)
-            return
+            raise
 
     def extract_name(self, element):
         """extract value of the 'name' tag of the xml element

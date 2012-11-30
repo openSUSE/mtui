@@ -1,5 +1,7 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
+#
+# mtui notifications, currently supporting python-notify only
+#
 
 import logging
 import warnings

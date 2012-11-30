@@ -1,5 +1,7 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
+#
+# mtui command line prompt
+#
 
 import os
 import sys
@@ -66,7 +68,11 @@ class CommandPrompt(cmd.Cmd):
         if args:
             attributes = Attributes()
 
-            refhost = Refhost(config.refhosts_xml, self.metadata.location)
+            try:
+                refhost = Refhost(config.refhosts_xml, self.metadata.location)
+            except Exception:
+                out.error('failed to load reference hosts data')
+                return
 
             if 'Testplatform:' in args:
                 try:
@@ -148,7 +154,12 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            refhost = Refhost(config.refhosts_xml, self.metadata.location)
+            try:
+                refhost = Refhost(config.refhosts_xml, self.metadata.location)
+            except Exception:
+                out.error('failed to load reference hosts data')
+                return
+
             hosts = self.do_search_hosts(args)
 
             for hostname in hosts:

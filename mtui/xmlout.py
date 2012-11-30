@@ -1,5 +1,7 @@
-#!/usr/bin/python
 # -*- coding: utf-8 -*-
+#
+# xml log output
+#
 
 import re
 import xml.dom.minidom
