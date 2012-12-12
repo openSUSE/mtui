@@ -334,8 +334,10 @@ class Target(object):
     def listdir(self, path):
         try:
             return self.connection.listdir(path)
-        except Exception:
-            return
+        except IOError, error:
+            if error.errno == errno.ENOENT:
+                out.debug('%s: directory %s does not exist' % (self.hostname, path))
+            return []
 
     def remove(self, path):
         try:
