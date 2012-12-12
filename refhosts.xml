@@ -742,7 +742,7 @@
       <virtual mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="iseries" name="saffron.suse.de">
+    <host arch="iseries" name="saffron.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
