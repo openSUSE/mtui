@@ -44,7 +44,7 @@ class Attributes(object):
         self.virtual = {'mode':'', 'hypervisor':''}
 
     def __str__(self):
-        """humand readable output ob the current attributes"""
+        """humand readable output of the current attributes"""
 
         version = ''
         kernel = ''
@@ -70,8 +70,15 @@ class Attributes(object):
             # add addon name followed by addon version to the string
             addons = ' '.join([addons, addon])
 
-            major = self.addons[addon]['major']
-            minor = self.addons[addon]['minor']
+            try:
+                major = self.addons[addon]['major']
+            except KeyError:
+                major = ""
+            try:
+                minor = self.addons[addon]['minor']
+            except KeyError:
+                minor = ""
+
             if major or minor:
                 addons = ' '.join([addons, '%s.%s' % (major, minor)])
 

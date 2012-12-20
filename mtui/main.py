@@ -91,6 +91,9 @@ def main():
             for value in argument.replace(';', ' ').split():
                 hostname, _, system = value.partition(',')
                 refhosts[hostname] = system
+            if not refhosts:
+                out.error('overwrite parameter set without valid host arguments')
+                sys.exit(0)
         elif parameter in ('-p', '--prerun'):
             try:
                 with open(argument, 'r') as script:
