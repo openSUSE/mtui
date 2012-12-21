@@ -888,7 +888,7 @@
       <addon name="smt">
         <version>
           <major>10</major>
-          <minor>sp4</minor>
+          <minor>sp3</minor>
         </version>
       </addon>
     </host>
