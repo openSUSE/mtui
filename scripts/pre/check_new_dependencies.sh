@@ -1,0 +1,1 @@
+../../helper/check_new_dependencies.sh
