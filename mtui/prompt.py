@@ -1812,9 +1812,10 @@ class CommandPrompt(cmd.Cmd):
         machines, the pre-, post- and compare scripts are run before and
         after the update process. If the update adds new packages to the
         channel, the "newpackage" parameter triggers the package installation
-        right after the update.
+        right after the update. To skip the preparation procedure, append
+        "noprepare" to the argument list.
 
-        update <hostname>[,newpackage]
+        update <hostname>[,newpackage][,noprepare]
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
@@ -1824,19 +1825,35 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if args:
+            prepare = True
             missing = False
             newpackage = False
 
             parameter = args.split(',')
+
+            # don't install new packages when doing a non-interactive kernel update
+            if not self.interactive and filter(lambda x: '-kmp-' in x, self.metadata.packages):
+                try:
+                    parameter.remove('newpackage')
+                except ValueError:
+                    pass
+                parameter.append('installed')
+
             if 'newpackage' in parameter:
                 newpackage = True
                 parameter.remove('newpackage')
                 args = ','.join(parameter)
 
+            if 'noprepare' in parameter:
+                prepare = False
+                parameter.remove('noprepare')
+                args = ','.join(parameter)
+
             targets = enabled_targets(self.targets)
 
-            if self.do_prepare(args) is False:
-                return
+            if prepare:
+                if self.do_prepare(args) is False:
+                    return
 
             if args.split(',')[0] != 'all':
                 targets = selected_targets(targets, args.split(','))
@@ -1955,7 +1972,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_update, args)
 
     def complete_update(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage'])
+        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage', 'noprepare'])
 
     def do_list_sessions(self, args):
         """

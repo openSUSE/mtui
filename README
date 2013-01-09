@@ -270,8 +270,9 @@ Applies the testing update to the target hosts. While updating the machines,
 the pre-, post- and compare scripts are run before and after the update
 process. If the update adds new packages to the channel, the "newpackage"
 parameter triggers the package installation right after the update.
+To skip the preparation procedure, append "noprepare" to the argument list.
 
-		update <hostname>[,newpackage]
+		update <hostname>[,newpackage][,noprepare]
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
 
