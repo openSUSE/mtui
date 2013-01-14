@@ -1136,7 +1136,7 @@
       <addon property="weak" name="sdk"/>
     </host>
   </location>
-  <location name="emeavirt">
+  <location name="nuremberg">
     <host arch="i386" name="teladi.qam.suse.de">
       <product name="sles">
         <version>
@@ -1289,5 +1289,7 @@
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
+  </location>
+  <location name="prague">
   </location>
 </definitions>
