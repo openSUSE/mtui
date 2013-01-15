@@ -278,6 +278,7 @@
       <kernel>true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="x86_64" name="cetur.qam.suse.de">
       <product name="studio">
@@ -343,17 +344,6 @@
       </addon>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="leo.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <addon property="weak" name="sdk"/>
-      <addon property="weak" name="hae"/>
-    </host>
     <host arch="s390x" name="s390vsw068.suse.de">
       <product name="sles">
         <version>
@@ -375,6 +365,7 @@
       <kernel>true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="ia64" name="merope.qam.suse.de">
       <product name="sles">
@@ -462,17 +453,6 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="frisch.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <addon property="weak" name="sdk"/>
-      <addon property="weak" name="hae"/>
     </host>
     <host arch="x86_64" name="qam-webyast12-64.qam.suse.de">
       <product name="sles">
