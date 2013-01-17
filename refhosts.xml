@@ -1271,5 +1271,45 @@
     </host>
   </location>
   <location name="prague">
+    <host arch="x86_64" name="archer.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="tucker.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="reed.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="sato.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
   </location>
 </definitions>
