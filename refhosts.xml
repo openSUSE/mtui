@@ -1278,7 +1278,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <virtual property="weak" mode="guest">kvm</virtual>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="tucker.qam.suse.de">
@@ -1288,7 +1288,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <virtual property="weak" mode="guest">kvm</virtual>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="reed.qam.suse.de">
@@ -1298,7 +1298,7 @@
           <minor>sp4</minor>
         </version>
       </product>
-      <virtual property="weak" mode="guest">kvm</virtual>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="sato.qam.suse.de">
@@ -1308,7 +1308,7 @@
           <minor>sp4</minor>
         </version>
       </product>
-      <virtual property="weak" mode="guest">kvm</virtual>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
   </location>
