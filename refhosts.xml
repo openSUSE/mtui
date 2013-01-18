@@ -989,6 +989,112 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="x86_64" name="mgr-srv-17-pg.qam.suse.de">
+      <product name="manager">
+        <version>
+          <major>1</major>
+          <minor>7</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+    </host>
+    <host arch="x86_64" name="mgr-srv-17-pgl.qam.suse.de">
+      <product name="manager">
+        <version>
+          <major>1</major>
+          <minor>7</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+    </host>
+    <host arch="x86_64" name="mgr-srv-17-ocl.qam.suse.de">
+      <product name="manager">
+        <version>
+          <major>1</major>
+          <minor>7</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+    </host>
+    <host arch="x86_64" name="mgr-proxy-17.qam.suse.de">
+      <product name="manager-proxy">
+        <version>
+          <major>1</major>
+          <minor>7</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+    </host>
+    <host arch="x86_64" name="mgr-clnt-rhel5.qam.suse.de">
+      <product name="rhel">
+        <version>
+          <major>5</major>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+      <addon name="manager-client">
+        <version>
+          <major>5</major>
+        </version>
+      </addon>
+    </host>
+    <host arch="x86_64" name="mgr-clnt-rhel6.qam.suse.de">
+      <product name="rhel">
+        <version>
+          <major>6</major>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+      <addon name="manager-client">
+        <version>
+          <major>6</major>
+        </version>
+      </addon>
+    </host>
+    <host arch="x86_64" name="mgr-clnt-10sp4.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+      <addon name="manager-client">
+        <version>
+          <major>10</major>
+        </version>
+      </addon>
+    </host>
+    <host arch="x86_64" name="mgr-clnt-11sp1.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+      <addon name="manager-client">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </addon>
+    </host>
+    <host arch="x86_64" name="mgr-clnt-11sp2.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="kvm-host-nue-01.qam.suse.de">kvm</virtual>
+      <addon name="manager-client">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </addon>
+    </host>
   </location>
   <location name="beijing">
     <host arch="x86_64" name="147.2.207.90">
