@@ -1311,5 +1311,45 @@
       <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="x86_64" name="kelby.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="mayweather.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="hayes.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="hees.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>10</major>
+          <minor>sp4</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
   </location>
 </definitions>
