@@ -173,13 +173,14 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="merkur.qam.suse.de">
+    <host arch="x86_64" name="split.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
           <minor>sp2</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
       <addon property="weak" name="webyast">
@@ -734,13 +735,14 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="oes.qam.suse.de">
+    <host arch="i386" name="goner.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
           <minor>sp4</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="couchant.qam.suse.de">
@@ -1287,16 +1289,6 @@
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="split.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="s390x" name="s390vsw020.suse.de">
       <product name="sles">
         <version>
@@ -1326,16 +1318,7 @@
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="goner.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp4</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
+
     <host arch="x86_64" name="terran.qam.suse.de">
       <product name="sles">
         <version>
