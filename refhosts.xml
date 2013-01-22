@@ -200,13 +200,14 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="dawn.qam.suse.de">
+    <host arch="i386" name="argonen.qam.suse.de">
       <product name="sles">
         <version>
           <major>11</major>
           <minor>sp2</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
       <addon property="weak" name="webyast">
@@ -615,13 +616,14 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="aurore.qam.suse.de">
+    <host arch="x86_64" name="terran.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
           <minor>sp4</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="fermium.qam.suse.de">
@@ -1279,16 +1281,6 @@
       <virtual property="weak" mode="guest">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="argonen.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="s390x" name="s390vsw020.suse.de">
       <product name="sles">
         <version>
@@ -1313,17 +1305,6 @@
         <version>
           <major>11</major>
           <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-
-    <host arch="x86_64" name="terran.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp4</minor>
         </version>
       </product>
       <virtual property="weak" mode="guest">xen</virtual>
