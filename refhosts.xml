@@ -133,7 +133,7 @@
         </version>
       </product>
       <kernel>true</kernel>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena64-11.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xenu32-11-2.qam.suse.de">
@@ -144,7 +144,7 @@
         </version>
       </product>
       <kernel>true</kernel>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena32-11.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc64" name="aal.qam.suse.de">
@@ -267,7 +267,7 @@
       </product>
       <kernel>true</kernel>
       <ltss property="weak">true</ltss>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="scott.qam.suse.de">
@@ -301,7 +301,7 @@
       </product>
       <kernel>true</kernel>
       <ltss property="weak">true</ltss>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena64-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xena64-11sp1.qam.suse.de">
@@ -722,7 +722,7 @@
         </version>
       </product>
       <kernel>true</kernel>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena64-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xenu32-10.qam.suse.de">
@@ -733,7 +733,7 @@
         </version>
       </product>
       <kernel>true</kernel>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="iseries" name="saffron.qam.suse.de">
@@ -935,7 +935,7 @@
         </version>
       </product>
       <kernel>true</kernel>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena64-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="dax.qam.suse.de">
@@ -968,7 +968,7 @@
         </version>
       </product>
       <kernel>true</kernel>
-      <virtual mode="guest">xen</virtual>
+      <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="sulu.qam.suse.de">
