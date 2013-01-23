@@ -277,7 +277,7 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
@@ -364,7 +364,7 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
