@@ -1114,6 +1114,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
@@ -1125,6 +1126,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
@@ -1136,6 +1138,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1146,6 +1149,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1156,6 +1160,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1166,6 +1171,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1176,6 +1182,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1186,6 +1193,7 @@
           <minor>sp4</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1196,6 +1204,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
@@ -1207,6 +1216,7 @@
           <minor>sp1</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
@@ -1218,6 +1228,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
@@ -1228,6 +1239,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
