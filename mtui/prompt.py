@@ -1842,13 +1842,12 @@ class CommandPrompt(cmd.Cmd):
             if 'newpackage' in parameter:
                 newpackage = True
                 parameter.remove('newpackage')
-                args = ','.join(parameter)
 
             if 'noprepare' in parameter:
                 prepare = False
                 parameter.remove('noprepare')
-                args = ','.join(parameter)
 
+            args = ','.join(parameter)
             targets = enabled_targets(self.targets)
 
             if prepare:

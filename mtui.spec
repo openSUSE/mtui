@@ -70,7 +70,7 @@ mkdir -p %{buildroot}%{_datadir}/mtui
 cp -a scripts %{buildroot}%{_datadir}/mtui/
 cp -a helper %{buildroot}%{_datadir}/mtui/
 install -Dm0755 term.gnome.sh term.kde.sh term.xterm.sh %{buildroot}%{_datadir}/mtui/
-install -Dm0755 refhosts.xml %{buildroot}%{_datadir}/mtui/
+install -Dm0644 refhosts.xml %{buildroot}%{_datadir}/mtui/
 
 %clean
 rm -rf %{buildroot}
@@ -85,6 +85,6 @@ rm -rf %{buildroot}
 %{python_sitelib}/mtui*
 
 %changelog
-* Fri Sep 28 2012 ckornacker@suse.de
+* Thu Nov 29 2012 ckornacker@suse.de
 - version 1.0
 - initial rpm version
