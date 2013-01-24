@@ -32,9 +32,9 @@ if grep -q "VERSION = 11" /etc/SuSE-release; then
     zypper -n se -t package -is 2>/dev/null | egrep '(TESTING|System)' | awk -F\| '{gsub(/[ \t]+/,""); print $2"-"$4 }' | sort -u
 elif grep -q "VERSION = 10" /etc/SuSE-release; then
     for repo in /var/lib/zypp/db/sources/*; do
-        if grep -q TESTING $i; then
+        if grep -q TESTING $repo; then
             echo "sed -i -e 's,<enabled>.*</enabled>,<enabled>false</enabled>,g' $repo"
-	elif grep -q UPDATE $i; then
+	elif grep -q UPDATE $repo; then
             echo "sed -i -e 's,<enabled>.*</enabled>,<enabled>true</enabled>,g' $repo"
         fi
     done
