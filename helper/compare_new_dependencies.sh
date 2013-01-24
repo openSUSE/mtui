@@ -8,10 +8,11 @@ if [ -z "$1" -o -z "$2" ]; then
 fi
 
 list=$(grep "list:" "$1" | sed 's,list: ,,g')
-changed=$(diff -Nur "$1" "$2" | grep "^\+[[:alpha:]]" | cut -d: -f1 | sed 's,^+,,g')
+#changed=$(diff -Nur "$1" "$2" | grep "^\+[[:alpha:]]" | cut -d: -f1 | sed 's,^+,,g')
+changed=$(diff -Nur "$1" "$2" | grep "^\+[[:alpha:]]" | sed 's,^+,,g')
 
 for package in $changed; do
-   if ! [[ $list =~ $package ]]; then
+   if ! [[ "$list" =~ "$package" ]]; then
       new="$new $package"
    fi
 done
