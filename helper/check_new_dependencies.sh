@@ -40,5 +40,5 @@ elif grep -q "VERSION = 10" /etc/SuSE-release; then
     done
     zypper -n se -t package -i 2>/dev/null | egrep '(TESTING|System)' | awk -F\| '{gsub(/[ \t]+/,""); print $4"-"$5 }' | sort -u
 else
-    rpm -qa --queryformat '%{NAME}: %{VERSION}-%{RELEASE}\n' | sort -u
+    rpm -qa --queryformat '%{NAME}-%{VERSION}-%{RELEASE}\n' | sort -u
 fi
