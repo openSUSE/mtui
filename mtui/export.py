@@ -208,10 +208,15 @@ def xml_to_template(template, xmldata, updatehost=None):
             # return code values:   0 SUCCEEDED
             #                       1 FAILED
             #                       2 INTERNAL ERROR
+            #                       3 NOT RUN
             try:
                 # name == command, exitcode == exitcode
                 name = child.getAttribute('name')
                 exitcode = child.getAttribute('return')
+                # move on if the script wasn't run
+                if exitcode == '3':
+                    continue
+
             except Exception:
                 continue
 

@@ -655,7 +655,8 @@ compare_check_cpio.sh \
   $templatedir/output/scripts/post.check_cpio.sh.$hostname
 
 If there are some unwanted differences, the compare script should return 1.
-Otherwise, return 0.
+Otherwise, return 0. If the script didn't get any sensible output, 3 may be
+returned to indicate the script wasn't run.
 
 
 Proposed Testing Workflow
