@@ -22,7 +22,11 @@ for subdir in $(wget -q "$PATCHINFO_URL" -O - | grep DIR | sed -e 's,.*href="\([
    done
 done
 
-testsuites=$(zypper se -s qa_test -t package | grep qa_test | awk -F\| '{sub(/ qa_test_/,""); print $2 }' | sort -u)
+if grep -q "VERSION = 11" /etc/SuSE-release; then
+    testsuites=$(zypper se -s qa_test -t package 2>/dev/null | grep qa_test | awk -F\| '{sub(/ qa_test_/,""); print $2 }' | sort -u)
+if grep -q "VERSION = 10" /etc/SuSE-release; then
+    testsuites=$(zypper se qa_test 2>/dev/null | grep qa_test | awk -F\| '{sub(/ qa_test_/,""); print $4 }' | sort -u)
+fi
 
 # remove blacklisted testsuites
 for testsuite in $blacklist; do
