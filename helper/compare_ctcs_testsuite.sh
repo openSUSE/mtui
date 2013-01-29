@@ -20,7 +20,7 @@ if [ -z "$before" ]; then
 fi
 
 for testcase in $after; do
-    before=${before/$testcase/}
+    before=${before/$testcase /}
 done
 
 before=$(echo $before)
