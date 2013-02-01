@@ -56,7 +56,7 @@ class Target(object):
                         lock.comment))
 
     def __del__(self):
-        out.debug('%s: deleting Target object' % self.hostname)
+        #out.debug('%s: deleting Target object' % self.hostname)
         self.close()
 
     def __lt__(self, other):

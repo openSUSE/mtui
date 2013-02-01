@@ -534,7 +534,7 @@ class ZypperDowngrade(Downgrade):
     def __init__(self, targets, packages, patches):
         Downgrade.__init__(self, targets, packages)
 
-        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System Packages)" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(packages)
+        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(packages)
         self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
 
 
