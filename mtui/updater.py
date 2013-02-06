@@ -349,9 +349,9 @@ class ZypperPrepare(Prepare):
             if 'branding-upstream' in package:
                 continue
             if installed_only:
-                commands.append('rpm -q %s &>/dev/null && zypper -n in --no-recommends -y -l %s %s' % (package, parameter, package))
+                commands.append('rpm -q %s &>/dev/null && zypper -n in -y -l %s %s' % (package, parameter, package))
             else:
-                commands.append('zypper -n in --no-recommends -y -l %s %s' % (parameter, package))
+                commands.append('zypper -n in -y -l %s %s' % (parameter, package))
 
         self.commands = commands
 
