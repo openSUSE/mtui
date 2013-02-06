@@ -17,7 +17,7 @@ tempdir=/tmp/
 user=myusername
 
 # refhosts.xml location, defaults to "default". currently available values
-# due to refhosts.xml are: "default", "beijing" and "emeavirt"
+# due to refhosts.xml are: "default", "beijing", "prague" and "nuremberg"
 location=default
 
 # path to refhosts.xml. if path is not absolute, refhosts.xml is loaded from
@@ -29,7 +29,7 @@ refhosts=refhosts.xml
 tempdir=/tmp/
 
 # remote path to rep-clean.sh. defaults to ~rd-qa NIS user
-repclean=/suse/rd-qa/bin/rep-clean.sh
+repclean=/mounts/qam/infrastructure/mtui/helper/rep-clean/rep-clean.sh
 
 # path to the SLCS testsuite scripts
 testsuitedir=/usr/share/qa/tools/
