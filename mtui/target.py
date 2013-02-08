@@ -454,7 +454,7 @@ class Metadata(object):
 
     def get_release(self):
         systems = ' '.join(self.systems.values())
-        if re.search('manager-client', systems):
+        if re.search('manager', systems):
             # SUSE Manager hosts should have the sle11 zypper stack,
             # even on sle10 installations
             return '11'
