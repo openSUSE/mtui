@@ -412,7 +412,7 @@
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="kurk.qam.suse.de">
-      <product name="rt">
+      <product name="sles">
         <version>
           <major>11</major>
           <minor>sp1</minor>
@@ -422,9 +422,10 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
+      <addon name="rt"/>
     </host>
     <host arch="x86_64" name="kurk.qam.suse.de">
-      <product name="rt">
+      <product name="sles">
         <version>
           <major>11</major>
           <minor>sp2</minor>
@@ -433,6 +434,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
+      <addon name="rt"/>
     </host>
     <host arch="i386" name="xena32-11sp1.qam.suse.de">
       <product name="sles">
@@ -816,7 +818,7 @@
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="kurk.qam.suse.de">
-      <product name="rt">
+      <product name="sles">
         <version>
           <major>10</major>
           <minor>sp2</minor>
@@ -824,6 +826,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon name="rt"/>
     </host>
     <host arch="s390x" name="s390icv029.suse.de">
       <product name="sles">
@@ -848,7 +851,7 @@
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="sulu.qam.suse.de">
-      <product name="rt">
+      <product name="sles">
         <version>
           <major>10</major>
           <minor>sp2</minor>
@@ -856,6 +859,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon name="rt"/>
     </host>
     <host arch="x86_64" name="dax.qam.suse.de">
       <product name="sles">
@@ -896,7 +900,7 @@
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="kurk.qam.suse.de">
-      <product name="rt">
+      <product name="sles">
         <version>
           <major>10</major>
           <minor>sp3</minor>
@@ -904,6 +908,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon name="rt"/>
     </host>
     <host arch="i386" name="zypp.qam.suse.de">
       <product name="sles">
@@ -972,7 +977,7 @@
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="sulu.qam.suse.de">
-      <product name="rt">
+      <product name="sles">
         <version>
           <major>10</major>
           <minor>sp3</minor>
@@ -980,6 +985,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <addon name="rt"/>
     </host>
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
