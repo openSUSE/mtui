@@ -128,17 +128,15 @@ def main():
         try:
             update = Template(md5, location, directory)
         except IOError:
-            # in case the template doesn't exist, try to check it out
-            out.info('Testreport %s does not yet exist. Checking out.' % md5)
             # checkout the current testing template. we could do this with the
             # python svn module, but for now it's simpler calling just system()
             svnpath = '/'.join([config.svn_path, md5])
             os.system('cd %s; svn co %s' % (directory, svnpath))
             try:
                 update = Template(md5, location, directory)
-            except Exception:
-                # if the template still doesn't exist, it's probably the wrong
-                # template path.
+            except IOError:
+                # in case the template doesn't exist, try to check it out
+                out.error('failed to check out testreport template from %s' % svnpath)
                 sys.exit(0)
         except Exception:
             usage()

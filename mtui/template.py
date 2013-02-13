@@ -38,12 +38,8 @@ class Template(object):
         self.metadata.location = location
         self.metadata.directory = directory
 
-        try:
-            with open(self.path, 'r') as template:
-                self.parse_template(template)
-        except IOError, error:
-            out.error('failed to open template file: %s' % error.strerror)
-            raise
+        with open(self.path, 'r') as template:
+            self.parse_template(template)
 
     def parse_template(self, template):
         """parse maintenance template file
