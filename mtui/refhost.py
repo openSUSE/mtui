@@ -407,12 +407,14 @@ class Refhost(object):
 
         # don't add addon names to the systemname for now since this would
         # be incompatible to our legacy systemnames
-        #addons = "_".join(set(attributes.addons.keys()).difference(['sdk', 'hae']))
+        addons = "_".join(set(attributes.addons.keys()).difference(['sdk', 'hae']))
         #if addons:
         #    system = '%s%s%s_%s-%s' % (attributes.product, attributes.major, attributes.minor, addons, attributes.archs[0])
         #else:
         #    system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
-        if attributes:
+        if attributes and "manager-client" in addons:
+            system = '%s%s%s-manager-client-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+        elif attributes:
             system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
         else:
             system = 'host_not_found'
