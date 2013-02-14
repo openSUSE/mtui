@@ -512,7 +512,7 @@ class Refhost(object):
 
             # get all subpatterns and parameters, like subpattern = 'sled'
             # parameters = major=10,minor=sp4
-            matches = re.findall('(\w+)\(([^\)]+)\)', content)
+            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
             for match in matches:
                     subpattern = match[0]
                     parameters = match[1]
