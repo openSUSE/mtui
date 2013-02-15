@@ -5,7 +5,7 @@ cat <<EOF
 
 $0 <md5sum>
 
-$0 dumps all rpm package licenses 
+$0 dumps all rpm package architectures
 
 EOF
 exit 0
