@@ -292,6 +292,16 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="x86_64" name="bathala.qam.suse.de">
+      <product name="studio">
+        <version>
+          <major>1</major>
+          <minor>3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="x86_64" name="xenu64-11-1.qam.suse.de">
       <product name="sles">
         <version>
