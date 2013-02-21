@@ -12,7 +12,7 @@ post=$2
 mismatch=0
 
 for package in $(sed -e 's,:.*,,g' $pre); do
-    if [ "$(grep $package $pre)" != "$(grep $package $post)" ]; then
+    if [ "$(grep "$package:" $pre)" != "$(grep "$package:" $post)" ]; then
         mismatch=1
         grep -h "$package:" $pre $post
     fi

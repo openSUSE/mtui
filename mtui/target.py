@@ -454,6 +454,8 @@ class Metadata(object):
 
     def get_release(self):
         systems = ' '.join(self.systems.values())
+        if re.search('rhel', systems):
+            return 'YUM'
         if re.search('manager', systems):
             # SUSE Manager hosts should have the sle11 zypper stack,
             # even on sle10 installations
@@ -472,8 +474,6 @@ class Metadata(object):
             return '9'
         if re.search('sl11', systems):
             return '114'
-        if re.search('rhel', systems):
-            return 'YUM'
 
 
 class ThreadedMethod(threading.Thread):
