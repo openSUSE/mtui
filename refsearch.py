@@ -15,6 +15,8 @@ def do_search_hosts(location, args):
     attribute-- host attributes like architecture or product
     """
 
+    print location
+
     if args:
         attributes = Attributes()
 
@@ -88,7 +90,7 @@ def do_search_hosts(location, args):
 
 def usage():
     print
-    print 'Maintenance Referenz Host Search'
+    print 'Maintenance Reference Host Search'
     print '=' * 33
     print
     print sys.argv[0], '[parameter] <search>'
@@ -100,7 +102,7 @@ def usage():
 def main():
     #parsing parameter and arguments
 
-    location = "default"
+    location = config.location
 
     try:
         (opts, args) = getopt.getopt(sys.argv[1:], 'hl:', ['help', 'location='])
