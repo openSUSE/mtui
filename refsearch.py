@@ -23,7 +23,7 @@ def do_search_hosts(location, args):
         except Exception:
             print 'failed to load reference hosts data'
             return
-   
+
         if 'Testplatform:' in args:
             try:
                 refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
@@ -91,7 +91,7 @@ def usage():
     print 'Maintenance Referenz Host Search'
     print '=' * 33
     print
-    print sys.argv[0], '[parameter]'
+    print sys.argv[0], '[parameter] <search>'
     print
     print 'parameters:'
     print '\t-{short},--{long:20}{description}'.format(short='h', long='help', description='help')
@@ -99,12 +99,13 @@ def usage():
 
 def main():
     #parsing parameter and arguments
-  
+
     location = "default"
 
     try:
         (opts, args) = getopt.getopt(sys.argv[1:], 'hl:', ['help', 'location='])
-        search = args    
+        assert(opts or args)
+        search = args
         for (parameter, argument) in opts:
             if parameter in ('-h', '--help'):
                 usage()
@@ -112,11 +113,11 @@ def main():
                 location = location
             else:
                 usage()
-    
-    except getopt.GetoptError, error:
+
+    except (getopt.GetoptError, AssertionError):
         usage()
         sys.exit(2)
 
     do_search_hosts(location, " ".join(search))
-                    
+
 main()
