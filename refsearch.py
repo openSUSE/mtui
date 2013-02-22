@@ -23,7 +23,7 @@ def do_search_hosts(location, args):
         except Exception:
             print 'failed to load reference hosts data'
             return
-
+   
         if 'Testplatform:' in args:
             try:
                 refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
@@ -87,36 +87,36 @@ def do_search_hosts(location, args):
         return hosts
 
 def usage():
-	print
-	print 'Maintenance Referenz Host Search'
-	print '=' * 33
-	print
-	print sys.argv[0], '[parameter]'
-	print
-	print 'parameters:'
-	print '\t-{short},--{long:20}{description}'.format(short='h', long='help', description='help')
-	print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
+    print
+    print 'Maintenance Referenz Host Search'
+    print '=' * 33
+    print
+    print sys.argv[0], '[parameter]'
+    print
+    print 'parameters:'
+    print '\t-{short},--{long:20}{description}'.format(short='h', long='help', description='help')
+    print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
 
 def main():
     #parsing parameter and arguments
   
-	location = "default"
+    location = "default"
 
-	try:
-		(opts, args) = getopt.getopt(sys.argv[1:], 'hl:', ['help', 'location='])
-		search = args	
-		for (parameter, argument) in opts:
-			if parameter in ('-h', '--help'):
-				usage()
-			elif parameter in ('-l', '--location'):
-				location = location
-			else:
-				usage()
-	
-	except getopt.GetoptError, error:
-		usage()
-		sys.exit(2)
+    try:
+        (opts, args) = getopt.getopt(sys.argv[1:], 'hl:', ['help', 'location='])
+        search = args    
+        for (parameter, argument) in opts:
+            if parameter in ('-h', '--help'):
+                usage()
+            elif parameter in ('-l', '--location'):
+                location = location
+            else:
+                usage()
+    
+    except getopt.GetoptError, error:
+        usage()
+        sys.exit(2)
 
-	do_search_hosts(location, " ".join(search))
-
+    do_search_hosts(location, " ".join(search))
+                    
 main()
