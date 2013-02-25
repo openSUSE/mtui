@@ -12,15 +12,11 @@ exit 2
 fi
 
 MD5=$1
-PATCHINFO_URL="http://hilbert.nue.suse.com/abuildstat/patchinfo/$MD5"
+PATCHINFO_URL="http://hilbert.nue.suse.com/abuildstat/patchinfo/$MD5/patchinfo"
 
 blacklist="qa_test_lvm2"
 
-for subdir in $(wget -q "$PATCHINFO_URL" -O - | grep DIR | sed -e 's,.*href="\([^"]*\)/">.*,\1,g' | grep -v ^doc$ | grep -v patchinfo$); do 
-   for package in $(wget -q "$PATCHINFO_URL/$subdir" -O - | grep rpm | grep -v delta | sed -e 's,.*href="\([^"]*\)">.*,\1,g'); do
-      list="$list $package"
-   done
-done
+list=$(wget -q $PATCHINFO_URL -O - | grep " release " | cut -d " " -f 1 | sort -u | xargs)
 
 if grep -q "VERSION = 11" /etc/SuSE-release; then
     testsuites=$(zypper se -s qa_test -t package 2>/dev/null | grep qa_test | awk -F\| '{sub(/ qa_test_/,""); print $2 }' | sort -u)

@@ -12,13 +12,9 @@ exit 2
 fi
 
 MD5=$1
-PATCHINFO_URL="http://hilbert.nue.suse.com/abuildstat/patchinfo/$MD5"
+PATCHINFO_URL="http://hilbert.nue.suse.com/abuildstat/patchinfo/$MD5/patchinfo"
 
-for subdir in $(wget -q "$PATCHINFO_URL" -O - | grep DIR | sed -e 's,.*href="\([^"]*\)/">.*,\1,g' | grep -v ^doc$ | grep -v patchinfo$); do
-   for package in $(wget -q "$PATCHINFO_URL/$subdir" -O - | grep "\.rpm" | grep -v "delta\.rpm" | sed -e 's,.*href="\([^"]*\)">.*,\1,g'); do
-      list="$list $package"
-   done
-done
+list=$(wget -q $PATCHINFO_URL -O - | grep " release " | cut -d " " -f 1 | sort -u | xargs)
 
 echo "list: $list"
 if grep -q "VERSION = 11" /etc/SuSE-release; then
