@@ -14,8 +14,8 @@ def do_search_hosts(location, args):
     Keyword arguments:
     attribute-- host attributes like architecture or product
     """
-    print
-    print 'searching for location %s...' %location
+
+    print 'searching for location %s ...' %location
     print
 
     if args:
@@ -121,7 +121,7 @@ def main():
             if parameter in ('-h', '--help'):
                 usage()
             elif parameter in ('-l', '--location'):
-                location = location
+                location = argument
             else:
                 usage()
 
