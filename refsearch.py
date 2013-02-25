@@ -15,8 +15,6 @@ def do_search_hosts(location, args):
     attribute-- host attributes like architecture or product
     """
 
-    print location
-
     if args:
         attributes = Attributes()
 
@@ -89,6 +87,8 @@ def do_search_hosts(location, args):
         return hosts
 
 def usage():
+    tags = Attributes.tags
+
     print
     print 'Maintenance Reference Host Search'
     print '=' * 33
@@ -98,6 +98,12 @@ def usage():
     print 'parameters:'
     print '\t-{short},--{long:20}{description}'.format(short='h', long='help', description='help')
     print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
+    print
+    print 'possible search tags:'
+
+    for key in tags:
+        print '\t{key:25}{value}'.format(key=key, value=", ".join(tags[key]))
+    print
 
 def main():
     #parsing parameter and arguments
