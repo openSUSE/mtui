@@ -44,6 +44,7 @@ cp -a $RPM_SOURCE_DIR/helper $RPM_BUILD_DIR/
 cp -a $RPM_SOURCE_DIR/scripts $RPM_BUILD_DIR/
 cp -a $RPM_SOURCE_DIR/setup.py $RPM_BUILD_DIR/
 cp -a $RPM_SOURCE_DIR/mtui.py $RPM_BUILD_DIR/
+cp -a $RPM_SOURCE_DIR/refsearch.py $RPM_BUILD_DIR/
 cp -a $RPM_SOURCE_DIR/term.gnome.sh $RPM_BUILD_DIR/
 cp -a $RPM_SOURCE_DIR/term.kde.sh $RPM_BUILD_DIR/
 cp -a $RPM_SOURCE_DIR/term.xterm.sh $RPM_BUILD_DIR/
@@ -79,6 +80,7 @@ rm -rf %{buildroot}
 %defattr(-,root,root,-)
 %doc README FAQ mtui.cfg.example prerun.example
 %{_bindir}/mtui*
+%{_bindir}/refsearch.py
 %{_datadir}/mtui/*
 %dir %{_datadir}/mtui
 %config %{_sysconfdir}/mtui.cfg

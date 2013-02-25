@@ -19,6 +19,6 @@ setup(name='mtui',
       url = 'http://www.suse.com',
       download_url = 'http://qam.suse.de/infrastructure/mtui/',
       packages = ['mtui'],
-      scripts = ['mtui.py']
+      scripts = ['mtui.py', 'refsearch.py']
       )
 
