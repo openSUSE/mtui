@@ -8,7 +8,7 @@ if ! [ -f "$1" -a -f "$2" ]; then
 fi
 
 temp=$(mktemp /tmp/$progname.XXXXXX)
-diff -Naur "$1" "$2" > $temp
+diff -u "$1" "$2" | grep ^[+-] > $temp
 
 if [ -s $temp ]; then
    (
