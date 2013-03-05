@@ -466,6 +466,8 @@ class Metadata(object):
             return '11'
         if re.search('studio12', systems):
             return '11'
+        if re.search('slms12', systems):
+            return '11'
         if re.search('sle.11', systems):
             return '11'
         if re.search('sle.10', systems):
