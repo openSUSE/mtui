@@ -27,6 +27,7 @@ from utils import *
 from refhost import *
 from config import *
 from notification import *
+from testopia import *
 
 out = logging.getLogger('mtui')
 
@@ -840,6 +841,32 @@ class CommandPrompt(cmd.Cmd):
 
             print '\n'.join(downgrader(self.targets, self.metadata.get_package_list(), self.metadata.patches).commands)
             del downgrader
+
+    def do_testopia_list(self, args):
+        """
+        List all Testopia package testcases for the current product
+
+        testopia_list
+        Keyword arguments:
+        None
+        """
+
+        if args:
+            self.parse_error(self.do_testopia_list, args)
+        else:
+            testopia = Testopia()
+
+            release = self.metadata.get_release()
+            packages = self.metadata.get_package_list()
+
+            testcases = testopia.get_testcase_list(packages, release)
+
+            url = config.bugzilla_url
+
+            for case in testcases:
+                print
+                print case['summary']
+                print '%s/tr_show_case.cgi?case_id=%s' % (url, case['case_id'])
 
     def do_list_testsuite_commands(self, args):
         """

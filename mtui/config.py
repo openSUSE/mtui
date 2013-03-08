@@ -116,6 +116,24 @@ class Config(object):
             self.target_testsuitedir = '/usr/share/qa/tools'
         out.debug('config.target_testsuitedir set to "%s"' % self.target_testsuitedir)
 
+        try:
+            self.testopia_interface = self._get_option('testopia', 'interface')
+        except Exception:
+            self.testopia_interface = 'https://apibugzilla.novell.com/tr_xmlrpc.cgi'
+        out.debug('config.testopia_interface set to "%s"' % self.testopia_interface)
+
+        try:
+            self.testopia_user = self._get_option('testopia', 'user')
+        except Exception:
+            self.testopia_user = ''
+        out.debug('config.testopia_user set to "%s"' % self.testopia_user)
+
+        try:
+            self.testopia_pass = self._get_option('testopia', 'pass')
+        except Exception:
+            self.testopia_pass = ''
+        out.debug('config.testopia_pass set to "%s"' % self.testopia_pass)
+
     def _get_option(self, section, option):
         try:
             return self.config.get(section, option)
