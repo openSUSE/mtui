@@ -12,6 +12,8 @@ category2="compare_new_dependencies.sh compare_all_updated.sh compare_dependenci
 mydir="${0%/*}"
 PATH="$PATH:$mydir"
 
+declare -a results
+
 if [ -z "$mode" -o -z "$resultdir" -o -z "$md5sum" ]; then
     echo "$usage"
     exit 1
@@ -33,16 +35,40 @@ case "$mode" in
           echo "launching $progname"
           $helper $md5sum 2> $resultdir/$progname.after.err > $resultdir/$progname.after.out
        done
+       i=0
        for helper in $category2; do
           progname=${helper##*/}
           checkprog=${progname/compare_/check_}
           echo "launching $progname"
           $helper $resultdir/${checkprog%.*}*.before.err $resultdir/${checkprog%.*}*.after.err 2> $resultdir/$progname.err > $resultdir/$progname.out
+          resultname=${progname%.*}
           echo "errors:"
-          test -s $resultdir/$progname.err && cat $resultdir/$progname.err || echo "(empty)"
+          if  [ -s $resultdir/$progname.err ]; then
+             results[$i]="FAILED"
+             i=$[ $i + 1 ]
+             cat $resultdir/$progname.err
+          else 
+             results[$i]="PASSED"
+             i=$[ $i + 1 ]
+             result="$result`echo -n \t$resultname\t: PASSED\n`"
+             echo "(empty)"
+          fi
+            
           echo "info:"
-          test -s $resultdir/$progname.out && cat $resultdir/$progname.out || echo "(empty)"
+          if [ -s $resultdir/$progname.out ]; then
+              cat $resultdir/$progname.out 
+          else
+             echo "(empty)"
+          fi
        done
+       i=0
+       for helper in $category1; do
+          resultname=${helper##*/}
+          resultname=${resultname%.*}
+          echo "$resultname : ${results[$i]}"
+          i=$[ $i + 1 ]
+       done | column -t
       ;; 
     *) echo "$usage" ;;
 esac
+
