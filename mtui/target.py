@@ -9,6 +9,7 @@ import sys
 import re
 import threading
 import Queue
+import signal
 import logging
 import getpass
 
@@ -54,10 +55,6 @@ class Target(object):
         if lock.locked and lock.comment:
             out.warning('%s exclusively locked by %s (%s). please hold on testing on that host.' % (self.hostname, lock.user,
                         lock.comment))
-
-    def __del__(self):
-        #out.debug('%s: deleting Target object' % self.hostname)
-        self.close()
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
@@ -352,56 +349,40 @@ class Target(object):
                 except IOError:
                     out.warning('unable to remove %s on %s' % (path, self.hostname))
 
-    def close(self):
+    def close(self, action=None):
+        def alarm_handler(signum, frame):
+            out.warning('timeout reached on %s' % self.hostname)
+            raise CommandTimeout('close')
+
+        handler = signal.signal(signal.SIGALRM, alarm_handler)
+        signal.alarm(15)
+
         try:
             assert(self.connection)
 
             if self.connection.is_active():
                 self.add_history(['disconnect'])
                 self.remove_lock()
-
+        except Exception:
+            # ignore if the connection seems to be lost
+            pass
+        else:
+            if action == 'reboot':
+                out.info('rebooting %s' % self.hostname)
+                self.run('reboot')
+            elif action == 'halt':
+                out.info('powering off %s' % self.hostname)
+                self.run('halt')
+            else:
                 out.info('closing connection to %s' % self.hostname)
-                self.connection.close()
-        except Exception:
-            pass
 
-        self.connection = None
-
-        return
-
-    def reboot(self):
-        out.info('rebooting %s' % self.hostname)
-        try:
-            assert(self.connection)
-
-            if self.connection.is_active():
-                self.add_history(['disconnect'])
-                self.remove_lock()
-        except Exception:
-            pass
-        finally:
-            self.run('reboot')
+        if self.connection:
             self.connection.close()
+            self.connection = None
 
-        self.connection = None
-
-        return
-
-    def poweroff(self):
-        out.info('powering off %s' % self.hostname)
-        try:
-            assert(self.connection)
-
-            if self.connection.is_active():
-                self.add_history(['disconnect'])
-                self.remove_lock()
-        except Exception:
-            pass
-        finally:
-            self.run('halt')
-            self.connection.close()
-
-        self.connection = None
+        # restoring signal handler
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, handler)
 
         return
 
