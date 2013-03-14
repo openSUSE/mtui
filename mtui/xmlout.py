@@ -6,7 +6,7 @@
 import re
 import xml.dom.minidom
 
-from utils import *
+from mtui.utils import *
 
 
 class XMLOutput(object):

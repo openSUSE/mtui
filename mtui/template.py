@@ -7,9 +7,9 @@ import os
 import logging
 import re
 
-from config import *
-from target import *
-from refhost import *
+from mtui.config import *
+from mtui.target import *
+from mtui.refhost import *
 
 out = logging.getLogger('mtui')
 

@@ -8,9 +8,9 @@ import sys
 import time
 import re
 
-from target import *
-from rpmver import *
-from utils import *
+from mtui.target import *
+from mtui.rpmver import *
+from mtui.utils import *
 
 
 class UpdateError(Exception):

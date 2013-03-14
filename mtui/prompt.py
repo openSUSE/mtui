@@ -18,16 +18,16 @@ import shutil
 
 from datetime import date, datetime
 
-from rpmver import *
-from target import *
-from template import *
-from updater import *
-from export import *
-from utils import *
-from refhost import *
-from config import *
-from notification import *
-from testopia import *
+from mtui.rpmver import *
+from mtui.target import *
+from mtui.template import *
+from mtui.updater import *
+from mtui.export import *
+from mtui.utils import *
+from mtui.refhost import *
+from mtui.config import *
+from mtui.notification import *
+from mtui.testopia import *
 
 out = logging.getLogger('mtui')
 
@@ -45,6 +45,8 @@ class CommandPrompt(cmd.Cmd):
         self.datadir = config.datadir
 
         self.session = self.metadata.md5
+
+        self.testopia = None
 
         readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
 
@@ -854,19 +856,72 @@ class CommandPrompt(cmd.Cmd):
         if args:
             self.parse_error(self.do_testopia_list, args)
         else:
-            testopia = Testopia()
+            try:
+                assert(self.testopia.testcases)
+            except (AttributeError, AssertionError):
+                release = self.metadata.get_release()
+                packages = self.metadata.get_package_list()
 
-            release = self.metadata.get_release()
-            packages = self.metadata.get_package_list()
-
-            testcases = testopia.get_testcase_list(packages, release)
+                self.testopia = Testopia(release, packages)
 
             url = config.bugzilla_url
 
-            for case in testcases:
+            for case_id in self.testopia.testcases:
+                print '=== %s ===' % self.testopia.testcases[case_id]
+                print '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
                 print
-                print case['summary']
-                print '%s/tr_show_case.cgi?case_id=%s' % (url, case['case_id'])
+
+    def do_testopia_show(self, args):
+        """
+        Show Testopia testcase
+
+        testopia_show <testcase>[,testcase,...,testcase]
+        Keyword arguments:
+        testcase -- testcase ID
+        """
+
+        if args:
+            cases = []
+            url = config.bugzilla_url
+
+            try:
+                assert(self.testopia.testcases)
+            except (AttributeError, AssertionError):
+                release = self.metadata.get_release()
+                packages = self.metadata.get_package_list()
+
+                self.testopia = Testopia(release, packages)
+
+            for case in args.split(','):
+                case = case.replace('_', ' ')
+                try:
+                    cases.append(str(int(case)))
+                except ValueError:
+                    cases = [ k for k, v in self.testopia.testcases.items() if v in case ]
+
+            for case_id in cases:
+                testcase = self.testopia.get_testcase(case_id)
+
+                if testcase:
+                    print 'Testcase summary: %s' % testcase['summary']
+                    print 'Testcase requirements: %s' % testcase['requirement']
+                    print 'Testcase URL: %s/tr_show_case.cgi?case_id=%s' % (url, case_id)
+                    print 'Testcase actions:'
+                    print testcase['action']
+
+        else:
+            self.parse_error(self.do_testopia_show, args)
+
+    def complete_testopia_show(self, text, line, begidx, endidx):
+        try:
+            assert(self.testopia.testcases)
+        except (AttributeError, AssertionError):
+            release = self.metadata.get_release()
+            packages = self.metadata.get_package_list()
+            self.testopia = Testopia(release, packages)
+
+        testcases = [ i.replace(' ', '_') for i in self.testopia.testcases.values() ]
+        return [i for i in testcases if i.startswith(text) and i not in line]
 
     def do_list_testsuite_commands(self, args):
         """

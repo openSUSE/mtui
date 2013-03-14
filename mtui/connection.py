@@ -21,7 +21,7 @@ with warnings.catch_warnings():
     warnings.filterwarnings('ignore', category=DeprecationWarning)
     import paramiko
 
-from utils import *
+from mtui.utils import *
 
 out = logging.getLogger('mtui')
 

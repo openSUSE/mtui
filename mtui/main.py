@@ -11,10 +11,10 @@ import logging
 import shutil
 import re
 
-from log import *
-from config import *
-from prompt import *
-from template import *
+from mtui.log import *
+from mtui.config import *
+from mtui.prompt import *
+from mtui.template import *
 
 out = logging.getLogger('mtui')
 

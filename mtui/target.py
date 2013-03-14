@@ -13,10 +13,10 @@ import signal
 import logging
 import getpass
 
-from connection import *
-from xmlout import *
-from utils import *
-from config import *
+from mtui.connection import *
+from mtui.xmlout import *
+from mtui.utils import *
+from mtui.config import *
 
 out = logging.getLogger('mtui')
 

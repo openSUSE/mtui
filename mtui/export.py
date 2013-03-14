@@ -8,7 +8,7 @@ import logging
 import codecs
 import xml.dom.minidom
 
-from rpmver import *
+from mtui.rpmver import *
 
 out = logging.getLogger('mtui')
 

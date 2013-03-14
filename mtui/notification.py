@@ -20,6 +20,7 @@ try:
 except ImportError:
     pass
 
+
 class Notification(object):
     def __init__(self, summary=None, text=None, icon='stock_dialog-info'):
         self.summary = summary

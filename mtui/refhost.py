@@ -10,6 +10,7 @@ from xml.dom import minidom
 
 out = logging.getLogger('mtui')
 
+
 class Attributes(object):
     """Host attributes which get loaded from the xml or serve as search criteria
 
