@@ -117,13 +117,13 @@ class Testopia(object):
         try:
             assert(case_id)
         except AssertionError:
-            return []
+            return {}
 
         try:
             response = self.bugzilla.query_interface('TestCase.get', case_id)
         except Exception:
             out.debug('failed to get a XMLRPC response')
-            return []
+            return {}
 
         try:
             testcase = {'requirement':response['requirement'],
@@ -133,7 +133,7 @@ class Testopia(object):
                         'summary':self._replace_html(response['summary'])}
         except KeyError:
             out.error('testcase %s not found' % case_id)
-            return []
+            return {}
 
         return testcase
 
