@@ -885,7 +885,7 @@ class CommandPrompt(cmd.Cmd):
             url = config.bugzilla_url
 
             try:
-                assert(self.testopia.testcases)
+                assert(self.testopia)
             except (AttributeError, AssertionError):
                 release = self.metadata.get_release()
                 packages = self.metadata.get_package_list()

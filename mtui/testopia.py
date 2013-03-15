@@ -6,6 +6,7 @@
 import re
 import logging
 import HTMLParser
+import collections
 
 from mtui.config import *
 from mtui.connector.bugzilla import *
@@ -37,6 +38,7 @@ class Testopia(object):
         self.testcases = {}
         self.product = product
         self.packages = packages
+        self.casebuffer = collections.deque(maxlen=10)
 
         interface = config.testopia_interface
         username = config.testopia_user
@@ -119,6 +121,10 @@ class Testopia(object):
         except AssertionError:
             return {}
 
+        for case in self.casebuffer:
+            if case['case_id'] == case_id:
+                return case['testcase']
+
         try:
             response = self.bugzilla.query_interface('TestCase.get', case_id)
         except Exception:
@@ -134,6 +140,8 @@ class Testopia(object):
         except KeyError:
             out.error('testcase %s not found' % case_id)
             return {}
+
+        self.casebuffer.append({'case_id':case_id, 'testcase':testcase})
 
         return testcase
 
