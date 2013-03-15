@@ -3,6 +3,7 @@
 # manage connection to Testopia
 #
 
+import re
 import logging
 import HTMLParser
 
@@ -46,6 +47,18 @@ class Testopia(object):
 
         # cache testcases since Testopia is slow
         self.update_testcase_list()
+
+    def _replace_html(self, text):
+        parser = HTMLParser.HTMLParser()
+
+        text = parser.unescape(text)
+        text = re.sub('<br>', '\n', text)
+        text = re.sub('</span>', '\n', text)
+        text = re.sub('</div>', '\n', text)
+        text = re.sub('&nbsp;', ' ', text)
+        text = re.sub('<[^>]*>', '', text)
+
+        return text
 
     def update_testcase_list(self):
         out.debug('updating Testopia testcase list')
@@ -101,8 +114,6 @@ class Testopia(object):
 
         """
 
-        parser = HTMLParser.HTMLParser()
-
         try:
             assert(case_id)
         except AssertionError:
@@ -116,8 +127,10 @@ class Testopia(object):
 
         try:
             testcase = {'requirement':response['requirement'],
-                        'action':parser.unescape(response['text']['action']).replace('<br>', '\n'),
-                        'summary':response['summary']}
+                        'action':self._replace_html(response['text']['action']),
+                        'breakdown':self._replace_html(response['text']['breakdown']),
+                        'setup':self._replace_html(response['text']['setup']),
+                        'summary':self._replace_html(response['summary'])}
         except KeyError:
             out.error('testcase %s not found' % case_id)
             return []

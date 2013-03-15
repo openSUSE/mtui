@@ -903,10 +903,14 @@ class CommandPrompt(cmd.Cmd):
                 testcase = self.testopia.get_testcase(case_id)
 
                 if testcase:
-                    print 'Testcase summary: %s' % testcase['summary']
-                    print 'Testcase requirements: %s' % testcase['requirement']
-                    print 'Testcase URL: %s/tr_show_case.cgi?case_id=%s' % (url, case_id)
-                    print 'Testcase actions:'
+                    print green('Testcase summary: '), testcase['summary']
+                    print green('Testcase URL: '), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
+                    print green('Testcase requirements: '), testcase['requirement']
+                    print green('Testcase setup:')
+                    print testcase['setup']
+                    print green('Testcase breakdown:')
+                    print testcase['breakdown']
+                    print green('Testcase actions:')
                     print testcase['action']
 
         else:
