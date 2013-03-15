@@ -474,3 +474,50 @@ A: In case you don't want to use the "default" refhost location, i.e. if you
    [mtui]
    location=emeavirt
 
+Q: How do I use the Testopia interface of MTUI?
+A: Since there are no generic credentials for using Bugzilla/Testopia,
+   everyone willing to use Testopia from within MTUI needs to add a valid
+   Bugzilla username and password to the config file.
+   Currently supported testopia actions are list testcases for the current
+   update and show arbitrary testcases in detail. This may be extended to
+   also support editing and creating testcases.
+   Access to the testcases is cached within MTUI and usually faster than
+   using the Testopia webUI.
+
+   Example:
+
+   # cat ~/.mtuirc
+   # MTUI user configuration file
+   [testopia]
+   user=mylogin
+   pass=test123
+
+Q: How do I get a list of the Testopia testcases to be run for the update?
+A: The testopia_list command lists all package testcases for the update.
+
+   Example:
+
+   QA > testopia_list
+   === try driver update ===
+   https://bugzilla.novell.com/tr_show_case.cgi?case_id=232740
+
+   === check for rpm errors ===
+   https://bugzilla.novell.com/tr_show_case.cgi?case_id=232741
+
+Q: How do I display the test instructions of a Testopia testcase?
+A: Testcase actions can be displayed for arbitrary testcase IDs with the
+   testopia_show command.
+
+   Example:
+
+   QA > testopia_show 232740
+   Testcase summary: try driver update
+   Testcase requirements: 
+   Testcase URL: https://bugzilla.novell.com/tr_show_case.cgi?case_id=232740
+   Testcase actions:
+
+   try to update a driver with a driver CD according to documentation in:
+   attachment to bugzilla bug #21040 (http://bugzilla.suse.de/show_bug.cgi?id=21040)
+
+   testcase added after UL-RC4, due to BUG 21040
+

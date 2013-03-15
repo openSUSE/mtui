@@ -377,6 +377,20 @@ List available testsuites on the target hosts.
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 
+- testopia_list
+List all Testopia package testcases for the current product
+
+		testopia_list
+		Keyword arguments:
+		None
+
+- testopia_show
+Show Testopia testcase
+
+		testopia_show <testcase>[,testcase,...,testcase]
+		Keyword arguments:
+		testcase   -- testcase ID
+
 Metadata Commands
 *****************
 - load_template

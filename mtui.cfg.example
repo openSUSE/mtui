@@ -46,3 +46,8 @@ path=svn+ssh://svn@qam.suse.de/testreports
 patchinfo=http://hilbert.nue.suse.com/abuildstat/patchinfo
 bugzilla=https://bugzilla.novell.com
 testreports=http://qam.suse.de/testreports
+
+[testopia]
+interface=https://apibugzilla.novell.com/tr_xmlrpc.cgi
+user=bugzillauser
+pass=bugzillapass
