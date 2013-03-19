@@ -8,9 +8,12 @@ import time
 import fcntl
 import struct
 import termios
+import logging
 import tempfile
 import readline
 import re
+
+out = logging.getLogger('mtui')
 
 
 def timestamp():

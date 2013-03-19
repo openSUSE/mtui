@@ -391,6 +391,23 @@ Show Testopia testcase
 		Keyword arguments:
 		testcase   -- testcase ID
 
+- testopia_create
+Create new Testopia package testcase. An editor is spawned to process a
+testcase template file.
+
+		testopia_create <package>,<summary>
+		Keyword arguments:
+		package    -- package to create testcase for
+		summary    -- testcase summary
+
+- testopia_edit
+Edit already existing Testopia package testcase. An editor is spawned
+to process a testcase template file.
+
+		testopia_edit <testcase>
+		Keyword arguments:
+		testcase -- testcase ID
+
 Metadata Commands
 *****************
 - load_template

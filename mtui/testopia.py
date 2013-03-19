@@ -64,9 +64,9 @@ class Testopia(object):
 
     def update_testcase_list(self):
         out.debug('updating Testopia testcase list')
-        self.testcases = self.get_testcase_list(self.product, self.packages)
+        self.testcases = self.get_testcase_list()
 
-    def get_testcase_list(self, product, packages):
+    def get_testcase_list(self):
         """queries package testcases
 
         search for package testcases for the update product
@@ -80,17 +80,17 @@ class Testopia(object):
         cases = {}
 
         try:
-            assert(product and packages)
+            assert(self.product and self.packages)
         except AssertionError:
             return {}
 
-        out.debug('getting testcase list for packages %s' % packages)
-        tags = ','.join([ 'packagename_%s' % i for i in packages ])
+        out.debug('getting testcase list for packages %s' % self.packages)
+        tags = ','.join([ 'packagename_%s' % i for i in self.packages ])
 
         try:
-            response = self.bugzilla.query_interface('TestCase.list', {'tags':tags, 'tags_type':'anyexact', 'plan_id':self.plans[product]})
+            response = self.bugzilla.query_interface('TestCase.list', {'tags':tags, 'tags_type':'anyexact', 'plan_id':self.plans[self.product]})
         except Exception:
-            out.debug('failed to get a XMLRPC response')
+            out.critical('failed to query TestCase.list')
             return {}
 
         # since we're too lazy to copy testcases over to our latest products,
@@ -98,8 +98,8 @@ class Testopia(object):
         if not response:
             response = self.bugzilla.query_interface('TestCase.list', {'tags':tags, 'tags_type':'anyexact', 'plan_id':self.plans['10']})
             if response:
-                out.warning('found testcases for product 10 while %s was empty' % product)
-                out.warning('please consider migrating the testcases to product %s' % product)
+                out.warning('found testcases for product 10 while %s was empty' % self.product)
+                out.warning('please consider migrating the testcases to product %s' % self.product)
 
         for case in response:
             cases[case['case_id']] = case['summary']
@@ -128,20 +128,94 @@ class Testopia(object):
         try:
             response = self.bugzilla.query_interface('TestCase.get', case_id)
         except Exception:
-            out.debug('failed to get a XMLRPC response')
+            out.critical('failed to query TestCase.get')
             return {}
 
+        # first, import mandatory fields
         try:
-            testcase = {'requirement':response['requirement'],
-                        'action':self._replace_html(response['text']['action']),
-                        'breakdown':self._replace_html(response['text']['breakdown']),
-                        'setup':self._replace_html(response['text']['setup']),
+            testcase = {'action':self._replace_html(response['text']['action']),
                         'summary':self._replace_html(response['summary'])}
         except KeyError:
             out.error('testcase %s not found' % case_id)
             return {}
 
+        # import optional fields
+        try:
+            testcase['requirement'] = self._replace_html(response['requirement'])
+        except KeyError:
+            testcase['requirement'] = ''
+        try:
+            testcase['breakdown'] = self._replace_html(response['text']['breakdown'])
+        except KeyError:
+            testcase['breakdown'] = ''
+        try:
+            testcase['setup'] = self._replace_html(response['text']['setup'])
+        except KeyError:
+            testcase['setup'] = ''
+            pass
+
         self.casebuffer.append({'case_id':case_id, 'testcase':testcase})
 
         return testcase
+
+    def create_testcase(self, values):
+        """ create new testopia testcase
+
+        creates new testopia testcase in current update testrun
+
+        Keyword arguments:
+        values  -- Testopia testcase values
+
+        """
+
+        try:
+            plans = self.plans[self.product]
+        except KeyError:
+            out.error('no testplan found for product %s' % self.product)
+            raise
+
+        testcase = {'status': 2,
+                    'category': 2919,
+                    'priority': 6,
+                    'plans':self.plans[self.product]
+                   }
+
+        testcase.update(values)
+
+        try:
+            response = self.bugzilla.query_interface('TestCase.create', testcase)
+        except Exception:
+            out.critical('failed to query TestCase.create')
+            raise
+
+        return response['case_id']
+
+    def modify_testcase(self, case_id, values):
+        """ modify existing Testopia testcase
+
+        updates fields of already existing Testopia testcase
+
+        Keyword arguments:
+        case_id -- Testopia testcase ID
+        values  -- Testopia testcase values
+        """
+
+        action = values['action']
+        setup = values['setup']
+        breakdown = values['breakdown']
+        update = {'summary':values['summary'], 'requirement':values['requirement']}
+
+        try:
+            self.bugzilla.query_interface('TestCase.update', case_id, update)
+        except Exception:
+            out.critical('failed to query TestCase.update')
+            raise
+
+        try:
+            self.bugzilla.query_interface('TestCase.store_text', case_id, action, '', setup, breakdown)
+        except Exception:
+            out.critical('failed to query TestCase.store_text')
+            raise
+
+        return
 

@@ -866,6 +866,9 @@ class CommandPrompt(cmd.Cmd):
 
             url = config.bugzilla_url
 
+            if not self.testopia.testcases:
+                out.info('no testcases found')
+
             for case_id in self.testopia.testcases:
                 print '=== %s ===' % self.testopia.testcases[case_id]
                 print '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
@@ -906,10 +909,12 @@ class CommandPrompt(cmd.Cmd):
                     print green('Testcase summary: '), testcase['summary']
                     print green('Testcase URL: '), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
                     print green('Testcase requirements: '), testcase['requirement']
-                    print green('Testcase setup:')
-                    print testcase['setup']
-                    print green('Testcase breakdown:')
-                    print testcase['breakdown']
+                    if testcase['setup']:
+                        print green('Testcase setup:')
+                        print testcase['setup']
+                    if testcase['breakdown']:
+                        print green('Testcase breakdown:')
+                        print testcase['breakdown']
                     print green('Testcase actions:')
                     print testcase['action']
 
@@ -917,15 +922,124 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_testopia_show, args)
 
     def complete_testopia_show(self, text, line, begidx, endidx):
-        try:
-            assert(self.testopia.testcases)
-        except (AttributeError, AssertionError):
-            release = self.metadata.get_release()
-            packages = self.metadata.get_package_list()
-            self.testopia = Testopia(release, packages)
+        if not line.count(','):
+            return self.complete_testopia_testcaselist(text, line, begidx, endidx)
 
-        testcases = [ i.replace(' ', '_') for i in self.testopia.testcases.values() ]
-        return [i for i in testcases if i.startswith(text) and i not in line]
+    def do_testopia_create(self, args):
+        """
+        Create new Testopia package testcase.
+        An editor is spawned to process a testcase template file.
+
+        testopia_create <package>,<summary>
+        Keyword arguments:
+        package  -- package to create testcase for
+        summary  -- testcase summary
+        """
+
+        if args:
+            url = config.bugzilla_url
+            testcase = {}
+            fields = ['requirement:', 'setup:', 'breakdown:', 'action:']
+            (package, _, summary) = args.partition(',')
+
+            try:
+                assert(self.testopia)
+            except (AttributeError, AssertionError):
+                release = self.metadata.get_release()
+                packages = self.metadata.get_package_list()
+
+                self.testopia = Testopia(release, packages)
+
+            fields.insert(0, 'package: %s' % package)
+            fields.insert(0, 'summary: %s' % summary)
+
+            template = edit_text('\n'.join(fields))
+
+            template = template.replace('\n', '<br>')
+
+            for field in fields:
+                template = template.replace('<br>%s' % field, '\n%s' % field)
+
+            lines = template.split('\n')
+            for line in lines:
+                key, _, value = line.partition(':')
+                if key == 'package':
+                    key = 'tags'
+                    value = 'packagename_%s' % value.strip()
+
+                testcase[key] = value.strip()
+
+            try:
+                case_id = self.testopia.create_testcase(testcase)
+            except Exception:
+                out.error('failed to create testcase')
+            else:
+                out.info('created testcase %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
+
+        else:
+            self.parse_error(self.do_testopia_create, args)
+
+    def complete_testopia_create(self, text, line, begidx, endidx):
+        if not line.count(','):
+            return self.complete_packagelist(text, line, begidx, endidx)
+
+    def do_testopia_edit(self, args):
+        """
+        Edit already existing Testopia package testcase.
+        An editor is spawned to process a testcase template file.
+
+        testopia_edit <testcase>
+        Keyword arguments:
+        testcase -- testcase ID
+        """
+
+        if args:
+            template = []
+            url = config.bugzilla_url
+            fields = ['summary', 'requirement', 'setup', 'breakdown', 'action']
+
+            try:
+                assert(self.testopia)
+            except (AttributeError, AssertionError):
+                release = self.metadata.get_release()
+                packages = self.metadata.get_package_list()
+
+                self.testopia = Testopia(release, packages)
+
+            case = args.replace('_', ' ')
+            try:
+                case_id = str(int(case))
+            except ValueError:
+                case_id = [ k for k, v in self.testopia.testcases.items() if v in case ][0]
+
+            testcase = self.testopia.get_testcase(case_id)
+            for field in fields:
+                template.append('%s: %s' % (field, testcase[field]))
+
+            template = edit_text('\n'.join(template))
+
+            template = template.replace('\n', '<br>')
+
+            for field in fields:
+                template = template.replace('<br>%s' % field, '\n%s' % field)
+
+            lines = template.split('\n')
+            for line in lines:
+                key, _, value = line.partition(':')
+                testcase[key] = value.strip()
+
+            try:
+                self.testopia.modify_testcase(case_id, testcase)
+            except Exception:
+                out.error('failed to modify testcase %s' % case_id)
+            else:
+                out.info('testcase saved: %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
+        else:
+            self.parse_error(self.do_testopia_edit, args)
+
+    def complete_testopia_edit(self, text, line, begidx, endidx):
+        if not line.count(','):
+            return self.complete_testopia_testcaselist(text, line, begidx, endidx)
 
     def do_list_testsuite_commands(self, args):
         """
@@ -2481,6 +2595,20 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_enabled_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
         return [i for i in list(enabled_targets(self.targets)) + ['all'] + appendix if i.startswith(text) and i not in line]
+
+    def complete_packagelist(self, text, line, begidx, endidx, appendix=[]):
+        return [i for i in self.metadata.get_package_list() if i.startswith(text) and i not in line]
+
+    def complete_testopia_testcaselist(self, text, line, begidx, endidx):
+        try:
+            assert(self.testopia.testcases)
+        except (AttributeError, AssertionError):
+            release = self.metadata.get_release()
+            packages = self.metadata.get_package_list()
+            self.testopia = Testopia(release, packages)
+
+        testcases = [ i.replace(' ', '_') for i in self.testopia.testcases.values() ]
+        return [i for i in testcases if i.startswith(text) and i not in line]
 
     def parse_error(self, method, args):
         print
