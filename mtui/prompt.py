@@ -906,17 +906,20 @@ class CommandPrompt(cmd.Cmd):
                 testcase = self.testopia.get_testcase(case_id)
 
                 if testcase:
-                    print green('Testcase summary: '), testcase['summary']
-                    print green('Testcase URL: '), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
-                    print green('Testcase requirements: '), testcase['requirement']
+                    print blue('Testcase summary: '), testcase['summary']
+                    print blue('Testcase URL: '), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
+                    print blue('Testcase requirements: '), testcase['requirement']
                     if testcase['setup']:
-                        print green('Testcase setup:')
+                        print blue('Testcase setup:')
                         print testcase['setup']
                     if testcase['breakdown']:
-                        print green('Testcase breakdown:')
+                        print blue('Testcase breakdown:')
                         print testcase['breakdown']
-                    print green('Testcase actions:')
+                    print blue('Testcase actions:')
                     print testcase['action']
+                    if testcase['effect']:
+                        print blue('Testcase effect:')
+                        print testcase['effect']
 
         else:
             self.parse_error(self.do_testopia_show, args)
@@ -939,7 +942,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             url = config.bugzilla_url
             testcase = {}
-            fields = ['requirement:', 'setup:', 'breakdown:', 'action:']
+            fields = ['requirement:', 'setup:', 'breakdown:', 'action:', 'effect:']
             (package, _, summary) = args.partition(',')
 
             try:
@@ -996,7 +999,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             template = []
             url = config.bugzilla_url
-            fields = ['summary', 'requirement', 'setup', 'breakdown', 'action']
+            fields = ['summary', 'requirement', 'setup', 'breakdown', 'action', 'effect']
 
             try:
                 assert(self.testopia)

@@ -66,6 +66,20 @@ class Testopia(object):
         out.debug('updating Testopia testcase list')
         self.testcases = self.get_testcase_list()
 
+    def append_testcase_cache(self, case_id, testcase):
+        out.debug('writing testcase %s to cache' % case_id)
+        self.casebuffer.append({'case_id':case_id, 'testcase':testcase})
+
+    def remove_testcase_cache(self, case_id):
+        element = None
+        for case in self.casebuffer:
+            if case['case_id'] == case_id:
+                element = case
+
+        if element:
+            out.debug('removing testcase %s from cache' % element['case_id'])
+            self.casebuffer.remove(element)
+
     def get_testcase_list(self):
         """queries package testcases
 
@@ -123,6 +137,7 @@ class Testopia(object):
 
         for case in self.casebuffer:
             if case['case_id'] == case_id:
+                out.debug('found testcase %s in cache' % case_id)
                 return case['testcase']
 
         try:
@@ -152,9 +167,12 @@ class Testopia(object):
             testcase['setup'] = self._replace_html(response['text']['setup'])
         except KeyError:
             testcase['setup'] = ''
-            pass
+        try:
+            testcase['effect'] = self._replace_html(response['text']['effect'])
+        except KeyError:
+            testcase['effect'] = ''
 
-        self.casebuffer.append({'case_id':case_id, 'testcase':testcase})
+        self.append_testcase_cache(case_id, testcase)
 
         return testcase
 
@@ -173,6 +191,8 @@ class Testopia(object):
         except KeyError:
             out.error('no testplan found for product %s' % self.product)
             raise
+
+        out.debug('creating testcase for product %s' % self.product)
 
         testcase = {'status': 2,
                     'category': 2919,
@@ -202,6 +222,7 @@ class Testopia(object):
 
         action = values['action']
         setup = values['setup']
+        effect = values['effect']
         breakdown = values['breakdown']
         update = {'summary':values['summary'], 'requirement':values['requirement']}
 
@@ -212,10 +233,15 @@ class Testopia(object):
             raise
 
         try:
-            self.bugzilla.query_interface('TestCase.store_text', case_id, action, '', setup, breakdown)
+            self.bugzilla.query_interface('TestCase.store_text', case_id, action, effect, setup, breakdown)
         except Exception:
             out.critical('failed to query TestCase.store_text')
             raise
+
+        out.debug('values for testcase %s stored' % case_id)
+        # remove testcase from cache to get the updated version on
+        # the next query
+        self.remove_testcase_cache(case_id)
 
         return
 
