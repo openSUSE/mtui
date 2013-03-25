@@ -568,7 +568,6 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon name="smt">
         <version>
