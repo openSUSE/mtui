@@ -524,6 +524,13 @@ class CommandPrompt(cmd.Cmd):
                     updated[name] = {'project': project, 'commit': commit, 'disturl': disturl}
 
             for name in updated.keys():
+                # workaround if src name doesn't match any binary name
+                if name not in self.metadata.get_package_list():
+                    try:
+                        name = [ i for i in self.metadata.get_package_list() if i.startswith(name) and len(i) == len(name) + 1][0]
+                    except IndexError:
+                        out.critical('no matching binary RPM found for source package %s' % name)
+                        continue
                 RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % name).run()
 
                 for target in targets:
