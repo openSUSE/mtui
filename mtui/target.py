@@ -370,7 +370,7 @@ class Target(object):
             if action == 'reboot':
                 out.info('rebooting %s' % self.hostname)
                 self.run('reboot')
-            elif action == 'halt':
+            elif action == 'poweroff':
                 out.info('powering off %s' % self.hostname)
                 self.run('halt')
             else:

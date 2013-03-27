@@ -18,7 +18,7 @@ setup(name='mtui',
       keywords = ['SUSE', 'Maintenance', 'update', 'testing'],
       url = 'http://www.suse.com',
       download_url = 'http://qam.suse.de/infrastructure/mtui/',
-      packages = ['mtui'],
+      packages = ['mtui', 'mtui.connector'],
       scripts = ['mtui.py', 'refsearch.py']
       )
 
