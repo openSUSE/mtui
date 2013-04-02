@@ -540,47 +540,51 @@ class CommandPrompt(cmd.Cmd):
                         disturl = match.group(0)
                         project = match.group(1)
                         commit = match.group(2)
-                        name = match.group(3)
-                        installed[name] = {'project': project, 'commit': commit, 'disturl': disturl}
+                        package = match.group(3)
+                        installed[package] = {'project': project, 'commit': commit, 'disturl': disturl}
 
                 try:
-                    if installed[name]['commit'] == updated[name]['commit']:
-                        out.warning('revision of package %s hasn\'t changed, it\'s most likely aready updated. skipping' % name)
-                    else:
-                        diff = os.path.join(destination, '%s-%s.diff' % (name, args))
-                        if args == 'source':
-                            with open(diff, 'w+') as f:
-                                try:
-                                    f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
-                                        installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
-                                except Exception, error:
-                                    out.error('failed to diff packages: %s', error)
-                                    return
-
-                        elif args == 'build':
-                            for state in ['new', 'old']:
-                                sourcedir = os.path.join(destination, name, state)
-                                builddir = os.path.join(destination, name, state, 'BUILD')
-                                if state == 'new':
-                                    disturl = updated[name]['disturl']
-                                else:
-                                    disturl = installed[name]['disturl']
-
-                                RunCommand(targets, 'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui').run()
-                                RunCommand(targets, 'mkdir -p %s' % builddir).run()
-                                RunCommand(targets, 'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
-                                RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
-                                        % (sourcedir, name, builddir, sourcedir, name)).run()
-
-                            RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
-
-                        if args == 'source':
-                            out.info('wrote diff locally to %s' % diff)
-                        elif args == 'build':
-                            out.info('wrote diff remotely to %s' % diff)
-
-                except KeyError:
+                    assert(installed[name] and updated[name])
+                except (AssertionError, KeyError):
                     out.warning('osc disturl not found for package %s. skipping.' % name)
+                    continue
+
+                if installed[name]['commit'] == updated[name]['commit']:
+                    out.warning('revision of package %s hasn\'t changed, it\'s most likely aready updated. skipping' % name)
+                    continue
+
+                diff = os.path.join(destination, '%s-%s.diff' % (name, args))
+                if args == 'source':
+                    with open(diff, 'w+') as f:
+                        try:
+                            f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
+                                installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
+                        except Exception, error:
+                            out.error('failed to diff packages: %s', error)
+                            return
+
+                elif args == 'build':
+                    for state in ['new', 'old']:
+                        sourcedir = os.path.join(destination, name, state)
+                        builddir = os.path.join(destination, name, state, 'BUILD')
+                        if state == 'new':
+                            disturl = updated[name]['disturl']
+                        else:
+                            disturl = installed[name]['disturl']
+
+                        RunCommand(targets, 'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui').run()
+                        RunCommand(targets, 'mkdir -p %s' % builddir).run()
+                        RunCommand(targets, 'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
+                        RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
+                                % (sourcedir, name, builddir, sourcedir, name)).run()
+
+                    RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
+
+                if args == 'source':
+                    out.info('wrote diff locally to %s' % diff)
+                elif args == 'build':
+                    out.info('wrote diff remotely to %s' % diff)
+
         else:
             self.parse_error(self.do_source_diff, args)
 
@@ -2042,7 +2046,7 @@ class CommandPrompt(cmd.Cmd):
             parameter = args.split(',')
 
             # don't install new packages when doing a non-interactive kernel update
-            if not self.interactive and filter(lambda x: '-kmp-' in x, self.metadata.packages):
+            if not self.interactive and filter(lambda x: '-kmp-' or 'kernel-default' in x, self.metadata.packages):
                 try:
                     parameter.remove('newpackage')
                 except ValueError:
