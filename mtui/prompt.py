@@ -523,15 +523,16 @@ class CommandPrompt(cmd.Cmd):
                     name = match.group(3)
                     updated[name] = {'project': project, 'commit': commit, 'disturl': disturl}
 
-            for name in updated.keys():
-                # workaround if src name doesn't match any binary name
-                if name not in self.metadata.get_package_list():
-                    try:
-                        name = [ i for i in self.metadata.get_package_list() if i.startswith(name) and len(i) == len(name) + 1][0]
-                    except IndexError:
-                        out.critical('no matching binary RPM found for source package %s' % name)
-                        continue
-                RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % name).run()
+            # if there are src.rpm package names which are not reflected by
+            # binary rpms, check all binary rpms for this specific
+            # src.rpm/disturl name
+            if filter(lambda x: x not in self.metadata.get_package_list(), updated.keys()):
+                search_list = self.metadata.get_package_list()
+            else:
+                search_list = updated.keys()
+
+            for package in search_list:
+                RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % package).run()
 
                 for target in targets:
                     line = targets[target].lastout().split('\n')[0]
@@ -540,9 +541,10 @@ class CommandPrompt(cmd.Cmd):
                         disturl = match.group(0)
                         project = match.group(1)
                         commit = match.group(2)
-                        package = match.group(3)
-                        installed[package] = {'project': project, 'commit': commit, 'disturl': disturl}
+                        name = match.group(3)
+                        installed[name] = {'project': project, 'commit': commit, 'disturl': disturl}
 
+            for name in updated.keys():
                 try:
                     assert(installed[name] and updated[name])
                 except (AssertionError, KeyError):
@@ -1455,7 +1457,7 @@ class CommandPrompt(cmd.Cmd):
                             if targets[target].lasterr():
                                 print targets[target].lasterr()
                         else:
-                            match = re.search('(http://.*/submission.php.submission_id=\d+)', targets[target].lastout())
+                            match = re.search('(http://.*/submission.php.submission_id=\d+)', targets[target].lasterr())
                             if match:
                                 system = targets[target].system
                                 out.info('submission for %s (%s): %s' % (target, system, match.group(1)))
