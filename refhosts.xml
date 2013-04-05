@@ -448,6 +448,16 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="x86_64" name="slms13.qam.suse.de">
+      <product name="slms">
+        <version>
+          <major>1</major>
+          <minor>3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="x86_64" name="kurk.qam.suse.de">
       <product name="sles">
         <version>
