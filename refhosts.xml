@@ -551,6 +551,39 @@
       </addon>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="i386" name="webyast13-32.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
+      <addon name="webyast">
+        <version>
+          <major>1</major>
+          <minor>3</minor>
+        </version>
+      </addon>
+    </host>
+    <host arch="x86_64" name="webyast13-64.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
+      <addon name="webyast">
+        <version>
+          <major>1</major>
+          <minor>3</minor>
+        </version>
+      </addon>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="x86_64" name="qam-smt2.qam.suse.de">
       <product name="sles">
         <version>
