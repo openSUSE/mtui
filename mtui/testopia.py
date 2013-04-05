@@ -208,6 +208,8 @@ class Testopia(object):
             out.critical('failed to query TestCase.create')
             raise
 
+        self.testcases.update({response['case_id']:response['summary']})
+
         return response['case_id']
 
     def modify_testcase(self, case_id, values):
