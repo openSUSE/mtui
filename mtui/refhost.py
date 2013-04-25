@@ -25,7 +25,7 @@ class Attributes(object):
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
              'addons':['webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner', 'smt', 'manager-client', 'rt'],
              'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm', 'vmware'],
-             'tags':['kernel', 'ltss']
+             'tags':['kernel', 'ltss', 'minimal']
             }
 
     def __init__(self):
@@ -35,11 +35,12 @@ class Attributes(object):
         self.major = None
         self.minor = None
         self.release = None
-        # kernel and ltss can have 3 states: True (is kernel host)
+        # kernel, ltss and minimal can have 3 states: True (is kernel host)
         #                                    False (is not kernel host)
         #                                    None (not searched for)
         self.kernel = None
         self.ltss = None
+        self.minimal = None
         # mode should have "host", "guest" or an empty value
         # hypervisor is arbitrary, but most likely xen or kvm
         self.virtual = {'mode':'', 'hypervisor':''}
@@ -50,6 +51,7 @@ class Attributes(object):
         version = ''
         kernel = ''
         ltss = ''
+        minimal = ''
         addons = ''
 
         if self.major:
@@ -66,6 +68,8 @@ class Attributes(object):
             kernel = 'kernel'
         if self.ltss:
             ltss = 'ltss'
+        if self.minimal:
+            minimal = 'minimal'
 
         for addon in self.addons:
             # add addon name followed by addon version to the string
@@ -86,7 +90,7 @@ class Attributes(object):
 
         archs = ' '.join(set(self.archs))
 
-        rep = ' '.join([self.product, version, archs, kernel, ltss, self.virtual['mode'], self.virtual['hypervisor'], addons])
+        rep = ' '.join([self.product, version, archs, kernel, ltss, minimal, self.virtual['mode'], self.virtual['hypervisor'], addons])
         return ' '.join(rep.split())
 
     def __nonzero__(self):
@@ -284,6 +288,20 @@ class Refhost(object):
                 assert(not self.attributes.ltss)
 
             try:
+                # minimal element found on the host. make sure we are searching for
+                # a minimal host, or the minimal host must not be exclusive.
+                node = element.getElementsByTagName('minimal')[0]
+                prop = node.getAttribute('property')
+                if self.attributes.minimal:
+                    assert(node.firstChild.data == 'true')
+                elif self.attributes.minimal is False:
+                    assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
+            except IndexError:
+                # minimal element not found for the host. make sure we do not
+                # require the host to be a minimal host
+                assert(not self.attributes.minimal)
+
+            try:
                 node = element.getElementsByTagName('virtual')[0]
             except IndexError:
                 # no virtual element found for the host. make sure we don't search
@@ -391,6 +409,10 @@ class Refhost(object):
                 if element.firstChild.data == 'true':
                     attributes.ltss = True
 
+            for element in node.getElementsByTagName('minimal'):
+                if element.firstChild.data == 'true':
+                    attributes.minimal = True
+
             for element in node.getElementsByTagName('virtual'):
                 attributes.virtual = {'mode':element.getAttribute('mode'), 'hypervisor':element.firstChild.data}
 
@@ -435,6 +457,7 @@ class Refhost(object):
         attributes = Attributes()
         attributes.kernel = False
         attributes.ltss = False
+        attributes.minimal = False
 
         addons = []
         # split by '-' since this looks like to be the delimiter
@@ -478,6 +501,8 @@ class Refhost(object):
                 attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
             if addon == 'ltss':
                 attributes.ltss = True
+            if addon == 'minimal':
+                attributes.minimal = True
             if addon in attributes.tags['products']:
                 attributes.product = addon
             if addon in attributes.tags['addons']:
@@ -501,6 +526,7 @@ class Refhost(object):
         attributes = Attributes()
         attributes.kernel = False
         attributes.ltss = False
+        attributes.minimal = False
 
         # split patterns to base, arch, addon, tags
         patterns = testplatform.split(';')
@@ -578,6 +604,8 @@ class Refhost(object):
                 attributes.kernel = True
             if tag == 'ltss':
                 attributes.ltss = True
+            if tag == 'minimal':
+                attributes.minimal = True
 
         try:
             # add adons to the attributes

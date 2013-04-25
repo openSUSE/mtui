@@ -57,10 +57,14 @@ def do_search_hosts(location, args):
                     attributes.kernel = True
                 if tag == 'ltss':
                     attributes.ltss = True
+                if tag == 'minimal':
+                    attributes.minimal = True
                 if tag == '!kernel':
                     attributes.kernel = False
                 if tag == '!ltss':
                     attributes.ltss = False
+                if tag == '!minimal':
+                    attributes.minimal = False
                 if tag == 'xenu':
                     attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
                 if tag == 'xen0':
