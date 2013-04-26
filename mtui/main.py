@@ -139,7 +139,8 @@ def main():
                 out.error('failed to check out testreport template from %s' % svnpath)
                 sys.exit(0)
         except Exception:
-            usage()
+            out.error('failed to parse testreport template %s' % os.path.join(directory, md5, 'log'))
+            sys.exit(0)
 
         metadata = update.metadata
     else:

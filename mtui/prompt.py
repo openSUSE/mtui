@@ -2482,7 +2482,7 @@ class CommandPrompt(cmd.Cmd):
         out.info('exporting XML to %s' % filename)
         try:
             with open(filename, 'w') as f:
-                f.write(''.join(l.encode('utf-8') for l in template))
+                f.write('\n'.join(l.rstrip().encode('utf-8') for l in template))
         except IOError, error:
             print 'failed to write %s: %s' % (filename, error.strerror)
         else:
