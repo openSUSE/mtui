@@ -917,7 +917,7 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     cases.append(str(int(case)))
                 except ValueError:
-                    cases = [ k for k, v in self.testopia.testcases.items() if v in case ]
+                    cases = [ k for k, v in self.testopia.testcases.items() if v.replace('_', ' ') in case ]
 
             for case_id in cases:
                 testcase = self.testopia.get_testcase(case_id)
@@ -1030,7 +1030,11 @@ class CommandPrompt(cmd.Cmd):
             try:
                 case_id = str(int(case))
             except ValueError:
-                case_id = [ k for k, v in self.testopia.testcases.items() if v in case ][0]
+                try:
+                    case_id = [ k for k, v in self.testopia.testcases.items() if v.replace('_', ' ') in case ][0]
+                except IndexError:
+                    out.critical('case_id for testcase %s not found' % case)
+                    return
 
             testcase = self.testopia.get_testcase(case_id)
             for field in fields:
