@@ -443,13 +443,11 @@ class Metadata(object):
             return '11'
         if re.search('mgr', systems):
             return '11'
-        if re.search('sles4vmware11', systems):
+        if re.search('sles4vmware', systems):
             return '11'
-        if re.search('studio12', systems):
+        if re.search('studio', systems):
             return '11'
-        if re.search('studio13', systems):
-            return '11'
-        if re.search('slms12', systems):
+        if re.search('slms', systems):
             return '11'
         if re.search('sle.11', systems):
             return '11'
