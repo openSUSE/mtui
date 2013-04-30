@@ -1047,9 +1047,13 @@ class CommandPrompt(cmd.Cmd):
             for field in fields:
                 template.append('%s: %s' % (field, testcase[field]))
 
-            template = edit_text('\n'.join(template))
+            edited = edit_text('\n'.join(template))
 
-            template = template.replace('\n', '<br>')
+            if edited == '\n'.join(template):
+                out.warning('testcase was not modified. not uploading.')
+                return
+
+            template = edited.replace('\n', '<br>')
 
             for field in fields:
                 template = template.replace('<br>%s' % field, '\n%s' % field)
