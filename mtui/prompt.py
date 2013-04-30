@@ -887,7 +887,18 @@ class CommandPrompt(cmd.Cmd):
                 out.info('no testcases found')
 
             for case_id in self.testopia.testcases:
-                print '=== %s ===' % self.testopia.testcases[case_id]
+                summary = self.testopia.testcases[case_id]['summary']
+                if self.testopia.testcases[case_id]['status'] == 'disabled':
+                    status = red('disabled')
+                elif self.testopia.testcases[case_id]['status'] == 'confirmed':
+                    status = green('confirmed')
+                else:
+                    status = yellow('proposed')
+                if self.testopia.testcases[case_id]['automated'] == 'yes':
+                    automated = 'automated'
+                else:
+                    automated = 'manual'
+                print '{0:40}: {1} ({2})'.format(summary, status, automated)
                 print '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
                 print
 
@@ -917,7 +928,7 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     cases.append(str(int(case)))
                 except ValueError:
-                    cases = [ k for k, v in self.testopia.testcases.items() if v.replace('_', ' ') in case ]
+                    cases = [ k for k, v in self.testopia.testcases.items() if v['summary'].replace('_', ' ') in case ]
 
             for case_id in cases:
                 testcase = self.testopia.get_testcase(case_id)
@@ -926,9 +937,11 @@ class CommandPrompt(cmd.Cmd):
                     continue
 
                 if testcase:
-                    print blue('Testcase summary: '), testcase['summary']
-                    print blue('Testcase URL: '), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
-                    print blue('Testcase requirements: '), testcase['requirement']
+                    print blue('Testcase summary:'), testcase['summary']
+                    print blue('Testcase URL:'), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
+                    print blue('Testcase automated:'), testcase['automated']
+                    print blue('Testcase status:'), testcase['status']
+                    print blue('Testcase requirements:'), testcase['requirement']
                     if testcase['setup']:
                         print blue('Testcase setup:')
                         print testcase['setup']
@@ -973,15 +986,21 @@ class CommandPrompt(cmd.Cmd):
 
                 self.testopia = Testopia(release, packages)
 
+            fields.insert(0, 'status: proposed')
+            fields.insert(0, 'automated: no')
             fields.insert(0, 'package: %s' % package)
             fields.insert(0, 'summary: %s' % summary)
 
-            template = edit_text('\n'.join(fields))
+            edited = edit_text('\n'.join(fields))
 
-            template = template.replace('\n', '<br>')
+            if edited == '\n'.join(fields):
+                out.warning('testcase was not modified. not uploading.')
+                return
+
+            template = edited.replace('\n', '<br>')
 
             for field in fields:
-                template = template.replace('<br>%s' % field, '\n%s' % field)
+                template = template.replace('<br>%s:' % field.partition(':')[0], '\n%s:' % field.partition(':')[0])
 
             lines = template.split('\n')
             for line in lines:
@@ -995,6 +1014,8 @@ class CommandPrompt(cmd.Cmd):
             try:
                 case_id = self.testopia.create_testcase(testcase)
             except Exception:
+                import traceback
+                traceback.print_exc()
                 out.error('failed to create testcase')
             else:
                 out.info('created testcase %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
@@ -1019,7 +1040,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             template = []
             url = config.bugzilla_url
-            fields = ['summary', 'requirement', 'setup', 'breakdown', 'action', 'effect']
+            fields = ['summary', 'automated', 'status', 'requirement', 'setup', 'breakdown', 'action', 'effect']
 
             try:
                 assert(self.testopia)
@@ -1034,7 +1055,7 @@ class CommandPrompt(cmd.Cmd):
                 case_id = str(int(case))
             except ValueError:
                 try:
-                    case_id = [ k for k, v in self.testopia.testcases.items() if v.replace('_', ' ') in case ][0]
+                    case_id = [ k for k, v in self.testopia.testcases.items() if v['summary'].replace('_', ' ') in case ][0]
                 except IndexError:
                     out.critical('case_id for testcase %s not found' % case)
                     return
@@ -2642,7 +2663,7 @@ class CommandPrompt(cmd.Cmd):
             packages = self.metadata.get_package_list()
             self.testopia = Testopia(release, packages)
 
-        testcases = [ i.replace(' ', '_') for i in self.testopia.testcases.values() ]
+        testcases = [ i['summary'].replace(' ', '_') for i in self.testopia.testcases.values() ]
         return [i for i in testcases if i.startswith(text) and i not in line]
 
     def parse_error(self, method, args):

@@ -24,6 +24,8 @@ class Testopia(object):
 
     # product to testplan maps
     plans = { '9':'251', '10':'263,351', '11':'2672' }
+    status = { 3:'disabled', 2:'confirmed', 1:'proposed' }
+    automated = { 1:'yes', 0:'no' }
 
     def __init__(self, product=None, packages=None):
         """create xmlrpclib.ServerProxy object for communication
@@ -61,6 +63,27 @@ class Testopia(object):
         text = re.sub('<[^>]*>', '', text)
 
         return text
+
+    def convert_datafield(self, datafield):
+        for key in datafield.keys():
+            if key == 'automated':
+                automated = {}
+                for k, v in self.automated.items():
+                    automated[v] = k
+                try:
+                    datafield['isautomated'] = automated[datafield.pop('automated')]
+                except KeyError as error:
+                    out.critical('unknown value for automated: %s. using default.' % error)
+            elif key == 'status':
+                status = {}
+                for k, v in self.status.items():
+                    status[v] = k
+                try:
+                    datafield['case_status_id'] = status[datafield.pop('status')]
+                except KeyError as error:
+                    out.critical('unknown value for status: %s. using default.' % error)
+
+        return datafield
 
     def update_testcase_list(self):
         out.debug('updating Testopia testcase list')
@@ -116,7 +139,8 @@ class Testopia(object):
                 out.warning('please consider migrating the testcases to product %s' % self.product)
 
         for case in response:
-            cases[case['case_id']] = case['summary']
+            cases[case['case_id']] = {'summary':case['summary'], 'status':self.status[case['case_status_id']],
+                    'automated':self.automated[case['isautomated']]}
 
         return cases
 
@@ -149,7 +173,9 @@ class Testopia(object):
         # first, import mandatory fields
         try:
             testcase = {'action':self._replace_html(response['text']['action']),
-                        'summary':self._replace_html(response['summary'])}
+                        'summary':self._replace_html(response['summary']),
+                        'status':self.status[response['case_status_id']],
+                        'automated':self.automated[response['isautomated']]}
         except KeyError:
             out.error('testcase %s not found' % case_id)
             return {}
@@ -202,13 +228,16 @@ class Testopia(object):
 
         testcase.update(values)
 
+        testcase = self.convert_datafield(testcase)
+
         try:
             response = self.bugzilla.query_interface('TestCase.create', testcase)
         except Exception:
             out.critical('failed to query TestCase.create')
             raise
 
-        self.testcases.update({response['case_id']:response['summary']})
+        self.testcases.update({response['case_id']:{'summary':response['summary'], 'status':self.status[response['case_status_id']],
+            'automated':self.automated[response['isautomated']]}})
 
         return response['case_id']
 
@@ -226,7 +255,10 @@ class Testopia(object):
         setup = values['setup']
         effect = values['effect']
         breakdown = values['breakdown']
-        update = {'summary':values['summary'], 'requirement':values['requirement']}
+
+        update = {'summary':values['summary'], 'requirement':values['requirement'], 'automated':values['automated'], 'status':values['status']}
+
+        update = self.convert_datafield(update)
 
         try:
             self.bugzilla.query_interface('TestCase.update', case_id, update)
@@ -244,6 +276,7 @@ class Testopia(object):
         # remove testcase from cache to get the updated version on
         # the next query
         self.remove_testcase_cache(case_id)
+        self.update_testcase_list()
 
         return
 
