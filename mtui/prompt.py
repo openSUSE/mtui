@@ -922,6 +922,9 @@ class CommandPrompt(cmd.Cmd):
             for case_id in cases:
                 testcase = self.testopia.get_testcase(case_id)
 
+                if not testcase:
+                    continue
+
                 if testcase:
                     print blue('Testcase summary: '), testcase['summary']
                     print blue('Testcase URL: '), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
@@ -1037,6 +1040,10 @@ class CommandPrompt(cmd.Cmd):
                     return
 
             testcase = self.testopia.get_testcase(case_id)
+
+            if not testcase:
+                return
+
             for field in fields:
                 template.append('%s: %s' % (field, testcase[field]))
 
