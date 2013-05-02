@@ -5,8 +5,9 @@
 
 import re
 import logging
-import HTMLParser
 import collections
+
+from xml.sax import saxutils
 
 from mtui.config import *
 from mtui.connector.bugzilla import *
@@ -52,17 +53,24 @@ class Testopia(object):
         # cache testcases since Testopia is slow
         self.update_testcase_list()
 
-    def _replace_html(self, text):
-        parser = HTMLParser.HTMLParser()
-
-        text = parser.unescape(text)
+    def _unescape_html(self, text):
         text = re.sub('<br>', '\n', text)
         text = re.sub('</span>', '\n', text)
         text = re.sub('</div>', '\n', text)
         text = re.sub('&nbsp;', ' ', text)
         text = re.sub('<[^>]*>', '', text)
 
-        return text
+        try:
+            return saxutils.unescape(text)
+        except Exception:
+            return text
+
+    def _escape_html(self, text):
+        entities = {'|br|':'<br>'}
+        try:
+            return saxutils.escape(text, entities)
+        except Exception:
+            return text
 
     def convert_datafield(self, datafield):
         for key in datafield.keys():
@@ -172,8 +180,8 @@ class Testopia(object):
 
         # first, import mandatory fields
         try:
-            testcase = {'action':self._replace_html(response['text']['action']),
-                        'summary':self._replace_html(response['summary']),
+            testcase = {'action':self._unescape_html(response['text']['action']),
+                        'summary':self._unescape_html(response['summary']),
                         'status':self.status[response['case_status_id']],
                         'automated':self.automated[response['isautomated']]}
         except KeyError:
@@ -182,19 +190,19 @@ class Testopia(object):
 
         # import optional fields
         try:
-            testcase['requirement'] = self._replace_html(response['requirement'])
+            testcase['requirement'] = self._unescape_html(response['requirement'])
         except KeyError:
             testcase['requirement'] = ''
         try:
-            testcase['breakdown'] = self._replace_html(response['text']['breakdown'])
+            testcase['breakdown'] = self._unescape_html(response['text']['breakdown'])
         except KeyError:
             testcase['breakdown'] = ''
         try:
-            testcase['setup'] = self._replace_html(response['text']['setup'])
+            testcase['setup'] = self._unescape_html(response['text']['setup'])
         except KeyError:
             testcase['setup'] = ''
         try:
-            testcase['effect'] = self._replace_html(response['text']['effect'])
+            testcase['effect'] = self._unescape_html(response['text']['effect'])
         except KeyError:
             testcase['effect'] = ''
 
@@ -226,6 +234,10 @@ class Testopia(object):
                     'plans':self.plans[self.product]
                    }
 
+
+        for k, v in values.items():
+            values[k] = self._escape_html(v)
+
         testcase.update(values)
 
         testcase = self.convert_datafield(testcase)
@@ -251,12 +263,17 @@ class Testopia(object):
         values  -- Testopia testcase values
         """
 
+        for k, v in values.items():
+            values[k] = self._escape_html(v)
+
+        summary = values['summary']
+        requirement = values['requirement']
         action = values['action']
         setup = values['setup']
         effect = values['effect']
         breakdown = values['breakdown']
 
-        update = {'summary':values['summary'], 'requirement':values['requirement'], 'automated':values['automated'], 'status':values['status']}
+        update = {'summary':summary, 'requirement':requirement, 'automated':values['automated'], 'status':values['status']}
 
         update = self.convert_datafield(update)
 

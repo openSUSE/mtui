@@ -997,10 +997,10 @@ class CommandPrompt(cmd.Cmd):
                 out.warning('testcase was not modified. not uploading.')
                 return
 
-            template = edited.replace('\n', '<br>')
+            template = edited.replace('\n', '|br|')
 
             for field in fields:
-                template = template.replace('<br>%s:' % field.partition(':')[0], '\n%s:' % field.partition(':')[0])
+                template = template.replace('|br|%s:' % field.partition(':')[0], '\n%s:' % field.partition(':')[0])
 
             lines = template.split('\n')
             for line in lines:
@@ -1014,8 +1014,6 @@ class CommandPrompt(cmd.Cmd):
             try:
                 case_id = self.testopia.create_testcase(testcase)
             except Exception:
-                import traceback
-                traceback.print_exc()
                 out.error('failed to create testcase')
             else:
                 out.info('created testcase %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
@@ -1074,10 +1072,10 @@ class CommandPrompt(cmd.Cmd):
                 out.warning('testcase was not modified. not uploading.')
                 return
 
-            template = edited.replace('\n', '<br>')
+            template = edited.replace('\n', '|br|')
 
             for field in fields:
-                template = template.replace('<br>%s' % field, '\n%s' % field)
+                template = template.replace('|br|%s' % field, '\n%s' % field)
 
             lines = template.split('\n')
             for line in lines:
