@@ -58,15 +58,6 @@
       </product>
       <addon name="hae"/>
     </host>
-    <host arch="s390x" name="s390vsw037.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <minimal>true</minimal>
-    </host>
     <host arch="s390x" name="s390vsw139.suse.de">
       <product name="sles">
         <version>
@@ -358,7 +349,7 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <!-- <kernel>true</kernel> -->
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
@@ -380,17 +371,6 @@
         </version>
       </addon>
       <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="s390x" name="s390vsw068.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <addon property="weak" name="sdk"/>
-      <addon property="weak" name="hae"/>
     </host>
     <host arch="i386" name="kirk.qam.suse.de">
       <product name="sles">
