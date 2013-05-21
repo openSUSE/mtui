@@ -1,7 +1,122 @@
 <?xml version="1.0" encoding="utf-8"?>
 <definitions>
   <location name="default">
-    <host arch="i386" name="s4v-11sp1-a51-32.qam.suse.de">
+    <host arch="s390x" name="s390icv070.suse.de">
+      <product name="sles">
+        <version>
+          <major>9</major>
+        </version>
+      </product>
+      <ltss>true</ltss>
+      <kernel property="weak">true</kernel>
+    </host>
+    <host arch="s390" name="s390icv048.suse.de">
+      <product name="sles">
+        <version>
+          <major>9</major>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <ltss>true</ltss>
+    </host>
+    <host arch="x86_64" name="dax.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>9</major>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <ltss>true</ltss>
+    </host>
+    <host arch="i386" name="zypp.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>9</major>
+        </version>
+      </product>
+      <ltss>true</ltss>
+      <kernel property="weak">true</kernel>
+    </host>
+
+    <host arch="i386" name="zypp.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="dax.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="s390x" name="s390vsw117.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="kurk.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
+      <addon name="rt"/>
+    </host>
+    <host arch="i386" name="sulu.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
+      <addon name="rt"/>
+    </host>
+    <host arch="x86_64" name="xenu64-10o.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <virtual mode="guest" host="xena64-11sp1.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="xenu32-10o.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>10</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+
+<host arch="i386" name="s4v-11sp1-a51-32.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
@@ -665,24 +780,8 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="s390x" name="s390icv070.suse.de">
-      <product name="sles">
-        <version>
-          <major>9</major>
-        </version>
-      </product>
-      <ltss>true</ltss>
-      <kernel property="weak">true</kernel>
-    </host>
-    <host arch="s390" name="s390icv048.suse.de">
-      <product name="sles">
-        <version>
-          <major>9</major>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <ltss>true</ltss>
-    </host>
+
+
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
         <version>
@@ -907,123 +1006,7 @@
         </version>
       </addon>
     </host>
-    <host arch="i386" name="zypp.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel>true</kernel>
-      <virtual mode="host">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="kurk.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-      <addon name="rt"/>
-    </host>
-    <host arch="i386" name="zypp.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <ltss property="weak">true</ltss>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="dax.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <ltss property="weak">true</ltss>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="zypp.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>9</major>
-        </version>
-      </product>
-      <ltss>true</ltss>
-      <kernel property="weak">true</kernel>
-    </host>
-    <host arch="x86_64" name="dax.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>9</major>
-        </version>
-      </product>
-      <ltss>true</ltss>
-      <kernel property="weak">true</kernel>
-    </host>
-    <host arch="x86_64" name="xenu64-10o.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel>true</kernel>
-      <virtual mode="guest" host="xena64-11sp1.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="dax.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel>true</kernel>
-      <virtual mode="host">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="s390x" name="s390vsw117.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <ltss property="weak">true</ltss>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="xenu32-10o.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel>true</kernel>
-      <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="sulu.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>10</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-      <addon name="rt"/>
-    </host>
+
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
         <version>
