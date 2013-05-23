@@ -1376,6 +1376,46 @@
     </host>
   </location>
   <location name="prague">
+    <host arch="i386" name="cunningham.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="fletcher.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="rivers.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="palmer.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="x86_64" name="archer.qam.suse.de">
       <product name="sles">
         <version>
