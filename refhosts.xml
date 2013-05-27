@@ -1132,6 +1132,7 @@
       </addon>
     </host>
   </location>
+
   <location name="beijing">
     <host arch="x86_64" name="147.2.207.90">
       <product name="sles">
@@ -1270,6 +1271,7 @@
       <addon property="weak" name="sdk"/>
     </host>
   </location>
+
   <location name="nuremberg">
     <host arch="i386" name="teladi.qam.suse.de">
       <product name="sles">
@@ -1374,7 +1376,44 @@
       <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="i386" name="bashir.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+    </host>
+    <host arch="x86_64" name="jadzia.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+    </host>
+    <host arch="i386" name="dukat.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+    </host>
+    <host arch="x86_64" name="sisko.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+    </host>
   </location>
+
   <location name="prague">
     <host arch="i386" name="cunningham.qam.suse.de">
       <product name="sles">
