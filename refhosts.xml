@@ -569,6 +569,7 @@
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
     </host>
     <host arch="x86_64" name="slms13-internal.qam.suse.de">
       <product name="slms">
