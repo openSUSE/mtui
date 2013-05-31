@@ -365,7 +365,7 @@ populated with some attributes like SWAMPID or testsuite name, but can
 also be edited before the results get submitted. Submitting results to
 qadb requires the rd-qa NIS password.
 
-		testsuite_submit <hostname>,hostname,...,<testsuite>
+		testsuite_submit <hostname>[,hostname,...],<testsuite>
 		Keyword arguments:
 		hostname   -- hostname from the target list or "all"
 		testsuite  -- testsuite-run command
@@ -378,6 +378,13 @@ List available testsuites on the target hosts.
 		hostname   -- hostname from the target list or "all"
 
 - testopia_list
+List all Testopia package testcases for the current product.
+If now packages are set, testcases are displayed for the current update.
+
+		testopia_list [package,...,package]
+		Keyword arguments:
+		package  -- packag to display testcases for
+
 List all Testopia package testcases for the current product
 
 		testopia_list

@@ -863,44 +863,45 @@ class CommandPrompt(cmd.Cmd):
 
     def do_testopia_list(self, args):
         """
-        List all Testopia package testcases for the current product
+        List all Testopia package testcases for the current product.
+        If now packages are set, testcases are displayed for the
+        current update.
 
-        testopia_list
+        testopia_list [package,package,...]
         Keyword arguments:
-        None
+        package  -- packag to display testcases for
         """
 
-        if args:
-            self.parse_error(self.do_testopia_list, args)
-        else:
-            try:
-                assert(self.testopia.testcases)
-            except (AttributeError, AssertionError):
-                release = self.metadata.get_release()
+        try:
+            assert(self.testopia.testcases and not args)
+        except (AttributeError, AssertionError):
+            release = self.metadata.get_release()
+            packages = args.split(',')
+            if not packages:
                 packages = self.metadata.get_package_list()
 
-                self.testopia = Testopia(release, packages)
+            self.testopia = Testopia(release, packages)
 
-            url = config.bugzilla_url
+        url = config.bugzilla_url
 
-            if not self.testopia.testcases:
-                out.info('no testcases found')
+        if not self.testopia.testcases:
+            out.info('no testcases found')
 
-            for case_id in self.testopia.testcases:
-                summary = self.testopia.testcases[case_id]['summary']
-                if self.testopia.testcases[case_id]['status'] == 'disabled':
-                    status = red('disabled')
-                elif self.testopia.testcases[case_id]['status'] == 'confirmed':
-                    status = green('confirmed')
-                else:
-                    status = yellow('proposed')
-                if self.testopia.testcases[case_id]['automated'] == 'yes':
-                    automated = 'automated'
-                else:
-                    automated = 'manual'
-                print '{0:40}: {1} ({2})'.format(summary, status, automated)
-                print '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
-                print
+        for case_id in self.testopia.testcases:
+            summary = self.testopia.testcases[case_id]['summary']
+            if self.testopia.testcases[case_id]['status'] == 'disabled':
+                status = red('disabled')
+            elif self.testopia.testcases[case_id]['status'] == 'confirmed':
+                status = green('confirmed')
+            else:
+                status = yellow('proposed')
+            if self.testopia.testcases[case_id]['automated'] == 'yes':
+                automated = 'automated'
+            else:
+                automated = 'manual'
+            print '{0:40}: {1} ({2})'.format(summary, status, automated)
+            print '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
+            print
 
     def do_testopia_show(self, args):
         """
@@ -2213,7 +2214,7 @@ class CommandPrompt(cmd.Cmd):
 
             script_hook(targets, 'post', os.path.dirname(self.metadata.path), self.metadata.md5)
             script_hook(targets, 'compare', os.path.dirname(self.metadata.path), self.metadata.md5)
-            FileDelete(targets, os.path.join(config.target_tempdir, self.metadata.md5)).run()
+            FileDelete(targets, os.path.join(config.target_tempdir, self.metadata.md5, 'output')).run()
 
             for target in targets:
                 if not lock.locked:
