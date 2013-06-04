@@ -28,7 +28,7 @@
       <kernel property="weak">true</kernel>
       <ltss>true</ltss>
     </host>
-    <host arch="i386" name="zypp.qam.suse.de">
+    <host arch="i386" name="dawn.qam.suse.de">
       <product name="sles">
         <version>
           <major>9</major>
@@ -38,7 +38,7 @@
       <kernel property="weak">true</kernel>
     </host>
 
-    <host arch="i386" name="zypp.qam.suse.de">
+    <host arch="i386" name="dawn.qam.suse.de">
       <product name="sles">
         <version>
           <major>10</major>
