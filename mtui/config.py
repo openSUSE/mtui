@@ -8,6 +8,12 @@ import getpass
 import logging
 import ConfigParser
 
+try:
+    import keyring
+except ImportError:
+    # disable keyring support since python-keyring is missing
+    keyring = None
+
 out = logging.getLogger('mtui')
 
 
@@ -132,6 +138,20 @@ class Config(object):
             self.testopia_pass = self._get_option('testopia', 'pass')
         except Exception:
             self.testopia_pass = ''
+
+        if keyring is not None:
+            out.debug('querying keyring for Testopia password')
+            if self.testopia_pass and self.testopia_user:
+                try:
+                    keyring.set_password('Testopia', self.testopia_user, self.testopia_pass)
+                except Exception:
+                    out.warning('failed to add Testopia password to the keyring')
+            elif self.testopia_user:
+                try:
+                    self.testopia_pass = keyring.get_password('Testopia', self.testopia_user)
+                except Exception:
+                    out.warning('failed to get Testopia password from the keyring')
+
         out.debug('config.testopia_pass set to "%s"' % self.testopia_pass)
 
     def _get_option(self, section, option):

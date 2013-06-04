@@ -478,9 +478,8 @@ Q: How do I use the Testopia interface of MTUI?
 A: Since there are no generic credentials for using Bugzilla/Testopia,
    everyone willing to use Testopia from within MTUI needs to add a valid
    Bugzilla username and password to the config file.
-   Currently supported testopia actions are list testcases for the current
-   update and show arbitrary testcases in detail. This may be extended to
-   also support editing and creating testcases.
+   Currently supported testopia actions are listing testcases for the current
+   update as well as arbitrary testcases, editing and creating testcases.
    Access to the testcases is cached within MTUI and usually faster than
    using the Testopia webUI.
 
@@ -492,16 +491,26 @@ A: Since there are no generic credentials for using Bugzilla/Testopia,
    user=mylogin
    pass=test123
 
+Q: How do I use a Keyring for securely storing my Testopia password?
+A: Provided python-keyring is installed, MTUI supports storing passwords in
+   GnomeKeyring and KWallet. To store the password for the first time, it has
+   to be set in the configuration file (see "How do I use the Testopia
+   interface of MTUI?"). When running MTUI, the password is stored in the
+   default keyring and can be removed from the configuration file.
+   Changing the password works by adding the new password to the MTUI
+   configuration file.
+
 Q: How do I get a list of the Testopia testcases to be run for the update?
 A: The testopia_list command lists all package testcases for the update.
 
    Example:
 
+QA > testopia_list mtui
    QA > testopia_list
-   === try driver update ===
+   try driver update                      : confirmed (manual)
    https://bugzilla.novell.com/tr_show_case.cgi?case_id=232740
 
-   === check for rpm errors ===
+   check for rpm errors                   : confirmed (manual)
    https://bugzilla.novell.com/tr_show_case.cgi?case_id=232741
 
 Q: How do I display the test instructions of a Testopia testcase?
