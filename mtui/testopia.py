@@ -129,7 +129,7 @@ class Testopia(object):
         except AssertionError:
             return {}
 
-        out.debug('getting testcase list for packages %s' % self.packages)
+        out.debug('getting testcase list for packages %s in testplan %s' % (self.packages, self.plans[self.product]))
         tags = ','.join([ 'packagename_%s' % i for i in self.packages ])
 
         try:

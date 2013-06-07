@@ -877,7 +877,7 @@ class CommandPrompt(cmd.Cmd):
         except (AttributeError, AssertionError):
             release = self.metadata.get_release()
             packages = args.split(',')
-            if not packages:
+            if not packages[0]:
                 packages = self.metadata.get_package_list()
 
             self.testopia = Testopia(release, packages)
