@@ -208,6 +208,16 @@
       <addon property="weak" name="hae"/>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="s390x" name="s390vsw073.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="s390x" name="s390lp3.suse.de">
       <product name="sles">
         <version>
