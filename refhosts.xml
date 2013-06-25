@@ -116,24 +116,24 @@
       <addon property="weak" name="sdk"/>
     </host>
 
-<host arch="i386" name="s4v-11sp1-a51-32.qam.suse.de">
+<host arch="i386" name="s4v-11sp3-i51-32.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>spminor>
         </version>
       </product>
-      <virtual mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
+      <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
       <ltss property="weak">true</ltss>
     </host>
-    <host arch="x86_64" name="s4v-11sp1-a51-64.qam.suse.de">
+    <host arch="x86_64" name="s4v-11sp3-i51-64.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>sp3</minor>
         </version>
       </product>
-      <virtual mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
+      <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
       <ltss property="weak">true</ltss>
     </host>
     <host arch="i386" name="s4v-11sp2-a51-32.qam.suse.de">
