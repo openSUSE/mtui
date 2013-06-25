@@ -524,7 +524,6 @@
           <minor>sp3</minor>
         </version>
       </product>
-      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
