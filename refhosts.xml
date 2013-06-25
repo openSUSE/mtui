@@ -120,7 +120,7 @@
       <product name="sles4vmware">
         <version>
           <major>11</major>
-          <minor>spminor>
+          <minor>sp3</minor>
         </version>
       </product>
       <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
