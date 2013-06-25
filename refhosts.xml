@@ -646,6 +646,17 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="x86_64" name="xena32-11sp1.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="i386" name="xena32-11sp1.qam.suse.de">
       <product name="sles">
         <version>
@@ -656,6 +667,49 @@
       <kernel>true</kernel>
       <ltss property="weak">true</ltss>
       <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="xenu32-11-3.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="xena64-11sp1.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <virtual mode="host">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="xenu64-11-3.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <virtual mode="guest" host="xena64-11sp1.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="ia64" name="leonard.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="ia64" name="leonard.qam.suse.de">
@@ -700,11 +754,10 @@
       <product name="sles">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>sp3</minor>
         </version>
       </product>
       <kernel>true</kernel>
-      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="qam-webyast12-32.qam.suse.de">
