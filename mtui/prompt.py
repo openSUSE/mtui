@@ -2087,7 +2087,7 @@ class CommandPrompt(cmd.Cmd):
             parameter = args.split(',')
 
             # don't install new packages when doing a non-interactive kernel update
-            if not self.interactive and filter(lambda x: '-kmp-' or 'kernel-default' in x, self.metadata.packages):
+            if not self.interactive and filter(lambda x: x in ['-kmp-', 'kernel-default'], self.metadata.packages):
                 try:
                     parameter.remove('newpackage')
                 except ValueError:
