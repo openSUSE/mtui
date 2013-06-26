@@ -37,7 +37,6 @@
       <ltss>true</ltss>
       <kernel property="weak">true</kernel>
     </host>
-
     <host arch="i386" name="dawn.qam.suse.de">
       <product name="sles">
         <version>
@@ -115,8 +114,7 @@
       <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-
-<host arch="i386" name="s4v-11sp3-i51-32.qam.suse.de">
+    <host arch="i386" name="s4v-11sp3-i51-32.qam.suse.de">
       <product name="sles4vmware">
         <version>
           <major>11</major>
@@ -883,8 +881,6 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-
-
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
         <version>
@@ -1109,7 +1105,6 @@
         </version>
       </addon>
     </host>
-
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
         <version>
@@ -1235,7 +1230,6 @@
       </addon>
     </host>
   </location>
-
   <location name="beijing">
     <host arch="x86_64" name="147.2.207.90">
       <product name="sles">
@@ -1374,7 +1368,6 @@
       <addon property="weak" name="sdk"/>
     </host>
   </location>
-
   <location name="nuremberg">
     <host arch="i386" name="teladi.qam.suse.de">
       <product name="sles">
@@ -1495,6 +1488,7 @@
         </version>
       </product>
       <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="sisko.qam.suse.de">
       <product name="sles">
@@ -1504,9 +1498,9 @@
         </version>
       </product>
       <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
     </host>
   </location>
-
   <location name="prague">
     <host arch="i386" name="cunningham.qam.suse.de">
       <product name="sles">
