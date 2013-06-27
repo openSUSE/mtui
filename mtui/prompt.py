@@ -1640,6 +1640,10 @@ class CommandPrompt(cmd.Cmd):
         else:
             self.parse_error(self.do_set_location, args)
 
+    def complete_set_location(self, text, line, begidx, endidx):
+        refhost = Refhost(config.refhosts_xml)
+        return [i for i in refhost.get_locations() if i.startswith(text) and i not in line]
+
     def do_set_host_lock(self, args):
         """
         Lock host for exclusive usage. This locks all repository transactions
