@@ -618,7 +618,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel property="weak">true</kernel>
+      <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
       <addon name="rt"/>
@@ -630,7 +630,7 @@
           <minor>sp3</minor>
         </version>
       </product>
-      <kernel property="weak">true</kernel>
+      <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="kempter.qam.suse.de">
@@ -640,7 +640,7 @@
           <minor>sp3</minor>
         </version>
       </product>
-      <kernel property="weak">true</kernel>
+      <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xena32-11sp1.qam.suse.de">
