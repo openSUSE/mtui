@@ -130,7 +130,7 @@ class Testopia(object):
             return {}
 
         out.debug('getting testcase list for packages %s in testplan %s' % (self.packages, self.plans[self.product]))
-        tags = ','.join([ 'packagename_%s' % i for i in self.packages ])
+        tags = ','.join([ 'packagename_{name},testcase_{name}'.format(name=i) for i in self.packages ])
 
         try:
             response = self.bugzilla.query_interface('TestCase.list', {'tags':tags, 'tags_type':'anyexact', 'plan_id':self.plans[self.product]})
@@ -288,6 +288,20 @@ class Testopia(object):
         except Exception:
             out.critical('failed to query TestCase.store_text')
             raise
+
+        try:
+            tags = self.bugzilla.query_interface('TestCase.get_tags', case_id )
+        except Exception:
+            out.critical('failed to query TestCase.get_tags')
+            raise
+
+        new_tags = set([ tag.replace('packagename_', 'testcase_') for tag in tags if tag.startswith('packagename') ]) - set(tags)
+        if new_tags:
+            try:
+                tags = self.bugzilla.query_interface('TestCase.add_tag', case_id, list(new_tags))
+            except Exception:
+                out.critical('failed to query TestCase.add_tag')
+                raise
 
         out.debug('values for testcase %s stored' % case_id)
         # remove testcase from cache to get the updated version on

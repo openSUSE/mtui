@@ -1008,7 +1008,7 @@ class CommandPrompt(cmd.Cmd):
                 key, _, value = line.partition(':')
                 if key == 'package':
                     key = 'tags'
-                    value = 'packagename_%s' % value.strip()
+                    value = 'packagename_{name},testcase_{name}'.format(name=value.strip())
 
                 testcase[key] = value.strip()
 
