@@ -1231,6 +1231,46 @@
     </host>
   </location>
   <location name="beijing">
+    <host arch="i386" name="iris.apac.novell.com">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="jasmine.apac.novell.com">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="kennedia.apac.novell.com">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="lantana.apac.novell.com">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="x86_64" name="147.2.207.90">
       <product name="sles">
         <version>
