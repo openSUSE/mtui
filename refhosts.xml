@@ -839,26 +839,24 @@
         </version>
       </addon>
     </host>
-    <host arch="i386" name="ceres.qam.suse.de">
+    <host arch="i386" name="troi.qam.suse.de">
       <product name="sled">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>sp3</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="uranus.qam.suse.de">
+    <host arch="x86_64" name="laforge.qam.suse.de">
       <product name="sled">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>sp3</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="obrien.qam.suse.de">
