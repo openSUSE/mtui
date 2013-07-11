@@ -18,6 +18,7 @@ blacklist="qa_test_lvm2"
 
 list=$(wget -q $PATCHINFO_URL -O - | grep " release " | cut -d " " -f 1 | sort -u | xargs)
 
+zypper -n ref >/dev/null 2>&1
 if grep -q "VERSION = 11" /etc/SuSE-release; then
     testsuites=$(zypper se -s qa_test -t package 2>/dev/null | grep qa_test | awk -F\| '{sub(/ qa_test_/,""); print $2 }' | sort -u)
 elif grep -q "VERSION = 10" /etc/SuSE-release; then
@@ -31,7 +32,6 @@ done
 
 for testsuite in $testsuites; do
     if [[ $list =~ $testsuite ]]; then
-        zypper -n ref >/dev/null 2>&1
         zypper -n in qa_test_$testsuite qa_lib_ctcs2 >/dev/null 2>&1
         if [ -x /usr/share/qa/tools/test_$testsuite-run ]; then
             export TESTS_LOGDIR=/var/log/qa/$MD5
