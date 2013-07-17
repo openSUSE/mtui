@@ -114,6 +114,7 @@
       <virtual mode="guest" host="xena32-11sp1.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
+
     <host arch="i386" name="s4v-11sp3-i51-32.qam.suse.de">
       <product name="sles4vmware">
         <version>
@@ -134,6 +135,27 @@
       <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
       <ltss property="weak">true</ltss>
     </host>
+    <host arch="i386" name="s4v-11sp3-i51-32.qam.suse.de">
+      <product name="sles4vmware11sp3">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
+      <ltss property="weak">true</ltss>
+    </host>
+    <host arch="x86_64" name="s4v-11sp3-i51-64.qam.suse.de">
+      <product name="sles4vmware11sp3">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
+      <ltss property="weak">true</ltss>
+    </host>
+
     <host arch="i386" name="s4v-11sp2-a51-32.qam.suse.de">
       <product name="sles4vmware">
         <version>
@@ -152,6 +174,25 @@
       </product>
       <virtual mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
     </host>
+    <host arch="i386" name="s4v-11sp2-a51-32.qam.suse.de">
+      <product name="sles4vmware11sp2">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="s4v-11sp2-a51-64.qam.suse.de">
+      <product name="sles4vmware11sp2">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
+    </host>
+
     <host arch="ppc64" name="sunset.qam.suse.de">
       <product name="sles">
         <version>
