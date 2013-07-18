@@ -41,6 +41,7 @@ my %valid_disturls = (
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:UU-DUD/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test:BlockMigration/standard/",
+         "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test:UnBlockMigration/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:ATK:[0-9.]+/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:ATK:[0-9.]+:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/standard/",
