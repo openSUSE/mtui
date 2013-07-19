@@ -550,6 +550,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="slms12-internal.qam.suse.de">
@@ -735,6 +736,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-webyast12-64.qam.suse.de">
@@ -822,6 +824,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
       <addon name="smt">
         <version>
@@ -1082,6 +1085,7 @@
         </version>
       </product>
       <kernel property="weak">true</kernel>
+      <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
       <addon name="smt">
         <version>
@@ -1668,4 +1672,107 @@
       <addon property="weak" name="sdk"/>
     </host>
   </location>
+
+  <location name="cloud">
+      <host arch="x86_64" name="aurore.qam.suse.de"/>
+      <host arch="x86_64" name="compute.qam.suse.de"/>
+      <host arch="x86_64" name="poincare.qam.suse.de"/>
+      <host arch="x86_64" name="frisch.qam.suse.de"/>
+      <host arch="x86_64" name="leo.qam.suse.de"/>
+  </location>
+
+  <location name="infrastructure">
+    <host arch="i386" name="galileo.qam.suse.de"/>
+    <host arch="i386" name="you.suse.de"/>
+    <host arch="x86_64" name="smt.suse.de"/>
+    <host arch="x86_64" name="backup.qam.suse.de"/>
+    <host arch="i386" name="monitor.qam.suse.de"/>
+
+    <host arch="x86_64" name="brune.qam.suse.de">
+      <virtual mode="host">kvm</virtual>
+    </host>
+    <host arch="x86_64" name="voskhod.qam.suse.de">
+      <virtual mode="host">xen</virtual>
+    </host>
+    <host arch="x86_64" name="enterprise-nx01.qam.suse.de">
+      <virtual mode="host">kvm</virtual>
+    </host>
+    <host arch="x86_64" name="kvm-host-nue-01.qam.suse.de">
+      <virtual mode="host">kvm</virtual>
+    </host>
+
+    <host arch="x86_64" name="kadmeia.qam.suse.de">
+      <virtual mode="host">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="kleopatra.qam.suse.de">
+      <virtual mode="host">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="kynane.qam.suse.de">
+      <virtual mode="host">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="thessalonike.qam.suse.de">
+      <virtual mode="host">vmware</virtual>
+    </host>
+
+    <host arch="ppc64" name="guppyvio.qam.suse.de"/>
+    <host arch="ppc64" name="sharkvio.qam.suse.de"/>
+    <host arch="ppc64" name="swordfishvio.qam.suse.de"/>
+
+    <host arch="???" name="lcs-gs9428-1.qam.suse.de"/>
+    <host arch="???" name="lcs-gs9428-2.qam.suse.de"/>
+    <host arch="???" name="lcs-gs9428-3.qam.suse.de"/>
+    <host arch="???" name="lcs-gs9428-4.qam.suse.de"/>
+    <host arch="???" name="lcs-gs9428-5.qam.suse.de"/>
+  </location>
+
+  <location name="consoles">
+    <host arch="???" name="serial.qam.suse.de"/>
+    <host arch="???" name="kvm.qam.suse.de"/>
+    <host arch="???" name="guppy-fsp1.qam.suse.de"/>
+    <host arch="???" name="shark-fsp1.qam.suse.de"/>
+    <host arch="???" name="swordfish-fsp1.qam.suse.de"/>
+    <host arch="???" name="birdofpray-mgmt.qam.suse.de"/>
+    <host arch="???" name="cloud-compute-mgmt.qam.suse.de"/>
+    <host arch="???" name="enterprise-nx01-mgmt.qam.suse.de"/>
+    <host arch="???" name="kvm-host-nue-01-mgmt.qam.suse.de"/>
+    <host arch="???" name="shran-mgmt.qam.suse.de"/>
+    <host arch="???" name="spock-mgmt.qam.suse.de"/>
+    <host arch="???" name="talas-mgmt.qam.suse.de"/>
+  </location>
+
+  <location name="misc">
+      <host arch="x86_64" name="birdofpray.qam.suse.de"/>
+      <host arch="x86_64" name="nicolaus.qam.suse.de"/>
+      <host arch="x86_64" name="spock.qam.suse.de">
+           <virtual mode="host">hyperv</virtual>
+      </host>
+      <host arch="x86_64" name="tpol.qam.suse.de">
+           <virtual mode="host">xen</virtual>
+      </host>
+           <host arch="x86_64" name="picard.qam.suse.de">
+      <virtual mode="host">xen</virtual>
+      </host>
+      <host arch="x86_64" name="qam-manager.qam.suse.de">
+	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
+      </host>
+      <host arch="x86_64" name="sapaio1.qam.suse.de">
+	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
+      </host>
+      <host arch="x86_64" name="sapaio2.qam.suse.de">
+	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
+      </host>
+      <host arch="i386" name="qam-w7-x86.qam.suse.de">
+	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
+      </host>
+      <host arch="x86_64" name="qam-w7-x64.qam.suse.de">
+	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
+      </host>
+      <host arch="x86_64" name="oes11.qam.suse.de">
+	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
+      </host>
+  </location>
+
+  <location name="unused">
+  </location>
+
 </definitions>
