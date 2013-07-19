@@ -19,8 +19,8 @@ echo $before | xargs -n 1 | sort > $temp1
 temp2=$(mktemp /tmp/$progname.XXXXXX)
 echo $after | xargs -n 1 | sort > $temp2
 
-#trap "rm -f $temp1 $temp2" SIGINT SIGKILL EXIT
-echo $temp1 $temp2
+trap "rm -f $temp1 $temp2" SIGINT SIGKILL EXIT
+
 if [ -z "$before" ]; then
     # no succeeded testcases prior to the update found, finding
     # regressions not possible. exit with NOT RUN
