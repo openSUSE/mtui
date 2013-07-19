@@ -13,20 +13,24 @@ sed -i -e 's/\x1b\[[0-9]*m//g' "$1" "$2"
 before=$(grep -A 1 "^Tests passed:" $1 | tail -n 1)
 after=$(grep -A 1 "^Tests passed:" $2 | tail -n 1)
 
+temp1=$(mktemp /tmp/$progname.XXXXXX)
+echo $before | xargs -n 1 | sort > $temp1
+
+temp2=$(mktemp /tmp/$progname.XXXXXX)
+echo $after | xargs -n 1 | sort > $temp2
+
+#trap "rm -f $temp1 $temp2" SIGINT SIGKILL EXIT
+echo $temp1 $temp2
 if [ -z "$before" ]; then
     # no succeeded testcases prior to the update found, finding
     # regressions not possible. exit with NOT RUN
     exit 3
 fi
 
-for testcase in $after; do
-    before=${before/$testcase /}
-done
+regression=$(comm -23 $temp1 $temp2 | xargs)
 
-before=$(echo $before)
-
-if [ ! -z "$before" ]; then
-    echo "CTCS2 testcase regressions: $before"
+if [ ! -z "$regression" ]; then
+    echo "CTCS2 testcase regressions: $regression"
     exit 1
 else
     exit 0
