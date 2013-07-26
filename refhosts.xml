@@ -1558,6 +1558,7 @@
       </product>
       <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="x86_64" name="fletcher.qam.suse.de">
       <product name="sles">
@@ -1568,6 +1569,7 @@
       </product>
       <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
     </host>
     <host arch="i386" name="rivers.qam.suse.de">
       <product name="sled">
