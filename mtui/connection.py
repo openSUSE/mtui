@@ -349,9 +349,10 @@ class Connection(object):
         try:
             sftp = self.client.open_sftp()
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            # return on all SSH exceptions. need to implement some exceptions
-            # to let the upper layer know that the file transfer has failed.
-            return
+            self.reconnect()
+            # currently resending a file after reconnection is implemented
+            # as recursion. this is a really bad idea and needs fixing.
+            return self.put(local, remote)
 
         # create remote base directory and copy the file to that directory
         for subdir in remote.split('/')[:-1]:

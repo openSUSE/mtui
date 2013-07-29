@@ -191,7 +191,7 @@ class Target(object):
             try:
                 return self.connection.put(local, remote)
             except EnvironmentError, error:
-                out.error('failed to send %s: %s' % (local, error.strerror))
+                out.error('%s: failed to send %s: %s' % (self.hostname, local, error.strerror))
         elif self.state == 'dryrun':
             out.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
 
@@ -201,7 +201,7 @@ class Target(object):
             try:
                 return self.connection.get(remote, local)
             except EnvironmentError, error:
-                out.error('failed to get %s: %s' % (remote, error.strerror))
+                out.error('%s: failed to get %s: %s' % (self.hostname, remote, error.strerror))
         elif self.state == 'dryrun':
             out.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
 

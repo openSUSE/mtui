@@ -556,7 +556,7 @@ class CommandPrompt(cmd.Cmd):
                     continue
 
                 if installed[name]['commit'] == updated[name]['commit']:
-                    out.warning('revision of package %s hasn\'t changed, it\'s most likely aready updated. skipping' % name)
+                    out.warning('revision of package %s hasn\'t changed, it\'s most likely aready updated. skipping.' % name)
                     continue
 
                 diff = os.path.join(destination, '%s-%s.diff' % (name, args))
@@ -570,6 +570,11 @@ class CommandPrompt(cmd.Cmd):
                             return
 
                 elif args == 'build':
+                    RunCommand(targets, 'which osc').run()
+                    for target in targets:
+                        if targets[target].lastexit() != 0:
+                            out.error('osc is missing on %s. skipping.' % target)
+
                     for state in ['new', 'old']:
                         sourcedir = os.path.join(destination, name, state)
                         builddir = os.path.join(destination, name, state, 'BUILD')
@@ -1320,18 +1325,18 @@ class CommandPrompt(cmd.Cmd):
         Please be aware that no interactive commands can be run with this
         procedure.
 
-        run <hostname,command>
+        run <hostname[,hostname,...],command>
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
 
-        (args, _, command) = args.partition(',')
-
-        if args and command:
+        if args:
             targets = enabled_targets(self.targets)
 
             if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
+                targets = selected_targets(targets, set(targets) & set(args.split(',')))
+
+            command = ''.join(set(args.split(',')) - set(self.targets) - set(['all']))
 
             for target in targets.keys():
                 lock = targets[target].locked()
@@ -1359,8 +1364,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_run, args)
 
     def complete_run(self, text, line, begidx, endidx):
-        if not line.count(','):
-            return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
     def do_testsuite_list(self, args):
         """

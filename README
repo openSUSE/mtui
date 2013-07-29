@@ -300,7 +300,7 @@ return code) of each host is shown on the console.
 Please be aware that no interactive commands can be run with this
 procedure.
 
-		run <hostname,command>
+		run <hostname[,hostname,...],command>
 		Keyword arguments:
 		hostname -- hostname from the target list or "all"
 

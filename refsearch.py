@@ -111,6 +111,9 @@ def usage():
     for key in tags:
         print '\t{key:25}{value}'.format(key=key, value=", ".join(tags[key]))
     print
+    print 'example:'
+    print '\t{name} sles 11 sp3 i386'.format(name=sys.argv[0])
+    print
 
 def main():
     #parsing parameter and arguments
