@@ -19,7 +19,7 @@
       <kernel property="weak">true</kernel>
       <ltss>true</ltss>
     </host>
-    <host arch="x86_64" name="dax.qam.suse.de">
+    <host arch="i386" name="julian.qam.suse.de">
       <product name="sles">
         <version>
           <major>9</major>
@@ -27,15 +27,17 @@
       </product>
       <kernel property="weak">true</kernel>
       <ltss>true</ltss>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
     </host>
-    <host arch="i386" name="dawn.qam.suse.de">
+    <host arch="x86_64" name="kyle.qam.suse.de">
       <product name="sles">
         <version>
           <major>9</major>
         </version>
       </product>
-      <ltss>true</ltss>
       <kernel property="weak">true</kernel>
+      <ltss>true</ltss>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
     </host>
     <host arch="i386" name="dawn.qam.suse.de">
       <product name="sles">
@@ -1489,26 +1491,6 @@
       <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="julian.qam.suse.de">
-      <product name="sled">
-        <version>
-          <major>10</major>
-          <minor>sp4</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="kyle.qam.suse.de">
-      <product name="sled">
-        <version>
-          <major>10</major>
-          <minor>sp4</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="i386" name="bashir.qam.suse.de">
       <product name="sled">
         <version>
@@ -1701,6 +1683,9 @@
     </host>
     <host arch="x86_64" name="kvm-host-nue-01.qam.suse.de">
       <virtual mode="host">kvm</virtual>
+    </host>
+    <host arch="x86_64" name="147.2.207.80">
+      <virtual mode="host">xen</virtual>
     </host>
 
     <host arch="x86_64" name="kadmeia.qam.suse.de">
