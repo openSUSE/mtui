@@ -1220,6 +1220,42 @@
         </version>
       </addon>
     </host>
+    <host arch="i386" name="borg-1.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
+    <host arch="x86_64" name="borg-2.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
+    <host arch="x86_64" name="borg-3.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
+    <host arch="i386" name="borg-4.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
   </location>
   <location name="beijing">
     <host arch="i386" name="iris.apac.novell.com">
@@ -1723,14 +1759,14 @@
     <host arch="???" name="enterprise-nx01-mgmt.qam.suse.de"/>
     <host arch="???" name="kvm-host-nue-01-mgmt.qam.suse.de"/>
     <host arch="???" name="shran-mgmt.qam.suse.de"/>
-    <host arch="???" name="spock-mgmt.qam.suse.de"/>
+    <host arch="???" name="borg-mgmt.qam.suse.de"/>
     <host arch="???" name="talas-mgmt.qam.suse.de"/>
   </location>
 
   <location name="misc">
       <host arch="x86_64" name="birdofpray.qam.suse.de"/>
       <host arch="x86_64" name="nicolaus.qam.suse.de"/>
-      <host arch="x86_64" name="spock.qam.suse.de">
+      <host arch="x86_64" name="borg.qam.suse.de">
            <virtual mode="host">hyperv</virtual>
       </host>
       <host arch="x86_64" name="tpol.qam.suse.de">
