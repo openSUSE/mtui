@@ -1122,7 +1122,7 @@ class CommandPrompt(cmd.Cmd):
             comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
 
             print 'export TESTS_LOGDIR=/var/log/qa/%s; <testsuite>' % self.metadata.md5
-            print '/usr/share/qa/tools/remote_qa_db_report.pl -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
+            print '/usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
                     username, self.metadata.md5, comment)
 
     def do_list_bugs(self, args):
