@@ -1737,6 +1737,10 @@
       <virtual mode="host">vmware</virtual>
     </host>
 
+    <host arch="x86_64" name="borg.qam.suse.de">
+           <virtual mode="host">hyperv</virtual>
+    </host>
+
     <host arch="ppc64" name="guppyvio.qam.suse.de"/>
     <host arch="ppc64" name="sharkvio.qam.suse.de"/>
     <host arch="ppc64" name="swordfishvio.qam.suse.de"/>
@@ -1766,15 +1770,14 @@
   <location name="misc">
       <host arch="x86_64" name="birdofpray.qam.suse.de"/>
       <host arch="x86_64" name="nicolaus.qam.suse.de"/>
-      <host arch="x86_64" name="borg.qam.suse.de">
-           <virtual mode="host">hyperv</virtual>
-      </host>
       <host arch="x86_64" name="tpol.qam.suse.de">
            <virtual mode="host">xen</virtual>
       </host>
            <host arch="x86_64" name="picard.qam.suse.de">
       <virtual mode="host">xen</virtual>
       </host>
+      <host arch="x86_64" name="merkur.qam.suse.de"/>
+      <host arch="x86_64" name="kickstart.qam.suse.de"/>
       <host arch="x86_64" name="qam-manager.qam.suse.de">
 	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
       </host>
