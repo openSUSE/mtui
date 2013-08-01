@@ -1480,7 +1480,7 @@ class CommandPrompt(cmd.Cmd):
             submit = []
             submit.append('echo \'echo -n "%s"\' > /tmp/pwdask' % password)
             submit.append('chmod 700 /tmp/pwdask')
-            submit.append('SSH_ASKPASS=/tmp/pwdask DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\''
+            submit.append('SSH_ASKPASS=/tmp/pwdask DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\''
                            % (self.metadata.md5, username, self.metadata.md5, comment))
             submit.append('rm /tmp/pwdask')
 
