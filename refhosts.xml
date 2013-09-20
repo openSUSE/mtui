@@ -274,6 +274,21 @@
         </version>
       </addon>
     </host>
+    <host arch="s390x" name="s390p4.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <ltss property="weak">true</ltss>
+      <addon name="studiorunner">
+        <version>
+          <major>1</major>
+          <minor>3</minor>
+        </version>
+      </addon>
+    </host>
     <host arch="s390x" name="s390vsw116.suse.de">
       <product name="sles">
         <version>
