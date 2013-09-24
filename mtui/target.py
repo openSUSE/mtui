@@ -445,6 +445,8 @@ class Metadata(object):
             return '11'
         if re.search('sles4vmware', systems):
             return '11'
+        if re.search('cloud', systems):
+            return '11'
         if re.search('studio', systems):
             return '11'
         if re.search('slms', systems):
