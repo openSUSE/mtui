@@ -107,7 +107,7 @@ class Config(object):
         try:
             self.repclean_path = self._get_option('target', 'repclean')
         except Exception:
-            self.repclean_path = '/mounts/qam/infrastructure/mtui/helper/rep-clean/rep-clean.sh'
+            self.repclean_path = '/mounts/qam/rep-clean/rep-clean.sh'
         out.debug('config.repclean_path set to "%s"' % self.repclean_path)
 
         try:
