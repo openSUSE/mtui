@@ -465,7 +465,7 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="bathala.qam.suse.de">
+    <host arch="x86_64" name="birdofpray.qam.suse.de">
       <product name="studio">
         <version>
           <major>1</major>
