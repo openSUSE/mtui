@@ -15,6 +15,10 @@ def do_search_hosts(location, args):
     attribute-- host attributes like architecture or product
     """
 
+    # this is an extracted copy of mtui/refhost.py:do_search_hosts
+    # See more doc there
+    # TODO: diff and DRY
+
     print 'searching for location %s ...' %location
     print
 

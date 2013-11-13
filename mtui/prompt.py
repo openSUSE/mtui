@@ -68,6 +68,10 @@ class CommandPrompt(cmd.Cmd):
         attribute-- host attributes like architecture or product
         """
 
+        # this is copied in /refsearch.py
+        # there is also improved version in
+        # qa-maintenance/various-tools.git/refhosts-search
+
         if args:
             attributes = Attributes()
 
