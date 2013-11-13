@@ -78,6 +78,11 @@ class CommandPrompt(cmd.Cmd):
                 return
 
             if 'Testplatform:' in args:
+                # USECASE: this branch is handling a case where user loads mtui
+                # without a testreport and copies the Testplatform: line
+                # from some testreport into search_hosts or autoadd or
+                # loading other set of hosts for running the current update
+                # on
                 try:
                     refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
                     hosts = refhost.search()
