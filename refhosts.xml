@@ -1666,6 +1666,12 @@
     <host arch="???" name="lcs-gs9428-3.qam.suse.de"/>
     <host arch="???" name="lcs-gs9428-4.qam.suse.de"/>
     <host arch="???" name="lcs-gs9428-5.qam.suse.de"/>
+
+    <host arch="???" name="c3srv2rack21.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack22.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack23.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack24.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack25.qam.suse.de"/>
   </location>
 
   <location name="consoles">

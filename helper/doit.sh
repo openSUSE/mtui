@@ -6,8 +6,8 @@ mode="$1"
 resultdir="$2"
 md5sum="$3"
 
-category1="check_new_dependencies.sh check_all_updated.pl check_dependencies.sh check_from_same_srcrpm.pl check_multiple-owners.sh check_new_licenses.sh check_vendor_and_disturl.pl check_same_arch.sh"
-category2="compare_new_dependencies.sh compare_all_updated.sh compare_dependencies.sh compare_from_same_srcrpm.sh compare_multiple-owners.sh compare_new_licenses.sh compare_rpm_Va.sh compare_vendor_and_disturl.sh compare_same_arch.sh"
+category1="check_new_dependencies.sh check_all_updated.pl check_dependencies.sh check_from_same_srcrpm.pl check_multiple-owners.sh check_new_licenses.sh check_vendor_and_disturl.pl check_same_arch.sh check_ctcs_testsuite.sh check_initrd_state.sh"
+category2="compare_new_dependencies.sh compare_all_updated.sh compare_dependencies.sh compare_from_same_srcrpm.sh compare_multiple-owners.sh compare_new_licenses.sh compare_rpm_Va.sh compare_vendor_and_disturl.sh compare_same_arch.sh compare_ctcs_testsuite.sh compare_initrd_state.sh"
 
 mydir="${0%/*}"
 PATH="$PATH:$mydir"
