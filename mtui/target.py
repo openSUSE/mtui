@@ -117,6 +117,9 @@ class Target(object):
         return self.connection.timeout
 
     def set_repo(self, name):
+        if name not in ["UPDATE", "TESTING"]:
+            raise ValueError("invalid name `%s`" % name)
+
         command = config.repclean_path
 
         try:
