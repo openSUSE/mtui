@@ -10,6 +10,8 @@ import getopt
 import logging
 import shutil
 import re
+import traceback
+import warnings
 
 from mtui.log import *
 from mtui.config import *
@@ -17,6 +19,52 @@ from mtui.prompt import *
 from mtui.template import *
 
 out = logging.getLogger('mtui')
+
+def check_modules():
+    """check if all mandatory modules are installed on the system
+
+    currently we need:
+    paramiko - for the ssh/network management. this has most likely a
+               dependency to python-crypto
+    rpm      - for comparing rpm versions and getting rpm metadata
+               on the local machine
+
+    """
+
+    modules = {'paramiko': 'python-paramiko', 'rpm': 'rpm-python'}
+
+    for (module, package) in modules.items():
+        try:
+            with warnings.catch_warnings():
+                # paramiko uses some deprecated python code, ignore it since
+                # it's only internal stuff and doesn't need to bother the tester
+                warnings.filterwarnings('ignore', category=DeprecationWarning)
+                exec 'import %s' % module
+        except ImportError:
+            # exit if a mandatory module couldn't be loaded
+            out.error('missing %s module. please install %s' % (module, modules[module]))
+            sys.exit(-1)
+        else:
+            # unload module again after we made sure it exists
+            exec 'del %s' % module
+
+def realmain():
+    """
+    mtui entry point. checking for all needed modules and invoke main()
+    """
+
+    try:
+        check_modules()
+
+        from mtui.main import main
+        main()
+    except Exception:
+        # all uncatched exceptions end up here and generate a nice backtrace
+        out.error('you found a bug. please notify ckornacker@suse.de')
+        print 'backtrace:'
+        print '-' * 60
+        traceback.print_exc(file=sys.stdout)
+        print '-' * 60
 
 
 def main():
