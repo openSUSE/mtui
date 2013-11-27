@@ -1847,10 +1847,6 @@ class CommandPrompt(cmd.Cmd):
             if args.split(',')[0] != 'all':
                 targets = selected_targets(targets, args.split(','))
 
-            if name.lower() not in ['testing', 'update']:
-                self.parse_error(self.do_set_repo, args)
-                return
-
             for target in targets:
                 lock = targets[target].locked()
                 if lock.locked and not lock.own():
@@ -1858,7 +1854,10 @@ class CommandPrompt(cmd.Cmd):
                     if lock.comment:
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
-                    targets[target].set_repo(name.upper())
+                    try:
+                        targets[target].set_repo(name.upper())
+                    except ValueError:
+                        self.parse_error(self.do_set_repo, args)
         else:
 
             self.parse_error(self.do_set_repo, args)
