@@ -1,24 +1,45 @@
 #!/usr/bin/env python
 
-from distutils.core import setup
-import distutils.command.build
-import distutils.command.install_data
-import os.path
-import sys
+from setuptools import setup
+from mtui import version
 
+setup(
+    name='mtui',
+    description = 'Maintenance Test Update Installer',
+    long_description = 'Command-line client for remote QAM test '+
+        'update installation and tracking.',
+    url = 'http://www.suse.com',
+    download_url = 'http://qam.suse.de/infrastructure/mtui/',
 
-setup(name='mtui',
-      version = '1.0',
-      description = 'Maintenance Test Update Installer',
-      long_description = 'Command-line client for remote QAM test update installation and tracking.',
-      author = 'Christian Kornacker',
-      author_email = 'ckornacker@suse.de',
-      license = 'GPL',
-      platforms = ['Linux', 'Mac OSX'],
-      keywords = ['SUSE', 'Maintenance', 'update', 'testing'],
-      url = 'http://www.suse.com',
-      download_url = 'http://qam.suse.de/infrastructure/mtui/',
-      packages = ['mtui', 'mtui.connector'],
-      scripts = ['mtui.py', 'refsearch.py']
-      )
+    version = version,
 
+    install_requires = [
+        "paramiko",
+    ],
+
+    # dependencies not on cheeseshop:
+    # rpm (http://www.rpm.org) with python enabled
+    # osc (http://en.opensuse.org/openSUSE:OSC)
+
+    extras_require = {
+        'keyring': ['keyring'],
+    },
+    # extra dependencies:
+    # notify (http://www.galago-project.org/specs/notification)
+
+    author = 'Christian Kornacker',
+    author_email = 'ckornacker@suse.de',
+
+    maintainer = 'SUSE QA Maintenance',
+    maintainer_email = 'qa-maintenance@suse.de',
+
+    license = 'License :: Other/Proprietary License',
+    platforms = ['Linux', 'Mac OSX'],
+    keywords = ['SUSE', 'Maintenance', 'update', 'testing'],
+
+    packages = ['mtui', 'mtui.connector'],
+
+    entry_points = {
+        'console_scripts': ['mtui = mtui.main:realmain']},
+    scripts = ['refsearch.py']
+)

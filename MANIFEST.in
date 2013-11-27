@@ -1,0 +1,3 @@
+include refhosts.xml *.example FAQ term*sh
+recursive-include scripts *
+recursive-include helper *
