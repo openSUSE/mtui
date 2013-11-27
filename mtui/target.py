@@ -247,9 +247,7 @@ class Target(object):
                 filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
                 lockfile = self.connection.open(filename)
             except Exception, error:
-                try:
-                    assert(error.errno == errno.ENOENT)
-                except Exception:
+                if not error.errno == errno.ENOENT:
                     out.error('failed to open lockfile: %s' % error)
                 return lock
 
