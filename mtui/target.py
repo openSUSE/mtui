@@ -133,8 +133,6 @@ class Target(object):
                     filename = os.path.join(datadir, 'helper', 'rep-clean', item)
                     destination = os.path.join(tempdir, item)
                     self.put(filename, destination)
-            except OSError:
-                out.error('missing rep-clean.sh script')
             else:
                 scriptfile = os.path.join(tempdir, 'rep-clean.sh')
                 conffile = os.path.join(tempdir, 'rep-clean.conf')
