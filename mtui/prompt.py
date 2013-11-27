@@ -392,7 +392,7 @@ class CommandPrompt(cmd.Cmd):
 
     def do_source_install(self, args):
         """
-        Installs current source RPMs to the target hosts. 
+        Installs current source RPMs to the target hosts.
 
         source_install <hostname>
         Keyword arguments:
@@ -2388,7 +2388,7 @@ class CommandPrompt(cmd.Cmd):
 
         terms [termname]
         Keyword arguments:
-        termname -- terminal emulator to spawn consoles on 
+        termname -- terminal emulator to spawn consoles on
         """
 
         systems = {}
