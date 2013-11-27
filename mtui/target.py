@@ -128,15 +128,14 @@ class Target(object):
             # copy over local rep-clean script if rep-clean isn't found
             datadir = config.datadir
             tempdir = config.target_tempdir
-            try:
-                for item in ['rep-clean.sh', 'rep-clean.conf']:
-                    filename = os.path.join(datadir, 'helper', 'rep-clean', item)
-                    destination = os.path.join(tempdir, item)
-                    self.put(filename, destination)
-            else:
-                scriptfile = os.path.join(tempdir, 'rep-clean.sh')
-                conffile = os.path.join(tempdir, 'rep-clean.conf')
-                command = '%s -F %s' % (scriptfile, conffile)
+            for item in ['rep-clean.sh', 'rep-clean.conf']:
+                filename = os.path.join(datadir, 'helper', 'rep-clean', item)
+                destination = os.path.join(tempdir, item)
+                self.put(filename, destination)
+
+            scriptfile = os.path.join(tempdir, 'rep-clean.sh')
+            conffile = os.path.join(tempdir, 'rep-clean.conf')
+            command = '%s -F %s' % (scriptfile, conffile)
         else:
             repclean.close()
 
