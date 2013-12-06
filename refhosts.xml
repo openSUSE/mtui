@@ -602,7 +602,7 @@
       <product name="sles">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>sp3</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
