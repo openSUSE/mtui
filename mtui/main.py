@@ -104,8 +104,21 @@ def main():
         # parameter takes an argument) and the long parameter list by the
         # full name of the parameter (and an equal sign if the parameter takes
         # an argument. for further information read the python getopt manual.
-        (opts, args) = getopt.getopt(sys.argv[1:], 'nhdl:s:p:t:m:vw:o:', ['non-interactive', 'help', 'dryrun',
-                                     'location=', 'templates=', 'md5=', 'search-hosts=', 'prerun=', 'overwrite=', 'verbose', 'timeout'])
+        short_opts = 'nhdl:s:p:t:m:vw:o:'
+        long_opts  = [
+            'non-interactive',
+            'help',
+            'dryrun',
+            'location=',
+            'templates=',
+            'md5=',
+            'search-hosts=',
+            'prerun=',
+            'overwrite=',
+            'verbose',
+            'timeout',
+        ]
+        opts, args = getopt.getopt(sys.argv[1:], short_opts, long_opts)
     except getopt.GetoptError, error:
         # catch unkown parameters and show usage
         out.error('failed to parse parameter: %s' % str(error))
