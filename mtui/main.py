@@ -17,6 +17,7 @@ from mtui.log import *
 from mtui.config import *
 from mtui.prompt import *
 from mtui.template import *
+from mtui import version
 
 out = logging.getLogger('mtui')
 
@@ -104,7 +105,7 @@ def main():
         # parameter takes an argument) and the long parameter list by the
         # full name of the parameter (and an equal sign if the parameter takes
         # an argument. for further information read the python getopt manual.
-        short_opts = 'nhdl:s:p:t:m:vw:o:'
+        short_opts = 'nhdl:s:p:t:m:vw:o:V'
         long_opts  = [
             'non-interactive',
             'help',
@@ -117,6 +118,7 @@ def main():
             'overwrite=',
             'verbose',
             'timeout',
+            'version',
         ]
         opts, args = getopt.getopt(sys.argv[1:], short_opts, long_opts)
     except getopt.GetoptError, error:
@@ -127,6 +129,9 @@ def main():
     for (parameter, argument) in opts:
         if parameter in ('-h', '--help'):
             usage()
+        elif parameter in ('-V', '--version'):
+            print version
+            sys.exit(0)
         elif parameter in ('-m', '--md5'):
             # match for a alphanumeric string with a length of 32 chars.
             # if it looks like a duck, swims like a duck, and quacks like
@@ -311,6 +316,7 @@ def usage():
         ('p' ,  'prerun='         ,  'script with a set of MTUI commands to run at start'),
         ('v' ,  'verbose'         ,  'enable debugging output'),
         ('w' ,  'timeout'         ,  'execution timeout in seconds'),
+        ('V' ,  'version'         ,  'print version'),
     ]
 
     print
