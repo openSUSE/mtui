@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from setuptools import setup
-from mtui import version
+from mtui import __version__
 
 setup(
     name='mtui',
@@ -11,7 +11,7 @@ setup(
     url = 'http://www.suse.com',
     download_url = 'http://qam.suse.de/infrastructure/mtui/',
 
-    version = version,
+    version = __version__,
 
     install_requires = [
         "paramiko",

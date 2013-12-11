@@ -17,7 +17,7 @@ from mtui.log import *
 from mtui.config import *
 from mtui.prompt import *
 from mtui.template import *
-from mtui import version
+from mtui import __version__
 
 out = logging.getLogger('mtui')
 
@@ -130,7 +130,7 @@ def main():
         if parameter in ('-h', '--help'):
             usage()
         elif parameter in ('-V', '--version'):
-            print version
+            print __version__
             sys.exit(0)
         elif parameter in ('-m', '--md5'):
             # match for a alphanumeric string with a length of 32 chars.
