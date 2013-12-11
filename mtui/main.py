@@ -298,18 +298,26 @@ def usage():
     print '=' * 35
     print
     print sys.argv[0], '[parameter]'
+
+
+    opts_desc = [
+        ('l' ,  'location='       ,  'reference host location name'),
+        ('t' ,  'template='       ,  'template directory'),
+        ('m' ,  'md5='            ,  'md5 update identifier'),
+        ('n' ,  'non-interactive' ,  'non-interactive update shell'),
+        ('d' ,  'dryrun'          ,  'start in dryrun mode'),
+        ('s' ,  'search-hosts='   ,  'search for hosts matching comma separated tags'),
+        ('o' ,  'overwrite='      ,  'overwrite template hostlist ("hostname,system hostname,system")'),
+        ('p' ,  'prerun='         ,  'script with a set of MTUI commands to run at start'),
+        ('v' ,  'verbose'         ,  'enable debugging output'),
+        ('w' ,  'timeout'         ,  'execution timeout in seconds'),
+    ]
+
     print
     print 'parameters:'
-    print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
-    print '\t-{short},--{long:20}{description}'.format(short='t', long='template=', description='template directory')
-    print '\t-{short},--{long:20}{description}'.format(short='m', long='md5=', description='md5 update identifier')
-    print '\t-{short},--{long:20}{description}'.format(short='n', long='non-interactive', description='non-interactive update shell')
-    print '\t-{short},--{long:20}{description}'.format(short='d', long='dryrun', description='start in dryrun mode')
-    print '\t-{short},--{long:20}{description}'.format(short='s', long='search-hosts=', description='search for hosts matching comma separated tags')
-    print '\t-{short},--{long:20}{description}'.format(short='o', long='overwrite=', description='overwrite template hostlist ("hostname,system hostname,system")')
-    print '\t-{short},--{long:20}{description}'.format(short='p', long='prerun=', description='script with a set of MTUI commands to run at start')
-    print '\t-{short},--{long:20}{description}'.format(short='v', long='verbose', description='enable debugging output')
-    print '\t-{short},--{long:20}{description}'.format(short='w', long='timeout', description='execution timeout in seconds')
+    for x in opts_desc:
+        kw = dict(zip(('short', 'long', 'description'), x))
+        print '\t-{short},--{long:20}{description}'.format(**kw)
     print
 
     sys.exit(0)
