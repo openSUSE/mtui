@@ -17,6 +17,7 @@ from mtui.log import *
 from mtui.config import *
 from mtui.prompt import *
 from mtui.template import *
+from mtui import version
 
 out = logging.getLogger('mtui')
 
@@ -104,8 +105,22 @@ def main():
         # parameter takes an argument) and the long parameter list by the
         # full name of the parameter (and an equal sign if the parameter takes
         # an argument. for further information read the python getopt manual.
-        (opts, args) = getopt.getopt(sys.argv[1:], 'nhdl:s:p:t:m:vw:o:', ['non-interactive', 'help', 'dryrun',
-                                     'location=', 'templates=', 'md5=', 'search-hosts=', 'prerun=', 'overwrite=', 'verbose', 'timeout'])
+        short_opts = 'nhdl:s:p:t:m:vw:o:V'
+        long_opts  = [
+            'non-interactive',
+            'help',
+            'dryrun',
+            'location=',
+            'templates=',
+            'md5=',
+            'search-hosts=',
+            'prerun=',
+            'overwrite=',
+            'verbose',
+            'timeout',
+            'version',
+        ]
+        opts, args = getopt.getopt(sys.argv[1:], short_opts, long_opts)
     except getopt.GetoptError, error:
         # catch unkown parameters and show usage
         out.error('failed to parse parameter: %s' % str(error))
@@ -114,6 +129,9 @@ def main():
     for (parameter, argument) in opts:
         if parameter in ('-h', '--help'):
             usage()
+        elif parameter in ('-V', '--version'):
+            print version
+            sys.exit(0)
         elif parameter in ('-m', '--md5'):
             # match for a alphanumeric string with a length of 32 chars.
             # if it looks like a duck, swims like a duck, and quacks like
@@ -285,18 +303,27 @@ def usage():
     print '=' * 35
     print
     print sys.argv[0], '[parameter]'
+
+
+    opts_desc = [
+        ('l' ,  'location='       ,  'reference host location name'),
+        ('t' ,  'template='       ,  'template directory'),
+        ('m' ,  'md5='            ,  'md5 update identifier'),
+        ('n' ,  'non-interactive' ,  'non-interactive update shell'),
+        ('d' ,  'dryrun'          ,  'start in dryrun mode'),
+        ('s' ,  'search-hosts='   ,  'search for hosts matching comma separated tags'),
+        ('o' ,  'overwrite='      ,  'overwrite template hostlist ("hostname,system hostname,system")'),
+        ('p' ,  'prerun='         ,  'script with a set of MTUI commands to run at start'),
+        ('v' ,  'verbose'         ,  'enable debugging output'),
+        ('w' ,  'timeout'         ,  'execution timeout in seconds'),
+        ('V' ,  'version'         ,  'print version'),
+    ]
+
     print
     print 'parameters:'
-    print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
-    print '\t-{short},--{long:20}{description}'.format(short='t', long='template=', description='template directory')
-    print '\t-{short},--{long:20}{description}'.format(short='m', long='md5=', description='md5 update identifier')
-    print '\t-{short},--{long:20}{description}'.format(short='n', long='non-interactive', description='non-interactive update shell')
-    print '\t-{short},--{long:20}{description}'.format(short='d', long='dryrun', description='start in dryrun mode')
-    print '\t-{short},--{long:20}{description}'.format(short='s', long='search-hosts=', description='search for hosts matching comma separated tags')
-    print '\t-{short},--{long:20}{description}'.format(short='o', long='overwrite=', description='overwrite template hostlist ("hostname,system hostname,system")')
-    print '\t-{short},--{long:20}{description}'.format(short='p', long='prerun=', description='script with a set of MTUI commands to run at start')
-    print '\t-{short},--{long:20}{description}'.format(short='v', long='verbose', description='enable debugging output')
-    print '\t-{short},--{long:20}{description}'.format(short='w', long='timeout', description='execution timeout in seconds')
+    for x in opts_desc:
+        kw = dict(zip(('short', 'long', 'description'), x))
+        print '\t-{short},--{long:20}{description}'.format(**kw)
     print
 
     sys.exit(0)

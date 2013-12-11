@@ -1,0 +1,4 @@
+include refhosts.xml term*sh
+recursive-include scripts *
+recursive-include helper *
+include Documentation/*

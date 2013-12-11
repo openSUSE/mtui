@@ -1,5 +1,0 @@
-# this is a prerun example file
-run all,uname -a
-list_hosts
-list_metadata
-quit
