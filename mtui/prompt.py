@@ -28,6 +28,7 @@ from mtui.refhost import *
 from mtui.config import *
 from mtui.notification import *
 from mtui.testopia import *
+from mtui import commands
 
 out = logging.getLogger('mtui')
 
@@ -37,6 +38,10 @@ class CommandPrompt(cmd.Cmd):
     prompt = 'QA > '
 
     def __init__(self, targets, metadata):
+        """
+            :param targets: dict where K is str, V is L{Target} and
+                K == V.hostname
+        """
         cmd.Cmd.__init__(self)
         self.interactive = True
         self.targets = targets
@@ -1656,6 +1661,11 @@ class CommandPrompt(cmd.Cmd):
     def complete_set_location(self, text, line, begidx, endidx):
         refhost = Refhost(config.refhosts_xml)
         return [i for i in refhost.get_locations() if i.startswith(text) and i not in line]
+
+    def do_hosts_unlock(self, args):
+        ts = enabled_targets(self.targets)
+        hosts = HostsGroup(ts)
+        commands.HostsUnlock(args, hosts, out).run()
 
     def do_set_host_lock(self, args):
         """

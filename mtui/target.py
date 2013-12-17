@@ -22,6 +22,69 @@ out = logging.getLogger('mtui')
 
 queue = Queue.Queue()
 
+class HostsGroupException(Exception):
+    def __init__(self, es):
+        self.es = es
+        msg = "\n".join([str(x) for x in es])
+        Exception.__init__(self, msg)
+
+    def handle(self, xs):
+        new = []
+        for e in self.es:
+            handled = False
+            for x in xs:
+                if x[0](e):
+                    x[1](e)
+                    handled = True
+            if not handled:
+                new.append(e)
+        if new:
+            raise HostsGroupException(new)
+
+class HostsGroup(object):
+    """
+    Composite pattern for L{Target}
+
+    doesn't deal with Target state as that would require too much work
+    to support properly. so
+
+    1. All the given hosts are expected to be enabled.
+
+    2. Lifetime of the object should be the same as execution of one
+       command given from user (to ensure 1.)
+    """
+    def __init__(self, hosts):
+        """
+        :param targets: list of L{Target}
+        """
+        self.hosts = hosts
+
+    def select(self, hosts):
+        if hosts == []:
+            return self
+
+        available = [x.host for x in self.hosts]
+        for x in hosts:
+            if not x in available:
+                "{0} is not in available hosts".format(x)
+                raise ValueError(x)
+
+        return HostsGroup([x for x in self.hosts if x.host in hosts])
+
+    def unlock(self, *a, **kw):
+        es = []
+        for x in self.hosts:
+            try:
+                x.unlock(*a, **kw)
+            except Exception as e:
+                es.append(e)
+
+        if not es == []:
+            raise HostsGroupException(es)
+
+    def __getitem__(self, x):
+        return self.hosts[x]
+
 class TargetLockedError(Exception):
     pass
 
@@ -214,10 +277,10 @@ class TargetLock(object):
         try:
             self.connection.remove(self.filename)
         except IOError as e:
-            if error.errno == errno.ENOENT:
+            if e.errno == errno.ENOENT:
                 pass
-        except Exception as error:
-            out.error('failed to remove lockfile: %s' % error)
+        except Exception as e:
+            out.error('failed to remove lockfile: %s' % e)
             raise
 
         self._lock = RemoteLock()
@@ -289,9 +352,6 @@ class Target(object):
             # NOTE: the condition was originally locked and lock.comment
             # idk why.
             out.warning(self._lock.locked_by_msg())
-
-    def unlock(self, force=False):
-        pass
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
@@ -484,8 +544,8 @@ class Target(object):
         """
         self._lock.lock(comment)
 
-    def unlock(self):
-        self._lock.unlock()
+    def unlock(self, force=False):
+        self._lock.unlock(force)
 
     def locked(self):
         """

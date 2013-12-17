@@ -85,7 +85,7 @@ def test_target_unlock():
     t._lock.unlock = x
     t.unlock()
 
-    eq_(t.test_mark, ((),{}))
+    eq_(t.test_mark, ((False,),{})) # ((force), {})
 
 def test_locked_target_is_locked():
     t = Target('foo', 'bar', connect=False)
