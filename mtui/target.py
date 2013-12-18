@@ -22,39 +22,276 @@ out = logging.getLogger('mtui')
 
 queue = Queue.Queue()
 
+class TargetLockedError(Exception):
+    pass
+
+class RemoteLock(object):
+    """
+    Localy represent the state of remote lock
+    """
+    def __init__(self):
+        self.user = None
+        """
+        :param user: user owning the lock
+        :type user: str or None
+        """
+        self.timestamp = None
+        """
+        :param timestamp: timestamp when the lock was set
+        :type timestamp: str or None
+        """
+        self.pid = None
+        """
+        :param pid: pid of owning the lock
+        :type pid: int or None
+        """
+        self.comment = None
+        """
+        :param comment: comment why the lock was set
+        :type comment: str or None
+        """
+
+    def to_lockfile(self):
+        """
+        :return: str representation of self to be written in the
+            lockfile
+        """
+        xs = [self.timestamp, self.user, str(self.pid)]
+        if self.comment:
+            xs.append(self.comment)
+        return ":".join(xs)
+
+    def __str__(self):
+        if self.comment:
+            comment = " (%s)" % self.comment
+        else:
+            comment = ""
+
+        user = self.user
+        return "locked by {0}{1}.".format(user, comment)
+
+    @classmethod
+    def from_lockfile(cls, line):
+        """
+        :return: L{RemoteLock} instance
+        """
+        self = cls()
+
+        if line=="":
+            return self
+
+        line = line.strip()
+        line = line.split(":")
+        if len(line) is 4:
+            self.comment = line.pop()
+
+        self.pid = int(line.pop())
+        self.user = line.pop()
+        self.timestamp = line.pop()
+
+        if line:
+            raise ValueError('got weird format in lockfile')
+
+        return self
+
+class TargetLock(object):
+    """
+        This class is not supposted to be used directly but via
+        L{Target} methods
+    """
+    # FIXME: use netstrings to ensure proper (de)serialization
+    # NOTE: the user name is not guaranteed not to collide.
+    # Unfortunately, I don't see a way to do this without unreasonably
+    # raising the logic complexity and usability
+
+    filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
+
+    def __init__(self, connection, config, out=None):
+        self.connection = connection
+
+        if not out:
+            out = logging.getLogger("mtui")
+
+        self.out = out
+        self.connection = connection
+
+        self.i_am_user = config.session_user
+        self.i_am_pid  = os.getpid()
+        self.timestamp_factory = timestamp
+        """
+        :type timestampFactory: callable
+        """
+
+        self._lock = RemoteLock()
+
+    def load(self):
+        """
+        :returns None:
+        """
+        self.out.debug('%s: getting mtui lock state' %
+            self.connection.hostname)
+
+        try:
+            lockfile = self.connection.open(self.filename)
+        except Exception as error:
+            if error.errno == errno.ENOENT:
+                return
+            raise
+
+        self._lock = RemoteLock.from_lockfile(lockfile.readline())
+        lockfile.close()
+
+    def is_locked(self):
+        """
+        :returns: bool True if target system is locked by someone else
+
+        If possible use `try: lock.lock(); ...` as this introduces race
+        condition that's fundamentally impossible to remove.
+        """
+        self.load()
+        return bool(self._lock.user)
+
+    def lock(self, comment=None):
+        """
+        Locks the target system
+
+        :returns: None
+        :raises TargetLockedError: if target is already locked.
+        """
+        if self.is_locked():
+            # NOTE: there is a slight race between between getting the
+            # state of the lock on target host and setting the lock.
+            # However, that has always been here afaik.
+            # TODO: test if using sftpclient.mkdir can be used to make
+            # the locking really atomic.
+            if not self.is_mine():
+                # NOTE: let the code pass through if is_mine() as
+                # setting a different comment may be desired.
+                raise TargetLockedError(self.locked_by_msg())
+
+        out.debug('%s: setting lock' % self.connection.hostname)
+
+        rl = RemoteLock()
+        rl.user = self.i_am_user
+        rl.timestamp = self.timestamp_factory()
+        rl.pid = self.i_am_pid
+        rl.comment = comment
+
+        try:
+            lockfile = self.connection.open(self.filename, 'w+')
+        except Exception as e:
+            out.error('failed to open lockfile: %s' % e)
+            raise
+
+        lockfile.write(rl.to_lockfile())
+        lockfile.close()
+        self._lock = rl
+
+    def locked_by_msg(self):
+        """
+        :returns str: locked by message suitable for display to user
+        """
+        host = self.connection.hostname
+        return "{0} is {1}".format(host, str(self._lock))
+
+    def locked_by(self):
+        return self._lock
+
+    def unlock(self, force=False):
+        """
+        Unlocks target system
+
+        :param force: bool if False (default) removes only locks owned
+            by current user. If True removes locks owned by anyone
+            Usefull when mtui crashes (and therefore you don't own your
+            locks anymore due to different pid) or someone elses mtui
+            hangs and you need to access the systems
+        """
+        if self.is_locked():
+            if not self.is_mine() and not force:
+                raise TargetLockedError(self.locked_by_msg())
+
+        try:
+            self.connection.remove(self.filename)
+        except IOError as e:
+            if error.errno == errno.ENOENT:
+                pass
+        except Exception as error:
+            out.error('failed to remove lockfile: %s' % error)
+            raise
+
+        self._lock = RemoteLock()
+
+    def is_mine(self):
+        """
+        :returns bool: True if the lock is owned by user running this
+        """
+        if not self._lock.user:
+            raise RuntimeError("not locked")
+
+        if self._lock.user != self.i_am_user:
+            return False
+        if self._lock.pid != self.i_am_pid:
+            # NOTE: checking pid handles the case where one user is
+            # running multiple mtui instances against the same hosts
+            return False
+
+        return True
 
 class Target(object):
 
-    def __init__(self, hostname, system, packages=[], state='enabled', timeout=300, exclusive=False):
+    def __init__(self, hostname, system, packages=[], state='enabled',
+        timeout=300, exclusive=False, connect=True):
+        """
+            :type connect: bool
+            :param connect:
+                introduced in order to run unit tests witout
+                having the target automatically connect
+        """
+
         self.host, _, self.port = hostname.partition(':')
         self.hostname = hostname
         self.system = system
         self.packages = {}
         self.log = []
         self.state = state
+        """
+        :param state:
+        :type state: str either "enabled" or "disabled"
+        :deprecated:
+        """
         self.timeout = timeout
         self.exclusive = exclusive
         self.connection = None
 
         out.info('connecting to %s' % self.hostname)
 
-        try:
-            self.connection = Connection(self.host, self.port, self.timeout)
-        except Exception, error:
-            try:
-                out.critical('connecting to %s failed: %s' % (self.hostname, str(error.strerror)))
-            except:
-                out.critical('connecting to %s failed: %s' % (self.hostname, str(error)))
-            raise
-
         for package in packages:
             self.packages[package] = Package(package)
 
-        lock = self.locked()
+        if connect:
+            self.connect()
 
-        if lock.locked and lock.comment:
-            out.warning('%s exclusively locked by %s (%s). please hold on testing on that host.' % (self.hostname, lock.user,
-                        lock.comment))
+    def connect(self):
+        try:
+            self.connection = Connection(self.host, self.port, self.timeout)
+        except Exception as error:
+            try:
+                # TODO: why is this here?
+                xs = (self.hostname, str(error.strerror))
+            except:
+                xs =  (self.hostname, str(error.strerror))
+            out.critical('connecting to %s failed: %s' % xs)
+            raise
+
+        self._lock = TargetLock(self.connection, config, out)
+        if self.is_locked():
+            # NOTE: the condition was originally locked and lock.comment
+            # idk why.
+            out.warning(self._lock.locked_by_msg())
+
+    def unlock(self, force=False):
+        pass
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
@@ -235,78 +472,68 @@ class Target(object):
         except:
             return ''
 
+    def is_locked(self):
+        """
+        :returns bool: True if target is locked by someone else
+        """
+        return self._lock.is_locked()
+
+    def lock(self, comment=None):
+        """
+        :returns None:
+        """
+        self._lock.lock(comment)
+
+    def unlock(self):
+        self._lock.unlock()
+
     def locked(self):
+        """
+        :deprecated: by is_locked method
+        """
         out.debug('%s: getting mtui lock state' % self.hostname)
         lock = Locked(False)
 
-        if self.state == 'enabled':
-            try:
-                filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
-                lockfile = self.connection.open(filename)
-            except Exception, error:
-                if not error.errno == errno.ENOENT:
-                    out.error('failed to open lockfile: %s' % error)
-                return lock
+        if self.state != 'enabled':
+            return lock
 
-            try:
-                line = lockfile.readline().strip()
-            except Exception:
-                lockfile.close()
-                return lock
+        try:
+            lock.locked = self._lock.is_locked()
+        except OSError:
+            return lock
 
-            try:
-                if len(line.split(':')) == 3:
-                    (lock.timestamp, lock.user, lock.pid) = line.split(':')
-                else:
-                    (lock.timestamp, lock.user, lock.pid, lock.comment) = line.split(':')
-            except Exception:
-                lockfile.close()
-                return lock
-
-            lock.locked = True
-
-            lockfile.close()
+        if lock.locked:
+            rl = self._lock.locked_by()
+            lock.timestamp = rl.timestamp
+            lock.user = rl.user
+            lock.pid = rl.pid
+            lock.comment = rl.comment
 
         return lock
 
     def set_locked(self, comment=None):
+        """
+        :deprecated: by lock method
+        """
         if self.state == 'enabled':
-            out.debug('%s: setting lock' % self.hostname)
             try:
-                filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
-                lockfile = self.connection.open(filename, 'w+')
-            except Exception, error:
-                out.error('failed to open lockfile: %s' % error)
+                self._lock.lock(comment)
+            except:
                 return
 
-            now = timestamp()
-            user = config.session_user
-            pid = os.getpid()
-            if comment:
-                lockfile.write('%s:%s:%s:%s' % (now, user, pid, comment))
-            else:
-                lockfile.write('%s:%s:%s' % (now, user, pid))
-            lockfile.close()
-
     def remove_lock(self):
-        lock = self.locked()
+        """
+        :deprecated:
+        """
+        if self.state != "enabled":
+            return
 
         try:
-            if lock.locked:
-                assert lock.own()
-
-                out.debug('%s: removing lock' % self.hostname)
-
-                try:
-                    filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
-                    self.connection.remove(filename)
-                except IOError, error:
-                    if error.errno == errno.ENOENT:
-                        out.debug('%s: lockfile does not exist' % self.hostname)
-                except Exception, error:
-                    out.error('failed to remove lockfile: %s' % error)
-        except AssertionError:
+            self.unlock()
+        except TargetLockedError:
             out.debug('unable to remove lock from %s. lock is probably not held by this session' % self.hostname)
+        except:
+            pass
 
     def add_history(self, comment):
         if self.state == 'enabled':
@@ -624,7 +851,6 @@ class RunCommand(object):
             queue.join()
             print
             raise
-
 
 class Locked(object):
 
