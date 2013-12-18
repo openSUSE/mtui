@@ -47,3 +47,6 @@ Documentation is located at ./Documentation where you can find
   <./Documentation/README>`_
 
 * and `FAQ <./Documentation/FAQ>`_
+
+If you want to modify the source code, please take a look at the
+`developer documentation <./Documentation/developer.rst>`_
