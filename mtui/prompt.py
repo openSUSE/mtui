@@ -2723,6 +2723,7 @@ def script_hook(targets, which, templatedir, md5):
                     command = [comparescript, prename, postname]
 
                     out.debug('running %s' % str(command))
+                    stdout = stderr = None
                     try:
                         sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         (stdout, stderr) = sub.communicate()
@@ -2739,7 +2740,7 @@ def script_hook(targets, which, templatedir, md5):
                     if exitcode == 2:
                         out.warning('internal error in testcase %s: %s' % (script, str(command)))
 
-                    targets[target].log.append([' '.join(command), stdout, stderr, exitcode, 0])
+                    targets[target].log.append([' '.join(command), str(stdout), str(stderr), exitcode, 0])
             else:
 
                 FileUpload(targets, local_file, os.path.join(remote_dir, remote_file)).run()
