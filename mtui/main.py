@@ -3,7 +3,7 @@
 # mtui invocation, usage texts and parameter parsing
 #
 
-import os
+import os, glob, stat
 import sys
 import errno
 import getopt
@@ -236,6 +236,8 @@ def main():
     ignored = shutil.ignore_patterns('*.svn')
 
     try:
+        # TODO: move this to some more sensible part of code.
+        # the update prompt command I guess.
         assert(metadata.path)
         # copy check_* and compare_* scripts to the template directory
         sourcedir = os.path.join(config.datadir, 'scripts')
@@ -253,6 +255,13 @@ def main():
         # don't copy anything
         out.debug('running without template, not copying scripts directory')
         pass
+
+    for i in glob.glob('%s/*/compare_*' % destdir):
+        # make sure the compare scripts (which run localy) are
+        # executable
+        # TODO: add test that the scripts indeed are +x
+        st = os.stat(i)
+        os.chmod(i, st.st_mode | stat.S_IEXEC)
 
     # create QA prompt and add hosts by attributes
     prompt = CommandPrompt(targets, metadata)
