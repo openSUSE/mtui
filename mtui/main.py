@@ -67,6 +67,62 @@ def realmain():
         traceback.print_exc(file=sys.stdout)
         print '-' * 60
 
+def create_metadata(md5, location, directory):
+    if md5 is None:
+        # if metadata isn't filled with data from the template,
+        # populate it with the required fields
+        out.debug('running without template')
+        metadata = Metadata()
+        metadata.location = location
+        metadata.directory = directory
+        return metadata
+
+    try:
+        update = Template(md5, location, directory)
+    except IOError:
+        # checkout the current testing template. we could do this with the
+        # python svn module, but for now it's simpler calling just system()
+        svnpath = '/'.join([config.svn_path, md5])
+        os.system('cd %s; svn co %s' % (directory, svnpath))
+        try:
+            update = Template(md5, location, directory)
+        except IOError:
+            # in case the template doesn't exist, try to check it out
+            out.error('failed to check out testreport template from %s' % svnpath)
+            raise
+
+    except Exception:
+        out.error('failed to parse testreport template %s' % os.path.join(directory, md5, 'log'))
+        raise
+
+    return update.metadata
+
+
+def copy_scripts(metadata, config):
+    if not metadata.path:
+        return
+
+    try:
+        # copy check_* and compare_* scripts to the template directory
+        # TODO: do not override
+        src = os.path.join(config.datadir, 'scripts')
+        dst = os.path.join(os.path.dirname(metadata.path), 'scripts')
+        ignore = shutil.ignore_patterns('*.svn')
+        shutil.copytree(src, dst, ignore=ignore)
+    except OSError, error:
+        # this should not happen but was already noticed once or twice.
+        # probable due to nfs timeouts if mtui was checked out to a nfs mount.
+        if error.errno == errno.ENOENT:
+            out.warning('scripts/ dir not found, please copy manually')
+        else:
+            pass
+
+    for i in glob.glob('%s/*/compare_*' % dst):
+        # make sure the compare scripts (which run localy) are
+        # executable
+        # TODO: add test that the scripts indeed are +x
+        st = os.stat(i)
+        os.chmod(i, st.st_mode | stat.S_IEXEC)
 
 def main():
     """parsing parameter list and initializing template metadata"""
@@ -190,31 +246,15 @@ def main():
     else:
         out.debug('created testreport directory')
 
-    if md5 is not None:
-        try:
-            update = Template(md5, location, directory)
-        except IOError:
-            # checkout the current testing template. we could do this with the
-            # python svn module, but for now it's simpler calling just system()
-            svnpath = '/'.join([config.svn_path, md5])
-            os.system('cd %s; svn co %s' % (directory, svnpath))
-            try:
-                update = Template(md5, location, directory)
-            except IOError:
-                # in case the template doesn't exist, try to check it out
-                out.error('failed to check out testreport template from %s' % svnpath)
-                sys.exit(0)
-        except Exception:
-            out.error('failed to parse testreport template %s' % os.path.join(directory, md5, 'log'))
-            sys.exit(0)
+    try:
+        metadata = create_metadata(md5, location, directory)
+    except:
+        # NOTE: logging is handled inside the create_metadata functions
+        sys.exit(0)
 
-        metadata = update.metadata
-    else:
-        # if metadata isn't filled with data from the template,
-        # populate it with the required fields
-        metadata = Metadata()
-        metadata.location = location
-        metadata.directory = directory
+    copy_scripts(metadata, config)
+    # TODO: move copy_scripts to some more sensible part of code.
+    # the update prompt command I guess.
 
     if refhosts:
         metadata.systems = refhosts
@@ -230,38 +270,6 @@ def main():
             # not work if we are somewhere deep in the network/ssh code where
             # KeyboardInterrupt is not thrown.
             out.warning('skipping host %s' % host)
-
-    # ignore svn metadata files when copying the testscripts to
-    # the correspondend directories
-    ignored = shutil.ignore_patterns('*.svn')
-
-    try:
-        # TODO: move this to some more sensible part of code.
-        # the update prompt command I guess.
-        assert(metadata.path)
-        # copy check_* and compare_* scripts to the template directory
-        sourcedir = os.path.join(config.datadir, 'scripts')
-        destdir = os.path.join(os.path.dirname(metadata.path), 'scripts')
-        shutil.copytree(sourcedir, destdir, ignore=ignored)
-    except OSError, error:
-        # this should not happen but was already noticed once or twice.
-        # probable due to nfs timeouts if mtui was checked out to a nfs mount.
-        if error.errno == errno.ENOENT:
-            out.warning('scripts/ dir not found, please copy manually')
-        else:
-            pass
-    except AssertionError:
-        # metadata path not set. most likely run without template.
-        # don't copy anything
-        out.debug('running without template, not copying scripts directory')
-        pass
-
-    for i in glob.glob('%s/*/compare_*' % destdir):
-        # make sure the compare scripts (which run localy) are
-        # executable
-        # TODO: add test that the scripts indeed are +x
-        st = os.stat(i)
-        os.chmod(i, st.st_mode | stat.S_IEXEC)
 
     # create QA prompt and add hosts by attributes
     prompt = CommandPrompt(targets, metadata)
