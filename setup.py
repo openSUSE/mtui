@@ -40,6 +40,6 @@ setup(
     packages = ['mtui', 'mtui.connector'],
 
     entry_points = {
-        'console_scripts': ['mtui = mtui.main:realmain']},
+        'console_scripts': ['mtui = mtui.main:main']},
     scripts = ['refsearch.py']
 )

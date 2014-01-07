@@ -49,24 +49,6 @@ def check_modules():
             # unload module again after we made sure it exists
             exec 'del %s' % module
 
-def realmain():
-    """
-    mtui entry point. checking for all needed modules and invoke main()
-    """
-
-    try:
-        check_modules()
-
-        from mtui.main import main
-        main()
-    except Exception:
-        # all uncatched exceptions end up here and generate a nice backtrace
-        out.error('you found a bug. please notify ckornacker@suse.de')
-        print 'backtrace:'
-        print '-' * 60
-        traceback.print_exc(file=sys.stdout)
-        print '-' * 60
-
 def create_metadata(md5, location, directory):
     if md5 is None:
         # if metadata isn't filled with data from the template,

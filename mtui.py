@@ -18,7 +18,7 @@
 # Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 
 
-from mtui.main import realmain
+from mtui.main import main
 
 if __name__ == '__main__':
-    realmain()
+    main()
