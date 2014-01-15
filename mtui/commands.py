@@ -74,3 +74,16 @@ class HostsUnlock(Command):
 
     def complete(self):
         raise NotImplementedError
+
+class Whoami(Command):
+    command = 'whoami'
+
+    def _argparser(self):
+        parser = argparse.ArgumentParser(prog=self.command)
+        return parser
+
+    def run(self):
+        print self.config.session_user
+
+    def complete(self):
+        raise NotImplementedError

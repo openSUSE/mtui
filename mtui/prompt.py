@@ -62,6 +62,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.commands = {}
         self._add_subcommand(commands.HostsUnlock)
+        self._add_subcommand(commands.Whoami)
 
     def _add_subcommand(self, cmd):
         if self.commands.has_key(cmd.command):
