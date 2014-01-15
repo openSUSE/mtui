@@ -60,6 +60,59 @@ class CommandPrompt(cmd.Cmd):
         except IOError, error:
             out.debug('failed to open history file: %s' % error.strerror)
 
+        self.commands = {}
+        self._add_subcommand(commands.HostsUnlock)
+
+    def _add_subcommand(self, cmd):
+        if self.commands.has_key(cmd.command):
+            raise RuntimeError("command {0} already set".\
+                format(cmd.command))
+        self.commands[cmd.command] = cmd
+
+    # {{{ overrides to support new style commands
+    def onecmd(self, line):
+        cmd_, arg, line = self.parseline(line)
+        try:
+            subcmd = self.commands[cmd_]
+        except KeyError:
+            return cmd.Cmd.onecmd(self, line)
+        else:
+            self.commandFactory(subcmd, arg).run()
+
+    def commandFactory(self, cmd, args=None):
+        hosts = HostsGroup(enabled_targets(self.targets).values())
+        return cmd(args, hosts, config, out)
+
+    def do_help(self, arg):
+        try:
+            cmd_ = self.commands[arg]
+        except KeyError:
+            return cmd.Cmd.do_help(self, arg)
+        else:
+            h = self.commandFactory(cmd_).argparser().format_help()
+            self.stdout.write(h)
+
+    def get_names(self):
+        names = cmd.Cmd.get_names(self)
+        names = names + ["do_" + x for x in self.commands.keys()]
+        return names
+
+    def __getattr__(self, x):
+        try:
+            y = x
+            if isinstance(y, str):
+                y = y.replace("do_","")
+            c = self.commands[y]
+        except KeyError:
+            raise AttributeError(str(x))
+        else:
+            argparser = self.commandFactory(c).argparser()
+            clsdict = {
+                '__doc__': argparser.format_help()
+            }
+            return type(x, (object,), clsdict)
+    # }}}
+
     def emptyline(self):
         return
 
@@ -1661,11 +1714,6 @@ class CommandPrompt(cmd.Cmd):
     def complete_set_location(self, text, line, begidx, endidx):
         refhost = Refhost(config.refhosts_xml)
         return [i for i in refhost.get_locations() if i.startswith(text) and i not in line]
-
-    def do_hosts_unlock(self, args):
-        ts = enabled_targets(self.targets)
-        hosts = HostsGroup(ts)
-        commands.HostsUnlock(args, hosts, out).run()
 
     def do_set_host_lock(self, args):
         """
