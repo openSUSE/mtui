@@ -22,9 +22,16 @@ class Config(object):
     """Read and store the variables from mtui config files"""
 
     def __init__(self):
-        # read config values from /etc/mtui.cfg for system-wide configuration
-        # and ~/.mtuirc for user overrides
-        self.configfiles = [os.path.join('/', 'etc', 'mtui.cfg'), os.path.expanduser('~/.mtuirc')]
+        try:
+            # FIXME: gotta read config overide from env instead of argv
+            # because this crap is used as a singleton all over the
+            # place
+            self.configfiles = [os.environ['MTUI_CONF']]
+        except KeyError:
+            self.configfiles = [
+                os.path.join('/', 'etc', 'mtui.cfg'),
+                os.path.expanduser('~/.mtuirc')
+            ]
 
         self.config = ConfigParser.SafeConfigParser()
         try:
