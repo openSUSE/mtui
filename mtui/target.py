@@ -194,15 +194,19 @@ class TargetLock(object):
         self.out.debug('%s: getting mtui lock state' %
             self.connection.hostname)
 
+        self._lock = RemoteLock() # make sure lock is reset.
+
         try:
             lockfile = self.connection.open(self.filename)
-        except Exception as error:
-            if error.errno == errno.ENOENT:
-                return
-            raise
+        except EnvironmentError as error:
+            if error.errno != errno.ENOENT:
+                raise
+            data = ""
+        else:
+            data = lockfile.readline()
+            lockfile.close()
 
-        self._lock = RemoteLock.from_lockfile(lockfile.readline())
-        lockfile.close()
+        self._lock = RemoteLock.from_lockfile(data)
 
     def is_locked(self):
         """
@@ -559,7 +563,9 @@ class Target(object):
 
         try:
             lock.locked = self._lock.is_locked()
-        except OSError:
+        except Exception:
+            out.error("Reading remote lock failed for {0}".\
+                format(self.host))
             return lock
 
         if lock.locked:

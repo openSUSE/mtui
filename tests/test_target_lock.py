@@ -213,3 +213,54 @@ def test_lock_force_unlock():
     l.unlock(True)
 
     _unlock_post_cond(l, conn)
+
+def _test_remote_lock_reset_lockFactory(exc_factory):
+    c = Config
+    c.session_user = 'bar'
+
+    class Lockfile:
+        def readline(self):
+            return "00-00:foo:666:kek"
+
+        def close(self):
+            pass
+
+    class ConnMock(object):
+        hostname = 'bar'
+        cnt = 0
+
+        def open(self, fn):
+            if self.cnt == 0:
+                self.cnt += 1
+                return Lockfile()
+            else:
+                exc_factory()
+
+    c = Config
+    c.session_user = 'foo'
+
+    return TargetLock(ConnMock(), c)
+
+def test_remote_lock_reset_on_enoent():
+    def fx():
+        e = IOError()
+        e.errno = errno.ENOENT
+        raise e
+    l = _test_remote_lock_reset_lockFactory(fx)
+    eq_(l.is_locked(), True)
+    eq_(l.is_locked(), False)
+
+def test_remote_lock_reset_on_exception():
+    def fx():
+        raise Exception("foo")
+    l = _test_remote_lock_reset_lockFactory(fx)
+
+    eq_(l.is_locked(), True)
+    try:
+        eq_(l.is_locked(), False)
+    except Exception as e:
+        eq_(e.message, "foo")
+        eq_(l._lock.user, None)
+        eq_(l._lock.timestamp, None)
+        eq_(l._lock.pid, None)
+        eq_(l._lock.comment, None)
