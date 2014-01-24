@@ -85,6 +85,9 @@ class HostsGroup(object):
     def __getitem__(self, x):
         return self.hosts[x]
 
+    def names(self):
+        return [x.hostname for x in self]
+
 class TargetLockedError(Exception):
     pass
 

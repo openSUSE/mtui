@@ -15,6 +15,7 @@ import re
 
 out = logging.getLogger('mtui')
 
+flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
 
 def timestamp():
     return str(int(time.time()))

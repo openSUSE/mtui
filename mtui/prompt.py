@@ -115,7 +115,15 @@ class CommandPrompt(cmd.Cmd):
                 y = y.replace("do_","")
             c = self.commands[y]
         except KeyError:
-            raise AttributeError(str(x))
+            try:
+                y = x
+                if isinstance(y, str):
+                    y = y.replace("complete_","")
+                c = self.commands[y]
+            except KeyError:
+                raise AttributeError(str(x))
+            else:
+                return self.commandFactory(c).complete
         else:
             argparser = self.commandFactory(c).argparser()
             clsdict = {
