@@ -23,9 +23,37 @@ def test_legacy_locked_target_is_locked():
     lock = t.locked()
     eq_(lock.locked, True)
     eq_(lock.user, 'quux')
-    eq_(lock.pid, 666)
+    eq_(lock.pid, '666')
     eq_(lock.comment, 'fuu')
     eq_(lock.timestamp, rl.timestamp)
+    eq_(lock.own(), False)
+
+def test_legacy_lock_is_own():
+    t = Target('foo', 'bar', connect=False)
+
+    c = Config
+    c.session_user = 'quux'
+
+    t._lock = TargetLock(None, c)
+    t._lock.load = lambda: None
+
+    rl = RemoteLock()
+    rl.user = 'quux'
+    rl.pid = 666
+    rl.timestamp = 'bah'
+    rl.comment  = 'fuu'
+    t._lock._lock = rl
+
+    lock = t.locked()
+    lock._getpid = lambda: 666
+    lock._getuser = lambda: 'quux'
+    eq_(lock.locked, True)
+    eq_(lock.user, 'quux')
+    eq_(lock.pid, '666')
+    eq_(lock.comment, 'fuu')
+    eq_(lock.timestamp, rl.timestamp)
+    eq_(lock.own(), True)
+
 
 def test_legacy_target_set_locks():
     t = Target('foo', 'bar', connect=False)

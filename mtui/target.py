@@ -572,7 +572,7 @@ class Target(object):
             rl = self._lock.locked_by()
             lock.timestamp = rl.timestamp
             lock.user = rl.user
-            lock.pid = rl.pid
+            lock.pid = str(rl.pid)
             lock.comment = rl.comment
 
         return lock
@@ -928,12 +928,23 @@ class Locked(object):
         self.comment = comment
 
     def own(self):
-        try:
-            assert(self.user == config.session_user)
-            assert(self.pid == str(os.getpid()))
-            return True
-        except Exception:
+        u = self._getuser()
+        if not self.user == u:
+            out.debug("user: %s != %s",self.user, u)
             return False
+
+        p = str(self._getpid())
+        if not self.pid == p:
+            out.debug("pid: %s != %s", self.pid, p)
+            return False
+
+        return True
+
+    def _getuser(self):
+        return config.session_user
+
+    def _getpid(self):
+        return os.getpid()
 
     def time(self, style=None):
         from datetime import datetime

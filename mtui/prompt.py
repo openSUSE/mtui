@@ -2238,6 +2238,8 @@ class CommandPrompt(cmd.Cmd):
                         targets[target].remove_lock()
                 return
 
+            out.debug("chosen updater: %s" % repr(updater))
+
             try:
                 updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
             except Exception:
