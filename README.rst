@@ -50,3 +50,23 @@ Documentation is located at ./Documentation where you can find
 
 If you want to modify the source code, please take a look at the
 `developer documentation <./Documentation/developer.rst>`_
+
+
+Automated Tests
+###############
+
+Run unit tests with `nosetests tests`
+
+`Acceptance testsuite
+<http://git.suse.de/?p=yac/mtui-test-acceptance.git;a=summary>`_ is at
+git.suse.de.
+
+Release Engineering
+###################
+
+Versioning scheme is based on `SemVer 2.0
+<http://semver.org/spec/v2.0.0.html>`_
+
+However, new features introduced in 1.x series are unstable and subject
+change and will be stabilized in 2.0 release or on bug report request if
+possible.
