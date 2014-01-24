@@ -28,7 +28,7 @@ from mtui.refhost import *
 from mtui.config import *
 from mtui.notification import *
 from mtui.testopia import *
-from mtui import commands
+from mtui import commands, strict_version
 
 from distutils.version import StrictVersion
 
@@ -1767,6 +1767,11 @@ class CommandPrompt(cmd.Cmd):
                     else:
                         targets[target].set_locked(comment)
                 elif state == 'disabled':
+                    husv = StrictVersion(commands.HostsUnlock.stable)
+                    if husv <=  self._command_interface:
+                        msg = "set_host_lock <host>,disable has been"
+                        msg += " deprecated in favor of unlock command"
+                        user_deprecation(out, msg)
                     try:
                         targets[target].remove_lock()
                     except AssertionError:
@@ -2864,4 +2869,5 @@ def selected_targets(targets, target_list):
 
     return temporary_targets
 
-
+def user_deprecation(out, msg):
+    out.warning(msg)
