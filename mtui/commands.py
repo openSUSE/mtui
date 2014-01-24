@@ -6,6 +6,14 @@ from mtui.target import HostsGroupException, TargetLockedError
 class Command(object):
     __metaclass__ = ABCMeta
 
+    stable = None
+    """
+    :type stable: str
+    :param stable: Major version since which the command is stabilized.
+        Derived classes must set this property.
+        Version must include at least major and minor
+    """
+
     def __init__(self, raw_args, hosts, config, out):
         """
         :type raw_args: str
@@ -38,6 +46,7 @@ class Command(object):
 
 class HostsUnlock(Command):
     command = 'unlock'
+    stable  = '2.0'
 
     def _argparser(self):
         parser = argparse.ArgumentParser(prog=self.command)
@@ -77,6 +86,7 @@ class HostsUnlock(Command):
 
 class Whoami(Command):
     command = 'whoami'
+    stable = '2.0'
 
     def _argparser(self):
         parser = argparse.ArgumentParser(prog=self.command)

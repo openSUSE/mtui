@@ -70,3 +70,7 @@ Versioning scheme is based on `SemVer 2.0
 However, new features introduced in 1.x series are unstable and subject
 change and will be stabilized in 2.0 release or on bug report request if
 possible.
+
+New commands are masked to the 2.0 release and are not available in 1.x
+unless you explicitly ask for them in configuration option
+`mtui.command_interface`

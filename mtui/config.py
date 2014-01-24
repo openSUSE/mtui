@@ -7,6 +7,7 @@ import os
 import getpass
 import logging
 import ConfigParser
+from mtui import __version__
 
 try:
     import keyring
@@ -69,6 +70,12 @@ class Config(object):
         except Exception:
             self.location = 'default'
         out.debug('config.location set to "%s"' % self.location)
+
+        try:
+            self.command_interface = self._get_option(
+                'mtui', 'command_interface')
+        except Exception:
+            self.command_interface = __version__
 
         try:
             self.refhosts_xml = os.path.expanduser(self._get_option('mtui', 'refhosts'))

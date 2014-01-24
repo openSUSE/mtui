@@ -34,6 +34,11 @@ repclean=/mounts/qam/infrastructure/mtui/helper/rep-clean/rep-clean.sh
 # path to the SLCS testsuite scripts
 testsuitedir=/usr/share/qa/tools/
 
+# set command_interface to "2.0" (without the quotes) to enable commands
+# that will be stabilized in 2.0 release (developed during 1.x
+# development).
+#command_interface =
+
 [connection]
 # connection timeout in seconds
 timeout=300

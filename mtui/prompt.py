@@ -30,6 +30,8 @@ from mtui.notification import *
 from mtui.testopia import *
 from mtui import commands
 
+from distutils.version import StrictVersion
+
 out = logging.getLogger('mtui')
 
 
@@ -37,7 +39,7 @@ class CommandPrompt(cmd.Cmd):
 
     prompt = 'QA > '
 
-    def __init__(self, targets, metadata):
+    def __init__(self, targets, metadata, config=config):
         """
             :param targets: dict where K is str, V is L{Target} and
                 K == V.hostname
@@ -47,7 +49,11 @@ class CommandPrompt(cmd.Cmd):
         self.targets = targets
         self.metadata = metadata
         self.homedir = os.path.expanduser('~')
-        self.datadir = config.datadir
+        self.config = config
+        self.datadir = self.config.datadir
+
+        self._command_interface = \
+            StrictVersion(config.command_interface)
 
         self.session = self.metadata.md5
 
@@ -68,6 +74,10 @@ class CommandPrompt(cmd.Cmd):
         if self.commands.has_key(cmd.command):
             raise RuntimeError("command {0} already set".\
                 format(cmd.command))
+
+        if self._command_interface < StrictVersion(cmd.stable):
+            return
+
         self.commands[cmd.command] = cmd
 
     # {{{ overrides to support new style commands

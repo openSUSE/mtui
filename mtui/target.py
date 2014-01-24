@@ -161,6 +161,10 @@ class TargetLock(object):
     """
         This class is not supposted to be used directly but via
         L{Target} methods
+
+        If the lock has comment, it is considered to be an `exclusive`
+        lock. Only place that takes this into consideration is `run`
+        command.
     """
     # FIXME: use netstrings to ensure proper (de)serialization
     # NOTE: the user name is not guaranteed not to collide.
