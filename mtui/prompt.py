@@ -2713,12 +2713,11 @@ class CommandPrompt(cmd.Cmd):
         if not input('save log? (Y/n) ', ['n', 'no'], self.interactive):
             self.do_save(None)
 
-        if args == 'reboot':
-            [ self.targets[x].close('reboot') or self.targets.pop(x) for x in set(self.targets)]
-        elif args == 'poweroff':
-            [ self.targets[x].close('poweroff') or self.targets.pop(x) for x in set(self.targets)]
-        else:
-            [ self.targets[x].close() or self.targets.pop(x) for x in set(self.targets)]
+        args_ = [args] if args in ('reboot', 'poweroff') else []
+
+        for x in set(self.targets):
+            self.targets[x].close(*args_)
+            self.targets.pop(x)
 
         try:
             readline.write_history_file('%s/.mtui_history' % self.homedir)
