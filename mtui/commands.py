@@ -102,22 +102,18 @@ class HostsUnlock(Command):
 
     @classmethod
     def _add_arguments(cls, parser):
-        parser.add_argument('-a', action='store_true',
-            help='execute on all hosts')
-
-        parser.add_argument('-f', action='store_true',
-            help='force execution for locks set by other people')
+        parser.add_argument('-f', '--force', action='store_true',
+            help='force unlock - remove locks set by other users or'
+                ' sessions')
 
         parser.add_argument('hosts', metavar='host', type=list,
-            nargs='*', help='hosts to execute at')
+            nargs='*', help='hosts to unlock. If no hosts are' +
+            ' given all enabled hosts are unlocked.')
 
         return parser
 
     def run(self):
         args = self.args
-
-        if args.a and bool(args.hosts):
-            self.logger.error("conflicting options")
 
         try:
             hosts = self.hosts.select(args.hosts)
@@ -126,7 +122,7 @@ class HostsUnlock(Command):
             return
 
         try:
-            hosts.unlock(force=args.f)
+            hosts.unlock(force=args.force)
         except HostsGroupException as e:
             e.handle([
                 (lambda e: isinstance(e, TargetLockedError),
@@ -137,9 +133,9 @@ class HostsUnlock(Command):
     def completer(hosts):
         def wrap(text, line, begidx, endidx):
             # TODO: there is argcomplete package as bach completion for
-            # argparse that may simplyfi this. But declares support for 2.7
-            # and 3.3 only
-            synonyms = [("-h", "--help"), ("-a",),  ("-f",)]
+            # argparse that may simplyfi this. But declares support for
+            # 2.7 and 3.3 only
+            synonyms = [("-h", "--help"), ("-a",),  ("-f", "--force")]
             choices = set(flatten(synonyms) + hosts.names())
 
             ls = line.split(" ")
