@@ -281,9 +281,11 @@ class TargetLock(object):
             locks anymore due to different pid) or someone elses mtui
             hangs and you need to access the systems
         """
-        if self.is_locked():
-            if not self.is_mine() and not force:
-                raise TargetLockedError(self.locked_by_msg())
+        if not self.is_locked():
+            return
+
+        if not self.is_mine() and not force:
+            raise TargetLockedError(self.locked_by_msg())
 
         try:
             self.connection.remove(self.filename)

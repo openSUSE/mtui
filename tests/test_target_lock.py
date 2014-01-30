@@ -123,6 +123,22 @@ def test_lock_locks():
     eq_(rl.comment, 'kek')
     eq_(rl.timestamp, '00-00')
 
+def test_unlock_doesnt_unlock_unlocked():
+    class ConnMock(object):
+        def remove(self, fn):
+            ok_(False)
+
+    c = Config
+    c.session_user = 'foo'
+
+    l = TargetLock(ConnMock(), c)
+    l.i_am_pid = 666
+
+    rl = RemoteLock()
+
+    l.load = lambda: None
+    l.unlock()
+
 def test_lock_is_mine():
     c = Config
     c.session_user = 'foo'
