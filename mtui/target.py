@@ -66,8 +66,8 @@ class HostsGroup(object):
         available = [x.host for x in self.hosts]
         for x in hosts:
             if not x in available:
-                "{0} is not in available hosts".format(x)
-                raise ValueError(x)
+                m = "Host {0} is not connected".format(repr(x))
+                raise ValueError(m)
 
         return HostsGroup([x for x in self.hosts if x.host in hosts])
 

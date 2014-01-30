@@ -2,12 +2,18 @@ from nose.tools import ok_, eq_
 
 from mtui.prompt import CommandPrompt
 from mtui.target import Metadata
-from mtui.commands import Whoami
+from mtui.commands import Command
 from mtui.config import Config, config
 from mtui import __version__
 
 import os
+import argparse
 from distutils.version import StrictVersion
+
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
 
 OLD_STYLE_CMD='update'
 NEW_STYLE_CMD='unlock'
@@ -68,11 +74,12 @@ def test_add_subcommand():
 
     cp = TestableCP()
 
-    class TestableComm(Whoami):
+    class ComMock(Command):
         stable = '2.0'
+        command = 'commock'
 
     eq_(cp.commands.values(), [])
-    cp._add_subcommand(TestableComm)
+    cp._add_subcommand(ComMock)
     eq_(cp.commands.values(), [])
 
     class TestableCP2(CommandPrompt):
@@ -82,5 +89,51 @@ def test_add_subcommand():
 
     cp = TestableCP2()
     eq_(cp.commands.values(), [])
-    cp._add_subcommand(TestableComm)
-    eq_(cp.commands.values(), [TestableComm])
+    cp._add_subcommand(ComMock)
+    eq_(cp.commands.values(), [ComMock])
+
+def test_command_argparse_fail():
+    """
+    test handling of command args parsing failure
+    namely that ArgsParseFailure is catched during onecmd()
+    """
+    class ComMock(Command):
+        stable = '1.0'
+        command = 'commock'
+
+        def run(self):
+            ok_(False)
+
+    c = Config()
+    cp = CommandPrompt([], Metadata(), config=c)
+    cp.stdout = StringIO()
+    cp._add_subcommand(ComMock)
+
+    cp.onecmd('commock -foo')
+    eq_(cp.stdout.getvalue(), "usage: commock [-h]\n")
+
+def test_command_doesnt_run_on_help():
+    class ComMock(Command):
+        command = 'commock'
+        stable = '2.0'
+
+        def run(self):
+            ok_(False)
+
+    c = Config()
+    c.command_interface = ComMock.stable
+    cp = CommandPrompt([], Metadata(), config=c)
+    cp.stdout = StringIO()
+    cp._add_subcommand(ComMock)
+    cp.onecmd('commock -h')
+    eq_(cp.stdout.getvalue(), 'usage: commock [-h]\n\noptional '+
+        'arguments:\n  -h, --help  show this help message and exit\n')
+
+def test_command_println():
+    class ComMock(Command):
+        def run(self):
+            pass
+
+    c = ComMock(None, None, None, StringIO(), None)
+    c.println("a")
+    eq_(c.stdout.getvalue(), "a\n")

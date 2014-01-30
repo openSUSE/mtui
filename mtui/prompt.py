@@ -29,6 +29,8 @@ from mtui.config import *
 from mtui.notification import *
 from mtui.testopia import *
 from mtui import commands, strict_version
+from mtui.utils import log_exception
+from mtui.commands import ArgsParseFailure
 
 from distutils.version import StrictVersion
 
@@ -87,12 +89,23 @@ class CommandPrompt(cmd.Cmd):
             subcmd = self.commands[cmd_]
         except KeyError:
             return cmd.Cmd.onecmd(self, line)
-        else:
-            self.commandFactory(subcmd, arg).run()
+
+        try:
+            args = subcmd.parse_args(arg, self.stdout)
+        except ArgsParseFailure as e:
+            return
+
+        self.commandFactory(subcmd, args).run()
+
+    def _hostsGroupFactory(self):
+        """
+        :returns: L{HostsGroup} consisting of enabled hosts only
+        """
+        return HostsGroup(enabled_targets(self.targets).values())
 
     def commandFactory(self, cmd, args=None):
-        hosts = HostsGroup(enabled_targets(self.targets).values())
-        return cmd(args, hosts, config, out)
+        hosts = self._hostsGroupFactory()
+        return cmd(args, hosts, config, self.stdout, out)
 
     def do_help(self, arg):
         try:
@@ -100,8 +113,7 @@ class CommandPrompt(cmd.Cmd):
         except KeyError:
             return cmd.Cmd.do_help(self, arg)
         else:
-            h = self.commandFactory(cmd_).argparser().format_help()
-            self.stdout.write(h)
+            cmd_.argparser(self.stdout).print_help()
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
@@ -123,9 +135,10 @@ class CommandPrompt(cmd.Cmd):
             except KeyError:
                 raise AttributeError(str(x))
             else:
-                return self.commandFactory(c).complete
+                return log_exception(Exception, out.error)\
+                    (c.completer(self._hostsGroupFactory()))
         else:
-            argparser = self.commandFactory(c).argparser()
+            argparser = c.argparser(self.stdout)
             clsdict = {
                 '__doc__': argparser.format_help()
             }
