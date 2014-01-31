@@ -57,6 +57,9 @@ class CommandPrompt(cmd.Cmd):
         self._command_interface = \
             StrictVersion(config.command_interface)
 
+        self.prompt = 'QA > ' if self._command_interface <  '2.0' \
+            else 'mtui > '
+
         self.session = self.metadata.md5
 
         self.testopia = None
