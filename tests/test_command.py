@@ -24,7 +24,7 @@ class MyStdout:
 
 def test_do_help():
     c = Config()
-    c.command_interface = '2.0'
+    c.interface_version = '2.0'
     cp = CommandPrompt([], Metadata(), config=c)
     cp.stdout = MyStdout()
     cp.do_help(NEW_STYLE_CMD)
@@ -35,7 +35,7 @@ def test_do_help():
 
 def test_getattr():
     c = Config()
-    c.command_interface = '2.0'
+    c.interface_version = '2.0'
     cp = CommandPrompt([], Metadata(), config=c)
     attr = "do_"+NEW_STYLE_CMD
     r = getattr(cp, attr)
@@ -47,7 +47,7 @@ def test_getattr():
 
 def test_getnames():
     c = Config()
-    c.command_interface = '2.0'
+    c.interface_version = '2.0'
     cp = CommandPrompt([], Metadata(), config=c)
     names = cp.get_names()
     ok_('do_'+NEW_STYLE_CMD in names)
@@ -64,12 +64,12 @@ def test_command_prompt_init():
     cp = CommandPrompt([], Metadata(), config=c)
     ok_(c is cp.config)
 
-    eq_(cp._command_interface, StrictVersion(__version__))
+    eq_(cp._interface_version, StrictVersion(__version__))
 
 def test_add_subcommand():
     class TestableCP(CommandPrompt):
         def __init__(self):
-            self._command_interface = StrictVersion('1.1.0')
+            self._interface_version = StrictVersion('1.1.0')
             self.commands = {}
 
     cp = TestableCP()
@@ -84,7 +84,7 @@ def test_add_subcommand():
 
     class TestableCP2(CommandPrompt):
         def __init__(self):
-            self._command_interface = StrictVersion('2.0')
+            self._interface_version = StrictVersion('2.0')
             self.commands = {}
 
     cp = TestableCP2()
@@ -121,7 +121,7 @@ def test_command_doesnt_run_on_help():
             ok_(False)
 
     c = Config()
-    c.command_interface = ComMock.stable
+    c.interface_version = ComMock.stable
     cp = CommandPrompt([], Metadata(), config=c)
     cp.stdout = StringIO()
     cp._add_subcommand(ComMock)

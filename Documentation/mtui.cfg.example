@@ -1,5 +1,20 @@
-
 [mtui]
+# interface_version defines which functionality you want to enable.
+# Since mtui can be used to run scripts and to help with transition to
+# and polishing of new features, this can be set to a version that has
+# not been yet released which will enable features that are planned to
+# be stabilized in that (or lower but still future) version.
+#
+# The format is::
+#
+#     MAJOR "." MINOR
+#
+# See ChangeLog.rst for available API versions.
+#
+# Defaults to mtui.__version__ (current version installed)
+#
+# interface_version =
+
 # datadir contains all testing scripts and
 # defaults to the mtui sourcecode directory if not set
 datadir=/usr/share/mtui/
@@ -33,11 +48,6 @@ repclean=/mounts/qam/infrastructure/mtui/helper/rep-clean/rep-clean.sh
 
 # path to the SLCS testsuite scripts
 testsuitedir=/usr/share/qa/tools/
-
-# set command_interface to "2.0" (without the quotes) to enable commands
-# that will be stabilized in 2.0 release (developed during 1.x
-# development).
-#command_interface =
 
 [connection]
 # connection timeout in seconds

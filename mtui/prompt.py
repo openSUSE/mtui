@@ -54,10 +54,10 @@ class CommandPrompt(cmd.Cmd):
         self.config = config
         self.datadir = self.config.datadir
 
-        self._command_interface = \
-            StrictVersion(config.command_interface)
+        self._interface_version = \
+            StrictVersion(config.interface_version)
 
-        self.prompt = 'QA > ' if self._command_interface <  '2.0' \
+        self.prompt = 'QA > ' if self._interface_version <  '2.0' \
             else 'mtui > '
 
         self.session = self.metadata.md5
@@ -80,7 +80,7 @@ class CommandPrompt(cmd.Cmd):
             raise RuntimeError("command {0} already set".\
                 format(cmd.command))
 
-        if self._command_interface < StrictVersion(cmd.stable):
+        if self._interface_version < StrictVersion(cmd.stable):
             return
 
         self.commands[cmd.command] = cmd
@@ -1792,7 +1792,7 @@ class CommandPrompt(cmd.Cmd):
                         targets[target].set_locked(comment)
                 elif state == 'disabled':
                     husv = StrictVersion(commands.HostsUnlock.stable)
-                    if husv <=  self._command_interface:
+                    if husv <=  self._interface_version:
                         msg = "set_host_lock <host>,disable has been"
                         msg += " deprecated in favor of unlock command"
                         user_deprecation(out, msg)

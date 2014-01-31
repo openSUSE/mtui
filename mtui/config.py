@@ -72,10 +72,10 @@ class Config(object):
         out.debug('config.location set to "%s"' % self.location)
 
         try:
-            self.command_interface = self._get_option(
-                'mtui', 'command_interface')
+            self.interface_version = self._get_option(
+                'mtui', 'interface_version')
         except Exception:
-            self.command_interface = __version__
+            self.interface_version = __version__
 
         try:
             self.refhosts_xml = os.path.expanduser(self._get_option('mtui', 'refhosts'))
