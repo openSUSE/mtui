@@ -1,10 +1,11 @@
 import argparse
 from abc import ABCMeta, abstractmethod
+from gettext import gettext as _
+import traceback
+import os
 
 from mtui.target import HostsGroupException, TargetLockedError
 from mtui.utils import flatten
-from gettext import gettext as _
-import traceback
 
 class ArgsParseFailure(RuntimeError):
     pass
@@ -75,7 +76,8 @@ class Command(object):
         """
         :returns: L{argparse.ArgumentParser}
         """
-        p = MTUICommandArgParser(stdout, prog=cls.command)
+        p = MTUICommandArgParser(stdout, prog=cls.command,
+            description=cls.__doc__)
         cls._add_arguments(p)
 
         return p
@@ -164,11 +166,26 @@ class HostsUnlock(Command):
         return wrap
 
 class Whoami(Command):
+    """
+    Display current user name and session pid.
+
+    (username, pid) is used as user identity in rest of the codebase
+    (eg. locking, logging on hosts) so it makes sense to treat this
+    command consistently with those.
+
+    TODO: consolidate these into a SessionIdentity object
+    """
     command = 'whoami'
     stable = '2.0'
 
+    def get_pid(self):
+        return os.getpid()
+
     def run(self):
-        self.println(self.config.session_user)
+        self.println(" ".join([
+            self.config.session_user,
+            str(self.get_pid()),
+            ]))
 
     @staticmethod
     def completer(hosts):
