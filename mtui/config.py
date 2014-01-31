@@ -40,118 +40,79 @@ class Config(object):
         except ConfigParser.Error:
             pass
 
-        try:
-            self.datadir = os.path.expanduser(self._get_option('mtui', 'datadir'))
-        except Exception:
-            # datadir is in parent directory
-            self.datadir = os.path.dirname(os.path.dirname(__file__))
-        out.debug('config.datadir set to "%s"' % self.datadir)
+        data = [
+            ('datadir', ('mtui', 'datadir'),
+             lambda: os.path.dirname(os.path.dirname(__file__)),
+             os.path.expanduser),
 
-        try:
-            self.template_dir = os.path.expanduser(self._get_option('mtui', 'templatedir'))
-        except Exception:
-            self.template_dir = os.path.expanduser(os.getenv('TEMPLATEDIR', '.'))
-        out.debug('config.template_dir set to "%s"' % self.template_dir)
+            ('template_dir', ('mtui', 'templatedir'),
+             lambda: os.path.expanduser(os.getenv('TEMPLATEDIR', '.')),
+             os.path.expanduser),
 
-        try:
-            self.local_tempdir = os.path.expanduser(self._get_option('mtui', 'tempdir'))
-        except Exception:
-            self.local_tempdir = '/tmp'
-        out.debug('config.local_tempdir set to "%s"' % self.local_tempdir)
+            ('refhosts_xml', ('mtui', 'refhosts'),
+             lambda: os.path.join(self.datadir, 'refhosts.xml'),
+             lambda path: os.path.join(self.datadir, path)),
 
-        try:
-            self.session_user = self._get_option('mtui', 'user')
-        except Exception:
-            self.session_user = getpass.getuser()
-        out.debug('config.session_user set to "%s"' % self.session_user)
+            ('local_tempdir', ('mtui', 'tempdir'),
+             '/tmp'),
 
-        try:
-            self.location = self._get_option('mtui', 'location')
-        except Exception:
-            self.location = 'default'
-        out.debug('config.location set to "%s"' % self.location)
+            ('session_user', ('mtui', 'user'),
+             getpass.getuser),
 
-        try:
-            self.interface_version = self._get_option(
-                'mtui', 'interface_version')
-        except Exception:
-            self.interface_version = __version__
+            ('location', ('mtui', 'location'),
+             'default'),
 
-        try:
-            self.refhosts_xml = os.path.expanduser(self._get_option('mtui', 'refhosts'))
-            # always use an absolute path to refhosts.xml
-            if not self.refhosts_xml.startswith('/'):
-                # default location of refhosts.xml is in datadir if path isn't
-                # absolute
-                self.refhosts_xml = os.path.join(self.datadir, self.refhosts_xml)
-        except Exception:
-            self.refhosts_xml = os.path.join(self.datadir, 'refhosts.xml')
-        out.debug('config.refhosts_xml set to "%s"' % self.refhosts_xml)
+            ('interface_version', ('mtui', 'interface_version'),
+             __version__),
 
-        try:
-            self.connection_timeout = int(self._get_option('connection', 'timeout'))
-        except Exception:
-            self.connection_timeout = 300
-        out.debug('config.connection_timeout set to "%s"' % self.connection_timeout)
+            ('connection_timeout', ('connection', 'timeout'),
+             300, int),
 
-        try:
-            self.svn_path = self._get_option('svn', 'path')
-        except Exception:
-            self.svn_path = 'svn+ssh://svn@qam.suse.de/testreports'
-        out.debug('config.svn_path set to "%s"' % self.svn_path)
+            ('svn_path', ('svn', 'path'),
+             'svn+ssh://svn@qam.suse.de/testreports'),
 
-        try:
-            self.patchinfo_url = self._get_option('url', 'patchinfo')
-        except Exception:
-            self.patchinfo_url = 'http://hilbert.nue.suse.com/abuildstat/patchinfo'
-        out.debug('config.patchinfo_url set to "%s"' % self.patchinfo_url)
+            ('patchinfo_url', ('url', 'patchinfo'),
+             'http://hilbert.nue.suse.com/abuildstat/patchinfo'),
 
-        try:
-            self.bugzilla_url = self._get_option('url', 'bugzilla')
-        except Exception:
-            self.bugzilla_url = 'https://bugzilla.novell.com'
-        out.debug('config.bugzilla_url set to "%s"' % self.bugzilla_url)
+            ('bugzilla_url', ('url', 'bugzilla'),
+             'https://bugzilla.novell.com'),
 
-        try:
-            self.reports_url = self._get_option('url', 'testreports')
-        except Exception:
-            self.reports_url = 'http://qam.suse.de/testreports'
-        out.debug('config.reports_url set to "%s"' % self.reports_url)
+            ('reports_url', ('url', 'testreports'),
+             'http://qam.suse.de/testreports'),
 
-        try:
-            self.repclean_path = self._get_option('target', 'repclean')
-        except Exception:
-            self.repclean_path = '/mounts/qam/rep-clean/rep-clean.sh'
-        out.debug('config.repclean_path set to "%s"' % self.repclean_path)
+            ('repclean_path', ('target', 'repclean'),
+             '/mounts/qam/rep-clean/rep-clean.sh'),
 
-        try:
-            self.target_tempdir = self._get_option('target', 'tempdir')
-        except Exception:
-            self.target_tempdir = '/tmp'
-        out.debug('config.target_tempdir set to "%s"' % self.target_tempdir)
+            ('target_tempdir', ('target', 'tempdir'),
+             '/tmp'),
 
-        try:
-            self.target_testsuitedir = self._get_option('target', 'testsuitedir')
-        except Exception:
-            self.target_testsuitedir = '/usr/share/qa/tools'
-        out.debug('config.target_testsuitedir set to "%s"' % self.target_testsuitedir)
+            ('target_testsuitedir', ('target', 'testsuitedir'),
+             '/usr/share/qa/tools'),
 
-        try:
-            self.testopia_interface = self._get_option('testopia', 'interface')
-        except Exception:
-            self.testopia_interface = 'https://apibugzilla.novell.com/tr_xmlrpc.cgi'
-        out.debug('config.testopia_interface set to "%s"' % self.testopia_interface)
+            ('testopia_interface', ('testopia', 'interface'),
+             'https://apibugzilla.novell.com/tr_xmlrpc.cgi'),
 
-        try:
-            self.testopia_user = self._get_option('testopia', 'user')
-        except Exception:
-            self.testopia_user = ''
-        out.debug('config.testopia_user set to "%s"' % self.testopia_user)
+            ('testopia_user', ('testopia', 'user'), ''),
+            ('testopia_pass', ('testopia', 'pass'), '')
+        ]
 
-        try:
-            self.testopia_pass = self._get_option('testopia', 'pass')
-        except Exception:
-            self.testopia_pass = ''
+        asis = lambda x: x
+
+        for datum in data:
+            try:
+                attr, inipath, default, fixup = datum
+            except ValueError:
+                (attr, inipath, default), fixup = datum, asis
+
+            try:
+                setattr(self, attr, fixup(self._get_option(*inipath)))
+            except Exception:
+                try:
+                    d = default()
+                except TypeError:
+                    d = default
+                setattr(self, attr, d)
+            out.debug('config.%s set to "%s"' % (attr, getattr(self, attr)))
 
         if keyring is not None:
             out.debug('querying keyring for Testopia password')
