@@ -2,6 +2,15 @@
 ChangeLog
 #########
 
+next
+####
+
+backward incompatible
+=====================
+
+* Errors on config parsing made more consistent and informative.
+  8863337b9b7ab9ec332a618480c059c39a612aa3
+
 1.2.0
 #####
 
