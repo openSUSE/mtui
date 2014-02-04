@@ -96,23 +96,23 @@ class Config(object):
             ('testopia_pass', ('testopia', 'pass'), '')
         ]
 
-        asis = lambda x: x
+        normalizer = (lambda x: x,)
+        add_normalizer = lambda x: len(x) is 4 and x or x + normalizer
+        data = (add_normalizer(x) for x in data)
 
         for datum in data:
-            try:
-                attr, inipath, default, fixup = datum
-            except ValueError:
-                (attr, inipath, default), fixup = datum, asis
+            attr, inipath, default, fixup = datum
 
             try:
-                setattr(self, attr, fixup(self._get_option(*inipath)))
-            except Exception:
-                try:
-                    d = default()
-                except TypeError:
-                    d = default
-                setattr(self, attr, d)
-            out.debug('config.%s set to "%s"' % (attr, getattr(self, attr)))
+                val = self._get_option(inipath)
+            except:
+                if callable(default):
+                    val = default()
+                else:
+                    val = default
+
+            setattr(self, attr, fixup(val))
+            out.debug('config.%s set to "%s"' % (attr, val))
 
         if keyring is not None:
             out.debug('querying keyring for Testopia password')
@@ -129,15 +129,21 @@ class Config(object):
 
         out.debug('config.testopia_pass set to "%s"' % self.testopia_pass)
 
-    def _get_option(self, section, option):
+    def _get_option(self, secopt):
+        """
+        :type secopt: 2-tuple
+        :param secopt: (section, option)
+        """
         try:
-            return self.config.get(section, option)
+            return self.config.get(*secopt)
         except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
-            out.debug('[%s]->%s not found. falling back to default.' % (section, option))
+            msg = 'Config option {0}.{1} not found.'
+            out.debug(msg.format(*secopt))
             raise
-        except ConfigParser.Error:
-            out.error('failed to parse config files %s. falling back to default.' % self.configfiles)
+        except Exception:
+            msg = 'Config option {0}.{1} extraction from {2} ' + \
+                'failed.'
+            out.error(msg.format(secopt + (self.configfiles, )))
             raise
 
 config = Config()
-
