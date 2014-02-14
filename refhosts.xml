@@ -524,16 +524,6 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="x86_64" name="poincare.qam.suse.de">
-      <product name="studio">
-        <version>
-          <major>1</major>
-          <minor>1</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="x86_64" name="qam-slms2.qam.suse.de">
       <product name="slms">
         <version>
@@ -966,25 +956,6 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="boxer.suse.de">
-      <product name="opensuse">
-        <version>
-          <major>12</major>
-          <minor>2</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-    </host>
-    <host arch="x86_64" name="boxer.suse.de">
-      <product name="opensuse">
-        <version>
-          <major>12</major>
-          <minor>2</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="x86_64" name="levante.qam.suse.de">
       <product name="sled">
         <version>
@@ -1025,7 +996,7 @@
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
         <version>
-          <major>12</major>
+          <major>13</major>
           <minor>1</minor>
         </version>
       </product>
@@ -1034,7 +1005,7 @@
     <host arch="x86_64" name="boxer.suse.de">
       <product name="opensuse">
         <version>
-          <major>12</major>
+          <major>13</major>
           <minor>1</minor>
         </version>
       </product>
@@ -1590,6 +1561,7 @@
       <host arch="x86_64" name="poincare.qam.suse.de"/>
       <host arch="x86_64" name="frisch.qam.suse.de"/>
       <host arch="x86_64" name="leo.qam.suse.de"/>
+      <host arch="x86_64" name="bathala.qam.suse.de"/>
   </location>
 
   <location name="infrastructure">
@@ -1696,6 +1668,7 @@
   </location>
 
   <location name="unused">
+      <host arch="x86_64" name="kempter.qam.suse.de"/>
   </location>
 
 </definitions>
