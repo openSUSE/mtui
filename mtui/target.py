@@ -317,7 +317,7 @@ class TargetLock(object):
 class Target(object):
 
     def __init__(self, hostname, system, packages=[], state='enabled',
-        timeout=300, exclusive=False, connect=True):
+        timeout=300, exclusive=False, connect=True, logger=None):
         """
             :type connect: bool
             :param connect:
@@ -330,6 +330,10 @@ class Target(object):
         self.system = system
         self.packages = {}
         self.log = []
+        if logger is None:
+            # for backwards compatibility
+            logger = out
+        self.logger = logger
         self.state = state
         """
         :param state:
@@ -426,6 +430,25 @@ class Target(object):
     def get_timeout(self):
         return self.connection.timeout
 
+    def _upload_repclean(self):
+        """copy over local rep-clean script"""
+        datadir = config.datadir
+        tempdir = config.target_tempdir
+        try:
+            for item in ['rep-clean.sh', 'rep-clean.conf']:
+                filename = os.path.join(
+                    datadir, 'helper', 'rep-clean', item)
+                destination = os.path.join(tempdir, item)
+                self.put(filename, destination)
+        except Exception as e:
+            msg = "rep-clean uploading failed"
+            msg += " please see BNC#860284"
+            self.logger.error(msg)
+
+        scriptfile = os.path.join(tempdir, 'rep-clean.sh')
+        conffile = os.path.join(tempdir, 'rep-clean.conf')
+        return (scriptfile, conffile)
+
     def set_repo(self, name):
         if name not in ["UPDATE", "TESTING"]:
             raise ValueError("invalid name `%s`" % name)
@@ -435,17 +458,8 @@ class Target(object):
         try:
             repclean = self.connection.open(command, 'r')
         except IOError:
-            # copy over local rep-clean script if rep-clean isn't found
-            datadir = config.datadir
-            tempdir = config.target_tempdir
-            for item in ['rep-clean.sh', 'rep-clean.conf']:
-                filename = os.path.join(datadir, 'helper', 'rep-clean', item)
-                destination = os.path.join(tempdir, item)
-                self.put(filename, destination)
-
-            scriptfile = os.path.join(tempdir, 'rep-clean.sh')
-            conffile = os.path.join(tempdir, 'rep-clean.conf')
-            command = '%s -F %s' % (scriptfile, conffile)
+            x = self._upload_repclean()
+            command = '{0} -F {1}'.format(*x)
         else:
             repclean.close()
 
@@ -495,7 +509,25 @@ class Target(object):
             # failed to spawn shell
             out.error('%s: failed to spawn shell')
 
+    def put_file(self, local, remote):
+        msg = '{target}: put_file: {local} -> {remote}'
+        msg = msg.format({
+            'target' : self,
+            'local'  : local,
+            'remote' : remote,
+        })
+        out.debug(msg)
+        try:
+            return self.connection.put(local, remote)
+        except Exception as e:
+            msg += "failed: {0}".format(str(e))
+            out.error(msg)
+            raise
+
     def put(self, local, remote):
+        """
+        :deprecated: by Target.put_file
+        """
         if self.state == 'enabled':
             out.debug('%s: sending "%s"' % (self.hostname, local))
             try:

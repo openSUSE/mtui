@@ -132,3 +132,20 @@ def test_locked_target_is_locked():
 
     t.lock('fuu')
     eq_(t.test_mark, (('fuu',), {}))
+
+class LogMock:
+    def __init__(self):
+        self.errors = []
+
+    def error(self, x):
+        self.errors.append(x)
+
+def test_put_repclean_fail():
+    t = Target('foo', 'bar', connect=False)
+    t.logger = LogMock()
+    def put():
+        raise Exception()
+    t.put = put
+    t._upload_repclean()
+    exp_errors = ['rep-clean uploading failed please see BNC#860284']
+    eq_(t.logger.errors, exp_errors)
