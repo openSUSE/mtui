@@ -80,7 +80,11 @@ def input(text, options, interactive=True):
         pass
     finally:
         if response:
-            readline.remove_history_item(readline.get_current_history_length() - 1)
+            hlen = readline.get_current_history_length()
+            if hlen > 0:
+                # this is normaly not a problem but it breaks acceptance
+                # tests
+                readline.remove_history_item(hlen -1)
 
         return result
 
