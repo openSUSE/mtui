@@ -40,6 +40,9 @@ class Config(object):
         except ConfigParser.Error:
             pass
 
+
+        normalizer = lambda x: x
+
         data = [
             ('datadir', ('mtui', 'datadir'),
              lambda: os.path.dirname(os.path.dirname(__file__)),
@@ -93,18 +96,24 @@ class Config(object):
              'https://apibugzilla.novell.com/tr_xmlrpc.cgi'),
 
             ('testopia_user', ('testopia', 'user'), ''),
-            ('testopia_pass', ('testopia', 'pass'), '')
+            ('testopia_pass', ('testopia', 'pass'), ''),
+            ('chdir_to_templatedir', ('mtui', 'chdir_to_templatedir'),
+                False, normalizer, self.config.getboolean),
         ]
 
-        normalizer = (lambda x: x,)
-        add_normalizer = lambda x: len(x) is 4 and x or x + normalizer
+        add_normalizer = lambda x: x if len(x) > 3 \
+            else x + (normalizer,)
         data = (add_normalizer(x) for x in data)
 
+        getter = self.config.get
+        add_getter = lambda x: x if len(x) > 4 else x + (getter,)
+        data = (add_getter(x) for x in data)
+
         for datum in data:
-            attr, inipath, default, fixup = datum
+            attr, inipath, default, fixup, getter = datum
 
             try:
-                val = self._get_option(inipath)
+                val = self._get_option(inipath, getter)
             except:
                 if callable(default):
                     val = default()
@@ -129,13 +138,13 @@ class Config(object):
 
         out.debug('config.testopia_pass set to "%s"' % self.testopia_pass)
 
-    def _get_option(self, secopt):
+    def _get_option(self, secopt, getter):
         """
         :type secopt: 2-tuple
         :param secopt: (section, option)
         """
         try:
-            return self.config.get(*secopt)
+            return getter(*secopt)
         except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
             msg = 'Config option {0}.{1} not found.'
             out.debug(msg.format(*secopt))

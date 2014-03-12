@@ -238,6 +238,10 @@ def main():
     # TODO: move copy_scripts to some more sensible part of code.
     # the update prompt command I guess.
 
+
+    if config.chdir_to_templatedir and md5:
+        os.chdir(os.path.join(directory, md5))
+
     if refhosts:
         metadata.systems = refhosts
 

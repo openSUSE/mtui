@@ -24,6 +24,14 @@ datadir=/usr/share/mtui/
 # $TEMPLATEDIR or command line parameter
 templatedir=~/qam/templates
 
+# chdir to the md5sum checkout
+# usefull for eg.
+# * having ad-hoc scripts in the same dir for commiting to them svn and
+# uploading them with mtui put command
+# * having new pane in tmux in the same cwd as the testreport
+# Default: no
+chdir_to_templatedir = no
+
 # mtui temporary local directory for package source checkouts
 tempdir=/tmp/
 
