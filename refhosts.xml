@@ -1609,6 +1609,7 @@
   </location>
 
   <location name="misc">
+      <host arch="ia64" name="coppelius.qam.suse.de"/>
       <host arch="x86_64" name="birdofpray.qam.suse.de"/>
       <host arch="x86_64" name="nicolaus.qam.suse.de"/>
       <host arch="x86_64" name="tpol.qam.suse.de">
@@ -1641,7 +1642,6 @@
 
   <location name="unused">
     <host arch="x86_64" name="kempter.qam.suse.de"/>
-    <host arch="ia64" name="coppelius.qam.suse.de"/>
     <host arch="ia64" name="sinope.qam.suse.de"/>
     <host arch="ia64" name="fermium.qam.suse.de"/>
   </location>
