@@ -721,7 +721,6 @@ class CommandPrompt(cmd.Cmd):
         if args:
             self.parse_error(self.do_source_verify, args)
 
-        patches = {}
         destination = os.path.join(config.local_tempdir, self.metadata.md5)
 
         specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
@@ -734,6 +733,7 @@ class CommandPrompt(cmd.Cmd):
                 return
 
         for specfile in specfiles:
+            patches = {}
             with open(specfile, 'r') as spec:
                 content = spec.readlines()
 
