@@ -190,3 +190,15 @@ class Whoami(Command):
     @staticmethod
     def completer(hosts):
         raise NotImplementedError
+
+class Config(Command):
+    """
+    Display and manipulate (TODO) configuration in runtime.
+    """
+    command = "config"
+    stable = '2.0'
+
+    def run(self):
+        # TODO: move this code under `config show` command
+        from pprint import pprint
+        pprint(self.config.__dict__)
