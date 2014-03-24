@@ -346,7 +346,7 @@
         </version>
       </product>
       <ltss property="weak">true</ltss>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc64" name="salmler.qam.suse.de">
@@ -366,7 +366,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
