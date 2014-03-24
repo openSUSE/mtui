@@ -1644,6 +1644,7 @@
     <host arch="x86_64" name="kempter.qam.suse.de"/>
     <host arch="ia64" name="sinope.qam.suse.de"/>
     <host arch="ia64" name="fermium.qam.suse.de"/>
+    <host arch="ia64" name="miracle.qam.suse.de"/>
   </location>
 
 </definitions>
