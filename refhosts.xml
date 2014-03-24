@@ -1279,42 +1279,6 @@
       <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="argonen.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-      <addon property="weak" name="hae"/>
-      <addon property="weak" name="webyast">
-        <version>
-          <major>1</major>
-          <minor>2</minor>
-        </version>
-      </addon>
-    </host>
-    <host arch="x86_64" name="split.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-      <addon property="weak" name="hae"/>
-      <addon property="weak" name="webyast">
-        <version>
-          <major>1</major>
-          <minor>2</minor>
-        </version>
-      </addon>
-    </host>
     <host arch="i386" name="khaak.qam.suse.de">
       <product name="sled">
         <version>
