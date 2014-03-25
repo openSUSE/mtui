@@ -1157,30 +1157,6 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="147.2.207.82">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="147.2.207.81">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="i386" name="147.2.207.85">
       <product name="sles">
         <version>
@@ -1201,28 +1177,6 @@
         </version>
       </product>
       <ltss property="weak">true</ltss>
-      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="147.2.207.84">
-      <product name="sled">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="147.2.207.83">
-      <product name="sled">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
       <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
