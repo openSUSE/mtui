@@ -2,14 +2,72 @@
 ChangeLog
 #########
 
-next
-####
+1.3.0
+#####
 
 backward incompatible
 =====================
 
-* Errors on config parsing made more consistent and informative.
-  8863337b9b7ab9ec332a618480c059c39a612aa3
+* Errors on config parsing made more consistent and informative by using
+  unified format for config options (<section>.<option>) and including
+  the config file path when parsing fails.
+
+  :commits:
+    8863337b9b7ab9ec332a618480c059c39a612aa3
+
+new features
+============
+
+* config option mtui.chdir_to_templatedir. Applicable only with -m
+  argument. See `mtui.cfg.example <./Documentation/mtui.cfg.example>`_
+  for details
+
+  :commits:
+    b2ac515bfa9c28dd576d43e9ae52d82671d790a8
+
+bugfixes
+========
+
+* source_verify with multiple spec files bnc#850727
+
+  :commits:
+    0ba8bf4159356005fe00064e4451dba6fcf65937
+
+* minor fixes
+
+  :commits:
+    5e114190b8faf73e67f19af696dced239e39f7b5
+
+user experience
+===============
+
+* referring the user to BNC#860284 when the error hits.
+
+  :commits:
+    3d59271e1a6dcd3e163767399a976386063bf28a
+
+documentation
+=============
+
+* Added process description for `submitting code` and `release process`
+
+  :commits:
+    72be8fd9bfe2d21e739cf9b0b0437157c0a4826f
+
+internal
+========
+
+* cleanup in config
+
+  :commits:
+    26710fb1d81e5da1e0720b7b05906ed6a463ea1d
+    8863337b9b7ab9ec332a618480c059c39a612aa3
+
+* Getting TIOCGWINSZ from environment variables when ioctl fails to deal
+  with tests that require a terminal tty.
+
+  :commits:
+    25c0806c90c0d35d203af51ebc66de4fd530a7a2
 
 1.2.0
 #####
