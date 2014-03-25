@@ -1013,18 +1013,16 @@
     <host arch="x86_64" name="levante.qam.suse.de">
       <product name="sled">
         <version>
-          <major>11</major>
-          <minor>sp2</minor>
+          <major>12</major>
         </version>
       </product>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="riker.qam.suse.de">
+    <host arch="x86_64" name="riker.qam.suse.de">
       <product name="sled">
         <version>
-          <major>11</major>
-          <minor>sp2</minor>
+          <major>12</major>
         </version>
       </product>
       <kernel property="weak">true</kernel>
