@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <definitions>
-  <location name="default">
-    <host arch="s390x" name="s390vsw070.suse.de">
-      <product name="sles">
-        <version>
-          <major>9</major>
-        </version>
-      </product>
-      <ltss>true</ltss>
+<location name="default">
+<host arch="s390x" name="s390vsw070.suse.de">
+  <product name="sles">
+    <version>
+      <major>9</major>
+    </version>
+  </product>
+  <ltss>true</ltss>
       <kernel property="weak">true</kernel>
     </host>
     <host arch="s390" name="s390icv048.suse.de">
@@ -125,7 +125,6 @@
         </version>
       </product>
       <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
-      <ltss property="weak">true</ltss>
     </host>
     <host arch="x86_64" name="s4v-11sp3-i51-64.qam.suse.de">
       <product name="sles4vmware">
@@ -135,7 +134,6 @@
         </version>
       </product>
       <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
-      <ltss property="weak">true</ltss>
     </host>
     <host arch="i386" name="s4v-11sp3-i51-32.qam.suse.de">
       <product name="sles4vmware11sp3">
@@ -145,7 +143,6 @@
         </version>
       </product>
       <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
-      <ltss property="weak">true</ltss>
     </host>
     <host arch="x86_64" name="s4v-11sp3-i51-64.qam.suse.de">
       <product name="sles4vmware11sp3">
@@ -155,7 +152,6 @@
         </version>
       </product>
       <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
-      <ltss property="weak">true</ltss>
     </host>
 
     <host arch="i386" name="s4v-11sp2-a51-32.qam.suse.de">
@@ -202,7 +198,6 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <ltss property="weak">true</ltss>
       <addon name="hae"/>
     </host>
     <host arch="ppc64" name="makrele.qam.suse.de">
@@ -230,6 +225,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <addon name="hae"/>
       <addon property="weak" name="sdk"/>
       <addon name="webyast">
@@ -263,21 +259,6 @@
       <product name="sles">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <addon name="studiorunner">
-        <version>
-          <major>1</major>
-          <minor>2</minor>
-        </version>
-      </addon>
-    </host>
-    <host arch="s390x" name="s390p4.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
           <minor>sp2</minor>
         </version>
       </product>
@@ -296,22 +277,7 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <addon property="weak" name="sdk"/>
-      <addon property="weak" name="hae"/>
-      <addon property="weak" name="webyast">
-        <version>
-          <major>1</major>
-          <minor>2</minor>
-        </version>
-      </addon>
-    </host>
-    <host arch="ia64" name="sinope.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
       <addon property="weak" name="webyast">
@@ -339,6 +305,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <kernel>true</kernel>
       <virtual mode="guest" host="xena64-11.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
@@ -350,6 +317,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <kernel>true</kernel>
       <virtual mode="guest" host="xena32-11.qam.suse.de">xen</virtual>
       <addon property="weak" name="sdk"/>
@@ -377,7 +345,8 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
+      <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="ppc64" name="salmler.qam.suse.de">
@@ -397,17 +366,8 @@
           <minor>sp2</minor>
         </version>
       </product>
-      <kernel>true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="ia64" name="coppelius.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <kernel>true</kernel>
+      <kernel property="weak">true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="xena64-11.qam.suse.de">
@@ -429,6 +389,7 @@
         </version>
       </product>
       <kernel>true</kernel>
+      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="i386" name="xenu32-11-1.qam.suse.de">
@@ -454,16 +415,6 @@
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
-    </host>
-    <host arch="x86_64" name="cetur.qam.suse.de">
-      <product name="studio">
-        <version>
-          <major>1</major>
-          <minor>2</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="birdofpray.qam.suse.de">
       <product name="studio">
@@ -549,16 +500,6 @@
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
     </host>
-    <host arch="x86_64" name="poincare.qam.suse.de">
-      <product name="studio">
-        <version>
-          <major>1</major>
-          <minor>1</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="x86_64" name="qam-slms2.qam.suse.de">
       <product name="slms">
         <version>
@@ -627,11 +568,10 @@
       <product name="sles">
         <version>
           <major>11</major>
-          <minor>sp1</minor>
+          <minor>sp3</minor>
         </version>
       </product>
       <kernel property="weak">true</kernel>
-      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
       <addon name="rt"/>
@@ -643,6 +583,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
@@ -732,17 +673,6 @@
         </version>
       </product>
       <kernel>true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="ia64" name="leonard.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <kernel>true</kernel>
-      <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
     </host>
     <host arch="x86_64" name="qam-slms1.qam.suse.de">
@@ -857,6 +787,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
       <addon name="smt">
@@ -991,25 +922,6 @@
       <kernel>true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="i386" name="boxer.suse.de">
-      <product name="opensuse">
-        <version>
-          <major>12</major>
-          <minor>2</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-    </host>
-    <host arch="x86_64" name="boxer.suse.de">
-      <product name="opensuse">
-        <version>
-          <major>12</major>
-          <minor>2</minor>
-        </version>
-      </product>
-      <kernel property="weak">true</kernel>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="x86_64" name="levante.qam.suse.de">
       <product name="sled">
         <version>
@@ -1048,7 +960,7 @@
     <host arch="i386" name="boxer.suse.de">
       <product name="opensuse">
         <version>
-          <major>12</major>
+          <major>13</major>
           <minor>1</minor>
         </version>
       </product>
@@ -1057,7 +969,7 @@
     <host arch="x86_64" name="boxer.suse.de">
       <product name="opensuse">
         <version>
-          <major>12</major>
+          <major>13</major>
           <minor>1</minor>
         </version>
       </product>
@@ -1278,6 +1190,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
@@ -1289,6 +1202,7 @@
           <minor>sp2</minor>
         </version>
       </product>
+      <ltss property="weak">true</ltss>
       <virtual property="weak" mode="guest" host="147.2.207.80">xen</virtual>
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
@@ -1341,6 +1255,48 @@
     </host>
   </location>
   <location name="nuremberg">
+    <host arch="i386" name="teladi.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <ltss property="weak">true</ltss>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="boronen.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <ltss property="weak">true</ltss>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="i386" name="khaak.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="pirates.qam.suse.de">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="s390x" name="s390ctc012.suse.de">
       <product name="sles">
         <version>
@@ -1465,28 +1421,6 @@
       <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="archer.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
-      <addon property="weak" name="hae"/>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="tucker.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
-      <addon property="weak" name="hae"/>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="x86_64" name="reed.qam.suse.de">
       <product name="sles">
         <version>
@@ -1509,26 +1443,6 @@
       <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
       <addon property="weak" name="sdk"/>
     </host>
-    <host arch="x86_64" name="kelby.qam.suse.de">
-      <product name="sled">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="i386" name="mayweather.qam.suse.de">
-      <product name="sled">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
   </location>
 
   <location name="cloud">
@@ -1537,6 +1451,7 @@
       <host arch="x86_64" name="poincare.qam.suse.de"/>
       <host arch="x86_64" name="frisch.qam.suse.de"/>
       <host arch="x86_64" name="leo.qam.suse.de"/>
+      <host arch="x86_64" name="bathala.qam.suse.de"/>
   </location>
 
   <location name="infrastructure">
@@ -1588,6 +1503,12 @@
     <host arch="???" name="lcs-gs9428-3.qam.suse.de"/>
     <host arch="???" name="lcs-gs9428-4.qam.suse.de"/>
     <host arch="???" name="lcs-gs9428-5.qam.suse.de"/>
+
+    <host arch="???" name="c3srv2rack21.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack22.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack23.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack24.qam.suse.de"/>
+    <host arch="???" name="c3srv2rack25.qam.suse.de"/>
   </location>
 
   <location name="consoles">
@@ -1606,6 +1527,7 @@
   </location>
 
   <location name="misc">
+      <host arch="ia64" name="coppelius.qam.suse.de"/>
       <host arch="x86_64" name="birdofpray.qam.suse.de"/>
       <host arch="x86_64" name="nicolaus.qam.suse.de"/>
       <host arch="x86_64" name="tpol.qam.suse.de">
@@ -1637,6 +1559,10 @@
   </location>
 
   <location name="unused">
+    <host arch="x86_64" name="kempter.qam.suse.de"/>
+    <host arch="ia64" name="sinope.qam.suse.de"/>
+    <host arch="ia64" name="fermium.qam.suse.de"/>
+    <host arch="ia64" name="miracle.qam.suse.de"/>
   </location>
 
 </definitions>
