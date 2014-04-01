@@ -33,6 +33,8 @@ my %valid_vendors = (
 
 my %valid_disturls = (
     "SLE" => [
+         "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Products:Test/standard/",
+         "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Products:Test:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11:GA/standard/",
          "obs://build.suse.de/SUSE:SLE-11:GA:Products:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11:Update:Test/standard/",
