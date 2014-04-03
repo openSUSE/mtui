@@ -1356,14 +1356,14 @@
   <location name="cloud">
       <host arch="x86_64" name="aurore.qam.suse.de"/>
       <host arch="x86_64" name="compute.qam.suse.de"/>
+      <host arch="x86_64" name="cloud-compute2.qam.suse.de"/>
       <host arch="x86_64" name="poincare.qam.suse.de"/>
       <host arch="x86_64" name="frisch.qam.suse.de"/>
       <host arch="x86_64" name="leo.qam.suse.de"/>
-      <host arch="x86_64" name="bathala.qam.suse.de"/>
   </location>
 
   <location name="infrastructure">
-    <host arch="i386" name="galileo.qam.suse.de"/>
+    <host arch="x86_64" name="galileo.qam.suse.de"/>
     <host arch="i386" name="you.suse.de"/>
     <host arch="x86_64" name="smt.suse.de"/>
     <host arch="x86_64" name="backup.qam.suse.de"/>
@@ -1438,12 +1438,6 @@
       <host arch="ia64" name="coppelius.qam.suse.de"/>
       <host arch="x86_64" name="birdofpray.qam.suse.de"/>
       <host arch="x86_64" name="nicolaus.qam.suse.de"/>
-      <host arch="x86_64" name="tpol.qam.suse.de">
-           <virtual mode="host">xen</virtual>
-      </host>
-           <host arch="x86_64" name="picard.qam.suse.de">
-      <virtual mode="host">xen</virtual>
-      </host>
       <host arch="x86_64" name="merkur.qam.suse.de"/>
       <host arch="x86_64" name="kickstart.qam.suse.de"/>
       <host arch="x86_64" name="qam-manager.qam.suse.de">
@@ -1467,10 +1461,12 @@
   </location>
 
   <location name="unused">
-    <host arch="x86_64" name="kempter.qam.suse.de"/>
     <host arch="ia64" name="sinope.qam.suse.de"/>
     <host arch="ia64" name="fermium.qam.suse.de"/>
     <host arch="ia64" name="miracle.qam.suse.de"/>
+    <host arch="x86_64" name="kempter.qam.suse.de"/>
+    <host arch="x86_64" name="bathala.qam.suse.de"/>
+    <host arch="x86_64" name="tpol.qam.suse.de"/>
   </location>
 
 </definitions>
