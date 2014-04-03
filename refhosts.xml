@@ -1402,7 +1402,6 @@
            <virtual mode="host">hyperv</virtual>
     </host>
 
-    <host arch="ppc64" name="guppyvio.qam.suse.de"/>
     <host arch="ppc64" name="sharkvio.qam.suse.de"/>
     <host arch="ppc64" name="swordfishvio.qam.suse.de"/>
 
@@ -1422,11 +1421,11 @@
   <location name="consoles">
     <host arch="???" name="serial.qam.suse.de"/>
     <host arch="???" name="kvm.qam.suse.de"/>
-    <host arch="???" name="guppy-fsp1.qam.suse.de"/>
     <host arch="???" name="shark-fsp1.qam.suse.de"/>
     <host arch="???" name="swordfish-fsp1.qam.suse.de"/>
     <host arch="???" name="birdofpray-mgmt.qam.suse.de"/>
     <host arch="???" name="cloud-compute-mgmt.qam.suse.de"/>
+    <host arch="???" name="cloud-compute2-mgmt.qam.suse.de"/>
     <host arch="???" name="enterprise-nx01-mgmt.qam.suse.de"/>
     <host arch="???" name="kvm-host-nue-01-mgmt.qam.suse.de"/>
     <host arch="???" name="shran-mgmt.qam.suse.de"/>
