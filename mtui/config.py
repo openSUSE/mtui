@@ -68,6 +68,9 @@ class Config(object):
             ('interface_version', ('mtui', 'interface_version'),
              __version__),
 
+            # connection.timeout appears to be in units of seconds as
+            # indicated by
+            # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
             ('connection_timeout', ('connection', 'timeout'),
              300, int),
 
