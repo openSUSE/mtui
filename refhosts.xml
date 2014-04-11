@@ -914,6 +914,15 @@
       <kernel property="weak">true</kernel>
       <addon property="weak" name="sdk"/>
     </host>
+    <host arch="x86_64" name="tpol.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>12</major>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
+    </host>
     <host arch="x86_64" name="qam-smt1.qam.suse.de">
       <product name="sles">
         <version>
@@ -1360,6 +1369,7 @@
       <host arch="x86_64" name="poincare.qam.suse.de"/>
       <host arch="x86_64" name="frisch.qam.suse.de"/>
       <host arch="x86_64" name="leo.qam.suse.de"/>
+      <host arch="x86_64" name="kempter.qam.suse.de" description="1 HE,  4x2.2GHZ AMD, 8 GB RAM, 2x120GB SATA, no HW virt"/>
   </location>
 
   <location name="infrastructure">
@@ -1463,9 +1473,7 @@
     <host arch="ia64" name="sinope.qam.suse.de" description="2 HE, IA-64@900MHz , 4GB RAM, 2x37GB SCSI"/>
     <host arch="ia64" name="fermium.qam.suse.de" description="2 HE  IA-64@1700MHz , 1GB RAM, 2x37GB SCSI"/>
     <host arch="ia64" name="miracle.qam.suse.de" description="2 HE, IA-64@900MHz, 1.5GB RAM, 32GB SCSI"/>
-    <host arch="x86_64" name="kempter.qam.suse.de" description="1 HE,  4x2.2GHZ AMD, 8 GB RAM, 2x120GB SATA, no HW virt"/>
     <host arch="x86_64" name="bathala.qam.suse.de" description="desktop, i7-3770@3.40GHz, 16 GB RAM, 2x500GB SATA, HW virt"/>
-    <host arch="x86_64" name="tpol.qam.suse.de" description="1 HE, X3430@2.40GHz, 4 GB RAM, 1x500GB SATA, no HW virt"/>
   </location>
 
 </definitions>
