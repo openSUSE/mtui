@@ -1415,12 +1415,6 @@
     <host arch="ppc64" name="sharkvio.qam.suse.de"/>
     <host arch="ppc64" name="swordfishvio.qam.suse.de"/>
 
-    <host arch="???" name="lcs-gs9428-1.qam.suse.de"/>
-    <host arch="???" name="lcs-gs9428-2.qam.suse.de"/>
-    <host arch="???" name="lcs-gs9428-3.qam.suse.de"/>
-    <host arch="???" name="lcs-gs9428-4.qam.suse.de"/>
-    <host arch="???" name="lcs-gs9428-5.qam.suse.de"/>
-
     <host arch="???" name="c3srv2rack21.qam.suse.de"/>
     <host arch="???" name="c3srv2rack22.qam.suse.de"/>
     <host arch="???" name="c3srv2rack23.qam.suse.de"/>
