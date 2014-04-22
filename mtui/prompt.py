@@ -2504,7 +2504,7 @@ class CommandPrompt(cmd.Cmd):
     def do_get(self, args):
         """
         Downloads a file from all enabled hosts. Multiple files can not be
-        selected. Files are saved in the $templatedir/downloads/ subdirectory
+        selected. Files are saved in the $TEMPLATE_DIR/downloads/ subdirectory
         with the hostname as file extension.
 
         get <remote filename>
@@ -2702,7 +2702,7 @@ class CommandPrompt(cmd.Cmd):
         """
         Save the testing log to a XML file. All commands and package
         versions are saved there. When no parameter is given, the XML is saved
-        to $templatedir/output/log.xml. If that file already exists and the
+        to $TEMPLATE_DIR/output/log.xml. If that file already exists and the
         tester doesn't want to overwrite it, a postfix (current timestamp)
         is added to the filename. The log can be used to fill the required
         sections of the testing template after the testing has finished.

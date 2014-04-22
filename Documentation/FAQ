@@ -313,11 +313,11 @@ Q: How do I load my own hostlist instead of the hosts mentioned in the testing
 A: Usually it's sufficient to simply load the hosts from the template and add
    or remove reference hosts with the respecting commands. For some
    corner-cases, like exclusive automated testing on virtual machines, the
-   hostlist could be overwritten with the "-o" CLI parameter.
+   hostlist could be overwritten with the "-s" CLI parameter.
 
    Example:
 
-   # mtui -o "d51.suse.de,sle11test d122.suse.de,sp2test" -m 079ad960654954493d434c03dc3c5543
+   # mtui -s d51.suse.de,sle11test -s d122.suse.de,sp2test -m 079ad960654954493d434c03dc3c5543
    info: connecting to d51.suse.de
    info: connecting to d122.suse.de
    QA >
@@ -326,15 +326,15 @@ Q: How do I set the template directory without passing it as command line
    parameter every time I run MTUI?
 A: The template directory can be set in the MTUI user configuration file
    in either /etc/mtui.cfg or ~/.mtuirc. Additionally, setting the template
-   directory with $TEMPLATEDIR still works but is superseded by the
-   templatedir option in the configuration file.
+   directory with $TEMPLATE_DIR still works but is superseded by the
+   template_dir option in the configuration file.
 
    Example:
 
    # cat ~/.mtuirc
    # MTUI user configuration file
    [mtui]
-   templatedir=/tmp/testing/testreports/
+   template_dir=/tmp/testing/testreports/
 
 Q: How do I change the default editor for the edit command to emacs,nano,...?
 A: The $EDITOR environment variable is used to get the editor and defaults to

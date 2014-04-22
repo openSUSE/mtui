@@ -69,8 +69,8 @@ class Config(object):
              lambda: os.path.dirname(os.path.dirname(__file__)),
              os.path.expanduser),
 
-            ('template_dir', ('mtui', 'templatedir'),
-             lambda: os.path.expanduser(os.getenv('TEMPLATEDIR', '.')),
+            ('template_dir', ('mtui', 'template_dir'),
+             lambda: os.path.expanduser(os.getenv('TEMPLATE_DIR', '.')),
              os.path.expanduser),
 
             ('refhosts_xml', ('mtui', 'refhosts'),
@@ -92,7 +92,7 @@ class Config(object):
             # connection.timeout appears to be in units of seconds as
             # indicated by
             # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
-            ('connection_timeout', ('connection', 'timeout'),
+            ('connection_timeout', ('mtui', 'connection_timeout'),
              300, int),
 
             ('svn_path', ('svn', 'path'),
@@ -121,7 +121,7 @@ class Config(object):
 
             ('testopia_user', ('testopia', 'user'), ''),
             ('testopia_pass', ('testopia', 'pass'), ''),
-            ('chdir_to_templatedir', ('mtui', 'chdir_to_templatedir'),
+            ('chdir_to_template_dir', ('mtui', 'chdir_to_template_dir'),
                 False, normalizer, self.config.getboolean),
         ]
 
@@ -172,5 +172,22 @@ class Config(object):
                 'failed.'
             out.error(msg.format(secopt + (self.configfiles, )))
             raise
+
+    def merge_args(self, args):
+        """
+        Merges argv config overrides into the config instance
+
+        :param args: parsed argv:
+        :type args: L{argparse.Namespace}
+        """
+
+        if args.location:
+            self.location = argument
+
+        if args.template_dir:
+            self.template_dir = argument
+
+        if args.connection_timeout:
+            self.connection_timeout = args.connection_timeout
 
 config = Config()

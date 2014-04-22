@@ -91,7 +91,7 @@ class TestReport(object):
         self._open_and_parse(path)
         self.path = path
 
-        if self.config.chdir_to_templatedir:
+        if self.config.chdir_to_template_dir:
             os.chdir(dirname(path))
 
         self.copy_scripts()

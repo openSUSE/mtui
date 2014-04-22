@@ -34,9 +34,9 @@ Specifying the template directory in which the testing directories
 are checked out from SVN. If none is given, the current directory
 is used. However, this is typically set to another directory
 like --template=~/testing/templates. For an improved usability,
-the environment variable TEMPLATEDIR is also processed. Instead of
+the environment variable TEMPLATE_DIR is also processed. Instead of
 specifying the directory each time on the commandline, one could set
-templatedir="~/testing/templates" in ~/.mtuirc. The commandline
+template_dir="~/testing/templates" in ~/.mtuirc. The commandline
 parameter takes precedence over the environment variable if both are given.
 
 	-l,--location            set the refhost location
@@ -60,31 +60,29 @@ When set, MTUI is run in an non-interactive mode without a command shell.
 MTUI automatically applies the update and exports the results to the
 maintenance template before it quits. User input is not required.
 
-	-d,--dryrun              start in dryrun mode
-
-If this is set, no commands are actually issued to the connected hosts. MTUI
-prints the commands it would run without touching the machines. This could be
-disabled again on a running MTUI instance in the command shell with
-set_host_state (see below)
-
-	-v,--verbose             enable debugging output
+	-d,--debug               enable debugging output
 
 Enables MTUI's debugging output. There might be a use case for debug output
 when testing a command which runs for a longer time as the command output is
 then printed in realtime instead of after the command has finished. However,
 it's more reasonable to use the set_log_level (see below) command then. The
-default loglevel is INFO while -v sets it to DEBUG.
+default loglevel is INFO while -d sets it to DEBUG.
 
-	-w,--timeout		 
+	-w,--connection_timeout
 
 Sets the execution timeout to the specified value (default: 300). When the
 timeout limit was hit the user is asked to wait for the current command to
 return or to proceed with the next one. The timeout value is set in seconds.
 To disable the timeout set it to "0".
 
-	-s,--search-host	search host
+	-a,--autoadd	cumulative autoadd SUT based on attributes
 
-Adds machines to the target host list based on comma separated search tags.
+Cumulatively adds machines to the target host list based on given
+attributes.
+
+   Example:
+
+   # mtui -a sles -a 11sp1
 
 	-p,--prerun		path to prerun script
 
@@ -324,7 +322,7 @@ directory completion.
 
 - get
 Downloads a file from all enabled hosts. Multiple files can not be selected.
-Files are saved in the $templatedir/downloads/ subdirectory with the hostname
+Files are saved in the $TEMPLATE_DIR/downloads/ subdirectory with the hostname
 as file extension.
 
 		get <remote filename>
@@ -539,7 +537,7 @@ Change current reference host location to another site.
 - save
 Save the testing log to a XML file. All commands and package versions are saved
 there. When no parameter is given, the XML is saved to
-$templatedir/output/log.xml. If that file already exists and the tester doesn't
+$TEMPLATE_DIR/output/log.xml. If that file already exists and the tester doesn't
 want to overwrite it, a postfix (current timestamp) is added to the filename.
 The log can be used to fill the required sections of the testing template after
 the testing has finished. This could be done with the convert.py script.
@@ -663,7 +661,7 @@ these scripts are working. In short: the scripts are copied over to the
 template directory and are run when invoking the "update" procedure.
 The scripts which are linked to the scripts/pre/ directory
 are run before the update is applied. The tester should deploy own scripts to
-$templatedir/scripts. This makes sure that scripts which are specific to an
+$TEMPLATE_DIR/scripts. This makes sure that scripts which are specific to an
 update are not run on all other updates as well. All scripts in the
 scripts/post/ directory are run after the update was applied. To check if
 there are any regressions introduced by the update, the scripts in
@@ -682,15 +680,15 @@ which spawns the testcase on the hosts:
 This script (with the name check_cpio.sh) is then linked to
 scrips/pre/check_cpio.sh and scripts/post/check_cpio.sh. Now, it's run before
 the update and afterwards. The output is saved to
-$templatedir/output/scripts/[pre|post].check_cpio.sh.$hostname. When the post
+$TEMPLATE_DIR/output/scripts/[pre|post].check_cpio.sh.$hostname. When the post
 scripts have finished, the compare scripts are run. They need to have the same
 name ("compare" prefix instead of "check", though) as the check script.
 In this case it's compare_check_cpio.sh.
 
 compare_check_cpio.sh is run with the previous results as parameter:
 compare_check_cpio.sh \
-  $templatedir/output/scripts/pre.check_cpio.sh.$hostname \
-  $templatedir/output/scripts/post.check_cpio.sh.$hostname
+  $TEMPLATE_DIR/output/scripts/pre.check_cpio.sh.$hostname \
+  $TEMPLATE_DIR/output/scripts/post.check_cpio.sh.$hostname
 
 If there are some unwanted differences, the compare script should return 1.
 Otherwise, return 0. If the script didn't get any sensible output, 3 may be
@@ -700,7 +698,7 @@ returned to indicate the script wasn't run.
 Proposed Testing Workflow
 -------------------------
 Invoke mtui.py with the update md5 as parameter in interactive mode and set the
-testreports directory if it's not already set by the TEMPLATEDIR environment
+testreports directory if it's not already set by the TEMPLATE_DIR environment
 variable or the configuration file.
 The script connects then to the reference hosts mentioned in the template file.
 

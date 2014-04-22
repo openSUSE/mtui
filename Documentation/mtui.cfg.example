@@ -19,10 +19,10 @@
 # defaults to the mtui sourcecode directory if not set
 datadir=/usr/share/mtui/
 
-# all testreport logs are checked out and stored in the templatedir directory.
+# all testreport logs are checked out and stored in the template_dir directory.
 # this defaults to the current working dir if not set here or either by
-# $TEMPLATEDIR or command line parameter
-templatedir=~/qam/templates
+# $TEMPLATE_DIR or command line parameter
+template_dir=~/qam/templates
 
 # chdir to the md5sum checkout
 # usefull for eg.
@@ -30,7 +30,7 @@ templatedir=~/qam/templates
 # uploading them with mtui put command
 # * having new pane in tmux in the same cwd as the testreport
 # Default: no
-chdir_to_templatedir = no
+chdir_to_template_dir = no
 
 # mtui temporary local directory for package source checkouts
 tempdir=/tmp/
@@ -57,9 +57,8 @@ repclean=/mounts/qam/infrastructure/mtui/helper/rep-clean/rep-clean.sh
 # path to the SLCS testsuite scripts
 testsuitedir=/usr/share/qa/tools/
 
-[connection]
 # connection timeout in seconds
-timeout=300
+connection_timeout=300
 
 [svn]
 # svn path for testreport checkouts
