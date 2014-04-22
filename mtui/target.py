@@ -344,8 +344,6 @@ class Target(object):
         self.exclusive = exclusive
         self.connection = None
 
-        out.info('connecting to %s' % self.hostname)
-
         for package in packages:
             self.packages[package] = Package(package)
 
@@ -354,6 +352,7 @@ class Target(object):
 
     def connect(self):
         try:
+            out.info('connecting to %s' % self.hostname)
             self.connection = Connection(self.host, self.port, self.timeout)
         except Exception as error:
             try:
