@@ -1,6 +1,6 @@
 #################################
 Maintenance Test Update Installer
-##################################
+#################################
 
 MTUI is a tool that allows you to run commands on multiple hosts in
 parallel.
@@ -9,7 +9,7 @@ License
 #######
 
 MTUI is unpublished work of SUSE. You can find the full license at
-`LICENSE file<./LICENSE>`_
+`LICENSE file <./LICENSE>`_
 
 Installation
 ############
@@ -36,7 +36,7 @@ Bug reports and feature requests
 ################################
 
 Can be filed and searched at `Novell Bugzilla
-`<https://bugzilla.novell.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI>`_
+<https://bugzilla.novell.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI>`_
 
 Documentation
 #############
@@ -66,7 +66,7 @@ You can run unit tests with
 
 And you can find `acceptance test suite`_ at `git.suse.de`_
 
-.. _acceptance test suite: http://git.suse.de/?p=yac/mtui-test-acceptance.git;a=summary>
+.. _acceptance test suite: http://git.suse.de/?p=yac/mtui-test-acceptance.git;a=summary
 .. _git.suse.de: http://git.suse.de
 
 Release Engineering
