@@ -55,11 +55,19 @@ If you want to modify the source code, please take a look at the
 Automated Tests
 ###############
 
-Run unit tests with `nosetests tests`
+You can run unit tests with
 
-`Acceptance testsuite
-<http://git.suse.de/?p=yac/mtui-test-acceptance.git;a=summary>`_ is at
-git.suse.de.
+.. sourcecode:: bash
+
+   make check
+
+   # or with coverage:
+   make checkcover
+
+And you can find `acceptance test suite`_ at `git.suse.de`_
+
+.. _acceptance test suite: http://git.suse.de/?p=yac/mtui-test-acceptance.git;a=summary>
+.. _git.suse.de: http://git.suse.de
 
 Release Engineering
 ###################
