@@ -1371,6 +1371,7 @@
       <host arch="x86_64" name="leo.qam.suse.de"/>
       <host arch="x86_64" name="kempter.qam.suse.de" description="1 HE,  4x2.2GHZ AMD, 8 GB RAM, 2x120GB SATA, no HW virt"/>
       <host arch="x86_64" name="bathala.qam.suse.de" description="desktop, i7-3770@3.40GHz, 16 GB RAM, 2x500GB SATA, HW virt"/>
+      <host arch="x86_64" name="celsius.qam.suse.de" description="desktop, Core2 6600@2.40GHz, 2 GB RAM, 1x160 SATA, HW virt"/>
   </location>
 
   <location name="infrastructure">
@@ -1467,7 +1468,6 @@
     <host arch="ia64" name="sinope.qam.suse.de" description="2 HE, IA-64@900MHz , 4GB RAM, 2x37GB SCSI"/>
     <host arch="ia64" name="fermium.qam.suse.de" description="2 HE  IA-64@1700MHz , 1GB RAM, 2x37GB SCSI"/>
     <host arch="ia64" name="miracle.qam.suse.de" description="2 HE, IA-64@900MHz, 1.5GB RAM, 32GB SCSI"/>
-    <host arch="x86_64" name="celsius.qam.suse.de" description="desktop, Core2 6600@2.40GHz, 2 GB RAM, 1x160 SATA, HW virt"/>
     <host arch="x86_64" name="obrien.suse.de" description="desktop, x86_64, hw virt, 2GB RAM" location="Heiko's office"/>
     <host arch="x86_64" name="worf.suse.de" description="desktop, x86_64, hw virt, 1.5GB RAM" location="Andrej's office"/>
     <host arch="x86_64" name="zypp.suse.de" description="desktop, 3.2GHZ IDPF, x86_64, 2GB RAM, no hw virt" location="Andrej's office"/>
