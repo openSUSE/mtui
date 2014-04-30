@@ -17,10 +17,11 @@ import getpass
 import shutil
 
 from datetime import date, datetime
+from traceback import print_exc
 
 from mtui.rpmver import *
 from mtui.target import *
-from mtui.template import *
+from mtui.template import TestReportFactory
 from mtui.updater import *
 from mtui.export import *
 from mtui.utils import *
@@ -41,7 +42,7 @@ class CommandPrompt(cmd.Cmd):
 
     prompt = 'QA > '
 
-    def __init__(self, targets, metadata, config=config):
+    def __init__(self, targets, metadata, config, log):
         """
             :param targets: dict where K is str, V is L{Target} and
                 K == V.hostname
@@ -52,6 +53,7 @@ class CommandPrompt(cmd.Cmd):
         self.metadata = metadata
         self.homedir = os.path.expanduser('~')
         self.config = config
+        self.log = log
         self.datadir = self.config.datadir
 
         self._interface_version = \
@@ -1657,80 +1659,31 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_load_template, args)
             return
 
-        # overriding already loaded templates (currently) not supported
         if self.metadata.md5:
             if not input('should i overwrite already loaded session %s? (y/N) ' % self.metadata.md5, ['y', 'yes'], self.interactive):
                 return
 
         try:
-            update = Template(md5, self.metadata.location, self.metadata.directory)
-        except IOError:
-            # in case the template doesn't exist, try to check it out
-            out.info('Testreport %s does not yet exist. Checking out.' % md5)
-            # checkout the current testing template. we could do this with the
-            # python svn module, but for now it's simpler calling just system()
-            svnpath = '/'.join([config.svn_path, md5])
-            os.system('cd %s; svn co %s' % (self.metadata.directory, svnpath))
-            try:
-                update = Template(md5, self.metadata.location, self.metadata.directory)
-            except Exception:
-                # if the template still doesn't exist, it's probably the wrong
-                # template path.
-                out.error('failed to load template')
-                return
+            testreport = TestReportFactory(self.config, self.log, md5)
+        except Exception:
+            print_exc()
+            return
 
-        metadata = update.metadata
+        # Reload hosts to which we already have a connection
+        # close hosts we are already connected to but add them to the
+        # testreport.systems so they get connected to again.
+        # This feature comes from pre-1.0 versions.
+        # NOTE: the only reason we need to reconnect seems to be that
+        # when the L{Target} object is created, it is passed a list of
+        # packages, which changes with the testreport change. So this
+        # may go away when refactored.
+        for hostname, target in self.targets.items():
+            target.close()
+            testreport.add_host(hostname, target.system)
 
-        # reload hosts to which we already have a connection
-        for hostname in self.targets:
-            system = self.targets[hostname].system
-            out.info('reloading legacy host %s' % hostname)
-            try:
-                self.targets[hostname].close() or self.targets.pop(hostname)
-            except KeyError:
-                pass
-            try:
-                self.targets[hostname] = Target(hostname, system, metadata.get_package_list())
-                self.targets[hostname].add_history(['connect'])
-            except Exception:
-                out.warning('failed to add host %s to target list' % hostname)
-            metadata.systems[hostname] = system
-
-        for (hostname, system) in metadata.systems.items():
-            try:
-                try:
-                    self.targets[hostname]
-                except KeyError:
-                    self.targets[hostname] = Target(hostname, system, metadata.get_package_list())
-                    self.targets[hostname].add_history(['connect'])
-                else:
-                    out.debug('host %s already connected. skipping.' % hostname)
-            except Exception:
-                out.warning('failed to add host %s to target list' % hostname)
-            except KeyboardInterrupt:
-                # skip adding the reference host if CTRL-C was pressed. this might
-                # not work if we are somewhere deep in the network/ssh code where
-                # KeyboardInterrupt is not thrown.
-                out.warning('skipping host %s' % hostname)
-
-        # ignore svn metadata files when copying the testscripts to
-        # the correspondend directories
-        ignored = shutil.ignore_patterns('*.svn')
-
-        try:
-            # copy check_* and compare_* scripts to the template directory
-            sourcedir = os.path.join(self.datadir, 'scripts')
-            destdir = os.path.join(os.path.dirname(metadata.path), 'scripts')
-            shutil.copytree(sourcedir, destdir, ignore=ignored)
-        except OSError, error:
-            # this should not happen but was already noticed once or twice.
-            # probable due to nfs timeouts if mtui was checked out to a nfs mount.
-            if error.errno == errno.ENOENT:
-                out.warning('scripts/ dir not found, please copy manually')
-            else:
-                pass
-
-        self.metadata = metadata
+        testreport.load_systems_from_testplatforms()
+        self.targets = testreport.connect_targets()
+        self.metadata = testreport
 
     def do_set_location(self, args):
         """
@@ -2867,7 +2820,6 @@ def script_hook(targets, which, templatedir, md5):
         except KeyboardInterrupt:
             out.warning('skipping script %s' % script)
             continue
-
 
 def enabled_targets(targets):
     temporary_targets = {}

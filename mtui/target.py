@@ -744,54 +744,6 @@ class Package(object):
     def get_versions(self):
         return [self.before, self.after, self.required]
 
-
-class Metadata(object):
-
-    def __init__(self):
-        self.md5 = ''
-        self.path = ''
-        self.location = ''
-        self.directory = ''
-        self.category = ''
-        self.patches = {}
-        self.swampid = ''
-        self.packager = ''
-        self.packages = {}
-        self.reviewer = ''
-        self.systems = {}
-        self.bugs = {}
-
-    def get_package_list(self):
-        return self.packages.keys()
-
-    def get_release(self):
-        systems = ' '.join(self.systems.values())
-        if re.search('rhel', systems):
-            return 'YUM'
-        if re.search('manager', systems):
-            # SUSE Manager hosts should have the sle11 zypper stack,
-            # even on sle10 installations
-            return '11'
-        if re.search('mgr', systems):
-            return '11'
-        if re.search('sles4vmware', systems):
-            return '11'
-        if re.search('cloud', systems):
-            return '11'
-        if re.search('studio', systems):
-            return '11'
-        if re.search('slms', systems):
-            return '11'
-        if re.search('sle.11', systems):
-            return '11'
-        if re.search('sle.10', systems):
-            return '10'
-        if re.search('sle.9', systems):
-            return '9'
-        if re.search('sl11', systems):
-            return '114'
-
-
 class ThreadedMethod(threading.Thread):
 
     def __init__(self, queue):

@@ -12,6 +12,7 @@ import logging
 import tempfile
 import readline
 import re
+from errno import EEXIST
 
 out = logging.getLogger('mtui')
 
@@ -166,3 +167,13 @@ def log_exception(eclass, logger):
                 raise e
         return wrap2
     return wrap
+
+def ensure_dir_exists(dir_, on_create=None):
+    try:
+        os.makedirs(dir_)
+    except OSError as e:
+        if e.errno != EEXIST:
+            raise
+    else:
+        if callable(on_create):
+            on_create(path=dir_)
