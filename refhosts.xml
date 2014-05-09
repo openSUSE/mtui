@@ -135,24 +135,6 @@
       </product>
       <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
     </host>
-    <host arch="i386" name="s4v-11sp3-i51-32.qam.suse.de">
-      <product name="sles4vmware11sp3">
-        <version>
-          <major>11</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
-    </host>
-    <host arch="x86_64" name="s4v-11sp3-i51-64.qam.suse.de">
-      <product name="sles4vmware11sp3">
-        <version>
-          <major>11</major>
-          <minor>sp3</minor>
-        </version>
-      </product>
-      <virtual mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
-    </host>
 
     <host arch="i386" name="s4v-11sp2-a51-32.qam.suse.de">
       <product name="sles4vmware">
@@ -165,24 +147,6 @@
     </host>
     <host arch="x86_64" name="s4v-11sp2-a51-64.qam.suse.de">
       <product name="sles4vmware">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
-    </host>
-    <host arch="i386" name="s4v-11sp2-a51-32.qam.suse.de">
-      <product name="sles4vmware11sp2">
-        <version>
-          <major>11</major>
-          <minor>sp2</minor>
-        </version>
-      </product>
-      <virtual mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
-    </host>
-    <host arch="x86_64" name="s4v-11sp2-a51-64.qam.suse.de">
-      <product name="sles4vmware11sp2">
         <version>
           <major>11</major>
           <minor>sp2</minor>
@@ -1422,6 +1386,13 @@
     <host arch="???" name="c3srv2rack23.qam.suse.de"/>
     <host arch="???" name="c3srv2rack24.qam.suse.de"/>
     <host arch="???" name="c3srv2rack25.qam.suse.de"/>
+
+    <host arch="???" name="kvmpower21.qam.suse.de"/>
+    <host arch="???" name="kvmpower22.qam.suse.de"/>
+    <host arch="???" name="kvmpower23.qam.suse.de"/>
+    <host arch="???" name="kvmpower24.qam.suse.de"/>
+    <host arch="???" name="kvmpower25.qam.suse.de"/>
+
   </location>
 
   <location name="consoles">
@@ -1462,6 +1433,129 @@
       <host arch="x86_64" name="oes11.qam.suse.de">
 	  <virtual property="weak" mode="guest" host="brune.qam.suse.de">kvm</virtual>
       </host>
+
+    <host arch="i386" name="s4v-11sp2-a55-32.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="thessalonike.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="s4v-11sp2-a55-64.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="thessalonike.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="i386" name="s4v-11sp2-i51-32.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="s4v-11sp2-i51-64.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kadmeia.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="i386" name="s4v-11sp2-i55-32.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kynane.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="s4v-11sp2-i55-64.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp2</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kynane.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="i386" name="s4v-11sp3-a51-32.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="s4v-11sp3-a51-64.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kleopatra.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="i386" name="s4v-11sp3-a55-32.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="thessalonike.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="s4v-11sp3-a55-64.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="thessalonike.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="i386" name="s4v-11sp3-i55-32.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kynane.qam.suse.de">vmware</virtual>
+    </host>
+    <host arch="x86_64" name="s4v-11sp3-i55-64.qam.suse.de">
+      <product name="sles4vmware">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+	  <virtual property="weak" mode="guest" host="kynane.qam.suse.de">vmware</virtual>
+    </host>
+
+    <host arch="???" name="borg-5.qam.suse.de">
+	  <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
+    <host arch="???" name="borg-6.qam.suse.de">
+	  <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
+    <host arch="???" name="borg-7.qam.suse.de">
+	  <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
+    <host arch="???" name="borg-8.qam.suse.de">
+	  <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
+    </host>
+
   </location>
 
   <location name="unused">
