@@ -1556,9 +1556,25 @@
 	  <virtual mode="guest" host="borg.qam.suse.de">hyperv</virtual>
     </host>
 
+      <host arch="x86_64" name="nx.qam.suse.de" description="unused as NX gateway for the team in Beijijng">
+	  <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      </host>
+
+    <host arch="x86_64" name="cetur.qam.suse.de" description="2nd reference for Studio Onsite">
+      <product name="studio">
+        <version>
+          <major>1</major>
+          <minor>3</minor>
+        </version>
+      </product>
+      <kernel property="weak">true</kernel>
+      <addon property="weak" name="sdk"/>
+    </host>
   </location>
 
   <location name="unused">
+    <host arch="ia64" name="sykes.qam.suse.de" description="IA-64@900MHz (McKinley), 4GB RAM, 1x300GB + 1x240GB IDE"/>
+    <host arch="ia64" name="iceland.qam.suse.de" description="Dual-Core Intel(R) Itanium(R) 2 Processor 9140M, 8GB RAM, 1x72GB SCSI"/>
     <host arch="ia64" name="sinope.qam.suse.de" description="2 HE, IA-64@900MHz , 4GB RAM, 2x37GB SCSI"/>
     <host arch="ia64" name="fermium.qam.suse.de" description="2 HE  IA-64@1700MHz , 1GB RAM, 2x37GB SCSI"/>
     <host arch="ia64" name="miracle.qam.suse.de" description="2 HE, IA-64@900MHz, 1.5GB RAM, 32GB SCSI"/>
