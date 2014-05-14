@@ -1,6 +1,9 @@
 TMPDIR=/tmp/mtui-unittests
 TMPENV=TMPDIR=$(TMPDIR)
-NOSE=nosetests tests
+NOSE=nosetests tests --processes=-1
+# Note using --processes is essential to ensure tests won't hang as the
+# worker 1. doesn't have stdin and 2. have default 10s timeout.
+# See fixmes at tests.test_prompt.test_precmd_prerun
 COVERAGE=--with-coverage --cover-package=mtui
 
 .PHONY: help

@@ -144,12 +144,9 @@ def main():
                 out.error('overwrite parameter set without valid host arguments')
                 sys.exit(0)
         elif parameter in ('-p', '--prerun'):
-            try:
-                with open(argument, 'r') as script:
-                    prerun = script.readlines()
-            except Exception:
-                out.error('failed to open prerun script')
-                sys.exit(0)
+            with open(argument, 'r') as script:
+                prerun = [x.rstrip() for x in script.readlines()
+                    if not x.startswith('#')]
         elif parameter in ('-v', '--verbose'):
             out.setLevel(level=logging.DEBUG)
         elif parameter in ('-w', '--timeout'):
@@ -174,36 +171,14 @@ def main():
 
     prompt = CommandPrompt(targets, tr, config, out)
     prompt.interactive = interactive
+    if not prompt.interactive:
+        prerun += ["update all", "export", "quit"]
 
-    for line in prerun:
-        if line.startswith('#'):
-            continue
-        line = line.rstrip()
-        method, _, args = line.partition(' ')
-        print 'QA > %s' % line
-        try:
-            getattr(prompt, 'do_%s' % method)(args)
-        except KeyboardInterrupt:
-            # stop non-interactive command execution on CTRL-C
-            interactive = True
-            prompt.interactive = interactive
-            break
+    if attributes:
+        prompt.do_autoadd(attributes)
 
-    while True:
-        try:
-            if interactive:
-                # start the command prompt loop. this call blocks until the
-                # end of the QA> session
-                prompt.cmdloop()
-            else:
-                # if we are not in interactive mode, apply the update, export
-                # logs to the template and exit saving the template.
-                prompt.do_update('all')
-                prompt.do_export(None)
-                prompt.do_quit(None)
-        except KeyboardInterrupt:
-            print
-
+    prompt.set_cmdqueue(prerun)
+    prompt.cmdloop()
 
 def usage():
     """print a simple usage output and exit

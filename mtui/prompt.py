@@ -15,6 +15,7 @@ import glob
 import re
 import getpass
 import shutil
+from traceback import print_exc
 
 from datetime import date, datetime
 from traceback import print_exc
@@ -37,6 +38,27 @@ from distutils.version import StrictVersion
 
 out = logging.getLogger('mtui')
 
+class QuitLoop(RuntimeError):
+    pass
+
+class CmdQueue(list):
+    """
+    Prerun support.
+
+    Echos prompt with the command that's being popped (and about to be
+    executed
+    """
+    def __init__(self, iterable, prompt):
+        self.prompt = prompt
+        list.__init__(self, iterable)
+
+    def pop(self, i):
+        val = list.pop(self, i)
+        self.echo_prompt(val)
+        return val
+
+    def echo_prompt(self, val):
+        print "{0}{1}".format(self.prompt, val)
 
 class CommandPrompt(cmd.Cmd):
 
@@ -68,15 +90,18 @@ class CommandPrompt(cmd.Cmd):
 
         readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
 
-        try:
-            readline.read_history_file('%s/.mtui_history' % self.homedir)
-        except IOError, error:
-            out.debug('failed to open history file: %s' % error.strerror)
+        self._read_history()
 
         self.commands = {}
         self._add_subcommand(commands.HostsUnlock)
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
+
+    def _read_history(self):
+        try:
+            readline.read_history_file('%s/.mtui_history' % self.homedir)
+        except IOError as e:
+            out.debug('failed to open history file: %s' % str(e))
 
     def _add_subcommand(self, cmd):
         if self.commands.has_key(cmd.command):
@@ -87,6 +112,27 @@ class CommandPrompt(cmd.Cmd):
             return
 
         self.commands[cmd.command] = cmd
+
+    def set_cmdqueue(self, queue):
+        self.cmdqueue = CmdQueue(queue, self.prompt)
+
+    def cmdloop(self):
+        """
+        Customized cmd.Cmd.cmdloop so it handles Ctrl-C and prerun
+        """
+        while True:
+            try:
+                cmd.Cmd.cmdloop(self)
+            except KeyboardInterrupt:
+                # Drop to interactive mode.
+                # This takes effect only if we are in prerun
+                self.interactive = True
+                self.set_cmdqueue([])
+            except QuitLoop:
+                return
+
+    def postloop(self):
+        raise QuitLoop
 
     # {{{ overrides to support new style commands
     def onecmd(self, line):
