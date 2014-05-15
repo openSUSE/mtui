@@ -9,6 +9,7 @@ from os.path import join
 import shutil
 
 from mtui.utils import ensure_dir_exists
+from mtui.utils import chdir
 
 class TestEnsureDirExists(TestCase):
     def setUp(self):
@@ -50,3 +51,14 @@ class TestEnsureDirExists(TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.root)
+
+def test_chdir():
+    oldcwd = os.getcwd()
+    root = mkdtemp()
+
+    cwd = None
+    with chdir(root):
+        cwd = os.getcwd()
+
+    eq_(root, cwd)
+    eq_(os.getcwd(), oldcwd)

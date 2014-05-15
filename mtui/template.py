@@ -12,7 +12,7 @@ from traceback import format_exc
 
 from mtui.target import Target
 from mtui.refhost import Refhost
-from mtui.utils import ensure_dir_exists
+from mtui.utils import ensure_dir_exists, chdir
 
 try:
     from nose.tools import nottest
@@ -361,7 +361,8 @@ class _TestReportFactory(object):
         self._ensure_dir_exists(config.template_dir, on_create=cb)
 
     def svn_checkout(self, cwd, uri):
-        # FIXME: chdir in context manager not the subshell
-        os.system('cd %s; svn co %s' % (cwd, uri))
+        with chdir(cwd):
+            # FIXME: use python module to perform svn checkout
+            os.system('svn co %s' % uri)
 
 TestReportFactory=_TestReportFactory()

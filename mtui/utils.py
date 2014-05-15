@@ -177,3 +177,16 @@ def ensure_dir_exists(dir_, on_create=None):
     else:
         if callable(on_create):
             on_create(path=dir_)
+
+class chdir:
+    """Context manager for changing the current working directory"""
+
+    def __init__(self, newPath):
+        self.newPath = newPath
+
+    def __enter__(self):
+        self.savedPath = os.getcwd()
+        os.chdir(self.newPath)
+
+    def __exit__(self, etype, value, traceback):
+        os.chdir(self.savedPath)
