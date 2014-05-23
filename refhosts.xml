@@ -1,6 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <definitions>
 <location name="default">
+    <host arch="i386" name="teladi.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <ltss property="weak">true</ltss>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+    <host arch="x86_64" name="boronen.qam.suse.de">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp1</minor>
+        </version>
+      </product>
+      <ltss property="weak">true</ltss>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.qam.suse.de">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
 <host arch="s390x" name="s390vsw070.suse.de">
   <product name="sles">
     <version>
@@ -349,7 +371,7 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <kernel property="weak">true</kernel>
+      <kernel>true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
@@ -413,7 +435,7 @@
           <minor>sp1</minor>
         </version>
       </product>
-      <kernel property="weak">true</kernel>
+      <kernel>true</kernel>
       <ltss property="weak">true</ltss>
       <addon property="weak" name="sdk"/>
       <addon property="weak" name="hae"/>
@@ -1156,28 +1178,6 @@
     </host>
   </location>
   <location name="nuremberg">
-    <host arch="i386" name="teladi.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
-    <host arch="x86_64" name="boronen.qam.suse.de">
-      <product name="sles">
-        <version>
-          <major>11</major>
-          <minor>sp1</minor>
-        </version>
-      </product>
-      <ltss property="weak">true</ltss>
-      <virtual property="weak" mode="guest" host="voskhod.qam.suse.de">xen</virtual>
-      <addon property="weak" name="sdk"/>
-    </host>
     <host arch="s390x" name="s390ctc012.suse.de">
       <product name="sles">
         <version>
