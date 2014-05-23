@@ -12,6 +12,7 @@ import logging
 import tempfile
 import readline
 import re
+from errno import EEXIST
 
 out = logging.getLogger('mtui')
 
@@ -166,3 +167,26 @@ def log_exception(eclass, logger):
                 raise e
         return wrap2
     return wrap
+
+def ensure_dir_exists(dir_, on_create=None):
+    try:
+        os.makedirs(dir_)
+    except OSError as e:
+        if e.errno != EEXIST:
+            raise
+    else:
+        if callable(on_create):
+            on_create(path=dir_)
+
+class chdir:
+    """Context manager for changing the current working directory"""
+
+    def __init__(self, newPath):
+        self.newPath = newPath
+
+    def __enter__(self):
+        self.savedPath = os.getcwd()
+        os.chdir(self.newPath)
+
+    def __exit__(self, etype, value, traceback):
+        os.chdir(self.savedPath)

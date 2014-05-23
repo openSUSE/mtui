@@ -1,19 +1,17 @@
 from nose.tools import ok_, eq_
 
 from mtui.prompt import CommandPrompt
-from mtui.target import Metadata
 from mtui.commands import Command
 from mtui.config import Config, config
+from mtui.template import TestReport
 from mtui import __version__
 
 import os
 import argparse
 from distutils.version import StrictVersion
 
-try:
-    from cStringIO import StringIO
-except ImportError:
-    from StringIO import StringIO
+from .utils import LogMock
+from .utils import StringIO
 
 OLD_STYLE_CMD='update'
 NEW_STYLE_CMD='unlock'
@@ -25,7 +23,8 @@ class MyStdout:
 def test_do_help():
     c = Config()
     c.interface_version = '2.0'
-    cp = CommandPrompt([], Metadata(), config=c)
+    l = LogMock()
+    cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = MyStdout()
     cp.do_help(NEW_STYLE_CMD)
     ok_('usage: '+NEW_STYLE_CMD in cp.stdout.written)
@@ -36,7 +35,8 @@ def test_do_help():
 def test_getattr():
     c = Config()
     c.interface_version = '2.0'
-    cp = CommandPrompt([], Metadata(), config=c)
+    l = LogMock()
+    cp = CommandPrompt([], TestReport(c, l), c, l)
     attr = "do_"+NEW_STYLE_CMD
     r = getattr(cp, attr)
     ok_('usage: '+NEW_STYLE_CMD in r.__doc__)
@@ -48,20 +48,18 @@ def test_getattr():
 def test_getnames():
     c = Config()
     c.interface_version = '2.0'
-    cp = CommandPrompt([], Metadata(), config=c)
+    l = LogMock()
+    cp = CommandPrompt([], TestReport(c, l), c, l)
     names = cp.get_names()
     ok_('do_'+NEW_STYLE_CMD in names)
     ok_('do_'+OLD_STYLE_CMD in names)
 
 def test_command_prompt_init():
-    c = Config()
-    cp = CommandPrompt([], Metadata())
-    ok_(cp.config is config)
-
     os.environ['MTUI_CONF'] = '/dev/null'
+    l = LogMock()
     c = Config()
-    ok_(not c is config)
-    cp = CommandPrompt([], Metadata(), config=c)
+    l = LogMock()
+    cp = CommandPrompt([],  TestReport(c, l), c, l)
     ok_(c is cp.config)
 
     eq_(cp._interface_version, StrictVersion(__version__))
@@ -105,7 +103,8 @@ def test_command_argparse_fail():
             ok_(False)
 
     c = Config()
-    cp = CommandPrompt([], Metadata(), config=c)
+    l = LogMock()
+    cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = StringIO()
     cp._add_subcommand(ComMock)
 
@@ -122,7 +121,8 @@ def test_command_doesnt_run_on_help():
 
     c = Config()
     c.interface_version = ComMock.stable
-    cp = CommandPrompt([], Metadata(), config=c)
+    l = LogMock()
+    cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = StringIO()
     cp._add_subcommand(ComMock)
     cp.onecmd('commock -h')

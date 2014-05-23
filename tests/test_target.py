@@ -2,6 +2,7 @@ from nose.tools import ok_, eq_, raises
 
 from mtui.target import TargetLock, RemoteLock, Target
 from mtui.config import Config
+from .utils import LogMock
 
 
 def test_legacy_locked_target_is_locked():
@@ -132,13 +133,6 @@ def test_locked_target_is_locked():
 
     t.lock('fuu')
     eq_(t.test_mark, (('fuu',), {}))
-
-class LogMock:
-    def __init__(self):
-        self.errors = []
-
-    def error(self, x):
-        self.errors.append(x)
 
 def test_put_repclean_fail():
     t = Target('foo', 'bar', connect=False)
