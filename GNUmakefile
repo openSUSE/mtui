@@ -52,4 +52,7 @@ clean_coverage:
 helps += clean_unittests_temp "clean temporary files created by unittests"
 clean_unittests_temp:
 
-	if test -d $(TMPDIR); then $(RM) -r $(TMPDIR); fi
+	if test -d $(TMPDIR); then \
+		chmod u+rwX -R $(TMPDIR); \
+		$(RM) -r $(TMPDIR); \
+	fi
