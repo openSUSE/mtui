@@ -19,10 +19,9 @@ out = logging.getLogger('mtui')
 
 
 class Config(object):
-
     """Read and store the variables from mtui config files"""
 
-    def __init__(self):
+    def read(self):
         try:
             # FIXME: gotta read config overide from env instead of argv
             # because this crap is used as a singleton all over the
@@ -40,6 +39,8 @@ class Config(object):
         except ConfigParser.Error:
             pass
 
+    def __init__(self):
+        self.read()
 
         normalizer = lambda x: x
 
