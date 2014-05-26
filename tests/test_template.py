@@ -18,26 +18,18 @@ from mtui.target import Target
 from .utils import LogMock
 from .utils import StringIO
 from .utils import touch
+from .utils import ConfigFake
 
 from traceback import format_exc
-
-_cfg_attrs = [
-    'template_dir',
-    'svn_path',
-    'chdir_to_templatedir',
-    'location',
-]
-ConfigFake = namedtuple('ConfigFake', _cfg_attrs)
-# FIXME: there should be ConfigFake in tests.utils that should be tested
-# that has the exact same interface as mtui.config.Config with default
-# values None and reset only those needed for given test
 
 def test_instance_factory():
     from mtui.template import TestReportFactory
     ok_(isinstance(TestReportFactory, _TestReportFactory))
 
 def test_TestReportFactory_no_md5():
-    c = ConfigFake('foodir', None, None, 'fooloc')
+    c = ConfigFake()
+    c.template_dir = 'foodir'
+    c.location = 'fooloc'
     f = _TestReportFactory()
     l = LogMock()
     tr = f(c, l)
@@ -64,7 +56,7 @@ def test_TestReportFactory_call_md5():
             self.tr = tr
             self.md5 = md5
 
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     f = F()
     eq_(f._test_factory_md5_called, False)
     l = LogMock()
@@ -112,7 +104,10 @@ class TestReportFactoryMockFactoryMd5(_TestReportFactory):
             ._factory_md5(config, log, tr, md5, _count)
 
 def test_TestReportFactory_factory_md5_no_fail():
-    c = ConfigFake('/tmp/foo', 'svnpath', None, None)
+    c = ConfigFake()
+    c.template_dir = '/tmp/foo'
+    c.svn_path = 'svnpath'
+
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker()
     l = LogMock()
@@ -122,7 +117,10 @@ def test_TestReportFactory_factory_md5_no_fail():
     eq_(f.t_ensure_dir, [])
 
 def test_TestReportFactory_factory_md5_with_checkout():
-    c = ConfigFake('/tmp/foo', 'svnpath', None, None)
+    c = ConfigFake()
+    c.template_dir = '/tmp/foo'
+    c.svn_path = 'svnpath'
+
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker(read_fail=[1],
         read_error=lambda: _TemplateIOError(ENOENT, ''))
@@ -134,7 +132,10 @@ def test_TestReportFactory_factory_md5_with_checkout():
     eq_(f.t_ensure_dir, [c.template_dir])
 
 def test_TestReportFactory_factory_md5_failing_checkout():
-    c = ConfigFake('/tmp/foo', 'svnpath', None, None)
+    c = ConfigFake()
+    c.template_dir = '/tmp/foo'
+    c.svn_path = 'svnpath'
+
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker(read_fail=[1, 2, 3],
         read_error=lambda: _TemplateIOError(ENOENT, ''))
@@ -149,7 +150,10 @@ def test_TestReportFactory_factory_md5_failing_checkout():
         ok_(False)
 
 def test_TestReportFactory_factory_md5_other_ioerror():
-    c = ConfigFake('/tmp/foo', 'svnpath', None, None)
+    c = ConfigFake()
+    c.template_dir = '/tmp/foo'
+    c.svn_path = 'svnpath'
+
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker(read_fail=[1, 2, 3],
         read_error=lambda: IOError(EPERM, ''))
@@ -219,15 +223,7 @@ def test_TestReportFactory__copy_scripts_src_missing():
             return super(TestableFactory, self)._factory_md5(*args, **kw)
 
     l = LogMock()
-    cfg_attrs = [
-        'template_dir',
-        'datadir',
-        'location',
-        'chdir_to_templatedir',
-        'svn_path'
-    ]
-    ConfigFake_ = namedtuple("ConfigFake_", cfg_attrs)
-    c = ConfigFake_('', '', None, None, '')
+    c = ConfigFake()
     trf = TestableFactory()
 
     try:
@@ -248,7 +244,7 @@ def test_TestReport__open_and_parse_raises_templateioerror():
             raise IOError(EEXIST, 'sterr')
 
     l = LogMock()
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     tr = TestableReport(c, l)
     path = '/'
     while True:
@@ -267,7 +263,7 @@ def test_TestReport__copy_scripts_dst_exists():
             raise OSError(EEXIST, 'strerr', args[1])
 
     l = LogMock()
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     tr = TestableReport(c, l)
     tr._copy_scripts(None, 'foo', None)
 
@@ -283,7 +279,7 @@ def test_TestReport__copy_scripts_src_missing():
             raise OSError(ENOENT, 'strerr', args[0])
 
     l = LogMock()
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     tr = TestableReport(c, l)
     tr._copy_scripts('foo', None, None)
 
@@ -302,7 +298,7 @@ def test_TestReport__copy_scripts_on_error():
             raise OSError(1, 'strerr')
 
     l = LogMock()
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     tr = TestableReport(c, l)
     tr._copy_scripts(None, None, None)
 
@@ -323,9 +319,8 @@ class TestTestReport_FileSystem_Hitters(TestCase):
                 self.t_ensure_executable.append(pattern)
 
         l = LogMock()
-        ConfigFake_ = namedtuple('ConfigFake_',
-            ["datadir", "location", "template_dir"])
-        c = ConfigFake_("foodata", None, None)
+        c = ConfigFake()
+        c.datadir = 'foodata'
 
 
         tr = TestableReport(c, l)
@@ -346,7 +341,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 
     def test_ensure_executable_no_match(self):
         l = LogMock()
-        c = ConfigFake(None, None, None, None)
+        c = ConfigFake()
         tr = TestReport(c, l)
         pattern = self.in_temp('/*')
         tr._ensure_executable(pattern)
@@ -360,7 +355,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 
     def test_ensure_executable_makes_executable(self):
         l = LogMock()
-        c = ConfigFake(None, None, None, None)
+        c = ConfigFake()
         tr = TestReport(c, l)
 
         fd, f_txt = mkstemp(suffix='.txt', dir=self.tmp_dir)
@@ -397,7 +392,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         dst = self.in_temp('dst')
 
         l = LogMock()
-        c = ConfigFake(None, None, None, None)
+        c = ConfigFake()
         tr = TestReport(c, l)
         tr._copytree(src, dst)
 
@@ -416,7 +411,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         os.mkdir(dst)
 
         l = LogMock()
-        c = ConfigFake(None, None, None, None)
+        c = ConfigFake()
         tr = TestReport(c, l)
         try:
             tr._copytree(src, dst)
@@ -430,7 +425,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         dst = self.in_temp('dst')
 
         l = LogMock()
-        c = ConfigFake(None, None, None, None)
+        c = ConfigFake()
         tr = TestReport(c, l)
         try:
             tr._copytree(src, dst)
@@ -444,13 +439,6 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         shutil.rmtree(self.tmp_dir)
 
 def test_TestReport_connect_targets():
-    _cfg_attrs = [
-        'connection_timeout',
-        'location',
-        'template_dir',
-    ]
-    ConfigFake_ = namedtuple('ConfigFake_', _cfg_attrs)
-
     class TargetFake(Target):
         def __init__(self, *args, **kw):
             ok_(not kw.has_key('connect'))
@@ -462,7 +450,7 @@ def test_TestReport_connect_targets():
             self.t_history.append(comment)
 
     l = LogMock()
-    c = ConfigFake_(None, None, None)
+    c = ConfigFake()
     tr = TestReport(c, l)
     tr.TargetFactory = TargetFake
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
@@ -479,7 +467,7 @@ def test_TestReport_connect_targets():
 
 def test_TestReport_load_systems_from_testplatforms():
     l = LogMock()
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     tr = TestReport(c, l)
     tps = ['t1', 't2']
     tr.testplatforms = deepcopy(tps)
@@ -510,15 +498,12 @@ class RefhostFake:
 
     @staticmethod
     def t_config():
-        _cfg_attrs_refhost = [
-            'refhosts_xml',
-            'location',
-            'template_dir'
-        ]
-        ConfigFakeRefhost = namedtuple('ConfigFake_',
-            _cfg_attrs_refhost)
+        c = ConfigFake()
+        c.refhosts_xml = 'fooxml'
+        c.location = 'foolocation'
+        c.template_dir = 'footpldir'
 
-        return ConfigFakeRefhost('fooxml', 'foolocation', 'footpldir')
+        return c
 
 def test_TestReport_refhosts_from_tp():
     l = LogMock()
@@ -557,7 +542,7 @@ def test_TestReport_refhosts_from_tp_emptyresult():
 # {{{ template parser
 def test_TestReportParse_parsed_md5():
     l = LogMock()
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     tr = TestReport(c, l)
 
     md5 = "8c60b7480fc521d7eeb322955b387165"
@@ -575,7 +560,7 @@ def test_TestReportParse_parsed_md5():
 
 def test_TestReportParse_parsed_testplatform():
     l = LogMock()
-    c = ConfigFake(None, None, None, None)
+    c = ConfigFake()
     tr = TestReport(c, l)
 
     tps = ['footp1', 'footp2']
