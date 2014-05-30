@@ -31,8 +31,13 @@ def test_do_help():
     l = LogMock()
     cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = MyStdout()
-    cp.do_help(NEW_STYLE_CMD)
-    ok_('usage: '+NEW_STYLE_CMD in cp.stdout.written)
+
+    cp.do_help("commock")
+    eq_(cp.stdout.written, "*** No help on commock\n")
+
+    cp._add_subcommand(ComMock2_0)
+    cp.do_help("commock")
+    ok_('usage: '+ComMock2_0.command in cp.stdout.written)
 
     cp.do_help(OLD_STYLE_CMD)
     # just that doesn't raise
@@ -41,6 +46,7 @@ def test_getattr():
     c = Config()
     c.interface_version = '2.0'
     l = LogMock()
+
     cp = CommandPrompt([], TestReport(c, l), c, l)
     attr="do_"+ComMock2_0.command
     ok_(not hasattr(cp, attr))
@@ -59,8 +65,11 @@ def test_getnames():
     c.interface_version = '2.0'
     l = LogMock()
     cp = CommandPrompt([], TestReport(c, l), c, l)
+    attr = "do_"+ComMock2_0.command
+    ok_(attr not in cp.get_names())
+    cp._add_subcommand(ComMock2_0)
     names = cp.get_names()
-    ok_('do_'+NEW_STYLE_CMD in names)
+    ok_(attr in names)
     ok_('do_'+OLD_STYLE_CMD in names)
 
 def test_command_prompt_init():
