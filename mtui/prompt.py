@@ -62,7 +62,7 @@ class CmdQueue(list):
 
 class CommandPrompt(cmd.Cmd):
 
-    prompt = 'QA > '
+    prompt = 'mtui> '
 
     def __init__(self, targets, metadata, config, log):
         """
@@ -80,9 +80,6 @@ class CommandPrompt(cmd.Cmd):
 
         self._interface_version = \
             StrictVersion(config.interface_version)
-
-        self.prompt = 'QA > ' if self._interface_version <  '2.0' \
-            else 'mtui> '
 
         self.session = self.metadata.md5
 
