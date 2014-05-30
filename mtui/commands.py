@@ -100,7 +100,7 @@ class Command(object):
 
 class HostsUnlock(Command):
     command = 'unlock'
-    stable  = '2.0'
+    stable  = '3.0'
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -196,7 +196,7 @@ class Config(Command):
     Display and manipulate (TODO) configuration in runtime.
     """
     command = "config"
-    stable = '2.0'
+    stable = '3.0'
 
     def run(self):
         # TODO: move this code under `config show` command
