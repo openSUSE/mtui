@@ -16,6 +16,11 @@ from .utils import StringIO
 OLD_STYLE_CMD='update'
 NEW_STYLE_CMD='unlock'
 
+
+class ComMock2_0(Command):
+    stable = '2.0'
+    command = 'commock'
+
 class MyStdout:
     def write(self, x):
         self.written = x
@@ -37,9 +42,13 @@ def test_getattr():
     c.interface_version = '2.0'
     l = LogMock()
     cp = CommandPrompt([], TestReport(c, l), c, l)
-    attr = "do_"+NEW_STYLE_CMD
+    attr="do_"+ComMock2_0.command
+    ok_(not hasattr(cp, attr))
+
+    cp._interface_version = StrictVersion('2.0')
+    cp._add_subcommand(ComMock2_0)
     r = getattr(cp, attr)
-    ok_('usage: '+NEW_STYLE_CMD in r.__doc__)
+    ok_('usage: '+ComMock2_0.command in r.__doc__)
 
     attr = 'do_'+OLD_STYLE_CMD
     r = getattr(cp, attr)
@@ -72,12 +81,8 @@ def test_add_subcommand():
 
     cp = TestableCP()
 
-    class ComMock(Command):
-        stable = '2.0'
-        command = 'commock'
-
     eq_(cp.commands.values(), [])
-    cp._add_subcommand(ComMock)
+    cp._add_subcommand(ComMock2_0)
     eq_(cp.commands.values(), [])
 
     class TestableCP2(CommandPrompt):
@@ -87,8 +92,8 @@ def test_add_subcommand():
 
     cp = TestableCP2()
     eq_(cp.commands.values(), [])
-    cp._add_subcommand(ComMock)
-    eq_(cp.commands.values(), [ComMock])
+    cp._add_subcommand(ComMock2_0)
+    eq_(cp.commands.values(), [ComMock2_0])
 
 def test_command_argparse_fail():
     """
@@ -112,10 +117,7 @@ def test_command_argparse_fail():
     eq_(cp.stdout.getvalue(), "usage: commock [-h]\n")
 
 def test_command_doesnt_run_on_help():
-    class ComMock(Command):
-        command = 'commock'
-        stable = '2.0'
-
+    class ComMock(ComMock2_0):
         def run(self):
             ok_(False)
 
