@@ -82,7 +82,7 @@ class CommandPrompt(cmd.Cmd):
             StrictVersion(config.interface_version)
 
         self.prompt = 'QA > ' if self._interface_version <  '2.0' \
-            else 'mtui > '
+            else 'mtui> '
 
         self.session = self.metadata.md5
 
