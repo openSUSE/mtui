@@ -12,6 +12,7 @@ import Queue
 import signal
 import logging
 import getpass
+from traceback import format_exc
 
 from mtui.connection import *
 from mtui.xmlout import *
@@ -482,6 +483,7 @@ class Target(object):
                 exitcode = -1
             except AssertionError:
                 out.debug('zombie command terminated')
+                out.debug(format_exc())
                 return
             except Exception:
                 # failed to run command

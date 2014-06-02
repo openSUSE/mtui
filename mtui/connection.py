@@ -85,6 +85,13 @@ class Connection(object):
 
         self.connect()
 
+    def __repr__(self):
+        return "<{0} object hostname={1} port={2}>".format(
+              self.__class__.__name__
+            , self.hostname
+            , self.port
+        )
+
     def connect(self):
         """connect to the remote host using paramiko as ssh subsystem"""
 
@@ -419,9 +426,15 @@ class Connection(object):
     def open(self, filename, mode='r', bufsize=-1):
         """open remote file for reading"""
 
-        out.debug('opening file %s:%s:%s (%s)' % (self.hostname, self.port, filename, mode))
+        out.debug('{0} open({1}, {2})'.format(
+              repr(self)
+            , filename
+            , mode
+        ))
         try:
+            out.debug("  -> self.client.open_sftp")
             sftp = self.client.open_sftp()
+            out.debug("  -> sftp.open")
             return sftp.open(filename, mode, bufsize)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
