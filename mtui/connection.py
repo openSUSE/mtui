@@ -16,6 +16,7 @@ import getpass
 import logging
 import warnings
 import logging
+from traceback import format_exc
 
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -441,6 +442,13 @@ class Connection(object):
             # currently opening a file after reconnection is implemented
             # as recursion. this is a really bad idea and needs fixing.
             return self.open(filename, mode, bufsize)
+        except:
+            # It often happens to me lately that mtui seems to freeze at
+            # doing sftp.open() so let's log any other exception here,
+            # just in case it gets eaten by some caller in mtui
+            # bnc#880934
+            out.debug(format_exc())
+            raise
 
     def remove(self, path):
         """delete remote file"""
