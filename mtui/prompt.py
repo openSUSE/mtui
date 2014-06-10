@@ -133,9 +133,6 @@ class CommandPrompt(cmd.Cmd):
             except QuitLoop:
                 return
 
-    def postloop(self):
-        raise QuitLoop
-
     # {{{ overrides to support new style commands
     def onecmd(self, line):
         cmd_, arg, line = self.parseline(line)
