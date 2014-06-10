@@ -128,6 +128,8 @@ class CommandPrompt(cmd.Cmd):
                 # This takes effect only if we are in prerun
                 self.interactive = True
                 self.set_cmdqueue([])
+                # make the new prompt to be printed on new line
+                print ""
             except QuitLoop:
                 return
 
