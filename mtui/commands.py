@@ -95,6 +95,10 @@ class Command(object):
         raise RuntimeError()
 
     def println(self, xs):
+        """
+        `print` replacement method for the outputs to be testable by
+        injecting `StringIO`
+        """
         self.stdout.write(xs + "\n")
         self.stdout.flush()
 

@@ -1,3 +1,16 @@
+"""
+This module is concerned with the code providing framework to implement
+commands as classes.
+
+That is
+
+1. L{Command} class itself.
+
+2. L{CommandPrompt}s handling (adding & executing) of L{Command}
+   classes. Especially with regard to the
+   L{mtui.config.interface_version} feature.
+"""
+
 from nose.tools import ok_, eq_
 
 from mtui.prompt import CommandPrompt
@@ -26,6 +39,10 @@ class MyStdout:
         self.written = x
 
 def test_do_help():
+    """
+    Test CommandPrompt.do_help print helps properly for class-defined
+    commands.
+    """
     c = Config()
     c.interface_version = ComMock2_0.stable
     l = LogMock()
@@ -45,7 +62,7 @@ def test_do_help():
 def test_getattr():
     """
     Test L{CommandPrompt.getattr} simulates existence of
-    CommandPrompt.do_<command> methods for commands defined by classes.
+    CommandPrompt.do_<command> methods for class-defined commands.
 
     Because that's what L{cmd.Cmd} resolves command names to.
     """
@@ -67,6 +84,10 @@ def test_getattr():
     ok_(r == cp.do_update)
 
 def test_getnames():
+    """
+    Test L{CommandPrompt.getnames} returns commands including the
+    class-defined ones.
+    """
     c = Config()
     c.interface_version = ComMock2_0.stable
     l = LogMock()
@@ -79,6 +100,10 @@ def test_getnames():
     ok_('do_'+OLD_STYLE_CMD in names)
 
 def test_command_prompt_init():
+    """
+    Test L{CommandPrompt} is initialized with interface_version =
+    current mtui version unless defined by config.
+    """
     os.environ['MTUI_CONF'] = '/dev/null'
     l = LogMock()
     c = Config()
@@ -88,6 +113,12 @@ def test_command_prompt_init():
     eq_(cp._interface_version, StrictVersion(__version__))
 
 def test_add_subcommand():
+    """
+    Test L{CommandPrompt._add_subcommand} handles (adds or skips)
+    class-defined commands properly with regard to requested
+    interface_version
+    """
+
     class TestableCP(CommandPrompt):
         def __init__(self):
             # FIXME: inits are overriden to prevent definition of
@@ -112,11 +143,15 @@ def test_add_subcommand():
 
 def test_command_argparse_fail():
     """
-    test handling of command args parsing failure
-    namely that ArgsParseFailure is catched during onecmd()
+    Test handling of command args parsing failure
+    namely that ArgsParseFailure is caught during onecmd() and therefore
+    the command itself is NOT executed.
     """
     class ComMock(Command):
         stable = '1.0'
+        # only to keep the interface.
+        # class-defined commands were introduced in >1.0,
+        # therefore this command should always be active.
         command = 'commock'
 
         def run(self):
@@ -132,6 +167,9 @@ def test_command_argparse_fail():
     eq_(cp.stdout.getvalue(), "usage: commock [-h]\n")
 
 def test_command_doesnt_run_on_help():
+    """
+    Test command itself is not executed if help is requested.
+    """
     class ComMock(ComMock2_0):
         def run(self):
             ok_(False)
