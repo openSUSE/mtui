@@ -92,6 +92,11 @@ def main():
         if not re.match(r'^([a-fA-F\d]{32})$', args.md5):
             raise ValueError('invalid --md5 value')
 
+    if args.non_interactive and not args.prerun:
+        log.error("--non-interactive makes no sense without --prerun")
+        p.print_help()
+        sys.exit(1)
+
     if args.version:
         print __version__
         sys.exit(0)
