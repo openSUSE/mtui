@@ -120,9 +120,6 @@ def main():
 
     prompt.interactive = not args.non_interactive
 
-    if not prompt.interactive:
-        prerun += ["update all", "export", "quit"]
-
     if args.prerun:
         prompt.set_cmdqueue([x.rstrip()
             for x in args.prerun.readlines()

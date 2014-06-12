@@ -149,7 +149,11 @@ class CommandPrompt(cmd.Cmd):
         self.commands[cmd.command] = cmd
 
     def set_cmdqueue(self, queue):
-        self.cmdqueue = CmdQueue(queue, self.prompt)
+        q = queue[:]
+        if not self.interactive:
+            q.append("quit")
+
+        self.cmdqueue = CmdQueue(q, self.prompt)
 
     def cmdloop(self):
         """
@@ -162,7 +166,7 @@ class CommandPrompt(cmd.Cmd):
                 # Drop to interactive mode.
                 # This takes effect only if we are in prerun
                 self.interactive = True
-                self.set_cmdqueue([])
+                self.cmdqueue = []
                 # make the new prompt to be printed on new line
                 print ""
             except QuitLoop:

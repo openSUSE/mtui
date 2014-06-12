@@ -101,6 +101,20 @@ def test_set_cmdqueue():
     eq_(cp.cmdqueue, ['foo', 'bar'])
     ok_(isinstance(cp.cmdqueue, CmdQueue))
 
+def test_set_cmdqueue_noninteractive_prompt():
+    cp = (lambda c: lambda l: \
+            TestableCommandPrompt([], TestReport(c, l), c, l))\
+                (ConfigFake())(LogMock())
+    cp.interactive = False
+    eq_(cp.cmdqueue, [])
+
+    cp.set_cmdqueue([])
+    eq_(cp.cmdqueue, ['quit'])
+
+    cp.set_cmdqueue(['foo', 'bar'])
+    eq_(cp.cmdqueue, ['foo', 'bar', 'quit'])
+    ok_(isinstance(cp.cmdqueue, CmdQueue))
+
 def test_precmd_prerun():
     c = ConfigFake()
     l = LogMock()
