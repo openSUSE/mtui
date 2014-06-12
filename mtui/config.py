@@ -42,6 +42,26 @@ class Config(object):
     def __init__(self):
         self.read()
 
+        self._define_config_options()
+        self._parse_config()
+        self._handle_testopia_cred()
+
+    def _parse_config(self):
+        for datum in self.data:
+            attr, inipath, default, fixup, getter = datum
+
+            try:
+                val = self._get_option(inipath, getter)
+            except:
+                if callable(default):
+                    val = default()
+                else:
+                    val = default
+
+            setattr(self, attr, fixup(val))
+            out.debug('config.%s set to "%s"' % (attr, val))
+
+    def _define_config_options(self):
         normalizer = lambda x: x
 
         data = [
@@ -111,36 +131,30 @@ class Config(object):
 
         getter = self.config.get
         add_getter = lambda x: x if len(x) > 4 else x + (getter,)
-        data = (add_getter(x) for x in data)
+        data = [add_getter(x) for x in data]
+        self.data = data
 
-        for datum in data:
-            attr, inipath, default, fixup, getter = datum
+    def _handle_testopia_cred(self):
+        if not keyring:
+            return
 
+        out.debug('querying keyring for Testopia password')
+        if self.testopia_pass and self.testopia_user:
             try:
-                val = self._get_option(inipath, getter)
-            except:
-                if callable(default):
-                    val = default()
-                else:
-                    val = default
+                keyring.set_password('Testopia', self.testopia_user,
+                    self.testopia_pass)
+            except Exception:
+                out.warning('failed to add Testopia password to the keyring')
+                out.debug(format_exc())
+        elif self.testopia_user:
+            try:
+                self.testopia_pass = keyring.get_password('Testopia', self.testopia_user)
+            except Exception:
+                out.warning('failed to get Testopia password from the keyring')
+                out.debug(format_exc())
 
-            setattr(self, attr, fixup(val))
-            out.debug('config.%s set to "%s"' % (attr, val))
-
-        if keyring is not None:
-            out.debug('querying keyring for Testopia password')
-            if self.testopia_pass and self.testopia_user:
-                try:
-                    keyring.set_password('Testopia', self.testopia_user, self.testopia_pass)
-                except Exception:
-                    out.warning('failed to add Testopia password to the keyring')
-            elif self.testopia_user:
-                try:
-                    self.testopia_pass = keyring.get_password('Testopia', self.testopia_user)
-                except Exception:
-                    out.warning('failed to get Testopia password from the keyring')
-
-        out.debug('config.testopia_pass set to "%s"' % self.testopia_pass)
+        out.debug('config.testopia_pass = {0!r}'.format(
+            self.testopia_pass))
 
     def _get_option(self, secopt, getter):
         """
