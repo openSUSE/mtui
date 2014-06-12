@@ -204,6 +204,22 @@ class Config(Command):
     stable = '3.0'
 
     def run(self):
-        # TODO: move this code under `config show` command
-        from pprint import pprint
-        pprint(self.config.__dict__)
+        getattr(self, self.args.func)()
+
+    def show(self):
+        attrs = self.args.attributes
+        if not attrs:
+            attrs = [x[0] for x in self.config.data]
+
+        max_attr_len = len(max(attrs, key = len))
+        for i in attrs:
+            fmt="{0:<" + str(max_attr_len) + "} = {1!r}"
+            self.println(fmt.format(i, getattr(self.config, i)))
+
+    @classmethod
+    def _add_arguments(cls, p):
+        sp = p.add_subparsers()
+        p_show = sp.add_parser("show", help="show config values",
+            stdout=p.stdout)
+        p_show.add_argument("attributes", type=str, nargs="*")
+        p_show.set_defaults(func="show")
