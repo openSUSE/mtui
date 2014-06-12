@@ -106,9 +106,7 @@ def main():
 
     tr = TestReportFactory(config, out, args.md5)
     if args.sut:
-        tr.systems = dict([(hostname, system)
-            for x in args.sut
-            for hostname, system in x.split(",")])
+        tr.systems = dict([tuple(x.split(",")) for x in args.sut])
     else:
         tr.load_systems_from_testplatforms()
 
