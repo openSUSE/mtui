@@ -61,7 +61,23 @@ class CmdQueue(list):
         print "{0}{1}".format(self.prompt, val)
 
 class CommandPrompt(cmd.Cmd):
-
+    # TODO: It's worth considering to remove the inherit of cmd.Cmd and
+    # just copy some of it's needed functionality, because
+    #
+    # 1. cmd.Cmd is not written in unit test friendly way.
+    #
+    # 2. cmd.Cmd.cmdloop() has to be wrapped or "clever" hacks
+    #    (CmdQueue) devised in order to implement some features and
+    #    tests (KeyboardInterrupt, prerun, stepping the loop one input
+    #    by one) and the whole logic appears more complicated than
+    #    it needs to be.
+    #
+    # 3. using methods as commands is quite simple but wrong way to do
+    #    that and handling classes is hacked into the function system.
+    #
+    # Note: it might be possible to choose from several existing CLI
+    # frameworks. Eg. cement. Maybe there's something in twisted, which
+    # would be great if it could replace the ssh layer as well.
     prompt = 'mtui> '
 
     def __init__(self, targets, metadata, config, log):
