@@ -27,7 +27,7 @@ class MyStdout:
 
 def test_do_help():
     c = Config()
-    c.interface_version = '2.0'
+    c.interface_version = ComMock2_0.stable
     l = LogMock()
     cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = MyStdout()
@@ -43,15 +43,21 @@ def test_do_help():
     # just that doesn't raise
 
 def test_getattr():
+    """
+    Test L{CommandPrompt.getattr} simulates existence of
+    CommandPrompt.do_<command> methods for commands defined by classes.
+
+    Because that's what L{cmd.Cmd} resolves command names to.
+    """
     c = Config()
-    c.interface_version = '2.0'
+    c.interface_version = ComMock2_0.stable
     l = LogMock()
 
     cp = CommandPrompt([], TestReport(c, l), c, l)
     attr="do_"+ComMock2_0.command
     ok_(not hasattr(cp, attr))
 
-    cp._interface_version = StrictVersion('2.0')
+    cp._interface_version = StrictVersion(ComMock2_0.stable)
     cp._add_subcommand(ComMock2_0)
     r = getattr(cp, attr)
     ok_('usage: '+ComMock2_0.command in r.__doc__)
@@ -62,7 +68,7 @@ def test_getattr():
 
 def test_getnames():
     c = Config()
-    c.interface_version = '2.0'
+    c.interface_version = ComMock2_0.stable
     l = LogMock()
     cp = CommandPrompt([], TestReport(c, l), c, l)
     attr = "do_"+ComMock2_0.command
@@ -76,7 +82,6 @@ def test_command_prompt_init():
     os.environ['MTUI_CONF'] = '/dev/null'
     l = LogMock()
     c = Config()
-    l = LogMock()
     cp = CommandPrompt([],  TestReport(c, l), c, l)
     ok_(c is cp.config)
 
@@ -85,21 +90,22 @@ def test_command_prompt_init():
 def test_add_subcommand():
     class TestableCP(CommandPrompt):
         def __init__(self):
-            self._interface_version = StrictVersion('1.1.0')
+            # FIXME: inits are overriden to prevent definition of
+            # production commands and faking of other dependencies
             self.commands = {}
 
     cp = TestableCP()
+    # set lower version than ComMock2_0
+    self._interface_version = StrictVersion(
+        ".".join([x for x in map(add, ComMock2_0.stable, (-1, 1))])
+    )
 
     eq_(cp.commands.values(), [])
     cp._add_subcommand(ComMock2_0)
     eq_(cp.commands.values(), [])
 
-    class TestableCP2(CommandPrompt):
-        def __init__(self):
-            self._interface_version = StrictVersion('2.0')
-            self.commands = {}
-
-    cp = TestableCP2()
+    cp = TestableCP()
+    cp._interface_version = StrictVersion(ComMock2_0.stable)
     eq_(cp.commands.values(), [])
     cp._add_subcommand(ComMock2_0)
     eq_(cp.commands.values(), [ComMock2_0])
