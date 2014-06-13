@@ -60,6 +60,9 @@ class CmdQueue(list):
     def echo_prompt(self, val):
         print "{0}{1}".format(self.prompt, val)
 
+class CommandAlreadyBoundError(RuntimeError):
+    pass
+
 class CommandPrompt(cmd.Cmd):
     # TODO: It's worth considering to remove the inherit of cmd.Cmd and
     # just copy some of it's needed functionality, because
@@ -138,8 +141,7 @@ class CommandPrompt(cmd.Cmd):
 
     def _add_subcommand(self, cmd):
         if self.commands.has_key(cmd.command):
-            raise RuntimeError("command {0} already set".\
-                format(cmd.command))
+            raise CommandAlreadyBoundError(cmd.command)
 
         if self._interface_version < StrictVersion(cmd.stable):
             return
