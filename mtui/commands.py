@@ -36,6 +36,7 @@ class MTUICommandArgParser(argparse.ArgumentParser):
 
 class Command(object):
     __metaclass__ = ABCMeta
+    # FIXME: see L{CommandPrompt.__getattr__}
 
     stable = None
     """
