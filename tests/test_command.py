@@ -191,6 +191,6 @@ def test_command_println():
         def run(self):
             pass
 
-    c = ComMock(None, None, None, StringIO(), None)
+    c = ComMock(None, None, None, StringIO(), None, None)
     c.println("a")
     eq_(c.stdout.getvalue(), "a\n")
