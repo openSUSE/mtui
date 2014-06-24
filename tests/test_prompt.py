@@ -171,3 +171,28 @@ def test_interface_version_getter():
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
     cp._interface_version = StrictVersion('66.6')
     cp.get_interface_version() is cp._interface_version
+
+def test_commandFactory():
+    """
+    Test objects get passed in to commands properly
+    """
+    c = ConfigFake()
+    l = LogMock()
+    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+
+    future_config = None
+    class FakeCommand(Command):
+        command = 'fake'
+        stable = '1.0'
+        def run(self):
+            self.prompt.t_cmd = self
+
+    cp._add_subcommand(FakeCommand)
+    cp.onecmd("fake")
+    ok_(cp.t_cmd.prompt is cp)
+    ok_(cp.t_cmd.stdout is cp.stdout)
+    ok_(cp.t_cmd.logger is cp.log)
+    ok_(cp.t_cmd.config is cp.config)
+    # and some more for good measure
+    ok_(cp.t_cmd.logger is l)
+    ok_(cp.t_cmd.config is c)

@@ -45,7 +45,7 @@ class Command(object):
         Version must include at least major and minor
     """
 
-    def __init__(self, args, hosts, config, stdout, logger):
+    def __init__(self, args, hosts, config, stdout, logger, prompt):
         """
         :type args: str
         :param args: arguments remaidner for the command
@@ -58,6 +58,7 @@ class Command(object):
         self.stdout = stdout
         self.logger = logger
         self.config = config
+        self.prompt = prompt
 
     @classmethod
     def parse_args(cls, args, stdout):

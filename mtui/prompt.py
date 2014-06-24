@@ -189,7 +189,7 @@ class CommandPrompt(cmd.Cmd):
 
     def commandFactory(self, cmd, args=None):
         hosts = self._hostsGroupFactory()
-        return cmd(args, hosts, config, self.stdout, out)
+        return cmd(args, hosts, config, self.stdout, out, self)
 
     def do_help(self, arg):
         try:
