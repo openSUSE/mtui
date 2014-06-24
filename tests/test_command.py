@@ -18,6 +18,7 @@ from mtui.commands import Command
 from mtui.config import Config, config
 from mtui.template import TestReport
 from mtui import __version__
+from operator import add
 
 import os
 import argparse
@@ -127,8 +128,9 @@ def test_add_subcommand():
 
     cp = TestableCP()
     # set lower version than ComMock2_0
-    self._interface_version = StrictVersion(
-        ".".join([x for x in map(add, ComMock2_0.stable, (-1, 1))])
+    cp._interface_version = StrictVersion(
+        ".".join([str(x) for x in map(add,
+            StrictVersion(ComMock2_0.stable).version, (-1, 1, 0))])
     )
 
     eq_(cp.commands.values(), [])
