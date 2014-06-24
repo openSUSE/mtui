@@ -75,6 +75,9 @@ class CommandPrompt(cmd.Cmd):
     # 3. using methods as commands is quite simple but wrong way to do
     #    that and handling classes is hacked into the function system.
     #
+    # 4. L{cmd.Cmd} does not inherit L{object}, therefore we can't use
+    #    property accessor decorators and super
+    #
     # Note: it might be possible to choose from several existing CLI
     # frameworks. Eg. cement. Maybe there's something in twisted, which
     # would be great if it could replace the ssh layer as well.
@@ -94,8 +97,7 @@ class CommandPrompt(cmd.Cmd):
         self.log = log
         self.datadir = self.config.datadir
 
-        self._interface_version = \
-            StrictVersion(config.interface_version)
+        self.set_interface_version(config.interface_version)
 
         self.session = self.metadata.md5
 
@@ -109,6 +111,24 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.HostsUnlock)
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
+
+    def get_interface_version(self):
+        """
+        :return: L{StrictVersion} instance
+        """
+        return self._interface_version
+
+    def set_interface_version(self, x):
+        """
+        :type x: L{StrictVersion} or convertible to it.
+        :param x: version
+
+        :return: None
+        """
+        if not isinstance(x, StrictVersion):
+            x = StrictVersion(x)
+
+        self._interface_version = x
 
     def _read_history(self):
         try:

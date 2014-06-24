@@ -10,6 +10,8 @@ from mtui.prompt import CmdQueue
 from mtui.template import TestReport
 from mtui.commands import Command
 
+from distutils.version import StrictVersion
+
 from .utils import LogMock
 from .utils import ConfigFake
 
@@ -147,3 +149,22 @@ def test_cmdqueue():
     el0 = q.pop(0)
     eq_(el0, 3)
     eq_(q.t_echo_prompt_calls, [1,3])
+
+def test_interface_version_setter():
+    c = ConfigFake()
+    l = LogMock()
+    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    v = '66.0'
+    cp.set_interface_version(v)
+    eq_(cp._interface_version, StrictVersion(v))
+
+    sv = StrictVersion(v)
+    cp.set_interface_version(sv)
+    ok_(cp._interface_version is sv)
+
+def test_interface_version_getter():
+    c = ConfigFake()
+    l = LogMock()
+    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp._interface_version = StrictVersion('66.6')
+    cp.get_interface_version() is cp._interface_version
