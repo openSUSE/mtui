@@ -7,6 +7,7 @@ from nose.tools import nottest
 
 from mtui.prompt import CommandPrompt
 from mtui.prompt import CmdQueue
+from mtui.prompt import QuitLoop
 from mtui.template import TestReport
 from mtui.commands import Command
 
@@ -64,9 +65,11 @@ class TestableCommandPrompt(CommandPrompt):
 
     def do_quit(self, line):
         """
-        NOP overlaoad so L{sys.exit} doesn't get called
+        Simulates sys.exit() inside nosetests
+
+        :raises: QuitLoop
         """
-        return True
+        raise QuitLoop()
 
     do_exit = do_quit
 
@@ -93,7 +96,7 @@ def test_precmd_prerun():
     c = ConfigFake()
     l = LogMock()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
-    cp.set_cmdqueue(['foo', 'bar',])
+    cp.set_cmdqueue(['foo', 'bar', 'quit'])
     cp.cmdloop()
     # FIXME: this may hang forever.
     # The problem is that there is no way to manually step the
