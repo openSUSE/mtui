@@ -45,6 +45,7 @@ class TestableCommandPrompt(CommandPrompt):
         CommandPrompt.__init__(self, *a, **kw)
         self._add_subcommand(FakeCommandFactory())
         self.t_foo_called = []
+        self.t_preloop_counter = 0
 
     def _read_history(self):
         self.t_read_history_called = True
@@ -70,6 +71,14 @@ class TestableCommandPrompt(CommandPrompt):
         :raises: QuitLoop
         """
         raise QuitLoop()
+
+    def preloop(self):
+        self.t_preloop_counter += 1
+
+        if self.t_preloop_counter == 2:
+            # used by L{test_noninteractive_drops_to_interactive_on_ctrlc}
+            # to exit the cmdloop once ctrl-c was caught.
+            raise QuitLoop
 
     do_exit = do_quit
 
@@ -127,7 +136,7 @@ def test_noninteractive_drops_to_interactive_on_ctrlc():
     ok_(cp.interactive)
     eq_(cp.cmdqueue, [])
     eq_(cp.t_stop_calls, 0)
-    ok_(cp.t_eof_called)
+    ok_(not cp.t_eof_called)
 
 
 class TestableCmdQueue(CmdQueue):
