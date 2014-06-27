@@ -13,7 +13,7 @@ from mtui.commands import Command
 
 from distutils.version import StrictVersion
 
-from .utils import LogMock
+from .utils import LogFake
 from .utils import ConfigFake
 
 class FakeCommandFactory(object):
@@ -84,13 +84,13 @@ class TestableCommandPrompt(CommandPrompt):
 
 def test_read_history_on_init():
     c = ConfigFake()
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
     ok_(cp.t_read_history_called)
 
 def test_set_cmdqueue():
     c = ConfigFake()
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
     eq_(cp.cmdqueue, [])
 
@@ -104,7 +104,7 @@ def test_set_cmdqueue():
 def test_set_cmdqueue_noninteractive_prompt():
     cp = (lambda c: lambda l: \
             TestableCommandPrompt([], TestReport(c, l), c, l))\
-                (ConfigFake())(LogMock())
+                (ConfigFake())(LogFake())
     cp.interactive = False
     eq_(cp.cmdqueue, [])
 
@@ -117,7 +117,7 @@ def test_set_cmdqueue_noninteractive_prompt():
 
 def test_precmd_prerun():
     c = ConfigFake()
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
     cp.set_cmdqueue(['foo', 'bar', 'quit'])
     cp.cmdloop()
@@ -141,7 +141,7 @@ def test_precmd_prerun():
 
 def test_noninteractive_drops_to_interactive_on_ctrlc():
     c = ConfigFake()
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
     cp.set_cmdqueue(['foo', 'ctrlc', 'stop'])
     cp.interactive = False
@@ -178,7 +178,7 @@ def test_cmdqueue():
 
 def test_interface_version_setter():
     c = ConfigFake()
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
     v = '66.0'
     cp.set_interface_version(v)
@@ -190,7 +190,7 @@ def test_interface_version_setter():
 
 def test_interface_version_getter():
     c = ConfigFake()
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
     cp._interface_version = StrictVersion('66.6')
     cp.get_interface_version() is cp._interface_version
@@ -200,7 +200,7 @@ def test_commandFactory():
     Test objects get passed in to commands properly
     """
     c = ConfigFake()
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(c, l), c, l)
 
     future_config = None

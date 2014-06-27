@@ -8,7 +8,7 @@ from mtui.template import TestReport
 from mtui.prompt import CommandAlreadyBoundError
 from .utils import StringIO
 from .utils import ConfigFake
-from .utils import LogMock
+from .utils import LogFake
 from .test_prompt import TestableCommandPrompt
 
 from itertools import izip_longest
@@ -24,7 +24,7 @@ def _run_config(in_, config):
     note the burden of setting appropriate interface_version is on the
     user.
     """
-    l = LogMock()
+    l = LogFake()
     cp = TestableCommandPrompt([], TestReport(config, l), config, l)
     try:
         cp._add_subcommand(commands.Config)

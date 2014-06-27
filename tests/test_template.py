@@ -15,7 +15,7 @@ from mtui.template import _TestReportFactory
 from mtui.template import _TemplateIOError
 from mtui.template import TestReport
 from mtui.target import Target
-from .utils import LogMock
+from .utils import LogFake
 from .utils import StringIO
 from .utils import touch
 from .utils import ConfigFake
@@ -31,7 +31,7 @@ def test_TestReportFactory_no_md5():
     c.template_dir = 'foodir'
     c.location = 'fooloc'
     f = _TestReportFactory()
-    l = LogMock()
+    l = LogFake()
     tr = f(c, l)
     ok_(isinstance(tr, TestReport))
     eq_(tr.md5, '')
@@ -59,7 +59,7 @@ def test_TestReportFactory_call_md5():
     c = ConfigFake()
     f = F()
     eq_(f._test_factory_md5_called, False)
-    l = LogMock()
+    l = LogFake()
     f(c, l, md5='foomd5')
     eq_(f._test_factory_md5_called, True)
     ok_(isinstance(f.tr, TestReport))
@@ -110,7 +110,7 @@ def test_TestReportFactory_factory_md5_no_fail():
 
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker()
-    l = LogMock()
+    l = LogFake()
     tr = f(c, l, md5='foomd5')
     ok_(isinstance(tr, f.TestReport))
     eq_(f.t_counts, [0])
@@ -124,7 +124,7 @@ def test_TestReportFactory_factory_md5_with_checkout():
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker(read_fail=[1],
         read_error=lambda: _TemplateIOError(ENOENT, ''))
-    l = LogMock()
+    l = LogFake()
     tr = f(c, l, md5='foomd5')
     ok_(isinstance(tr, f.TestReport))
     eq_(f.t_counts, [0, 1])
@@ -139,7 +139,7 @@ def test_TestReportFactory_factory_md5_failing_checkout():
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker(read_fail=[1, 2, 3],
         read_error=lambda: _TemplateIOError(ENOENT, ''))
-    l = LogMock()
+    l = LogFake()
     try:
         f(c, l, md5='foomd5')
     except IOError:
@@ -157,7 +157,7 @@ def test_TestReportFactory_factory_md5_other_ioerror():
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker(read_fail=[1, 2, 3],
         read_error=lambda: IOError(EPERM, ''))
-    l = LogMock()
+    l = LogFake()
     try:
         f(c, l, md5='foomd5')
     except IOError:
@@ -222,7 +222,7 @@ def test_TestReportFactory__copy_scripts_src_missing():
             self.t_factory_calls += 1
             return super(TestableFactory, self)._factory_md5(*args, **kw)
 
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     trf = TestableFactory()
 
@@ -243,7 +243,7 @@ def test_TestReport__open_and_parse_raises_templateioerror():
             # wraps this function too, though it probably should not
             raise IOError(EEXIST, 'sterr')
 
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestableReport(c, l)
     path = '/'
@@ -262,7 +262,7 @@ def test_TestReport__copy_scripts_dst_exists():
         def _copytree(self, *args, **kw):
             raise OSError(EEXIST, 'strerr', args[1])
 
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestableReport(c, l)
     tr._copy_scripts(None, 'foo', None)
@@ -278,7 +278,7 @@ def test_TestReport__copy_scripts_src_missing():
         def _copytree(self, *args, **kw):
             raise OSError(ENOENT, 'strerr', args[0])
 
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestableReport(c, l)
     tr._copy_scripts('foo', None, None)
@@ -297,7 +297,7 @@ def test_TestReport__copy_scripts_on_error():
         def _copytree(self, *args, **kw):
             raise OSError(1, 'strerr')
 
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestableReport(c, l)
     tr._copy_scripts(None, None, None)
@@ -318,7 +318,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
             def _ensure_executable(self, pattern):
                 self.t_ensure_executable.append(pattern)
 
-        l = LogMock()
+        l = LogFake()
         c = ConfigFake()
         c.datadir = 'foodata'
 
@@ -340,7 +340,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(pattern, "{0}/*/compare_*".format(dst))
 
     def test_ensure_executable_no_match(self):
-        l = LogMock()
+        l = LogFake()
         c = ConfigFake()
         tr = TestReport(c, l)
         pattern = self.in_temp('/*')
@@ -354,7 +354,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(head[2], [])
 
     def test_ensure_executable_makes_executable(self):
-        l = LogMock()
+        l = LogFake()
         c = ConfigFake()
         tr = TestReport(c, l)
 
@@ -391,7 +391,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 
         dst = self.in_temp('dst')
 
-        l = LogMock()
+        l = LogFake()
         c = ConfigFake()
         tr = TestReport(c, l)
         tr._copytree(src, dst)
@@ -410,7 +410,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         dst = self.in_temp('dst')
         os.mkdir(dst)
 
-        l = LogMock()
+        l = LogFake()
         c = ConfigFake()
         tr = TestReport(c, l)
         try:
@@ -424,7 +424,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         src = self.in_temp('src')
         dst = self.in_temp('dst')
 
-        l = LogMock()
+        l = LogFake()
         c = ConfigFake()
         tr = TestReport(c, l)
         try:
@@ -449,7 +449,7 @@ def test_TestReport_connect_targets():
         def add_history(self, comment):
             self.t_history.append(comment)
 
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestReport(c, l)
     tr.TargetFactory = TargetFake
@@ -466,7 +466,7 @@ def test_TestReport_connect_targets():
         eq_(t.system, v)
 
 def test_TestReport_load_systems_from_testplatforms():
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestReport(c, l)
     tps = ['t1', 't2']
@@ -506,7 +506,7 @@ class RefhostFake:
         return c
 
 def test_TestReport_refhosts_from_tp():
-    l = LogMock()
+    l = LogFake()
     c = RefhostFake.t_config()
     tr = TestReport(c, l)
 
@@ -518,7 +518,7 @@ def test_TestReport_refhosts_from_tp_ValueError():
         def set_attributes_from_testplatform(self, x):
             raise ValueError(x)
 
-    l = LogMock()
+    l = LogFake()
     c = RefhostFake.t_config()
     tr = TestReport(c, l)
 
@@ -531,7 +531,7 @@ def test_TestReport_refhosts_from_tp_emptyresult():
         def search(self):
             return []
 
-    l = LogMock()
+    l = LogFake()
     c = RefhostFake.t_config()
     tr = TestReport(c, l)
 
@@ -541,7 +541,7 @@ def test_TestReport_refhosts_from_tp_emptyresult():
 
 # {{{ template parser
 def test_TestReportParse_parsed_md5():
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestReport(c, l)
 
@@ -559,7 +559,7 @@ def test_TestReportParse_parsed_md5():
     ok_(tr.md5, md5)
 
 def test_TestReportParse_parsed_testplatform():
-    l = LogMock()
+    l = LogFake()
     c = ConfigFake()
     tr = TestReport(c, l)
 

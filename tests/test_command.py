@@ -24,7 +24,7 @@ import os
 import argparse
 from distutils.version import StrictVersion
 
-from .utils import LogMock
+from .utils import LogFake
 from .utils import StringIO
 
 OLD_STYLE_CMD='update'
@@ -46,7 +46,7 @@ def test_do_help():
     """
     c = Config()
     c.interface_version = ComMock2_0.stable
-    l = LogMock()
+    l = LogFake()
     cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = MyStdout()
 
@@ -69,7 +69,7 @@ def test_getattr():
     """
     c = Config()
     c.interface_version = ComMock2_0.stable
-    l = LogMock()
+    l = LogFake()
 
     cp = CommandPrompt([], TestReport(c, l), c, l)
     attr="do_"+ComMock2_0.command
@@ -91,7 +91,7 @@ def test_getnames():
     """
     c = Config()
     c.interface_version = ComMock2_0.stable
-    l = LogMock()
+    l = LogFake()
     cp = CommandPrompt([], TestReport(c, l), c, l)
     attr = "do_"+ComMock2_0.command
     ok_(attr not in cp.get_names())
@@ -106,7 +106,7 @@ def test_command_prompt_init():
     current mtui version unless defined by config.
     """
     os.environ['MTUI_CONF'] = '/dev/null'
-    l = LogMock()
+    l = LogFake()
     c = Config()
     cp = CommandPrompt([],  TestReport(c, l), c, l)
     ok_(c is cp.config)
@@ -160,7 +160,7 @@ def test_command_argparse_fail():
             ok_(False)
 
     c = Config()
-    l = LogMock()
+    l = LogFake()
     cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = StringIO()
     cp._add_subcommand(ComMock)
@@ -178,7 +178,7 @@ def test_command_doesnt_run_on_help():
 
     c = Config()
     c.interface_version = ComMock.stable
-    l = LogMock()
+    l = LogFake()
     cp = CommandPrompt([], TestReport(c, l), c, l)
     cp.stdout = StringIO()
     cp._add_subcommand(ComMock)

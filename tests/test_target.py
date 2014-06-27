@@ -2,7 +2,7 @@ from nose.tools import ok_, eq_, raises
 
 from mtui.target import TargetLock, RemoteLock, Target
 from mtui.config import Config
-from .utils import LogMock
+from .utils import LogFake
 
 
 def test_legacy_locked_target_is_locked():
@@ -136,7 +136,7 @@ def test_locked_target_is_locked():
 
 def test_put_repclean_fail():
     t = Target('foo', 'bar', connect=False)
-    t.logger = LogMock()
+    t.logger = LogFake()
     def put():
         raise Exception()
     t.put = put

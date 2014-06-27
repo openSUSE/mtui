@@ -7,7 +7,7 @@ except ImportError:
 
 from mtui.config import Config
 
-class LogMock:
+class LogFake:
     def __init__(self):
         self.errors = []
         self.warnings = []

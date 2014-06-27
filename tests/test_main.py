@@ -9,7 +9,7 @@ from mtui.main import run_mtui
 from .utils import ConfigFake
 from .utils import StringIO
 from .utils import OneShotFactory
-from .utils import LogMock
+from .utils import LogFake
 
 # TODO: check the args get passed correctly into the application once
 # the main() was refactored enough
@@ -78,7 +78,7 @@ def test_main():
     c = ConfigFake()
     trff = TestReportFactoryFake()
     pf = OneShotFactory(PromptFake)
-    lf = LogMock()
+    lf = LogFake()
     sysf = SysFake(["mtui"])
     ok_(run_mtui(sysf, c, lf, trff, pf) is 0)
 
@@ -111,7 +111,7 @@ def test_main_config_overrides():
 
     trff = TestReportFactoryFake()
     pf = OneShotFactory(PromptFake)
-    lf = LogMock()
+    lf = LogFake()
 
     sysf = SysFake([
       "mtui"
