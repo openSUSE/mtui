@@ -17,8 +17,6 @@ from mtui.prompt import *
 from mtui.template import TestReport, TestReportFactory
 from mtui import __version__
 
-out = logging.getLogger('mtui')
-
 def get_parser():
     """
     :covered-by: tests.test_main.test_argparser_*
@@ -85,6 +83,21 @@ def get_parser():
     return p
 
 def main():
+    sys.exit(run_mtui(
+      sys
+    , Config()
+    , logging.getLogger('mtui')
+    , TestReportFactory
+    , CommandPrompt
+    ))
+
+def run_mtui(
+  sys
+, config
+, log
+, TestReportFactory
+, Prompt
+):
     p = get_parser()
     args = p.parse_args(sys.argv[1:])
 
@@ -95,23 +108,23 @@ def main():
     if args.non_interactive and not args.prerun:
         log.error("--non-interactive makes no sense without --prerun")
         p.print_help()
-        sys.exit(1)
+        return 1
 
     if args.version:
-        print __version__
-        sys.exit(0)
+        sys.stdout.write(__version__ + "\n")
+        return 0
 
     if args.debug:
-        out.setLevel(level=logging.DEBUG)
+        log.setLevel(level=logging.DEBUG)
 
-    tr = TestReportFactory(config, out, args.md5)
+    tr = TestReportFactory(config, log, args.md5)
     if args.sut:
         tr.systems = dict([tuple(x.split(",")) for x in args.sut])
     else:
         tr.load_systems_from_testplatforms()
 
     targets = tr.connect_targets()
-    prompt = CommandPrompt(targets, tr, config, out)
+    prompt = Prompt(targets, tr, config, log)
 
     if args.autoadd:
         prompt.do_autoadd(" ".join(args.autoadd))
@@ -124,3 +137,4 @@ def main():
             if not x.startswith('#')])
 
     prompt.cmdloop()
+    return 0

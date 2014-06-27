@@ -17,12 +17,16 @@ class LogMock:
         self.warning = self.warnings.append
         self.debug = self.debugs.append
 
+        self.t_setLevels = []
+
     def __repr__(self):
         return repr(self.__dict__)
 
     def __str__(self):
         return repr(self)
 
+    def setLevel(self, level=None):
+        self.t_setLevels.append(level)
 
 class ConfigFake(Config):
     """
@@ -44,3 +48,22 @@ class ConfigFake(Config):
 
 def touch(x):
     open(x, 'a').close()
+
+
+class ProductAlreadyProducedError(RuntimeError):
+    pass
+
+class OneShotFactory(object):
+    def __init__(self, productClass):
+        self.productClass = productClass
+        self.product = None
+
+    def __call__(self, *args, **kw):
+        if self.product:
+            raise ProductAlreadyProducedError(self.productClass)
+
+        self.product = self._make_product(args, kw)
+        return self.product
+
+    def _make_product(self, args, kw):
+        return self.productClass(*args, **kw)
