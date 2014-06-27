@@ -182,10 +182,10 @@ class Config(object):
         """
 
         if args.location:
-            self.location = argument
+            self.location = args.location
 
         if args.template_dir:
-            self.template_dir = argument
+            self.template_dir = args.template_dir
 
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout

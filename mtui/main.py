@@ -11,9 +11,9 @@ from traceback import format_exc
 import warnings
 from argparse import ArgumentParser
 
-from mtui.log import *
-from mtui.config import *
-from mtui.prompt import *
+from mtui import log as _crap_imported_for_side_effects
+from mtui.config import Config
+from mtui.prompt import CommandPrompt
 from mtui.template import TestReport, TestReportFactory
 from mtui import __version__
 
@@ -116,6 +116,8 @@ def run_mtui(
 
     if args.debug:
         log.setLevel(level=logging.DEBUG)
+
+    config.merge_args(args)
 
     tr = TestReportFactory(config, log, args.md5)
     if args.sut:

@@ -92,3 +92,46 @@ def test_main():
     eq_(prompt.t_autoadds, [])
     eq_(testreport.t_load_systems_from_testplatforms, 1)
     eq_(testreport.t_connect_targets, 1)
+
+def test_main_config_overrides():
+    location = 'prague'
+    template_dir = '/home/foo/bar/'
+    timeout = '666'
+
+    c = ConfigFake()
+
+    overrides = [
+      (location, lambda: c.location)
+    , (template_dir, lambda: c.template_dir)
+    , (int(timeout), lambda: c.connection_timeout)
+    ]
+
+    for x, y in overrides:
+        ok_(x != y(), "tautological setup")
+
+    trff = TestReportFactoryFake()
+    pf = OneShotFactory(PromptFake)
+    lf = LogMock()
+
+    sysf = SysFake([
+      "mtui"
+    , "-l", location
+    , "-t", template_dir
+    , "-w", timeout
+    ])
+
+    ok_(run_mtui(sysf, c, lf, trff, pf) is 0)
+
+    prompt = pf.product
+    testreport = trff.product
+
+    eq_(sysf.stdout.getvalue(), "")
+    eq_(prompt.t_cmdloops, 1)
+    eq_(prompt.t_cmdqueues, [])
+    eq_(prompt.interactive, True)
+    eq_(prompt.t_autoadds, [])
+    eq_(testreport.t_load_systems_from_testplatforms, 1)
+    eq_(testreport.t_connect_targets, 1)
+
+    for x, y in overrides:
+        eq_(x, y(), "override didn't take effect: {0} != {1}".format(x, y))
