@@ -5,8 +5,16 @@
 
 import re
 import logging
+import os
+import time
+import errno
+from urllib import urlopen
 
 from xml.dom import minidom
+from mtui.xdg import save_cache_path
+from mtui.utils import atomic_write_file
+
+from traceback import format_exc
 
 out = logging.getLogger('mtui')
 
@@ -102,7 +110,7 @@ class Attributes(object):
             return False
 
 
-class Refhost(object):
+class Refhosts(object):
 
     def __init__(self, hostmap, location=None, attributes=Attributes()):
         """load refhosts.xml file and pass it to the xml parser
@@ -125,6 +133,9 @@ class Refhost(object):
         # at the end of the day, this may not really be useful and may
         # be removed somewhere in the future
         self.attributes = attributes
+        self._parse_refhosts(hostmap)
+
+    def _parse_refhosts(self, hostmap):
         try:
             self.data = minidom.parse(hostmap)
         except Exception, error:
@@ -646,3 +657,105 @@ class Refhost(object):
 
         self.attributes = attributes
 
+class RefhostsResolveFailed(RuntimeError):
+    pass
+
+class _RefhostsFactory(object):
+    # FIXME: split resolvers into separate classes
+    # should help with the ammount of injected dependencies in each one
+    # of the classes
+
+    _stat = None
+    """
+    :type _stat: callable :: FilePath -> IO L{posix.stat_result}
+    """
+
+    _urlopen = None
+    """
+    :type urlopen: callable :: URI -> IO file-like
+    """
+    _time_now = None
+    """
+    :type time_now: callable :: IO float
+    :param time_now_getter: returns unix time
+    """
+
+    _write_file = None
+    """
+    :type _write_file: callable :: str -> FilePath -> IO ()
+    :param _write_file: atomically writes data into given file path
+    """
+
+    def __init__(
+      self
+    , time_now_getter  # +
+    , statter          # |
+    , urlopener        # |
+    , file_writer      # +- these are needed only for https resolver
+    , cache_path
+    , refhosts_factory=Refhosts
+    ):
+        self._time_now = time_now_getter
+        self._stat = statter
+        self._urlopen = urlopener
+        self._write_file = file_writer
+
+        self.refhosts_cache_path = cache_path
+        self.refhosts_factory = refhosts_factory
+
+    def __call__(self, config, log):
+        for resolver in [x.strip()
+        for x in config.refhosts_resolvers.split(",")]:
+            try:
+                return self._resolve_one(resolver, config, log)
+            except:
+                log.warning('Refhosts: resolver {0} failed'.format(
+                    resolver))
+                log.debug(format_exc())
+
+        raise RefhostsResolveFailed()
+
+    def _resolve_one(self, name, config, log):
+        try:
+            resolver = getattr(self, 'resolve_{0}'.format(name))
+        except AttributeError:
+            log.warning("Refhosts: invalid resolver: {0}".format(name))
+            raise
+        else:
+            return resolver(config)
+
+    def refresh_https_cache_if_needed(self, path, config):
+        if self._is_https_cache_refresh_needed(path
+        , config.refhosts_https_expiration):
+            self.refresh_https_cache(path, config.refhosts_https_uri)
+
+    def _is_https_cache_refresh_needed(self, path, expiration):
+        try:
+            statinfo = self._stat(path)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                return True
+            else:
+                raise
+
+        return self._time_now() - statinfo.st_mtime > expiration
+
+    def refresh_https_cache(self, path, uri):
+        self._write_file(self._urlopen(uri).read(), path)
+
+    def resolve_https(self, config):
+        f = self.refhosts_cache_path
+        self.refresh_https_cache_if_needed(f, config)
+
+        return self.refhosts_factory(f, config.location)
+
+    def resolve_path(self, config):
+        return self.refhosts_factory(config.refhosts_path, config.location)
+
+RefhostsFactory = _RefhostsFactory(
+  time.time
+, os.stat
+, urlopen
+, atomic_write_file
+, save_cache_path('refhosts.xml')
+)

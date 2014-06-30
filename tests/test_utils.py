@@ -3,13 +3,15 @@
 from nose.tools import ok_, eq_, raises
 from unittest import TestCase
 
-from tempfile import mkdtemp
 import os
-from os.path import join
+import pwd
 import shutil
+from tempfile import mkdtemp
+from os.path import join
 
 from mtui.utils import ensure_dir_exists
 from mtui.utils import chdir
+from mtui.xdg import save_cache_path
 
 class TestEnsureDirExists(TestCase):
     def setUp(self):
@@ -62,3 +64,8 @@ def test_chdir():
 
     eq_(root, cwd)
     eq_(os.getcwd(), oldcwd)
+
+def test_save_cache_path():
+    p = save_cache_path("foo")
+    eq_('mtui/foo', p[-8:])
+    ok_(len(p) > 9)

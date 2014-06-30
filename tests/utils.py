@@ -6,6 +6,12 @@ except ImportError:
     from StringIO import StringIO
 
 from mtui.config import Config
+from ConfigParser import ConfigParser
+from os.path import exists
+from posix import stat_result
+from tempfile import mktemp
+
+unused = None
 
 class LogFake:
     def __init__(self):
@@ -37,13 +43,13 @@ class ConfigFake(Config):
 
     To set different desired values in testcase, just assign them.
     """
-    def read(self):
-        class ConfigParser(object):
-            def get(*a, **kw):
-                raise NotImplementedError
+    def __init__(self, overrides=None):
+        super(ConfigFake, self).__init__()
+        if overrides:
+            for k,v in overrides.items():
+                self.set_option(k, v)
 
-            def getboolean(*a, **kw):
-                raise NotImplementedError
+    def read(self):
         self.config = ConfigParser()
 
 def touch(x):
@@ -67,3 +73,41 @@ class OneShotFactory(object):
 
     def _make_product(self, args, kw):
         return self.productClass(*args, **kw)
+
+def get_nonexistent_path():
+    return mktemp()
+
+class ConstMtimeStat(object):
+    def __init__(self, mtime):
+        self.mtime = mtime
+
+    def __call__(self, _):
+        return stat_result([self.mtime if x is 8 else None
+            for x in range(10)])
+        #  This object may be accessed either as a tuple of
+        # (0   , 1  , 2  , 3    , 4  , 5  , 6   , 7    , 8    , 9    )
+        # (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime)
+
+class ConstFloat(object):
+    def __init__(self, x):
+        self.x = x
+
+    def __call__(self, *_, **__):
+        return self.x
+
+class Raiser(object):
+    def __init__(self, e):
+        """
+        :param e: exception to be raised
+        """
+        self.e = e
+
+    def __call__(self, *_, **__):
+        raise self.e
+
+class CallLogger(object):
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, *a, **kw):
+        self.calls.append((a, kw))

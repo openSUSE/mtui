@@ -55,31 +55,39 @@ def test_config_show():
     # redefine options which depend on environment
     c.datadir = 'foo-data'
     c.template_dir = 'foo-template'
-    c.refhosts_xml = 'foo-refhosts'
+    c.refhosts_path = 'foo-refhosts'
     c.session_user = 'foo-user'
     c.interface_version = '66.6'
-    for x,y in izip_longest(_run_config("config show", c).splitlines(),
-        [ "datadir               = 'foo-data'"
-        , "template_dir          = 'foo-template'"
-        , "refhosts_xml          = 'foo-refhosts'"
-        , "local_tempdir         = '/tmp'"
-        , "session_user          = 'foo-user'"
-        , "location              = 'default'"
-        , "interface_version     = '66.6'"
-        , "connection_timeout    = 300"
-        , "svn_path              = 'svn+ssh://svn@qam.suse.de/testreports'"
-        , "patchinfo_url         = 'http://hilbert.nue.suse.com/abuildstat/patchinfo'"
-        , "bugzilla_url          = 'https://bugzilla.novell.com'"
-        , "reports_url           = 'http://qam.suse.de/testreports'"
-        , "repclean_path         = '/mounts/qam/rep-clean/rep-clean.sh'"
-        , "target_tempdir        = '/tmp'"
-        , "target_testsuitedir   = '/usr/share/qa/tools'"
-        , "testopia_interface    = 'https://apibugzilla.novell.com/tr_xmlrpc.cgi'"
-        , "testopia_user         = ''"
-        , "testopia_pass         = ''"
-        , "chdir_to_template_dir = False"
-        ]):
-            eq_(x,y)
+
+    for actual,expected in izip_longest(
+          [ (opt, val)
+            for x in _run_config("config show", c).splitlines()
+            for opt, _, val in [x.partition(" = ")]]
+        , [("{0:<25}".format(opt), val) for (opt, val) in
+            [ ("datadir"                    , "'foo-data'")
+            , ("template_dir"               , "'foo-template'")
+            , ("local_tempdir"              , "'/tmp'")
+            , ("session_user"               , "'foo-user'")
+            , ("location"                   , "'default'")
+            , ("interface_version"          , "'66.6'")
+            , ("connection_timeout"         , "300")
+            , ("svn_path"                   , "'svn+ssh://svn@qam.suse.de/testreports'")
+            , ("patchinfo_url"              , "'http://hilbert.nue.suse.com/abuildstat/patchinfo'")
+            , ("bugzilla_url"               , "'https://bugzilla.novell.com'")
+            , ("reports_url"                , "'http://qam.suse.de/testreports'")
+            , ("repclean_path"              , "'/mounts/qam/rep-clean/rep-clean.sh'")
+            , ("target_tempdir"             , "'/tmp'")
+            , ("target_testsuitedir"        , "'/usr/share/qa/tools'")
+            , ("testopia_interface"         , "'https://apibugzilla.novell.com/tr_xmlrpc.cgi'")
+            , ("testopia_user"              , "''")
+            , ("testopia_pass"              , "''")
+            , ("chdir_to_template_dir"      , "False")
+            , ("refhosts_resolvers"         , "'https'")
+            , ("refhosts_https_uri"         , "'https://qam.suse.de/metadata/refhosts.xml'")
+            , ("refhosts_https_expiration"  , "43200")
+            , ("refhosts_path"              , "'foo-refhosts'")
+        ]]):
+            eq_(actual,expected)
 
 def test_config_show_one():
     """

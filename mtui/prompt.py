@@ -171,6 +171,8 @@ class CommandPrompt(cmd.Cmd):
                 print ""
             except QuitLoop:
                 return
+            except Exception as e:
+                self.log.error(format_exc())
 
     # {{{ overrides to support new style commands
     def onecmd(self, line):
@@ -260,6 +262,13 @@ class CommandPrompt(cmd.Cmd):
     def emptyline(self):
         return
 
+    def _refhosts(self):
+        try:
+            return RefhostsFactory(self.config, self.log)
+        except Exception:
+            out.error('failed to load reference hosts data')
+            raise
+
     def do_search_hosts(self, args):
         """
         Seach hosts by by the specified attributes. A attribute tag could also be a
@@ -276,12 +285,7 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             attributes = Attributes()
-
-            try:
-                refhost = Refhost(config.refhosts_xml, self.metadata.location)
-            except Exception:
-                out.error('failed to load reference hosts data')
-                return
+            refhost = self._refhosts()
 
             if 'Testplatform:' in args:
                 # USECASE: this branch is handling a case where user loads mtui
@@ -372,12 +376,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            try:
-                refhost = Refhost(config.refhosts_xml, self.metadata.location)
-            except Exception:
-                out.error('failed to load reference hosts data')
-                return
-
+            refhost = self._refhosts()
             hosts = self.do_search_hosts(args)
 
             for hostname in hosts:
@@ -1807,7 +1806,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_set_location, args)
 
     def complete_set_location(self, text, line, begidx, endidx):
-        refhost = Refhost(config.refhosts_xml)
+        refhost = self._refhosts()
         return [i for i in refhost.get_locations() if i.startswith(text) and i not in line]
 
     def do_set_host_lock(self, args):

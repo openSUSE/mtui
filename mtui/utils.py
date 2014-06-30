@@ -14,6 +14,9 @@ import readline
 import re
 from errno import EEXIST
 
+from tempfile import mkstemp
+from shutil import move
+
 out = logging.getLogger('mtui')
 
 flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
@@ -190,3 +193,10 @@ class chdir:
 
     def __exit__(self, etype, value, traceback):
         os.chdir(self.savedPath)
+
+def atomic_write_file(data, path):
+    fd, fname = mkstemp(dir=dirname(path))
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+
+    move(fname, path)

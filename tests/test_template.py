@@ -5,7 +5,7 @@ from unittest import TestCase
 
 from collections import namedtuple
 from tempfile import mkdtemp, mkstemp
-from os.path import join, exists
+from os.path import join
 from errno import ENOENT, EPERM, EEXIST
 import shutil
 import os
@@ -19,6 +19,7 @@ from .utils import LogFake
 from .utils import StringIO
 from .utils import touch
 from .utils import ConfigFake
+from .utils import get_nonexistent_path
 
 from traceback import format_exc
 
@@ -246,14 +247,7 @@ def test_TestReport__open_and_parse_raises_templateioerror():
     l = LogFake()
     c = ConfigFake()
     tr = TestableReport(c, l)
-    path = '/'
-    while True:
-        path += '*'
-        if not exists(path):
-            break
-
-        if len(path) > 50:
-            raise RuntimeError("testcase setup failed")
+    path = get_nonexistent_path()
 
     tr._open_and_parse(path)
 
@@ -452,7 +446,7 @@ def test_TestReport_connect_targets():
     l = LogFake()
     c = ConfigFake()
     tr = TestReport(c, l)
-    tr.TargetFactory = TargetFake
+    tr.targetFactory = TargetFake
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
     ts = tr.connect_targets()
 
@@ -499,21 +493,29 @@ class RefhostFake:
     @staticmethod
     def t_config():
         c = ConfigFake()
-        c.refhosts_xml = 'fooxml'
+        c.refhosts_path = 'fooxml'
+        c.refhosts_resolvers = 'path'
         c.location = 'foolocation'
         c.template_dir = 'footpldir'
 
         return c
 
 def test_TestReport_refhosts_from_tp():
+    """
+    Test L{TestReport._refhosts_from_tp} - happy path
+    """
     l = LogFake()
     c = RefhostFake.t_config()
     tr = TestReport(c, l)
 
-    tr.RefhostFactory = RefhostFake
+    tr.refhostsFactory.refhosts_factory = RefhostFake
     eq_(tr._refhosts_from_tp('foo'), {'foo': 'foo_system'})
 
 def test_TestReport_refhosts_from_tp_ValueError():
+    """
+    Test L{TestReport._refhosts_from_tp} - failure while setting
+    attributes
+    """
     class RefhostFake_(RefhostFake):
         def set_attributes_from_testplatform(self, x):
             raise ValueError(x)
@@ -522,11 +524,14 @@ def test_TestReport_refhosts_from_tp_ValueError():
     c = RefhostFake.t_config()
     tr = TestReport(c, l)
 
-    tr.RefhostFactory = RefhostFake_
+    tr.refhostsFactory.refhosts_factory = RefhostFake_
     eq_(tr._refhosts_from_tp('footp'), {})
     eq_(l.warnings, ["failed to parse testplatform 'footp'"])
 
 def test_TestReport_refhosts_from_tp_emptyresult():
+    """
+    Test L{TestReport._refhosts_from_tp} - nothing found in refhosts
+    """
     class RefhostFake_(RefhostFake):
         def search(self):
             return []
@@ -535,7 +540,7 @@ def test_TestReport_refhosts_from_tp_emptyresult():
     c = RefhostFake.t_config()
     tr = TestReport(c, l)
 
-    tr.RefhostFactory = RefhostFake_
+    tr.refhostsFactory.refhosts_factory = RefhostFake_
     eq_(tr._refhosts_from_tp('footp'), {})
     eq_(l.warnings, ["nothing found for testplatform 'footp'"])
 

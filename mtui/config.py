@@ -17,6 +17,8 @@ except ImportError:
 
 out = logging.getLogger('mtui')
 
+class InvalidOptionNameError(RuntimeError):
+    pass
 
 class Config(object):
     """Read and store the variables from mtui config files"""
@@ -73,10 +75,6 @@ class Config(object):
              lambda: os.path.expanduser(os.getenv('TEMPLATE_DIR', '.')),
              os.path.expanduser),
 
-            ('refhosts_xml', ('mtui', 'refhosts'),
-             lambda: os.path.join(self.datadir, 'refhosts.xml'),
-             lambda path: os.path.join(self.datadir, path)),
-
             ('local_tempdir', ('mtui', 'tempdir'),
              '/tmp'),
 
@@ -123,6 +121,18 @@ class Config(object):
             ('testopia_pass', ('testopia', 'pass'), ''),
             ('chdir_to_template_dir', ('mtui', 'chdir_to_template_dir'),
                 False, normalizer, self.config.getboolean),
+
+            # {{{ refhosts
+            ('refhosts_resolvers', ('refhosts', 'resolvers'), 'https'),
+
+            ('refhosts_https_uri', ('refhosts', 'https_uri'),
+                'https://qam.suse.de/metadata/refhosts.xml'),
+            ('refhosts_https_expiration', ('refhosts',
+                'https_expiration'), 3600*12, int, self.config.getint),
+
+            ('refhosts_path', ('refhosts', 'path'),
+                '/usr/share/suse-qam-metadata/refhosts.xml'),
+            # }}}
         ]
 
         add_normalizer = lambda x: x if len(x) > 3 \
@@ -133,6 +143,28 @@ class Config(object):
         add_getter = lambda x: x if len(x) > 4 else x + (getter,)
         data = [add_getter(x) for x in data]
         self.data = data
+
+    def _has_option(self, opt):
+        """
+        :return True: if opt is valid option name
+        """
+        return opt in [x[0] for x in self.data]
+
+    def set_option(self, opt, val):
+        """
+        :returns: None
+        :raises: InvalidOptionNameError if opt is not valid option name
+
+        Warning: this method is not type safe. You need to take care to
+            pass proper type as the value.
+            where by type safe is meant that the value is not passed
+            through normalizer defined for the option.
+        """
+        # FIXME: ^ remove warning (add type safety)
+        if not self._has_option(opt):
+            raise InvalidOptionNameError()
+
+        setattr(self, opt, val)
 
     def _handle_testopia_cred(self):
         if not keyring:

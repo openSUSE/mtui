@@ -11,7 +11,7 @@ import stat
 from traceback import format_exc
 
 from mtui.target import Target
-from mtui.refhost import Refhost
+from mtui.refhost import RefhostsFactory
 from mtui.utils import ensure_dir_exists, chdir
 
 try:
@@ -37,8 +37,8 @@ class TestReport(object):
     # Firstly, it might clear some things up to change the open/read
     # things to file-like interface.
 
-    TargetFactory = Target
-    RefhostFactory = Refhost
+    targetFactory = Target
+    refhostsFactory = RefhostsFactory
 
     def __init__(self, config, log):
         self.config = config
@@ -265,7 +265,7 @@ class TestReport(object):
 
         for (host, system) in self.systems.items():
             try:
-                targets[host] = self.TargetFactory(host, system,
+                targets[host] = self.targetFactory(host, system,
                     self.get_package_list(),
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
@@ -287,8 +287,7 @@ class TestReport(object):
         return targets
 
     def _refhosts_from_tp(self, testplatform):
-        refhosts = self.RefhostFactory(self.config.refhosts_xml,
-            self.location)
+        refhosts = self.refhostsFactory(self.config, self.log)
 
         try:
             refhosts.set_attributes_from_testplatform(testplatform)
