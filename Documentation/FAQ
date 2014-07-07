@@ -344,12 +344,12 @@ A: The $EDITOR environment variable is used to get the editor and defaults to
 
    # EDITOR=nano mtui -m 079ad960654954493d434c03dc3c5543
 
-Q: How do I run MTUI in a non-interactive mode without user interaction?
+Q: How do I run MTUI in a noninteractive mode without user interaction?
 A: To simply run an update on the testhosts and export the log, it's
-   sufficient to pass the "-n" or "--non-interactive" parameter to MTUI.
+   sufficient to pass the "-n" or "--noninteractive" parameter to MTUI.
    However, there is an extension to this when also setting a prerun script
    with the "-p" (--prerun) parameter. MTUI runs then a user-defined,
-   non-interactive session.
+   noninteractive session.
 
    Example:
 

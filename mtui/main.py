@@ -63,10 +63,10 @@ def get_parser():
         help= 'override config mtui.connection_timeout'
     )
     p.add_argument(
-        '-n', '--non-interactive',
+        '-n', '--noninteractive',
         action='store_true',
         default=False,
-        help='non-interactive update shell'
+        help='noninteractive update shell'
     )
     p.add_argument(
         '-d', '--debug',
@@ -105,8 +105,8 @@ def run_mtui(
         if not re.match(r'^([a-fA-F\d]{32})$', args.md5):
             raise ValueError('invalid --md5 value')
 
-    if args.non_interactive and not args.prerun:
-        log.error("--non-interactive makes no sense without --prerun")
+    if args.noninteractive and not args.prerun:
+        log.error("--noninteractive makes no sense without --prerun")
         p.print_help()
         return 1
 
@@ -131,7 +131,7 @@ def run_mtui(
     if args.autoadd:
         prompt.do_autoadd(" ".join(args.autoadd))
 
-    prompt.interactive = not args.non_interactive
+    prompt.interactive = not args.noninteractive
 
     if args.prerun:
         prompt.set_cmdqueue([x.rstrip()

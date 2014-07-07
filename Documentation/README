@@ -54,9 +54,9 @@ composed of the directory parameter and md5 update hash.
 from SVN, MTUI tries to fetch it. When starting MTUI without -m parameter,
 a template could be loaded with the load_template command afterwards.
 
-	-n,--non-interactive     non-interactive update
+	-n,--noninteractive      noninteractive update
 
-When set, MTUI is run in an non-interactive mode without a command shell.
+When set, MTUI is run in an noninteractive mode without a command shell.
 MTUI automatically applies the update and exports the results to the
 maintenance template before it quits. User input is not required.
 
@@ -87,7 +87,7 @@ attributes.
 	-p,--prerun		path to prerun script
 
 Runs MTUI commands prior to starting the interactive shell or the update
-process. User input is not required if in non-interactive mode (-n parameter).
+process. User input is not required if in noninteractive mode (-n parameter).
 
 	-h,--help                help
 
