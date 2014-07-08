@@ -96,12 +96,26 @@ class Connection(object):
     def connect(self):
         """connect to the remote host using paramiko as ssh subsystem"""
 
+        cfg = paramiko.config.SSHConfig()
+        try:
+            with open(os.path.expanduser("~/.ssh/config")) as fd:
+                cfg.parse(fd)
+        except IOError as e:
+            out.info(e)
+        opts = cfg.lookup(self.hostname)
+
         try:
             out.debug('connecting to %s:%s' % (self.hostname, self.port))
             # if this fails, the user most likely has none or an outdated
             # hostkey for the specified host. checking back with a manual
             # "ssh root@..." invocation helps in most cases.
-            self.client.connect(self.hostname, self.port, username='root')
+            self.client.connect(
+                hostname = opts.get('hostname', self.hostname),
+                port = opts.get('port', self.port),
+                username = opts.get('user', 'root'),
+                key_filename = opts.get('identityfile', None),
+            )
+
         except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
             # if public key auth fails, fallback to a password prompt.
             # other than ssh, mtui asks only once for a password. this could
