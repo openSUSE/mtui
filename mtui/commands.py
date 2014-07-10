@@ -114,7 +114,7 @@ class HostsUnlock(Command):
             help='force unlock - remove locks set by other users or'
                 ' sessions')
 
-        parser.add_argument('hosts', metavar='host', type=list,
+        parser.add_argument('hosts', metavar='host', type=str,
             nargs='*', help='hosts to unlock. If no hosts are' +
             ' given all enabled hosts are unlocked.')
 
