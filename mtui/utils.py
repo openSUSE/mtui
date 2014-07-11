@@ -16,6 +16,7 @@ from errno import EEXIST
 
 from tempfile import mkstemp
 from shutil import move
+from os.path import dirname
 
 out = logging.getLogger('mtui')
 
