@@ -2,6 +2,121 @@
 ChangeLog
 #########
 
+2.0.0
+#####
+
+Bugfixes
+========
+
+* Fix bnc#870198 - host parsing in "unlock" command
+
+  :commits:
+    a753d5c2409d82b13d1954dde4947b11acfec41c
+
+
+* Proper implementation for prerun
+
+  :commits:
+    3390bcf517f875809869679784da4f978cec8ec5
+
+  The cmd.Cmd has been deduplicated and prerun now supports
+  class-defined commands
+
+new features
+============
+
+* bnc#850119 Separate refhosts
+
+  :commits:
+    d859329beb0d15dd45d0e70fc552c851557eab68
+
+  Configuration changes:
+
+    * mtui.refhosts_xml changed to refhosts.refhosts_path and is
+      applicable only if refhosts.resolvers includes "path" resolver.
+
+    * refhosts.resolvers is treated as comma separated list of resolvers
+      (path or https).
+
+    * for https resolver, additional config refhosts.https_uri and
+      refhosts.expiration are available and defaults to our qam refhosts
+      uri and 12 hours, respectively.
+
+* After testreport template is parsed, it is reported (warning) which
+  parameters were not found.
+
+  :commits:
+    c5be08045be67574619b7dc09c0f943d888f3388
+
+backwards incompatible improvements
+===================================
+
+* New commands not ready for stabilization were bumped to 3.0
+  Meaning: if you were using interface_version=2.0 you will need to
+  reconfigure to 3.0
+
+* Cleaned up arguments parsing & naming to better convey the meaning of
+  what they do and change some to take saner format
+
+  :commits:
+    c48717289421f3f176b8e2f18918d29f958b7698
+
+  * Argument changes:
+
+      * timeout      -> connection_timeout
+
+      * search-hosts -> cumulative autoadd
+
+      * overwrite    -> cumulative sut
+
+      * verbose      -> debug
+
+  * Unify naming between config options and CLI arguments
+
+    * template dir:
+        argv:   --templates      -> --template_dir
+        config: mtui.templatedir -> mtui.template_dir
+        env:    TEMPLATEDIR      -> TEMPLATE_DIR
+
+        and consequently config option
+        mtui.chdir_to_templatedir -> mtui.chdir_to_template_dir
+
+    * timeout:
+        config: connection.timeout -> mtui.connection_timeout
+        argv:   --timeout -> --connection_timeout
+
+  * Arguments location, connection_timeout and template_dir are now config
+    overrides (this is probably rather internal only change)
+
+  * Remove option dryrun as theoretically unsound and not well defined
+
+  * Switch from getopt to argparse which results in
+
+      * automatic non-zero exit code (bugfix)
+
+      * better parse failure messages (UX)
+
+      * and simpler parser maintenance (internal)
+
+      * fixed out of sync usage - --templates option
+        since ea2e9abd9bbdedc8b6002c49c60d44c6c7a5e19b
+
+  * properly parsed md5 so it doesn't accept strings longer than 32
+    chars
+
+  * Dead code removal - check_modules() should have been removed as part
+    of commit 4c648cfed4374453fd86442ca3d42fb797ac028f
+
+* `config` command changed to `config show` with additional arguments
+
+* prompt changed to "mtui> "
+
+  :commits:
+    d4cdd93657a8637e8a10690788b57f8349f4b377
+
+    To be more consistent with other tools (eg. gpg) and more esthetically
+    pleasing
+
 1.3.0
 #####
 
