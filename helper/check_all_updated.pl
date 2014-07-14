@@ -11,7 +11,7 @@ my $help;
 my $installed;
 my $build;
 my $filter;
-my $quiet;
+my $verbose = 0;
 my $debug;
 my $mismatches = 0;
 my $consideredpackages = 0;
@@ -28,7 +28,7 @@ my %buildsrcnames;
 my $dir;
 
 my $usagemsg = "
-usage:\t$0 [--help] [--quiet] [--debug]
+usage:\t$0 [--help] [--verbose] [--debug]
            (--installed [--filter <url to build dir>] | --build <url to build dir>)
 
 This script operates in two modes:
@@ -53,7 +53,7 @@ Note: packages that have NOT been updated are skipped (not validated) since from
 
 Note: the assumption is that no packages exist in <url to build dir> that have been built from different versions of the same src rpm (this should only happen if a build service engineer manually tampered with the build dir ;)
 
-Use the option --quiet to not output the diff of the changelogs of the mismatching source revisions.
+Use the option --verbose to output the diff of the changelogs of the mismatching source revisions.
 ";
 
 GetOptions(
@@ -61,7 +61,7 @@ GetOptions(
      "i|installed" => \$installed,
      "b|build=s" => \$build,
      "f|filter=s" => \$filter,
-     "q|quiet" => \$quiet,
+     "v|verbose" => \$verbose,
      "d|debug" => \$debug,
 )  or die "$usagemsg";
 
@@ -252,7 +252,7 @@ while (my ($disturl, $name) = each %disturl_mapper) {
                              "       have src revision $src_revision but expected $current_rev\n" .
                              "       DISTURL=$disturl\n";
 
-                if (not defined $quiet) {
+                if ($verbose) {
                     print        "       changelog of each contained spec file:\n";
                     while(<BS>) {
                         if (m/<entry name=\"([^\"]+\.changes)\"/) {
