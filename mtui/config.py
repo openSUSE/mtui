@@ -8,6 +8,7 @@ import getpass
 import logging
 import ConfigParser
 from mtui import __version__
+from traceback import format_exc
 
 try:
     import keyring
