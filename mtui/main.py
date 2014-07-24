@@ -12,7 +12,7 @@ import warnings
 from argparse import ArgumentParser
 
 from mtui import log as _crap_imported_for_side_effects
-from mtui.config import Config
+from mtui.config import config
 from mtui.prompt import CommandPrompt
 from mtui.template import TestReport, TestReportFactory
 from mtui import __version__
@@ -85,7 +85,7 @@ def get_parser():
 def main():
     sys.exit(run_mtui(
       sys
-    , Config()
+    , config
     , logging.getLogger('mtui')
     , TestReportFactory
     , CommandPrompt
