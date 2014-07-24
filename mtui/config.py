@@ -134,6 +134,9 @@ class Config(object):
             ('refhosts_path', ('refhosts', 'path'),
                 '/usr/share/suse-qam-metadata/refhosts.xml'),
             # }}}
+
+            ('use_keyring', ('mtui', 'use_keyring'),
+                False, bool, self.config.getboolean),
         ]
 
         add_normalizer = lambda x: x if len(x) > 3 \
@@ -168,7 +171,12 @@ class Config(object):
         setattr(self, opt, val)
 
     def _handle_testopia_cred(self):
+        if not self.use_keyring:
+            out.debug("keyring disabled by configuration")
+            return
+
         if not keyring:
+            out.warning("keyring library not available")
             return
 
         out.debug('querying keyring for Testopia password')

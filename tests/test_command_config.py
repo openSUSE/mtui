@@ -86,6 +86,7 @@ def test_config_show():
             , ("refhosts_https_uri"         , "'https://qam.suse.de/metadata/refhosts.xml'")
             , ("refhosts_https_expiration"  , "43200")
             , ("refhosts_path"              , "'foo-refhosts'")
+            , ("use_keyring"                , 'False')
         ]]):
             eq_(actual,expected)
 
