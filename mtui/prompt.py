@@ -840,6 +840,7 @@ class CommandPrompt(cmd.Cmd):
                 out.error('failed to load specfile')
                 return
 
+        out.debug("Found specfiles: {0}".format(specfiles))
         for specfile in specfiles:
             patches = {}
             with open(specfile, 'r') as spec:
