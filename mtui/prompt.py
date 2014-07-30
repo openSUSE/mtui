@@ -854,6 +854,8 @@ class CommandPrompt(cmd.Cmd):
                 if match:
                     patches[match.group(1)] = match.group(2)
 
+            print ''
+
             if not patches:
                 out.warning('no patch entries found in specfile {0}'
                     .format(specfile))
