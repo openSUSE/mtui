@@ -859,7 +859,6 @@ class CommandPrompt(cmd.Cmd):
             if not patches:
                 out.warning('no patch entries found in specfile {0}'
                     .format(specfile))
-                return
             else:
                 print 'Patches in %s:' % specfile
 
