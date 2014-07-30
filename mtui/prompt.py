@@ -855,22 +855,24 @@ class CommandPrompt(cmd.Cmd):
                     patches[match.group(1)] = match.group(2)
 
             if not patches:
-                out.warning('no patch entries found in specfile')
+                out.warning('no patch entries found in specfile {0}'
+                    .format(specfile))
                 return
+            else:
+                print 'Patches in %s:' % specfile
 
-            print 'Patches in %s:' % specfile
-            for patch in patches:
-                num = filter(str.isdigit, patch) or 0
-                if num == 0 and re.findall('\'%patch\W+', str(content)):
-                    result = green('applied')
-                elif re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
-                    result = green('applied')
-                elif re.findall('patch.*%%{P:%s}' % num, str(content)):
-                    result = green('applied')
-                else:
-                    result = red('not applied')
+                for patch in patches:
+                    num = filter(str.isdigit, patch) or 0
+                    if num == 0 and re.findall('\'%patch\W+', str(content)):
+                        result = green('applied')
+                    elif re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
+                        result = green('applied')
+                    elif re.findall('patch.*%%{P:%s}' % num, str(content)):
+                        result = green('applied')
+                    else:
+                        result = red('not applied')
 
-                print '{0:45}: {1}'.format(patches[patch].replace('name}', name), result)
+                    print '{0:45}: {1}'.format(patches[patch].replace('name}', name), result)
 
     def do_list_packages(self, args):
         """
