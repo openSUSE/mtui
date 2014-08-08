@@ -6,7 +6,11 @@
 import os
 import getpass
 import logging
-import ConfigParser
+try:
+    import configparser
+except ImportError:
+    import ConfigParser as configparser
+
 from mtui import __version__
 from traceback import format_exc
 
@@ -36,10 +40,10 @@ class Config(object):
                 os.path.expanduser('~/.mtuirc')
             ]
 
-        self.config = ConfigParser.SafeConfigParser()
+        self.config = configparser.SafeConfigParser()
         try:
             self.config.read(self.configfiles)
-        except ConfigParser.Error:
+        except configparser.Error:
             pass
 
     def __init__(self):
@@ -204,7 +208,7 @@ class Config(object):
         """
         try:
             return getter(*secopt)
-        except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+        except (configparser.NoSectionError, configparser.NoOptionError):
             msg = 'Config option {0}.{1} not found.'
             out.debug(msg.format(*secopt))
             raise
