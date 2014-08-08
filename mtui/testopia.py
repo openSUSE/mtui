@@ -24,7 +24,7 @@ class Testopia(object):
     """
 
     # product to testplan maps
-    plans = { '9':'251', '10':'263,351', '11':'2672' }
+    plans = { '9':'251', '10':'263,351', '11':'2672', '12':'4809' }
     status = { 3:'disabled', 2:'confirmed', 1:'proposed' }
     automated = { 1:'yes', 0:'no' }
 
