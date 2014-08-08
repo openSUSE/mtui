@@ -8,7 +8,10 @@ import os
 import sys
 import re
 import threading
-import Queue
+try:
+    from queue import Queue
+except ImportError:
+    from Queue import Queue
 import signal
 import logging
 import getpass
@@ -21,7 +24,7 @@ from mtui.config import *
 
 out = logging.getLogger('mtui')
 
-queue = Queue.Queue()
+queue = Queue()
 
 class HostsGroupException(Exception):
     def __init__(self, es):
