@@ -533,7 +533,7 @@ class Target(object):
             out.debug('%s: sending "%s"' % (self.hostname, local))
             try:
                 return self.connection.put(local, remote)
-            except EnvironmentError, error:
+            except EnvironmentError as error:
                 out.error('%s: failed to send %s: %s' % (self.hostname, local, error.strerror))
         elif self.state == 'dryrun':
             out.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
@@ -543,7 +543,7 @@ class Target(object):
             out.debug('%s: receiving "%s"' % (self.hostname, remote))
             try:
                 return self.connection.get(remote, local)
-            except EnvironmentError, error:
+            except EnvironmentError as error:
                 out.error('%s: failed to get %s: %s' % (self.hostname, remote, error.strerror))
         elif self.state == 'dryrun':
             out.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
@@ -649,7 +649,7 @@ class Target(object):
             try:
                 filename = os.path.join('/', 'var', 'log', 'mtui.log')
                 historyfile = self.connection.open(filename, 'a+')
-            except Exception, error:
+            except Exception as error:
                 out.error('failed to open history file: %s' % error)
                 return
 
@@ -664,7 +664,7 @@ class Target(object):
     def listdir(self, path):
         try:
             return self.connection.listdir(path)
-        except IOError, error:
+        except IOError as error:
             if error.errno == errno.ENOENT:
                 out.debug('%s: directory %s does not exist' % (self.hostname, path))
             return []
@@ -672,7 +672,7 @@ class Target(object):
     def remove(self, path):
         try:
             self.connection.remove(path)
-        except IOError, error:
+        except IOError as error:
             if error.errno == errno.ENOENT:
                 out.debug('%s: path %s does not exist' % (self.hostname, path))
             else:

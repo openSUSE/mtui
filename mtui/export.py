@@ -34,7 +34,7 @@ def xml_to_template(template, xmldata, updatehost=None):
             x = xml.dom.minidom.parse(xmldata)
         else:
             x = xml.dom.minidom.parseString(xmldata.encode('utf-8'))
-    except Exception, error:
+    except Exception as error:
         out.error('failed to parse XML data: %s' % str(error))
         raise AttributeError('XML')
 

@@ -31,7 +31,7 @@ def main():
 
     try:
         (opts, args) = getopt.getopt(sys.argv[1:], 'ht:x:o:', ['help', 'template=', 'xml=', 'output='])
-    except getopt.GetoptError, error:
+    except getopt.GetoptError as error:
         print 'failed to parse parameter: %s' % str(error)
         usage()
 
@@ -60,7 +60,7 @@ def main():
         try:
             with open(output, 'w') as f:
                 f.write(''.join(l.encode('utf-8') for l in template))
-        except Exception, error:
+        except Exception as error:
             print 'failed to write %s: %s' % (output, str(error))
         else:
             print 'wrote template to %s' % output

@@ -649,10 +649,10 @@ class CommandPrompt(cmd.Cmd):
 
         try:
             os.makedirs(destination)
-        except OSError, error:
+        except OSError as error:
             if error.errno == errno.EEXIST:
                 pass
-        except Exception, error:
+        except Exception as error:
             out.critical('failed to create temp directory: %s' % str(error))
             return
 
@@ -722,7 +722,7 @@ class CommandPrompt(cmd.Cmd):
             for rpmfile in glob.glob(os.path.join(destination, '*.src.rpm')):
                 try:
                     match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
-                except Exception, error:
+                except Exception as error:
                     out.critical('failed to open %s: %s' % (rpmfile, error))
                     if unicode(error) == u'public key not available':
                         out.critical('Public key is not available.')
@@ -775,7 +775,7 @@ class CommandPrompt(cmd.Cmd):
                         try:
                             f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
                                 installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
-                        except Exception, error:
+                        except Exception as error:
                             out.error('failed to diff packages: %s', error)
                             return
 
@@ -2527,10 +2527,10 @@ class CommandPrompt(cmd.Cmd):
 
             try:
                 os.makedirs(destination)
-            except OSError, error:
+            except OSError as error:
                 if error.errno == errno.EEXIST:
                     pass
-            except Exception, error:
+            except Exception as error:
                 out.critical('failed to create directories: %s' % str(error))
                 return
 
@@ -2697,7 +2697,7 @@ class CommandPrompt(cmd.Cmd):
         try:
             with open(filename, 'w') as f:
                 f.write('\n'.join(l.rstrip().encode('utf-8') for l in template))
-        except IOError, error:
+        except IOError as error:
             print 'failed to write %s: %s' % (filename, error.strerror)
         else:
             print 'wrote template to %s' % filename
@@ -2735,10 +2735,10 @@ class CommandPrompt(cmd.Cmd):
 
         try:
             os.makedirs(output_dir)
-        except OSError, error:
+        except OSError as error:
             if error.errno == errno.EEXIST:
                 pass
-        except Exception, error:
+        except Exception as error:
             out.critical('failed to create directories: %s' % str(error))
             return
 
@@ -2753,7 +2753,7 @@ class CommandPrompt(cmd.Cmd):
 
         try:
             outxml = open(filename, 'w')
-        except IOError, error:
+        except IOError as error:
             out.error('failed to open file for writing: %s' % error.strerror)
             return
 
@@ -2890,7 +2890,7 @@ def script_hook(targets, which, templatedir, md5):
                         sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         (stdout, stderr) = sub.communicate()
                         exitcode = sub.wait()
-                    except Exception, error:
+                    except Exception as error:
                         out.critical('running compare script failed: %s' % str(error))
                         exitcode = 1
 
@@ -2910,10 +2910,10 @@ def script_hook(targets, which, templatedir, md5):
 
                 try:
                     os.makedirs(output_dir)
-                except OSError, error:
+                except OSError as error:
                     if error.errno == errno.EEXIST:
                         pass
-                except Exception, error:
+                except Exception as error:
                     out.critical('failed to create directories: %s' % str(error))
                     return
 
@@ -2924,7 +2924,7 @@ def script_hook(targets, which, templatedir, md5):
                         f.write(targets[target].lastout())
                         f.write(targets[target].lasterr())
                         f.close()
-                    except IOError, error:
+                    except IOError as error:
                         out.error('failed to write script output to %s: %s' % (filename, error.strerror))
         except KeyboardInterrupt:
             out.warning('skipping script %s' % script)

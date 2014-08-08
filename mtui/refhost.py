@@ -138,7 +138,7 @@ class Refhosts(object):
     def _parse_refhosts(self, hostmap):
         try:
             self.data = minidom.parse(hostmap)
-        except Exception, error:
+        except Exception as error:
             # nothing to do for us if we can't load the hosts
             out.error('failed to parse refhosts.xml: %s' % error)
             raise
@@ -573,7 +573,7 @@ class Refhosts(object):
                         try:
                             # add key and value to the name/subpattern dict
                             requests[name][subpattern].update({key:value})
-                        except KeyError, error:
+                        except KeyError as error:
                             # if name or subpattern do not yet exist in the dict,
                             # create them. first make sure which one is missing:
                             # name or supbattern

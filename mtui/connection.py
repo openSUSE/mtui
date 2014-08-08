@@ -137,7 +137,7 @@ class Connection(object):
             # unspecified general SSHException. the host/sshd is probably not available.
             out.error('SSHException while connecting to %s' % self.hostname)
             raise
-        except Exception, error:
+        except Exception as error:
             # general Exception
             out.error('%s: %s' % (self.hostname, error))
             raise
