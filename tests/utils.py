@@ -9,7 +9,10 @@ except ImportError:
         from io import StringIO
 
 from mtui.config import Config
-from ConfigParser import ConfigParser
+try:
+    from configparser import ConfigParser
+except ImportError:
+    from ConfigParser import ConfigParser
 from os.path import exists
 from posix import stat_result
 from tempfile import mktemp
