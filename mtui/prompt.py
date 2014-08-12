@@ -3,6 +3,8 @@
 # mtui command line prompt
 #
 
+from functools import reduce
+
 import os
 import sys
 import stat
