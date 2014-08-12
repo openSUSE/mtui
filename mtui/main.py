@@ -8,7 +8,7 @@ import logging
 import shutil
 from traceback import format_exc
 import warnings
-from argparse import ArgumentParser
+import argparse
 
 from mtui import log as _crap_imported_for_side_effects
 from mtui.config import config
@@ -22,7 +22,7 @@ def get_parser():
     :covered-by: tests.test_main.test_argparser_*
     """
 
-    p = ArgumentParser()
+    p = argparse.ArgumentParser()
     p.add_argument(
         '-l', '--location',
         type=str,
@@ -53,7 +53,7 @@ def get_parser():
     )
     p.add_argument(
         '-p', '--prerun',
-        type=file,
+        type=argparse.FileType('r'),
         help='script with a set of MTUI commands to run at start'
     )
     p.add_argument(
