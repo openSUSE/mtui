@@ -439,7 +439,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 def test_TestReport_connect_targets():
     class TargetFake(Target):
         def __init__(self, *args, **kw):
-            ok_(not kw.has_key('connect'))
+            ok_('connect' not in kw)
             kw['connect'] = False
             super(TargetFake, self).__init__(*args, **kw)
             self.t_history = []

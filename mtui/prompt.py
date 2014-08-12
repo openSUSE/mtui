@@ -141,7 +141,7 @@ class CommandPrompt(cmd.Cmd):
             out.debug('failed to open history file: %s' % str(e))
 
     def _add_subcommand(self, cmd):
-        if self.commands.has_key(cmd.command):
+        if cmd.command in self.commands:
             raise CommandAlreadyBoundError(cmd.command)
 
         if self._interface_version < StrictVersion(cmd.stable):

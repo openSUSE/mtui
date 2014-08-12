@@ -104,7 +104,7 @@ def termsize():
         # https://github.com/dagwieers/ansible/commit/7192eb30477f8987836c075eece6e530eb9b07f2
         k_rows, k_cols = 'ACCTEST_ROWS', 'ACCTEST_COLS'
         env = os.environ
-        if not (env.has_key(k_rows) and env.has_key(k_cols)):
+        if not (k_rows in env and k_cols in env):
             raise
 
         return int(env[k_rows]), int(env[k_cols])
