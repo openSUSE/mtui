@@ -9,7 +9,10 @@ from tempfile import NamedTemporaryFile
 from collections import namedtuple
 from posix import stat_result
 from errno import EPERM
-from urllib2 import URLError
+try:
+    from urllib.error import URLError
+except ImportError:
+    from urllib2 import URLError
 
 from mtui.refhost import _RefhostsFactory
 from mtui.refhost import RefhostsFactory
