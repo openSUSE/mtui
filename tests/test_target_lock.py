@@ -275,7 +275,7 @@ def test_remote_lock_reset_on_exception():
     try:
         eq_(l.is_locked(), False)
     except Exception as e:
-        eq_(e.message, "foo")
+        eq_(e.args[0], "foo")
         eq_(l._lock.user, None)
         eq_(l._lock.timestamp, None)
         eq_(l._lock.pid, None)
