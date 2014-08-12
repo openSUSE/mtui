@@ -4,7 +4,10 @@
 #
 
 import logging
-import xmlrpclib
+try:
+    import xmlrpc.client as xmlrpclib
+except ImportError:
+    import xmlrpclib
 
 out = logging.getLogger('mtui')
 
