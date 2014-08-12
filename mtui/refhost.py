@@ -8,7 +8,10 @@ import logging
 import os
 import time
 import errno
-from urllib import urlopen
+try:
+    from urllib.request import urlopen
+except ImportError:
+    from urllib import urlopen
 
 from xml.dom import minidom
 from mtui.xdg import save_cache_path
