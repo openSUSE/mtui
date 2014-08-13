@@ -33,6 +33,7 @@ from mtui.testopia import *
 from mtui import commands, strict_version
 from mtui.utils import log_exception
 from mtui.commands import ArgsParseFailure
+from mtui.types import MD5Hash
 
 from distutils.version import StrictVersion
 
@@ -1759,14 +1760,7 @@ class CommandPrompt(cmd.Cmd):
         md5      -- md5 update identifier
         """
 
-        # check if args is a valid md5 hash
-        match = re.match(r'([a-fA-F\d]{32})', args)
-        try:
-            md5 = match.group(1)
-        except AttributeError:
-            out.error('md5 hash "%s" not valid' % args)
-            self.parse_error(self.do_load_template, args)
-            return
+        md5 = MD5Hash(args.lstrip().rstrip())
 
         if self.metadata.md5:
             if not input('should i overwrite already loaded session %s? (y/N) ' % self.metadata.md5, ['y', 'yes'], self.interactive):
