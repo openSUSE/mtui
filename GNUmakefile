@@ -1,6 +1,6 @@
 TMPDIR=/tmp/mtui-unittests
 TMPENV=TMPDIR=$(TMPDIR)
-RUNNER = nosetests
+RUNNER ?= nosetests
 NOSE = $(RUNNER) tests --processes=-1
 # Note using --processes is essential to ensure tests won't hang as the
 # worker 1. doesn't have stdin and 2. have default 10s timeout.
