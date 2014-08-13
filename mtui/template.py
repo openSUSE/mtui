@@ -320,6 +320,7 @@ class _TestReportFactory(object):
 
     def __call__(self, config, log, md5=None):
         """
+        :type md5: L{mtui.types.MD5Hash} or None
         :returns: L{TestReport} object
         """
 
