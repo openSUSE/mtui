@@ -611,8 +611,8 @@ class CommandPrompt(cmd.Cmd):
                 targets = selected_targets(targets, args.split(','))
 
             if targets:
-                patchinfo = '/'.join([config.patchinfo_url, self.metadata.md5])
-                destination = '/'.join([config.target_tempdir, self.metadata.md5])
+                patchinfo = '/'.join([config.patchinfo_url, str(self.metadata.md5)])
+                destination = '/'.join([config.target_tempdir, str(self.metadata.md5)])
                 fetchcmd = 'mkdir -p %s; cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" %s/' \
                     % (destination, destination, lelf.metadata.md5)
                 installcmd = 'cd %s; rpm -Uhv *.src.rpm' % destination
@@ -641,7 +641,7 @@ class CommandPrompt(cmd.Cmd):
             out.error('no testing template loaded')
             return
 
-        destination = os.path.join(config.local_tempdir, self.metadata.md5)
+        destination = os.path.join(config.local_tempdir, str(self.metadata.md5))
         pattern = ''
 
         if args:
@@ -656,7 +656,7 @@ class CommandPrompt(cmd.Cmd):
             out.critical('failed to create temp directory: %s' % str(error))
             return
 
-        patchinfo = '/'.join([config.patchinfo_url, self.metadata.md5])
+        patchinfo = '/'.join([config.patchinfo_url, str(self.metadata.md5)])
 
         exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*src.rpm" %s/'
                              % (destination, patchinfo))
@@ -714,7 +714,7 @@ class CommandPrompt(cmd.Cmd):
 
             updated = {}
             installed = {}
-            destination = os.path.join(config.local_tempdir, self.metadata.md5)
+            destination = os.path.join(config.local_tempdir, str(self.metadata.md5))
 
             if not glob.glob(os.path.join(destination, '*', '*.spec')):
                 self.do_source_extract('')
@@ -829,7 +829,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             self.parse_error(self.do_source_verify, args)
 
-        destination = os.path.join(config.local_tempdir, self.metadata.md5)
+        destination = os.path.join(config.local_tempdir, str(self.metadata.md5))
 
         specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
 
@@ -1378,10 +1378,10 @@ class CommandPrompt(cmd.Cmd):
             targetlist = ' '.join(sorted(self.targets.keys()))
             packagelist = ' '.join(sorted(self.metadata.get_package_list()))
             if self.metadata.md5:
-                patchinfo = '/'.join([config.patchinfo_url, self.metadata.md5])
-                report = '/'.join([config.reports_url, self.metadata.md5, 'log'])
+                patchinfo = '/'.join([config.patchinfo_url, str(self.metadata.md5)])
+                report = '/'.join([config.reports_url, str(self.metadata.md5), 'log'])
 
-            print '{0:15}: {1}'.format('MD5SUM', self.metadata.md5)
+            print '{0:15}: {1}'.format('MD5SUM', self.metadata.md5 if self.metadata.md5 is not None else "")
             print '{0:15}: {1}'.format('SWAMP ID', self.metadata.swampid)
             print '{0:15}: {1}'.format('Category', self.metadata.category)
             print '{0:15}: {1}'.format('Reviewer', self.metadata.reviewer)
@@ -2152,7 +2152,7 @@ class CommandPrompt(cmd.Cmd):
 
                 out.info('downgrading')
                 for target in targets:
-                    targets[target].add_history(['downgrade', self.metadata.md5, ' '.join(self.metadata.get_package_list())])
+                    targets[target].add_history(['downgrade', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
 
                 try:
                     downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
@@ -2326,7 +2326,7 @@ class CommandPrompt(cmd.Cmd):
                         targets[target].remove_lock()
                 return
 
-            script_hook(targets, 'pre', os.path.dirname(self.metadata.path), self.metadata.md5)
+            script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.md5))
 
             out.info('updating')
 
@@ -2363,7 +2363,7 @@ class CommandPrompt(cmd.Cmd):
 
             missing = False
             for target in targets:
-                targets[target].add_history(['update', self.metadata.md5, ' '.join(self.metadata.get_package_list())])
+                targets[target].add_history(['update', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
                 packages = targets[target].packages
 
                 targets[target].query_versions()
@@ -2391,9 +2391,9 @@ class CommandPrompt(cmd.Cmd):
                         targets[target].remove_lock()
                 return
 
-            script_hook(targets, 'post', os.path.dirname(self.metadata.path), self.metadata.md5)
-            script_hook(targets, 'compare', os.path.dirname(self.metadata.path), self.metadata.md5)
-            FileDelete(targets, os.path.join(config.target_tempdir, self.metadata.md5, 'output')).run()
+            script_hook(targets, 'post', os.path.dirname(self.metadata.path), str(self.metadata.md5))
+            script_hook(targets, 'compare', os.path.dirname(self.metadata.path), str(self.metadata.md5))
+            FileDelete(targets, os.path.join(config.target_tempdir, str(self.metadata.md5), 'output')).run()
 
             for target in targets:
                 if not lock.locked:
@@ -2497,7 +2497,7 @@ class CommandPrompt(cmd.Cmd):
 
             for filename in glob.glob(args):
                 if os.path.isfile(filename):
-                    remote = os.path.join(config.target_tempdir, self.metadata.md5, os.path.basename(filename))
+                    remote = os.path.join(config.target_tempdir, str(self.metadata.md5), os.path.basename(filename))
 
                     FileUpload(targets, filename, remote).run()
                     out.info('uploaded %s to %s' % (filename, remote))
@@ -2614,11 +2614,11 @@ class CommandPrompt(cmd.Cmd):
         elif command == 'template':
             path = self.metadata.path
         elif command == 'specfile':
-            path = os.path.join(config.local_tempdir, self.metadata.md5, '*', '*.spec')
+            path = os.path.join(config.local_tempdir, str(self.metadata.md5), '*', '*.spec')
             if not glob.glob(path):
                 self.do_source_extract(None)
         elif command == 'patch':
-            path = os.path.join(config.local_tempdir, self.metadata.md5, '*', filename)
+            path = os.path.join(config.local_tempdir, str(self.metadata.md5), '*', filename)
             if not glob.glob(path):
                 self.do_source_extract(None)
         else:
@@ -2631,7 +2631,7 @@ class CommandPrompt(cmd.Cmd):
         if 'file,' in line:
             return self.complete_filelist(text.replace('file,', '', 1), line, begidx, endidx)
         if 'patch,' in line:
-            specfile = glob.glob(os.path.join(config.local_tempdir, self.metadata.md5, '*', '*.spec'))
+            specfile = glob.glob(os.path.join(config.local_tempdir, str(self.metadata.md5), '*', '*.spec'))
             with open(specfile, 'r') as spec:
                 name = re.findall('Name:\W+(.*)', spec.read())[0]
                 spec.seek(0)
@@ -2850,6 +2850,9 @@ class CommandPrompt(cmd.Cmd):
 
 
 def script_hook(targets, which, templatedir, md5):
+    """
+    :type md5: str
+    """
     # this hook seriously needs a rewrite
 
     if which not in ['post', 'pre', 'compare']:

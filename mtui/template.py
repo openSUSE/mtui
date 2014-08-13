@@ -334,7 +334,7 @@ class _TestReportFactory(object):
 
     def _factory_md5(self, config, log, tr, md5, _count=0):
         try:
-            tr.read(join(config.template_dir, md5, 'log'))
+            tr.read(join(config.template_dir, str(md5), 'log'))
             # Note: when reading old templates, one might need rather
             # log.emea or log.asia
             return tr
@@ -347,7 +347,7 @@ class _TestReportFactory(object):
 
             self._ensure_template_dir_exists(config, log)
 
-            uri = join(config.svn_path, md5)
+            uri = join(config.svn_path, str(md5))
             self.svn_checkout(config.template_dir, uri)
 
             return self._factory_md5(config, log, tr, md5, _count+1)
