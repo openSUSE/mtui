@@ -24,7 +24,6 @@ from os.path import basename
 from os.path import splitext
 
 from datetime import datetime
-from traceback import print_exc
 
 from mtui import messages
 from mtui.rpmver import *
@@ -104,9 +103,9 @@ class CommandPrompt(cmd.Cmd):
 
     def __init__(self, config, log, sys_=None):
         self.set_prompt()
+        self.sys = sys_ or sys
 
-        cmd.Cmd.__init__(self)
-
+        cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
 
         self.targets = {}
@@ -213,7 +212,7 @@ class CommandPrompt(cmd.Cmd):
 
         try:
             args = subcmd.parse_args(arg, self.sys)
-        except ArgsParseFailure as e:
+        except ArgsParseFailure:
             return
 
         self.commandFactory(subcmd, args).run()

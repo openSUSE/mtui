@@ -36,6 +36,7 @@ class SysFake(object):
         self.argv = argv
         self.stdout = StringIO()
         self.stderr = StringIO()
+        self.stdin = StringIO()
 
 class LogFake:
     _conv = lambda _, x: x
