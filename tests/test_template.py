@@ -15,6 +15,7 @@ from mtui.template import _TestReportFactory
 from mtui.template import _TemplateIOError
 from mtui.template import TestReport
 from mtui.target import Target
+from mtui.types import MD5Hash
 from .utils import LogFake
 from .utils import StringIO
 from .utils import touch
@@ -35,7 +36,7 @@ def test_TestReportFactory_no_md5():
     l = LogFake()
     tr = f(c, l)
     ok_(isinstance(tr, TestReport))
-    eq_(tr.md5, '')
+    eq_(tr.md5, None)
     eq_(tr.packages, {})
     eq_(tr.systems, {})
     eq_(tr.bugs, {})
@@ -61,12 +62,13 @@ def test_TestReportFactory_call_md5():
     f = F()
     eq_(f._test_factory_md5_called, False)
     l = LogFake()
-    f(c, l, md5='foomd5')
+    md5 = MD5Hash('82407e2d7113cfde72f65d81e4ffee61')
+    f(c, l, md5=md5)
     eq_(f._test_factory_md5_called, True)
     ok_(isinstance(f.tr, TestReport))
     ok_(f.config is c)
     ok_(f.log is l)
-    eq_(f.md5, 'foomd5')
+    eq_(f.md5, md5)
 
 def TestReportMocker(read_fail=None, read_error=None):
     if not read_fail:
@@ -112,7 +114,7 @@ def test_TestReportFactory_factory_md5_no_fail():
     f = TestReportFactoryMockFactoryMd5()
     f.TestReport = TestReportMocker()
     l = LogFake()
-    tr = f(c, l, md5='foomd5')
+    tr = f(c, l, md5=MD5Hash('82407e2d7113cfde72f65d81e4ffee61'))
     ok_(isinstance(tr, f.TestReport))
     eq_(f.t_counts, [0])
     eq_(f.t_ensure_dir, [])
@@ -126,10 +128,11 @@ def test_TestReportFactory_factory_md5_with_checkout():
     f.TestReport = TestReportMocker(read_fail=[1],
         read_error=lambda: _TemplateIOError(ENOENT, ''))
     l = LogFake()
-    tr = f(c, l, md5='foomd5')
+    md5 = MD5Hash('82407e2d7113cfde72f65d81e4ffee61')
+    tr = f(c, l, md5=md5)
     ok_(isinstance(tr, f.TestReport))
     eq_(f.t_counts, [0, 1])
-    eq_(f.t_svn_check, [(c.template_dir, join(c.svn_path, 'foomd5'))])
+    eq_(f.t_svn_check, [(c.template_dir, join(c.svn_path, str(md5)))])
     eq_(f.t_ensure_dir, [c.template_dir])
 
 def test_TestReportFactory_factory_md5_failing_checkout():
@@ -141,11 +144,12 @@ def test_TestReportFactory_factory_md5_failing_checkout():
     f.TestReport = TestReportMocker(read_fail=[1, 2, 3],
         read_error=lambda: _TemplateIOError(ENOENT, ''))
     l = LogFake()
+    md5 = MD5Hash('82407e2d7113cfde72f65d81e4ffee61')
     try:
-        f(c, l, md5='foomd5')
+        f(c, l, md5=md5)
     except IOError:
         eq_(f.t_counts, [0, 1])
-        eq_(f.t_svn_check, [(c.template_dir, join(c.svn_path, 'foomd5'))])
+        eq_(f.t_svn_check, [(c.template_dir, join(c.svn_path, str(md5)))])
         eq_(f.t_ensure_dir, [c.template_dir])
     else:
         ok_(False)
@@ -160,7 +164,7 @@ def test_TestReportFactory_factory_md5_other_ioerror():
         read_error=lambda: IOError(EPERM, ''))
     l = LogFake()
     try:
-        f(c, l, md5='foomd5')
+        f(c, l, md5=MD5Hash('82407e2d7113cfde72f65d81e4ffee61'))
     except IOError:
         eq_(f.t_counts, [0])
         eq_(f.t_svn_check, [])
@@ -228,7 +232,7 @@ def test_TestReportFactory__copy_scripts_src_missing():
     trf = TestableFactory()
 
     try:
-        trf(c, l, md5='foo')
+        trf(c, l, md5=MD5Hash('82407e2d7113cfde72f65d81e4ffee61'))
     except EnvironmentError as e:
         pass
     else:
@@ -550,7 +554,7 @@ def test_TestReportParse_parsed_md5():
     c = ConfigFake()
     tr = TestReport(c, l)
 
-    md5 = "8c60b7480fc521d7eeb322955b387165"
+    md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
 
     tpl_data = [
         "SAT Patch No: 8655",
@@ -561,7 +565,7 @@ def test_TestReportParse_parsed_md5():
     tpl = StringIO(tpl_data)
 
     tr._parse(tpl)
-    ok_(tr.md5, md5)
+    eq_(tr.md5, md5)
 
 def test_TestReportParse_parsed_testplatform():
     l = LogFake()

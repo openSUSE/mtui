@@ -13,6 +13,7 @@ from traceback import format_exc
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.utils import ensure_dir_exists, chdir
+from mtui.types import MD5Hash
 
 try:
     from nose.tools import nottest
@@ -71,7 +72,7 @@ class TestReport(object):
         self.swampid = ""
         self.packager = ""
         self.reviewer = ""
-        self.md5 = ""
+        self.md5 = None
 
 
     def _copytree(_, *args, **kw):
@@ -110,7 +111,7 @@ class TestReport(object):
         for line in tpl.readlines():
             match = re.search('MD5 sum: (.+)', line)
             if match:
-                self.md5 = match.group(1)
+                self.md5 = MD5Hash(match.group(1))
 
             match = re.search('Category: (.+)', line)
             if match:
