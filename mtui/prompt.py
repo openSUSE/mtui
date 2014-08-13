@@ -674,16 +674,16 @@ class CommandPrompt(cmd.Cmd):
 
     def do_source_diff(self, args):
         """
-        Creates a source diff between the update package and the currently
-        installed package. If the diff needs to be against the latest
-        released package, make sure to run "prepare" first.
+        Creates a source diff between the updated package (read from
+        testreport) and the currently installed package on the SUT.
 
-        If diff type "source" is set, a package source diff is created.
-        This creates usually a diff of the specfile and new patchfiles.
+        If the diff needs to be against the latest released package,
+        make sure to run "prepare" first.
 
-        If diff type "build" is set, a build diff is created.
-        This creates a diff between the patched build directories and
-        is usually architecture dependend.
+        Diff type "source" creates a diff of the specfile and new patchfiles.
+
+        Diff type "build" creates a diff between the patched build
+        directories which may be architecture dependent.
 
         The osc command line client needs to be installed first.
 
