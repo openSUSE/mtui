@@ -13,6 +13,7 @@ from traceback import format_exc
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.utils import ensure_dir_exists, chdir
+from mtui.types import MD5Hash
 
 try:
     from nose.tools import nottest
@@ -71,7 +72,7 @@ class TestReport(object):
         self.swampid = ""
         self.packager = ""
         self.reviewer = ""
-        self.md5 = ""
+        self.md5 = None
 
 
     def _copytree(_, *args, **kw):
@@ -110,7 +111,7 @@ class TestReport(object):
         for line in tpl.readlines():
             match = re.search('MD5 sum: (.+)', line)
             if match:
-                self.md5 = match.group(1)
+                self.md5 = MD5Hash(match.group(1))
 
             match = re.search('Category: (.+)', line)
             if match:
@@ -320,6 +321,7 @@ class _TestReportFactory(object):
 
     def __call__(self, config, log, md5=None):
         """
+        :type md5: L{mtui.types.MD5Hash} or None
         :returns: L{TestReport} object
         """
 
@@ -333,7 +335,7 @@ class _TestReportFactory(object):
 
     def _factory_md5(self, config, log, tr, md5, _count=0):
         try:
-            tr.read(join(config.template_dir, md5, 'log'))
+            tr.read(join(config.template_dir, str(md5), 'log'))
             # Note: when reading old templates, one might need rather
             # log.emea or log.asia
             return tr
@@ -346,7 +348,7 @@ class _TestReportFactory(object):
 
             self._ensure_template_dir_exists(config, log)
 
-            uri = join(config.svn_path, md5)
+            uri = join(config.svn_path, str(md5))
             self.svn_checkout(config.template_dir, uri)
 
             return self._factory_md5(config, log, tr, md5, _count+1)

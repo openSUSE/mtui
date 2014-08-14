@@ -21,7 +21,7 @@ class XMLOutput(object):
             self.add_header(metadata)
 
     def add_header(self, metadata):
-        self.update.setAttribute('md5', metadata.md5)
+        self.update.setAttribute('md5', str(metadata.md5))
         for (type, id) in metadata.patches.items():
             self.update.setAttribute(type, id)
 

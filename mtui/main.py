@@ -6,7 +6,6 @@ import errno
 import getopt
 import logging
 import shutil
-import re
 from traceback import format_exc
 import warnings
 from argparse import ArgumentParser
@@ -15,13 +14,13 @@ from mtui import log as _crap_imported_for_side_effects
 from mtui.config import config
 from mtui.prompt import CommandPrompt
 from mtui.template import TestReport, TestReportFactory
+from mtui.types import MD5Hash
 from mtui import __version__
 
 def get_parser():
     """
     :covered-by: tests.test_main.test_argparser_*
     """
-    # FIXME: implement -m and -s as type for argparse
 
     p = ArgumentParser()
     p.add_argument(
@@ -42,7 +41,7 @@ def get_parser():
     )
     p.add_argument(
         '-m', '--md5',
-        type=str,
+        type=MD5Hash,
         help='md5 update identifier'
     )
     p.add_argument(
@@ -100,10 +99,6 @@ def run_mtui(
 ):
     p = get_parser()
     args = p.parse_args(sys.argv[1:])
-
-    if args.md5:
-        if not re.match(r'^([a-fA-F\d]{32})$', args.md5):
-            raise ValueError('invalid --md5 value')
 
     if args.noninteractive and not args.prerun:
         log.error("--noninteractive makes no sense without --prerun")
