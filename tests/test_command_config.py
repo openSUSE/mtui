@@ -11,7 +11,11 @@ from .utils import ConfigFake
 from .utils import LogFake
 from .test_prompt import TestableCommandPrompt
 
-from itertools import izip_longest
+try:
+    from itertools import zip_longest
+except ImportError:
+    from itertools import izip_longest as zip_longest
+
 
 # FIXME: the command objects needs to be constructed via CommandPrompt
 # due to CDC's braindead implementation. See
@@ -59,7 +63,7 @@ def test_config_show():
     c.session_user = 'foo-user'
     c.interface_version = '66.6'
 
-    for actual,expected in izip_longest(
+    for actual,expected in zip_longest(
           [ (opt, val)
             for x in _run_config("config show", c).splitlines()
             for opt, _, val in [x.partition(" = ")]]

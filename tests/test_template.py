@@ -6,7 +6,7 @@ from unittest import TestCase
 from collections import namedtuple
 from tempfile import mkdtemp, mkstemp
 from os.path import join
-from errno import ENOENT, EPERM, EEXIST
+from errno import EINTR, ENOENT, EPERM, EEXIST
 import shutil
 import os
 from copy import deepcopy
@@ -210,7 +210,7 @@ def test_TestReportFactory__copy_scripts_src_missing():
     """
     class TestableReport(TestReport):
         def _copytree(self, *args, **kw):
-            raise IOError(ENOENT, 'strerr', args[0])
+            raise IOError(EINTR, 'strerr', args[0])
 
         def _open_and_parse(self, path):
             pass
@@ -439,7 +439,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 def test_TestReport_connect_targets():
     class TargetFake(Target):
         def __init__(self, *args, **kw):
-            ok_(not kw.has_key('connect'))
+            ok_('connect' not in kw)
             kw['connect'] = False
             super(TargetFake, self).__init__(*args, **kw)
             self.t_history = []
