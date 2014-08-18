@@ -13,6 +13,7 @@ import warnings
 from argparse import FileType
 
 from .argparse import ArgumentParser
+from .argparse import ArgsParseFailure
 from mtui import log as _crap_imported_for_side_effects
 from mtui.config import config
 from mtui.prompt import CommandPrompt
@@ -101,7 +102,10 @@ def run_mtui(
 , Prompt
 ):
     p = get_parser()
-    args = p.parse_args(sys.argv[1:])
+    try:
+        args = p.parse_args(sys.argv[1:])
+    except ArgsParseFailure as e:
+        return e.status
 
     if args.noninteractive and not args.prerun:
         log.error("--noninteractive makes no sense without --prerun")
