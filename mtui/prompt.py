@@ -34,7 +34,7 @@ from mtui.notification import *
 from mtui.testopia import *
 from mtui import commands, strict_version
 from mtui.utils import log_exception
-from mtui.commands import ArgsParseFailure
+from .argparse import ArgsParseFailure
 from mtui.types import MD5Hash
 
 from distutils.version import StrictVersion

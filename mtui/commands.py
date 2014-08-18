@@ -4,35 +4,9 @@ from gettext import gettext as _
 import traceback
 import os
 
+from .argparse import ArgumentParser
 from mtui.target import HostsGroupException, TargetLockedError
 from mtui.utils import flatten
-
-class ArgsParseFailure(RuntimeError):
-    pass
-
-class MTUICommandArgParser(argparse.ArgumentParser):
-    def __init__(self, stdout, *a, **kw):
-        super(MTUICommandArgParser, self).__init__(*a, **kw)
-        self.stdout = stdout
-
-    def print_help(self, file=None):
-        """
-        :param file: ignored, self.stdout is always used instead
-        """
-        # also takes care of default _HelpAction calling
-        # print_help
-        super(MTUICommandArgParser, self).print_help(self.stdout)
-
-    def print_usage(self, file=None):
-        """
-        :param file: ignored, self.stdout is always used instead
-        """
-        super(MTUICommandArgParser, self).print_usage(self.stdout)
-
-    def exit(self, *a, **kw):
-        # don't want to call sys.exit when calling -h or parsing
-        # failed inside mtui
-        raise ArgsParseFailure
 
 class Command(object):
     __metaclass__ = ABCMeta
@@ -78,7 +52,7 @@ class Command(object):
         """
         :returns: L{argparse.ArgumentParser}
         """
-        p = MTUICommandArgParser(stdout, prog=cls.command,
+        p = ArgumentParser(stdout, prog=cls.command,
             description=cls.__doc__)
         cls._add_arguments(p)
 
