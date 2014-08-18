@@ -20,6 +20,12 @@ from random import randrange
 
 unused = None
 
+class SysFake(object):
+    def __init__(self, argv=unused):
+        self.argv = argv
+        self.stdout = StringIO()
+        self.stderr = StringIO()
+
 class LogFake:
     def __init__(self):
         self.errors = []

@@ -213,7 +213,7 @@ def test_commandFactory():
     cp._add_subcommand(FakeCommand)
     cp.onecmd("fake")
     ok_(cp.t_cmd.prompt is cp)
-    ok_(cp.t_cmd.stdout is cp.stdout)
+    ok_(cp.t_cmd.sys is cp.sys)
     ok_(cp.t_cmd.logger is cp.log)
     ok_(cp.t_cmd.config is cp.config)
     # and some more for good measure

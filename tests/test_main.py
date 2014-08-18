@@ -8,6 +8,7 @@ from nose.tools import nottest
 from mtui.main import get_parser
 from mtui.main import run_mtui
 from .utils import ConfigFake
+from .utils import SysFake
 from .utils import StringIO
 from .utils import OneShotFactory
 from .utils import LogFake
@@ -21,18 +22,18 @@ from mtui.types.obs import RequestReviewID
 
 def test_argparser_sut():
     # FIXME: parse SUTs as part of the parser
-    p = get_parser()
+    p = get_parser(SysFake())
     a = p.parse_args(["-s", "foo", "--sut", "bar"])
     eq_(a.sut, ["foo", "bar"])
 
 def test_argparser_autoadd():
     # TODO: validate attributes
-    p = get_parser()
+    p = get_parser(SysFake())
     a = p.parse_args(["-a", "foo", "--autoadd", "bar"])
     eq_(a.autoadd, ["foo", "bar"])
 
 def helper_parse_reviewid(rrid):
-    return get_parser().parse_args(
+    return get_parser(SysFake()).parse_args(
         [ "-r"
         , rrid
         ])
@@ -77,7 +78,7 @@ def test_argparser_md5_and_reviewid_exclusive():
     """
     Test mutual exclusivity of --md5 and --review-id is enforced
     """
-    get_parser().parse_args(
+    get_parser(SysFake()).parse_args(
         [ "-m"
         , "a93bcc098674a50ea93791fc528bdd9f"
         , "-r"
@@ -126,11 +127,6 @@ class TestReportFactoryFake(OneShotFactory):
 
     def _make_product(self, config, log, md5=None):
         return TestReportFake(config, log)
-
-class SysFake(object):
-    def __init__(self, argv):
-        self.argv = argv
-        self.stdout = StringIO()
 
 def test_main():
     c = ConfigFake()

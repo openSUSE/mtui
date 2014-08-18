@@ -26,6 +26,8 @@ from distutils.version import StrictVersion
 
 from .utils import LogFake
 from .utils import StringIO
+from .utils import SysFake
+from .utils import unused
 
 OLD_STYLE_CMD='update'
 NEW_STYLE_CMD='unlock'
@@ -35,10 +37,6 @@ class ComMock2_0(Command):
     stable = '2.0'
     command = 'commock'
 
-class MyStdout:
-    def write(self, x):
-        self.written = x
-
 def test_do_help():
     """
     Test CommandPrompt.do_help print helps properly for class-defined
@@ -47,15 +45,14 @@ def test_do_help():
     c = Config()
     c.interface_version = ComMock2_0.stable
     l = LogFake()
-    cp = CommandPrompt([], TestReport(c, l), c, l)
-    cp.stdout = MyStdout()
+    cp = CommandPrompt([], TestReport(c, l), c, l, SysFake())
 
     cp.do_help("commock")
-    eq_(cp.stdout.written, "*** No help on commock\n")
+    eq_(cp.sys.stdout.getvalue(), "*** No help on commock\n")
 
     cp._add_subcommand(ComMock2_0)
     cp.do_help("commock")
-    ok_('usage: '+ComMock2_0.command in cp.stdout.written)
+    ok_('usage: '+ComMock2_0.command in cp.sys.stdout.getvalue())
 
     cp.do_help(OLD_STYLE_CMD)
     # just that doesn't raise
@@ -161,12 +158,11 @@ def test_command_argparse_fail():
 
     c = Config()
     l = LogFake()
-    cp = CommandPrompt([], TestReport(c, l), c, l)
-    cp.stdout = StringIO()
+    cp = CommandPrompt([], TestReport(c, l), c, l, SysFake())
     cp._add_subcommand(ComMock)
 
     cp.onecmd('commock -foo')
-    eq_(cp.stdout.getvalue(), "usage: commock [-h]\n")
+    eq_(cp.sys.stdout.getvalue(), "usage: commock [-h]\n")
 
 def test_command_doesnt_run_on_help():
     """
@@ -179,11 +175,10 @@ def test_command_doesnt_run_on_help():
     c = Config()
     c.interface_version = ComMock.stable
     l = LogFake()
-    cp = CommandPrompt([], TestReport(c, l), c, l)
-    cp.stdout = StringIO()
+    cp = CommandPrompt([], TestReport(c, l), c, l, SysFake())
     cp._add_subcommand(ComMock)
     cp.onecmd('commock -h')
-    eq_(cp.stdout.getvalue(), 'usage: commock [-h]\n\noptional '+
+    eq_(cp.sys.stdout.getvalue(), 'usage: commock [-h]\n\noptional '+
         'arguments:\n  -h, --help  show this help message and exit\n')
 
 def test_command_println():
@@ -191,6 +186,6 @@ def test_command_println():
         def run(self):
             pass
 
-    c = ComMock(None, None, None, StringIO(), None, None)
+    c = ComMock(None, None, None, SysFake(unused), None, None)
     c.println("a")
-    eq_(c.stdout.getvalue(), "a\n")
+    eq_(c.sys.stdout.getvalue(), "a\n")

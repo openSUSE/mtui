@@ -22,12 +22,12 @@ from mtui.types.md5 import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui import __version__
 
-def get_parser():
+def get_parser(sys):
     """
     :covered-by: tests.test_main.test_argparser_*
     """
 
-    p = ArgumentParser()
+    p = ArgumentParser(sys_=sys)
     p.add_argument(
         '-l', '--location',
         type=str,
@@ -109,7 +109,7 @@ def run_mtui(
 , TestReportFactory
 , Prompt
 ):
-    p = get_parser()
+    p = get_parser(sys)
     try:
         args = p.parse_args(sys.argv[1:])
     except ArgsParseFailure as e:

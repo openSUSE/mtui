@@ -21,7 +21,7 @@ class Command(object):
         Version must include at least major and minor
     """
 
-    def __init__(self, args, hosts, config, stdout, logger, prompt):
+    def __init__(self, args, hosts, config, sys, logger, prompt):
         """
         :type args: str
         :param args: arguments remaidner for the command
@@ -31,15 +31,15 @@ class Command(object):
         """
         self.hosts = hosts
         self.args = args
-        self.stdout = stdout
+        self.sys = sys
         self.logger = logger
         self.config = config
         self.prompt = prompt
 
     @classmethod
-    def parse_args(cls, args, stdout):
+    def parse_args(cls, args, sys):
         args = [] if args is '' else args.split(" ")
-        return cls.argparser(stdout).parse_args(args)
+        return cls.argparser(sys).parse_args(args)
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -49,11 +49,11 @@ class Command(object):
         pass
 
     @classmethod
-    def argparser(cls, stdout):
+    def argparser(cls, sys):
         """
         :returns: L{ArgumentParser}
         """
-        p = ArgumentParser(stdout, prog=cls.command,
+        p = ArgumentParser(sys_=sys, prog=cls.command,
             description=cls.__doc__)
         cls._add_arguments(p)
 
@@ -76,8 +76,8 @@ class Command(object):
         `print` replacement method for the outputs to be testable by
         injecting `StringIO`
         """
-        self.stdout.write(xs + "\n")
-        self.stdout.flush()
+        self.sys.stdout.write(xs + "\n")
+        self.sys.stdout.flush()
 
 class HostsUnlock(Command):
     command = 'unlock'
@@ -196,6 +196,6 @@ class Config(Command):
     def _add_arguments(cls, p):
         sp = p.add_subparsers()
         p_show = sp.add_parser("show", help="show config values",
-            stdout=p.stdout)
+            sys_=p.sys)
         p_show.add_argument("attributes", type=str, nargs="*")
         p_show.set_defaults(func="show")
