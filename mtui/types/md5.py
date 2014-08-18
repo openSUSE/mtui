@@ -1,5 +1,3 @@
-import re
-
 class MD5Hash(object):
     def __init__(self, hash_):
         try:
@@ -19,3 +17,4 @@ class MD5Hash(object):
                 format(x))
 
         return self.hash == x.hash
+

@@ -18,7 +18,8 @@ from mtui import log as _crap_imported_for_side_effects
 from mtui.config import config
 from mtui.prompt import CommandPrompt
 from mtui.template import TestReport, TestReportFactory
-from mtui.types import MD5Hash
+from mtui.types.md5 import MD5Hash
+from mtui.types.obs import RequestReviewID
 from mtui import __version__
 
 def get_parser():
@@ -43,10 +44,16 @@ def get_parser():
         type=str,
         help='override config mtui.template_dir'
     )
-    p.add_argument(
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
         '-m', '--md5',
         type=MD5Hash,
         help='md5 update identifier'
+    )
+    g.add_argument(
+        '-r', '--review-id',
+        type=RequestReviewID.from_str,
+        help='OBS request review id\nexample: SUSE:Maintenance:1:1'
     )
     p.add_argument(
         '-s', '--sut',
@@ -83,6 +90,7 @@ def get_parser():
         default=False,
         help='print version and exit'
     )
+
     return p
 
 def main():

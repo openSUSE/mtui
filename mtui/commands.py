@@ -1,3 +1,4 @@
+from __future__ import absolute_import
 import argparse
 from abc import ABCMeta, abstractmethod
 from gettext import gettext as _
@@ -50,7 +51,7 @@ class Command(object):
     @classmethod
     def argparser(cls, stdout):
         """
-        :returns: L{argparse.ArgumentParser}
+        :returns: L{ArgumentParser}
         """
         p = ArgumentParser(stdout, prog=cls.command,
             description=cls.__doc__)
