@@ -9,6 +9,7 @@ from mtui.prompt import CommandAlreadyBoundError
 from .utils import StringIO
 from .utils import ConfigFake
 from .utils import LogFake
+from .utils import SysFake
 from .test_prompt import TestableCommandPrompt
 
 try:
@@ -29,12 +30,11 @@ def _run_config(in_, config):
     user.
     """
     l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(config, l), config, l)
+    cp = TestableCommandPrompt([], TestReport(config, l), config, l, SysFake())
     try:
         cp._add_subcommand(commands.Config)
     except CommandAlreadyBoundError:
         pass
-    cp.stdout = StringIO()
     cp.onecmd(in_)
     return cp.stdout.getvalue()
 

@@ -18,6 +18,11 @@ from tempfile import mkstemp
 from shutil import move
 from os.path import dirname
 
+try:
+    from itertools import zip_longest
+except ImportError:
+    from itertools import izip_longest as zip_longest
+
 out = logging.getLogger('mtui')
 
 flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
@@ -201,3 +206,24 @@ def atomic_write_file(data, path):
         f.write(data)
 
     move(fname, path)
+
+class check_eq(object):
+    """
+    Usage: check_eq(x)(y)
+    :return: y if (x == y) is True otherwise raises
+    :raises: ValueError
+    """
+    def __init__(self, x):
+        self.x = x
+
+    def __call__(self, x):
+        if not self.x == x:
+            raise ValueError("Expected: {0!r}, got: {1!r}".format(
+                self.x, x))
+
+    def __repr__(self):
+        return "<{0}.{1} {2!r}>".format(
+            self.__class__.__module__,
+            self.__class__.__name__,
+            self.x
+        )

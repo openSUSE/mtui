@@ -16,8 +16,15 @@ except ImportError:
 from os.path import exists
 from posix import stat_result
 from tempfile import mktemp
+from random import randrange
 
 unused = None
+
+class SysFake(object):
+    def __init__(self, argv=unused):
+        self.argv = argv
+        self.stdout = StringIO()
+        self.stderr = StringIO()
 
 class LogFake:
     def __init__(self):
@@ -117,3 +124,17 @@ class CallLogger(object):
 
     def __call__(self, *a, **kw):
         self.calls.append((a, kw))
+
+def rand_maintenance_id():
+    """
+    :return: int random id of maintenance id component in OBS review
+        request id
+    """
+    return randrange(1, 9999)
+
+def rand_review_id():
+    """
+    :return: int random id of review id component in OBS review
+        request id
+    """
+    return randrange(1, 9999)

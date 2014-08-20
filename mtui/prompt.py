@@ -34,7 +34,7 @@ from mtui.notification import *
 from mtui.testopia import *
 from mtui import commands, strict_version
 from mtui.utils import log_exception
-from mtui.commands import ArgsParseFailure
+from .argparse import ArgsParseFailure
 from mtui.types import MD5Hash
 
 from distutils.version import StrictVersion
@@ -89,7 +89,7 @@ class CommandPrompt(cmd.Cmd):
     # would be great if it could replace the ssh layer as well.
     prompt = 'mtui> '
 
-    def __init__(self, targets, metadata, config, log):
+    def __init__(self, targets, metadata, config, log, sys_=None):
         """
             :param targets: dict where K is str, V is L{Target} and
                 K == V.hostname
@@ -117,6 +117,9 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.HostsUnlock)
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
+        self.sys = sys_ or sys
+        self.stdout = self.sys.stdout
+        # self.stdout is used by cmd.Cmd
 
     def get_interface_version(self):
         """
@@ -187,7 +190,7 @@ class CommandPrompt(cmd.Cmd):
             return cmd.Cmd.onecmd(self, line)
 
         try:
-            args = subcmd.parse_args(arg, self.stdout)
+            args = subcmd.parse_args(arg, self.sys)
         except ArgsParseFailure as e:
             return
 
@@ -201,7 +204,7 @@ class CommandPrompt(cmd.Cmd):
 
     def commandFactory(self, cmd, args=None):
         hosts = self._hostsGroupFactory()
-        return cmd(args, hosts, self.config, self.stdout, self.log, self)
+        return cmd(args, hosts, self.config, self.sys, self.log, self)
 
     def do_help(self, arg):
         # FIXME: see L{CommandPrompt.__getattr__}
@@ -210,7 +213,7 @@ class CommandPrompt(cmd.Cmd):
         except KeyError:
             return cmd.Cmd.do_help(self, arg)
         else:
-            cmd_.argparser(self.stdout).print_help()
+            cmd_.argparser(self.sys).print_help()
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
@@ -255,7 +258,7 @@ class CommandPrompt(cmd.Cmd):
                 return log_exception(Exception, out.error)\
                     (c.completer(self._hostsGroupFactory()))
         else:
-            argparser = c.argparser(self.stdout)
+            argparser = c.argparser(self.sys)
             clsdict = {
                 '__doc__': argparser.format_help()
             }

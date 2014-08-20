@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+from __future__ import absolute_import
+
 import os, glob, stat
 import sys
 import errno
@@ -8,21 +10,24 @@ import logging
 import shutil
 from traceback import format_exc
 import warnings
-import argparse
+from argparse import FileType
 
+from .argparse import ArgumentParser
+from .argparse import ArgsParseFailure
 from mtui import log as _crap_imported_for_side_effects
 from mtui.config import config
 from mtui.prompt import CommandPrompt
 from mtui.template import TestReport, TestReportFactory
-from mtui.types import MD5Hash
+from mtui.types.md5 import MD5Hash
+from mtui.types.obs import RequestReviewID
 from mtui import __version__
 
-def get_parser():
+def get_parser(sys):
     """
     :covered-by: tests.test_main.test_argparser_*
     """
 
-    p = argparse.ArgumentParser()
+    p = ArgumentParser(sys_=sys)
     p.add_argument(
         '-l', '--location',
         type=str,
@@ -39,10 +44,16 @@ def get_parser():
         type=str,
         help='override config mtui.template_dir'
     )
-    p.add_argument(
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
         '-m', '--md5',
         type=MD5Hash,
         help='md5 update identifier'
+    )
+    g.add_argument(
+        '-r', '--review-id',
+        type=RequestReviewID.from_str,
+        help='OBS request review id\nexample: SUSE:Maintenance:1:1'
     )
     p.add_argument(
         '-s', '--sut',
@@ -53,7 +64,7 @@ def get_parser():
     )
     p.add_argument(
         '-p', '--prerun',
-        type=argparse.FileType('r'),
+        type=FileType('r'),
         help='script with a set of MTUI commands to run at start'
     )
     p.add_argument(
@@ -79,6 +90,7 @@ def get_parser():
         default=False,
         help='print version and exit'
     )
+
     return p
 
 def main():
@@ -97,8 +109,11 @@ def run_mtui(
 , TestReportFactory
 , Prompt
 ):
-    p = get_parser()
-    args = p.parse_args(sys.argv[1:])
+    p = get_parser(sys)
+    try:
+        args = p.parse_args(sys.argv[1:])
+    except ArgsParseFailure as e:
+        return e.status
 
     if args.noninteractive and not args.prerun:
         log.error("--noninteractive makes no sense without --prerun")

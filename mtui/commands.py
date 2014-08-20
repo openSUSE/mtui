@@ -1,38 +1,13 @@
+from __future__ import absolute_import
 import argparse
 from abc import ABCMeta, abstractmethod
 from gettext import gettext as _
 import traceback
 import os
 
+from .argparse import ArgumentParser
 from mtui.target import HostsGroupException, TargetLockedError
 from mtui.utils import flatten
-
-class ArgsParseFailure(RuntimeError):
-    pass
-
-class MTUICommandArgParser(argparse.ArgumentParser):
-    def __init__(self, stdout, *a, **kw):
-        super(MTUICommandArgParser, self).__init__(*a, **kw)
-        self.stdout = stdout
-
-    def print_help(self, file=None):
-        """
-        :param file: ignored, self.stdout is always used instead
-        """
-        # also takes care of default _HelpAction calling
-        # print_help
-        super(MTUICommandArgParser, self).print_help(self.stdout)
-
-    def print_usage(self, file=None):
-        """
-        :param file: ignored, self.stdout is always used instead
-        """
-        super(MTUICommandArgParser, self).print_usage(self.stdout)
-
-    def exit(self, *a, **kw):
-        # don't want to call sys.exit when calling -h or parsing
-        # failed inside mtui
-        raise ArgsParseFailure
 
 class Command(object):
     __metaclass__ = ABCMeta
@@ -46,7 +21,7 @@ class Command(object):
         Version must include at least major and minor
     """
 
-    def __init__(self, args, hosts, config, stdout, logger, prompt):
+    def __init__(self, args, hosts, config, sys, logger, prompt):
         """
         :type args: str
         :param args: arguments remaidner for the command
@@ -56,15 +31,15 @@ class Command(object):
         """
         self.hosts = hosts
         self.args = args
-        self.stdout = stdout
+        self.sys = sys
         self.logger = logger
         self.config = config
         self.prompt = prompt
 
     @classmethod
-    def parse_args(cls, args, stdout):
+    def parse_args(cls, args, sys):
         args = [] if args is '' else args.split(" ")
-        return cls.argparser(stdout).parse_args(args)
+        return cls.argparser(sys).parse_args(args)
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -74,11 +49,11 @@ class Command(object):
         pass
 
     @classmethod
-    def argparser(cls, stdout):
+    def argparser(cls, sys):
         """
-        :returns: L{argparse.ArgumentParser}
+        :returns: L{ArgumentParser}
         """
-        p = MTUICommandArgParser(stdout, prog=cls.command,
+        p = ArgumentParser(sys_=sys, prog=cls.command,
             description=cls.__doc__)
         cls._add_arguments(p)
 
@@ -101,8 +76,8 @@ class Command(object):
         `print` replacement method for the outputs to be testable by
         injecting `StringIO`
         """
-        self.stdout.write(xs + "\n")
-        self.stdout.flush()
+        self.sys.stdout.write(xs + "\n")
+        self.sys.stdout.flush()
 
 class HostsUnlock(Command):
     command = 'unlock'
@@ -221,6 +196,6 @@ class Config(Command):
     def _add_arguments(cls, p):
         sp = p.add_subparsers()
         p_show = sp.add_parser("show", help="show config values",
-            stdout=p.stdout)
+            sys_=p.sys)
         p_show.add_argument("attributes", type=str, nargs="*")
         p_show.set_defaults(func="show")
