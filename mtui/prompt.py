@@ -2722,50 +2722,34 @@ class CommandPrompt(cmd.Cmd):
         filename -- save log as file filename
         """
 
-        targets = self.targets
+        path = args.strip() if args is not None else ''
 
-        if args:
-            filename = args.split(',')[0]
-        else:
-            filename = 'log.xml'
+        if not path:
+            path = 'log.xml'
 
-        if filename.startswith('/'):
-            output_dir = os.path.dirname(filename)
-            filename = os.path.basename(filename)
-        else:
-            output_dir = os.path.join(os.path.dirname(self.metadata.path), 'output')
+        if not path.startswith('/'):
+            dir_ = os.path.dirname(self.metadata.path) if self.metadata else ''
+            path = os.path.join(dir_, 'output', path)
 
-        try:
-            os.makedirs(output_dir)
-        except OSError as error:
-            if error.errno == errno.EEXIST:
-                pass
-        except Exception as error:
-            out.critical('failed to create directories: %s' % str(error))
-            return
+        ensure_dir_exists(os.path.dirname(path))
 
-        filename = os.path.join(output_dir, filename)
+        if os.path.exists(path):
+            self.log.warning('file {0} exists.'.format(path))
+            m = 'should i overwrite {0}? (y/N) '.format(path)
+            if not input(m, ['y', 'yes'], self.interactive):
+                path += '.' + timestamp()
 
-        if os.path.exists(filename):
-            out.warning('file %s exists.' % filename)
-            if not input('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
-                filename += '.' + timestamp()
-
-        out.info('saving output to %s' % filename)
-
-        try:
-            outxml = open(filename, 'w')
-        except IOError as error:
-            out.error('failed to open file for writing: %s' % error.strerror)
-            return
+        self.log.info('saving output to {0}'.format(path))
 
         output = XMLOutput()
-        output.add_header(self.metadata)
-        for target in targets:
-            output.add_target(targets[target])
+        if self.metadata:
+            output.add_header(self.metadata)
 
-        outxml.write(output.pretty())
-        outxml.close()
+        for target in self.targets.values():
+            output.add_target(target)
+
+        with open(path, 'w') as f:
+            f.write(output.pretty())
 
     def do_quit(self, args):
         """
