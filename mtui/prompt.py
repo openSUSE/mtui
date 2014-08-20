@@ -1377,31 +1377,11 @@ class CommandPrompt(cmd.Cmd):
         None
         """
 
-        if args:
-            self.parse_error(self.do_list_metadata, args)
-        else:
+        if not self.metadata:
+            out.info("No update loaded. Therefore can't list metadata")
+            return
 
-            targetlist = ' '.join(sorted(self.targets.keys()))
-            packagelist = ' '.join(sorted(self.metadata.get_package_list()))
-            if self.metadata.md5:
-                patchinfo = '/'.join([config.patchinfo_url, str(self.metadata.md5)])
-                report = '/'.join([config.reports_url, str(self.metadata.md5), 'log'])
-
-            print '{0:15}: {1}'.format('MD5SUM', self.metadata.md5 if self.metadata.md5 is not None else "")
-            print '{0:15}: {1}'.format('SWAMP ID', self.metadata.swampid)
-            print '{0:15}: {1}'.format('Category', self.metadata.category)
-            print '{0:15}: {1}'.format('Reviewer', self.metadata.reviewer)
-            print '{0:15}: {1}'.format('Packager', self.metadata.packager)
-            for (type, id) in self.metadata.patches.items():
-                print '{0:15}: {1}'.format(type.upper(), id)
-            print '{0:15}: {1}'.format('Bugs', ', '.join(self.metadata.bugs.keys()))
-            print '{0:15}: {1}'.format('Hosts', targetlist)
-            print '{0:15}: {1}'.format('Packages', packagelist)
-            try:
-                print '{0:15}: {1}'.format('Build', patchinfo)
-                print '{0:15}: {1}'.format('Testreport', report)
-            except UnboundLocalError:
-                pass
+        self.metadata.show_yourself(self.sys.stdout)
 
     def do_list_versions(self, args):
         """

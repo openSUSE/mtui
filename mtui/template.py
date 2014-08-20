@@ -375,11 +375,42 @@ class TestReport(object):
     def add_host(self, hostname, system):
         self.systems[hostname] = system
 
+    def _show_yourself_data(self):
+        return [
+            ('Category'  , self.category),
+            ('Hosts'     , ' '.join(sorted(self.systems.keys()))),
+            ('Reviewer'  , self.reviewer),
+            ('Packager'  , self.packager),
+            ('Bugs'      , ', '.join(self.bugs.keys())),
+            ('Packages'  , ' '.join(sorted(self.get_package_list()))),
+            ('Testreport', self._testreport_url()),
+        ] + [(x.upper(), y) for x,y in self.patches.items()]
+
+    def show_yourself(self, writer):
+        fmt = "{0:15}: {1}\n"
+        for xs in self._show_yourself_data():
+            writer.write(fmt.format(*xs))
+
+
+    def _testreport_url(self):
+        return '/'.join([self.config.reports_url, str(self.id), 'log'])
+
 class SwampTestReport(TestReport):
-    pass
+    @property
+    def id(self):
+        return self.md5
+
+    def _show_yourself_data(self):
+        return [
+            ('MD5SUM'  , self.md5),
+            ('SWAMP ID', self.swampid),
+            ('Build'   ,'/'.join([self.config.patchinfo_url, str(self.md5)])),
+        ] + super(SwampTestReport, self)._show_yourself_data()
 
 class OBSTestReport(TestReport):
-    pass
+    @property
+    def id(self):
+        return self.rrid
 
 if has_nose:
     TestReport = nottest(TestReport)
