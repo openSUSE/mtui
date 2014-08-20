@@ -8,6 +8,7 @@ from nose.tools import nottest
 from mtui.prompt import CommandPrompt
 from mtui.prompt import CmdQueue
 from mtui.prompt import QuitLoop
+from mtui.prompt import requires_update
 from mtui.template import TestReport
 from mtui.commands import Command
 

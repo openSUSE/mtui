@@ -68,6 +68,19 @@ class CmdQueue(list):
 class CommandAlreadyBoundError(RuntimeError):
     pass
 
+def requires_update(fn):
+    def wrap(self, *a, **kw):
+        if not self.metadata:
+            self.log.error('no testing template loaded')
+            return
+
+        return fn(self, *a, **kw)
+
+
+    wrap.__name__ = fn.__name__
+    wrap.__doc__  = fn.__doc__
+    return wrap
+
 class CommandPrompt(cmd.Cmd):
     # TODO: It's worth considering to remove the inherit of cmd.Cmd and
     # just copy some of it's needed functionality, because
@@ -598,6 +611,7 @@ class CommandPrompt(cmd.Cmd):
                 timeout = host.get_timeout()
                 print '{0:20} {1:20}: {2}s'.format(host.hostname, system, timeout)
 
+    @requires_update
     def do_source_install(self, args):
         """
         Installs current source RPMs to the target hosts.
@@ -606,10 +620,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             targets = enabled_targets(self.targets)
@@ -634,6 +644,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_source_install(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_source_extract(self, args):
         """
         Extracts current source RPMs to a local temporary directory.
@@ -643,10 +654,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         filename -- filename to extract
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         destination = os.path.join(config.local_tempdir, str(self.metadata.md5))
         pattern = ''
@@ -679,6 +686,7 @@ class CommandPrompt(cmd.Cmd):
 
         out.info('src rpm was extracted to %s' % destination)
 
+    @requires_update
     def do_source_diff(self, args):
         """
         Creates a source diff between the updated package (read from
@@ -698,10 +706,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         type     -- "build" or "source" diff
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args in ['source', 'build']:
             try:
@@ -819,6 +823,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_source_diff(self, text, line, begidx, endidx):
         return [i for i in ['source', 'build'] if i.startswith(text)]
 
+    @requires_update
     def do_source_verify(self, args):
         """
         Verifies SPECFILE content. Makes sure that every Patch entry
@@ -828,10 +833,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         None
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             self.parse_error(self.do_source_verify, args)
@@ -926,6 +927,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_list_packages(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_add_scripts(self, args):
         """
         Add check script to the pre/post testruns
@@ -934,10 +936,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         script   -- script name to add to the testrun
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             for script in args.split(','):
@@ -969,6 +967,7 @@ class CommandPrompt(cmd.Cmd):
         scripts = os.listdir(os.path.join(self.datadir, 'helper'))
         return [script for script in scripts if script.startswith(text) and 'check' in script and script not in line]
 
+    @requires_update
     def do_remove_scripts(self, args):
         """
         Remove check script from the pre/post testruns
@@ -977,10 +976,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         script   -- script name to remove from the testrun
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             for script in args.split(','):
@@ -1006,6 +1001,7 @@ class CommandPrompt(cmd.Cmd):
         post = os.listdir(os.path.join(os.path.dirname(self.metadata.path), 'scripts', 'post'))
         return [script for script in set(pre) & set(post) if script.startswith(text) and 'check' in script and script not in line]
 
+    @requires_update
     def do_list_scripts(self, args):
         """
         List available scripts from the scripts subdirectory. This scripts
@@ -1016,10 +1012,6 @@ class CommandPrompt(cmd.Cmd):
         None
         """
 
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
-
         if args:
             self.parse_error(self.do_list_scripts, args)
         else:
@@ -1029,6 +1021,7 @@ class CommandPrompt(cmd.Cmd):
                     if not '.svn' in root:
                         print os.path.join(root, name)
 
+    @requires_update
     def do_list_update_commands(self, args):
         """
         List all commands which are invoked when applying updates on the
@@ -1038,10 +1031,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         None
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             self.parse_error(self.do_list_update_commands, args)
@@ -1058,6 +1047,7 @@ class CommandPrompt(cmd.Cmd):
             print '\n'.join(updater(self.targets, self.metadata.patches, self.metadata.get_package_list()).commands)
             del updater
 
+    @requires_update
     def do_list_downgrade_commands(self, args):
         """
         List all commands which are invoked when downgrading packages on the
@@ -1067,10 +1057,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         None
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             self.parse_error(self.do_list_update_commands, args)
@@ -1369,6 +1355,7 @@ class CommandPrompt(cmd.Cmd):
                 print 'Bug #{0:5}: {1}'.format(bug, description)
                 print '%s/show_bug.cgi?id=%s' % (url, bug)
 
+    @requires_update
     def do_list_metadata(self, args):
         """
         Lists patchinfo metadata like patch number, SWAMP ID or packager.
@@ -1377,10 +1364,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         None
         """
-
-        if not self.metadata:
-            out.info("No update loaded. Therefore can't list metadata")
-            return
 
         self.metadata.show_yourself(self.sys.stdout)
 
@@ -2123,6 +2106,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_uninstall(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_downgrade(self, args):
         """
         Downgrades all related packages to the last released version (using
@@ -2132,10 +2116,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             targets = enabled_targets(self.targets)
@@ -2173,6 +2153,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_downgrade(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_prepare(self, args):
         """
         Installs missing or outdated packages from the UPDATE repositories.
@@ -2186,10 +2167,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             force = False
@@ -2240,6 +2217,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_prepare(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed', 'testing'])
 
+    @requires_update
     def do_update(self, args):
         """
         Applies the testing update to the target hosts. While updating the
@@ -2253,10 +2231,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         if args:
             prepare = True
@@ -2441,6 +2415,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_list_sessions(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_checkout(self, args):
         """
         Update template files from the SVN.
@@ -2450,15 +2425,12 @@ class CommandPrompt(cmd.Cmd):
         none
         """
 
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
-
         exitcode = os.system('cd %s; svn up' % os.path.dirname(self.metadata.path))
 
         if exitcode != 0:
             out.error('updating template failed, returncode: %s' % exitcode)
 
+    @requires_update
     def do_commit(self, args):
         """
         Commits the testing template to the SVN. This can be run after the
@@ -2468,10 +2440,6 @@ class CommandPrompt(cmd.Cmd):
         Keyword arguments:
         message  -- commit message
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         message = ''
         if args:
@@ -2641,6 +2609,7 @@ class CommandPrompt(cmd.Cmd):
         else:
             return [i for i in ['file,', 'template', 'specfile', 'patch,'] if i.startswith(text)]
 
+    @requires_update
     def do_export(self, args):
         """
         Exports the gathered update data to template file. This includes
@@ -2655,10 +2624,6 @@ class CommandPrompt(cmd.Cmd):
         hostname -- host update log to export
         force    -- overwrite template if it exists
         """
-
-        if not self.metadata.md5:
-            out.error('no testing template loaded')
-            return
 
         force = False
         hostname = None
