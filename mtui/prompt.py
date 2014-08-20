@@ -711,7 +711,7 @@ class CommandPrompt(cmd.Cmd):
 
             updated = {}
             installed = {}
-            destination = os.path.join(config.local_tempdir, str(self.metadata.md5))
+            destination = self.metadata.local_wd()
 
             if not glob.glob(os.path.join(destination, '*', '*.spec')):
                 self.do_source_extract('')
@@ -823,7 +823,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             self.parse_error(self.do_source_verify, args)
 
-        destination = os.path.join(config.local_tempdir, str(self.metadata.md5))
+        destination = self.metadata.local_wd()
 
         specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
 
