@@ -884,6 +884,7 @@ class CommandPrompt(cmd.Cmd):
 
                     print '{0:45}: {1}'.format(patches[patch].replace('name}', name), result)
 
+    @requires_update
     def do_list_packages(self, args):
         """
         Lists current installed package versions from the targets if a
@@ -996,6 +997,7 @@ class CommandPrompt(cmd.Cmd):
         else:
             self.parse_error(self.do_remove_scripts, args)
 
+    @requires_update
     def complete_remove_scripts(self, text, line, begidx, endidx):
         pre = os.listdir(os.path.join(os.path.dirname(self.metadata.path), 'scripts', 'pre'))
         post = os.listdir(os.path.join(os.path.dirname(self.metadata.path), 'scripts', 'post'))
@@ -1308,6 +1310,7 @@ class CommandPrompt(cmd.Cmd):
         if not line.count(','):
             return self.complete_testopia_testcaselist(text, line, begidx, endidx)
 
+    @requires_update
     def do_list_testsuite_commands(self, args):
         """
         List all commands which are invoked when running ctcs2 testsuites
@@ -1332,6 +1335,7 @@ class CommandPrompt(cmd.Cmd):
             print '/usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
                     username, self.metadata.md5, comment)
 
+    @requires_update
     def do_list_bugs(self, args):
         """
         Lists related bugs and corresponding Bugzilla URLs.
@@ -1577,6 +1581,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_testsuite_list(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_testsuite_run(self, args):
         """
         Runs ctcs2 testsuite and saves logs to /var/log/qa/$md5 on the
