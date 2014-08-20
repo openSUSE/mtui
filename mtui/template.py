@@ -14,6 +14,7 @@ from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
+from mtui.types.obs import RequestReviewID
 
 try:
     from nose.tools import nottest
@@ -28,6 +29,58 @@ class _TemplateIOError(IOError):
     else in the process
     """
     pass
+
+class UpdateID(object):
+    def __init__(self, id_, testreport_factory):
+        self.id = id_
+        self.testreport_factory = testreport_factory
+
+    def _template_path(self, config):
+        return join(config.template_dir, str(self.id), 'log')
+
+    def make_testreport(self):
+        tr = self.testreport_factory(
+            self.config,
+            self.log,
+        )
+
+        try:
+            tr.read(self._template_path())
+        except _TemaplateIOError as e:
+            if e.errno != ENOENT:
+                raise
+
+            self._vcs_checkout()
+            tr.read(self._template_path())
+
+        return tr
+
+    def _vcs_checkout(self):
+        self._ensure_dir_exists(
+            self.config.template_dir,
+            on_create=lambda path: log.debug('created config.template_dir directory {0}'.format(path))
+        )
+
+        with chdir(self.config.template_dir):
+            # FIXME: use python module to perform svn checkout
+            os.system('svn co %s' % join(config.svn_path, str(self.id)))
+
+class SwampUpdateID(UpdateID):
+    def __init__(self, md5):
+        """
+        :param md5: str
+        """
+        super(SwampUpdateID, self).__init__(
+            MD5Hash(md5),
+            SwampTestReport
+        )
+
+class OBSUpdateID(UpdateID):
+    def __init__(self, rrid, *args, **kw):
+        super(OBSUpdateID, self).__init__(
+            RequestReviewID(rrid),
+            OBSTestReport
+        )
 
 class TestReportAlreadyLoaded(RuntimeError):
     pass
@@ -314,56 +367,3 @@ class TestReport(object):
 
 if has_nose:
     TestReport = nottest(TestReport)
-
-class _TestReportFactory(object):
-    def __init__(self):
-        self.TestReport = TestReport
-
-    def __call__(self, config, log, md5=None):
-        """
-        :type md5: L{mtui.types.MD5Hash} or None
-        :returns: L{TestReport} object
-        """
-
-        tr = self.TestReport(config, log)
-
-        if md5 is None:
-            log.debug('TestReportFactory: not using template')
-            return tr
-
-        return self._factory_md5(config, log, tr, md5)
-
-    def _factory_md5(self, config, log, tr, md5, _count=0):
-        try:
-            tr.read(join(config.template_dir, str(md5), 'log'))
-            # Note: when reading old templates, one might need rather
-            # log.emea or log.asia
-            return tr
-        except _TemplateIOError as e:
-            if e.errno != ENOENT:
-                raise
-
-            if _count > 0:
-                raise
-
-            self._ensure_template_dir_exists(config, log)
-
-            uri = join(config.svn_path, str(md5))
-            self.svn_checkout(config.template_dir, uri)
-
-            return self._factory_md5(config, log, tr, md5, _count+1)
-
-    def _ensure_dir_exists(_, *a, **kw):
-        return  ensure_dir_exists(*a, **kw)
-
-    def _ensure_template_dir_exists(self, config, log):
-        msg = 'created config.template_dir directory {0}'
-        cb = lambda path: log.debug(msg.format(path))
-        self._ensure_dir_exists(config.template_dir, on_create=cb)
-
-    def svn_checkout(self, cwd, uri):
-        with chdir(cwd):
-            # FIXME: use python module to perform svn checkout
-            os.system('svn co %s' % uri)
-
-TestReportFactory=_TestReportFactory()

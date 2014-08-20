@@ -24,7 +24,6 @@ from traceback import print_exc
 
 from mtui.rpmver import *
 from mtui.target import *
-from mtui.template import TestReportFactory
 from mtui.updater import *
 from mtui.export import *
 from mtui.utils import *
@@ -36,6 +35,8 @@ from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
 from mtui.types import MD5Hash
+from mtui.template import OBSUpdateID
+from mtui.template import SwampUpdateID
 
 from distutils.version import StrictVersion
 
@@ -90,23 +91,21 @@ class CommandPrompt(cmd.Cmd):
     # would be great if it could replace the ssh layer as well.
     prompt = 'mtui> '
 
-    def __init__(self, targets, metadata, config, log, sys_=None):
-        """
-            :param targets: dict where K is str, V is L{Target} and
-                K == V.hostname
-        """
+    def __init__(self, config, log, sys_=None):
         cmd.Cmd.__init__(self)
+
         self.interactive = True
-        self.targets = targets
-        self.metadata = metadata
+
+        self.targets = {}
+        self.metadata = None
+        self.session = None
+
         self.homedir = os.path.expanduser('~')
         self.config = config
         self.log = log
         self.datadir = self.config.datadir
 
         self.set_interface_version(config.interface_version)
-
-        self.session = self.metadata.md5
 
         self.testopia = None
 
@@ -1761,22 +1760,30 @@ class CommandPrompt(cmd.Cmd):
         Already connected hosts are kept and extended by the reference hosts
         defined in the template file.
 
-        load_template <md5>
+        load_template <update_id>
         Keyword arguments:
-        md5      -- md5 update identifier
+        update_id      -- either md5sum for swamp update or
+                          obs request review id for obs update
         """
 
-        md5 = MD5Hash(args.lstrip().rstrip())
+        id_ = args.strip()
+        update = None
+        u_types = [SwampUpdateID, OBSUpdateID]
+        for i in u_types:
+            try:
+                update = i(id_)
+            except ValueError as e:
+                pass
 
-        if self.metadata.md5:
-            if not input('should i overwrite already loaded session %s? (y/N) ' % self.metadata.md5, ['y', 'yes'], self.interactive):
+        if not update:
+            raise ValueError("Couldn't match {0!r} to either of {1!r}".
+                format(id_, u_types))
+
+        if self.metadata:
+            m = 'should i overwrite already loaded session {0}? (y/N) '
+            if not input(m.format(self.metadata.id), ['y', 'yes'], self.interactive):
                 return
 
-        try:
-            testreport = TestReportFactory(self.config, self.log, md5)
-        except Exception:
-            print_exc()
-            return
 
         # Reload hosts to which we already have a connection
         # close hosts we are already connected to but add them to the
@@ -1786,13 +1793,27 @@ class CommandPrompt(cmd.Cmd):
         # when the L{Target} object is created, it is passed a list of
         # packages, which changes with the testreport change. So this
         # may go away when refactored.
+        re_add = []
         for hostname, target in self.targets.items():
             target.close()
-            testreport.add_host(hostname, target.system)
+            re_add.append("{0},{1}".format(hostname, target.system))
 
-        testreport.load_systems_from_testplatforms()
-        self.targets = testreport.connect_targets()
-        self.metadata = testreport
+        self.load_update(update)
+
+        for x in re_add:
+            self.do_add_host(x)
+
+    def load_update(self, update, autoconnect=True):
+        update.config = self.config
+        update.log = self.log
+
+        tr = update.make_testreport()
+
+        if autoconnect:
+            tr.load_systems_from_testplatforms()
+            self.targets = tr.connect_targets()
+
+        self.metadata = tr
 
     def do_set_location(self, args):
         """

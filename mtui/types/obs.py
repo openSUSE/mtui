@@ -45,25 +45,11 @@ class ComponentParseError(RequestReviewIDParseError):
         )
 
 class RequestReviewID(object):
-    def __init__(self, maintenance_id, review_id):
-        for x in ["maintenance_id", "review_id"]:
-            if not isinstance(locals()[x], int):
-                raise TypeError("{0} expected int, got:{1!}".format(
-                    x,
-                    locals()[x]
-                ))
-
-        self.maintenance_id = maintenance_id
-        self.review_id = review_id
-
-    def __str__(self):
-        return "SUSE:Maintenance:{0}:{1}".format(
-            self.maintenance_id,
-            self.review_id
-        )
-
-    @classmethod
-    def from_str(cls, rrid):
+    def __init__(self, rrid):
+        """
+        :type rrid: str
+        :param rrid: fully qualified Request Review ID
+        """
         parsers =  [
               check_eq("SUSE")
             , check_eq("Maintenance")
@@ -81,9 +67,14 @@ class RequestReviewID(object):
         # apply parsers to inputs, getting parsed values or raise
         xs = [_apply_parser(*ys) for ys in xs]
 
-        mid, rid = xs[-2:]
+        self.maintenance_id, self.review_id = xs[-2:]
 
-        return cls(mid, rid)
+    def __str__(self):
+        return "SUSE:Maintenance:{0}:{1}".format(
+            self.maintenance_id,
+            self.review_id
+        )
+
 
 def _apply_parser(f, x, cnt):
     if not f or not cnt:
