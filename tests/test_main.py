@@ -43,14 +43,14 @@ def test_argparser_reviewid_ok():
     Test correct RRID is parsed successfully
     """
 
-    rrid = RequestReviewID(
+    rrid = RequestReviewID("SUSE:Maintenance:{0}:{1}".format(
         rand_maintenance_id(),
         rand_review_id()
-    )
+    ))
 
     parsed = helper_parse_reviewid(str(rrid)).review_id
-    eq_(parsed.review_id, rrid.review_id)
-    eq_(parsed.maintenance_id, rrid.maintenance_id)
+    eq_(parsed.id.review_id, rrid.review_id)
+    eq_(parsed.id.maintenance_id, rrid.maintenance_id)
 
 @raises(ArgsParseFailure)
 def test_parse_rrid_w0():
@@ -86,13 +86,7 @@ def test_argparser_md5_and_reviewid_exclusive():
         ])
 
 class PromptFake(object):
-    def __init__(self, targets, test_report, config, log):
-        self.targets = targets
-        self.metadata = test_report
-        self.config = config
-        self.log = log
-        self.interactive = True
-
+    def __init__(self, *args, **kw):
         self.t_autoadds = []
         self.t_cmdloops = 0
         self.t_cmdqueues = []
@@ -129,25 +123,19 @@ class TestReportFactoryFake(OneShotFactory):
         return TestReportFake(config, log)
 
 def test_main():
+    """
+    Test main happy path without args gets to running the prompt cmdloop
+    """
     c = ConfigFake()
-    trff = TestReportFactoryFake()
     pf = OneShotFactory(PromptFake)
-    lf = LogFake()
-    sysf = SysFake(["mtui"])
-    ok_(run_mtui(sysf, c, lf, trff, pf) is 0)
+    ok_(run_mtui(SysFake(["mtui"]), c, LogFake(), pf) is 0)
 
-    prompt = pf.product
-    testreport = trff.product
-
-    eq_(sysf.stdout.getvalue(), "")
-    eq_(prompt.t_cmdloops, 1)
-    eq_(prompt.t_cmdqueues, [])
-    eq_(prompt.interactive, True)
-    eq_(prompt.t_autoadds, [])
-    eq_(testreport.t_load_systems_from_testplatforms, 1)
-    eq_(testreport.t_connect_targets, 1)
+    eq_(pf.product.t_cmdloops, 1)
 
 def test_main_config_overrides():
+    """
+    Test argv options override their config counterparts
+    """
     location = 'prague'
     template_dir = '/home/foo/bar/'
     timeout = '666'
@@ -163,10 +151,6 @@ def test_main_config_overrides():
     for x, y in overrides:
         ok_(x != y(), "tautological setup")
 
-    trff = TestReportFactoryFake()
-    pf = OneShotFactory(PromptFake)
-    lf = LogFake()
-
     sysf = SysFake([
       "mtui"
     , "-l", location
@@ -174,18 +158,7 @@ def test_main_config_overrides():
     , "-w", timeout
     ])
 
-    ok_(run_mtui(sysf, c, lf, trff, pf) is 0)
-
-    prompt = pf.product
-    testreport = trff.product
-
-    eq_(sysf.stdout.getvalue(), "")
-    eq_(prompt.t_cmdloops, 1)
-    eq_(prompt.t_cmdqueues, [])
-    eq_(prompt.interactive, True)
-    eq_(prompt.t_autoadds, [])
-    eq_(testreport.t_load_systems_from_testplatforms, 1)
-    eq_(testreport.t_connect_targets, 1)
+    ok_(run_mtui(sysf, c, LogFake(), PromptFake) is 0)
 
     for x, y in overrides:
         eq_(x, y(), "override didn't take effect: {0} != {1}".format(x, y))

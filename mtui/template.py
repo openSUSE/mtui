@@ -30,13 +30,26 @@ class _TemplateIOError(IOError):
     """
     pass
 
+
+def testreport_svn_checkout(config, log, uri):
+    ensure_dir_exists(
+        config.template_dir,
+        on_create=lambda path: log.debug('created config.template_dir directory {0}'.format(path))
+    )
+
+    with chdir(config.template_dir):
+        # FIXME: use python module to perform svn checkout
+        os.system('svn co {0}'.format(uri))
+
+
 class UpdateID(object):
-    def __init__(self, id_, testreport_factory):
+    def __init__(self, id_, testreport_factory, testreport_svn_checkout):
         self.id = id_
         self.testreport_factory = testreport_factory
+        self._vcs_checkout = testreport_svn_checkout
 
-    def _template_path(self, config):
-        return join(config.template_dir, str(self.id), 'log')
+    def _template_path(self):
+        return join(self.config.template_dir, str(self.id), 'log')
 
     def make_testreport(self):
         tr = self.testreport_factory(
@@ -46,24 +59,19 @@ class UpdateID(object):
 
         try:
             tr.read(self._template_path())
-        except _TemaplateIOError as e:
+        except _TemplateIOError as e:
             if e.errno != ENOENT:
                 raise
 
-            self._vcs_checkout()
+            self._vcs_checkout(
+                self.config,
+                self.log,
+                join(self.config.svn_path, str(self.id))
+            )
+
             tr.read(self._template_path())
 
         return tr
-
-    def _vcs_checkout(self):
-        self._ensure_dir_exists(
-            self.config.template_dir,
-            on_create=lambda path: log.debug('created config.template_dir directory {0}'.format(path))
-        )
-
-        with chdir(self.config.template_dir):
-            # FIXME: use python module to perform svn checkout
-            os.system('svn co %s' % join(config.svn_path, str(self.id)))
 
 class SwampUpdateID(UpdateID):
     def __init__(self, md5):
@@ -72,14 +80,16 @@ class SwampUpdateID(UpdateID):
         """
         super(SwampUpdateID, self).__init__(
             MD5Hash(md5),
-            SwampTestReport
+            SwampTestReport,
+            testreport_svn_checkout
         )
 
 class OBSUpdateID(UpdateID):
     def __init__(self, rrid, *args, **kw):
         super(OBSUpdateID, self).__init__(
             RequestReviewID(rrid),
-            OBSTestReport
+            OBSTestReport,
+            testreport_svn_checkout
         )
 
 class TestReportAlreadyLoaded(RuntimeError):
@@ -364,6 +374,12 @@ class TestReport(object):
 
     def add_host(self, hostname, system):
         self.systems[hostname] = system
+
+class SwampTestReport(TestReport):
+    pass
+
+class OBSTestReport(TestReport):
+    pass
 
 if has_nose:
     TestReport = nottest(TestReport)

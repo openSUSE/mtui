@@ -83,15 +83,11 @@ class TestableCommandPrompt(CommandPrompt):
     do_exit = do_quit
 
 def test_read_history_on_init():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     ok_(cp.t_read_history_called)
 
 def test_set_cmdqueue():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     eq_(cp.cmdqueue, [])
 
     cp.set_cmdqueue([])
@@ -102,9 +98,7 @@ def test_set_cmdqueue():
     ok_(isinstance(cp.cmdqueue, CmdQueue))
 
 def test_set_cmdqueue_noninteractive_prompt():
-    cp = (lambda c: lambda l: \
-            TestableCommandPrompt([], TestReport(c, l), c, l))\
-                (ConfigFake())(LogFake())
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp.interactive = False
     eq_(cp.cmdqueue, [])
 
@@ -116,9 +110,7 @@ def test_set_cmdqueue_noninteractive_prompt():
     ok_(isinstance(cp.cmdqueue, CmdQueue))
 
 def test_precmd_prerun():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp.set_cmdqueue(['foo', 'bar', 'quit'])
     cp.cmdloop()
     # FIXME: this may hang forever.
@@ -140,9 +132,7 @@ def test_precmd_prerun():
         bcf.t_factory_calls)
 
 def test_noninteractive_drops_to_interactive_on_ctrlc():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp.set_cmdqueue(['foo', 'ctrlc', 'stop'])
     cp.interactive = False
     cp.cmdloop()
@@ -177,9 +167,7 @@ def test_cmdqueue():
     eq_(q.t_echo_prompt_calls, [1,3])
 
 def test_interface_version_setter():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     v = '66.0'
     cp.set_interface_version(v)
     eq_(cp._interface_version, StrictVersion(v))
@@ -189,9 +177,7 @@ def test_interface_version_setter():
     ok_(cp._interface_version is sv)
 
 def test_interface_version_getter():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp._interface_version = StrictVersion('66.6')
     cp.get_interface_version() is cp._interface_version
 
@@ -201,7 +187,7 @@ def test_commandFactory():
     """
     c = ConfigFake()
     l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(c, l)
 
     future_config = None
     class FakeCommand(Command):

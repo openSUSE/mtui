@@ -97,7 +97,6 @@ def main():
       sys
     , config
     , logging.getLogger('mtui')
-    , TestReportFactory
     , CommandPrompt
     ))
 
@@ -105,7 +104,6 @@ def run_mtui(
   sys
 , config
 , log
-, TestReportFactory
 , Prompt
 ):
     p = get_parser(sys)

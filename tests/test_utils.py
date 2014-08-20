@@ -23,6 +23,11 @@ class TestEnsureDirExists(TestCase):
         ensure_dir_exists(d)
 
     def test_create_exists(self):
+        """
+        ensure_dir_exists is obviously supposed to be convergent so second
+        call should result in the same state. This test asserts mainly that
+        OSError(EEXIST) is not raised on second call.
+        """
         d = self.mkpath('b', 'a')
         ensure_dir_exists(d)
         ensure_dir_exists(d)

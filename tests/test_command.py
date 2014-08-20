@@ -25,6 +25,7 @@ import argparse
 from distutils.version import StrictVersion
 
 from .utils import LogFake
+from .utils import ConfigFake
 from .utils import StringIO
 from .utils import SysFake
 from .utils import unused
@@ -44,8 +45,7 @@ def test_do_help():
     """
     c = Config()
     c.interface_version = ComMock2_0.stable
-    l = LogFake()
-    cp = CommandPrompt([], TestReport(c, l), c, l, SysFake())
+    cp = CommandPrompt(c, LogFake(), SysFake())
 
     cp.do_help("commock")
     eq_(cp.sys.stdout.getvalue(), "*** No help on commock\n")
@@ -66,9 +66,8 @@ def test_getattr():
     """
     c = Config()
     c.interface_version = ComMock2_0.stable
-    l = LogFake()
 
-    cp = CommandPrompt([], TestReport(c, l), c, l)
+    cp = CommandPrompt(c, LogFake())
     attr="do_"+ComMock2_0.command
     ok_(not hasattr(cp, attr))
 
@@ -88,8 +87,7 @@ def test_getnames():
     """
     c = Config()
     c.interface_version = ComMock2_0.stable
-    l = LogFake()
-    cp = CommandPrompt([], TestReport(c, l), c, l)
+    cp = CommandPrompt(c, LogFake())
     attr = "do_"+ComMock2_0.command
     ok_(attr not in cp.get_names())
     cp._add_subcommand(ComMock2_0)
@@ -103,9 +101,8 @@ def test_command_prompt_init():
     current mtui version unless defined by config.
     """
     os.environ['MTUI_CONF'] = '/dev/null'
-    l = LogFake()
     c = Config()
-    cp = CommandPrompt([],  TestReport(c, l), c, l)
+    cp = CommandPrompt(c, LogFake())
     ok_(c is cp.config)
 
     eq_(cp._interface_version, StrictVersion(__version__))
@@ -156,9 +153,7 @@ def test_command_argparse_fail():
         def run(self):
             ok_(False)
 
-    c = Config()
-    l = LogFake()
-    cp = CommandPrompt([], TestReport(c, l), c, l, SysFake())
+    cp = CommandPrompt(ConfigFake(), LogFake(), SysFake())
     cp._add_subcommand(ComMock)
 
     cp.onecmd('commock -foo')
@@ -172,10 +167,9 @@ def test_command_doesnt_run_on_help():
         def run(self):
             ok_(False)
 
-    c = Config()
+    c = ConfigFake()
     c.interface_version = ComMock.stable
-    l = LogFake()
-    cp = CommandPrompt([], TestReport(c, l), c, l, SysFake())
+    cp = CommandPrompt(c, LogFake(), SysFake())
     cp._add_subcommand(ComMock)
     cp.onecmd('commock -h')
     eq_(cp.sys.stdout.getvalue(), 'usage: commock [-h]\n\noptional '+

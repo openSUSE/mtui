@@ -6,239 +6,179 @@ from unittest import TestCase
 from collections import namedtuple
 from tempfile import mkdtemp, mkstemp
 from os.path import join
+from os.path import dirname
 from errno import EINTR, ENOENT, EPERM, EEXIST
 import shutil
 import os
 from copy import deepcopy
 
-from mtui.template import _TestReportFactory
 from mtui.template import _TemplateIOError
 from mtui.template import TestReport
+from mtui.template import SwampUpdateID
+from mtui.template import _TemplateIOError
 from mtui.target import Target
-from mtui.types import MD5Hash
 from .utils import LogFake
 from .utils import StringIO
 from .utils import touch
 from .utils import ConfigFake
 from .utils import get_nonexistent_path
+from .utils import unused
 
 from traceback import format_exc
 
-def test_instance_factory():
-    from mtui.template import TestReportFactory
-    ok_(isinstance(TestReportFactory, _TestReportFactory))
+# FIXME: use temps python package to manage tempdirs/files
 
-def test_TestReportFactory_no_md5():
-    c = ConfigFake()
-    c.template_dir = 'foodir'
-    c.location = 'fooloc'
-    f = _TestReportFactory()
-    l = LogFake()
-    tr = f(c, l)
-    ok_(isinstance(tr, TestReport))
-    eq_(tr.md5, None)
-    eq_(tr.packages, {})
-    eq_(tr.systems, {})
-    eq_(tr.bugs, {})
-    eq_(tr.testplatforms, [])
-    eq_(tr.location, 'fooloc')
-    eq_(tr.directory, 'foodir')
-    ok_(tr.config is c)
-    ok_(tr.log is l)
-    eq_(l.debugs, ['TestReportFactory: not using template'])
+class TestReportSVNCheckoutFake(object):
+    def __init__(self, template_path):
+        self.path = template_path
 
-def test_TestReportFactory_call_md5():
-    class F(_TestReportFactory):
-        _test_factory_md5_called = False
+    def __call__(self, *a, **kw):
+        os.makedirs(dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("unused")
 
-        def _factory_md5(self, config, log, tr, md5):
-            self._test_factory_md5_called = True
-            self.config = config
-            self.log = log
-            self.tr = tr
-            self.md5 = md5
-
-    c = ConfigFake()
-    f = F()
-    eq_(f._test_factory_md5_called, False)
-    l = LogFake()
-    md5 = MD5Hash('82407e2d7113cfde72f65d81e4ffee61')
-    f(c, l, md5=md5)
-    eq_(f._test_factory_md5_called, True)
-    ok_(isinstance(f.tr, TestReport))
-    ok_(f.config is c)
-    ok_(f.log is l)
-    eq_(f.md5, md5)
-
-def TestReportMocker(read_fail=None, read_error=None):
-    if not read_fail:
-        read_fail = []
-
-    if read_fail and read_error is None:
-        raise ValueError('Invalid read_error {0!r}'.format(read_error))
-
-    class TestReportMock(TestReport):
-        read_cnt = 0
-
-        def read(self, path):
-            self.read_cnt += 1
-            if self.read_cnt in read_fail:
-                raise read_error()
-
-    return TestReportMock
-
-class TestReportFactoryMockFactoryMd5(_TestReportFactory):
-    def __init__(self):
-        super(TestReportFactoryMockFactoryMd5, self).__init__()
-        self.t_ensure_dir = []
-        self.t_svn_check = []
-        self.t_counts = []
-
-    def _ensure_dir_exists(self, path, on_create=None):
-        ok_(callable(on_create))
-        self.t_ensure_dir.append(path)
-
-    def svn_checkout(self, path, uri):
-        self.t_svn_check.append((path, uri))
-
-    def _factory_md5(self, config, log, tr, md5, _count=0):
-        self.t_counts.append(_count)
-        return super(TestReportFactoryMockFactoryMd5, self)\
-            ._factory_md5(config, log, tr, md5, _count)
-
-def test_TestReportFactory_factory_md5_no_fail():
-    c = ConfigFake()
-    c.template_dir = '/tmp/foo'
-    c.svn_path = 'svnpath'
-
-    f = TestReportFactoryMockFactoryMd5()
-    f.TestReport = TestReportMocker()
-    l = LogFake()
-    tr = f(c, l, md5=MD5Hash('82407e2d7113cfde72f65d81e4ffee61'))
-    ok_(isinstance(tr, f.TestReport))
-    eq_(f.t_counts, [0])
-    eq_(f.t_ensure_dir, [])
-
-def test_TestReportFactory_factory_md5_with_checkout():
-    c = ConfigFake()
-    c.template_dir = '/tmp/foo'
-    c.svn_path = 'svnpath'
-
-    f = TestReportFactoryMockFactoryMd5()
-    f.TestReport = TestReportMocker(read_fail=[1],
-        read_error=lambda: _TemplateIOError(ENOENT, ''))
-    l = LogFake()
-    md5 = MD5Hash('82407e2d7113cfde72f65d81e4ffee61')
-    tr = f(c, l, md5=md5)
-    ok_(isinstance(tr, f.TestReport))
-    eq_(f.t_counts, [0, 1])
-    eq_(f.t_svn_check, [(c.template_dir, join(c.svn_path, str(md5)))])
-    eq_(f.t_ensure_dir, [c.template_dir])
-
-def test_TestReportFactory_factory_md5_failing_checkout():
-    c = ConfigFake()
-    c.template_dir = '/tmp/foo'
-    c.svn_path = 'svnpath'
-
-    f = TestReportFactoryMockFactoryMd5()
-    f.TestReport = TestReportMocker(read_fail=[1, 2, 3],
-        read_error=lambda: _TemplateIOError(ENOENT, ''))
-    l = LogFake()
-    md5 = MD5Hash('82407e2d7113cfde72f65d81e4ffee61')
-    try:
-        f(c, l, md5=md5)
-    except IOError:
-        eq_(f.t_counts, [0, 1])
-        eq_(f.t_svn_check, [(c.template_dir, join(c.svn_path, str(md5)))])
-        eq_(f.t_ensure_dir, [c.template_dir])
-    else:
-        ok_(False)
-
-def test_TestReportFactory_factory_md5_other_ioerror():
-    c = ConfigFake()
-    c.template_dir = '/tmp/foo'
-    c.svn_path = 'svnpath'
-
-    f = TestReportFactoryMockFactoryMd5()
-    f.TestReport = TestReportMocker(read_fail=[1, 2, 3],
-        read_error=lambda: IOError(EPERM, ''))
-    l = LogFake()
-    try:
-        f(c, l, md5=MD5Hash('82407e2d7113cfde72f65d81e4ffee61'))
-    except IOError:
-        eq_(f.t_counts, [0])
-        eq_(f.t_svn_check, [])
-        eq_(f.t_ensure_dir, [])
-    else:
-        ok_(False)
-
-def test_TestReportFactory_ensure_dir_exists():
-    f = _TestReportFactory()
-    d = '/tmp/mtui-unittestsuite-foobar'
-    try:
-        os.rmdir(d)
-    except OSError as e:
-        if e.errno != ENOENT:
-            raise
-    except:
-        raise
-    f._ensure_dir_exists(d)
-    os.rmdir(d)
-
-def test_TestReportFactory_double_ensure_dir_exists():
+def test_UID_mtr_success():
     """
-    ensure_dir_exists is obviously supposed to be convergent so second
-    call should result in the same state. This test asserts mainly that
-    OSError(EEXIST) is not raised on second call.
+    Test UpdateID.make_testreport immediate success
+
+    1. returns the TestReport instance from UpdateID.testreport_factory
+
+    2. passes config and log objects on to the testreport instance
     """
-    f = _TestReportFactory()
-    d = '/tmp/mtui-unittestsuite-foobar'
-    try:
-        os.rmdir(d)
-    except OSError as e:
-        if not e.errno == ENOENT:
-            raise
-    f._ensure_dir_exists(d)
-    f._ensure_dir_exists(d)
-    os.rmdir(d)
 
-def test_TestReportFactory__copy_scripts_src_missing():
-    """
-    Test the behaviour of factory_md5 when ENOENT happens during
-    TestReport.read (which is the same that is catched when the
-    testreport md5 is not checked out
-    """
-    class TestableReport(TestReport):
-        def _copytree(self, *args, **kw):
-            raise IOError(EINTR, 'strerr', args[0])
-
-        def _open_and_parse(self, path):
-            pass
-
-    class TestableFactory(_TestReportFactory):
-        def __init__(self, *a, **kw):
-            super(TestableFactory, self).__init__(*a, **kw)
-            self.TestReport = TestableReport
-            self.svn_checkout = lambda *a: None
-            self._ensure_template_dir_exists = lambda *a: None
-            self.t_factory_calls = 0
-
-        def _factory_md5(self, *args, **kw):
-            self.t_factory_calls += 1
-            return super(TestableFactory, self)._factory_md5(*args, **kw)
-
-    l = LogFake()
-    c = ConfigFake()
-    trf = TestableFactory()
+    d = mkdtemp()
 
     try:
-        trf(c, l, md5=MD5Hash('82407e2d7113cfde72f65d81e4ffee61'))
-    except EnvironmentError as e:
+        c = ConfigFake()
+        c.template_dir = d
+        c.svn_path = unused
+
+        u = SwampUpdateID('82407e2d7113cfde72f65d81e4ffee61')
+        u.config = c
+        u.log = LogFake()
+        class TestReportFake(TestReport):
+            def _parse(self, file_):
+                pass
+
+        u.testreport_factory = TestReportFake
+
+        TestReportSVNCheckoutFake(u._template_path())()
+
+        tr = u.make_testreport()
+
+        ok_(isinstance(tr, TestReportFake))
+        eq_(u.config, tr.config)
+        eq_(u.log, tr.log)
+    finally:
+        shutil.rmtree(d)
+
+def test_UID_mtr_with_checkout():
+    """
+    Test UpdateID.make_testreport does vcs_checkout if can't read the
+    report
+    """
+    d = mkdtemp()
+
+    try:
+        c = ConfigFake()
+        c.template_dir = d
+        c.svn_path = 'svnpath'
+
+        u = SwampUpdateID('82407e2d7113cfde72f65d81e4ffee61')
+        u.config = c
+        u.log = LogFake()
+        u._vcs_checkout = TestReportSVNCheckoutFake(u._template_path())
+
+        class TestReportFake(TestReport):
+            def _parse(self, file_):
+                pass
+        u.testreport_factory = TestReportFake
+
+        tr = u.make_testreport()
+
+        ok_(isinstance(tr, TestReportFake))
+        eq_(u.config, tr.config)
+        eq_(u.log, tr.log)
+    finally:
+        shutil.rmtree(d)
+
+def test_UID_mtr_failing_checkout():
+    """
+    Test UpdateID.make_testreport raises
+    """
+    d = mkdtemp()
+
+    try:
+        c = ConfigFake()
+        c.template_dir = d
+        c.svn_path = 'svnpath'
+
+        u = SwampUpdateID('82407e2d7113cfde72f65d81e4ffee61')
+        u.config = c
+        u.log = LogFake()
+        u._vcs_checkout = lambda *a, **kw: unused
+
+        tr = u.make_testreport()
+    except _TemplateIOError:
         pass
     else:
-        ok_(False)
+        ok_(False, "_TemplateIOError expected to be raised")
+    finally:
+        shutil.rmtree(d)
 
-    eq_(trf.t_factory_calls, 1)
+def test_UID_mtr_other_ioerror():
+    """
+    Test UpdateID.make_testreport raises
+    """
+
+    d = mkdtemp()
+
+    try:
+        c = ConfigFake()
+        c.template_dir = d
+        c.svn_path = 'svnpath'
+
+        u = SwampUpdateID('82407e2d7113cfde72f65d81e4ffee61')
+        u.config = c
+        u.log = LogFake()
+        u._vcs_checkout = lambda *a, **kw: ok_(False,
+            "shouldn't try to perform checkout")
+
+        TestReportSVNCheckoutFake(u._template_path())()
+        os.chmod(u._template_path(), 0)
+
+        try:
+            tr = u.make_testreport()
+        except _TemplateIOError as e:
+            pass
+        else:
+            ok_(False, "_TemplateIOError expected to be raised")
+    finally:
+        shutil.rmtree(d)
+
+def test_UID_mtr__copy_scripts_src_missing():
+    """
+    Test make_testreport() when scripts are missing in datadir
+    """
+
+    d = mkdtemp()
+
+    try:
+        c = ConfigFake()
+        c.template_dir = d
+        c.svn_path = 'svnpath'
+        c.datadir = get_nonexistent_path()
+
+        u = SwampUpdateID('82407e2d7113cfde72f65d81e4ffee61')
+        u.config = c
+        u.log = LogFake()
+        u._vcs_checkout = TestReportSVNCheckoutFake(u._template_path())
+
+        tr = u.make_testreport()
+        eq_(tr.log.errors[-1], 'copy scripts manually')
+        ok_(isinstance(tr, TestReport))
+    finally:
+        shutil.rmtree(d)
 
 @raises(_TemplateIOError)
 def test_TestReport__open_and_parse_raises_templateioerror():
@@ -551,18 +491,18 @@ def test_TestReportParse_parsed_md5():
     c = ConfigFake()
     tr = TestReport(c, l)
 
-    md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
+    md5 = SwampUpdateID('8c60b7480fc521d7eeb322955b387165')
 
     tpl_data = [
         "SAT Patch No: 8655",
-        "MD5 sum: {0}".format(md5),
+        "MD5 sum: {0}".format(md5.id),
         "SUBSWAMPID: 55446",
     ]
     tpl_data = "\n".join(tpl_data)
     tpl = StringIO(tpl_data)
 
     tr._parse(tpl)
-    eq_(tr.md5, md5)
+    eq_(tr.md5, md5.id)
 
 def test_TestReportParse_parsed_testplatform():
     l = LogFake()

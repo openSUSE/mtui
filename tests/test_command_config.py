@@ -29,8 +29,7 @@ def _run_config(in_, config):
     note the burden of setting appropriate interface_version is on the
     user.
     """
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(config, l), config, l, SysFake())
+    cp = TestableCommandPrompt(config, LogFake(), SysFake())
     try:
         cp._add_subcommand(commands.Config)
     except CommandAlreadyBoundError:
