@@ -381,27 +381,34 @@ class CommandPrompt(cmd.Cmd):
         attribute-- host attributes like architecture or product
         """
 
-        if args:
-            refhost = self._refhosts()
-            hosts = self.do_search_hosts(args)
-
-            for hostname in hosts:
-                attributes = refhost.get_host_attributes(hostname)
-                try:
-                    out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
-                except KeyError:
-                    try:
-                        system = refhost.get_host_systemname(hostname)
-                        self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
-                        self.metadata.systems[hostname] = system
-                    except Exception:
-                        out.error('failed to add host %s to list' % hostname)
-        else:
+        if not args:
             self.parse_error(self.do_autoadd, args)
+            return
+
+        refhost = self._refhosts()
+        hosts = self.do_search_hosts(args)
+
+        for hostname in hosts:
+            self.connect_system_if_unconnected(
+                hostname,
+                refhost.get_host_systemname(hostname)
+            )
 
     def complete_autoadd(self, text, line, begidx, endidx):
         attributes = Attributes()
         return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
+
+    def connect_system_if_unconnected(self, hostname, system):
+        try:
+            out.warning('already connected to {0}. skipping.'.format(
+                self.targets[hostname].hostname
+            ))
+        except KeyError:
+            p_list = self.metadata.get_package_list() if self.metadata else []
+            self.targets[hostname] = Target(hostname, system, p_list)
+
+            if self.metadata:
+                self.metadata.systems[hostname] = system
 
     def do_add_host(self, args):
         """
@@ -414,23 +421,17 @@ class CommandPrompt(cmd.Cmd):
         system   -- system type, ie. sles11sp1-i386
         """
 
-        if args:
-            try:
-                (hostname, system) = args.split(',')
-            except ValueError:
-                self.parse_error(self.do_add_host, args)
-                return
-
-            try:
-                out.warning('already connected to %s. skipping.' % self.targets[hostname].hostname)
-            except KeyError:
-                try:
-                    self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
-                    self.metadata.systems[hostname] = system
-                except Exception:
-                    out.error('failed to add host %s to list' % hostname)
-        else:
+        if not args:
             self.parse_error(self.do_add_host, args)
+            return
+
+        try:
+            (hostname, system) = args.split(',')
+        except ValueError:
+            self.parse_error(self.do_add_host, args)
+            return
+
+        self.connect_system_if_unconnected(hostname, system)
 
     def do_remove_host(self, args):
         """
