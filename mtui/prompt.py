@@ -2570,7 +2570,7 @@ class CommandPrompt(cmd.Cmd):
 
         # all but the file command needs template data. skip if template
         # isn't loaded
-        if not self.metadata.md5 and command != 'file':
+        if not self.metadata and command != 'file':
             out.error('no testing template loaded')
             return
 
@@ -2578,25 +2578,23 @@ class CommandPrompt(cmd.Cmd):
             path = filename
         elif command == 'template':
             path = self.metadata.path
-        elif command == 'specfile':
-            path = os.path.join(config.local_tempdir, str(self.metadata.md5), '*', '*.spec')
+        elif command in ['specfile', 'patch']:
+            if command == 'specfile':
+                filename = '*.spec'
+            path = os.path.join(self.metadata.local_wd(), '*', filename)
             if not glob.glob(path):
-                self.do_source_extract(None)
-        elif command == 'patch':
-            path = os.path.join(config.local_tempdir, str(self.metadata.md5), '*', filename)
-            if not glob.glob(path):
-                self.do_source_extract(None)
+                self.do_source_extract('')
         else:
             self.parse_error(self.do_edit, args)
             return
 
-        os.system('%s %s' % (editor, path))
+        os.system('{0} {1}'.format(editor, path))
 
     def complete_edit(self, text, line, begidx, endidx):
         if 'file,' in line:
             return self.complete_filelist(text.replace('file,', '', 1), line, begidx, endidx)
         if 'patch,' in line:
-            specfile = glob.glob(os.path.join(config.local_tempdir, str(self.metadata.md5), '*', '*.spec'))
+            specfile = glob.glob(self.metadata.local_wd(), '*', '*.spec')
             with open(specfile, 'r') as spec:
                 name = re.findall('Name:\W+(.*)', spec.read())[0]
                 spec.seek(0)
