@@ -262,3 +262,10 @@ def test_load_update_doesnt_leave_previous_session():
     cp.load_update(FakeUpdate(), autoconnect=False)
     eq_(cp.prompt, "mtui> ")
     eq_(cp.session, None)
+
+def test_set_location():
+    p = CommandPrompt(ConfigFake(), LogFake())
+    loc = 'prague'
+    ok_(p.config.location != loc)
+    p.do_set_location(loc)
+    eq_(p.config.location, loc)

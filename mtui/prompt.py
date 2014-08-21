@@ -1768,12 +1768,16 @@ class CommandPrompt(cmd.Cmd):
         site     -- location name
         """
 
+        args = args.strip()
         if not args:
             self.parse_error(self.do_set_location, args)
             return
 
-        out.info('changed location from "%s" to "%s"' % (self.metadata.location, args))
-        self.metadata.location = args
+        self.log.info('changed location from {0!r}" to {0!r}'.format(
+            self.config.location,
+            args
+        ))
+        self.config.location = args
 
     def complete_set_location(self, text, line, begidx, endidx):
         refhost = self._refhosts()

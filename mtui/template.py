@@ -130,9 +130,7 @@ class TestReport(object):
         self.log = log
         self._date = date
 
-        self.location = config.location
         self.directory = config.template_dir
-
 
         # Note: the default values here are unchanged from the previous
         # class Metadata for backward compaibility purposes, so we don't
