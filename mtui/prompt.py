@@ -924,31 +924,32 @@ class CommandPrompt(cmd.Cmd):
         script   -- script name to add to the testrun
         """
 
-        if args:
-            for script in args.split(','):
-                src = os.path.join(self.datadir, 'helper', script)
-                destdir = os.path.join(os.path.dirname(self.metadata.path), 'scripts')
-
-                try:
-                    for state in ['pre', 'post']:
-                        dest = os.path.join(destdir, state, script)
-                        shutil.copy(src, dest)
-
-                    src = os.path.join(self.datadir, 'helper', script.replace('check_', 'compare_'))
-                    dest = os.path.join(destdir, 'compare', script.replace('check_', 'compare_'))
-                    try:
-                        shutil.copy(src, dest)
-                    except IOError:
-                        # ignore missing compare scripts
-                        pass
-
-                except IOError:
-                    out.error('failed to copy script %s' % script)
-                else:
-                    out.info('done')
-
-        else:
+        scripts = [x for x in ' foo'.strip().split(",") if x]
+        if not scripts:
             self.parse_error(self.do_add_scripts, args)
+            return
+
+        for script in scripts:
+            src = os.path.join(self.datadir, 'helper', script)
+            destdir = os.path.join(os.path.dirname(self.metadata.path), 'scripts')
+
+            try:
+                for state in ['pre', 'post']:
+                    dest = os.path.join(destdir, state, script)
+                    shutil.copy(src, dest)
+
+                src = os.path.join(self.datadir, 'helper', script.replace('check_', 'compare_'))
+                dest = os.path.join(destdir, 'compare', script.replace('check_', 'compare_'))
+                try:
+                    shutil.copy(src, dest)
+                except IOError:
+                    # ignore missing compare scripts
+                    pass
+
+            except IOError:
+                out.error('failed to copy script %s' % script)
+            else:
+                out.info('done')
 
     def complete_add_scripts(self, text, line, begidx, endidx):
         scripts = os.listdir(os.path.join(self.datadir, 'helper'))
@@ -1309,17 +1310,17 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             self.parse_error(self.do_list_testsuite_commands, args)
-        else:
+            return
 
-            time = date.today().strftime('%d/%m/%y')
-            swampid = self.metadata.swampid
-            username = config.session_user
+        time = date.today().strftime('%d/%m/%y')
+        swampid = self.metadata.swampid
+        username = config.session_user
 
-            comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
+        comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
 
-            print 'export TESTS_LOGDIR=/var/log/qa/%s; <testsuite>' % self.metadata.md5
-            print '/usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
-                    username, self.metadata.md5, comment)
+        print 'export TESTS_LOGDIR=/var/log/qa/%s; <testsuite>' % self.metadata.md5
+        print '/usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
+                username, self.metadata.md5, comment)
 
     @requires_update
     def do_list_bugs(self, args):
@@ -1333,17 +1334,17 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             self.parse_error(self.do_list_bugs, args)
-        else:
+            return
 
-            buglist = ','.join(sorted(self.metadata.bugs.keys()))
+        buglist = ','.join(sorted(self.metadata.bugs.keys()))
 
-            url = config.bugzilla_url
+        url = config.bugzilla_url
 
-            print 'Buglist: %s/buglist.cgi?bug_id=%s' % (url, buglist)
-            for (bug, description) in self.metadata.bugs.items():
-                print
-                print 'Bug #{0:5}: {1}'.format(bug, description)
-                print '%s/show_bug.cgi?id=%s' % (url, bug)
+        print 'Buglist: %s/buglist.cgi?bug_id=%s' % (url, buglist)
+        for (bug, description) in self.metadata.bugs.items():
+            print
+            print 'Bug #{0:5}: {1}'.format(bug, description)
+            print '%s/show_bug.cgi?id=%s' % (url, bug)
 
     @requires_update
     def do_list_metadata(self, args):
@@ -1582,35 +1583,35 @@ class CommandPrompt(cmd.Cmd):
 
         (args, _, command) = args.rpartition(',')
 
-        if args and command:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            if not command.startswith('/'):
-                command = os.path.join(config.target_testsuitedir, command.strip())
-
-            command = 'export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5, command)
-            name = os.path.basename(command).replace('-run', '')
-
-            if targets:
-                try:
-                    RunCommand(targets, command).run()
-                except KeyboardInterrupt:
-                    out.info('testsuite run canceled')
-                    return
-
-                for target in targets:
-                    print '%s:~> %s-testsuite [%s]' % (target, name, targets[target].lastexit())
-                    print targets[target].lastout()
-                    if targets[target].lasterr():
-                        print targets[target].lasterr()
-
-                out.info('done')
-        else:
-
+        if not(args and command):
             self.parse_error(self.do_testsuite_run, args)
+            return
+
+        targets = enabled_targets(self.targets)
+
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, args.split(','))
+
+        if not command.startswith('/'):
+            command = os.path.join(config.target_testsuitedir, command.strip())
+
+        command = 'export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5, command)
+        name = os.path.basename(command).replace('-run', '')
+
+        if targets:
+            try:
+                RunCommand(targets, command).run()
+            except KeyboardInterrupt:
+                out.info('testsuite run canceled')
+                return
+
+            for target in targets:
+                print '%s:~> %s-testsuite [%s]' % (target, name, targets[target].lastexit())
+                print targets[target].lastout()
+                if targets[target].lasterr():
+                    print targets[target].lasterr()
+
+            out.info('done')
 
     def complete_testsuite_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1631,61 +1632,62 @@ class CommandPrompt(cmd.Cmd):
 
         (args, _, command) = args.rpartition(',')
 
-        if args and command:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            name = os.path.basename(command).replace('-run', '')
-            time = date.today().strftime('%d/%m/%y')
-            swampid = self.metadata.swampid
-            username = config.session_user
-
-            comment = 'testing %s (SWAMP %s) on %s' % (name, swampid, time)
-
-            comment = edit_text(comment)
-
-            if len(comment) > 100:
-                out.warning('comment strings > 100 chars are truncated by remote_qa_db_report.pl')
-
-            out.info('please specify rd-qa NIS password')
-            password = getpass.getpass()
-
-            submit = []
-            submit.append('echo \'echo -n "%s"\' > /tmp/pwdask' % password)
-            submit.append('chmod 700 /tmp/pwdask')
-            submit.append('SSH_ASKPASS=/tmp/pwdask DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\''
-                           % (self.metadata.md5, username, self.metadata.md5, comment))
-            submit.append('rm /tmp/pwdask')
-
-            for target in targets:
-                for command in submit:
-                    try:
-                        temp = {target:targets[target]}
-                        RunCommand(temp, command).run()
-                    except KeyboardInterrupt:
-                        return
-
-                    if 'remote_qa_db_report.pl' in command:
-                        if targets[target].lastexit() != 0:
-                            out.critical('submitting testsuite results failed on %s:' % target)
-                            print '%s:~> %s [%s]' % (target, name, targets[target].lastexit())
-                            print targets[target].lastout()
-                            if targets[target].lasterr():
-                                print targets[target].lasterr()
-                        else:
-                            match = re.search('(http://.*/submission.php.submission_id=\d+)', targets[target].lasterr())
-                            if match:
-                                system = targets[target].system
-                                out.info('submission for %s (%s): %s' % (target, system, match.group(1)))
-                            else:
-                                out.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (target,
-                                             target))
-
-            out.info('done')
-        else:
+        if not(args and command):
             self.parse_error(self.do_testsuite_submit, args)
+            return
+
+        targets = enabled_targets(self.targets)
+
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, args.split(','))
+
+        name = os.path.basename(command).replace('-run', '')
+        time = date.today().strftime('%d/%m/%y')
+        swampid = self.metadata.swampid
+        username = config.session_user
+
+        comment = 'testing %s (SWAMP %s) on %s' % (name, swampid, time)
+
+        comment = edit_text(comment)
+
+        if len(comment) > 100:
+            out.warning('comment strings > 100 chars are truncated by remote_qa_db_report.pl')
+
+        out.info('please specify rd-qa NIS password')
+        password = getpass.getpass()
+
+        submit = []
+        submit.append('echo \'echo -n "%s"\' > /tmp/pwdask' % password)
+        submit.append('chmod 700 /tmp/pwdask')
+        submit.append('SSH_ASKPASS=/tmp/pwdask DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\''
+                       % (self.metadata.md5, username, self.metadata.md5, comment))
+        submit.append('rm /tmp/pwdask')
+
+        for target in targets:
+            for command in submit:
+                try:
+                    temp = {target:targets[target]}
+                    RunCommand(temp, command).run()
+                except KeyboardInterrupt:
+                    return
+
+                if 'remote_qa_db_report.pl' in command:
+                    if targets[target].lastexit() != 0:
+                        out.critical('submitting testsuite results failed on %s:' % target)
+                        print '%s:~> %s [%s]' % (target, name, targets[target].lastexit())
+                        print targets[target].lastout()
+                        if targets[target].lasterr():
+                            print targets[target].lasterr()
+                    else:
+                        match = re.search('(http://.*/submission.php.submission_id=\d+)', targets[target].lasterr())
+                        if match:
+                            system = targets[target].system
+                            out.info('submission for %s (%s): %s' % (target, system, match.group(1)))
+                        else:
+                            out.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (target,
+                                         target))
+
+        out.info('done')
 
     def complete_testsuite_submit(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1779,11 +1781,12 @@ class CommandPrompt(cmd.Cmd):
         site     -- location name
         """
 
-        if args:
-            out.info('changed location from "%s" to "%s"' % (self.metadata.location, args))
-            self.metadata.location = args
-        else:
+        if not args:
             self.parse_error(self.do_set_location, args)
+            return
+
+        out.info('changed location from "%s" to "%s"' % (self.metadata.location, args))
+        self.metadata.location = args
 
     def complete_set_location(self, text, line, begidx, endidx):
         refhost = self._refhosts()
@@ -2018,37 +2021,37 @@ class CommandPrompt(cmd.Cmd):
 
         (args, _, packages) = args.rpartition(',')
 
-        if args and packages:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            if targets:
-                release = self.metadata.get_release()
-                try:
-                    installer = Installer[release]
-                except KeyError:
-                    out.critical('no installer available for %s' % release)
-                    return
-
-                out.info('installing')
-                for target in targets:
-                    targets[target].add_history(['install', packages])
-
-                try:
-                    installer(targets, packages.split()).run()
-                except Exception:
-                    out.critical('failed to install packages')
-                    return
-                except KeyboardInterrupt:
-                    out.info('installation process canceled')
-                    return
-                else:
-                    out.info('done')
-        else:
-
+        if not(args and packages):
             self.parse_error(self.do_install, args)
+            return
+
+        targets = enabled_targets(self.targets)
+
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, args.split(','))
+
+        if targets:
+            release = self.metadata.get_release()
+            try:
+                installer = Installer[release]
+            except KeyError:
+                out.critical('no installer available for %s' % release)
+                return
+
+            out.info('installing')
+            for target in targets:
+                targets[target].add_history(['install', packages])
+
+            try:
+                installer(targets, packages.split()).run()
+            except Exception:
+                out.critical('failed to install packages')
+                return
+            except KeyboardInterrupt:
+                out.info('installation process canceled')
+                return
+            else:
+                out.info('done')
 
     def complete_install(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -2065,34 +2068,34 @@ class CommandPrompt(cmd.Cmd):
 
         (args, _, packages) = args.rpartition(',')
 
-        if args and packages:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            if targets:
-                release = self.metadata.get_release()
-                try:
-                    uninstaller = Uninstaller[release]
-                except KeyError:
-                    out.critical('no uninstaller available for %s' % release)
-                    return
-
-                out.info('removing')
-                try:
-                    uninstaller(targets, packages.split()).run()
-                except Exception:
-                    out.critical('failed to remove packages')
-                    return
-                except KeyboardInterrupt:
-                    out.info('uninstallation process canceled')
-                    return
-                else:
-                    out.info('done')
-        else:
-
+        if not(args and packages):
             self.parse_error(self.do_uninstall, args)
+            return
+
+        targets = enabled_targets(self.targets)
+
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, args.split(','))
+
+        if targets:
+            release = self.metadata.get_release()
+            try:
+                uninstaller = Uninstaller[release]
+            except KeyError:
+                out.critical('no uninstaller available for %s' % release)
+                return
+
+            out.info('removing')
+            try:
+                uninstaller(targets, packages.split()).run()
+            except Exception:
+                out.critical('failed to remove packages')
+                return
+            except KeyboardInterrupt:
+                out.info('uninstallation process canceled')
+                return
+            else:
+                out.info('done')
 
     def complete_uninstall(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -2108,38 +2111,38 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if args:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            if targets:
-                release = self.metadata.get_release()
-
-                try:
-                    downgrader = Downgrader[release]
-                except KeyError:
-                    out.critical('no downgrader available for %s' % release)
-                    return
-
-                out.info('downgrading')
-                for target in targets:
-                    targets[target].add_history(['downgrade', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
-
-                try:
-                    downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
-                except Exception:
-                    out.critical('failed to downgrade target systems')
-                    return
-                except KeyboardInterrupt:
-                    out.info('downgrade process canceled')
-                    return
-                else:
-                    out.info('done')
-        else:
-
+        if not args:
             self.parse_error(self.do_downgrade, args)
+            return
+
+        targets = enabled_targets(self.targets)
+
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, args.split(','))
+
+        if targets:
+            release = self.metadata.get_release()
+
+            try:
+                downgrader = Downgrader[release]
+            except KeyError:
+                out.critical('no downgrader available for %s' % release)
+                return
+
+            out.info('downgrading')
+            for target in targets:
+                targets[target].add_history(['downgrade', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
+
+            try:
+                downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
+            except Exception:
+                out.critical('failed to downgrade target systems')
+                return
+            except KeyboardInterrupt:
+                out.info('downgrade process canceled')
+                return
+            else:
+                out.info('done')
 
     def complete_downgrade(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -2159,51 +2162,51 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if args:
-            force = False
-            installed = False
-            testing = False
-
-            parameter = args.split(',')
-            if 'force' in parameter:
-                force = True
-                parameter.remove('force')
-            if 'installed' in parameter:
-                installed = True
-                parameter.remove('installed')
-            if 'testing' in parameter:
-                testing = True
-                parameter.remove('testing')
-
-            args = ','.join(parameter)
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            if targets:
-                release = self.metadata.get_release()
-
-                try:
-                    preparer = Preparer[release]
-                except KeyError:
-                    out.critical('no preparer available for %s' % release)
-                    return True
-
-                out.info('preparing')
-                try:
-                    preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed, testing=testing).run()
-                except Exception:
-                    out.critical('failed to prepare target systems')
-                    return False
-                except KeyboardInterrupt:
-                    out.info('preparation process canceled')
-                    return False
-                else:
-                    out.info('done')
-        else:
-
+        if not args:
             self.parse_error(self.do_prepare, args)
+            return
+
+        force = False
+        installed = False
+        testing = False
+
+        parameter = args.split(',')
+        if 'force' in parameter:
+            force = True
+            parameter.remove('force')
+        if 'installed' in parameter:
+            installed = True
+            parameter.remove('installed')
+        if 'testing' in parameter:
+            testing = True
+            parameter.remove('testing')
+
+        args = ','.join(parameter)
+        targets = enabled_targets(self.targets)
+
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, args.split(','))
+
+        if targets:
+            release = self.metadata.get_release()
+
+            try:
+                preparer = Preparer[release]
+            except KeyError:
+                out.critical('no preparer available for %s' % release)
+                return True
+
+            out.info('preparing')
+            try:
+                preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed, testing=testing).run()
+            except Exception:
+                out.critical('failed to prepare target systems')
+                return False
+            except KeyboardInterrupt:
+                out.info('preparation process canceled')
+                return False
+            else:
+                out.info('done')
 
     def complete_prepare(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed', 'testing'])
@@ -2223,153 +2226,154 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if args:
-            prepare = True
-            missing = False
-            newpackage = False
+        if not args:
+            self.parse_error(self.do_update, args)
+            return
 
-            parameter = args.split(',')
+        prepare = True
+        missing = False
+        newpackage = False
 
-            # don't install new packages when doing a noninteractive kernel update
-            if not self.interactive and filter(lambda x: x in ['-kmp-', 'kernel-default'], self.metadata.packages):
-                try:
-                    parameter.remove('newpackage')
-                except ValueError:
-                    pass
-                parameter.append('installed')
+        parameter = args.split(',')
 
-            if 'newpackage' in parameter:
-                newpackage = True
+        # don't install new packages when doing a noninteractive kernel update
+        if not self.interactive and filter(lambda x: x in ['-kmp-', 'kernel-default'], self.metadata.packages):
+            try:
                 parameter.remove('newpackage')
+            except ValueError:
+                pass
+            parameter.append('installed')
 
-            if 'noprepare' in parameter:
-                prepare = False
-                parameter.remove('noprepare')
+        if 'newpackage' in parameter:
+            newpackage = True
+            parameter.remove('newpackage')
 
-            args = ','.join(parameter)
-            targets = enabled_targets(self.targets)
+        if 'noprepare' in parameter:
+            prepare = False
+            parameter.remove('noprepare')
 
-            if prepare:
-                if self.do_prepare(args) is False:
-                    return
+        args = ','.join(parameter)
+        targets = enabled_targets(self.targets)
 
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            for target in targets:
-                lock = targets[target].locked()
-                if lock.locked and not lock.own():
-                    out.warning('host %s is locked since %s by %s. aborting.' % (target, lock.time(), lock.user))
-                    if lock.comment:
-                        out.info("%s's comment: %s" % (lock.user, lock.comment))
-                    return
-
-            for target in targets:
-                targets[target].set_locked()
-                not_installed = []
-                packages = targets[target].packages
-
-                targets[target].query_versions()
-
-                for package in packages:
-                    required = self.metadata.packages[package]
-                    before = targets[target].packages[package].current
-
-                    packages[package].set_versions(before=before, required=required)
-
-                    if before is None or before == '0':
-                        missing = True
-                        not_installed.append(package)
-                    else:
-                        if RPMVersion(before) >= RPMVersion(required):
-                            out.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
-
-                if len(not_installed):
-                    out.warning('%s: these packages are not installed: %s' % (target, not_installed))
-
-            if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
-                for target in targets:
-                    if not lock.locked:
-                        targets[target].remove_lock()
+        if prepare:
+            if self.do_prepare(args) is False:
                 return
 
-            script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.md5))
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, args.split(','))
 
-            out.info('updating')
-
-            release = self.metadata.get_release()
-            try:
-                updater = Updater[release]
-            except KeyError:
-                out.critical('no updater available for %s' % release)
-                for target in targets:
-                    if not lock.locked:
-                        targets[target].remove_lock()
+        for target in targets:
+            lock = targets[target].locked()
+            if lock.locked and not lock.own():
+                out.warning('host %s is locked since %s by %s. aborting.' % (target, lock.time(), lock.user))
+                if lock.comment:
+                    out.info("%s's comment: %s" % (lock.user, lock.comment))
                 return
 
-            out.debug("chosen updater: %s" % repr(updater))
+        for target in targets:
+            targets[target].set_locked()
+            not_installed = []
+            packages = targets[target].packages
 
-            try:
-                updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
-            except Exception:
-                out.critical('failed to update target systems')
-                for target in targets:
-                    if not lock.locked:
-                        targets[target].remove_lock()
-                Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
-                return
-            except KeyboardInterrupt:
-                out.info('update process canceled')
-                for target in targets:
-                    if not lock.locked:
-                        targets[target].remove_lock()
-                return
+            targets[target].query_versions()
 
-            if newpackage:
-                self.do_prepare('%s,testing' % args)
+            for package in packages:
+                required = self.metadata.packages[package]
+                before = targets[target].packages[package].current
 
-            missing = False
-            for target in targets:
-                targets[target].add_history(['update', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
-                packages = targets[target].packages
+                packages[package].set_versions(before=before, required=required)
 
-                targets[target].query_versions()
+                if before is None or before == '0':
+                    missing = True
+                    not_installed.append(package)
+                else:
+                    if RPMVersion(before) >= RPMVersion(required):
+                        out.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
 
-                for package in packages:
-                    before = packages[package].before
-                    required = packages[package].required
-                    after = targets[target].packages[package].current
+            if len(not_installed):
+                out.warning('%s: these packages are not installed: %s' % (target, not_installed))
 
-                    packages[package].set_versions(after=after)
-
-                    if after is not None and after != '0':
-                        if RPMVersion(before) == RPMVersion(after):
-                            missing = True
-                            out.warning('%s: package was not updated: %s (%s)' % (target, package, after))
-
-                        if RPMVersion(after) < RPMVersion(required):
-                            missing = True
-                            out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
-                                        required))
-
-            if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
-                for target in targets:
-                    if not lock.locked:
-                        targets[target].remove_lock()
-                return
-
-            script_hook(targets, 'post', os.path.dirname(self.metadata.path), str(self.metadata.md5))
-            script_hook(targets, 'compare', os.path.dirname(self.metadata.path), str(self.metadata.md5))
-            FileDelete(targets, os.path.join(config.target_tempdir, str(self.metadata.md5), 'output')).run()
-
+        if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
             for target in targets:
                 if not lock.locked:
                     targets[target].remove_lock()
+            return
 
-            Notification('MTUI', 'updating %s finished' % self.session).show()
-            out.info('done')
-        else:
-            self.parse_error(self.do_update, args)
+        script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.md5))
+
+        out.info('updating')
+
+        release = self.metadata.get_release()
+        try:
+            updater = Updater[release]
+        except KeyError:
+            out.critical('no updater available for %s' % release)
+            for target in targets:
+                if not lock.locked:
+                    targets[target].remove_lock()
+            return
+
+        out.debug("chosen updater: %s" % repr(updater))
+
+        try:
+            updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
+        except Exception:
+            out.critical('failed to update target systems')
+            for target in targets:
+                if not lock.locked:
+                    targets[target].remove_lock()
+            Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
+            return
+        except KeyboardInterrupt:
+            out.info('update process canceled')
+            for target in targets:
+                if not lock.locked:
+                    targets[target].remove_lock()
+            return
+
+        if newpackage:
+            self.do_prepare('%s,testing' % args)
+
+        missing = False
+        for target in targets:
+            targets[target].add_history(['update', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
+            packages = targets[target].packages
+
+            targets[target].query_versions()
+
+            for package in packages:
+                before = packages[package].before
+                required = packages[package].required
+                after = targets[target].packages[package].current
+
+                packages[package].set_versions(after=after)
+
+                if after is not None and after != '0':
+                    if RPMVersion(before) == RPMVersion(after):
+                        missing = True
+                        out.warning('%s: package was not updated: %s (%s)' % (target, package, after))
+
+                    if RPMVersion(after) < RPMVersion(required):
+                        missing = True
+                        out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
+                                    required))
+
+        if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
+            for target in targets:
+                if not lock.locked:
+                    targets[target].remove_lock()
+            return
+
+        script_hook(targets, 'post', os.path.dirname(self.metadata.path), str(self.metadata.md5))
+        script_hook(targets, 'compare', os.path.dirname(self.metadata.path), str(self.metadata.md5))
+        FileDelete(targets, os.path.join(config.target_tempdir, str(self.metadata.md5), 'output')).run()
+
+        for target in targets:
+            if not lock.locked:
+                targets[target].remove_lock()
+
+        Notification('MTUI', 'updating %s finished' % self.session).show()
+        out.info('done')
 
     def complete_update(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage', 'noprepare'])
@@ -2454,17 +2458,17 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            targets = self.targets
-
-            for filename in glob.glob(args):
-                if os.path.isfile(filename):
-                    remote = os.path.join(config.target_tempdir, str(self.metadata.md5), os.path.basename(filename))
-
-                    FileUpload(targets, filename, remote).run()
-                    out.info('uploaded %s to %s' % (filename, remote))
-        else:
-
             self.parse_error(self.do_put, args)
+            return
+
+        targets = self.targets
+
+        for filename in glob.glob(args):
+            if os.path.isfile(filename):
+                remote = os.path.join(config.target_tempdir, str(self.metadata.md5), os.path.basename(filename))
+
+                FileUpload(targets, filename, remote).run()
+                out.info('uploaded %s to %s' % (filename, remote))
 
     def complete_put(self, text, line, begidx, endidx):
         return self.complete_filelist(text, line, begidx, endidx)
@@ -2480,26 +2484,26 @@ class CommandPrompt(cmd.Cmd):
         filename -- file to download from the target hosts
         """
 
-        if args:
-            targets = self.targets
-
-            destination = os.path.join(os.path.dirname(self.metadata.path), 'downloads')
-            local = os.path.join(destination, os.path.basename(args))
-
-            try:
-                os.makedirs(destination)
-            except OSError as error:
-                if error.errno == errno.EEXIST:
-                    pass
-            except Exception as error:
-                out.critical('failed to create directories: %s' % str(error))
-                return
-
-            FileDownload(targets, args, local, True).run()
-            out.info('downloaded %s to %s' % (args, local))
-        else:
-
+        if not args:
             self.parse_error(self.do_get, args)
+            return
+
+        targets = self.targets
+
+        destination = os.path.join(os.path.dirname(self.metadata.path), 'downloads')
+        local = os.path.join(destination, os.path.basename(args))
+
+        try:
+            os.makedirs(destination)
+        except OSError as error:
+            if error.errno == errno.EEXIST:
+                pass
+        except Exception as error:
+            out.critical('failed to create directories: %s' % str(error))
+            return
+
+        FileDownload(targets, args, local, True).run()
+        out.info('downloaded %s to %s' % (args, local))
 
     def do_terms(self, args):
         """
