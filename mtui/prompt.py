@@ -2290,7 +2290,7 @@ class CommandPrompt(cmd.Cmd):
                     targets[target].remove_lock()
             return
 
-        script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.md5))
+        script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.id))
 
         out.info('updating')
 
@@ -2327,7 +2327,7 @@ class CommandPrompt(cmd.Cmd):
 
         missing = False
         for target in targets:
-            targets[target].add_history(['update', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
+            targets[target].add_history(['update', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
             packages = targets[target].packages
 
             targets[target].query_versions()
@@ -2355,9 +2355,9 @@ class CommandPrompt(cmd.Cmd):
                     targets[target].remove_lock()
             return
 
-        script_hook(targets, 'post', os.path.dirname(self.metadata.path), str(self.metadata.md5))
-        script_hook(targets, 'compare', os.path.dirname(self.metadata.path), str(self.metadata.md5))
-        FileDelete(targets, os.path.join(config.target_tempdir, str(self.metadata.md5), 'output')).run()
+        script_hook(targets, 'post', os.path.dirname(self.metadata.path), str(self.metadata.id))
+        script_hook(targets, 'compare', os.path.dirname(self.metadata.path), str(self.metadata.id))
+        FileDelete(targets, os.path.join(config.target_tempdir, str(self.metadata.id), 'output')).run()
 
         for target in targets:
             if not lock.locked:
