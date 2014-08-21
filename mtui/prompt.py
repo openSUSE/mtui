@@ -1567,26 +1567,31 @@ class CommandPrompt(cmd.Cmd):
         if args.split(',')[0] != 'all':
             targets = selected_targets(targets, args.split(','))
 
+        if not targets:
+            return
+
         if not command.startswith('/'):
             command = os.path.join(config.target_testsuitedir, command.strip())
 
-        command = 'export TESTS_LOGDIR=/var/log/qa/%s; %s' % (self.metadata.md5, command)
+        command = 'export TESTS_LOGDIR=/var/log/qa/{0}; {1}'.format(
+            self.metadata.id,
+            command
+        )
         name = os.path.basename(command).replace('-run', '')
 
-        if targets:
-            try:
-                RunCommand(targets, command).run()
-            except KeyboardInterrupt:
-                out.info('testsuite run canceled')
-                return
+        try:
+            RunCommand(targets, command).run()
+        except KeyboardInterrupt:
+            out.info('testsuite run canceled')
+            return
 
-            for target in targets:
-                print '%s:~> %s-testsuite [%s]' % (target, name, targets[target].lastexit())
-                print targets[target].lastout()
-                if targets[target].lasterr():
-                    print targets[target].lasterr()
+        for target in targets:
+            print '%s:~> %s-testsuite [%s]' % (target, name, targets[target].lastexit())
+            print targets[target].lastout()
+            if targets[target].lasterr():
+                print targets[target].lasterr()
 
-            out.info('done')
+        out.info('done')
 
     def complete_testsuite_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
