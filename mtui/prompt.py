@@ -18,6 +18,7 @@ import re
 import getpass
 import shutil
 from traceback import print_exc
+from os.path import join
 
 from datetime import datetime
 from traceback import print_exc
@@ -287,6 +288,13 @@ class CommandPrompt(cmd.Cmd):
         except Exception:
             out.error('failed to load reference hosts data')
             raise
+
+    def target_tempdir(self, *path):
+        if self.metadata:
+            return self.metadata.target_wd(*path)
+
+        path = [self.config.target_tempdir] + list(path)
+        return join(*path)
 
     def do_search_hosts(self, args):
         """
@@ -2448,18 +2456,18 @@ class CommandPrompt(cmd.Cmd):
         filename -- file to upload to the target hosts
         """
 
-        if args:
+        if not args:
             self.parse_error(self.do_put, args)
             return
 
-        targets = self.targets
-
         for filename in glob.glob(args):
-            if os.path.isfile(filename):
-                remote = os.path.join(config.target_tempdir, str(self.metadata.md5), os.path.basename(filename))
+            if not os.path.isfile(filename):
+                continue
 
-                FileUpload(targets, filename, remote).run()
-                out.info('uploaded %s to %s' % (filename, remote))
+            remote = self.target_tempdir(os.path.basename(filename))
+
+            FileUpload(self.targets, filename, remote).run()
+            self.log.info('uploaded {0} to {1}'.format(filename, remote))
 
     def complete_put(self, text, line, begidx, endidx):
         return self.complete_filelist(text, line, begidx, endidx)
