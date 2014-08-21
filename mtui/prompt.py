@@ -19,7 +19,7 @@ import getpass
 import shutil
 from traceback import print_exc
 
-from datetime import date, datetime
+from datetime import datetime
 from traceback import print_exc
 
 from mtui.rpmver import *

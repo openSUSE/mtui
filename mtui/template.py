@@ -9,12 +9,17 @@ import shutil
 import glob
 import stat
 from traceback import format_exc
+from abc import ABCMeta
+from abc import abstractmethod
+from datetime import date
 
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
+from mtui.utils import edit_text
+from mtui.utils import UserMessage
 
 try:
     from nose.tools import nottest
@@ -30,6 +35,8 @@ class _TemplateIOError(IOError):
     """
     pass
 
+class QadbReportCommentLengthWarning(UserMessage):
+    message = 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'
 
 def testreport_svn_checkout(config, log, uri):
     ensure_dir_exists(
@@ -55,6 +62,7 @@ class UpdateID(object):
         tr = self.testreport_factory(
             self.config,
             self.log,
+            date = date
         )
 
         try:
@@ -101,12 +109,26 @@ class TestReport(object):
     # Firstly, it might clear some things up to change the open/read
     # things to file-like interface.
 
+    __metaclass__ = ABCMeta
+
     targetFactory = Target
     refhostsFactory = RefhostsFactory
 
-    def __init__(self, config, log):
+    @property
+    @abstractmethod
+    def _type(self):
+        """
+        :return: str Short human readable description of the TestReport
+            type.
+        """
+
+    def __init__(self, config, log, date):
+        """
+        :type today: f :: L{datetime.date}
+        """
         self.config = config
         self.log = log
+        self._date = date
 
         self.location = config.location
         self.directory = config.template_dir
@@ -136,6 +158,9 @@ class TestReport(object):
         self.packager = ""
         self.reviewer = ""
         self.md5 = None
+        """
+        :type md5: MD5Hash instance or None
+        """
 
 
     def _copytree(_, *args, **kw):
@@ -420,8 +445,55 @@ class TestReport(object):
     def patchinfo_url(self):
         return '/'.join([self.config.patchinfo_url, str(self.id)])
 
+    def get_testsuite_comment(self, testsuite):
+        return TestsuiteComment(
+            self.log,
+            "{0} {1}".format(self._type, self.id),
+            testsuite,
+            self._date.today(),
+            text_editor = edit_text
+        )
+
+class TestsuiteComment(object):
+    _max_comment_len = 100
+
+    def __init__(self, log, update_id, testsuite, date, text_editor = None):
+        """
+        :type update_id: str
+        :type testsuite: str or None
+        :type date: L{datetime.date}
+        :type text_editor: f :: str -> str
+        """
+        self.update_id = update_id
+        self.log = log
+        self.date = date
+        self.testsuite = testsuite
+
+        self._user_str = None
+        self._text_editor = text_editor
+
+    def _to_str(self):
+        if self._user_str:
+            return self._user_str
+
+        return 'testing {2} on {0} on {1}'.format(
+            self.update_id,
+            self.date.strftime('%d/%m/%y'),
+            self.testsuite
+        )
+
+    def __str__(self):
+        xs = self._to_str()
+        if len(xs) > self._max_comment_len:
+            self.log.warning(QadbReportCommentLengthWarning())
+        return xs
+
+    def edit_text(self):
+        self._user_str = self._text_editor(str(self))
 
 class SwampTestReport(TestReport):
+    _type = "SWAMP"
+
     @property
     def id(self):
         return self.md5
@@ -434,6 +506,8 @@ class SwampTestReport(TestReport):
         ] + super(SwampTestReport, self)._show_yourself_data()
 
 class OBSTestReport(TestReport):
+    _type = "OBS"
+
     @property
     def id(self):
         return self.rrid
