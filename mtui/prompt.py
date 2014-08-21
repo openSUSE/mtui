@@ -102,16 +102,16 @@ class CommandPrompt(cmd.Cmd):
     # Note: it might be possible to choose from several existing CLI
     # frameworks. Eg. cement. Maybe there's something in twisted, which
     # would be great if it could replace the ssh layer as well.
-    prompt = 'mtui> '
 
     def __init__(self, config, log, sys_=None):
+        self.set_prompt()
+
         cmd.Cmd.__init__(self)
 
         self.interactive = True
 
         self.targets = {}
         self.metadata = None
-        self.session = None
 
         self.homedir = os.path.expanduser('~')
         self.config = config
@@ -1680,12 +1680,17 @@ class CommandPrompt(cmd.Cmd):
         name     -- session name
         """
 
-        if args:
-            self.session = args
-            self.prompt = 'QA:%s > ' % self.session
-        else:
-            self.session = self.metadata.md5
-            self.prompt = 'QA > '
+        session = args.strip()
+        if not session:
+            if self.metadata:
+                session = self.metadata.id
+            else:
+                session = None
+
+    def set_prompt(self, session=None):
+        self.session = session
+        session = ":"+session if session else ''
+        self.prompt = 'mtui{0}> '.format(session)
 
     def do_load_template(self, args):
         """
