@@ -395,6 +395,28 @@ class TestReport(object):
     def _testreport_url(self):
         return '/'.join([self.config.reports_url, str(self.id), 'log'])
 
+    def local_wd(self, *paths):
+        """
+        :return: str local working directory
+        """
+        return self._wd(self.config.local_tempdir, str(self.id), *paths)
+
+    def report_wd(self, *paths, **kw):
+        """
+        :return: str local working directory relative to the testreport
+            checkout.
+        """
+        return self._wd(dirname(self.path), *paths, **kw)
+
+    def _wd(self, *paths, **kwargs):
+        return ensure_dir_exists(*paths, **kwargs)
+
+    def target_wd(self, *paths):
+        """
+        :return: str remote working directory on SUT
+        """
+        return join(self.config.target_tempdir, str(self.id), *paths)
+
     def patchinfo_url(self):
         return '/'.join([self.config.patchinfo_url, str(self.id)])
 
