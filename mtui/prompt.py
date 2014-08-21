@@ -296,6 +296,19 @@ class CommandPrompt(cmd.Cmd):
         path = [self.config.target_tempdir] + list(path)
         return join(*path)
 
+    def downloads_wd(self, *path, **kw):
+        """
+        :return: str directory for downloads.
+            If template is loaded, it's ${report directory}/downloads
+            Otherwise ${CWD}/downloads
+        """
+        path = ['downloads'] + list(path)
+        return (
+            self.metadata.report_wd
+            if self.metadata
+            else ensure_dir_exists
+        )(*path, **kw)
+
     def do_search_hosts(self, args):
         """
         Seach hosts by by the specified attributes. A attribute tag could also be a
@@ -2487,22 +2500,10 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_get, args)
             return
 
-        targets = self.targets
+        local = self.downloads_wd(os.path.basename(args), filepath=True)
 
-        destination = os.path.join(os.path.dirname(self.metadata.path), 'downloads')
-        local = os.path.join(destination, os.path.basename(args))
-
-        try:
-            os.makedirs(destination)
-        except OSError as error:
-            if error.errno == errno.EEXIST:
-                pass
-        except Exception as error:
-            out.critical('failed to create directories: %s' % str(error))
-            return
-
-        FileDownload(targets, args, local, True).run()
-        out.info('downloaded %s to %s' % (args, local))
+        FileDownload(self.targets, args, local, True).run()
+        self.log.info('downloaded {0} to {1}'.format(args, local))
 
     def do_terms(self, args):
         """
