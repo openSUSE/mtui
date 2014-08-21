@@ -395,6 +395,10 @@ class TestReport(object):
     def _testreport_url(self):
         return '/'.join([self.config.reports_url, str(self.id), 'log'])
 
+    def patchinfo_url(self):
+        return '/'.join([self.config.patchinfo_url, str(self.id)])
+
+
 class SwampTestReport(TestReport):
     @property
     def id(self):
