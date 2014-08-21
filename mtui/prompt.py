@@ -655,36 +655,22 @@ class CommandPrompt(cmd.Cmd):
         filename -- filename to extract
         """
 
-        destination = os.path.join(config.local_tempdir, str(self.metadata.md5))
-        pattern = ''
+        with chdir(self.metadata.local_wd()):
+            rc = os.system('wget -q -r -nd -l2 --no-parent -A "*src.rpm" {0}/'.format(self.metadata.patchinfo_url()))
 
-        if args:
-            pattern = args
+            if rc:
+                self.log.error('failed to fetch src rpm')
+                return
 
-        try:
-            os.makedirs(destination)
-        except OSError as error:
-            if error.errno == errno.EEXIST:
-                pass
-        except Exception as error:
-            out.critical('failed to create temp directory: %s' % str(error))
-            return
+            rc = os.system('for i in *src.rpm; do name=$(rpm -qp --queryformat "%%{{NAME}}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories %s; cd ..; done'.format(args.strip()))
 
-        patchinfo = '/'.join([config.patchinfo_url, str(self.metadata.md5)])
+            if rc:
+                self.log.error('failed to extract src rpm')
+                return
 
-        exitcode = os.system('cd %s; wget -q -r -nd -l2 --no-parent -A "*src.rpm" %s/'
-                             % (destination, patchinfo))
-        if exitcode:
-            out.error('failed to fetch src rpm')
-            return
-        exitcode = \
-            os.system('cd %s; for i in *src.rpm; do name=$(rpm -qp --queryformat "%%{NAME}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories %s; cd ..; done'
-                       % (destination, pattern))
-        if exitcode:
-            out.error('failed to extract src rpm')
-            return
-
-        out.info('src rpm was extracted to %s' % destination)
+        self.log.info('src rpm was extracted to {0}'.format(
+            self.metadata.local_wd()
+        ))
 
     @requires_update
     def do_source_diff(self, args):
