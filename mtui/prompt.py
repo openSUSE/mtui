@@ -2122,7 +2122,7 @@ class CommandPrompt(cmd.Cmd):
 
             out.info('downgrading')
             for target in targets:
-                targets[target].add_history(['downgrade', str(self.metadata.md5), ' '.join(self.metadata.get_package_list())])
+                targets[target].add_history(['downgrade', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
 
             try:
                 downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
