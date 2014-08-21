@@ -1298,31 +1298,6 @@ class CommandPrompt(cmd.Cmd):
             return self.complete_testopia_testcaselist(text, line, begidx, endidx)
 
     @requires_update
-    def do_list_testsuite_commands(self, args):
-        """
-        List all commands which are invoked when running ctcs2 testsuites
-        on the target hosts.
-
-        list_testsuite_commands
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            self.parse_error(self.do_list_testsuite_commands, args)
-            return
-
-        time = date.today().strftime('%d/%m/%y')
-        swampid = self.metadata.swampid
-        username = config.session_user
-
-        comment = 'testing <testsuite> on SWAMP %s on %s' % (swampid, time)
-
-        print 'export TESTS_LOGDIR=/var/log/qa/%s; <testsuite>' % self.metadata.md5
-        print '/usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:%s -T %s -f /var/log/qa/%s -c \'%s\'' % (self.metadata.md5,
-                username, self.metadata.md5, comment)
-
-    @requires_update
     def do_list_bugs(self, args):
         """
         Lists related bugs and corresponding Bugzilla URLs.
