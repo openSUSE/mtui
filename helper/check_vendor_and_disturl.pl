@@ -6,9 +6,10 @@
 # tested and supported products;
 # - SLES9 SP3 - SP4
 # - SLE10 SP1 - SP4
-# - SLE11 GA - SP1
+# - SLE11 GA - SP3
+# - SLE12 GA
 # - SLES4VMware
-# - openSUSE 11.1 - 11.4
+# - openSUSE 11.1 - 13.1
 #
 
 use strict;
@@ -21,6 +22,7 @@ if ($ARGV[0] =~ /^[0-9a-f]{32}$/i) { $url = $defaultbuilddir . $ARGV[0]; }
 
 my %valid_vendors = (
     "SLE" => [
+         "SUSE LLC <https://www.suse.com/>", # SLE12
          "SUSE LINUX Products GmbH, Nuernberg, Germany",
          "SuSE Linux AG, Nuernberg, Germany", # packages shipped before 2004
          "IBM Corp.", # specific to ppc(64) on all SLE products
@@ -33,6 +35,8 @@ my %valid_vendors = (
 
 my %valid_disturls = (
     "SLE" => [
+         "obs://build.suse.de/SUSE:SLE-12:GA/standard/",
+         "obs://build.suse.de/SUSE:Maintenance:[0-9]+/SUSE_SLE-12_Update/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Products:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Products:Test:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11:GA/standard/",

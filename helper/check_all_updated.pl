@@ -21,6 +21,7 @@ my $ibs = "https://api.suse.de/public/";
 my $obs = "https://api.opensuse.org/public/";
 my $defaultbuilddir = "http://hilbert.nue.suse.com/abuildstat/patchinfo/";
 my $defaultbuilddir_opensuse_org = "http://download.opensuse.org/repositories/openSUSE:/Maintenance:/";
+my $defaultbuilddir_suse = "http://download.suse.de/ibs/SUSE:/Maintenance:/";
 my $defaultptfdir = "http://euklid.suse.de/mirror/SuSE/support.suse.de/";
 my %disturl_mapper;
 my %disturl_packages;
@@ -43,8 +44,11 @@ The argument to --build and --filter can be either a web url (like http://hilber
    ad8b1800d6dc90608d0c5a7103bc1839 
    expanded to http://hilbert.nue.suse.com/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/
 
-   177/openSUSE_12.1_Update/
-   expanded to http://download.opensuse.org/repositories/openSUSE:/Maintenance:/177/openSUSE_12.1_Update/
+   openSUSE:Maintenance:177:17
+   expanded to http://download.opensuse.org/repositories/openSUSE:/Maintenance:/177/
+
+   SUSE:Maintenance:32:12
+   expanded to http://download.suse.de/ibs/SUSE:/Maintenance:/32/
 
    x86_64/update/SUSE-SLES/10/PTF/b27a428a0750dc195e58933ba4411674/20110321
    expanded to http://euklid.suse.de/mirror/SuSE/support.suse.de/x86_64/update/SUSE-SLES/10/PTF/b27a428a0750dc195e58933ba4411674/20110321
@@ -88,27 +92,39 @@ my $filterarg = (defined $filter) ? $filter : (defined $build) ? $build : (defin
 
 if (defined $filterarg) { 
    if ($filterarg =~ /^[0-9a-f]{32}$/i) { $filter = $defaultbuilddir . $filterarg; }
-   elsif ($filterarg =~ /^[0-9]+\/openSUSE/) { $filter = $defaultbuilddir_opensuse_org . $filterarg; }
-   elsif ($filterarg =~ /^(i386|ia64|ppc|ppc64|s390|s390x|x86_64)\/.*\/PTF\//) { $filter = $defaultptfdir . $filterarg; }
+   elsif ($filterarg =~ /^openSUSE:Maintenance:([0-9]+):/) { $filter = $defaultbuilddir_opensuse_org . $1 . "/"; }
+   elsif ($filterarg =~ /^SUSE:Maintenance:([0-9]+):/) { $filter = $defaultbuilddir_suse . $1 . "/"; }
+   elsif ($filterarg =~ /^(i386|i586|i686|ia64|ppc|s390|x86_64|aarch)\/.*\/PTF\//) { $filter = $defaultptfdir . $filterarg; }
    else { $filter = $filterarg; }
    print "INFO: assuming <url to build dir> = $filter\n";
 }
 
 sub geturlsofsrcrpms {
+    # TODO: replace with a (limited) recursion parser (but having minimal Perl module dependencies)
     my $url = shift or die;
     my @srcrpms;
 
     if ($url =~ /^http/) {
         open (IN, "-|", "w3m -dump $url");
         while (<IN>) {
+            defined $debug && print "DEBUG: $_";
             if (/\[DIR\]\s+(\S+)\//i) {
                 my $subdir = $1;
                 open (INS, "-|", "w3m -dump $url/$subdir");
                 while (<INS>) {
-                    if (/\s+(\S+\.(no)?src\.rpm)\s+/i) {
-                        my $srcrpm = $1;
-                        push (@srcrpms, "$url/$subdir/$srcrpm");
-			defined $debug && print "DEBUG: geturlsofsrcrpms(): pushing $url/$subdir/$srcrpm\n";
+                    defined $debug && print "DEBUG: $_";
+                    if (/\[DIR\]\s+(\S+)\//i) {
+                       my $subsubdir = $1;
+                       open (INSS, "-|", "w3m -dump $url/$subdir/$subsubdir");
+                       while (<INSS>) {
+                            defined $debug && print "DEBUG: $_";
+			    if (/\s+(\S+\.(no)?src\.rpm)\s+/i) {
+				my $srcrpm = $1;
+				push (@srcrpms, "$url/$subdir/$subsubdir/$srcrpm");
+				defined $debug && print "DEBUG: geturlsofsrcrpms(): pushing $url/$subdir/$srcrpm\n";
+			    }
+                       }
+                       close (INSS);
                     }
                 }
                 close (INS);
@@ -121,7 +137,12 @@ sub geturlsofsrcrpms {
         @srcrpms = split (/\n/, `find $url -iname '*\.src\.rpm' -or -iname '*\.nosrc\.rpm'`);
     }
 
-    return @srcrpms;
+    my %usrcrpms;
+    foreach my $srcrpm (@srcrpms) {
+       if ($srcrpm =~ /^.*\/(.*)$/) { $usrcrpms{"$1"} = $srcrpm; }
+    }
+
+    return values %usrcrpms;
 }
 
 if (defined $filter) {
@@ -285,11 +306,15 @@ while (my ($disturl, $name) = each %disturl_mapper) {
     close(BS);
 }
 
-print "INFO: $mismatches mismatches among the $consideredpackages considered packages could be detected (" . 
-      int($mismatches/$consideredpackages*100) . "%)\n";
+my $rate;
 
+$rate = ($consideredpackages != 0) ? int($mismatches/$consideredpackages*100) : "(nan)";
+print "INFO: $mismatches mismatches among the $consideredpackages considered packages could be detected ($rate%)\n";
+
+$rate = ($installedpackages != 0) ? int($skippedpackages/$installedpackages*100) : "(nan)";
 if (defined $installed) { 
-    print "INFO: the DISTURL of $skippedpackages out of $installedpackages installed packages does not point to a known update project (" . int($skippedpackages/$installedpackages*100) . "%, never updated?)\n";      
+    print "INFO: the DISTURL of $skippedpackages out of $installedpackages installed packages does not point to a known update project (" .
+    "$rate%, never updated?)\n";
 }
 
 exit 0;
