@@ -60,6 +60,12 @@ Note: the assumption is that no packages exist in <url to build dir> that have b
 Use the option --verbose to output the diff of the changelogs of the mismatching source revisions.
 ";
 
+sub mydebug {
+    my $string = shift;
+    return unless defined $debug;
+    print "DEBUG: $string";
+}
+
 GetOptions(
      "h|help" => \$help,
      "i|installed" => \$installed,
@@ -107,24 +113,29 @@ sub geturlsofsrcrpms {
     if ($url =~ /^http/) {
         open (IN, "-|", "w3m -dump $url");
         while (<IN>) {
-            defined $debug && print "DEBUG: $_";
+            mydebug("$_");
             if (/\[DIR\]\s+(\S+)\//i) {
                 my $subdir = $1;
                 open (INS, "-|", "w3m -dump $url/$subdir");
                 while (<INS>) {
-                    defined $debug && print "DEBUG: $_";
+                    mydebug("$_");
                     if (/\[DIR\]\s+(\S+)\//i) {
                        my $subsubdir = $1;
                        open (INSS, "-|", "w3m -dump $url/$subdir/$subsubdir");
                        while (<INSS>) {
-                            defined $debug && print "DEBUG: $_";
-			    if (/\s+(\S+\.(no)?src\.rpm)\s+/i) {
-				my $srcrpm = $1;
-				push (@srcrpms, "$url/$subdir/$subsubdir/$srcrpm");
-				defined $debug && print "DEBUG: geturlsofsrcrpms(): pushing $url/$subdir/$srcrpm\n";
-			    }
+                           mydebug("$_");
+                           if (/\s+(\S+\.(no)?src\.rpm)\s+/i) {
+                               my $srcrpm = $1;
+                               push (@srcrpms, "$url/$subdir/$subsubdir/$srcrpm");
+                               mydebug("geturlsofsrcrpms(): pushing $url/$subdir/$subsubdir/$srcrpm\n");
+                           }
                        }
                        close (INSS);
+                    }
+                    elsif (/\s+(\S+\.(no)?src\.rpm)\s+/i) {
+                        my $srcrpm = $1;
+                        push (@srcrpms, "$url/$subdir/$srcrpm");
+                        mydebug("geturlsofsrcrpms(): pushing $url/$subdir/$srcrpm\n");
                     }
                 }
                 close (INS);
@@ -158,9 +169,9 @@ if (defined $filter) {
             }
             else { 
                 $buildsrcnames{$srcname}++; 
-		defined $debug && print "DEBUG: \$buildsrcnames{'$srcname'} = " . $buildsrcnames{$srcname} . "\n";
+                mydebug("\$buildsrcnames{'$srcname'} = " . $buildsrcnames{$srcname} . "\n");
             }
-            defined $debug && print "DEBUG: src rpm $srcname references $disturl\n";
+            mydebug("src rpm $srcname references $disturl\n");
         }
         close (IN);
     }
@@ -176,7 +187,7 @@ if (defined $installed) {
     while (<IN>) {
         my ($package, $disturl) = split;
         next if ($package =~ /^gpg-pubkey/);
-	$installedpackages++;    
+        $installedpackages++;    
 
         my ($srcname) = ($disturl =~ m/\/[0-9a-f]{32,}-([^\/\.]*)/);
         if (not defined $srcname) {
@@ -187,12 +198,12 @@ if (defined $installed) {
         else { 
             $disturl_mapper{$disturl} = $srcname;
             push (@{$disturl_packages{$disturl}}, $package); 
-	    defined $debug && print "DEBUG: case 'defined installed': srcname = $srcname\n";
+            mydebug("case 'defined installed': srcname = $srcname\n");
             if (not defined $filter or defined $buildsrcnames{$srcname}) {
                 $consideredpackages++;
             }
         }
-        defined $debug && print "DEBUG: installed $package references $disturl from src rpm $srcname\n";
+        mydebug("installed $package references $disturl from src rpm $srcname\n");
     }
     close (IN);
 
@@ -257,7 +268,7 @@ while (my ($disturl, $name) = each %disturl_mapper) {
     my ($prj, $md5pkg) = (split "/", $disturl)[3, 5];
     my ($src_revision) = (split "-", $md5pkg)[0];
     my $publicapi = ($disturl =~ /build.suse.de/) ? $ibs : ($disturl =~ /build.opensuse.org/) ? $obs : undef;
-    # print "DEBUG: $disturl -> API $publicapi\n";
+    mydebug("$disturl -> API $publicapi\n");
 
     open(BS, "-|", "curl", "-s", "-k", "$publicapi/source/$prj/$name?expand") or die;
     while(<BS>) {
@@ -314,7 +325,7 @@ print "INFO: $mismatches mismatches among the $consideredpackages considered pac
 $rate = ($installedpackages != 0) ? int($skippedpackages/$installedpackages*100) : "(nan)";
 if (defined $installed) { 
     print "INFO: the DISTURL of $skippedpackages out of $installedpackages installed packages does not point to a known update project (" .
-    "$rate%, never updated?)\n";
+    "$rate% never updated)\n";
 }
 
 exit 0;
