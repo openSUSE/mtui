@@ -433,7 +433,6 @@ class TestTestReport_FileSystem_Hitters(TestCase):
             ok_(False, "OSError expected")
 
     def tearDown(self):
-        print self.tmp_dir
         shutil.rmtree(self.tmp_dir)
 
 def test_TestReport_connect_targets():
@@ -454,8 +453,6 @@ def test_TestReport_connect_targets():
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
     ts = tr.connect_targets()
 
-    for i in l.debugs:
-        print i
     eq_(len(ts), 2)
 
     for (k, v), (h, t) in zip(tr.systems.items(), ts.items()):
