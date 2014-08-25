@@ -121,7 +121,7 @@ class Connection(object):
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.
             out.warning('Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly' % self.hostname)
-            print 'Trying manually, please enter the root password'
+            out.warning('Trying manually, please enter the root password')
             password = getpass.getpass()
 
             try:
