@@ -4,6 +4,8 @@
 # below the abstractions layer (like updating, preparing, etc.)
 #
 
+from __future__ import print_function
+
 import os
 import sys
 import re
@@ -896,7 +898,7 @@ class RunCommand(object):
 
                 queue.join()
         except KeyboardInterrupt:
-            print 'stopping command queue, please wait.'
+            print('stopping command queue, please wait.')
             try:
                 while queue.unfinished_tasks:
                     spinner(lock)
@@ -912,7 +914,7 @@ class RunCommand(object):
                     pass
 
             queue.join()
-            print
+            print()
             raise
 
 class Locked(object):

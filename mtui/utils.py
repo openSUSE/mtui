@@ -3,6 +3,8 @@
 # occasionally used functions which don't match anywhere else
 #
 
+from __future__ import print_function
+
 import os
 import time
 import fcntl
@@ -79,7 +81,7 @@ def input(text, options, interactive=True):
     response = False
 
     if not interactive:
-        print text
+        print(text)
         return False
 
     try:
@@ -148,7 +150,7 @@ def page(text, interactive=True):
                 linelist = ['']
             lines2print = min(len(linelist), linesleft)
             for i in range(lines2print):
-                print linelist[i]
+                print(linelist[i])
             linesleft -= lines2print
             linelist = linelist[lines2print:]
 
