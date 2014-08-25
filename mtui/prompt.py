@@ -128,6 +128,9 @@ class CommandPrompt(cmd.Cmd):
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
 
+    def println(self, msg = '', eol = '\n'):
+        return self.stdout.write(msg + eol)
+
     def get_interface_version(self):
         """
         :return: L{StrictVersion} instance
@@ -181,7 +184,7 @@ class CommandPrompt(cmd.Cmd):
                 self.interactive = True
                 self.cmdqueue = []
                 # make the new prompt to be printed on new line
-                print ""
+                self.println()
             except QuitLoop:
                 return
             except messages.UserError as e:
@@ -414,7 +417,7 @@ class CommandPrompt(cmd.Cmd):
 
             for hostname in set(hosts):
                 hosttags = refhost.get_host_attributes(hostname)
-                print '{0:25}: {1}'.format(hostname, hosttags)
+                self.println('{0:25}: {1}'.format(hostname, hosttags))
 
             return hosts
 
@@ -540,7 +543,12 @@ class CommandPrompt(cmd.Cmd):
                     state = red('Disabled')
 
                 system = '(%s)' % host.system
-                print '{0:20} {1:20}: {2} ({3})'.format(host.hostname, system, state, mode)
+                self.println('{0:20} {1:20}: {2} ({3})'.format(
+                    host.hostname,
+                    system,
+                    state,
+                    mode
+                ))
 
     def do_list_history(self, args):
         """
@@ -579,7 +587,10 @@ class CommandPrompt(cmd.Cmd):
                     RunCommand(targets, 'tail -n %s /var/log/mtui.log' % count).run()
 
             for host in sorted(targets.values()):
-                print 'history from %s (%s):' % (host.hostname, host.system)
+                self.println('history from {} ({}):'.format(
+                    host.hostname,
+                    host.system
+                ))
                 lines = host.lastout().split('\n')
                 lines.reverse()
                 for line in lines:
@@ -591,8 +602,12 @@ class CommandPrompt(cmd.Cmd):
                         continue
 
                     time = datetime.fromtimestamp(float(when))
-                    print '%s, %s: %s' % (time.strftime('%A, %d.%m.%Y %H:%M'), who, event)
-                print
+                    self.println('{}, {}: {}'.format(
+                        time.strftime('%A, %d.%m.%Y %H:%M'),
+                        who,
+                        event
+                    ))
+                self.println()
         else:
             self.parse_error(self.do_list_history, args)
 
@@ -624,13 +639,21 @@ class CommandPrompt(cmd.Cmd):
                     else:
                         lockedby = lock.user
 
-                    print '{0:20} {1:20}: {2}'.format(host.hostname, system, yellow('since %s by %s' % (lock.time(), lockedby))),
+                    self.println(eol = '', msg = '{0:20} {1:20}: {2}'.format(
+                        host.hostname,
+                        system,
+                        yellow('since {} by {}'.format(lock.time(), lockedby))
+                    ))
                     if lock.comment:
-                        print ': %s' % lock.comment
+                        self.println(' : {}'.format(lock.comment))
                     else:
-                        print
+                        self.println()
                 else:
-                    print '{0:20} {1:20}: {2}'.format(host.hostname, system, green('not locked'))
+                    self.println('{0:20} {1:20}: {2}'.format(
+                        host.hostname,
+                        system,
+                        green('not locked')
+                    ))
 
     def do_list_timeout(self, args):
         """
@@ -650,7 +673,11 @@ class CommandPrompt(cmd.Cmd):
             for host in sorted(targets.values()):
                 system = '(%s)' % host.system
                 timeout = host.get_timeout()
-                print '{0:20} {1:20}: {2}s'.format(host.hostname, system, timeout)
+                self.println('{0:20} {1:20}: {2}s'.format(
+                    host.hostname,
+                    system,
+                    timeout
+                ))
 
     @requires_update
     def do_source_extract(self, args):
@@ -857,13 +884,13 @@ class CommandPrompt(cmd.Cmd):
                 if match:
                     patches[match.group(1)] = match.group(2)
 
-            print ''
+            self.println()
 
             if not patches:
                 out.warning('no patch entries found in specfile {0}'
                     .format(specfile))
             else:
-                print 'Patches in %s:' % specfile
+                self.println('Patches in {}:'.format(specfile))
 
                 for patch in patches:
                     num = filter(str.isdigit, patch) or 0
@@ -876,7 +903,10 @@ class CommandPrompt(cmd.Cmd):
                     else:
                         result = red('not applied')
 
-                    print '{0:45}: {1}'.format(patches[patch].replace('name}', name), result)
+                    self.println('{0:45}: {1}'.format(
+                        patches[patch].replace('name}', name),
+                        result
+                    ))
 
     @requires_update
     def do_list_packages(self, args):
@@ -899,7 +929,10 @@ class CommandPrompt(cmd.Cmd):
 
             for host in sorted(targets.values()):
                 host.query_versions()
-                print 'packages on %s (%s):' % (host.hostname, host.system)
+                self.println('packages on {} ({}):'.format(
+                    host.hostname,
+                    host.system
+                ))
                 for package in host.packages:
                     current = host.packages[package].current
                     required = self.metadata.packages[package]
@@ -912,12 +945,16 @@ class CommandPrompt(cmd.Cmd):
                     else:
                         state = green('updated')
 
-                    print '{0:30}: {1:15} {2}'.format(package, host.packages[package].current, state)
+                    self.println('{0:30}: {1:15} {2}'.format(
+                        package,
+                        host.packages[package].current,
+                        state
+                    ))
 
-                print
+                self.println()
         else:
             for (package, version) in self.metadata.packages.items():
-                print '{0:30}: {1}'.format(package, version)
+                self.println('{0:30}: {1}'.format(package, version))
 
     def complete_list_packages(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1016,7 +1053,7 @@ class CommandPrompt(cmd.Cmd):
             for (root, dirs, files) in os.walk(os.path.join(os.path.dirname(self.metadata.path), 'scripts')):
                 for name in files:
                     if not '.svn' in root:
-                        print os.path.join(root, name)
+                        self.println(os.path.join(root, name))
 
     @requires_update
     def do_list_update_commands(self, args):
@@ -1035,7 +1072,11 @@ class CommandPrompt(cmd.Cmd):
 
             updater = self.metadata.get_updater()
 
-            print '\n'.join(updater(self.targets, self.metadata.patches, self.metadata.get_package_list()).commands)
+            self.println('\n'.join(updater(
+                self.targets,
+                self.metadata.patches,
+                self.metadata.get_package_list()).commands
+            ))
             del updater
 
     @requires_update
@@ -1061,7 +1102,11 @@ class CommandPrompt(cmd.Cmd):
                 out.critical('no downgrader available for %s' % release)
                 return
 
-            print '\n'.join(downgrader(self.targets, self.metadata.get_package_list(), self.metadata.patches).commands)
+            self.println('\n'.join(downgrader(
+                self.targets,
+                self.metadata.get_package_list(),
+                self.metadata.patches).commands
+            ))
             del downgrader
 
     def do_testopia_list(self, args):
@@ -1102,9 +1147,9 @@ class CommandPrompt(cmd.Cmd):
                 automated = 'automated'
             else:
                 automated = 'manual'
-            print '{0:40}: {1} ({2})'.format(summary, status, automated)
-            print '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
-            print
+            self.println('{0:40}: {1} ({2})'.format(summary, status, automated))
+            self.println('{}/tr_show_case.cgi?case_id={}'.format(url, case_id))
+            self.println()
 
     def do_testopia_show(self, args):
         """
@@ -1141,22 +1186,22 @@ class CommandPrompt(cmd.Cmd):
                     continue
 
                 if testcase:
-                    print blue('Testcase summary:'), testcase['summary']
-                    print blue('Testcase URL:'), '%s/tr_show_case.cgi?case_id=%s' % (url, case_id)
-                    print blue('Testcase automated:'), testcase['automated']
-                    print blue('Testcase status:'), testcase['status']
-                    print blue('Testcase requirements:'), testcase['requirement']
+                    self.println('%s %s'.format(blue('Testcase summary:'), testcase['summary']))
+                    self.println('%s %s'.format(blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
+                    self.println('%s %s'.format(blue('Testcase automated:'), testcase['automated']))
+                    self.println('%s %s'.format(blue('Testcase status:'), testcase['status']))
+                    self.println('%s %s'.format(blue('Testcase requirements:'), testcase['requirement']))
                     if testcase['setup']:
-                        print blue('Testcase setup:')
-                        print testcase['setup']
+                        self.println(blue('Testcase setup:'))
+                        self.println(testcase['setup'])
                     if testcase['breakdown']:
-                        print blue('Testcase breakdown:')
-                        print testcase['breakdown']
-                    print blue('Testcase actions:')
-                    print testcase['action']
+                        self.println(blue('Testcase breakdown:'))
+                        self.println(testcase['breakdown'])
+                    self.println(blue('Testcase actions:'))
+                    self.println(testcase['action'])
                     if testcase['effect']:
-                        print blue('Testcase effect:')
-                        print testcase['effect']
+                        self.println(blue('Testcase effect:'))
+                        self.println(testcase['effect'])
 
         else:
             self.parse_error(self.do_testopia_show, args)
@@ -1317,11 +1362,11 @@ class CommandPrompt(cmd.Cmd):
 
         url = config.bugzilla_url
 
-        print 'Buglist: %s/buglist.cgi?bug_id=%s' % (url, buglist)
+        self.println('Buglist: {}/buglist.cgi?bug_id={}'.format(url, buglist))
         for (bug, description) in self.metadata.bugs.items():
-            print
-            print 'Bug #{0:5}: {1}'.format(bug, description)
-            print '%s/show_bug.cgi?id=%s' % (url, bug)
+            self.println()
+            self.println('Bug #{0:5}: {1}'.format(bug, description))
+            self.println('{}/show_bug.cgi?id={}'.format(url, bug))
 
     @requires_update
     def do_list_metadata(self, args):
@@ -1381,10 +1426,10 @@ class CommandPrompt(cmd.Cmd):
                 release = {}
 
                 if len(history) > 1:
-                    print 'version history from:'
+                    self.println('version history from:')
                     for target in history[path]:
-                        print '  %s (%s)' % (target, targets[target].system)
-                print
+                        self.println('  {} ({})'.format(target, targets[target].system))
+                self.println()
 
                 lines = targets[target].lastout().split('\n')
                 for line in lines:
@@ -1398,12 +1443,12 @@ class CommandPrompt(cmd.Cmd):
                             release[name].append(match.group(2))
 
                 for package in release:
-                    print '%s:' % package
+                    self.println('{}:'.format(package))
                     indent = 0
                     for version in sorted(release[package], key=RPMVersion, reverse=True):
-                        print '  ' * indent + '-> %s' % version
+                        self.println('  ' * indent + '-> {}'.format(version))
                         indent = indent + 1
-                    print
+                    self.println()
 
     def do_show_log(self, args):
         """
@@ -1536,9 +1581,9 @@ class CommandPrompt(cmd.Cmd):
                 targets = selected_targets(targets, args.split(','))
 
             for target in targets:
-                print 'testsuites on %s (%s):' % (target, targets[target].system)
-                print '\n'.join([i for i in sorted(targets[target].listdir(path)) if i.endswith('-run')])
-                print
+                self.println('testsuites on {} ({}):'.format(target, targets[target].system))
+                self.println('\n'.join([i for i in sorted(targets[target].listdir(path)) if i.endswith('-run')]))
+                self.println()
         else:
             self.parse_error(self.do_testsuite_list, args)
 
@@ -1588,10 +1633,10 @@ class CommandPrompt(cmd.Cmd):
             return
 
         for target in targets:
-            print '%s:~> %s-testsuite [%s]' % (target, name, targets[target].lastexit())
-            print targets[target].lastout()
+            self.println('{}:~> {}-testsuite [{}]'.format(target, name, targets[target].lastexit()))
+            self.println(targets[target].lastout())
             if targets[target].lasterr():
-                print targets[target].lasterr()
+                self.println(targets[target].lasterr())
 
         out.info('done')
 
@@ -1653,10 +1698,10 @@ class CommandPrompt(cmd.Cmd):
                 if 'remote_qa_db_report.pl' in command:
                     if targets[target].lastexit() != 0:
                         out.critical('submitting testsuite results failed on %s:' % target)
-                        print '%s:~> %s [%s]' % (target, name, targets[target].lastexit())
-                        print targets[target].lastout()
+                        self.println('{}:~> {} [{}]'.format(target, name, targets[target].lastexit()))
+                        self.println(targets[target].lastout())
                         if targets[target].lasterr():
-                            print targets[target].lasterr()
+                            self.println(targets[target].lasterr())
                     else:
                         match = re.search('(http://.*/submission.php.submission_id=\d+)', targets[target].lasterr())
                         if match:
@@ -2334,8 +2379,8 @@ class CommandPrompt(cmd.Cmd):
                 return
 
         for host in sorted(targets.values()):
-            print 'sessions on %s (%s):' % (host.hostname, host.system)
-            print host.lastout()
+            self.println('sessions on {} ({}):'.format(host.hostname, host.system))
+            self.println(host.lastout())
 
     def complete_list_sessions(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -2455,9 +2500,9 @@ class CommandPrompt(cmd.Cmd):
                 self.parse_error(self.do_terms, args)
         else:
 
-            print 'available terminals scripts:'
+            self.println('available terminals scripts:')
             for filename in glob.glob(os.path.join(dirname, 'term.*.sh')):
-                print os.path.basename(filename).split('.')[1]
+                self.println(os.path.basename(filename).split('.')[1])
 
     def complete_terms(self, text, line, begidx, endidx):
         dirname = self.datadir
@@ -2576,9 +2621,9 @@ class CommandPrompt(cmd.Cmd):
             with open(filename, 'w') as f:
                 f.write('\n'.join(l.rstrip().encode('utf-8') for l in template))
         except IOError as error:
-            print 'failed to write %s: %s' % (filename, error.strerror)
+            self.println('failed to write {}: {}'.format(filename, error.strerror))
         else:
-            print 'wrote template to %s' % filename
+            self.println('wrote template to {}'.format(filename))
 
     def complete_export(self, text, line, begidx, endidx):
         return self.complete_hostlist(text, line, begidx, endidx, ['force'])
@@ -2706,9 +2751,9 @@ class CommandPrompt(cmd.Cmd):
         return [i for i in testcases if i.startswith(text) and i not in line]
 
     def parse_error(self, method, args):
-        print
+        self.println()
         out.error('failed to parse command: %s %s' % (method.__name__.replace('do_', ''), args))
-        print '%s: %s' % (method.__name__.replace('do_', ''), method.__doc__)
+        self.println('{}: {}'.format(method.__name__.replace('do_', ''), method.__doc__))
 
 class Script(object):
     """
