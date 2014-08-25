@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+from __future__ import print_function
+
 import getopt
 import sys
 import logging
@@ -12,24 +14,24 @@ from mtui.config import Config
 def usage():
     tags = Attributes.tags
 
-    print
-    print 'Maintenance Reference Host Search'
-    print '=' * 33
-    print
-    print sys.argv[0], '[parameter] <search>'
-    print
-    print 'parameters:'
-    print '\t-{short},--{long:20}{description}'.format(short='h', long='help', description='help')
-    print '\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name')
-    print
-    print 'possible search tags:'
+    print()
+    print('Maintenance Reference Host Search')
+    print('=' * 33)
+    print()
+    print(sys.argv[0], '[parameter] <search>')
+    print()
+    print('parameters:')
+    print('\t-{short},--{long:20}{description}'.format(short='h', long='help', description='help'))
+    print('\t-{short},--{long:20}{description}'.format(short='l', long='location=', description='reference host location name'))
+    print()
+    print('possible search tags:')
 
     for key in tags:
-        print '\t{key:25}{value}'.format(key=key, value=", ".join(tags[key]))
-    print
-    print 'example:'
-    print '\t{name} sles 11 sp3 i386'.format(name=sys.argv[0])
-    print
+        print('\t{key:25}{value}'.format(key=key, value=", ".join(tags[key])))
+    print()
+    print('example:')
+    print('\t{name} sles 11 sp3 i386'.format(name=sys.argv[0]))
+    print()
 
 def main():
     config = Config()
