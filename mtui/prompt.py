@@ -51,8 +51,9 @@ class CmdQueue(list):
     Echos prompt with the command that's being popped (and about to be
     executed
     """
-    def __init__(self, iterable, prompt):
+    def __init__(self, iterable, prompt, term = None):
         self.prompt = prompt
+        self.term = term or sys
         list.__init__(self, iterable)
 
     def pop(self, i):
@@ -61,7 +62,7 @@ class CmdQueue(list):
         return val
 
     def echo_prompt(self, val):
-        print "{0}{1}".format(self.prompt, val)
+        self.term.stdout.write("{0}{1}\n".format(self.prompt, val))
 
 class CommandAlreadyBoundError(RuntimeError):
     pass
@@ -159,7 +160,7 @@ class CommandPrompt(cmd.Cmd):
         if not self.interactive:
             q.append("quit")
 
-        self.cmdqueue = CmdQueue(q, self.prompt)
+        self.cmdqueue = CmdQueue(q, self.prompt, term = self.sys)
 
     def cmdloop(self):
         """
