@@ -1687,9 +1687,12 @@ class CommandPrompt(cmd.Cmd):
             else:
                 session = None
 
+        self.set_prompt(session)
+        self.session = session
+
     def set_prompt(self, session=None):
         self.session = session
-        session = ":"+session if session else ''
+        session = ":"+str(session) if session else ''
         self.prompt = 'mtui{0}> '.format(session)
 
     def do_load_template(self, args):
@@ -1752,6 +1755,8 @@ class CommandPrompt(cmd.Cmd):
             tr.load_systems_from_testplatforms()
             self.targets = tr.connect_targets()
 
+        if self.metadata and self.metadata.md5 is self.session:
+            self.set_prompt(None)
         self.metadata = tr
 
     def do_set_location(self, args):
