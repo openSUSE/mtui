@@ -11,12 +11,19 @@ from errno import EINTR, ENOENT, EPERM, EEXIST
 import shutil
 import os
 from copy import deepcopy
+from datetime import date
 
 from mtui.template import _TemplateIOError
 from mtui.template import TestReport
+from mtui.template import SwampTestReport
+from mtui.template import OBSTestReport
+from mtui.template import TestsuiteComment
 from mtui.template import SwampUpdateID
 from mtui.template import _TemplateIOError
+from mtui.template import QadbReportCommentLengthWarning
 from mtui.target import Target
+from mtui.types.md5 import MD5Hash
+from mtui.types.obs import RequestReviewID
 from .utils import LogFake
 from .utils import StringIO
 from .utils import touch
@@ -37,14 +44,17 @@ class TestReportSVNCheckoutFake(object):
         with open(self.path, "w") as f:
             f.write("unused")
 
-def TRF(tr, config=None, log=None):
+def TRF(tr, config=None, log=None, date_=None):
     if not config:
         config = ConfigFake()
 
     if not log:
         log = LogFake()
 
-    return tr(config, log)
+    if not date:
+        date_ = date
+
+    return tr(config, log, date_)
 
 def test_UID_mtr_success():
     """
@@ -492,3 +502,56 @@ def test_TestReportParse_parsed_testplatform():
     tr._parse(tpl)
     ok_(tr.testplatforms, tps)
 # }}}
+
+def test_swamp_get_testsuite_comment():
+    tr = TRF(SwampTestReport, date_ = date)
+    tr.md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
+    comment = tr.get_testsuite_comment("tsuite")
+    ok_(isinstance(comment, TestsuiteComment))
+    eq_(str(comment), "testing tsuite on SWAMP {0} on {1}".format(
+        tr.md5,
+        date.today().strftime("%d/%m/%y"),
+    ))
+
+def test_obs_get_testsuite_comment():
+    tr = TRF(OBSTestReport, date_ = date)
+    tr.rrid = RequestReviewID("SUSE:Maintenance:1:1")
+    comment = tr.get_testsuite_comment("tsuite")
+    ok_(isinstance(comment, TestsuiteComment))
+    eq_(str(comment), "testing tsuite on OBS {0} on {1}".format(
+        tr.rrid,
+        date.today().strftime("%d/%m/%y"),
+    ))
+
+def test_TC_edit_text():
+    """
+    Test L{TestsuiteComment.__str__} returns the new string after
+    L{TestsuiteComment.edit_text} was executed.
+    """
+    tc = TestsuiteComment(LogFake(), "foo", "bar", date.today(),
+        text_editor = lambda _: "meh"
+    )
+    ok_(str(tc).startswith("testing bar on foo on "))
+    tc.edit_text()
+    eq_(str(tc), "meh")
+
+def test_TC_str_warning():
+    """
+    Test L{TestsuiteComment.__str__} issues the warning when comment too
+    long
+    """
+    tc = TestsuiteComment(LogFake(), unused, unused, date.today(),
+        lambda _: "-" * TestsuiteComment._max_comment_len
+    )
+
+    tc.edit_text()
+    str(tc)
+    eq_(tc.log.warnings, [])
+
+    tc = TestsuiteComment(LogFake(), unused, unused, date.today(),
+        lambda _: "-" * (TestsuiteComment._max_comment_len+1)
+    )
+    tc.edit_text()
+    eq_(tc.log.warnings, [])
+    str(tc)
+    eq_(tc.log.warnings.pop(), QadbReportCommentLengthWarning())
