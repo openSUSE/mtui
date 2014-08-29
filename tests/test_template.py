@@ -37,6 +37,15 @@ class TestReportSVNCheckoutFake(object):
         with open(self.path, "w") as f:
             f.write("unused")
 
+def TRF(tr, config=None, log=None):
+    if not config:
+        config = ConfigFake()
+
+    if not log:
+        log = LogFake()
+
+    return tr(config, log)
+
 def test_UID_mtr_success():
     """
     Test UpdateID.make_testreport immediate success
@@ -188,9 +197,7 @@ def test_TestReport__open_and_parse_raises_templateioerror():
             # wraps this function too, though it probably should not
             raise IOError(EEXIST, 'sterr')
 
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestableReport(c, l)
+    tr = TRF(TestableReport)
     path = get_nonexistent_path()
 
     tr._open_and_parse(path)
@@ -200,13 +207,11 @@ def test_TestReport__copy_scripts_dst_exists():
         def _copytree(self, *args, **kw):
             raise OSError(EEXIST, 'strerr', args[1])
 
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestableReport(c, l)
+    tr = TRF(TestableReport)
     tr._copy_scripts(None, 'foo', None)
 
-    eq_(l.errors, [])
-    eq_(l.warnings, [
+    eq_(tr.log.errors, [])
+    eq_(tr.log.warnings, [
         'Copy scripts None -> foo failed. reason:',
         "[Errno 17] strerr: 'foo'",
     ])
@@ -216,17 +221,15 @@ def test_TestReport__copy_scripts_src_missing():
         def _copytree(self, *args, **kw):
             raise OSError(ENOENT, 'strerr', args[0])
 
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestableReport(c, l)
+    tr = TRF(TestableReport)
     tr._copy_scripts('foo', None, None)
 
-    eq_(l.errors, [
+    eq_(tr.log.errors, [
         'Copy scripts foo -> None failed. reason:',
         "[Errno 2] strerr: 'foo'",
         'copy scripts manually',
     ])
-    eq_(l.warnings, [])
+    eq_(tr.log.warnings, [])
 
 
 @raises(OSError)
@@ -235,9 +238,7 @@ def test_TestReport__copy_scripts_on_error():
         def _copytree(self, *args, **kw):
             raise OSError(1, 'strerr')
 
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestableReport(c, l)
+    tr = TRF(TestableReport)
     tr._copy_scripts(None, None, None)
 
 class TestTestReport_FileSystem_Hitters(TestCase):
@@ -256,12 +257,9 @@ class TestTestReport_FileSystem_Hitters(TestCase):
             def _ensure_executable(self, pattern):
                 self.t_ensure_executable.append(pattern)
 
-        l = LogFake()
-        c = ConfigFake()
-        c.datadir = 'foodata'
-
-
-        tr = TestableReport(c, l)
+        tr = TRF(TestableReport,
+            config = ConfigFake(dict(datadir = 'foodata'))
+        )
         tr.path = join(self.tmp_dir, 'foopath')
         tr.copy_scripts()
 
@@ -278,9 +276,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(pattern, "{0}/*/compare_*".format(dst))
 
     def test_ensure_executable_no_match(self):
-        l = LogFake()
-        c = ConfigFake()
-        tr = TestReport(c, l)
+        tr = TRF(TestReport)
         pattern = self.in_temp('/*')
         tr._ensure_executable(pattern)
 
@@ -292,9 +288,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(head[2], [])
 
     def test_ensure_executable_makes_executable(self):
-        l = LogFake()
-        c = ConfigFake()
-        tr = TestReport(c, l)
+        tr = TRF(TestReport)
 
         fd, f_txt = mkstemp(suffix='.txt', dir=self.tmp_dir)
         os.close(fd)
@@ -329,9 +323,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 
         dst = self.in_temp('dst')
 
-        l = LogFake()
-        c = ConfigFake()
-        tr = TestReport(c, l)
+        tr = TRF(TestReport)
         tr._copytree(src, dst)
 
         eq_(len(files), 2)
@@ -348,9 +340,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         dst = self.in_temp('dst')
         os.mkdir(dst)
 
-        l = LogFake()
-        c = ConfigFake()
-        tr = TestReport(c, l)
+        tr = TRF(TestReport)
         try:
             tr._copytree(src, dst)
         except OSError as e:
@@ -362,9 +352,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         src = self.in_temp('src')
         dst = self.in_temp('dst')
 
-        l = LogFake()
-        c = ConfigFake()
-        tr = TestReport(c, l)
+        tr = TRF(TestReport)
         try:
             tr._copytree(src, dst)
         except OSError as e:
@@ -386,9 +374,7 @@ def test_TestReport_connect_targets():
         def add_history(self, comment):
             self.t_history.append(comment)
 
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestReport(c, l)
+    tr = TRF(TestReport)
     tr.targetFactory = TargetFake
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
     ts = tr.connect_targets()
@@ -401,9 +387,7 @@ def test_TestReport_connect_targets():
         eq_(t.system, v)
 
 def test_TestReport_load_systems_from_testplatforms():
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestReport(c, l)
+    tr = TRF(TestReport)
     tps = ['t1', 't2']
     tr.testplatforms = deepcopy(tps)
     tr._refhosts_from_tp = lambda x: dict([(x, x+"val")])
@@ -445,9 +429,7 @@ def test_TestReport_refhosts_from_tp():
     """
     Test L{TestReport._refhosts_from_tp} - happy path
     """
-    l = LogFake()
-    c = RefhostFake.t_config()
-    tr = TestReport(c, l)
+    tr = TRF(TestReport, config = RefhostFake.t_config())
 
     tr.refhostsFactory.refhosts_factory = RefhostFake
     eq_(tr._refhosts_from_tp('foo'), {'foo': 'foo_system'})
@@ -461,13 +443,11 @@ def test_TestReport_refhosts_from_tp_ValueError():
         def set_attributes_from_testplatform(self, x):
             raise ValueError(x)
 
-    l = LogFake()
-    c = RefhostFake.t_config()
-    tr = TestReport(c, l)
+    tr = TRF(TestReport, config = RefhostFake.t_config())
 
     tr.refhostsFactory.refhosts_factory = RefhostFake_
     eq_(tr._refhosts_from_tp('footp'), {})
-    eq_(l.warnings, ["failed to parse testplatform 'footp'"])
+    eq_(tr.log.warnings, ["failed to parse testplatform 'footp'"])
 
 def test_TestReport_refhosts_from_tp_emptyresult():
     """
@@ -477,19 +457,15 @@ def test_TestReport_refhosts_from_tp_emptyresult():
         def search(self):
             return []
 
-    l = LogFake()
-    c = RefhostFake.t_config()
-    tr = TestReport(c, l)
+    tr = TRF(TestReport, config = RefhostFake.t_config())
 
     tr.refhostsFactory.refhosts_factory = RefhostFake_
     eq_(tr._refhosts_from_tp('footp'), {})
-    eq_(l.warnings, ["nothing found for testplatform 'footp'"])
+    eq_(tr.log.warnings, ["nothing found for testplatform 'footp'"])
 
 # {{{ template parser
 def test_TestReportParse_parsed_md5():
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestReport(c, l)
+    tr = TRF(TestReport)
 
     md5 = SwampUpdateID('8c60b7480fc521d7eeb322955b387165')
 
@@ -505,9 +481,7 @@ def test_TestReportParse_parsed_md5():
     eq_(tr.md5, md5.id)
 
 def test_TestReportParse_parsed_testplatform():
-    l = LogFake()
-    c = ConfigFake()
-    tr = TestReport(c, l)
+    tr = TRF(TestReport)
 
     tps = ['footp1', 'footp2']
 
