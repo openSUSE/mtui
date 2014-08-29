@@ -1,83 +1,76 @@
 #!/usr/bin/perl -w
 # vim: sw=4 et
-# idea and prototype by Dirk Mueller <dmueller@suse.de> in 2010
-# finished by Heiko Rommel <rommel@suse.de> in 2011
+# idea and prototype by Dirk Mueller <dmueller@suse.de> in 2010 (--build case)
+# continued by Heiko Rommel <rommel@suse.de> in 2011 (--installed case)
 
 use strict;
 use Getopt::Long;
 use File::Temp qw(tempfile);
 
-my $help;
-my $installed;
-my $build;
-my $filter;
-my $verbose = 0;
-my $debug;
-my $mismatches = 0;
-my $consideredpackages = 0;
-my $skippedpackages = 0;
-my $installedpackages = 0;
-my $ibs = "https://api.suse.de/public/";
-my $obs = "https://api.opensuse.org/public/";
-my $defaultbuilddir = "http://hilbert.nue.suse.com/abuildstat/patchinfo/";
-my $defaultbuilddir_opensuse_org = "http://download.opensuse.org/repositories/openSUSE:/Maintenance:/";
-my $defaultbuilddir_suse = "http://download.suse.de/ibs/SUSE:/Maintenance:/";
-my $defaultptfdir = "http://euklid.suse.de/mirror/SuSE/support.suse.de/";
-my %disturl_mapper;
-my %disturl_packages;
-my %buildsrcnames;
-my $dir;
-
 my $usagemsg = "
 usage:\t$0 [--help] [--verbose] [--debug]
-           (--installed [--filter <url to build dir>] | --build <url to build dir>)
+           (--installed [-r <url-to-remote-repo> -p <path-to-filelist>] |
+            --build -r <url-to-remote-repo> -p <path-to-filelist>) id
+
+id is either \$md5sum or (openSUSE|SUSE):Maintenance:\$issue:\$request
 
 This script operates in two modes:
 
 When using --installed then all installed packages that have been built in update projects (e.g. have been previously updated on the system) are checked if source in the update project exists that superseeds the installed version. 
-Additionaly, if you specify the option --filter then the list of installed packages is first filtered if they have been built from the same src rpm(s) as the the packages at the filter url. This is mostly usefull to speed up/limit verification to a set of packages. 
+Additionaly, if you specify the options -r and -p then the list of installed packages is first filtered if they have been built from the same src rpm(s) as the the packages at the given location. This is mostly usefull to speed up/limit verification to a set of packages. 
 
-When using --build then all packages located in the build dir are checked if source in the update project exists that superseeds the built packages.  This is totally independent from the installed packages.
+When using --build and mandatory -r and -p then all packages located in the remote dir are checked if source in the update project exists that superseeds the built packages.  This is totally independent from the installed packages and used to verify if this is an outdated maintenance submission.
 
-The argument to --build and --filter can be either a web url (like http://hilbert.nue.suse.com/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/) or a local path (like /mounts/work/built/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839) or one of the following short cuts:
+The repo url given by -r and the package list given by -p are used to compose the full path to the build packages. Typicall patterns:
 
-   ad8b1800d6dc90608d0c5a7103bc1839 
-   expanded to http://hilbert.nue.suse.com/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/
+   SLE >= 12
+   r = http://download.suse.de/ibs/SUSE:/Maintenance:/32/
+   p contains items like: SUSE_Updates_SLE-SERVER_12_aarch64/aarch64/libvirt-2.2.5-9.1.aarch64.rpm
 
-   openSUSE:Maintenance:177:17
-   expanded to http://download.opensuse.org/repositories/openSUSE:/Maintenance:/177/
+   SLE < 12
+   r = http://hilbert.nue.suse.com/abuildstat/patchinfo/ad8b1800d6dc90608d0c5a7103bc1839/
+   p contains items like: sle11-i586/nss_ldap-x86-262-11.32.39.1.ia64.rpm
 
-   SUSE:Maintenance:32:12
-   expanded to http://download.suse.de/ibs/SUSE:/Maintenance:/32/
+   openSUSE >= 12.*
+   r = http://download.opensuse.org/repositories/openSUSE:/Maintenance:/2971/
+   p contains items like: openSUSE_13.1_Update/x86_64/accountsservice-0.6.35-2.16.1.x86_64.rpm  
 
-   x86_64/update/SUSE-SLES/10/PTF/b27a428a0750dc195e58933ba4411674/20110321
-   expanded to http://euklid.suse.de/mirror/SuSE/support.suse.de/x86_64/update/SUSE-SLES/10/PTF/b27a428a0750dc195e58933ba4411674/20110321
+   PTFs
+   r = http://euklid.suse.de/mirror/SuSE/support.suse.de/
+   p contains items like: x86_64/update/SUSE-SLES/10/PTF/b27a428a0750dc195e58933ba4411674/20110321/???
 
 Note: packages that have NOT been updated are skipped (not validated) since from the DISTURL of the installed packages we can not guess the correct update project (especially on SLE11 with overlayed update repos)
 
 Note: the assumption is that no packages exist in <url to build dir> that have been built from different versions of the same src rpm (this should only happen if a build service engineer manually tampered with the build dir ;)
 
 Use the option --verbose to output the diff of the changelogs of the mismatching source revisions.
+Use the option --debug to trigger debug out.
 ";
 
-sub mydebug {
-    my $string = shift;
-    return unless defined $debug;
-    print "DEBUG: $string";
-}
+my $installed;
+my $build;
+my $verbose;
+my $debug;
+my $repo;
+my $plist;
+my $help;
+my $id;
 
 GetOptions(
-     "h|help" => \$help,
      "i|installed" => \$installed,
-     "b|build=s" => \$build,
-     "f|filter=s" => \$filter,
+     "b|build" => \$build,
      "v|verbose" => \$verbose,
      "d|debug" => \$debug,
-)  or die "$usagemsg";
+     "r=s" => \$repo,
+     "p=s" => \$plist,
+     "h|help" => \$help,
+     ) or die "$usagemsg";
+
+$id=shift;
 
 if (defined $help) {
-   print $usagemsg;
-   exit 0;
+    print $usagemsg;
+    exit 0;
 }
 
 if (defined $installed and defined $build) {
@@ -85,79 +78,57 @@ if (defined $installed and defined $build) {
    exit 1;
 }
 
-my $firstarg;
+if (defined $build and (not defined $repo or not defined $plist)) {
+   print STDERR "ERROR: -p and -r are mandatory for --build\n$usagemsg";
+   exit 1;
+}
 
-# work around the requirement of having arguments (sth/ mtui.py currently can not provide)
+# work around the requirement of having extra options (sth/ mtui.py currently can not provide)
 if (not defined $build and not defined $installed) { 
    $installed = 'true'; 
-   $firstarg = shift;
    print "INFO: assuming --installed\n";
 }
 
-my $filterarg = (defined $filter) ? $filter : (defined $build) ? $build : (defined $firstarg) ? $firstarg : undef;
+my $ibs = "https://api.suse.de/public/";
+my $obs = "https://api.opensuse.org/public/";
 
-if (defined $filterarg) { 
-   if ($filterarg =~ /^[0-9a-f]{32}$/i) { $filter = $defaultbuilddir . $filterarg; }
-   elsif ($filterarg =~ /^openSUSE:Maintenance:([0-9]+):/) { $filter = $defaultbuilddir_opensuse_org . $1 . "/"; }
-   elsif ($filterarg =~ /^SUSE:Maintenance:([0-9]+):/) { $filter = $defaultbuilddir_suse . $1 . "/"; }
-   elsif ($filterarg =~ /^(i386|i586|i686|ia64|ppc|s390|x86_64|aarch)\/.*\/PTF\//) { $filter = $defaultptfdir . $filterarg; }
-   else { $filter = $filterarg; }
-   print "INFO: assuming <url to build dir> = $filter\n";
+my %disturl_mapper;
+my %disturl_packages;
+my %buildsrcnames;
+
+sub mydebug {
+    my $string = shift;
+    return unless defined $debug;
+    print "DEBUG: $string";
 }
 
 sub geturlsofsrcrpms {
-    # TODO: replace with a (limited) recursion parser (but having minimal Perl module dependencies)
-    my $url = shift or die;
-    my @srcrpms;
 
-    if ($url =~ /^http/) {
-        open (IN, "-|", "w3m -dump $url");
-        while (<IN>) {
-            mydebug("$_");
-            if (/\[DIR\]\s+(\S+)\//i) {
-                my $subdir = $1;
-                open (INS, "-|", "w3m -dump $url/$subdir");
-                while (<INS>) {
-                    mydebug("$_");
-                    if (/\[DIR\]\s+(\S+)\//i) {
-                       my $subsubdir = $1;
-                       open (INSS, "-|", "w3m -dump $url/$subdir/$subsubdir");
-                       while (<INSS>) {
-                           mydebug("$_");
-                           if (/\s+(\S+\.(no)?src\.rpm)\s+/i) {
-                               my $srcrpm = $1;
-                               push (@srcrpms, "$url/$subdir/$subsubdir/$srcrpm");
-                               mydebug("geturlsofsrcrpms(): pushing $url/$subdir/$subsubdir/$srcrpm\n");
-                           }
-                       }
-                       close (INSS);
-                    }
-                    elsif (/\s+(\S+\.(no)?src\.rpm)\s+/i) {
-                        my $srcrpm = $1;
-                        push (@srcrpms, "$url/$subdir/$srcrpm");
-                        mydebug("geturlsofsrcrpms(): pushing $url/$subdir/$srcrpm\n");
-                    }
-                }
-                close (INS);
-            }   
-        }   
-        close (IN);
-    }
-    else {
-        die "ERROR: unable to access build directory $url\n" if (not -d $url or not -r $url);
-        @srcrpms = split (/\n/, `find $url -iname '*\.src\.rpm' -or -iname '*\.nosrc\.rpm'`);
-    }
+     my $repo = shift or die;
+     my $file = shift or die;
+     my %srcrpms;
 
-    my %usrcrpms;
-    foreach my $srcrpm (@srcrpms) {
-       if ($srcrpm =~ /^.*\/(.*)$/) { $usrcrpms{"$1"} = $srcrpm; }
-    }
+     local *FH;
+     open (FH, "< $file") or die "ERROR: can't open file $file: $!";
 
-    return values %usrcrpms;
+     while (<FH>) {
+         if (/(^.*\/(.*\.(src|nosrc)\.rpm))/) {
+            $srcrpms{$2} = $repo . "$1";
+            mydebug("adding srcrpm $1 for key $2\n");
+         }
+     }
+
+     close (FH);
+     return values %srcrpms;
 }
 
-if (defined $filter) {
-    my @srcrpms = geturlsofsrcrpms($filter);
+my $mismatches = 0;
+my $consideredpackages = 0;
+my $skippedpackages = 0;
+my $installedpackages = 0;
+
+if (defined $repo and defined $plist) {
+    my @srcrpms = geturlsofsrcrpms($repo, $plist);
     foreach my $srcrpm (@srcrpms) {                                                                       
         open (IN, "-|", "rpm -qp --qf \"%{NAME} %{DISTURL}\n\" $srcrpm | sort -t - -k1,5") or die;
         while (<IN>) {
@@ -174,11 +145,6 @@ if (defined $filter) {
             mydebug("src rpm $srcname references $disturl\n");
         }
         close (IN);
-    }
-
-    if (open(P, "$filter/patchinfo")) {
-       print grep { /SUBSWAMPID:/ } <P>;
-       close(P);
     }
 }
 
@@ -199,7 +165,7 @@ if (defined $installed) {
             $disturl_mapper{$disturl} = $srcname;
             push (@{$disturl_packages{$disturl}}, $package); 
             mydebug("case 'defined installed': srcname = $srcname\n");
-            if (not defined $filter or defined $buildsrcnames{$srcname}) {
+            if (not defined $plist or defined $buildsrcnames{$srcname}) {
                 $consideredpackages++;
             }
         }
@@ -235,7 +201,7 @@ while (my ($disturl, $name) = each %disturl_mapper) {
 
     # in case we validate against a specifc maintenance update skip if the src
     # name is not among the src names of the maintenance update
-    if (defined $filter and not defined $buildsrcnames{$name}) {
+    if (defined $plist and not defined $buildsrcnames{$name}) {
         next;
     }
 

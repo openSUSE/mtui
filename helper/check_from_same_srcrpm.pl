@@ -29,7 +29,7 @@ foreach my $srcrpm (sort keys %checksums) {
     if (keys %{$checksums{$srcrpm}} > 1) {
         print STDERR "ERROR: different src checksums found for packages build from $srcrpm:\n";
         foreach my $checksum (sort keys %{$checksums{$srcrpm}}) {
-            print STDERR "\t$checksum: " . join (",", @{$checksums{$srcrpm}{$checksum}}) . "\n";
+            print STDERR "\t$checksum: " . join (",", sort @{$checksums{$srcrpm}{$checksum}}) . "\n";
         }
     }
 }

@@ -13,17 +13,48 @@
 #
 
 use strict;
+use Getopt::Long;
 
-my $defaultbuilddir = "http://hilbert.nue.suse.com/abuildstat/patchinfo/";
-my $query;
-my $url;
+my $usagemsg="
+usage:\t$0 [-r <url-to-remote-repo> -p <path-to-filelist> id]
 
-if ($ARGV[0] =~ /^[0-9a-f]{32}$/i) { $url = $defaultbuilddir . $ARGV[0]; }
+checks the vendor and disturls of packages against accepted values
+
+If specified, all packages from maintenance id are checked. To help finding
+them, you need to specify a repo url and a file with relative paths of rpms.
+id is either \$md5sum or (openSUSE|SUSE):Maintenance:\$issue:\$request
+
+If not specified, all installed packages will be ckecked.
+
+";
+
+my $repo;
+my $plist;
+my $help;
+my $id;
+
+GetOptions(
+           "r=s" => \$repo,
+           "p=s" => \$plist,
+           "h|help" => \$help,
+          ) or die "$usagemsg";
+
+if (defined $help) {
+    print $usagemsg;
+    exit 0;
+}
+
+$id=shift;
+
+if (defined $id and (not defined $repo or not defined $plist)) {
+   print $usagemsg;
+   exit 1;
+}
 
 my %valid_vendors = (
     "SLE" => [
          "SUSE LLC <https://www.suse.com/>", # SLE12
-         "SUSE LINUX Products GmbH, Nuernberg, Germany",
+         "SUSE LINUX Products GmbH, Nuernberg, Germany", # packages shipped 2004-2014
          "SuSE Linux AG, Nuernberg, Germany", # packages shipped before 2004
          "IBM Corp.", # specific to ppc(64) on all SLE products
     ],
@@ -123,36 +154,25 @@ if (not defined $productclass) {
 print "INFO: detected product class: $productclass\n";
 
 sub getpackagelist {
-    my $url = shift or return;
-    my %packages;
 
-    open (IN, "-|", "w3m -dump $url");
-    while (<IN>) {
-        if (/\[DIR\]\s+(\S+)\//i) {
-            my $subdir = $1;
-            open (INS, "-|", "w3m -dump $url/$subdir");
-            while (<INS>) {
-                next if /\.delta\./;
-                if (m/] (.+)-([^-]+)-([^-]+)\.(\w+)\.rpm/i) {
-                    $packages{$1} = "";
-                }
-            }
-           close (INS);
+     my $file = shift;
+     my %packages;
+
+     local *FH;
+     open (FH, "< $file") or die "ERROR: can't open file $file: $!";
+
+     while (<FH>) {
+        next if (/\.delta\.(log|info|rpm)/ or not /\.rpm$/);
+        if (/.*\/(.+)-[^-]+-[^-]+\.[^.]+\.rpm$/) {
+           $packages{$1} = "set";
         }
      }
-     close (IN);
 
-     return %packages;
+     close (FH);
+     return keys %packages;
 }
 
-my @packages = getpackagelist($url);
-
-# if no packages were returned, check all installed packages
-if (@packages) {
-    $query = "@packages";
-} else {
-    $query = "-a";
-}
+my $query = (defined $plist) ? getpackagelist($plist) : "-a";
 
 open (FH, "-|", "rpm -q --qf \"\%{NAME} %{DISTURL} %{VENDOR}\n\" $query | sort -t - -k1,5") or die;
 while (<FH>) {
