@@ -1,5 +1,5 @@
 TMPDIR=/tmp/mtui-unittests
-TMPENV=TMPDIR=$(TMPDIR)
+TMPENV=TMPDIR=$(TMPDIR) EDITOR=false
 RUNNER ?= nosetests
 NOSE = $(RUNNER) tests --processes=-1
 # Note using --processes is essential to ensure tests won't hang as the
@@ -19,7 +19,7 @@ help:
 helps += check "run unit tests"
 check: tmpdir
 
-	$(TMPENV) $(NOSE)
+	$(TMPENV) $(NOSE) <&-
 
 .PHONY: checkcover
 helps += checkcover "run unit tests with coverage"
@@ -27,7 +27,7 @@ checkcover: clean .coverage
 
 .coverage: tmpdir
 
-	$(TMPENV) $(NOSE) $(COVERAGE)
+	$(TMPENV) $(NOSE) $(COVERAGE) <&-
 
 .PHONY: annotate
 helps += annotate "annotate source code with execution information"
