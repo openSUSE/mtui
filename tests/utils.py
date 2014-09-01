@@ -31,10 +31,12 @@ class LogFake:
         self.errors = []
         self.warnings = []
         self.debugs = []
+        self.infos = []
 
         self.error = self.errors.append
         self.warning = self.warnings.append
         self.debug = self.debugs.append
+        self.info = self.infos.append
 
         self.t_setLevels = []
 
