@@ -1,11 +1,11 @@
 #!/bin/bash
 
-export LANG=C
+export LC_ALL=C
 
 help () {
    cat <<EOF
 
-usage: $0 -p <path-to-filelist> <id>
+usage: $0 -p <path-to-filelist> [id]
 
 where id is either \$md5sum or (openSUSE|SUSE):Maintenance:\$issue:\$request
 
@@ -14,16 +14,22 @@ $0 runs ctcs testsuites if a matching package is found
 EOF
 }
 
-while getopts ":r:p:h" opt
-do
-   case $opt in
-   p) plist="$OPTARG" ;;
-   h) help="true" ;;
-   \?) echo "ERROR: unsupported option $OPTARG" >&2; exit 1 ;;
+ARGS=$(getopt -o p:r:h -- "$@")
+
+if [ $? -gt 0 ]; then help; exit 1; fi
+
+eval set -- "$ARGS"
+
+while true; do
+   case "$1" in
+      -p) shift; plist="$1"; shift; ;;
+      -r) shift; echo "INFO: option -r is not implemented"; shift; ;;
+      -h) shift; help="set" ;;
+      --) shift; break; ;;
    esac
 done
 
-id=$BASH_ARGV
+id="$1"
 
 if [ -n "$help" -o -z "$plist" ]; then
    help
@@ -31,7 +37,7 @@ if [ -n "$help" -o -z "$plist" ]; then
 fi
 
 list=$(
-    grep -Ev "\.delta\.(log|info|rpm)" $plist | grep -E "\.rpm$" | while read p
+    sed -n '/\.delta\.\(log\|info\|rpm\)/! { /\.rpm$/p; }' $plist | while read p
     do
        pn=${p%-[^-]*-[^-]*\.[^.]*\.rpm}
        echo ${pn##*/}

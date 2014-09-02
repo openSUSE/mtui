@@ -83,7 +83,10 @@ if (defined $build and (not defined $repo or not defined $plist)) {
    exit 1;
 }
 
-# work around the requirement of having extra options (sth/ mtui.py currently can not provide)
+# currently, mtui.py calls the script with a fixed set of options,
+# neither --installed nore --build is part of that set
+# thus, we assume the --installed case
+
 if (not defined $build and not defined $installed) { 
    $installed = 'true'; 
    print "INFO: assuming --installed\n";

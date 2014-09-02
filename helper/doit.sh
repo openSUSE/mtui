@@ -2,17 +2,34 @@
 
 usage="$0 -m (before|after) -o <result dir> -r <repo> -p <file-with-package-list> <id>"
 
-while getopts "m:o:r:p:h" opt
-do
-   case $opt in
-   m) mode="$OPTARG" ;;
-   o) resultdir="$OPTARG" ;;
-   r) repo="$OPTARG" ;;
-   p) plist="$OPTARG" ;;
-   h) help="true" ;;
-   \?) exit 1 ;;
+ARGS=$(getopt -o m:o:r:p:h -- "$@")
+
+eval set -- "$ARGS"
+
+while true; do
+   case "$1" in
+      -m) shift; mode="$1"; shift; ;;
+      -o) shift; resultdir="$1"; shift; ;;
+      -r) shift; repo="$1"; shift; ;;
+      -p) shift; plist="$1"; shift; ;;
+      -h) shift; help="set" ;;
+      --) shift; break; ;;
    esac
 done
+
+id="$1"
+
+if [ $? -gt 0 ]; then echo "$usage"; exit 1; fi
+
+if [ $mode != "before" -a $mode != "after" ]; then
+   echo $usage
+   exit 1
+fi
+
+if [ -z "$resultdir" -o -z "$repo" -o -z "$plist" -o -z "$id" ]; then
+   echo "$usage"
+   exit 1
+fi
 
 declare -a scripts=(
    check_new_dependencies.sh:compare_new_dependencies.sh
@@ -27,71 +44,57 @@ declare -a scripts=(
    check_initrd_state.sh:compare_initrd_state.sh
 )
 
-PATH="$PATH:${0%/*}"
-
-id=$BASH_ARGV
-
 declare -a results
 
-if [ -z "$mode" -o -z "$resultdir" -o -z "$repo" -o -z "$plist" -o -z "$id" ]; then
-    echo "$usage"
-    exit 1
-fi
+PATH="$PATH:${0%/*}"
 
 mkdir -p "$resultdir" || exit 1
 
-case "$mode" in
-    before)
-       for item in ${scripts[*]}; do
-          script=${item%%:*}
-          progname=${script##*/}
-          echo "launching $script $mode update"
-          $script -r $repo -p $plist $id 2> $resultdir/$progname.before.err > $resultdir/$progname.before.out
-       done
-       ;;
-    after)
-       for item in ${scripts[*]}; do
-          script=${item%%:*}
-          progname=${script##*/}
-          echo "launching $script $mode update"
-          $script -r $repo -p $plist $id 2> $resultdir/$progname.after.err > $resultdir/$progname.after.out
+function run-script
+{
+   local mode=$1 script=${2%%:*} compare=${2##*:}
+   local progname=${script##*/}
+   local comparename=${compare##*/}
 
-          compare=${item##*:}
-          comparename=${compare##*/}
-          echo "launching $compare"
-          $compare $resultdir/$progname.before.err $resultdir/$progname.after.err 2> $resultdir/$comparename.err > $resultdir/$comparename.out
+   echo "launching $script $mode update"
+   $script -r $repo -p $plist $id 2> $resultdir/$progname.$mode.err > $resultdir/$progname.$mode.out
 
-          echo "errors:"
-          if  [ -s $resultdir/$comparename.err ]; then
-             result="${progname%.*}:FAILED"
-             cat $resultdir/$comparename.err
-          else 
-             result="${progname%.*}:PASSED"
-             echo "(empty)"
-          fi
+   if [ $mode != "before" ]; then
+      echo "launching $compare"
+      $compare $resultdir/$progname.before.err $resultdir/$progname.after.err 2> $resultdir/$comparename.err > $resultdir/$comparename.out
 
-          echo "info:"
-          if [ -s $resultdir/$comparename.out ]; then
-              cat $resultdir/$comparename.out 
-          else
-             echo "(empty)"
-          fi
+      echo "errors:"
+      if  [ -s $resultdir/$comparename.err ]; then
+	 result="${progname%.*}:FAILED"
+	 cat $resultdir/$comparename.err
+      else 
+	 result="${progname%.*}:PASSED"
+	 echo "(empty)"
+      fi
 
-          echo ""
-          if [ -z "$results" ]; then
-             results="$result"
-          else
-             results="$results $result"
-          fi
-       done
+      echo "info:"
+      if [ -s $resultdir/$comparename.out ]; then
+	  cat $resultdir/$comparename.out 
+      else
+	 echo "(empty)"
+      fi
 
-       for result in $results; do 
-          name=${result%:*}
-          outcome=${result#*:}
-          echo -e "\t$name\t$outcome"
-       done | column -t
-       ;; 
+      echo ""
+      if [ -z "$results" ]; then
+	 results="$result"
+      else
+	 results="$results $result"
+      fi
+   fi
+}
 
-    *) echo "$usage" ;;
-esac
+for item in ${scripts[*]}; do
+   run-script $mode $item
+done
+
+for result in $results; do 
+   name=${result%:*}
+   outcome=${result#*:}
+   echo -e "\t$name\t$outcome"
+done | column -t
 
