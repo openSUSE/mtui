@@ -31,6 +31,13 @@ if [ -z "$resultdir" -o -z "$repo" -o -z "$plist" -o -z "$id" ]; then
    exit 1
 fi
 
+if [ "${plist#http://}" != "$plist" ]; then
+   temp_plist=$(mktemp /tmp/plist.XXXXXX)
+   trap "rm -f $temp_plist" SIGINT SIGKILL EXIT
+   curl -s $plist > $temp_plist
+   plist=$temp_plist
+fi
+
 declare -a scripts=(
    check_new_dependencies.sh:compare_new_dependencies.sh
    check_all_updated.pl:compare_all_updated.sh
