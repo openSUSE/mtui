@@ -48,7 +48,6 @@ def testreport_svn_checkout(config, log, uri):
         # FIXME: use python module to perform svn checkout
         os.system('svn co {0}'.format(uri))
 
-
 class UpdateID(object):
     def __init__(self, id_, testreport_factory, testreport_svn_checkout):
         self.id = id_
@@ -410,10 +409,17 @@ class TestReport(object):
         ] + [(x.upper(), y) for x,y in self.patches.items()]
 
     def show_yourself(self, writer):
-        fmt = "{0:15}: {1}\n"
-        for xs in self._show_yourself_data():
-            writer.write(fmt.format(*xs))
+        self._aligned_write(writer, dict(self._show_yourself_data()))
 
+    def _aligned_write(self, writer, data):
+        """
+        :type data: dict
+        """
+        fmt = "{0:15}: {1}\n"
+        xs = data.items()
+        xs.sort()
+        for x in xs:
+            writer.write(fmt.format(*x))
 
     def _testreport_url(self):
         return '/'.join([self.config.reports_url, str(self.id), 'log'])
