@@ -475,7 +475,7 @@ def test_TestReport_refhosts_from_tp_emptyresult():
 
 # {{{ template parser
 def test_TestReportParse_parsed_md5():
-    tr = TRF(TestReport)
+    tr = TRF(SwampTestReport)
 
     md5 = SwampUpdateID('8c60b7480fc521d7eeb322955b387165')
 
@@ -491,7 +491,7 @@ def test_TestReportParse_parsed_md5():
     eq_(tr.md5, md5.id)
 
 def test_TestReportParse_parsed_testplatform():
-    tr = TRF(TestReport)
+    tr = TRF(SwampTestReport)
 
     tps = ['footp1', 'footp2']
 
