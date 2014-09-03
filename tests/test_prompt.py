@@ -8,13 +8,17 @@ from nose.tools import nottest
 from mtui.prompt import CommandPrompt
 from mtui.prompt import CmdQueue
 from mtui.prompt import QuitLoop
+from mtui.prompt import requires_update
 from mtui.template import TestReport
 from mtui.commands import Command
+from mtui.types.md5 import MD5Hash
+from mtui.template import SwampTestReport
 
 from distutils.version import StrictVersion
 
 from .utils import LogFake
 from .utils import ConfigFake
+from .utils import unused
 
 class FakeCommandFactory(object):
     t_run_called = 0
@@ -83,15 +87,11 @@ class TestableCommandPrompt(CommandPrompt):
     do_exit = do_quit
 
 def test_read_history_on_init():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     ok_(cp.t_read_history_called)
 
 def test_set_cmdqueue():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     eq_(cp.cmdqueue, [])
 
     cp.set_cmdqueue([])
@@ -102,9 +102,7 @@ def test_set_cmdqueue():
     ok_(isinstance(cp.cmdqueue, CmdQueue))
 
 def test_set_cmdqueue_noninteractive_prompt():
-    cp = (lambda c: lambda l: \
-            TestableCommandPrompt([], TestReport(c, l), c, l))\
-                (ConfigFake())(LogFake())
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp.interactive = False
     eq_(cp.cmdqueue, [])
 
@@ -116,9 +114,7 @@ def test_set_cmdqueue_noninteractive_prompt():
     ok_(isinstance(cp.cmdqueue, CmdQueue))
 
 def test_precmd_prerun():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp.set_cmdqueue(['foo', 'bar', 'quit'])
     cp.cmdloop()
     # FIXME: this may hang forever.
@@ -140,9 +136,7 @@ def test_precmd_prerun():
         bcf.t_factory_calls)
 
 def test_noninteractive_drops_to_interactive_on_ctrlc():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp.set_cmdqueue(['foo', 'ctrlc', 'stop'])
     cp.interactive = False
     cp.cmdloop()
@@ -177,9 +171,7 @@ def test_cmdqueue():
     eq_(q.t_echo_prompt_calls, [1,3])
 
 def test_interface_version_setter():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     v = '66.0'
     cp.set_interface_version(v)
     eq_(cp._interface_version, StrictVersion(v))
@@ -189,9 +181,7 @@ def test_interface_version_setter():
     ok_(cp._interface_version is sv)
 
 def test_interface_version_getter():
-    c = ConfigFake()
-    l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp._interface_version = StrictVersion('66.6')
     cp.get_interface_version() is cp._interface_version
 
@@ -201,7 +191,7 @@ def test_commandFactory():
     """
     c = ConfigFake()
     l = LogFake()
-    cp = TestableCommandPrompt([], TestReport(c, l), c, l)
+    cp = TestableCommandPrompt(c, l)
 
     future_config = None
     class FakeCommand(Command):
@@ -219,3 +209,63 @@ def test_commandFactory():
     # and some more for good measure
     ok_(cp.t_cmd.logger is l)
     ok_(cp.t_cmd.config is c)
+
+def test_requires_update():
+    class PromptFake:
+        def __init__(self, metadata, log):
+            self.metadata = metadata
+            self.log = log
+
+        @requires_update
+        def foo(self):
+            pass
+
+    p = PromptFake(True, LogFake())
+    p.foo()
+
+    eq_(p.log.errors,  [])
+
+    p = PromptFake(None, LogFake())
+    p.foo()
+    eq_(p.log.errors, ["no testing template loaded"])
+
+def test_set_session_name():
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
+    cp.do_set_session_name("foo")
+    eq_(cp.session, "foo")
+    eq_(cp.prompt, "mtui:foo> ")
+
+def test_set_session_name_auto_testreport():
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
+    md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
+    cp.metadata = SwampTestReport(ConfigFake(), LogFake(), unused)
+    cp.metadata.md5 = md5
+    cp.do_set_session_name("")
+    eq_(cp.prompt, "mtui:{0}> ".format(md5))
+    eq_(cp.session, md5)
+
+def test_set_session_name_auto_no_testreport():
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
+    cp.do_set_session_name("")
+    eq_(cp.prompt, "mtui> ")
+    eq_(cp.session, None)
+
+def test_load_update_doesnt_leave_previous_session():
+    class FakeUpdate:
+        def make_testreport(self):
+            md5 = MD5Hash('11111111111111111111111111111111')
+            return SwampTestReport(ConfigFake(), LogFake(), unused)
+
+    cp = TestableCommandPrompt(ConfigFake(), LogFake())
+    cp.metadata = SwampTestReport(ConfigFake(), LogFake(), unused)
+    cp.metadata.md5 = MD5Hash('00000000000000000000000000000000')
+    cp.load_update(FakeUpdate(), autoconnect=False)
+    eq_(cp.prompt, "mtui> ")
+    eq_(cp.session, None)
+
+def test_set_location():
+    p = CommandPrompt(ConfigFake(), LogFake())
+    loc = 'prague'
+    ok_(p.config.location != loc)
+    p.do_set_location(loc)
+    eq_(p.config.location, loc)

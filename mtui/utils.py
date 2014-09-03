@@ -15,10 +15,13 @@ import tempfile
 import readline
 import re
 from errno import EEXIST
+from abc import ABCMeta
+from abc import abstractmethod
 
 from tempfile import mkstemp
 from shutil import move
 from os.path import dirname
+from os.path import join
 
 try:
     from itertools import zip_longest
@@ -179,15 +182,32 @@ def log_exception(eclass, logger):
         return wrap2
     return wrap
 
-def ensure_dir_exists(dir_, on_create=None):
+def ensure_dir_exists(*path, **kwargs):
+    """
+    :returns: str joined path with dirs created as needed.
+    :type path: [str] to join
+
+    :type filepath: bool
+    :param filepath: path is treated as directory if False, otherwise as
+        file and last component is not created as directory.
+    """
+
+    on_create = kwargs.get('on_create', None)
+    filepath  = kwargs.get('filepath', False)
+
+    path = join(*path)
+    dirn = dirname(path) if filepath else path
+
     try:
-        os.makedirs(dir_)
+        os.makedirs(dirn)
     except OSError as e:
         if e.errno != EEXIST:
             raise
     else:
         if callable(on_create):
-            on_create(path=dir_)
+            on_create(path=dirn)
+
+    return path
 
 class chdir:
     """Context manager for changing the current working directory"""
@@ -229,3 +249,15 @@ class check_eq(object):
             self.__class__.__name__,
             self.x
         )
+
+class UserMessage(object):
+    __metaclass__ = ABCMeta
+    def __str__(self):
+        return self.message
+
+    @property
+    @abstractmethod
+    def message(self): pass
+
+    def __eq__(self, x):
+        return str(self) == str(x)

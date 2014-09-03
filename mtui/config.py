@@ -27,6 +27,7 @@ class InvalidOptionNameError(RuntimeError):
 
 class Config(object):
     """Read and store the variables from mtui config files"""
+    # FIXME: change str paths to L{filepath.FilePath}
 
     def read(self):
         try:

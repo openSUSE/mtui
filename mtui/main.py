@@ -17,9 +17,8 @@ from .argparse import ArgsParseFailure
 from mtui import log as _crap_imported_for_side_effects
 from mtui.config import config
 from mtui.prompt import CommandPrompt
-from mtui.template import TestReport, TestReportFactory
-from mtui.types.md5 import MD5Hash
-from mtui.types.obs import RequestReviewID
+from mtui.template import OBSUpdateID
+from mtui.template import SwampUpdateID
 from mtui import __version__
 
 def get_parser(sys):
@@ -47,12 +46,12 @@ def get_parser(sys):
     g = p.add_mutually_exclusive_group()
     g.add_argument(
         '-m', '--md5',
-        type=MD5Hash,
+        type=SwampUpdateID,
         help='md5 update identifier'
     )
     g.add_argument(
         '-r', '--review-id',
-        type=RequestReviewID.from_str,
+        type=OBSUpdateID,
         help='OBS request review id\nexample: SUSE:Maintenance:1:1'
     )
     p.add_argument(
@@ -98,7 +97,6 @@ def main():
       sys
     , config
     , logging.getLogger('mtui')
-    , TestReportFactory
     , CommandPrompt
     ))
 
@@ -106,7 +104,6 @@ def run_mtui(
   sys
 , config
 , log
-, TestReportFactory
 , Prompt
 ):
     p = get_parser(sys)
@@ -129,14 +126,15 @@ def run_mtui(
 
     config.merge_args(args)
 
-    tr = TestReportFactory(config, log, args.md5)
-    if args.sut:
-        tr.systems = dict([tuple(x.split(",")) for x in args.sut])
-    else:
-        tr.load_systems_from_testplatforms()
+    update = args.md5 or args.review_id
 
-    targets = tr.connect_targets()
-    prompt = Prompt(targets, tr, config, log)
+    prompt = Prompt(config, log)
+    if update:
+        prompt.load_update(update, not bool(args.sut))
+
+    if args.sut:
+        for x in args.sut:
+            prompt.do_add_host(x)
 
     if args.autoadd:
         prompt.do_autoadd(" ".join(args.autoadd))

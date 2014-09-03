@@ -9,11 +9,17 @@ import shutil
 import glob
 import stat
 from traceback import format_exc
+from abc import ABCMeta
+from abc import abstractmethod
+from datetime import date
 
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
+from mtui.types.obs import RequestReviewID
+from mtui.utils import edit_text
+from mtui.utils import UserMessage
 
 try:
     from nose.tools import nottest
@@ -29,6 +35,71 @@ class _TemplateIOError(IOError):
     """
     pass
 
+class QadbReportCommentLengthWarning(UserMessage):
+    message = 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'
+
+def testreport_svn_checkout(config, log, uri):
+    ensure_dir_exists(
+        config.template_dir,
+        on_create=lambda path: log.debug('created config.template_dir directory {0}'.format(path))
+    )
+
+    with chdir(config.template_dir):
+        # FIXME: use python module to perform svn checkout
+        os.system('svn co {0}'.format(uri))
+
+
+class UpdateID(object):
+    def __init__(self, id_, testreport_factory, testreport_svn_checkout):
+        self.id = id_
+        self.testreport_factory = testreport_factory
+        self._vcs_checkout = testreport_svn_checkout
+
+    def _template_path(self):
+        return join(self.config.template_dir, str(self.id), 'log')
+
+    def make_testreport(self):
+        tr = self.testreport_factory(
+            self.config,
+            self.log,
+            date = date
+        )
+
+        try:
+            tr.read(self._template_path())
+        except _TemplateIOError as e:
+            if e.errno != ENOENT:
+                raise
+
+            self._vcs_checkout(
+                self.config,
+                self.log,
+                join(self.config.svn_path, str(self.id))
+            )
+
+            tr.read(self._template_path())
+
+        return tr
+
+class SwampUpdateID(UpdateID):
+    def __init__(self, md5):
+        """
+        :param md5: str
+        """
+        super(SwampUpdateID, self).__init__(
+            MD5Hash(md5),
+            SwampTestReport,
+            testreport_svn_checkout
+        )
+
+class OBSUpdateID(UpdateID):
+    def __init__(self, rrid, *args, **kw):
+        super(OBSUpdateID, self).__init__(
+            RequestReviewID(rrid),
+            OBSTestReport,
+            testreport_svn_checkout
+        )
+
 class TestReportAlreadyLoaded(RuntimeError):
     pass
 
@@ -38,16 +109,28 @@ class TestReport(object):
     # Firstly, it might clear some things up to change the open/read
     # things to file-like interface.
 
+    __metaclass__ = ABCMeta
+
     targetFactory = Target
     refhostsFactory = RefhostsFactory
 
-    def __init__(self, config, log):
+    @property
+    @abstractmethod
+    def _type(self):
+        """
+        :return: str Short human readable description of the TestReport
+            type.
+        """
+
+    def __init__(self, config, log, date):
+        """
+        :type today: f :: L{datetime.date}
+        """
         self.config = config
         self.log = log
+        self._date = date
 
-        self.location = config.location
         self.directory = config.template_dir
-
 
         # Note: the default values here are unchanged from the previous
         # class Metadata for backward compaibility purposes, so we don't
@@ -73,6 +156,9 @@ class TestReport(object):
         self.packager = ""
         self.reviewer = ""
         self.md5 = None
+        """
+        :type md5: MD5Hash instance or None
+        """
 
 
     def _copytree(_, *args, **kw):
@@ -312,58 +398,117 @@ class TestReport(object):
     def add_host(self, hostname, system):
         self.systems[hostname] = system
 
+    def _show_yourself_data(self):
+        return [
+            ('Category'  , self.category),
+            ('Hosts'     , ' '.join(sorted(self.systems.keys()))),
+            ('Reviewer'  , self.reviewer),
+            ('Packager'  , self.packager),
+            ('Bugs'      , ', '.join(self.bugs.keys())),
+            ('Packages'  , ' '.join(sorted(self.get_package_list()))),
+            ('Testreport', self._testreport_url()),
+        ] + [(x.upper(), y) for x,y in self.patches.items()]
+
+    def show_yourself(self, writer):
+        fmt = "{0:15}: {1}\n"
+        for xs in self._show_yourself_data():
+            writer.write(fmt.format(*xs))
+
+
+    def _testreport_url(self):
+        return '/'.join([self.config.reports_url, str(self.id), 'log'])
+
+    def local_wd(self, *paths):
+        """
+        :return: str local working directory
+        """
+        return self._wd(self.config.local_tempdir, str(self.id), *paths)
+
+    def report_wd(self, *paths, **kw):
+        """
+        :return: str local working directory relative to the testreport
+            checkout.
+        """
+        return self._wd(dirname(self.path), *paths, **kw)
+
+    def _wd(self, *paths, **kwargs):
+        return ensure_dir_exists(*paths, **kwargs)
+
+    def target_wd(self, *paths):
+        """
+        :return: str remote working directory on SUT
+        """
+        return join(self.config.target_tempdir, str(self.id), *paths)
+
+    def patchinfo_url(self):
+        return '/'.join([self.config.patchinfo_url, str(self.id)])
+
+    def get_testsuite_comment(self, testsuite):
+        return TestsuiteComment(
+            self.log,
+            "{0} {1}".format(self._type, self.id),
+            testsuite,
+            self._date.today(),
+            text_editor = edit_text
+        )
+
+class TestsuiteComment(object):
+    _max_comment_len = 100
+
+    def __init__(self, log, update_id, testsuite, date, text_editor = None):
+        """
+        :type update_id: str
+        :type testsuite: str or None
+        :type date: L{datetime.date}
+        :type text_editor: f :: str -> str
+        """
+        self.update_id = update_id
+        self.log = log
+        self.date = date
+        self.testsuite = testsuite
+
+        self._user_str = None
+        self._text_editor = text_editor
+
+    def _to_str(self):
+        if self._user_str:
+            return self._user_str
+
+        return 'testing {2} on {0} on {1}'.format(
+            self.update_id,
+            self.date.strftime('%d/%m/%y'),
+            self.testsuite
+        )
+
+    def __str__(self):
+        xs = self._to_str()
+        if len(xs) > self._max_comment_len:
+            self.log.warning(QadbReportCommentLengthWarning())
+        return xs
+
+    def edit_text(self):
+        self._user_str = self._text_editor(str(self))
+
+class SwampTestReport(TestReport):
+    _type = "SWAMP"
+
+    @property
+    def id(self):
+        return self.md5
+
+    def _show_yourself_data(self):
+        return [
+            ('MD5SUM'  , self.md5),
+            ('SWAMP ID', self.swampid),
+            ('Build'   ,'/'.join([self.config.patchinfo_url, str(self.md5)])),
+        ] + super(SwampTestReport, self)._show_yourself_data()
+
+class OBSTestReport(TestReport):
+    _type = "OBS"
+
+    @property
+    def id(self):
+        return self.rrid
+
 if has_nose:
     TestReport = nottest(TestReport)
-
-class _TestReportFactory(object):
-    def __init__(self):
-        self.TestReport = TestReport
-
-    def __call__(self, config, log, md5=None):
-        """
-        :type md5: L{mtui.types.MD5Hash} or None
-        :returns: L{TestReport} object
-        """
-
-        tr = self.TestReport(config, log)
-
-        if md5 is None:
-            log.debug('TestReportFactory: not using template')
-            return tr
-
-        return self._factory_md5(config, log, tr, md5)
-
-    def _factory_md5(self, config, log, tr, md5, _count=0):
-        try:
-            tr.read(join(config.template_dir, str(md5), 'log'))
-            # Note: when reading old templates, one might need rather
-            # log.emea or log.asia
-            return tr
-        except _TemplateIOError as e:
-            if e.errno != ENOENT:
-                raise
-
-            if _count > 0:
-                raise
-
-            self._ensure_template_dir_exists(config, log)
-
-            uri = join(config.svn_path, str(md5))
-            self.svn_checkout(config.template_dir, uri)
-
-            return self._factory_md5(config, log, tr, md5, _count+1)
-
-    def _ensure_dir_exists(_, *a, **kw):
-        return  ensure_dir_exists(*a, **kw)
-
-    def _ensure_template_dir_exists(self, config, log):
-        msg = 'created config.template_dir directory {0}'
-        cb = lambda path: log.debug(msg.format(path))
-        self._ensure_dir_exists(config.template_dir, on_create=cb)
-
-    def svn_checkout(self, cwd, uri):
-        with chdir(cwd):
-            # FIXME: use python module to perform svn checkout
-            os.system('svn co %s' % uri)
-
-TestReportFactory=_TestReportFactory()

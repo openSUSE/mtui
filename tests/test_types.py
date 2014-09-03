@@ -25,7 +25,7 @@ def test_MD5Hash_TypeError():
 
 
 def helper_parse_reviewid(rrid):
-    return obs.RequestReviewID.from_str(rrid)
+    return obs.RequestReviewID(rrid)
 
 def test_RRID_ok():
     """
