@@ -230,7 +230,7 @@ class TestReport(object):
             self.packages = dict([(pack.split()[0], pack.split()[2]) for pack in match.group(1).split(',')])
             return True
 
-        match = re.search('Test Plan Reviewers: (.+)', line)
+        match = re.search('Test Plan Reviewer(?:s)?: (.+)', line)
         if match:
             self.reviewer = match.group(1)
             return True
@@ -556,6 +556,10 @@ class OBSTestReport(TestReport):
 
     def __init__(self, *a, **kw):
         super(OBSTestReport, self).__init__(*a, **kw)
+
+        self.rrid = None
+        self.rating = None
+        self.repository = None
 
         self._attrs += [
             'rrid',
