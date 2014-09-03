@@ -1,5 +1,6 @@
 from unittest import TestCase
 from nose.tools import eq_
+
 from mtui.template import SwampTestReport
 from mtui.template import OBSTestReport
 from mtui.types.md5 import MD5Hash
@@ -114,3 +115,23 @@ class TestTestReport_show_yourself(TestCase):
         ]
 
         self._run(TestableOBSTestReport, lines, data)
+
+def check_parse_reviewer(report, input_, reviewer):
+    tr = TRF(report)
+    tpl = StringIO(input_.format(reviewer))
+
+    tr._parse(tpl)
+    eq_(tr.reviewer, reviewer)
+
+def test_TR_parse_reviewer():
+    inputs = [
+        ("suggested_singular", "Suggested Test Plan Reviewer: {0}"),
+        ("suggested_plural", "Suggested Test Plan Reviewers: {0}"),
+        ("assigned_singular", "Test Plan Reviewer: {0}"),
+        ("assigned_singular", "Test Plan Reviewers: {0}"),
+    ]
+    reports = [SwampTestReport, OBSTestReport]
+    reviewer = "foobar"
+    for r in reports:
+        for n,i in inputs:
+            yield check_parse_reviewer, r, i.format(reviewer), reviewer
