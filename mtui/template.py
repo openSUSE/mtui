@@ -20,6 +20,7 @@ from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.utils import edit_text
 from mtui.utils import UserMessage
+from mtui import updater
 
 try:
     from nose.tools import nottest
@@ -287,6 +288,21 @@ class TestReport(object):
                 return release
 
         raise UnknownSystemError(systems)
+
+    def get_preparer(self):
+        return updater.Preparer[self.get_release()]
+
+    def get_updater(self):
+        return updater.Updater[self.get_release()]
+
+    def get_installer(self):
+        return updater.Installer[self.get_release()]
+
+    def get_uninstaller(self):
+        return updater.Uninstaller[self.get_release()]
+
+    def get_downgrader(self):
+        return updater.Downgrader[self.get_release()]
 
     def copy_scripts(self):
         if not self.path:

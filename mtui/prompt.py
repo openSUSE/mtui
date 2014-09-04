@@ -25,7 +25,6 @@ from traceback import print_exc
 
 from mtui.rpmver import *
 from mtui.target import *
-from mtui.updater import *
 from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
@@ -1046,13 +1045,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_update_commands, args)
         else:
 
-            release = self.metadata.get_release()
-
-            try:
-                updater = Updater[release]
-            except KeyError:
-                out.critical('no updater available for %s' % release)
-                return
+            updater = self.metadata.get_updater()
 
             print '\n'.join(updater(self.targets, self.metadata.patches, self.metadata.get_package_list()).commands)
             del updater
@@ -2043,12 +2036,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-            try:
-                installer = Installer[release]
-            except KeyError:
-                out.critical('no installer available for %s' % release)
-                return
+            installer = self.metadata.get_installer()
 
             out.info('installing')
             for target in targets:
@@ -2090,12 +2078,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-            try:
-                uninstaller = Uninstaller[release]
-            except KeyError:
-                out.critical('no uninstaller available for %s' % release)
-                return
+            uninstaller = self.metadata.get_uninstaller()
 
             out.info('removing')
             try:
@@ -2133,13 +2116,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-
-            try:
-                downgrader = Downgrader[release]
-            except KeyError:
-                out.critical('no downgrader available for %s' % release)
-                return
+            downgrader = self.metadata.get_downgrader()
 
             out.info('downgrading')
             for target in targets:
@@ -2200,15 +2177,9 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-
-            try:
-                preparer = Preparer[release]
-            except KeyError:
-                out.critical('no preparer available for %s' % release)
-                return True
-
+            preparer = self.metadata.get_preparer()
             out.info('preparing')
+
             try:
                 preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed, testing=testing).run()
             except Exception:
@@ -2315,10 +2286,9 @@ class CommandPrompt(cmd.Cmd):
 
         out.info('updating')
 
-        release = self.metadata.get_release()
         try:
-            updater = Updater[release]
-        except KeyError:
+            updater = self.metadata.get_updater()
+        except Exception:
             out.critical('no updater available for %s' % release)
             for target in targets:
                 if not lock.locked:
