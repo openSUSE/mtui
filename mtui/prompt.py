@@ -38,6 +38,7 @@ from mtui.types import MD5Hash
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
 from mtui import updater
+from mtui.utils import requires_update
 
 from distutils.version import StrictVersion
 
@@ -68,19 +69,6 @@ class CmdQueue(list):
 
 class CommandAlreadyBoundError(RuntimeError):
     pass
-
-def requires_update(fn):
-    def wrap(self, *a, **kw):
-        if not self.metadata:
-            self.log.error('no testing template loaded')
-            return
-
-        return fn(self, *a, **kw)
-
-
-    wrap.__name__ = fn.__name__
-    wrap.__doc__  = fn.__doc__
-    return wrap
 
 class CommandPrompt(cmd.Cmd):
     # TODO: It's worth considering to remove the inherit of cmd.Cmd and

@@ -20,6 +20,7 @@ from tempfile import mkstemp
 from shutil import move
 from os.path import dirname
 from os.path import join
+from mtui.messages import TestReportNotLoadedError
 
 try:
     from itertools import zip_longest
@@ -247,3 +248,14 @@ class check_eq(object):
             self.__class__.__name__,
             self.x
         )
+
+def requires_update(fn):
+    def wrap(self, *a, **kw):
+        if not self.metadata:
+            raise TestReportNotLoadedError()
+
+        return fn(self, *a, **kw)
+
+    wrap.__name__ = fn.__name__
+    wrap.__doc__  = fn.__doc__
+    return wrap

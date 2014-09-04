@@ -8,7 +8,6 @@ from nose.tools import nottest
 from mtui.prompt import CommandPrompt
 from mtui.prompt import CmdQueue
 from mtui.prompt import QuitLoop
-from mtui.prompt import requires_update
 from mtui.template import TestReport
 from mtui.commands import Command
 from mtui.types.md5 import MD5Hash
@@ -209,25 +208,6 @@ def test_commandFactory():
     # and some more for good measure
     ok_(cp.t_cmd.logger is l)
     ok_(cp.t_cmd.config is c)
-
-def test_requires_update():
-    class PromptFake:
-        def __init__(self, metadata, log):
-            self.metadata = metadata
-            self.log = log
-
-        @requires_update
-        def foo(self):
-            pass
-
-    p = PromptFake(True, LogFake())
-    p.foo()
-
-    eq_(p.log.errors,  [])
-
-    p = PromptFake(None, LogFake())
-    p.foo()
-    eq_(p.log.errors, ["no testing template loaded"])
 
 def test_set_session_name():
     cp = TestableCommandPrompt(ConfigFake(), LogFake())

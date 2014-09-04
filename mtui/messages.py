@@ -43,3 +43,7 @@ class ConnectingToMessage(UserMessage):
 
     def __str__(self):
         return 'connecting to {0}'.format(self.hostname)
+
+class TestReportNotLoadedError(UserError):
+    def __str__(self):
+        return 'TestReport not loaded'
