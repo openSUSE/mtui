@@ -148,3 +148,10 @@ def rand_review_id():
 
 def testreports():
     return [OBSTestReport, SwampTestReport]
+
+class _Hostnames:
+    foo = "foo.example.org"
+    bar = "bar.example.org"
+    qux = "qux.example.org"
+
+hostnames = _Hostnames()

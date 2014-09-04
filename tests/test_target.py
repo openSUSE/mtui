@@ -1,12 +1,33 @@
 from nose.tools import ok_, eq_, raises
 
+from paramiko import SSHException
+
 from mtui.target import TargetLock, RemoteLock, Target
+from mtui.target import LockedTargets
+from mtui import messages
+from mtui.connection import Connection
 from mtui.config import Config
 from .utils import LogFake
+from .utils import LogFakeStr
+from .utils import unused
+from .utils import hostnames
+from .utils import StringIO
 
+def TF(hostname, lock = None, connection = None, log = None):
+    """
+    TargetFactory
+    """
+
+    kw = dict(logger = log if log else LogFake())
+    if lock:
+        kw['lock'] = lock
+    if connection:
+        kw['connection'] = connection
+
+    return Target(hostname, unused, **kw)
 
 def test_legacy_locked_target_is_locked():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
 
     c = Config
     c.session_user = 'foo'
@@ -30,7 +51,7 @@ def test_legacy_locked_target_is_locked():
     eq_(lock.own(), False)
 
 def test_legacy_lock_is_own():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
 
     c = Config
     c.session_user = 'quux'
@@ -57,7 +78,7 @@ def test_legacy_lock_is_own():
 
 
 def test_legacy_target_set_locks():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
 
     c = Config
     c.session_user = 'foo'
@@ -72,7 +93,7 @@ def test_legacy_target_set_locks():
     eq_(t.locked_with, (('foo',), {}))
 
 def test_legacy_target_remove_lock_on_enabled():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
     eq_(t.state, "enabled")
 
     t.unlock_called = False
@@ -85,7 +106,7 @@ def test_legacy_target_remove_lock_on_enabled():
 
 
 def test_legacy_target_remove_lock_on_disabled():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
     t.state = 'disabled'
 
     # FIXME: this will easily yield false negative
@@ -98,7 +119,7 @@ def test_legacy_target_remove_lock_on_disabled():
     eq_(t.unlock_called, False)
 
 def test_target_unlock():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
     t.state = None
     # state is irrelevant
 
@@ -117,7 +138,7 @@ def test_target_unlock():
     eq_(t.test_mark, ((False,),{})) # ((force), {})
 
 def test_locked_target_is_locked():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
 
     c = Config
     c.session_user = 'foo'
@@ -135,7 +156,7 @@ def test_locked_target_is_locked():
     eq_(t.test_mark, (('fuu',), {}))
 
 def test_put_repclean_fail():
-    t = Target('foo', 'bar', connect=False)
+    t = Target('foo', 'bar', connect = False)
     t.logger = LogFake()
     def put():
         raise Exception()
@@ -143,3 +164,103 @@ def test_put_repclean_fail():
     t._upload_repclean()
     exp_errors = ['rep-clean uploading failed please see BNC#860284']
     eq_(t.logger.errors, exp_errors)
+
+class TestTargetConnect(object):
+    def test_happy_path(self):
+        t = TF("foo", connection = ConnectionFake, lock = TargetLockFake)
+        ok_(t.connection)
+
+    def test_connection_error(self):
+        class ConnFake(ConnectionFake):
+            def connect(self):
+                raise SSHException("bar")
+
+        l = LogFakeStr()
+        try:
+            t = TF(hostnames.foo, connection = ConnFake, log = l, lock = TargetLockFake)
+        except SSHException:
+            eq_(l.criticals, [
+                str(messages.ConnectingTargetFailedMessage(hostnames.foo, "bar"))
+            ])
+            eq_(l.infos, [
+                str(messages.ConnectingToMessage(hostnames.foo))
+            ])
+        else:
+            ok_(False, "exception expected")
+
+    def test_host_locked(self):
+        class ConnFake(ConnectionFake):
+            def open(self, filename, mode = 'r', bufsize = -1):
+                rl = RemoteLock()
+                rl.user = "alice"
+                rl.timestamp = "0000"
+                rl.pid = 666
+                return StringIO(rl.to_lockfile())
+
+        class LockFake(TargetLockFake):
+            def __init__(self, *a, **kw):
+                super(LockFake, self).__init__(*a, **kw)
+                self.lock()
+
+        t = TF(hostnames.foo, connection = ConnFake, lock = TargetLock)
+        eq_(t.logger.warnings, ["{0} is locked by alice.".format(hostnames.foo)])
+
+class TargetLockFake(object):
+    def __init__(self, conn, config, log):
+        self.unlock()
+
+    def lock(self, comment = None):
+        self.locked = True
+
+    def unlock(self, force = None):
+        self.locked = False
+
+    def is_locked(self):
+        return self.locked
+
+class ConnectionFake(Connection):
+    def connect(self):
+        pass
+    def load_keys(self):
+        pass
+
+class MyErr(RuntimeError):
+    pass
+
+class TestLockedTargets(object):
+    def _check_locks(self, targets, result):
+        if not targets:
+            raise ValueError("no targets")
+
+        for t in targets:
+            eq_(t.is_locked(), result)
+
+    def test_happy_path(self):
+        ts = [
+            TF(hostnames.foo, lock = TargetLockFake, connection = ConnectionFake),
+            TF(hostnames.bar, lock = TargetLockFake, connection = ConnectionFake),
+            TF(hostnames.qux, lock = TargetLockFake, connection = ConnectionFake),
+        ]
+
+        self._check_locks(ts, False)
+        with LockedTargets(ts):
+            self._check_locks(ts, True)
+
+        self._check_locks(ts, False)
+
+    def test_reraise(self):
+        ts = [
+            TF(hostnames.foo, lock = TargetLockFake, connection = ConnectionFake),
+            TF(hostnames.bar, lock = TargetLockFake, connection = ConnectionFake),
+            TF(hostnames.qux, lock = TargetLockFake, connection = ConnectionFake),
+        ]
+
+        self._check_locks(ts, False)
+        m = "foo"
+        try:
+            with LockedTargets(ts):
+                self._check_locks(ts, True)
+                raise MyErr(m)
+        except MyErr as e:
+            eq_(str(e), m)
+            self._check_locks(ts, False)
