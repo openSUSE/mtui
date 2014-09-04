@@ -18,6 +18,9 @@ from posix import stat_result
 from tempfile import mktemp
 from random import randrange
 
+from mtui.template import OBSTestReport
+from mtui.template import SwampTestReport
+
 unused = None
 
 class SysFake(object):
@@ -140,3 +143,6 @@ def rand_review_id():
         request id
     """
     return randrange(1, 9999)
+
+def testreports():
+    return [OBSTestReport, SwampTestReport]
