@@ -21,7 +21,7 @@ from mtui.template import TestsuiteComment
 from mtui.template import SwampUpdateID
 from mtui.template import _TemplateIOError
 from mtui.template import QadbReportCommentLengthWarning
-from mtui.template import UnknownSystemError
+from mtui.updater import UnknownSystemError
 from mtui.target import Target
 from mtui.types.md5 import MD5Hash
 from mtui.types.obs import RequestReviewID
