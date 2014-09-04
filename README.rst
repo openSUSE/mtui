@@ -18,7 +18,25 @@ openSUSE and SUSE
 =================
 
 Packages are available at `IBS home:yac:mtui
-<https://build.suse.de/project/show/home:yac:mtui>`_
+<https://build.suse.de/project/show/home:yac:mtui>`_.
+
+Add the appropriate repository to your system
+
+.. sourcecode:: bash
+
+    zypper ar <repo-link>
+
+You can find the proper ``<repo-link>`` on the `project repositories page
+<https://build.suse.de/project/repositories/home:yac:mtui>`_ for each
+distribution under the the "Go to download repository" link.
+
+Then you can run
+
+.. sourcecode:: bash
+
+    zypper in mtui
+
+and get mtui with the apropriate dependecies as well.
 
 Gentoo
 ======
