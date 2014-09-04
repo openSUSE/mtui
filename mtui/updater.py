@@ -249,7 +249,14 @@ class RedHatUpdate(Update):
         self.commands = commands
 
 
-Updater = {'11': ZypperUpdate, '114': openSuseUpdate, '10': OldZypperUpdate, '9': OnlineUpdate, 'OES': RugUpdate, 'YUM': RedHatUpdate}
+Updater = {
+    '11': ZypperUpdate,
+    '114': openSuseUpdate,
+    '10': OldZypperUpdate,
+    '9': OnlineUpdate,
+    'OES': RugUpdate,
+    'YUM': RedHatUpdate,
+}
 
 
 class Prepare(object):
@@ -401,7 +408,12 @@ class RedHatPrepare(Prepare):
         self.commands = commands
 
 
-Preparer = {'11': ZypperPrepare, '114': ZypperPrepare, '10': OldZypperPrepare, 'YUM': RedHatPrepare}
+Preparer = {
+    '11': ZypperPrepare,
+    '114': ZypperPrepare,
+    '10': OldZypperPrepare,
+    'YUM': RedHatPrepare,
+}
 
 
 class Downgrade(object):
@@ -582,7 +594,12 @@ class RedHatDowngrade(Downgrade):
         self.commands = commands
 
 
-Downgrader = {'11': ZypperDowngrade, '114': ZypperDowngrade, '10': OldZypperDowngrade, 'YUM': RedHatDowngrade}
+Downgrader = {
+    '11': ZypperDowngrade,
+    '114': ZypperDowngrade,
+    '10': OldZypperDowngrade,
+    'YUM': RedHatDowngrade,
+}
 
 
 class Install(object):
@@ -680,7 +697,12 @@ class RedHatInstall(Install):
         self.commands = commands
 
 
-Installer = {'11': ZypperInstall, '114': ZypperInstall, '10': ZypperInstall, 'YUM': RedHatInstall}
+Installer = {
+    '11': ZypperInstall,
+    '114': ZypperInstall,
+    '10': ZypperInstall,
+    'YUM': RedHatInstall,
+}
 
 
 class ZypperUninstall(Install):
@@ -706,5 +728,9 @@ class RedHatUninstall(Install):
         self.commands = commands
 
 
-Uninstaller = {'11': ZypperUninstall, '114': ZypperUninstall, '10': ZypperUninstall, 'YUM': RedHatUninstall}
-
+Uninstaller = {
+    '11': ZypperUninstall,
+    '114': ZypperUninstall,
+    '10': ZypperUninstall,
+    'YUM': RedHatUninstall,
+}
