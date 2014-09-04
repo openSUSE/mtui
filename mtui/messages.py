@@ -13,6 +13,9 @@ class UserMessage(object):
     def __eq__(self, x):
         return str(self) == str(x)
 
+class UserError(UserMessage, RuntimeError):
+    pass
+
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
         return 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'

@@ -191,6 +191,9 @@ class CommandPrompt(cmd.Cmd):
                 print ""
             except QuitLoop:
                 return
+            except messages.UserError as e:
+                self.log.error(e)
+                self.log.debug(format_exc())
             except Exception as e:
                 self.log.error(format_exc())
 
