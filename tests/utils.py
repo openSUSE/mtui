@@ -30,16 +30,15 @@ class SysFake(object):
         self.stderr = StringIO()
 
 class LogFake:
+    _conv = lambda _, x: x
     def __init__(self):
-        self.errors = []
-        self.warnings = []
-        self.debugs = []
-        self.infos = []
+        self.__setup(self._conv)
 
-        self.error = self.errors.append
-        self.warning = self.warnings.append
-        self.debug = self.debugs.append
-        self.info = self.infos.append
+    def __setup(self, conv):
+        for i in ['error', 'warning', 'debug', 'info', 'critical']:
+            setattr(self, i+"s", list())
+            setattr(self, i, (lambda i: lambda x: getattr(self, i).append(conv(x)))(i+"s"))
+            # because reasons
 
         self.t_setLevels = []
 
@@ -51,6 +50,9 @@ class LogFake:
 
     def setLevel(self, level=None):
         self.t_setLevels.append(level)
+
+class LogFakeStr(LogFake):
+    _conv = lambda _, x: str(x)
 
 class ConfigFake(Config):
     """
