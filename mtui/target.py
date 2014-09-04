@@ -166,6 +166,18 @@ class RemoteLock(object):
 
         return self
 
+class LockedTargets(object):
+    def __init__(self, targets):
+        self.targets = targets
+
+    def __enter__(self):
+        for target in self.targets:
+            target.lock()
+
+    def __exit__(self, type_, value, tb):
+        for target in self.targets:
+            target.unlock()
+
 class TargetLock(object):
     """
         This class is not supposted to be used directly but via
