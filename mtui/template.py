@@ -19,7 +19,7 @@ from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.utils import edit_text
-from mtui.utils import UserMessage
+from mtui.messages import QadbReportCommentLengthWarning
 from mtui import updater
 
 try:
@@ -35,9 +35,6 @@ class _TemplateIOError(IOError):
     else in the process
     """
     pass
-
-class QadbReportCommentLengthWarning(UserMessage):
-    message = 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'
 
 def testreport_svn_checkout(config, log, uri):
     ensure_dir_exists(

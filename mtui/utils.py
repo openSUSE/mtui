@@ -15,8 +15,6 @@ import tempfile
 import readline
 import re
 from errno import EEXIST
-from abc import ABCMeta
-from abc import abstractmethod
 
 from tempfile import mkstemp
 from shutil import move
@@ -249,15 +247,3 @@ class check_eq(object):
             self.__class__.__name__,
             self.x
         )
-
-class UserMessage(object):
-    __metaclass__ = ABCMeta
-    def __str__(self):
-        return self.message
-
-    @property
-    @abstractmethod
-    def message(self): pass
-
-    def __eq__(self, x):
-        return str(self) == str(x)
