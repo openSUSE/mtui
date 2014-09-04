@@ -37,6 +37,7 @@ from .argparse import ArgsParseFailure
 from mtui.types import MD5Hash
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
+from mtui import updater
 
 from distutils.version import StrictVersion
 
@@ -287,6 +288,23 @@ class CommandPrompt(cmd.Cmd):
         except Exception:
             out.error('failed to load reference hosts data')
             raise
+
+    def get_installer(self):
+        """
+        :return: installer instance
+
+        Just passes the call to metadata if they exist. Otherwise try
+        to get the updater from `self.targets`.
+
+        Currently it is first match wins so if we are connected to different
+        system it won't work. But it's ok, it never did.
+        """
+        if self.metadata:
+            return self.metadata.get_installer()
+
+        return updater.Installer[updater.get_release([
+            x.system for x in self.targets.values()
+        ])]
 
     def target_tempdir(self, *path):
         if self.metadata:
@@ -2036,7 +2054,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            installer = self.metadata.get_installer()
+            installer = self.get_installer()
 
             out.info('installing')
             for target in targets:
