@@ -102,6 +102,9 @@ class OBSUpdateID(UpdateID):
 class TestReportAlreadyLoaded(RuntimeError):
     pass
 
+class UnknownSystemError(ValueError):
+    pass
+
 class TestReport(object):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
@@ -270,30 +273,20 @@ class TestReport(object):
 
     def get_release(self):
         systems = ' '.join(self.systems.values())
-        if re.search('rhel', systems):
-            return 'YUM'
-        if re.search('manager', systems):
-            # SUSE Manager hosts should have the sle11 zypper stack,
-            # even on sle10 installations
-            return '11'
-        if re.search('mgr', systems):
-            return '11'
-        if re.search('sles4vmware', systems):
-            return '11'
-        if re.search('cloud', systems):
-            return '11'
-        if re.search('studio', systems):
-            return '11'
-        if re.search('slms', systems):
-            return '11'
-        if re.search('sle.11', systems):
-            return '11'
-        if re.search('sle.10', systems):
-            return '10'
-        if re.search('sle.9', systems):
-            return '9'
-        if re.search('sl11', systems):
-            return '114'
+        self.log.debug("systems: {0}".format(systems))
+
+        for rexp, release in {
+            'rhel'      : 'YUM',
+            'sle[sd]12' : '12',
+            '(manager|mgr|sles4vmware|cloud|studio|slms|sle.11)': '11',
+            'sle.10'    : '10',
+            'sle.9'     : 9,
+            'sl11'      : '114',
+        }.items():
+            if re.search(rexp, systems):
+                return release
+
+        raise UnknownSystemError(systems)
 
     def copy_scripts(self):
         if not self.path:

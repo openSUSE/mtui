@@ -561,7 +561,7 @@ def test_TC_str_warning():
 def test_get_release():
     cases = [
         ] + [
-            ({'foo': x},'12') for x in
+            ({'foo': x}, '12') for x in
             [
                 'sled12None-x86_64',
                 'sles12None-x86_64',
