@@ -23,6 +23,7 @@ from mtui.connection import *
 from mtui.xmlout import *
 from mtui.utils import *
 from mtui.config import *
+from mtui import messages
 
 out = logging.getLogger('mtui')
 
@@ -333,9 +334,9 @@ class TargetLock(object):
         return True
 
 class Target(object):
-
     def __init__(self, hostname, system, packages=[], state='enabled',
-        timeout=300, exclusive=False, connect=True, logger=None):
+        timeout=300, exclusive=False, connect=True, logger=None,
+        lock=TargetLock, connection=Connection):
         """
             :type connect: bool
             :param connect:
@@ -348,6 +349,9 @@ class Target(object):
         self.system = system
         self.packages = {}
         self.log = []
+        self.TargetLock = lock
+        self.Connection = connection
+
         if logger is None:
             # for backwards compatibility
             logger = out
@@ -370,22 +374,19 @@ class Target(object):
 
     def connect(self):
         try:
-            out.info('connecting to %s' % self.hostname)
-            self.connection = Connection(self.host, self.port, self.timeout)
-        except Exception as error:
-            try:
-                # TODO: why is this here?
-                xs = (self.hostname, str(error.strerror))
-            except:
-                xs =  (self.hostname, str(error.strerror))
-            out.critical('connecting to %s failed: %s' % xs)
+            self.logger.info('connecting to %s' % self.hostname)
+            self.connection = self.Connection(self.host, self.port, self.timeout)
+        except Exception as e:
+            self.logger.critical(messages.ConnectingTargetFailedMessage(
+                self.hostname, e
+            ))
             raise
 
-        self._lock = TargetLock(self.connection, config, out)
+        self._lock = self.TargetLock(self.connection, config, self.logger)
         if self.is_locked():
             # NOTE: the condition was originally locked and lock.comment
             # idk why.
-            out.warning(self._lock.locked_by_msg())
+            self.logger.warning(self._lock.locked_by_msg())
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
