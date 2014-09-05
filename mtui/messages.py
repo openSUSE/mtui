@@ -44,6 +44,10 @@ class ConnectingToMessage(UserMessage):
     def __str__(self):
         return 'connecting to {0}'.format(self.hostname)
 
+class MissingPackagesError(UserError):
+    def __str__(self):
+        return "Missing packages: TestReport not loaded and no -p given."
+
 class TestReportNotLoadedError(UserError):
     def __str__(self):
         return 'TestReport not loaded'

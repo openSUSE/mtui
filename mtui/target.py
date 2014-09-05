@@ -22,8 +22,11 @@ from traceback import format_exc
 from mtui.connection import *
 from mtui.xmlout import *
 from mtui.utils import *
+from mtui.utils import unlines
 from mtui.config import *
+from mtui.rpmver import RPMVersion
 from mtui import messages
+from mtui.utils import unwords
 
 out = logging.getLogger('mtui')
 
@@ -88,6 +91,13 @@ class HostsGroup(object):
 
         if not es == []:
             raise HostsGroupException(es)
+
+    def query_versions(self, packages):
+        rs = {}
+        for x in self.hosts:
+            rs[x] = x.query_package_versions(packages)
+
+        return rs
 
     def __getitem__(self, x):
         return self.hosts[x]
@@ -405,21 +415,13 @@ class Target(object):
         if packages is None:
             packages = self.packages.keys()
 
-        if isinstance(packages, list):
-            packages = ' '.join(packages)
-
         if self.state == 'enabled':
-            self.run('rpm -q %s' % packages)
-
-            for line in re.split('\n+', self.lastout()):
-                match = re.search(r"^([a-zA-Z0-9_\-\+\.]*)-([a-zA-Z0-9_\.+]*)-([a-zA-Z0-9_\.]*)", line)
-                if match:
-                    self.packages[match.group(1)].current = '%s-%s' % (match.group(2), match.group(3))
+            pvs = self.query_package_versions(packages)
+            for p, v in pvs.items():
+                if v:
+                    self.packages[p].current = str(v)
                 else:
-                    match = re.search('package (.*) is not installed', line)
-                    if match:
-                        self.packages[match.group(1)].current = '0'
-                        out.debug('%s: package %s is not installed' % (self.hostname, match.group(1)))
+                    self.packages[p].current = '0'
         elif self.state == 'dryrun':
 
             out.info('dryrun: %s running "rpm -q %s"' % (self.hostname, packages))
@@ -427,6 +429,34 @@ class Target(object):
         elif self.state == 'disabled':
 
             self.log.append(['', '', '', 0, 0])
+
+
+    def query_package_versions(self, packages):
+        """
+        :type packages: [str]
+        :param packages: packages to query versions for
+
+        :return: {package: RPMVersion or None}
+            where
+              package = str
+        """
+        self.run('rpm -q {0}'.format(unwords(packages)))
+
+        packages = {}
+        for line in re.split('\n+', self.lastout()):
+            match = re.search(r"^([a-zA-Z0-9_\-\+\.]*)-([a-zA-Z0-9_\.+]*)-([a-zA-Z0-9_\.]*)", line)
+            if match:
+                packages[match.group(1)] = RPMVersion('{0}-{1}'.format(
+                    match.group(2),
+                    match.group(3)
+                ))
+                continue
+
+            match = re.search('package (.*) is not installed', line)
+            if match:
+                packages[match.group(1)] = None
+
+        return packages
 
     def query_version(self, package):
         out.debug('%s: querying current %s version' % (self.hostname, package))

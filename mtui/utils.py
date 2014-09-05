@@ -241,6 +241,10 @@ class check_eq(object):
             self.x
         )
 
+unwords = " ".join
+words = lambda x: x.split(" ")
+unlines = "\n".join
+
 def requires_update(fn):
     def wrap(self, *a, **kw):
         if not self.metadata:

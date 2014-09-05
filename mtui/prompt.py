@@ -119,6 +119,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.HostsUnlock)
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
+        self._add_subcommand(commands.ListPackages)
         self.sys = sys_ or sys
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
