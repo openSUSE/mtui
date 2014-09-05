@@ -61,21 +61,13 @@ def edit_text(text):
 
     return text
 
-
-def green(text):
-    return "\033[1;32m%s\033[1;m" % text
-
-
-def red(text):
-    return "\033[1;31m%s\033[1;m" % text
-
-
-def yellow(text):
-    return "\033[1;33m%s\033[1;m" % text
-
-
-def blue(text):
-    return "\033[1;34m%s\033[1;m" % text
+if os.getenv('COLOR', 'always') == 'always':
+    green   = lambda xs: "\033[1;32m%s\033[1;m" % xs
+    red     = lambda xs: "\033[1;31m%s\033[1;m" % xs
+    yellow  = lambda xs: "\033[1;33m%s\033[1;m" % xs
+    blue    = lambda xs: "\033[1;34m%s\033[1;m" % xs
+else:
+    green = red = yellow = blue = lambda xs: str(xs)
 
 
 def input(text, options, interactive=True):
