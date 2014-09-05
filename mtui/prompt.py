@@ -282,8 +282,14 @@ class CommandPrompt(cmd.Cmd):
             raise
 
     def get_installer(self):
+        return self._get_updater("installer")
+
+    def get_uninstaller(self):
+        return self._get_updater("uninstaller")
+
+    def _get_updater(self, kind):
         """
-        :return: installer instance
+        :return: an updater instance
 
         Just passes the call to metadata if they exist. Otherwise try
         to get the updater from `self.targets`.
@@ -292,9 +298,10 @@ class CommandPrompt(cmd.Cmd):
         system it won't work. But it's ok, it never did.
         """
         if self.metadata:
-            return self.metadata.get_installer()
+            return getattr(self.metadata, "get_" + kind)()
 
-        return updater.Installer[updater.get_release([
+        register = kind[0].upper() + kind[1:]
+        return getattr(updater, register)[updater.get_release([
             x.system for x in self.targets.values()
         ])]
 
@@ -2088,7 +2095,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            uninstaller = self.metadata.get_uninstaller()
+            uninstaller = self.get_uninstaller()
 
             out.info('removing')
             try:
