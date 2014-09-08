@@ -2335,9 +2335,9 @@ class CommandPrompt(cmd.Cmd):
             if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
                 return
 
-            script_hook(targets, 'post', os.path.dirname(self.metadata.path), str(self.metadata.id))
-            script_hook(targets, 'compare', os.path.dirname(self.metadata.path), str(self.metadata.id))
-            FileDelete(targets, os.path.join(config.target_tempdir, str(self.metadata.id), 'output')).run()
+            script_hook(targets, 'post', self.metadata.report_wd(), str(self.metadata.id))
+            script_hook(targets, 'compare', self.metadata.report_wd(), str(self.metadata.id))
+            FileDelete(targets, self.metadata.target_wd('output')).run()
 
         Notification('MTUI', 'updating %s finished' % self.session).show()
         out.info('done')
