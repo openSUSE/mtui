@@ -8,6 +8,7 @@ from mtui.types.obs import RequestReviewID
 
 from .utils import StringIO
 from .utils import unused
+from .utils import testreports
 from .test_template import TRF
 
 class TestableSwampTestReport(SwampTestReport):
@@ -130,8 +131,7 @@ def test_TR_parse_reviewer():
         ("assigned_singular", "Test Plan Reviewer: {0}"),
         ("assigned_singular", "Test Plan Reviewers: {0}"),
     ]
-    reports = [SwampTestReport, OBSTestReport]
     reviewer = "foobar"
-    for r in reports:
+    for r in testreports():
         for n,i in inputs:
             yield check_parse_reviewer, r, i.format(reviewer), reviewer

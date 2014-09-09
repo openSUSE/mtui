@@ -180,6 +180,9 @@ def test_command_println():
         def run(self):
             pass
 
-    c = ComMock(None, None, None, SysFake(unused), None, None)
+    class PromptFake:
+        metadata = None
+
+    c = ComMock(None, None, None, SysFake(unused), None, PromptFake())
     c.println("a")
     eq_(c.sys.stdout.getvalue(), "a\n")

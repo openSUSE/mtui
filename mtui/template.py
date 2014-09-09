@@ -19,7 +19,8 @@ from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.utils import edit_text
-from mtui.utils import UserMessage
+from mtui.messages import QadbReportCommentLengthWarning
+from mtui import updater
 
 try:
     from nose.tools import nottest
@@ -34,9 +35,6 @@ class _TemplateIOError(IOError):
     else in the process
     """
     pass
-
-class QadbReportCommentLengthWarning(UserMessage):
-    message = 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'
 
 def testreport_svn_checkout(config, log, uri):
     ensure_dir_exists(
@@ -269,31 +267,22 @@ class TestReport(object):
         return self.packages.keys()
 
     def get_release(self):
-        systems = ' '.join(self.systems.values())
-        if re.search('rhel', systems):
-            return 'YUM'
-        if re.search('manager', systems):
-            # SUSE Manager hosts should have the sle11 zypper stack,
-            # even on sle10 installations
-            return '11'
-        if re.search('mgr', systems):
-            return '11'
-        if re.search('sles4vmware', systems):
-            return '11'
-        if re.search('cloud', systems):
-            return '11'
-        if re.search('studio', systems):
-            return '11'
-        if re.search('slms', systems):
-            return '11'
-        if re.search('sle.11', systems):
-            return '11'
-        if re.search('sle.10', systems):
-            return '10'
-        if re.search('sle.9', systems):
-            return '9'
-        if re.search('sl11', systems):
-            return '114'
+        return updater.get_release(self.systems.values())
+
+    def get_preparer(self):
+        return updater.Preparer[self.get_release()]
+
+    def get_updater(self):
+        return updater.Updater[self.get_release()]
+
+    def get_installer(self):
+        return updater.Installer[self.get_release()]
+
+    def get_uninstaller(self):
+        return updater.Uninstaller[self.get_release()]
+
+    def get_downgrader(self):
+        return updater.Downgrader[self.get_release()]
 
     def copy_scripts(self):
         if not self.path:

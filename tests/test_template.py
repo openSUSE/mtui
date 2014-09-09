@@ -21,6 +21,7 @@ from mtui.template import TestsuiteComment
 from mtui.template import SwampUpdateID
 from mtui.template import _TemplateIOError
 from mtui.template import QadbReportCommentLengthWarning
+from mtui.updater import UnknownSystemError
 from mtui.target import Target
 from mtui.types.md5 import MD5Hash
 from mtui.types.obs import RequestReviewID
@@ -30,6 +31,7 @@ from .utils import touch
 from .utils import ConfigFake
 from .utils import get_nonexistent_path
 from .utils import unused
+from .utils import testreports
 
 from traceback import format_exc
 
@@ -555,3 +557,42 @@ def test_TC_str_warning():
     eq_(tc.log.warnings, [])
     str(tc)
     eq_(tc.log.warnings.pop(), QadbReportCommentLengthWarning())
+
+def test_get_release():
+    cases = [
+        ] + [
+            ({'foo': x}, '12') for x in
+            [
+                'sled12None-x86_64',
+                'sles12None-x86_64',
+                'sles12None-x86_64',
+            ]
+        ] + [
+            ({'foo': x}, '11') for x in
+            [
+                'sled11sp3-i386',
+                'sled11sp3-x86_64',
+                'sles11sp3-i386',
+                'sles11sp3-s390x',
+                'sles11sp3-x86_64',
+                'mgr',
+                'sles4vmware',
+                'cloud',
+                'studio',
+                'slms',
+                'manager',
+            ]
+        ] + [({'foo': 'rhel'}, 'YUM')]
+
+    for r in testreports():
+        for system, result in cases:
+            yield check_release, r, system, result
+
+def check_release(report, systems, result):
+    tr = TRF(report)
+    tr.systems = systems
+    eq_(tr.get_release(), result)
+
+def test_get_release_exc():
+    for r in testreports():
+        yield raises(UnknownSystemError)(check_release), r, {'foo': ''}, unused

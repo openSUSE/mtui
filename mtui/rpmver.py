@@ -62,4 +62,8 @@ class RPMVersion(object):
     def __ne__(self, other):
         return rpm.labelCompare(('1', self.ver, self.rel), ('1', other.ver, other.rel)) != 0
 
-
+    def __str__(self):
+        s = str(self.ver)
+        if self.rel != '0':
+            s += "-" + str(self.rel)
+        return s

@@ -14,6 +14,24 @@ from mtui.target import *
 from mtui.rpmver import *
 from mtui.utils import *
 
+class UnknownSystemError(ValueError):
+    pass
+
+def get_release(systems):
+    systems = ' '.join(systems)
+
+    for rexp, release in {
+        'rhel'      : 'YUM',
+        'sle[sd]12' : '12',
+        '(manager|mgr|sles4vmware|cloud|studio|slms|sle.11)': '11',
+        'sle.10'    : '10',
+        'sle.9'     : 9,
+        'sl11'      : '114',
+    }.items():
+        if re.search(rexp, systems):
+            return release
+
+    raise UnknownSystemError(systems)
 
 class UpdateError(Exception):
 
@@ -249,7 +267,14 @@ class RedHatUpdate(Update):
         self.commands = commands
 
 
-Updater = {'11': ZypperUpdate, '114': openSuseUpdate, '10': OldZypperUpdate, '9': OnlineUpdate, 'OES': RugUpdate, 'YUM': RedHatUpdate}
+Updater = {
+    '11': ZypperUpdate,
+    '114': openSuseUpdate,
+    '10': OldZypperUpdate,
+    '9': OnlineUpdate,
+    'OES': RugUpdate,
+    'YUM': RedHatUpdate,
+}
 
 
 class Prepare(object):
@@ -401,7 +426,12 @@ class RedHatPrepare(Prepare):
         self.commands = commands
 
 
-Preparer = {'11': ZypperPrepare, '114': ZypperPrepare, '10': OldZypperPrepare, 'YUM': RedHatPrepare}
+Preparer = {
+    '11': ZypperPrepare,
+    '114': ZypperPrepare,
+    '10': OldZypperPrepare,
+    'YUM': RedHatPrepare,
+}
 
 
 class Downgrade(object):
@@ -582,7 +612,12 @@ class RedHatDowngrade(Downgrade):
         self.commands = commands
 
 
-Downgrader = {'11': ZypperDowngrade, '114': ZypperDowngrade, '10': OldZypperDowngrade, 'YUM': RedHatDowngrade}
+Downgrader = {
+    '11': ZypperDowngrade,
+    '114': ZypperDowngrade,
+    '10': OldZypperDowngrade,
+    'YUM': RedHatDowngrade,
+}
 
 
 class Install(object):
@@ -680,7 +715,12 @@ class RedHatInstall(Install):
         self.commands = commands
 
 
-Installer = {'11': ZypperInstall, '114': ZypperInstall, '10': ZypperInstall, 'YUM': RedHatInstall}
+Installer = {
+    '11': ZypperInstall,
+    '114': ZypperInstall,
+    '10': ZypperInstall,
+    'YUM': RedHatInstall,
+}
 
 
 class ZypperUninstall(Install):
@@ -706,5 +746,9 @@ class RedHatUninstall(Install):
         self.commands = commands
 
 
-Uninstaller = {'11': ZypperUninstall, '114': ZypperUninstall, '10': ZypperUninstall, 'YUM': RedHatUninstall}
-
+Uninstaller = {
+    '11': ZypperUninstall,
+    '114': ZypperUninstall,
+    '10': ZypperUninstall,
+    'YUM': RedHatUninstall,
+}

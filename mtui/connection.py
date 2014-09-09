@@ -75,15 +75,14 @@ class Connection(object):
 
         self.session = None
         self.client = paramiko.SSHClient()
-        self.client.load_system_host_keys()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        self.load_keys()
 
         # uncomment to combine stderr and stdout channel. In most cases,
         # mtui expects a separate stderr channel. Changing this may be
         # harmfull to error checking code.
 
         # self.client.set_combine_stderr(True)
-
         self.connect()
 
     def __repr__(self):
@@ -93,9 +92,12 @@ class Connection(object):
             , self.port
         )
 
+    def load_keys(self):
+        self.client.load_system_host_keys()
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
     def connect(self):
         """connect to the remote host using paramiko as ssh subsystem"""
-
         cfg = paramiko.config.SSHConfig()
         try:
             with open(os.path.expanduser("~/.ssh/config")) as fd:

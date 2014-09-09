@@ -11,7 +11,12 @@ from os.path import join
 
 from mtui.utils import ensure_dir_exists
 from mtui.utils import chdir
+from mtui.utils import requires_update
 from mtui.xdg import save_cache_path
+from mtui.messages import TestReportNotLoadedError
+
+from .utils import unused
+from .utils import LogFake
 
 class TestEnsureDirExists(TestCase):
     def setUp(self):
@@ -74,3 +79,23 @@ def test_save_cache_path():
     p = save_cache_path("foo")
     eq_('mtui/foo', p[-8:])
     ok_(len(p) > 9)
+
+class TestRequiresUpdate:
+    class PromptFake:
+        def __init__(self, metadata, log):
+            self.metadata = metadata
+            self.log = log
+
+        @requires_update
+        def foo(self):
+            pass
+
+    def test_happy_path(self):
+        p = self.PromptFake(True, LogFake())
+        p.foo()
+        eq_(p.log.errors,  [])
+
+    @raises(TestReportNotLoadedError)
+    def test_sad_path(self):
+        p = self.PromptFake(None, unused)
+        p.foo()

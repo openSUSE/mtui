@@ -8,6 +8,10 @@ import os
 from .argparse import ArgumentParser
 from mtui.target import HostsGroupException, TargetLockedError
 from mtui.utils import flatten
+from mtui.utils import blue, yellow, green, red
+from mtui import messages
+from mtui.utils import requires_update
+from mtui.rpmver import RPMVersion
 
 class Command(object):
     __metaclass__ = ABCMeta
@@ -35,6 +39,7 @@ class Command(object):
         self.logger = logger
         self.config = config
         self.prompt = prompt
+        self.metadata = prompt.metadata
 
     @classmethod
     def parse_args(cls, args, sys):
@@ -71,13 +76,19 @@ class Command(object):
     def run(self):
         raise RuntimeError()
 
-    def println(self, xs):
+    def println(self, xs = ""):
         """
         `print` replacement method for the outputs to be testable by
         injecting `StringIO`
         """
         self.sys.stdout.write(xs + "\n")
         self.sys.stdout.flush()
+
+    @classmethod
+    def _add_hosts_arg(cls, parser):
+        parser.add_argument('hosts', metavar = 'host', type = str,
+            nargs = '*', help = 'hosts to act on. If no hosts are' +
+            ' given all enabled hosts are used.')
 
 class HostsUnlock(Command):
     command = 'unlock'
@@ -89,10 +100,7 @@ class HostsUnlock(Command):
             help='force unlock - remove locks set by other users or'
                 ' sessions')
 
-        parser.add_argument('hosts', metavar='host', type=str,
-            nargs='*', help='hosts to unlock. If no hosts are' +
-            ' given all enabled hosts are unlocked.')
-
+        cls._add_hosts_arg(parser)
         return parser
 
     def run(self):
@@ -145,6 +153,86 @@ class HostsUnlock(Command):
 
             return endchoices
         return wrap
+
+class ListPackages(Command):
+    command = 'list_packages'
+    stable = '2.0'
+
+    state_map = {
+        None: blue("not installed"),
+        -1:   yellow("update needed"),
+        0:    green("updated"),
+        1:    red("too recent"),
+    }
+
+    def _vers2state(self, current, wanted):
+        if not current:
+            return self.state_map[None]
+
+        return self.state_map[cmp(current, wanted)]
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            "-p", "--packages",
+            type    = str,
+            action  = 'append',
+            default = [],
+            help    = 'Cumulative packages to list'
+        )
+
+        parser.add_argument(
+            "-w", "--wanted",
+            action  = 'store_true',
+            default = False,
+            help    = "Print versions wanted by the testreport"
+        )
+
+        cls._add_hosts_arg(parser)
+
+    @requires_update
+    def _run_just_wanted(self):
+        for xs in self.metadata.packages.items():
+            self.printPVLN(*(xs + ("",)))
+
+    def run(self):
+        if self.args.wanted:
+            self._run_just_wanted()
+            return
+
+        hosts = self.hosts.select(self.args.hosts)
+
+        pkgs = self.metadata.packages.keys() if self.metadata else self.args.packages
+        if not pkgs:
+            raise messages.MissingPackagesError()
+
+        for target, pvs in hosts.query_versions(pkgs).items():
+            self.println("packages on {0} ({1}):".format(
+                target.hostname,
+                target.system,
+            ))
+
+            for p, v in pvs.items():
+                if self.metadata:
+                    try:
+                        wanted = self.metadata.packages[p]
+                    except KeyError:
+                        state = None
+                    else:
+                        state = self._vers2state(v, RPMVersion(wanted))
+                else:
+                    state = "" if v else self.state_map[None]
+
+                self.printPVLN(p, v, state)
+
+            self.println()
+
+    def printPVLN(self, package, version, state):
+        self.println('{0:30}: {1:15} {2}'.format(
+            package,
+            version,
+            state
+        ))
 
 class Whoami(Command):
     """

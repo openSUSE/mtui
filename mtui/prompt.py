@@ -25,7 +25,6 @@ from traceback import print_exc
 
 from mtui.rpmver import *
 from mtui.target import *
-from mtui.updater import *
 from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
@@ -38,6 +37,8 @@ from .argparse import ArgsParseFailure
 from mtui.types import MD5Hash
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
+from mtui import updater
+from mtui.utils import requires_update
 
 from distutils.version import StrictVersion
 
@@ -68,19 +69,6 @@ class CmdQueue(list):
 
 class CommandAlreadyBoundError(RuntimeError):
     pass
-
-def requires_update(fn):
-    def wrap(self, *a, **kw):
-        if not self.metadata:
-            self.log.error('no testing template loaded')
-            return
-
-        return fn(self, *a, **kw)
-
-
-    wrap.__name__ = fn.__name__
-    wrap.__doc__  = fn.__doc__
-    return wrap
 
 class CommandPrompt(cmd.Cmd):
     # TODO: It's worth considering to remove the inherit of cmd.Cmd and
@@ -131,6 +119,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.HostsUnlock)
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
+        self._add_subcommand(commands.ListPackages)
         self.sys = sys_ or sys
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -191,6 +180,9 @@ class CommandPrompt(cmd.Cmd):
                 print ""
             except QuitLoop:
                 return
+            except messages.UserError as e:
+                self.log.error(e)
+                self.log.debug(format_exc())
             except Exception as e:
                 self.log.error(format_exc())
 
@@ -288,6 +280,30 @@ class CommandPrompt(cmd.Cmd):
         except Exception:
             out.error('failed to load reference hosts data')
             raise
+
+    def get_installer(self):
+        return self._get_updater("installer")
+
+    def get_uninstaller(self):
+        return self._get_updater("uninstaller")
+
+    def _get_updater(self, kind):
+        """
+        :return: an updater instance
+
+        Just passes the call to metadata if they exist. Otherwise try
+        to get the updater from `self.targets`.
+
+        Currently it is first match wins so if we are connected to different
+        system it won't work. But it's ok, it never did.
+        """
+        if self.metadata:
+            return getattr(self.metadata, "get_" + kind)()
+
+        register = kind[0].upper() + kind[1:]
+        return getattr(updater, register)[updater.get_release([
+            x.system for x in self.targets.values()
+        ])]
 
     def target_tempdir(self, *path):
         if self.metadata:
@@ -1046,13 +1062,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_update_commands, args)
         else:
 
-            release = self.metadata.get_release()
-
-            try:
-                updater = Updater[release]
-            except KeyError:
-                out.critical('no updater available for %s' % release)
-                return
+            updater = self.metadata.get_updater()
 
             print '\n'.join(updater(self.targets, self.metadata.patches, self.metadata.get_package_list()).commands)
             del updater
@@ -2043,12 +2053,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-            try:
-                installer = Installer[release]
-            except KeyError:
-                out.critical('no installer available for %s' % release)
-                return
+            installer = self.get_installer()
 
             out.info('installing')
             for target in targets:
@@ -2090,12 +2095,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-            try:
-                uninstaller = Uninstaller[release]
-            except KeyError:
-                out.critical('no uninstaller available for %s' % release)
-                return
+            uninstaller = self.get_uninstaller()
 
             out.info('removing')
             try:
@@ -2133,13 +2133,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-
-            try:
-                downgrader = Downgrader[release]
-            except KeyError:
-                out.critical('no downgrader available for %s' % release)
-                return
+            downgrader = self.metadata.get_downgrader()
 
             out.info('downgrading')
             for target in targets:
@@ -2200,15 +2194,9 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            release = self.metadata.get_release()
-
-            try:
-                preparer = Preparer[release]
-            except KeyError:
-                out.critical('no preparer available for %s' % release)
-                return True
-
+            preparer = self.metadata.get_preparer()
             out.info('preparing')
+
             try:
                 preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed, testing=testing).run()
             except Exception:
@@ -2274,115 +2262,82 @@ class CommandPrompt(cmd.Cmd):
         if args.split(',')[0] != 'all':
             targets = selected_targets(targets, args.split(','))
 
-        for target in targets:
-            lock = targets[target].locked()
-            if lock.locked and not lock.own():
-                out.warning('host %s is locked since %s by %s. aborting.' % (target, lock.time(), lock.user))
-                if lock.comment:
-                    out.info("%s's comment: %s" % (lock.user, lock.comment))
+        with LockedTargets([self.targets[x] for x in targets]):
+            for target in targets:
+                not_installed = []
+                packages = targets[target].packages
+
+                targets[target].query_versions()
+
+                for package in packages:
+                    required = self.metadata.packages[package]
+                    before = targets[target].packages[package].current
+
+                    packages[package].set_versions(before=before, required=required)
+
+                    if before is None or before == '0':
+                        missing = True
+                        not_installed.append(package)
+                    else:
+                        if RPMVersion(before) >= RPMVersion(required):
+                            out.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
+
+                if len(not_installed):
+                    out.warning('%s: these packages are not installed: %s' % (target, not_installed))
+
+            if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
                 return
 
-        for target in targets:
-            targets[target].set_locked()
-            not_installed = []
-            packages = targets[target].packages
+            script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.id))
 
-            targets[target].query_versions()
+            out.info('updating')
 
-            for package in packages:
-                required = self.metadata.packages[package]
-                before = targets[target].packages[package].current
+            updater = self.metadata.get_updater()
+            out.debug("chosen updater: %s" % repr(updater))
 
-                packages[package].set_versions(before=before, required=required)
+            try:
+                updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
+            except Exception:
+                out.critical('failed to update target systems')
+                Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
+                return
+            except KeyboardInterrupt:
+                out.info('update process canceled')
+                return
 
-                if before is None or before == '0':
-                    missing = True
-                    not_installed.append(package)
-                else:
-                    if RPMVersion(before) >= RPMVersion(required):
-                        out.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
+            if newpackage:
+                self.do_prepare('%s,testing' % args)
 
-            if len(not_installed):
-                out.warning('%s: these packages are not installed: %s' % (target, not_installed))
-
-        if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
+            missing = False
             for target in targets:
-                if not lock.locked:
-                    targets[target].remove_lock()
-            return
+                targets[target].add_history(['update', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
+                packages = targets[target].packages
 
-        script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.id))
+                targets[target].query_versions()
 
-        out.info('updating')
+                for package in packages:
+                    before = packages[package].before
+                    required = packages[package].required
+                    after = targets[target].packages[package].current
 
-        release = self.metadata.get_release()
-        try:
-            updater = Updater[release]
-        except KeyError:
-            out.critical('no updater available for %s' % release)
-            for target in targets:
-                if not lock.locked:
-                    targets[target].remove_lock()
-            return
+                    packages[package].set_versions(after=after)
 
-        out.debug("chosen updater: %s" % repr(updater))
+                    if after is not None and after != '0':
+                        if RPMVersion(before) == RPMVersion(after):
+                            missing = True
+                            out.warning('%s: package was not updated: %s (%s)' % (target, package, after))
 
-        try:
-            updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
-        except Exception:
-            out.critical('failed to update target systems')
-            for target in targets:
-                if not lock.locked:
-                    targets[target].remove_lock()
-            Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
-            return
-        except KeyboardInterrupt:
-            out.info('update process canceled')
-            for target in targets:
-                if not lock.locked:
-                    targets[target].remove_lock()
-            return
+                        if RPMVersion(after) < RPMVersion(required):
+                            missing = True
+                            out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
+                                        required))
 
-        if newpackage:
-            self.do_prepare('%s,testing' % args)
+            if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
+                return
 
-        missing = False
-        for target in targets:
-            targets[target].add_history(['update', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
-            packages = targets[target].packages
-
-            targets[target].query_versions()
-
-            for package in packages:
-                before = packages[package].before
-                required = packages[package].required
-                after = targets[target].packages[package].current
-
-                packages[package].set_versions(after=after)
-
-                if after is not None and after != '0':
-                    if RPMVersion(before) == RPMVersion(after):
-                        missing = True
-                        out.warning('%s: package was not updated: %s (%s)' % (target, package, after))
-
-                    if RPMVersion(after) < RPMVersion(required):
-                        missing = True
-                        out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
-                                    required))
-
-        if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
-            for target in targets:
-                if not lock.locked:
-                    targets[target].remove_lock()
-            return
-
-        script_hook(targets, 'post', os.path.dirname(self.metadata.path), str(self.metadata.id))
-        script_hook(targets, 'compare', os.path.dirname(self.metadata.path), str(self.metadata.id))
-        FileDelete(targets, os.path.join(config.target_tempdir, str(self.metadata.id), 'output')).run()
-
-        for target in targets:
-            if not lock.locked:
-                targets[target].remove_lock()
+            script_hook(targets, 'post', self.metadata.report_wd(), str(self.metadata.id))
+            script_hook(targets, 'compare', self.metadata.report_wd(), str(self.metadata.id))
+            FileDelete(targets, self.metadata.target_wd('output')).run()
 
         Notification('MTUI', 'updating %s finished' % self.session).show()
         out.info('done')
