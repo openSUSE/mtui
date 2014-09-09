@@ -213,7 +213,7 @@ class CommandPrompt(cmd.Cmd):
         """
         :returns: L{HostsGroup} consisting of enabled hosts only
         """
-        return HostsGroup(enabled_targets(self.targets).values())
+        return HostsGroup(list(enabled_targets(self.targets).values()))
 
     def commandFactory(self, cmd, args=None):
         hosts = self._hostsGroupFactory()
@@ -775,7 +775,7 @@ class CommandPrompt(cmd.Cmd):
             if filter(lambda x: x not in self.metadata.get_package_list(), updated.keys()):
                 search_list = self.metadata.get_package_list()
             else:
-                search_list = updated.keys()
+                search_list = list(updated.keys())
 
             for package in search_list:
                 RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % package).run()

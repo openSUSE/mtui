@@ -202,7 +202,7 @@ class ListPackages(Command):
 
         hosts = self.hosts.select(self.args.hosts)
 
-        pkgs = self.metadata.packages.keys() if self.metadata else self.args.packages
+        pkgs = list(self.metadata.packages.keys()) if self.metadata else self.args.packages
         if not pkgs:
             raise messages.MissingPackagesError()
 
