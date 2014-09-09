@@ -30,7 +30,7 @@ class Attributes(object):
 
     """
 
-    tags = {'products':['sled', 'sles', 'opensuse', 'studio', 'slms', 'sles4vmware', 'manager', 'rhel'],
+    tags = {'products':['sled', 'sles', 'opensuse', 'studio', 'slms', 'sles4vmware', 'manager', 'rhel', 'sle'],
              'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64', 'iseries'],
              'major':['9', '10', '11', '12', '5', '6'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
@@ -218,7 +218,10 @@ class Refhosts(object):
 
             if self.attributes.product:
                 # current host product is the searched product
-                assert(element.getElementsByTagName('product')[0].getAttribute('name') == self.attributes.product)
+                product = element.getElementsByTagName('product')[0].getAttribute('name')
+                if self.attributes.product == "sle":
+                    product = product[0:-1]
+                assert(product == self.attributes.product)
 
             for addon in self.attributes.addons:
                 # each addon in the search attributes is available on this host
