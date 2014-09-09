@@ -772,7 +772,7 @@ class CommandPrompt(cmd.Cmd):
             # if there are src.rpm package names which are not reflected by
             # binary rpms, check all binary rpms for this specific
             # src.rpm/disturl name
-            if filter(lambda x: x not in self.metadata.get_package_list(), updated.keys()):
+            if [x for x in updated.keys() if x not in self.metadata.get_package_list()]:
                 search_list = self.metadata.get_package_list()
             else:
                 search_list = list(updated.keys())
@@ -893,7 +893,7 @@ class CommandPrompt(cmd.Cmd):
                 self.println('Patches in {}:'.format(specfile))
 
                 for patch in patches:
-                    num = filter(str.isdigit, patch) or 0
+                    num = ''.join(filter(str.isdigit, patch)) or 0
                     if num == 0 and re.findall('\'%patch\W+', str(content)):
                         result = green('applied')
                     elif re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
@@ -2245,7 +2245,7 @@ class CommandPrompt(cmd.Cmd):
         parameter = args.split(',')
 
         # don't install new packages when doing a noninteractive kernel update
-        if not self.interactive and filter(lambda x: x in ['-kmp-', 'kernel-default'], self.metadata.packages):
+        if not self.interactive and [x for x in self.metadata.packages if x in ['-kmp-', 'kernel-default']]:
             try:
                 parameter.remove('newpackage')
             except ValueError:

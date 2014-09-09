@@ -185,14 +185,14 @@ class Refhosts(object):
             self.attributes.archs = [arch]
             try:
                 # get correct location element from a list of location elements
-                location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
+                location_element = list(filter(self.is_location_element, self.data.getElementsByTagName('location')))[0]
                 # extract hostname on all hosts matching the filter criteria
-                hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
+                hosts = list(map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host'))))
                 assert(hosts)
             except (AssertionError, IndexError):
                 # host not found in specified location, try again in default location
-                location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
-                hosts = map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host')))
+                location_element = list(filter(self.is_default_location_element, self.data.getElementsByTagName('location')))[0]
+                hosts = list(map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host'))))
 
             if hosts:
                 results = results + hosts
@@ -392,13 +392,13 @@ class Refhosts(object):
 
         try:
             # search for the hostname in all host elements below the specified location
-            location_element = filter(self.is_location_element, self.data.getElementsByTagName('location'))[0]
-            nodes = filter(lambda x: x.getAttribute('name') == hostname, location_element.getElementsByTagName('host'))
-            assert(nodes)
+            location_element = list(filter(self.is_location_element, self.data.getElementsByTagName('location')))[0]
+            nodes = list([x for x in location_element.getElementsByTagName('host') if x.getAttribute('name') == hostname])
+            assert(len(nodes))
         except (AssertionError, IndexError):
             # if no matchin hostnames are found, search again in the default location
-            location_element = filter(self.is_default_location_element, self.data.getElementsByTagName('location'))[0]
-            nodes = filter(lambda x: x.getAttribute('name') == hostname, location_element.getElementsByTagName('host'))
+            location_element = list(filter(self.is_default_location_element, self.data.getElementsByTagName('location')))[0]
+            nodes = list([x for x in location_element.getElementsByTagName('host') if x.getAttribute('name') == hostname])
 
         # technically this iterates over all found host elements.
         # but since we just return one attribute object, we choose the first
@@ -606,7 +606,7 @@ class Refhosts(object):
         # assign the findings to the attributes object
         attributes.archs = requests['arch']
         # currently, just one base product is supported
-        attributes.product = requests['base'].keys()[0]
+        attributes.product = list(requests['base'].keys())[0]
         try:
             attributes.major = requests['base'][attributes.product]['major']
         except KeyError:
