@@ -1861,7 +1861,7 @@ class CommandPrompt(cmd.Cmd):
                 targets = selected_targets(targets, args.split(','))
 
             if state == 'enabled':
-                comment = raw_input('comment: ').strip()
+                comment = user_input('comment: ').strip()
 
             for target in targets:
                 lock = targets[target].locked()

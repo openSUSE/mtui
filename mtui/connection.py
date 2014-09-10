@@ -266,7 +266,7 @@ class Connection(object):
                     lock.acquire()
 
                 try:
-                    if raw_input('command "%s" timed out on %s. wait? (y/N) ' % (command, self.hostname)).lower() in ['y', 'yes']:
+                    if user_input('command "%s" timed out on %s. wait? (y/N) ' % (command, self.hostname)).lower() in ['y', 'yes']:
                         continue
                     else:
                         # if the user don't want to wait, raise CommandTimeout and procceed

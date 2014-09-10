@@ -32,6 +32,11 @@ try:
 except NameError:
     xrange = range
 
+try:
+    user_input = raw_input
+except NameError:
+    user_input = input
+
 out = logging.getLogger('mtui')
 
 flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
@@ -84,7 +89,7 @@ def prompt_user(text, options, interactive=True):
         return False
 
     try:
-        response = raw_input(text).lower()
+        response = user_input(text).lower()
         if response and response in options:
             result = True
     except KeyboardInterrupt:
