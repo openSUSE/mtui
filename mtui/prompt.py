@@ -1775,7 +1775,7 @@ class CommandPrompt(cmd.Cmd):
 
         if self.metadata:
             m = 'should i overwrite already loaded session {0}? (y/N) '
-            if not input(m.format(self.metadata.id), ['y', 'yes'], self.interactive):
+            if not prompt_user(m.format(self.metadata.id), ['y', 'yes'], self.interactive):
                 return
 
 
@@ -2298,7 +2298,7 @@ class CommandPrompt(cmd.Cmd):
                 if len(not_installed):
                     out.warning('%s: these packages are not installed: %s' % (target, not_installed))
 
-            if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
+            if missing and prompt_user('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
                 return
 
             self.metadata.script_hooks(PreScript).run(targets.values())
@@ -2345,7 +2345,7 @@ class CommandPrompt(cmd.Cmd):
                             out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
                                         required))
 
-            if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
+            if missing and prompt_user("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
                 return
 
             self.metadata.script_hooks(PostScript).run(targets.values())
@@ -2618,7 +2618,7 @@ class CommandPrompt(cmd.Cmd):
 
         if os.path.exists(filename) and not force:
             out.warning('file %s exists.' % filename)
-            if not input('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
+            if not prompt_user('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
                 filename += '.' + timestamp()
 
         out.info('exporting XML to %s' % filename)
@@ -2662,7 +2662,7 @@ class CommandPrompt(cmd.Cmd):
         if os.path.exists(path):
             self.log.warning('file {0} exists.'.format(path))
             m = 'should i overwrite {0}? (y/N) '.format(path)
-            if not input(m, ['y', 'yes'], self.interactive):
+            if not prompt_user(m, ['y', 'yes'], self.interactive):
                 path += '.' + timestamp()
 
         self.log.info('saving output to {0}'.format(path))
@@ -2688,7 +2688,7 @@ class CommandPrompt(cmd.Cmd):
         bootarg  -- reboot or poweroff
         """
 
-        if not input('save log? (Y/n) ', ['n', 'no'], self.interactive):
+        if not prompt_user('save log? (Y/n) ', ['n', 'no'], self.interactive):
             self.do_save(None)
 
         args_ = [args] if args in ('reboot', 'poweroff') else []

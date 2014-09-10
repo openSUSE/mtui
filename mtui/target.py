@@ -943,7 +943,7 @@ class RunCommand(object):
             queue.join()
 
             for target in serial:
-                input('press Enter key to proceed with %s' % serial[target].hostname, '')
+                prompt_user('press Enter key to proceed with %s' % serial[target].hostname, '')
                 thread = ThreadedMethod(queue)
                 thread.setDaemon(True)
                 thread.start()

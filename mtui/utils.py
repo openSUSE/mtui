@@ -75,7 +75,7 @@ else:
     green = red = yellow = blue = lambda xs: str(xs)
 
 
-def input(text, options, interactive=True):
+def prompt_user(text, options, interactive=True):
     result = False
     response = False
 
@@ -162,7 +162,7 @@ def page(text, interactive=True):
                 except IndexError:
                     return
 
-        if input(prompt, "q"):
+        if prompt_user(prompt, "q"):
             return
 
 def log_exception(eclass, logger):
