@@ -48,6 +48,11 @@ from distutils.version import StrictVersion
 
 out = logging.getLogger('mtui')
 
+try:
+    unicode
+except NameError:
+    unicode = str
+
 class QuitLoop(RuntimeError):
     pass
 
