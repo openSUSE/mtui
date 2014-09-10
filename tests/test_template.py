@@ -66,7 +66,7 @@ def test_UID_mtr_success():
         u = SwampUpdateID('82407e2d7113cfde72f65d81e4ffee61')
         u.config = c
         u.log = LogFake()
-        class TestReportFake(TestReport):
+        class TestReportFake(SwampTestReport):
             def _parse(self, file_):
                 pass
 
@@ -99,7 +99,7 @@ def test_UID_mtr_with_checkout():
         u.log = LogFake()
         u._vcs_checkout = TestReportSVNCheckoutFake(u._template_path())
 
-        class TestReportFake(TestReport):
+        class TestReportFake(SwampTestReport):
             def _parse(self, file_):
                 pass
         u.testreport_factory = TestReportFake
@@ -192,7 +192,7 @@ def test_UID_mtr__copy_scripts_src_missing():
 
 @raises(_TemplateIOError)
 def test_TestReport__open_and_parse_raises_templateioerror():
-    class TestableReport(TestReport):
+    class TestableReport(SwampTestReport):
         def _parse(self, f):
             # NOTE: here we are abusing the fact that the try/except
             # wraps this function too, though it probably should not
@@ -204,7 +204,7 @@ def test_TestReport__open_and_parse_raises_templateioerror():
     tr._open_and_parse(path)
 
 def test_TestReport__copy_scripts_dst_exists():
-    class TestableReport(TestReport):
+    class TestableReport(SwampTestReport):
         def _copytree(self, *args, **kw):
             raise OSError(EEXIST, 'strerr', args[1])
 
@@ -218,7 +218,7 @@ def test_TestReport__copy_scripts_dst_exists():
     ])
 
 def test_TestReport__copy_scripts_src_missing():
-    class TestableReport(TestReport):
+    class TestableReport(SwampTestReport):
         def _copytree(self, *args, **kw):
             raise OSError(ENOENT, 'strerr', args[0])
 
@@ -235,7 +235,7 @@ def test_TestReport__copy_scripts_src_missing():
 
 @raises(OSError)
 def test_TestReport__copy_scripts_on_error():
-    class TestableReport(TestReport):
+    class TestableReport(SwampTestReport):
         def _copytree(self, *args, **kw):
             raise OSError(1, 'strerr')
 
@@ -250,7 +250,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         return "{0}/{1}".format(self.tmp_dir, suffix)
 
     def test_copy_scripts(self):
-        class TestableReport(TestReport):
+        class TestableReport(SwampTestReport):
             t_copytree = []
             t_ensure_executable = []
             def _copytree(self, *args, **kw):
@@ -277,7 +277,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(pattern, "{0}/*/compare_*".format(dst))
 
     def test_ensure_executable_no_match(self):
-        tr = TRF(TestReport)
+        tr = TRF(SwampTestReport)
         pattern = self.in_temp('/*')
         tr._ensure_executable(pattern)
 
@@ -289,7 +289,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(head[2], [])
 
     def test_ensure_executable_makes_executable(self):
-        tr = TRF(TestReport)
+        tr = TRF(SwampTestReport)
 
         fd, f_txt = mkstemp(suffix='.txt', dir=self.tmp_dir)
         os.close(fd)
@@ -324,7 +324,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 
         dst = self.in_temp('dst')
 
-        tr = TRF(TestReport)
+        tr = TRF(SwampTestReport)
         tr._copytree(src, dst)
 
         eq_(len(files), 2)
@@ -341,7 +341,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         dst = self.in_temp('dst')
         os.mkdir(dst)
 
-        tr = TRF(TestReport)
+        tr = TRF(SwampTestReport)
         try:
             tr._copytree(src, dst)
         except OSError as e:
@@ -353,7 +353,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         src = self.in_temp('src')
         dst = self.in_temp('dst')
 
-        tr = TRF(TestReport)
+        tr = TRF(SwampTestReport)
         try:
             tr._copytree(src, dst)
         except OSError as e:
@@ -375,7 +375,7 @@ def test_TestReport_connect_targets():
         def add_history(self, comment):
             self.t_history.append(comment)
 
-    tr = TRF(TestReport)
+    tr = TRF(SwampTestReport)
     tr.targetFactory = TargetFake
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
     ts = tr.connect_targets()
@@ -388,7 +388,7 @@ def test_TestReport_connect_targets():
         eq_(t.system, v)
 
 def test_TestReport_load_systems_from_testplatforms():
-    tr = TRF(TestReport)
+    tr = TRF(SwampTestReport)
     tps = ['t1', 't2']
     tr.testplatforms = deepcopy(tps)
     tr._refhosts_from_tp = lambda x: dict([(x, x+"val")])
@@ -430,7 +430,7 @@ def test_TestReport_refhosts_from_tp():
     """
     Test L{TestReport._refhosts_from_tp} - happy path
     """
-    tr = TRF(TestReport, config = RefhostFake.t_config())
+    tr = TRF(SwampTestReport, config = RefhostFake.t_config())
 
     tr.refhostsFactory.refhosts_factory = RefhostFake
     eq_(tr._refhosts_from_tp('foo'), {'foo': 'foo_system'})
@@ -444,7 +444,7 @@ def test_TestReport_refhosts_from_tp_ValueError():
         def set_attributes_from_testplatform(self, x):
             raise ValueError(x)
 
-    tr = TRF(TestReport, config = RefhostFake.t_config())
+    tr = TRF(SwampTestReport, config = RefhostFake.t_config())
 
     tr.refhostsFactory.refhosts_factory = RefhostFake_
     eq_(tr._refhosts_from_tp('footp'), {})
@@ -458,7 +458,7 @@ def test_TestReport_refhosts_from_tp_emptyresult():
         def search(self):
             return []
 
-    tr = TRF(TestReport, config = RefhostFake.t_config())
+    tr = TRF(SwampTestReport, config = RefhostFake.t_config())
 
     tr.refhostsFactory.refhosts_factory = RefhostFake_
     eq_(tr._refhosts_from_tp('footp'), {})
