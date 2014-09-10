@@ -104,7 +104,7 @@ class Attributes(object):
         rep = ' '.join([self.product, version, archs, kernel, ltss, minimal, self.virtual['mode'], self.virtual['hypervisor'], addons])
         return ' '.join(rep.split())
 
-    def __nonzero__(self):
+    def __bool__(self):
         """return if attributes have been set on this object"""
 
         if self.__str__():
@@ -112,6 +112,9 @@ class Attributes(object):
         else:
             return False
 
+    def __nonzero__(self):
+        """python-2.x compat"""
+        return self.__bool__()
 
 class Refhosts(object):
 
