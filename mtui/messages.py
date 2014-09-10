@@ -1,8 +1,8 @@
 from abc import ABCMeta
 from abc import abstractmethod
+from mtui.five import with_metaclass
 
-class UserMessage(object):
-    __metaclass__ = ABCMeta
+class UserMessage(with_metaclass(ABCMeta, object)):
     def __str__(self):
         return self.message
 

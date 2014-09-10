@@ -22,6 +22,7 @@ from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.utils import edit_text
+from mtui.five import with_metaclass
 from mtui.messages import QadbReportCommentLengthWarning
 from mtui import updater
 from mtui.utils import ass_is, ass_isL
@@ -117,13 +118,11 @@ class OBSUpdateID(UpdateID):
 class TestReportAlreadyLoaded(RuntimeError):
     pass
 
-class TestReport(object):
+class TestReport(with_metaclass(ABCMeta, object)):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read
     # things to file-like interface.
-
-    __metaclass__ = ABCMeta
 
     targetFactory = Target
     refhostsFactory = RefhostsFactory
