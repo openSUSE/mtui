@@ -27,6 +27,11 @@ try:
 except ImportError:
     from itertools import izip_longest as zip_longest
 
+try:
+    xrange
+except NameError:
+    xrange = range
+
 out = logging.getLogger('mtui')
 
 flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
