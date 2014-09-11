@@ -27,6 +27,7 @@ from mtui.config import *
 from mtui.rpmver import RPMVersion
 from mtui import messages
 from mtui.utils import unwords
+from mtui.utils import ass_is, ass_isL
 
 out = logging.getLogger('mtui')
 
@@ -343,7 +344,10 @@ class TargetLock(object):
 
         return True
 
-class Target(object):
+class TargetI(object):
+    pass
+
+class Target(TargetI):
     def __init__(self, hostname, system, packages=[], state='enabled',
         timeout=300, exclusive=False, connect=True, logger=None,
         lock=TargetLock, connection=Connection):
@@ -819,88 +823,79 @@ class ThreadedMethod(threading.Thread):
                 except ValueError:
                     pass  # already removed by ctrl+c
 
+class ThreadedTargetGroup(object):
+    def __init__(self, targets):
+        ass_isL(targets, TargetI)
 
-class FileDelete(object):
-
-    def __init__(self, targets, path):
         self.targets = targets
-        self.path = path
+
+    def mk_thread(self):
+        thread = ThreadedMethod(queue)
+        thread.setDaemon(True)
+        thread.start()
+
+    def mk_threads(self):
+        for _ in range(0, len(self.targets)):
+            self.mk_thread()
 
     def run(self):
-        for target in self.targets:
-            thread = ThreadedMethod(queue)
-            thread.setDaemon(True)
-            thread.start()
-
-        for target in self.targets:
-            try:
-                queue.put([self.targets[target].remove, [self.path]])
-            except KeyboardInterrupt:
-                pass
+        self.mk_threads()
+        self.setup_queue()
 
         while queue.unfinished_tasks:
             spinner()
 
         queue.join()
 
+    def setup_queue(self):
+        for t in self.targets:
+            queue.put(self.mk_cmd(t))
 
-class FileUpload(object):
+class FileDelete(ThreadedTargetGroup):
+    def __init__(self, targets, path):
+        super(FileDelete, self).__init__(targets)
+        self.path = path
 
+    def mk_cmd(self, t):
+        ass_is(t, TargetI)
+        return [t.remove, [self.path]]
+
+class FileUpload(ThreadedTargetGroup):
     def __init__(self, targets, local, remote):
-        self.targets = targets
+        super(FileUpload, self).__init__(targets)
         self.local = local
         self.remote = remote
 
-    def run(self):
-        for target in self.targets:
-            thread = ThreadedMethod(queue)
-            thread.setDaemon(True)
-            thread.start()
+    def mk_cmd(self, t):
+        ass_is(t, TargetI)
+        return [t.put, [self.local, self.remote]]
 
-        for target in self.targets:
-            try:
-                queue.put([self.targets[target].put, [self.local, self.remote]])
-            except KeyboardInterrupt:
-                pass
-
-        while queue.unfinished_tasks:
-            spinner()
-
-        queue.join()
-
-
-class FileDownload(object):
-
+class FileDownload(ThreadedTargetGroup):
     def __init__(self, targets, remote, local, postfix=False):
-        self.targets = targets
+        ass_isL(targets, TargetI)
+        super(FileDownload, self).__init__(targets)
+
         self.remote = remote
         self.local = local
         self.postfix = postfix
 
-    def run(self):
-        for target in self.targets:
-            thread = ThreadedMethod(queue)
-            thread.setDaemon(True)
-            thread.start()
+    def local_name(self, t):
+        """
+        :type t: L{TargetI} instance
+        """
+        if not self.postfix:
+            return self.local
 
-        for target in self.targets:
-            try:
-                if self.postfix:
-                    queue.put([self.targets[target].get, [self.remote, '%s.%s' % (self.local, target)]])
-                else:
-                    queue.put([self.targets[target].get, [self.remote, self.local]])
-            except KeyboardInterrupt:
-                pass
+        return '{0}.{1}'.format(self.local, t.hostname)
 
-        while queue.unfinished_tasks:
-            spinner()
-
-        queue.join()
-
+    def mk_cmd(self, t):
+        ass_is(t, TargetI)
+        return [t.get, [self.remote, self.local_name(t)]]
 
 class RunCommand(object):
-
     def __init__(self, targets, command):
+        ass_isL(targets.values(), TargetI)
+
         self.targets = targets
         self.command = command
 

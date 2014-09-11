@@ -51,3 +51,50 @@ class MissingPackagesError(UserError):
 class TestReportNotLoadedError(UserError):
     def __str__(self):
         return 'TestReport not loaded'
+
+class FailedToWriteScriptResult(UserMessage):
+    def __init__(self, path, reason):
+        self.path = path
+        self.reason = reason
+
+    def __str__(self):
+        return "failed to write script output to {0}: {1}".format(
+            self.path,
+            self.reason,
+        )
+
+class StartingCompareScriptError(UserMessage):
+    def __init__(self, reason, argv):
+        self.reason = reason
+        self.argv = argv
+
+    def __str__(self):
+        return "Starting compare script {0!r} failed: {1}".format(
+            self.argv,
+            self.reason
+        )
+
+class CompareScriptError(UserMessage):
+    def __init__(self, argv, stderr, stdout, rc):
+        self.argv = argv
+        self.stderr = stderr
+        self.stdout = stdout
+        self.rc = rc
+
+    def __str__(self):
+        raise NotImplementedError
+
+class CompareScriptFailed(CompareScriptError):
+    def __str__(self):
+        return "Compare script {0!r} failed: rc = {1} err = {2!r}".format(
+            self.argv,
+            self.rc,
+            self.stderr,
+        )
+
+class CompareScriptCrashed(CompareScriptError):
+    def __str__(self):
+        return "Compare script {0!r} crashed: {1!r}".format(
+            self.argv,
+            self.stderr,
+        )
