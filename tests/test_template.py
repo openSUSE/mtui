@@ -32,6 +32,7 @@ from .utils import ConfigFake
 from .utils import get_nonexistent_path
 from .utils import unused
 from .utils import testreports
+from .utils import TRF
 
 from traceback import format_exc
 
@@ -45,18 +46,6 @@ class TestReportSVNCheckoutFake(object):
         os.makedirs(dirname(self.path))
         with open(self.path, "w") as f:
             f.write("unused")
-
-def TRF(tr, config=None, log=None, date_=None):
-    if not config:
-        config = ConfigFake()
-
-    if not log:
-        log = LogFake()
-
-    if not date:
-        date_ = date
-
-    return tr(config, log, date_)
 
 def test_UID_mtr_success():
     """
