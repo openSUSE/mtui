@@ -51,7 +51,27 @@ fi
 
 dir=$(mktemp -d /tmp/$progname.XXXXXX)
 
-cd $dir && gunzip < /boot/initrd | cpio -i --make-directories > /dev/null 2>&1 
+trap "rm -f $dir" SIGINT SIGKILL EXIT
+
+cd $dir || exit 1
+
+format="$(file $(readlink -f /boot/initrd))"
+
+# initrds come in different formats (SLE12+ vs <SLE12)
+case "$format" in
+  *gzip*)
+      echo "INFO: traditional gzip format of initrd detected"
+      gunzip < /boot/initrd | cpio -i --make-directories > /dev/null 2>&1
+      ;;
+  *cpio*)
+      echo "INFO: dracut format of initrd detected"
+      /usr/lib/dracut/skipcpio /boot/initrd | xz -dc | cpio -i --make-directories > /dev/null 2>&1
+      ;;
+  *)
+      echo "ERROR: unregistered format of initrd: $format" >&2
+      exit 1
+      ;;
+esac
 
 # try to find files which might end up in /boot/initrd
 for package in $list; do
