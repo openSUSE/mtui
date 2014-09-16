@@ -76,12 +76,15 @@ my %valid_disturls = (
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:Products:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:GA:UU-DUD/standard/",
+         # the following is used for Cloud <= 3 et al.
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Products:Test:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test:BlockMigration/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:Test:UnBlockMigration/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:ATK:[0-9.]+/standard/",
          "obs://build.suse.de/SUSE:SLE-11-SP[1-9]+:Update:ATK:[0-9.]+:Update:Test/standard/",
+         # the following is used for Cloud >= 4
+         "obs://build.suse.de/SUSE:SLE-11-SP[3-9]+:Update:Cloud[4-9]+:Test:Update:Test/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/standard/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:GA/SLE_[0-9]+_SP[0-9]+_Update/",
          "obs://build.suse.de/SUSE:SLE-10-SP[1-9]+:Update:Test/standard/",
