@@ -443,6 +443,13 @@ class TestReport(object):
             text_editor = edit_text
         )
 
+    def __repr__(self):
+        return "<{0}.{1} {2}>".format(
+            self.__module__,
+            self.__class__.__name__,
+            self.id
+        )
+
 class TestsuiteComment(object):
     _max_comment_len = 100
 
