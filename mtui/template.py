@@ -328,6 +328,9 @@ class TestReport(object):
 
     def _copy_scripts(self, src, dst, ignore):
         try:
+            self.log.debug("Copying scripts: {0} -> {1}".format(
+                src, dst
+            ))
             self._copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
