@@ -8,7 +8,6 @@ import logging
 
 from mtui.refhost import Attributes
 from mtui.prompt import CommandPrompt
-from mtui.template import TestReportFactory
 from mtui.config import Config
 
 def usage():
@@ -53,7 +52,7 @@ def main():
         usage()
         sys.exit(2)
 
-    p = CommandPrompt([], TestReportFactory(config, log, None), config, log)
+    p = CommandPrompt(config, log)
     p.do_search_hosts(" ".join(search))
 
 main()
