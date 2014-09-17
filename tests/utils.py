@@ -157,7 +157,7 @@ class _Hostnames:
 
 hostnames = _Hostnames()
 
-def TRF(tr, config = None, log = None, date_ = None):
+def TRF(tr, config = None, log = None, date_ = None, **kw):
     if not config:
         config = ConfigFake()
 
@@ -167,7 +167,7 @@ def TRF(tr, config = None, log = None, date_ = None):
     if not date:
         date_ = date
 
-    return tr(config, log, date_)
+    return tr(config, log, date_, **kw)
 
 class MD5HexdigestFactory(object):
     def __init__(self):
