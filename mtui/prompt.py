@@ -2879,27 +2879,27 @@ class CompareScript(Script):
         for t in ts:
             self._run_single_target(t)
 
+    def _result(self, s, t):
+        return self.results_wd(self._filename(
+                subdir = s,
+                target = t,
+            ).replace("compare_", "check_"),
+            filepath = True
+        )
+
+    def _pre_file(self, t):
+        return self._result(PreScript.subdir, t)
+
+    def _post_file(self, t):
+        return self._result(PostScript.subdir, t)
+
     def _run_single_target(self, t):
         ass_is(t, TargetI)
 
-        pre = self.results_wd(self._filename(
-                subdir = PreScript.subdir,
-                target = t,
-            ).replace("compare_", "check_"),
-            filepath = True
-        )
-
-        post = self.results_wd(self._filename(
-                subdir = PostScript.subdir,
-                target = t,
-            ).replace("compare_", "check_"),
-            filepath = True
-        )
-
         argv = [
             self.path,
-            pre,
-            post,
+            self._pre_file(t),
+            self._post_file(t),
         ]
 
         self.log.debug("running {0}".format(argv))
@@ -2911,8 +2911,9 @@ class CompareScript(Script):
                 stderr = subprocess.PIPE
             )
         except Exception as e:
-            t.log.append(' '.join(argv), '', '', 0x100, 0)
+            t.log.append([' '.join(argv), '', '', 0x100, 0])
             self.log.critical(messages.StartingCompareScriptError(e, argv))
+            return
 
         (stdout, stderr) = p.communicate()
         rc = p.wait()
