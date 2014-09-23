@@ -178,6 +178,7 @@ class TestReport(object):
         """
         :type md5: MD5Hash instance or None
         """
+        self.repository = None
 
         self._attrs = [
             'category',
@@ -186,6 +187,7 @@ class TestReport(object):
             'packages',
             'systems',
             'bugs',
+            'repository',
         ]
         """
         :type attrs: [str]
@@ -275,6 +277,11 @@ class TestReport(object):
         if match:
             for bug in match.group(1).split(','):
                 self.bugs[bug.strip(' ')] = 'Description not available'
+            return True
+
+        m = re.match('Repository: (.+)', line)
+        if m:
+            self.repository = m.group(1)
             return True
 
         return False
@@ -422,6 +429,7 @@ class TestReport(object):
             ('Bugs'      , ', '.join(self.bugs.keys())),
             ('Packages'  , ' '.join(sorted(self.get_package_list()))),
             ('Testreport', self._testreport_url()),
+            ('Repository', self.repository),
         ] + [(x.upper(), y) for x,y in self.patches.items()]
 
     def show_yourself(self, writer):
@@ -610,12 +618,10 @@ class OBSTestReport(TestReport):
 
         self.rrid = None
         self.rating = None
-        self.repository = None
 
         self._attrs += [
             'rrid',
             'rating',
-            'repository',
         ]
 
     @property
@@ -636,16 +642,10 @@ class OBSTestReport(TestReport):
             self.rrid = RequestReviewID(m.group(1))
             return True
 
-        m = re.match('Repository: (.+)', line)
-        if m:
-            self.repository = m.group(1)
-            return True
-
     def _show_yourself_data(self):
         return [
             ('ReviewRequestID'  , self.rrid),
             ('Rating'           , self.rating),
-            ('Repository'       , self.repository)
         ] + super(OBSTestReport, self)._show_yourself_data()
 
 if has_nose:

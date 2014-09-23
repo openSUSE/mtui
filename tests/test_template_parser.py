@@ -36,6 +36,7 @@ class TestTestReport_show_yourself(TestCase):
             'Bugs': '825657, 833764',
             'Packages': 'drbd drbd-bash-completion',
             'Testreport': 'http://qam.suse.de/testreports/{0}/log'.format(uid),
+            'Repository': 'http://download.suse.de/ibs/SUSE:/Maintenance:/32/',
         }
 
     def test_md5(self):
@@ -58,6 +59,7 @@ class TestTestReport_show_yourself(TestCase):
             'Category: {Category}',
             'SAT Patch No: 8438',
             'MD5 sum: {MD5SUM}',
+            'Repository: {Repository}',
             'SUBSWAMPID: {SWAMP ID}',
             'Packager: {Packager}',
             'Bugs: {Bugs}',
@@ -96,7 +98,6 @@ class TestTestReport_show_yourself(TestCase):
         data = self.common_data(uid)
         data.update({
             'ReviewRequestID': str(uid),
-            'Repository': 'http://download.suse.de/ibs/SUSE:/Maintenance:/32/',
             'Rating': 'moderate',
         })
 
