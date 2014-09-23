@@ -19,6 +19,9 @@ import getpass
 import shutil
 from traceback import print_exc
 from os.path import join
+from os.path import isfile
+from os.path import basename
+from os.path import splitext
 
 from datetime import datetime
 from traceback import print_exc
@@ -39,6 +42,7 @@ from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
 from mtui import updater
 from mtui.utils import requires_update
+from mtui.utils import ass_is, ass_isL
 
 from distutils.version import StrictVersion
 
@@ -2288,7 +2292,7 @@ class CommandPrompt(cmd.Cmd):
             if missing and input('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
                 return
 
-            script_hook(targets, 'pre', os.path.dirname(self.metadata.path), str(self.metadata.id))
+            self.metadata.script_hooks(PreScript).run(targets.values())
 
             out.info('updating')
 
@@ -2335,9 +2339,9 @@ class CommandPrompt(cmd.Cmd):
             if missing and input("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
                 return
 
-            script_hook(targets, 'post', self.metadata.report_wd(), str(self.metadata.id))
-            script_hook(targets, 'compare', self.metadata.report_wd(), str(self.metadata.id))
-            FileDelete(targets, self.metadata.target_wd('output')).run()
+            self.metadata.script_hooks(PostScript).run(targets.values())
+            self.metadata.script_hooks(CompareScript).run(targets.values())
+            FileDelete(targets.values(), self.metadata.target_wd('output')).run()
 
         Notification('MTUI', 'updating %s finished' % self.session).show()
         out.info('done')
@@ -2747,90 +2751,186 @@ class CommandPrompt(cmd.Cmd):
         out.error('failed to parse command: %s %s' % (method.__name__.replace('do_', ''), args))
         print '%s: %s' % (method.__name__.replace('do_', ''), method.__doc__)
 
-
-def script_hook(targets, which, templatedir, md5):
+class Script(object):
     """
-    :type md5: str
+    :type subdir: str
+    :param subdir: subdirectory in the L{TestReport.scripts_wd} where the
+        scripts are located.
+
+        Note: also used as a "type of the script" and can be shown to
+        the user.
+
+    FIXME: should be an abstract attribute
     """
-    # this hook seriously needs a rewrite
 
-    if which not in ['post', 'pre', 'compare']:
-        return
+    def __init__(self, tr, path, log, file_uploader, cmd_runner):
+        """
+        :type path: str
+        :param path: absolute path to the script
+        """
+        self.path = path
+        self.name = basename(path)
+        self.testreport = tr
+        self.log = log
+        self.file_uploader = file_uploader
+        self.cmd_runner = cmd_runner
 
-    output_dir = os.path.join(templatedir, 'output', 'scripts')
-    remote_dir = os.path.join(config.target_tempdir, md5)
+    def __repr__(self):
+        return "<{0}.{1} {2} for {3}>".format(
+            self.__module__,
+            self.__class__.__name__,
+            self.path,
+            repr(self.testreport)
+        )
 
-    scriptdir = os.path.join(templatedir, 'scripts', which)
+    def __str__(self):
+        return "{0} script {1}".format(
+            self.subdir,
+            self.name,
+        )
 
-    if not os.path.isdir(scriptdir):
-        out.warning('%s scripts not found in %s' % (which, scriptdir))
-        return
+    @classmethod
+    def absolute_subdir(cls, tr):
+        """
+        :type tr: L{TestReport}
+        """
+        return tr.scripts_wd(cls.subdir)
 
-    for script in os.listdir(scriptdir):
-        local_file = os.path.join(scriptdir, script)
-        remote_file = '%s.%s' % (which, script)
-
-        if not os.path.isfile(local_file):
-            continue
-
-        out.info('preparing script %s' % script)
+    def run(self, targets):
+        """
+        :type targets: [L{Target}]
+        """
+        ass_isL(targets, TargetI)
 
         try:
-            if which == 'compare':
-                for target in targets:
-                    suffix = script.rpartition('.')[2]
-                    prename = '%s/pre.%s.%s' % (output_dir, script.replace('compare_', 'check_'), target)
-                    postname = '%s/post.%s.%s' % (output_dir, script.replace('compare_', 'check_'), target)
-                    prename = glob.glob(prename.replace('.%s.' % suffix, '*'))[0]
-                    postname = glob.glob(postname.replace('.%s.' % suffix, '*'))[0]
-                    comparescript = os.path.join(templatedir, 'scripts', 'compare', script)
-                    command = [comparescript, prename, postname]
-
-                    out.debug('running %s' % str(command))
-                    stdout = stderr = None
-                    try:
-                        sub = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                        (stdout, stderr) = sub.communicate()
-                        exitcode = sub.wait()
-                    except Exception as error:
-                        out.critical('running compare script failed: %s' % str(error))
-                        exitcode = 1
-
-                    if exitcode == 1:
-                        out.critical('testcase %s failed: %s\n%s' % (script, str(command), stdout))
-                        if stderr:
-                            print 'stderr:', stderr
-
-                    if exitcode == 2:
-                        out.warning('internal error in testcase %s: %s' % (script, str(command)))
-
-                    targets[target].log.append([' '.join(command), str(stdout), str(stderr), exitcode, 0])
-            else:
-
-                FileUpload(targets, local_file, os.path.join(remote_dir, remote_file)).run()
-                RunCommand(targets, '%s/%s %s' % (remote_dir, remote_file, md5)).run()
-
-                try:
-                    os.makedirs(output_dir)
-                except OSError as error:
-                    if error.errno == errno.EEXIST:
-                        pass
-                except Exception as error:
-                    out.critical('failed to create directories: %s' % str(error))
-                    return
-
-                for target in targets:
-                    filename = os.path.join(output_dir, '%s.%s' % (remote_file, target))
-                    try:
-                        f = open(filename, 'w')
-                        f.write(targets[target].lastout())
-                        f.write(targets[target].lasterr())
-                        f.close()
-                    except IOError as error:
-                        out.error('failed to write script output to %s: %s' % (filename, error.strerror))
+            self.log.info('running {0}'.format(self))
+            self._run(targets)
         except KeyboardInterrupt:
-            out.warning('skipping script %s' % script)
-            continue
+            self.log.warning('skipping {0}'.format(self))
+            return
+
+    def results_wd(self, *path, **kw):
+        return self.testreport.report_wd(
+            'output',
+            'scripts',
+            *path,
+            **kw
+        )
+
+    def _filename(self, target = None, subdir = None):
+        """
+        :returns: str "fully qualified" file name
+        """
+        ass_is(target, TargetI, True)
+
+        if not subdir:
+            subdir = self.subdir
+
+        xs = [subdir, splitext(self.name)[0]]
+        if target:
+            xs.append(target.hostname)
+
+        return ".".join(xs)
+
+class PreScript(Script):
+    subdir = "pre"
+
+    def remote_path(self):
+        return self.testreport.target_wd(self._filename())
+
+    def result_file(self, target):
+        """
+        :type target: L{TargetI} instance
+        """
+        ass_is(target, TargetI)
+        return self.results_wd(self._filename(target), filepath = True)
+
+    def _run(self, targets):
+        ass_isL(targets, TargetI)
+
+        self.file_uploader(
+            targets,
+            self.path,
+            self.remote_path(),
+        ).run()
+
+        self.cmd_runner(
+            dict([(t.hostname, t) for t in targets]),
+            "{0} {1}".format(self.remote_path(), self.testreport.id)
+        ).run()
+
+        for t in targets:
+            fname = self.result_file(t)
+            try:
+                with open(fname, 'w') as f:
+                    f.write(t.lastout())
+                    f.write(t.lasterr())
+            except IOError as e:
+                self.log.error(messages.FailedToWriteScriptResult(fname, e))
+
+class PostScript(PreScript):
+    subdir = "post"
+
+class CompareScript(Script):
+    subdir = "compare"
+
+    def _run(self, ts):
+        ass_isL(ts, TargetI)
+        for t in ts:
+            self._run_single_target(t)
+
+    def _run_single_target(self, t):
+        ass_is(t, TargetI)
+
+        pre = self.results_wd(self._filename(
+                subdir = PreScript.subdir,
+                target = t,
+            ).replace("compare_", "check_"),
+            filepath = True
+        )
+
+        post = self.results_wd(self._filename(
+                subdir = PostScript.subdir,
+                target = t,
+            ).replace("compare_", "check_"),
+            filepath = True
+        )
+
+        argv = [
+            self.path,
+            pre,
+            post,
+        ]
+
+        self.log.debug("running {0}".format(argv))
+        stdout = stderr = None
+        try:
+            p = subprocess.Popen(
+                argv,
+                stdout = subprocess.PIPE,
+                stderr = subprocess.PIPE
+            )
+        except Exception as e:
+            t.log.append(' '.join(argv), '', '', 0x100, 0)
+            self.log.critical(messages.StartingCompareScriptError(e, argv))
+
+        (stdout, stderr) = p.communicate()
+        rc = p.wait()
+
+        t.log.append([' '.join(argv), str(stdout), str(stderr), rc, 0])
+
+        if rc == 0:
+            return
+
+        if rc == 2:
+            logger, msg = self.log.critical, messages.CompareScriptCrashed
+        else:
+            logger, msg = self.log.warning, messages.CompareScriptFailed
+
+        assert callable(logger), "{0!r} not callable".format(logger)
+
+        logger(msg(argv, stdout, stderr, rc))
+
 
 def enabled_targets(targets):
     temporary_targets = {}

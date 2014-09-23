@@ -12,6 +12,8 @@ from os.path import join
 from mtui.utils import ensure_dir_exists
 from mtui.utils import chdir
 from mtui.utils import requires_update
+from mtui.utils import ass_is
+from mtui.utils import ass_isL
 from mtui.xdg import save_cache_path
 from mtui.messages import TestReportNotLoadedError
 
@@ -99,3 +101,23 @@ class TestRequiresUpdate:
     def test_sad_path(self):
         p = self.PromptFake(None, unused)
         p.foo()
+
+class Foo:
+    pass
+
+class TestAssIs:
+    def test_happy(self):
+        for x, y in [
+            ("foo", str),
+            (Foo(), Foo),
+        ]:
+            yield ass_is, x, y
+
+    def test_sad(self):
+        for x, y in [
+            ("foo", list),
+            ("foo", Foo),
+            (Foo, Foo),
+            (Foo(), TestAssIs),
+        ]:
+            yield raises(AssertionError)(ass_is), x, y

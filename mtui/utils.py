@@ -255,3 +255,16 @@ def requires_update(fn):
     wrap.__name__ = fn.__name__
     wrap.__doc__  = fn.__doc__
     return wrap
+
+def ass_is(x, class_, maybe_none = False):
+    if maybe_none and x is None:
+        return
+    assert isinstance(x, class_), "got {0!r}".format(x)
+
+if __debug__:
+    def ass_isL(xs, class_):
+        for x in xs:
+            ass_is(x, class_)
+else:
+    def ass_isL(_, __):
+        pass

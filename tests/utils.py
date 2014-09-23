@@ -17,6 +17,7 @@ from os.path import exists
 from posix import stat_result
 from tempfile import mktemp
 from random import randrange
+from datetime import date
 
 from mtui.template import OBSTestReport
 from mtui.template import SwampTestReport
@@ -155,3 +156,29 @@ class _Hostnames:
     qux = "qux.example.org"
 
 hostnames = _Hostnames()
+
+def TRF(tr, config = None, log = None, date_ = None, **kw):
+    if not config:
+        config = ConfigFake()
+
+    if not log:
+        log = LogFake()
+
+    if not date:
+        date_ = date
+
+    return tr(config, log, date_, **kw)
+
+class MD5HexdigestFactory(object):
+    def __init__(self):
+        self.base = 0
+
+    def __call__(self):
+        """
+        :Returns: str that is valid md5 hexdigest and has not been returned
+             before
+        """
+        self.base += 1
+        return "{0:0=32}".format(self.base -1)
+
+new_md5 = MD5HexdigestFactory()

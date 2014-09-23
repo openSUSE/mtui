@@ -14,6 +14,9 @@ from abc import abstractmethod
 from datetime import date
 
 from mtui.target import Target
+from mtui.target import TargetI
+from mtui.target import RunCommand
+from mtui.target import FileUpload
 from mtui.refhost import RefhostsFactory
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
@@ -21,6 +24,7 @@ from mtui.types.obs import RequestReviewID
 from mtui.utils import edit_text
 from mtui.messages import QadbReportCommentLengthWarning
 from mtui import updater
+from mtui.utils import ass_is, ass_isL
 
 try:
     from nose.tools import nottest
@@ -45,6 +49,19 @@ def testreport_svn_checkout(config, log, uri):
     with chdir(config.template_dir):
         # FIXME: use python module to perform svn checkout
         os.system('svn co {0}'.format(uri))
+
+class Scripts(object):
+    def __init__(self, scripts):
+        """
+        :type scripts: [L{Script}]
+        """
+        self.scripts = scripts
+
+    def run(self, targets):
+        ass_isL(targets, TargetI)
+
+        for x in self.scripts:
+            x.run(targets)
 
 class UpdateID(object):
     def __init__(self, id_, testreport_factory, testreport_svn_checkout):
@@ -119,7 +136,8 @@ class TestReport(object):
             type.
         """
 
-    def __init__(self, config, log, date):
+    def __init__(self, config, log, date, file_uploader = FileUpload,
+    cmd_runner = RunCommand, scripts_src_dir = None):
         """
         :type today: f :: L{datetime.date}
         """
@@ -127,6 +145,10 @@ class TestReport(object):
         self.log = log
         self._date = date
 
+        self.file_uploader = file_uploader
+        self.cmd_runner = cmd_runner
+
+        self._scripts_src_dir = scripts_src_dir
         self.directory = config.template_dir
 
         # Note: the default values here are unchanged from the previous
@@ -284,14 +306,20 @@ class TestReport(object):
     def get_downgrader(self):
         return updater.Downgrader[self.get_release()]
 
+    def scripts_src_dir(self):
+        if self._scripts_src_dir:
+            return self._scripts_src_dir
+
+        return join(self.config.datadir, 'scripts')
+
     def copy_scripts(self):
         if not self.path:
             raise RuntimeError("Called while missing path")
 
         # copy check_* and compare_* scripts to the template directory
         # TODO: do not override
-        src = join(self.config.datadir, 'scripts')
-        dst = join(dirname(self.path), 'scripts')
+        src = self.scripts_src_dir()
+        dst = self.scripts_wd()
 
         ignore = shutil.ignore_patterns('*.svn')
 
@@ -300,6 +328,9 @@ class TestReport(object):
 
     def _copy_scripts(self, src, dst, ignore):
         try:
+            self.log.debug("Copying scripts: {0} -> {1}".format(
+                src, dst
+            ))
             self._copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
@@ -431,6 +462,15 @@ class TestReport(object):
         """
         return join(self.config.target_tempdir, str(self.id), *paths)
 
+    def scripts_wd(self, *paths):
+        """
+        :return: str path to the scripts dir joined with paths
+
+        Note this method does not create the directories as needed
+        because that's handled by L{TestReport.copy_scripts}
+        """
+        return join(self.report_wd(), *["scripts"] + list(paths))
+
     def patchinfo_url(self):
         return '/'.join([self.config.patchinfo_url, str(self.id)])
 
@@ -442,6 +482,26 @@ class TestReport(object):
             self._date.today(),
             text_editor = edit_text
         )
+
+    def __repr__(self):
+        return "<{0}.{1} {2}>".format(
+            self.__module__,
+            self.__class__.__name__,
+            self.id
+        )
+
+    def script_hooks(self, s):
+        """
+        :type s: L{Script} class
+        """
+
+        d = s.absolute_subdir(self)
+
+        return Scripts([
+            s(self, join(d, x), self.log, self.file_uploader, self.cmd_runner)
+            for r, _, fs in os.walk(d) if r == d
+            for x in fs
+        ])
 
 class TestsuiteComment(object):
     _max_comment_len = 100
