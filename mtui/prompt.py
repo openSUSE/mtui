@@ -2845,6 +2845,9 @@ class PreScript(Script):
         ass_is(target, TargetI)
         return self.results_wd(self._filename(target), filepath = True)
 
+    def remote_pkglist_path(self):
+        return self.testreport.target_wd('package-list.txt')
+
     def _run(self, targets):
         ass_isL(targets, TargetI)
 
@@ -2854,9 +2857,15 @@ class PreScript(Script):
             self.remote_path(),
         ).run()
 
+        self.file_uploader(
+            targets,
+            self.testreport.pkg_list_file(),
+            self.remote_pkglist_path(),
+        ).run()
+
         self.cmd_runner(
             dict([(t.hostname, t) for t in targets]),
-            "{0} {1}".format(self.remote_path(), self.testreport.id)
+            self.mk_command()
         ).run()
 
         for t in targets:
@@ -2867,6 +2876,14 @@ class PreScript(Script):
                     f.write(t.lasterr())
             except IOError as e:
                 self.log.error(messages.FailedToWriteScriptResult(fname, e))
+
+    def mk_command(self):
+        return "{exe} -r {repository} -p {pkg_list_file} {id}".format(
+            exe = self.remote_path(),
+            repository = self.testreport.repository,
+            pkg_list_file = self.remote_pkglist_path(),
+            id  = self.testreport.id,
+        )
 
 class PostScript(PreScript):
     subdir = "post"

@@ -481,6 +481,9 @@ class TestReport(object):
         """
         return join(self.report_wd(), *["scripts"] + list(paths))
 
+    def pkg_list_file(self):
+        return self.report_wd('packages-list.txt', filepath = True)
+
     def patchinfo_url(self):
         return '/'.join([self.config.patchinfo_url, str(self.id)])
 
