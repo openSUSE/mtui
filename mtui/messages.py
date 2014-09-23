@@ -86,7 +86,7 @@ class CompareScriptError(UserMessage):
 
 class CompareScriptFailed(CompareScriptError):
     def __str__(self):
-        return "Compare script {0!r} failed: rc = {1} err = {2!r}".format(
+        return "Compare script {0!r} failed: rc = {1} err:\n{2}".format(
             self.argv,
             self.rc,
             self.stderr,
@@ -94,7 +94,7 @@ class CompareScriptFailed(CompareScriptError):
 
 class CompareScriptCrashed(CompareScriptError):
     def __str__(self):
-        return "Compare script {0!r} crashed: {1!r}".format(
+        return "Compare script {0!r} crashed:\n{1}".format(
             self.argv,
             self.stderr,
         )
