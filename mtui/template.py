@@ -451,6 +451,8 @@ class TestReport(object):
         :return: str local working directory relative to the testreport
             checkout.
         """
+        assert self.path, "empty path"
+
         return self._wd(dirname(self.path), *paths, **kw)
 
     def _wd(self, *paths, **kwargs):
