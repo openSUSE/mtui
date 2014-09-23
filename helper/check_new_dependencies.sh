@@ -1,23 +1,51 @@
 #!/bin/bash
 
-if [ -z "$1" -o "$1" = "-h" ]; then
-cat <<EOF
+export LC_ALL=C
 
-$0 <md5sum>
+help () {
+   cat <<EOF
+
+usage: $0 -p <path-to-filelist> [id]
+
+where id is either \$md5sum or (openSUSE|SUSE):Maintenance:\$issue:\$request
 
 $0 dumps all rpm package versions
 
 EOF
-exit 2
+}
+
+ARGS=$(getopt -o p:r:h -- "$@")
+
+if [ $? -gt 0 ]; then help; exit 1; fi
+
+eval set -- "$ARGS"
+
+while true; do
+   case "$1" in
+      -p) shift; plist="$1"; shift; ;;
+      -r) shift; echo "INFO: option -r is not implemented"; shift; ;;
+      -h) shift; help="set" ;;
+      --) shift; break; ;;
+   esac
+done
+
+id="$1"
+
+if [ -n "$help" -o -z "$plist" ]; then
+   help
+   exit 0
 fi
 
-MD5=$1
-PATCHINFO_URL="http://hilbert.nue.suse.com/abuildstat/patchinfo/$MD5/patchinfo"
+list=$(
+    sed -n '/\.delta\.\(log\|info\|rpm\)/! { /\.rpm$/p; }' $plist | while read p
+    do
+       pn=${p%-[^-]*-[^-]*\.[^.]*\.rpm}
+       echo ${pn##*/}
+    done | sort -u | xargs
+)
 
-list=$(wget -q $PATCHINFO_URL -O - | grep " release " | cut -d " " -f 1 | sort -u | xargs)
-
-echo "list: $list"
-if grep -q "VERSION = 11" /etc/SuSE-release; then
+echo "list: \"$list\""
+if grep -Eq "VERSION = (11|12)" /etc/SuSE-release; then
     for repo in $(zypper lr -s | awk -F\| '{ print $2 }'); do
         if [[ "$repo" =~ "TESTING" ]]; then
             zypper -n mr -d $repo >/dev/null 2>&1

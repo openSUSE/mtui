@@ -40,7 +40,11 @@ Q: Which helpers are planned/not implemented yet?
    b) (be innovative :)
 
 Q: What is doit.sh for ?
-A: A simple demonstration how available scripts should be executed - as soon as
-   mtui is in production it is not needed anymore.
+A: A way to launch the scripts outside of mtui, e.g. to validate your system
+   before/after huge updates or to use the checks on platforms that are yet not
+   supported by mtui.
+
+Q: What if I hit a bug ?
+A: Report it to BNC, SUSE Tools -> Testenvironment -> MTUI
 
 EOF
