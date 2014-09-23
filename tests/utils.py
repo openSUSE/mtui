@@ -22,6 +22,8 @@ from datetime import date
 from mtui.template import OBSTestReport
 from mtui.template import SwampTestReport
 
+from pprint import pprint
+
 unused = None
 
 class SysFake(object):
@@ -36,7 +38,8 @@ class LogFake:
         self.__setup(self._conv)
 
     def __setup(self, conv):
-        for i in ['error', 'warning', 'debug', 'info', 'critical']:
+        self.__levels = ['error', 'warning', 'debug', 'info', 'critical']
+        for i in self.__levels:
             setattr(self, i+"s", list())
             setattr(self, i, (lambda i: lambda x: getattr(self, i).append(conv(x)))(i+"s"))
             # because reasons
@@ -51,6 +54,12 @@ class LogFake:
 
     def setLevel(self, level=None):
         self.t_setLevels.append(level)
+
+    def pprint(self):
+        pprint(dict([
+            (x, getattr(self, x))
+            for x in [i+"s" for i in self.__levels]
+        ]))
 
 class LogFakeStr(LogFake):
     _conv = lambda _, x: str(x)
