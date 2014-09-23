@@ -75,7 +75,7 @@ class StartingCompareScriptError(UserMessage):
         )
 
 class CompareScriptError(UserMessage):
-    def __init__(self, argv, stderr, stdout, rc):
+    def __init__(self, argv, stdout, stderr, rc):
         self.argv = argv
         self.stderr = stderr
         self.stdout = stdout
