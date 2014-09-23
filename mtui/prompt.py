@@ -2911,8 +2911,9 @@ class CompareScript(Script):
                 stderr = subprocess.PIPE
             )
         except Exception as e:
-            t.log.append(' '.join(argv), '', '', 0x100, 0)
+            t.log.append([' '.join(argv), '', '', 0x100, 0])
             self.log.critical(messages.StartingCompareScriptError(e, argv))
+            return
 
         (stdout, stderr) = p.communicate()
         rc = p.wait()
