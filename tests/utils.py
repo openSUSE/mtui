@@ -18,6 +18,7 @@ from posix import stat_result
 from tempfile import mktemp
 from random import randrange
 from datetime import date
+from time import sleep
 
 from mtui.template import OBSTestReport
 from mtui.template import SwampTestReport
@@ -212,3 +213,14 @@ class MD5HexdigestFactory(object):
         return "{0:0=32}".format(self.base -1)
 
 new_md5 = MD5HexdigestFactory()
+
+def wait_for_ctrlc():
+    """
+    Helpful to insert into testcases for inspecting prepared working
+    directory
+    """
+    try:
+        while True:
+            sleep(10)
+    except KeyboardInterrupt:
+        pass
