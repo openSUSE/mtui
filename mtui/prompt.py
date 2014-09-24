@@ -664,7 +664,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         with chdir(self.metadata.local_wd()):
-            rc = os.system('wget -q -r -nd -l2 --no-parent -A "*src.rpm" {0}/'.format(self.metadata.patchinfo_url()))
+            rc = os.system('wget -q -r -nd -l2 --no-parent -A "*src.rpm" {0}/'.format(self.metadata.repository))
 
             if rc:
                 self.log.error('failed to fetch src rpm')

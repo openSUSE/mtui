@@ -102,9 +102,6 @@ class Config(object):
             ('svn_path', ('svn', 'path'),
              'svn+ssh://svn@qam.suse.de/testreports'),
 
-            ('patchinfo_url', ('url', 'patchinfo'),
-             'http://hilbert.nue.suse.com/abuildstat/patchinfo'),
-
             ('bugzilla_url', ('url', 'bugzilla'),
              'https://bugzilla.novell.com'),
 

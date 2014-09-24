@@ -75,7 +75,6 @@ def test_config_show():
             , ("interface_version"          , "'66.6'")
             , ("connection_timeout"         , "300")
             , ("svn_path"                   , "'svn+ssh://svn@qam.suse.de/testreports'")
-            , ("patchinfo_url"              , "'http://hilbert.nue.suse.com/abuildstat/patchinfo'")
             , ("bugzilla_url"               , "'https://bugzilla.novell.com'")
             , ("reports_url"                , "'http://qam.suse.de/testreports'")
             , ("repclean_path"              , "'/mounts/qam/rep-clean/rep-clean.sh'")
