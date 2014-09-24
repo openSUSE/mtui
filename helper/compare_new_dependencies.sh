@@ -22,7 +22,7 @@ if [ -z "$new" ]; then
    echo "no external packages affected"
    exit 0
 else
-   echo "affected external packages: $new"
+   echo "ERROR: affected external packages: $new" >&2
    exit 1
 fi
 
