@@ -44,7 +44,7 @@ list=$(
     done | sort -u | xargs
 )
 
-echo "list: \"$list\""
+echo "list: $list"
 if grep -Eq "VERSION = (11|12)" /etc/SuSE-release; then
     for repo in $(zypper lr -s | awk -F\| '{ print $2 }'); do
         if [[ "$repo" =~ "TESTING" ]]; then
