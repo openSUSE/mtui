@@ -653,39 +653,6 @@ class CommandPrompt(cmd.Cmd):
                 print '{0:20} {1:20}: {2}s'.format(host.hostname, system, timeout)
 
     @requires_update
-    def do_source_install(self, args):
-        """
-        Installs current source RPMs to the target hosts.
-
-        source_install <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        if args:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            if targets:
-                patchinfo = '/'.join([config.patchinfo_url, str(self.metadata.md5)])
-                destination = '/'.join([config.target_tempdir, str(self.metadata.md5)])
-                fetchcmd = 'mkdir -p %s; cd %s; wget -q -r -nd -l2 --no-parent -A "*.src.rpm" %s/' \
-                    % (destination, destination, lelf.metadata.md5)
-                installcmd = 'cd %s; rpm -Uhv *.src.rpm' % destination
-
-                RunCommand(targets, fetchcmd).run()
-                RunCommand(targets, installcmd).run()
-
-                out.info('done')
-        else:
-            self.parse_error(self.do_source_install, args)
-
-    def complete_source_install(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
-
-    @requires_update
     def do_source_extract(self, args):
         """
         Extracts current source RPMs to a local temporary directory.
