@@ -51,7 +51,7 @@ fi
 
 dir=$(mktemp -d /tmp/$progname.XXXXXX)
 
-trap "rm -f $dir" SIGINT SIGKILL EXIT
+trap "rm -rf $dir" SIGINT SIGKILL EXIT
 
 cd $dir || exit 1
 
@@ -66,6 +66,10 @@ case "$format" in
   *cpio*)
       echo "INFO: dracut format of initrd detected"
       /usr/lib/dracut/skipcpio /boot/initrd | xz -dc | cpio -i --make-directories > /dev/null 2>&1
+      ;;
+  *XZ*)
+      echo "INFO: XZ compressed format of initrd detected"
+      xz --decompress --stdout < /boot/initrd | cpio -i --make-directories > /dev/null 2>&1
       ;;
   *)
       echo "ERROR: unregistered format of initrd: $format" >&2
@@ -84,4 +88,3 @@ for package in $list; do
     done
 done
 
-rm -rf $dir
