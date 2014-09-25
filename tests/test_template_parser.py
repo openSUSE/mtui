@@ -45,9 +45,7 @@ class TestTestReport_show_yourself(TestCase):
         data.update({
             'MD5SUM': uid,
             'SWAMP ID': '54755',
-            'Build': 'http://hilbert.nue.suse.com/abuildstat/patchinfo/{0}'.format(uid),
             'SAT': '8438',
-            'Build': 'http://hilbert.nue.suse.com/abuildstat/patchinfo/{0}'.format(uid),
         })
 
         lines = [

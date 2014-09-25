@@ -484,9 +484,6 @@ class TestReport(object):
     def pkg_list_file(self):
         return self.report_wd('packages-list.txt', filepath = True)
 
-    def patchinfo_url(self):
-        return '/'.join([self.config.patchinfo_url, str(self.id)])
-
     def get_testsuite_comment(self, testsuite):
         return TestsuiteComment(
             self.log,
@@ -573,7 +570,6 @@ class SwampTestReport(TestReport):
         return [
             ('MD5SUM'  , self.md5),
             ('SWAMP ID', self.swampid),
-            ('Build'   ,'/'.join([self.config.patchinfo_url, str(self.md5)])),
         ] + super(SwampTestReport, self)._show_yourself_data()
 
 
