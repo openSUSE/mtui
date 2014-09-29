@@ -2405,7 +2405,7 @@ class CommandPrompt(cmd.Cmd):
 
             remote = self.target_tempdir(os.path.basename(filename))
 
-            FileUpload(self.targets, filename, remote).run()
+            FileUpload(self.targets.values(), filename, remote).run()
             self.log.info('uploaded {0} to {1}'.format(filename, remote))
 
     def complete_put(self, text, line, begidx, endidx):
@@ -2428,7 +2428,7 @@ class CommandPrompt(cmd.Cmd):
 
         local = self.downloads_wd(os.path.basename(args), filepath=True)
 
-        FileDownload(self.targets, args, local, True).run()
+        FileDownload(self.targets.values(), args, local, True).run()
         self.log.info('downloaded {0} to {1}'.format(args, local))
 
     def do_terms(self, args):
