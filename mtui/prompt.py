@@ -1983,17 +1983,9 @@ class CommandPrompt(cmd.Cmd):
         if args.split(',')[0] != 'all':
             targets = selected_targets(targets, args.split(','))
 
-        for target in targets:
-            lock = targets[target].locked()
-            if lock.locked and not lock.own():
-                out.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
-                if lock.comment:
-                    out.info("%s's comment: %s" % (lock.user, lock.comment))
-            else:
-                try:
-                    targets[target].set_repo(name.upper())
-                except ValueError:
-                    self.parse_error(self.do_set_repo, args)
+        with LockedTargets([self.targets[x] for x in targets]):
+            for t in [self.targets[x] for x in targets]:
+                t.set_repo(name.upper())
 
     def complete_set_repo(self, text, line, begidx, endidx):
         if line.count(','):
