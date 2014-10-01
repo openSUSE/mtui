@@ -1985,7 +1985,7 @@ class CommandPrompt(cmd.Cmd):
 
         with LockedTargets([self.targets[x] for x in targets]):
             for t in [self.targets[x] for x in targets]:
-                t.set_repo(name.upper())
+                t.set_repo(name.upper(), self.metadata)
 
     def complete_set_repo(self, text, line, begidx, endidx):
         if line.count(','):

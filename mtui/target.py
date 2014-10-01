@@ -28,6 +28,7 @@ from mtui.rpmver import RPMVersion
 from mtui import messages
 from mtui.utils import unwords
 from mtui.utils import ass_is, ass_isL
+from mtui.utils import get_release
 
 out = logging.getLogger('mtui')
 
@@ -501,7 +502,7 @@ class Target(TargetI):
         conffile = os.path.join(tempdir, 'rep-clean.conf')
         return (scriptfile, conffile)
 
-    def set_repo(self, name):
+    def set_repo(self, name, testreport = None):
         if name not in ["UPDATE", "TESTING"]:
             raise ValueError("invalid name `%s`" % name)
 
@@ -515,14 +516,30 @@ class Target(TargetI):
         else:
             repclean.close()
 
-        if name == 'TESTING':
-            out.debug('%s: enabling TESTING repos' % self.hostname)
-            parameter = '-t'
-        elif name == 'UPDATE':
-            out.debug('%s: enabling UPDATE repos' % self.hostname)
-            parameter = '-n'
+        if get_release([self.system]) == '12':
+            if not testreport:
+                raise RuntimeError("Target.set_repo can't be used without testreport on sle12 systems")
 
-        self.run('%s %s' % (command, parameter))
+            cmd = "{repclean} -z"
+
+            if name == "TESTING":
+                cmd += "; {repclean} -i {incident_id}"
+
+            cmd = cmd.format(
+                repclean = command,
+                incident_id = testreport.rrid.maintenance_id
+            )
+
+        else:
+            params = dict(
+                TESTING = '-t',
+                UPDATE  = '-n'
+            )
+
+            cmd = "{0} {1}".format(command, params[name])
+
+        out.debug('{0}: enabling {1} repos'.format(self.hostname, name))
+        self.run(cmd)
 
     def run(self, command, lock=None):
         if self.state == 'enabled':
