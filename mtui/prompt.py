@@ -2161,7 +2161,13 @@ class CommandPrompt(cmd.Cmd):
             out.info('preparing')
 
             try:
-                preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed, testing=testing).run()
+                preparer(
+                    targets,
+                    self.metadata.get_package_list(),
+                    force = force,
+                    installed_only = installed,
+                    testing = testing
+                ).run()
             except Exception:
                 out.critical('failed to prepare target systems')
                 return False

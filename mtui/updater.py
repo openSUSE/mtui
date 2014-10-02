@@ -235,9 +235,12 @@ Updater = {
 
 class Prepare(object):
 
-    def __init__(self, targets, testing):
+    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
         self.targets = targets
         self.testing = testing
+        self.packages = packages
+        self.force = force
+        self.installed_only = installed_only
         self.commands = []
 
     def run(self):
@@ -316,22 +319,20 @@ class Prepare(object):
 
         return
 
-
 class ZypperPrepare(Prepare):
-
-    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
-        Prepare.__init__(self, targets, testing)
+    def __init__(self, *a, **kw):
+        super(ZypperPrepare, self).__init__(*a, **kw)
 
         parameter = ''
         commands = []
 
-        if force:
+        if self.force:
             parameter = '--force-resolution'
 
-        for package in packages:
+        for package in self.packages:
             if 'branding-upstream' in package:
                 continue
-            if installed_only:
+            if self.installed_only:
                 commands.append('rpm -q %s &>/dev/null && zypper -n in -y -l %s %s' % (package, parameter, package))
             else:
                 commands.append('zypper -n in -y -l %s %s' % (parameter, package))
@@ -343,19 +344,18 @@ class ZypperPrepare(Prepare):
             out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError(target.hostname, 'RPM Error')
 
-
 class OldZypperPrepare(Prepare):
 
-    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
-        Prepare.__init__(self, targets, testing)
+    def __init__(self, *a, **kw):
+        super(OldZypperPrepare, self).__init__(*a, **kw)
 
         commands = []
 
-        for package in packages:
+        for package in self.packages:
             # do not install upstream-branding packages
             if 'branding-upstream' in package:
                 continue
-            if installed_only:
+            if self.installed_only:
                 commands.append('rpm -q %s &>/dev/null && zypper -n in -y -l %s' % (package, package))
             else:
                 commands.append('zypper -n in -y -l %s' % package)
@@ -363,24 +363,22 @@ class OldZypperPrepare(Prepare):
         self.commands = commands
 
 class RedHatPrepare(Prepare):
-
-    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
-        Prepare.__init__(self, targets, testing)
+    def __init__(self, *a, **kw):
+        super(RedHatPrepare, self).__init__(*a, **kw)
 
         parameter = ''
         commands = []
 
-        if not testing:
+        if not self.testing:
             parameter = '--disablerepo=*testing*'
 
-        for package in packages:
-            if installed_only:
+        for package in self.packages:
+            if self.installed_only:
                 commands.append('rpm -q %s &>/dev/null && yum -y %s install %s' % (package, parameter, package))
             else:
                 commands.append('yum -y %s install %s' % (parameter, package))
 
         self.commands = commands
-
 
 Preparer = {
     '11': ZypperPrepare,
