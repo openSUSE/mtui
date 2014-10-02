@@ -670,7 +670,7 @@ class CommandPrompt(cmd.Cmd):
                 self.log.error('failed to fetch src rpm')
                 return
 
-            rc = os.system('for i in *src.rpm; do name=$(rpm -qp --queryformat "%%{{NAME}}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories %s; cd ..; done'.format(args.strip()))
+            rc = os.system('for i in *src.rpm; do name=$(rpm -qp --queryformat "%{{NAME}}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories {0}; cd ..; done'.format(args.strip()))
 
             if rc:
                 self.log.error('failed to extract src rpm')
