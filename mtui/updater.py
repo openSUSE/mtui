@@ -411,10 +411,11 @@ Preparer = {
 
 
 class Downgrade(object):
-
-    def __init__(self, targets, packages=None):
+    def __init__(self, targets, packages, patches):
         self.targets = targets
         self.packages = packages
+        self.patches = patches
+
         self.commands = {}
         self.install_command = None
         self.list_command = None
@@ -538,32 +539,30 @@ class Downgrade(object):
 
 
 class ZypperDowngrade(Downgrade):
+    def __init__(self, *a, **kw):
+        super(ZypperDowngrade, self).__init__(*a, **kw)
 
-    def __init__(self, targets, packages, patches):
-        Downgrade.__init__(self, targets, packages)
-
-        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(packages)
+        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(self.packages)
         self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
 
 
 class OldZypperDowngrade(Downgrade):
-
-    def __init__(self, targets, packages, patches):
-        Downgrade.__init__(self, targets, packages)
+    def __init__(self, *a, **kw):
+        super(OldZypperDowngrade, self).__init__(*a, **kw)
 
         try:
-            patch = patches['zypp']
+            patch = self.patches['zypp']
         except KeyError:
             out.critical('required ZYPP patch number for zypper downgrade not found')
             return
 
-        self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(packages)
+        self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(self.packages)
         self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
 
         commands = []
 
         invalid_packages = ['glibc', 'rpm', 'zypper', 'readline']
-        invalid = set(packages).intersection(invalid_packages)
+        invalid = set(self.packages).intersection(invalid_packages)
         if invalid:
             out.critical('crucial package found in package list: %s. please downgrade manually' % list(invalid))
             return
@@ -571,22 +570,15 @@ class OldZypperDowngrade(Downgrade):
         commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n rm -y -t patch $p; done'
                          % patch)
 
-        for package in packages:
+        for package in self.packages:
             commands.append('zypper -n rm -y -t atom %s' % package)
 
         self.post_commands = commands
 
 class RedHatDowngrade(Downgrade):
-
-    def __init__(self, targets, packages, patches):
-        Downgrade.__init__(self, targets, packages)
-
-        commands = []
-
-        commands.append('yum -y downgrade %s' % ' '.join(packages))
-
-        self.commands = commands
-
+    def __init__(self, *a, **kw):
+        super(RedHatDowngrade, self).__init__(*a, **kw)
+        self.commands = ['yum -y downgrade %s' % ' '.join(self.packages)]
 
 Downgrader = {
     '11': ZypperDowngrade,
@@ -594,7 +586,6 @@ Downgrader = {
     '10': OldZypperDowngrade,
     'YUM': RedHatDowngrade,
 }
-
 
 class Install(object):
 

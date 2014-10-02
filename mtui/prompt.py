@@ -2103,7 +2103,11 @@ class CommandPrompt(cmd.Cmd):
                 targets[target].add_history(['downgrade', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
 
             try:
-                downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
+                downgrader(
+                    targets,
+                    self.metadata.get_package_list(),
+                    self.metadata.patches
+                ).run()
             except Exception:
                 out.critical('failed to downgrade target systems')
                 return
