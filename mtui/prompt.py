@@ -653,32 +653,11 @@ class CommandPrompt(cmd.Cmd):
                 print '{0:20} {1:20}: {2}s'.format(host.hostname, system, timeout)
 
     @requires_update
-    def do_source_extract(self, args):
+    def do_source_extract(self, _):
         """
         Extracts current source RPMs to a local temporary directory.
-        If no filename is given, the whole package content is extracted.
-
-        source_extract [filename]
-        Keyword arguments:
-        filename -- filename to extract
         """
-
-        with chdir(self.metadata.local_wd()):
-            rc = os.system('wget -q -r -nd -l2 --no-parent -A "*src.rpm" {0}/'.format(self.metadata.repository))
-
-            if rc:
-                self.log.error('failed to fetch src rpm')
-                return
-
-            rc = os.system('for i in *src.rpm; do name=$(rpm -qp --queryformat "%{{NAME}}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories {0}; cd ..; done'.format(args.strip()))
-
-            if rc:
-                self.log.error('failed to extract src rpm')
-                return
-
-        self.log.info('src rpm was extracted to {0}'.format(
-            self.metadata.local_wd()
-        ))
+        self.metadata.extract_source_rpm()
 
     @requires_update
     def do_source_diff(self, args):

@@ -121,3 +121,16 @@ class CompareScriptCrashed(CompareScriptError):
             self.argv,
             self.stderr,
         )
+
+class FailedToDownloadSrcRPMError(ErrorMessage, SystemCommandError):
+    _message = "Failed to download source rpm."
+
+class FailedToExtractSrcRPM(ErrorMessage, SystemCommandError):
+    _message = "Failed to extract source rpm."
+
+class SrcRPMExtractedMessage(UserMessage):
+    def __init__(self, dir):
+        self.dir = dir
+
+    def __str__(self):
+        return 'Extracted source rpm to {0}'.format(self.dir)
