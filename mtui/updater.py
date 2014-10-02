@@ -698,6 +698,7 @@ class RedHatInstall(Install):
 
 Installer = {
     '11': ZypperInstall,
+    '12': ZypperInstall,
     '114': ZypperInstall,
     '10': ZypperInstall,
     'YUM': RedHatInstall,
@@ -729,6 +730,7 @@ class RedHatUninstall(Install):
 
 Uninstaller = {
     '11': ZypperUninstall,
+    '12': ZypperUninstall,
     '114': ZypperUninstall,
     '10': ZypperUninstall,
     'YUM': RedHatUninstall,
