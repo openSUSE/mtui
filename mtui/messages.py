@@ -27,6 +27,18 @@ class UserError(UserMessage, RuntimeError):
     the user
     """
 
+class SystemCommandError(UserMessage):
+    def __init__(self, rc, command):
+        self.rc = rc
+        self.command = command
+
+    @property
+    def message(self):
+        return self._message + " rc = {0} Command: {1!r}".format(
+            self.rc,
+            self.command
+        )
+
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
         return 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'
