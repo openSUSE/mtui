@@ -582,6 +582,7 @@ class RedHatDowngrade(Downgrade):
 
 Downgrader = {
     '11': ZypperDowngrade,
+    '12': ZypperDowngrade,
     '114': ZypperDowngrade,
     '10': OldZypperDowngrade,
     'YUM': RedHatDowngrade,
