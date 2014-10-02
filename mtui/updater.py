@@ -115,8 +115,20 @@ class Update(object):
 
 
 class ZypperUpdate(Update):
+    def check(self, target, stdin, stdout, stderr, exitcode):
+        if 'Error:' in stderr:
+            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
+            raise UpdateError('RPM Error', target.hostname)
+        if 'The following package is not supported by its vendor' in stdout:
+            out.critical('%s: package support is uncertain:', target.hostname)
+            marker = 'The following package is not supported by its vendor:\n'
+            start = stdout.find(marker)
+            end = stdout.find('\n\n', start)
+            print(stdout[start:end])
+
+class ZypperUpToSLE11Update(ZypperUpdate):
     def __init__(self, *a, **kw):
-        super(ZypperUpdate, self).__init__(*a, **kw)
+        super(ZypperUpToSLE11Update, self).__init__(*a, **kw)
 
         try:
             patch = self.patches['sat']
@@ -132,16 +144,21 @@ class ZypperUpdate(Update):
             'for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n install -l -y -t patch $p=%s; done' % (patch, patch),
         ]
 
-    def check(self, target, stdin, stdout, stderr, exitcode):
-        if 'Error:' in stderr:
-            out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
-            raise UpdateError('RPM Error', target.hostname)
-        if 'The following package is not supported by its vendor' in stdout:
-            out.critical('%s: package support is uncertain:', target.hostname)
-            marker = 'The following package is not supported by its vendor:\n'
-            start = stdout.find(marker)
-            end = stdout.find('\n\n', start)
-            print(stdout[start:end])
+
+class ZypperSLE12Update(ZypperUpdate):
+    def __init__(self, *a, **kw):
+        super(ZypperSLE12Update, self).__init__(*a, **kw)
+        repo = "TESTING-{0}".format(self.testreport.rrid.maintenance_id)
+
+        self.commands = [
+            "export LANG=",
+            "zypper lr -puU",
+            "zypper refresh",
+            "zypper patches | grep {0}".format(repo),
+            "for repo in $(zypper lr | awk 'BEGIN {{ FS=\"|\" }} {{ print $2; }}' | grep {0}); do zypper -n update -l -y -t patch -c $(zypper lr | grep {0} | cut -d \"|\" -f 2); done".format(repo),
+            "zypper patches | grep {0}".format(repo)
+        ]
+
 
 class openSuseUpdate(Update):
 
@@ -225,7 +242,8 @@ class RedHatUpdate(Update):
         ]
 
 Updater = {
-    '11': ZypperUpdate,
+    '11': ZypperUpToSLE11Update,
+    '12': ZypperSLE12Update,
     '114': openSuseUpdate,
     '10': OldZypperUpdate,
     '9': OnlineUpdate,
@@ -385,6 +403,7 @@ class RedHatPrepare(Prepare):
 
 Preparer = {
     '11': ZypperPrepare,
+    '12': ZypperPrepare,
     '114': ZypperPrepare,
     '10': OldZypperPrepare,
     'YUM': RedHatPrepare,
