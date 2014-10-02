@@ -37,6 +37,7 @@ class RPMVersion(object):
     """
 
     def __init__(self, ver, *args):
+        ver = ver.replace('.noarch', '')
         if '-' in ver:
             # split rpm version string into version and release string
             (self.ver, self.rel) = ver.rsplit('-')
