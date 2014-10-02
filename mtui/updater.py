@@ -114,26 +114,22 @@ class Update(object):
 
 
 class ZypperUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(ZypperUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['sat']
+            patch = self.patches['sat']
         except KeyError:
             out.critical('required SAT patch number for zypper update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('zypper lr -puU')
-        commands.append('zypper refresh')
-        commands.append('zypper patches | grep " %s "' % patch)
-        commands.append('for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n install -l -y -t patch $p=%s; done'
-                         % (patch, patch))
-
-        self.commands = commands
+        self.commands = [
+            'export LANG=',
+            'zypper lr -puU',
+            'zypper refresh',
+            'zypper patches | grep " %s "' % patch,
+            'for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n install -l -y -t patch $p=%s; done' % (patch, patch),
+        ]
 
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
@@ -146,107 +142,86 @@ class ZypperUpdate(Update):
             end = stdout.find('\n\n', start)
             print(stdout[start:end])
 
-
 class openSuseUpdate(Update):
 
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(openSuseUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['sat']
+            patch = self.patches['sat']
         except KeyError:
             out.critical('required SAT patch number for zypper update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('zypper -v lr -puU')
-        commands.append('zypper pch | grep " %s "' % patch)
-        commands.append('zypper -v install -t patch softwaremgmt-201107=%s' % patch)
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'zypper -v lr -puU',
+            'zypper pch | grep " %s "' % patch,
+            'zypper -v install -t patch softwaremgmt-201107=%s' % patch,
+        ]
 
 class OldZypperUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(OldZypperUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['zypp']
+            patch = self.patches['zypp']
         except KeyError:
             out.critical('required ZYPP patch number for zypper update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('zypper sl')
-        commands.append('zypper refresh')
-        commands.append('zypper patches | grep %s-0' % patch)
-        commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n in -l -y -t patch $p; done'
-                         % patch)
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'zypper sl',
+            'zypper refresh',
+            'zypper patches | grep %s-0' % patch,
+            'for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n in -l -y -t patch $p; done' % patch,
+        ]
 
 class OnlineUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(OnlineUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['you']
+            patch = self.patches['you']
         except KeyError:
             out.critical('required YOU patch number for online_update update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('find /var/lib/YaST2/you/ -name patch-%s' % patch)
-        commands.append('online_update -V --url http://you.suse.de/download -S patch-%s -f' % patch)
-        commands.append('find /var/lib/YaST2/you/ -name patch-%s' % patch)
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'find /var/lib/YaST2/you/ -name patch-%s' % patch,
+            'online_update -V --url http://you.suse.de/download -S patch-%s -f' % patch,
+            'find /var/lib/YaST2/you/ -name patch-%s' % patch,
+        ]
 
 class RugUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(RugUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['you']
+            patch = self.patches['you']
         except KeyError:
             out.critical('required YOU patch number for rug update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('rug sl')
-        commands.append('rug refresh')
-        commands.append('rug patch-info patch-%s' % patch)
-        commands.append('rug patch-install patch-%s' % patch)
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'rug sl',
+            'rug refresh',
+            'rug patch-info patch-%s' % patch,
+            'rug patch-install patch-%s' % patch,
+        ]
 
 class RedHatUpdate(Update):
+    def __init__(self, *a, **kw):
+        super(RedHatUpdate, self).__init__(*a, **kw)
 
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
-
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('yum repolist')
-        commands.append('yum -y update %s' % ' '.join(packages))
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'yum repolist',
+            'yum -y update %s' % ' '.join(packages),
+        ]
 
 Updater = {
     '11': ZypperUpdate,
