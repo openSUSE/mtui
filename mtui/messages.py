@@ -2,6 +2,9 @@ from abc import ABCMeta
 from abc import abstractmethod
 
 class UserMessage(object):
+    """
+    Message to be displayed to the user
+    """
     __metaclass__ = ABCMeta
     def __str__(self):
         return self.message
@@ -13,8 +16,16 @@ class UserMessage(object):
     def __eq__(self, x):
         return str(self) == str(x)
 
+class ErrorMessage(UserMessage, RuntimeError):
+    """
+    Program error message to be displayed to the user
+    """
+
 class UserError(UserMessage, RuntimeError):
-    pass
+    """
+    Error, caused by improper usage of the program, to be displayed to
+    the user
+    """
 
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
