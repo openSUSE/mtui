@@ -31,10 +31,11 @@ class UpdateError(Exception):
 
 class Update(object):
 
-    def __init__(self, targets, patches, packages):
+    def __init__(self, targets, patches, packages, testreport):
         self.targets = targets
         self.patches = patches
         self.commands = []
+        self.testreport = testreport
 
     def run(self):
         skipped = False
@@ -62,7 +63,7 @@ class Update(object):
                 raise UpdateError('Hosts locked')
 
             for target in self.targets:
-                queue.put([self.targets[target].set_repo, ['TESTING']])
+                queue.put([self.targets[target].set_repo, ['TESTING', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()
@@ -235,12 +236,14 @@ Updater = {
 
 class Prepare(object):
 
-    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
+    def __init__(self, targets, packages, testreport, testing=False,
+    force=False, installed_only=False):
         self.targets = targets
         self.testing = testing
         self.packages = packages
         self.force = force
         self.installed_only = installed_only
+        self.testreport = testreport
         self.commands = []
 
     def run(self):
@@ -270,9 +273,9 @@ class Prepare(object):
 
             for target in self.targets:
                 if self.testing:
-                    queue.put([self.targets[target].set_repo, ['TESTING']])
+                    queue.put([self.targets[target].set_repo, ['TESTING', self.testreport]])
                 else:
-                    queue.put([self.targets[target].set_repo, ['UPDATE']])
+                    queue.put([self.targets[target].set_repo, ['UPDATE', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()

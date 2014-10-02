@@ -1035,7 +1035,7 @@ class CommandPrompt(cmd.Cmd):
 
             updater = self.metadata.get_updater()
 
-            print '\n'.join(updater(self.targets, self.metadata.patches, self.metadata.get_package_list()).commands)
+            print '\n'.join(updater(self.targets, self.metadata.patches, self.metadata.get_package_list(), self.metadata).commands)
             del updater
 
     @requires_update
@@ -2164,6 +2164,7 @@ class CommandPrompt(cmd.Cmd):
                 preparer(
                     targets,
                     self.metadata.get_package_list(),
+                    self.metadata,
                     force = force,
                     installed_only = installed,
                     testing = testing
@@ -2265,7 +2266,7 @@ class CommandPrompt(cmd.Cmd):
             out.debug("chosen updater: %s" % repr(updater))
 
             try:
-                updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
+                updater(targets, self.metadata.patches, self.metadata.get_package_list(), self.metadata).run()
             except Exception:
                 out.critical('failed to update target systems')
                 Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
