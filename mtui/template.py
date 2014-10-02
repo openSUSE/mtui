@@ -681,5 +681,11 @@ class OBSTestReport(TestReport):
             ('Rating'           , self.rating),
         ] + super(OBSTestReport, self)._show_yourself_data()
 
+    def download_source_rpm(self):
+        download_source_rpm(
+            self.repository,
+            3
+        )
+
 if has_nose:
     TestReport = nottest(TestReport)
