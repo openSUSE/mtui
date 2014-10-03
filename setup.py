@@ -37,7 +37,7 @@ setup(
     platforms = ['Linux', 'Mac OSX'],
     keywords = ['SUSE', 'Maintenance', 'update', 'testing'],
 
-    packages = ['mtui', 'mtui.connector'],
+    packages = ['mtui', 'mtui.connector', 'mtui.types'],
 
     entry_points = {
         'console_scripts': ['mtui = mtui.main:main']},
