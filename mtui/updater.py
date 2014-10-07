@@ -155,7 +155,7 @@ class ZypperSLE12Update(ZypperUpdate):
             "zypper lr -puU",
             "zypper refresh",
             "zypper patches | grep {0}".format(repo),
-            "for repo in $(zypper lr | awk 'BEGIN {{ FS=\"|\" }} {{ print $2; }}' | grep {0}); do zypper -n update -l -y -t patch -c $(zypper lr | grep {0} | cut -d \"|\" -f 2); done".format(repo),
+            "for repo in $(zypper lr | awk 'BEGIN { FS=\"|\" } { print $2; }' | grep {0}); do zypper -n update -l -y -t patch -c $repo; done".format(repo),
             "zypper patches | grep {0}".format(repo)
         ]
 
