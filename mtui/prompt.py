@@ -2253,7 +2253,7 @@ class CommandPrompt(cmd.Cmd):
             except Exception:
                 out.critical('failed to update target systems')
                 Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
-                return
+                raise
             except KeyboardInterrupt:
                 out.info('update process canceled')
                 return
