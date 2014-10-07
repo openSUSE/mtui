@@ -2,6 +2,15 @@
 ChangeLog
 #########
 
+3.0.0b2
+#######
+
+Bugfixes
+========
+
+* Fix SLE12 updater to code so it works with multiple addon/module
+  repositories
+
 3.0.0b1
 #######
 
