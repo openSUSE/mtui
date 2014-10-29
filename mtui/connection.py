@@ -103,7 +103,8 @@ class Connection(object):
             with open(os.path.expanduser("~/.ssh/config")) as fd:
                 cfg.parse(fd)
         except IOError as e:
-            out.info(e)
+            if e.errno != errno.ENOENT:
+                out.warning(e)
         opts = cfg.lookup(self.hostname)
 
         try:
