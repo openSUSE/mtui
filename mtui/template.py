@@ -12,6 +12,7 @@ from traceback import format_exc
 from abc import ABCMeta
 from abc import abstractmethod
 from datetime import date
+import subprocess
 
 from mtui.target import Target
 from mtui.target import TargetI
@@ -43,12 +44,12 @@ class _TemplateIOError(IOError):
     """
     pass
 
-def download_source_rpm(uri, recursion_level, system = os.system):
+def download_source_rpm(uri, recursion_level, system = subprocess.call):
     cmd = 'wget -q -r -nd -l{1} --no-parent -A "*src.rpm" {0}/'.format(
         uri,
         recursion_level
     )
-    rc = system(cmd)
+    rc = system(cmd, shell = True)
 
     if rc:
         raise FailedToDownloadSrcRPMError(rc, cmd)
