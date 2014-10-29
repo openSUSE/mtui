@@ -9,10 +9,6 @@ class UserMessage(object):
     def __str__(self):
         return self.message
 
-    @abstractmethod
-    def __str__(self):
-        pass
-
     def __eq__(self, x):
         return str(self) == str(x)
 
