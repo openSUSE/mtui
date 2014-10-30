@@ -44,8 +44,8 @@ class Config(object):
         self.config = configparser.SafeConfigParser()
         try:
             self.config.read(self.configfiles)
-        except configparser.Error:
-            pass
+        except configparser.Error as e:
+            out.error(e)
 
     def __init__(self):
         self.read()
