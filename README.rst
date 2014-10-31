@@ -54,7 +54,7 @@ Bug reports and feature requests
 ################################
 
 Can be filed and searched at `Novell Bugzilla
-<https://bugzilla.novell.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI>`_
+<https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI>`_
 
 Documentation
 #############
