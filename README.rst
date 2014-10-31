@@ -17,8 +17,8 @@ Installation
 openSUSE and SUSE
 =================
 
-Packages are available at `IBS home:yac:mtui
-<https://build.suse.de/project/show/home:yac:mtui>`_.
+Packages are available at `IBS QA:Maintenance
+<https://build.suse.de/project/show/QA:Maintenance>`_.
 
 Add the appropriate repository to your system
 
@@ -27,7 +27,7 @@ Add the appropriate repository to your system
     zypper ar <repo-link>
 
 You can find the proper ``<repo-link>`` on the `project repositories page
-<https://build.suse.de/project/repositories/home:yac:mtui>`_ for each
+<https://build.suse.de/project/repositories/QA:Maintenance>`_ for each
 distribution under the the "Go to download repository" link.
 
 Then you can run
