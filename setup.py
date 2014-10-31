@@ -15,6 +15,7 @@ setup(
 
     install_requires = [
         "paramiko",
+        'xdg',
     ],
 
     # dependencies not on cheeseshop:
@@ -26,6 +27,11 @@ setup(
     },
     # extra dependencies:
     # notify (http://www.galago-project.org/specs/notification)
+
+    tests_require = [
+        'temps',
+        'nose',
+    ],
 
     author = 'Christian Kornacker',
     author_email = 'ckornacker@suse.de',
