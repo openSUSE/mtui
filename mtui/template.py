@@ -22,6 +22,7 @@ from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.utils import edit_text
+from mtui.five import with_metaclass
 from mtui.messages import QadbReportCommentLengthWarning
 from mtui import updater
 from mtui.utils import ass_is, ass_isL
@@ -117,13 +118,11 @@ class OBSUpdateID(UpdateID):
 class TestReportAlreadyLoaded(RuntimeError):
     pass
 
-class TestReport(object):
+class TestReport(with_metaclass(ABCMeta, object)):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read
     # things to file-like interface.
-
-    __metaclass__ = ABCMeta
 
     targetFactory = Target
     refhostsFactory = RefhostsFactory
@@ -293,10 +292,10 @@ class TestReport(object):
             self.log.warning(msg.format(missing))
 
     def get_package_list(self):
-        return self.packages.keys()
+        return list(self.packages.keys())
 
     def get_release(self):
-        return updater.get_release(self.systems.values())
+        return updater.get_release(list(self.systems.values()))
 
     def get_preparer(self):
         return updater.Preparer[self.get_release()]
@@ -426,7 +425,7 @@ class TestReport(object):
             ('Hosts'     , ' '.join(sorted(self.systems.keys()))),
             ('Reviewer'  , self.reviewer),
             ('Packager'  , self.packager),
-            ('Bugs'      , ', '.join(self.bugs.keys())),
+            ('Bugs'      , ', '.join(sorted(self.bugs.keys()))),
             ('Packages'  , ' '.join(sorted(self.get_package_list()))),
             ('Testreport', self._testreport_url()),
             ('Repository', self.repository),
@@ -439,11 +438,8 @@ class TestReport(object):
         """
         :type data: dict
         """
-        fmt = "{0:15}: {1}\n"
-        xs = data.items()
-        xs.sort()
-        for x in xs:
-            writer.write(fmt.format(*x))
+        for x in sorted(data.items()):
+            writer.write("{0:15}: {1}\n".format(*x))
 
     def _testreport_url(self):
         return '/'.join([self.config.reports_url, str(self.id), 'log'])

@@ -127,15 +127,15 @@ def test_add_subcommand():
             StrictVersion(ComMock2_0.stable).version, (-1, 1, 0))])
     )
 
-    eq_(cp.commands.values(), [])
+    eq_(list(cp.commands.values()), [])
     cp._add_subcommand(ComMock2_0)
-    eq_(cp.commands.values(), [])
+    eq_(list(cp.commands.values()), [])
 
     cp = TestableCP()
     cp._interface_version = StrictVersion(ComMock2_0.stable)
-    eq_(cp.commands.values(), [])
+    eq_(list(cp.commands.values()), [])
     cp._add_subcommand(ComMock2_0)
-    eq_(cp.commands.values(), [ComMock2_0])
+    eq_(list(cp.commands.values()), [ComMock2_0])
 
 def test_command_argparse_fail():
     """

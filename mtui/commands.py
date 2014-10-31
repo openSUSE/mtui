@@ -11,12 +11,10 @@ from mtui.utils import flatten
 from mtui.utils import blue, yellow, green, red
 from mtui import messages
 from mtui.utils import requires_update
+from mtui.five import with_metaclass
 from mtui.rpmver import RPMVersion
 
-class Command(object):
-    __metaclass__ = ABCMeta
-    # FIXME: see L{CommandPrompt.__getattr__}
-
+class Command(with_metaclass(ABCMeta, object)):
     stable = None
     """
     :type stable: str
@@ -202,7 +200,7 @@ class ListPackages(Command):
 
         hosts = self.hosts.select(self.args.hosts)
 
-        pkgs = self.metadata.packages.keys() if self.metadata else self.args.packages
+        pkgs = list(self.metadata.packages.keys()) if self.metadata else self.args.packages
         if not pkgs:
             raise messages.MissingPackagesError()
 

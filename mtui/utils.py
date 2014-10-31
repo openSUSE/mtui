@@ -27,6 +27,16 @@ try:
 except ImportError:
     from itertools import izip_longest as zip_longest
 
+try:
+    xrange
+except NameError:
+    xrange = range
+
+try:
+    user_input = raw_input
+except NameError:
+    user_input = input
+
 out = logging.getLogger('mtui')
 
 flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
@@ -70,7 +80,7 @@ else:
     green = red = yellow = blue = lambda xs: str(xs)
 
 
-def input(text, options, interactive=True):
+def prompt_user(text, options, interactive=True):
     result = False
     response = False
 
@@ -79,7 +89,7 @@ def input(text, options, interactive=True):
         return False
 
     try:
-        response = raw_input(text).lower()
+        response = user_input(text).lower()
         if response and response in options:
             result = True
     except KeyboardInterrupt:
@@ -157,7 +167,7 @@ def page(text, interactive=True):
                 except IndexError:
                     return
 
-        if input(prompt, "q"):
+        if prompt_user(prompt, "q"):
             return
 
 def log_exception(eclass, logger):
