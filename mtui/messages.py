@@ -19,8 +19,8 @@ class ErrorMessage(UserMessage, RuntimeError):
 
 class UserError(UserMessage, RuntimeError):
     """
-    Error, caused by improper usage of the program, to be displayed to
-    the user
+    Error, caused by improper usage of the program,
+    to be displayed to the user
     """
 
 class SystemCommandError(UserMessage):
