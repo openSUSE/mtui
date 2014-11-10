@@ -36,8 +36,20 @@ class RPMVersion(object):
 
     """
 
+    _arch_suffixes = [
+        'noarch',
+        'x86_64',
+        's390x',
+        'ppc64le'
+    ]
+    """
+    :param _arch_suffixes: arch suffixes we get in addition to version on sle12
+    """
+
     def __init__(self, ver, *args):
-        ver = ver.replace('.noarch', '')
+        for x in self._arch_suffixes:
+            ver = ver.replace('.' + x, '')
+
         if '-' in ver:
             # split rpm version string into version and release string
             (self.ver, self.rel) = ver.rsplit('-')
