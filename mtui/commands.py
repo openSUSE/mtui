@@ -13,6 +13,8 @@ from mtui import messages
 from mtui.utils import requires_update
 from mtui.five import with_metaclass
 from mtui.rpmver import RPMVersion
+from mtui.messages import HostIsNotConnectedError
+from mtui.messages import ListPackagesAllHost
 
 class Command(with_metaclass(ABCMeta, object)):
     stable = None
@@ -198,7 +200,15 @@ class ListPackages(Command):
             self._run_just_wanted()
             return
 
-        hosts = self.hosts.select(self.args.hosts)
+        try:
+            hosts = self.hosts.select(self.args.hosts)
+        except HostIsNotConnectedError as e:
+            if e.host == "all":
+                self.logger.error(e)
+                self.logger.info(ListPackagesAllHost())
+                return
+            else:
+                raise
 
         pkgs = list(self.metadata.packages.keys()) if self.metadata else self.args.packages
         if not pkgs:

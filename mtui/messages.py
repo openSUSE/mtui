@@ -23,6 +23,13 @@ class UserError(UserMessage, RuntimeError):
     to be displayed to the user
     """
 
+class DeprecationMessage(UserMessage):
+    pass
+
+class ListPackagesAllHost(DeprecationMessage):
+    message = "Perhaps you meant to run just `list_packages`." \
+            + " Argument `all` is no longer accepted."
+
 class HostIsNotConnectedError(UserError, ValueError):
     """
     Thrown when user requests an operation to be performed on a host
