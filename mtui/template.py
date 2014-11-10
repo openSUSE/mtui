@@ -12,6 +12,7 @@ from traceback import format_exc
 from abc import ABCMeta
 from abc import abstractmethod
 from datetime import date
+import subprocess
 
 from mtui.target import Target
 from mtui.target import TargetI
@@ -24,6 +25,9 @@ from mtui.types.obs import RequestReviewID
 from mtui.utils import edit_text
 from mtui.five import with_metaclass
 from mtui.messages import QadbReportCommentLengthWarning
+from mtui.messages import FailedToDownloadSrcRPMError
+from mtui.messages import FailedToExtractSrcRPM
+from mtui.messages import SrcRPMExtractedMessage
 from mtui import updater
 from mtui.utils import ass_is, ass_isL
 
@@ -40,6 +44,16 @@ class _TemplateIOError(IOError):
     else in the process
     """
     pass
+
+def download_source_rpm(uri, recursion_level, system = subprocess.call):
+    cmd = 'wget -q -r -nd -l{1} --no-parent -A "*src.rpm" {0}/'.format(
+        uri,
+        recursion_level
+    )
+    rc = system(cmd, shell = True)
+
+    if rc:
+        raise FailedToDownloadSrcRPMError(rc, cmd)
 
 def testreport_svn_checkout(config, log, uri):
     ensure_dir_exists(
@@ -509,6 +523,21 @@ class TestReport(with_metaclass(ABCMeta, object)):
             for x in fs
         ])
 
+    def download_source_rpm(self):
+        raise NotImplementedError()
+
+    def extract_source_rpm(self):
+        with chdir(self.local_wd()):
+            self.download_source_rpm()
+
+            cmd = 'for i in *src.rpm; do name=$(rpm -qp --queryformat "%{NAME}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories; cd ..; done'
+            rc = os.system(cmd)
+
+            if rc:
+                raise FailedToExtractSrcRPM(rc, cmd)
+
+        self.log.info(SrcRPMExtractedMessage(self.local_wd()))
+
 class TestsuiteComment(object):
     _max_comment_len = 100
 
@@ -605,6 +634,12 @@ class SwampTestReport(TestReport):
 
         return False
 
+    def download_source_rpm(self):
+        download_source_rpm(
+            self.repository,
+            2
+        )
+
 class OBSTestReport(TestReport):
     _type = "OBS"
 
@@ -642,6 +677,12 @@ class OBSTestReport(TestReport):
             ('ReviewRequestID'  , self.rrid),
             ('Rating'           , self.rating),
         ] + super(OBSTestReport, self)._show_yourself_data()
+
+    def download_source_rpm(self):
+        download_source_rpm(
+            self.repository,
+            3
+        )
 
 if has_nose:
     TestReport = nottest(TestReport)

@@ -31,10 +31,11 @@ class UpdateError(Exception):
 
 class Update(object):
 
-    def __init__(self, targets, patches, packages):
+    def __init__(self, targets, patches, packages, testreport):
         self.targets = targets
         self.patches = patches
         self.commands = []
+        self.testreport = testreport
 
     def run(self):
         skipped = False
@@ -62,7 +63,7 @@ class Update(object):
                 raise UpdateError('Hosts locked')
 
             for target in self.targets:
-                queue.put([self.targets[target].set_repo, ['TESTING']])
+                queue.put([self.targets[target].set_repo, ['TESTING', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()
@@ -114,27 +115,6 @@ class Update(object):
 
 
 class ZypperUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
-
-        try:
-            patch = patches['sat']
-        except KeyError:
-            out.critical('required SAT patch number for zypper update not found')
-            return
-
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('zypper lr -puU')
-        commands.append('zypper refresh')
-        commands.append('zypper patches | grep " %s "' % patch)
-        commands.append('for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n install -l -y -t patch $p=%s; done'
-                         % (patch, patch))
-
-        self.commands = commands
-
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
             out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
@@ -146,110 +126,124 @@ class ZypperUpdate(Update):
             end = stdout.find('\n\n', start)
             print(stdout[start:end])
 
-
-class openSuseUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+class ZypperUpToSLE11Update(ZypperUpdate):
+    def __init__(self, *a, **kw):
+        super(ZypperUpToSLE11Update, self).__init__(*a, **kw)
 
         try:
-            patch = patches['sat']
+            patch = self.patches['sat']
         except KeyError:
             out.critical('required SAT patch number for zypper update not found')
             return
 
-        commands = []
+        self.commands = [
+            'export LANG=',
+            'zypper lr -puU',
+            'zypper refresh',
+            'zypper patches | grep " %s "' % patch,
+            'for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n install -l -y -t patch $p=%s; done' % (patch, patch),
+        ]
 
-        commands.append('export LANG=')
-        commands.append('zypper -v lr -puU')
-        commands.append('zypper pch | grep " %s "' % patch)
-        commands.append('zypper -v install -t patch softwaremgmt-201107=%s' % patch)
 
-        self.commands = commands
+class ZypperSLE12Update(ZypperUpdate):
+    def __init__(self, *a, **kw):
+        super(ZypperSLE12Update, self).__init__(*a, **kw)
+        repo = "TESTING-{0}".format(self.testreport.rrid.maintenance_id)
+
+        self.commands = [
+            "export LANG=",
+            "zypper lr -puU",
+            "zypper refresh",
+            "zypper patches | grep {0}".format(repo),
+            "for repo in $(zypper lr | awk 'BEGIN {{ FS=\"|\" }} {{ print $2; }}' | grep {0}); do zypper -n update -l -y -t patch -c $repo; done".format(repo),
+            "zypper patches | grep {0}".format(repo)
+        ]
 
 
-class OldZypperUpdate(Update):
+class openSuseUpdate(Update):
 
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(openSuseUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['zypp']
+            patch = self.patches['sat']
+        except KeyError:
+            out.critical('required SAT patch number for zypper update not found')
+            return
+
+        self.commands = [
+            'export LANG=',
+            'zypper -v lr -puU',
+            'zypper pch | grep " %s "' % patch,
+            'zypper -v install -t patch softwaremgmt-201107=%s' % patch,
+        ]
+
+class OldZypperUpdate(Update):
+    def __init__(self, *a, **kw):
+        super(OldZypperUpdate, self).__init__(*a, **kw)
+
+        try:
+            patch = self.patches['zypp']
         except KeyError:
             out.critical('required ZYPP patch number for zypper update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('zypper sl')
-        commands.append('zypper refresh')
-        commands.append('zypper patches | grep %s-0' % patch)
-        commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n in -l -y -t patch $p; done'
-                         % patch)
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'zypper sl',
+            'zypper refresh',
+            'zypper patches | grep %s-0' % patch,
+            'for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n in -l -y -t patch $p; done' % patch,
+        ]
 
 class OnlineUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(OnlineUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['you']
+            patch = self.patches['you']
         except KeyError:
             out.critical('required YOU patch number for online_update update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('find /var/lib/YaST2/you/ -name patch-%s' % patch)
-        commands.append('online_update -V --url http://you.suse.de/download -S patch-%s -f' % patch)
-        commands.append('find /var/lib/YaST2/you/ -name patch-%s' % patch)
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'find /var/lib/YaST2/you/ -name patch-%s' % patch,
+            'online_update -V --url http://you.suse.de/download -S patch-%s -f' % patch,
+            'find /var/lib/YaST2/you/ -name patch-%s' % patch,
+        ]
 
 class RugUpdate(Update):
-
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
+    def __init__(self, *a, **kw):
+        super(RugUpdate, self).__init__(*a, **kw)
 
         try:
-            patch = patches['you']
+            patch = self.patches['you']
         except KeyError:
             out.critical('required YOU patch number for rug update not found')
             return
 
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('rug sl')
-        commands.append('rug refresh')
-        commands.append('rug patch-info patch-%s' % patch)
-        commands.append('rug patch-install patch-%s' % patch)
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'rug sl',
+            'rug refresh',
+            'rug patch-info patch-%s' % patch,
+            'rug patch-install patch-%s' % patch,
+        ]
 
 class RedHatUpdate(Update):
+    def __init__(self, *a, **kw):
+        super(RedHatUpdate, self).__init__(*a, **kw)
 
-    def __init__(self, targets, patches, packages):
-        Update.__init__(self, targets, patches, packages)
-
-        commands = []
-
-        commands.append('export LANG=')
-        commands.append('yum repolist')
-        commands.append('yum -y update %s' % ' '.join(packages))
-
-        self.commands = commands
-
+        self.commands = [
+            'export LANG=',
+            'yum repolist',
+            'yum -y update %s' % ' '.join(packages),
+        ]
 
 Updater = {
-    '11': ZypperUpdate,
+    '11': ZypperUpToSLE11Update,
+    '12': ZypperSLE12Update,
     '114': openSuseUpdate,
     '10': OldZypperUpdate,
     '9': OnlineUpdate,
@@ -260,9 +254,14 @@ Updater = {
 
 class Prepare(object):
 
-    def __init__(self, targets, testing):
+    def __init__(self, targets, packages, testreport, testing=False,
+    force=False, installed_only=False):
         self.targets = targets
         self.testing = testing
+        self.packages = packages
+        self.force = force
+        self.installed_only = installed_only
+        self.testreport = testreport
         self.commands = []
 
     def run(self):
@@ -292,9 +291,9 @@ class Prepare(object):
 
             for target in self.targets:
                 if self.testing:
-                    queue.put([self.targets[target].set_repo, ['TESTING']])
+                    queue.put([self.targets[target].set_repo, ['TESTING', self.testreport]])
                 else:
-                    queue.put([self.targets[target].set_repo, ['UPDATE']])
+                    queue.put([self.targets[target].set_repo, ['UPDATE', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()
@@ -341,22 +340,20 @@ class Prepare(object):
 
         return
 
-
 class ZypperPrepare(Prepare):
-
-    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
-        Prepare.__init__(self, targets, testing)
+    def __init__(self, *a, **kw):
+        super(ZypperPrepare, self).__init__(*a, **kw)
 
         parameter = ''
         commands = []
 
-        if force:
+        if self.force:
             parameter = '--force-resolution'
 
-        for package in packages:
+        for package in self.packages:
             if 'branding-upstream' in package:
                 continue
-            if installed_only:
+            if self.installed_only:
                 commands.append('rpm -q %s &>/dev/null && zypper -n in -y -l %s %s' % (package, parameter, package))
             else:
                 commands.append('zypper -n in -y -l %s %s' % (parameter, package))
@@ -368,19 +365,18 @@ class ZypperPrepare(Prepare):
             out.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
             raise UpdateError(target.hostname, 'RPM Error')
 
-
 class OldZypperPrepare(Prepare):
 
-    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
-        Prepare.__init__(self, targets, testing)
+    def __init__(self, *a, **kw):
+        super(OldZypperPrepare, self).__init__(*a, **kw)
 
         commands = []
 
-        for package in packages:
+        for package in self.packages:
             # do not install upstream-branding packages
             if 'branding-upstream' in package:
                 continue
-            if installed_only:
+            if self.installed_only:
                 commands.append('rpm -q %s &>/dev/null && zypper -n in -y -l %s' % (package, package))
             else:
                 commands.append('zypper -n in -y -l %s' % package)
@@ -388,27 +384,26 @@ class OldZypperPrepare(Prepare):
         self.commands = commands
 
 class RedHatPrepare(Prepare):
-
-    def __init__(self, targets, packages, testing=False, force=False, installed_only=False):
-        Prepare.__init__(self, targets, testing)
+    def __init__(self, *a, **kw):
+        super(RedHatPrepare, self).__init__(*a, **kw)
 
         parameter = ''
         commands = []
 
-        if not testing:
+        if not self.testing:
             parameter = '--disablerepo=*testing*'
 
-        for package in packages:
-            if installed_only:
+        for package in self.packages:
+            if self.installed_only:
                 commands.append('rpm -q %s &>/dev/null && yum -y %s install %s' % (package, parameter, package))
             else:
                 commands.append('yum -y %s install %s' % (parameter, package))
 
         self.commands = commands
 
-
 Preparer = {
     '11': ZypperPrepare,
+    '12': ZypperPrepare,
     '114': ZypperPrepare,
     '10': OldZypperPrepare,
     'YUM': RedHatPrepare,
@@ -416,10 +411,11 @@ Preparer = {
 
 
 class Downgrade(object):
-
-    def __init__(self, targets, packages=None):
+    def __init__(self, targets, packages, patches):
         self.targets = targets
         self.packages = packages
+        self.patches = patches
+
         self.commands = {}
         self.install_command = None
         self.list_command = None
@@ -543,32 +539,30 @@ class Downgrade(object):
 
 
 class ZypperDowngrade(Downgrade):
+    def __init__(self, *a, **kw):
+        super(ZypperDowngrade, self).__init__(*a, **kw)
 
-    def __init__(self, targets, packages, patches):
-        Downgrade.__init__(self, targets, packages)
-
-        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(packages)
+        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(self.packages)
         self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
 
 
 class OldZypperDowngrade(Downgrade):
-
-    def __init__(self, targets, packages, patches):
-        Downgrade.__init__(self, targets, packages)
+    def __init__(self, *a, **kw):
+        super(OldZypperDowngrade, self).__init__(*a, **kw)
 
         try:
-            patch = patches['zypp']
+            patch = self.patches['zypp']
         except KeyError:
             out.critical('required ZYPP patch number for zypper downgrade not found')
             return
 
-        self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(packages)
+        self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(self.packages)
         self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
 
         commands = []
 
         invalid_packages = ['glibc', 'rpm', 'zypper', 'readline']
-        invalid = set(packages).intersection(invalid_packages)
+        invalid = set(self.packages).intersection(invalid_packages)
         if invalid:
             out.critical('crucial package found in package list: %s. please downgrade manually' % list(invalid))
             return
@@ -576,30 +570,23 @@ class OldZypperDowngrade(Downgrade):
         commands.append('for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n rm -y -t patch $p; done'
                          % patch)
 
-        for package in packages:
+        for package in self.packages:
             commands.append('zypper -n rm -y -t atom %s' % package)
 
         self.post_commands = commands
 
 class RedHatDowngrade(Downgrade):
-
-    def __init__(self, targets, packages, patches):
-        Downgrade.__init__(self, targets, packages)
-
-        commands = []
-
-        commands.append('yum -y downgrade %s' % ' '.join(packages))
-
-        self.commands = commands
-
+    def __init__(self, *a, **kw):
+        super(RedHatDowngrade, self).__init__(*a, **kw)
+        self.commands = ['yum -y downgrade %s' % ' '.join(self.packages)]
 
 Downgrader = {
     '11': ZypperDowngrade,
+    '12': ZypperDowngrade,
     '114': ZypperDowngrade,
     '10': OldZypperDowngrade,
     'YUM': RedHatDowngrade,
 }
-
 
 class Install(object):
 
@@ -698,6 +685,7 @@ class RedHatInstall(Install):
 
 Installer = {
     '11': ZypperInstall,
+    '12': ZypperInstall,
     '114': ZypperInstall,
     '10': ZypperInstall,
     'YUM': RedHatInstall,
@@ -729,6 +717,7 @@ class RedHatUninstall(Install):
 
 Uninstaller = {
     '11': ZypperUninstall,
+    '12': ZypperUninstall,
     '114': ZypperUninstall,
     '10': ZypperUninstall,
     'YUM': RedHatUninstall,

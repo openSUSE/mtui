@@ -17,7 +17,7 @@ Installation
 openSUSE and SUSE
 =================
 
-Packages are available at `IBS QA:Maintenance
+Packages are available at `IBS QA:Maintenance project
 <https://build.suse.de/project/show/QA:Maintenance>`_.
 
 Add the appropriate repository to your system

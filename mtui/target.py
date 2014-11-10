@@ -517,7 +517,7 @@ class Target(TargetI):
             repclean.close()
 
         if get_release([self.system]) == '12':
-            if not testreport:
+            if name == "TESTING" and not testreport:
                 raise RuntimeError("Target.set_repo can't be used without testreport on sle12 systems")
 
             cmd = "{repclean} -z"
@@ -527,7 +527,7 @@ class Target(TargetI):
 
             cmd = cmd.format(
                 repclean = command,
-                incident_id = testreport.rrid.maintenance_id
+                incident_id = testreport.rrid.maintenance_id if testreport else None
             )
 
         else:

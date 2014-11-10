@@ -2,6 +2,77 @@
 ChangeLog
 #########
 
+3.0.0b2
+#######
+
+Bugfixes
+========
+
+* Fix SLE12 updater to code so it works with multiple addon/module
+  repositories
+
+3.0.0b1
+#######
+
+Bugfixes
+========
+
+* bnc#885898 - mtui consumes a lot resources on kernel updates
+
+* bnc#888204 - Traceback returned when incorrect password provided when
+    using interface_version=3.0
+
+* bnc#889566 - command source_verify: make nicer output for multiple
+    spec files. Makes the output easier to read and the command itself
+    reliable in case there is multiple spec files and some of them have
+    no patches.
+
+* Install and uninstall commands works without testreport loaded.
+    However it will still break if you are connected to hosts that
+    require different installation commands.
+
+New features
+============
+
+* SLE 12 critical features support. Such as load_template,
+  list_packages, source_extract, source_verify, install, uninstall,
+    update, downgrade and export.
+
+* New config option mtui.use_keyring so using keyring can be disabled
+    for mtui if the keyring module is present on the system.
+
+* ${HOME}/.ssh/config is respected when connecting to hosts.
+    Thanks to Roman Neuhauser for this feature.
+
+* Colors can now be disabled by exporting COLOR=never into environment.
+
+* command list_packages can be given -p argument to specify package to
+    list.
+
+* A special case to attributes handling was added so ``sle`` is
+    recognized as either ``sles`` or ``sled`` so user can ask for ``sle
+    12`` and will be connected to SLE 12 machines without OpenSUSE 12.
+
+Internal
+========
+
+* Lots of improvements to be more comaptible to python 3 thanks to
+    Roman Neuhauser.
+
+* Lots of other refactorings.
+
+Backward incompatible
+=====================
+
+* command list_testsuite_commands was removed.
+
+* command list_packages changed arguments.
+    ``list_packages all`` is now just ``list_packages``.
+    ``list_packages`` is now ``list_packages -w``
+
+* command source_install was removed since it was broken since Nov 2012
+  anyway.
+
 2.0.0
 #####
 

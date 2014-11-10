@@ -3,18 +3,37 @@ from abc import abstractmethod
 from mtui.five import with_metaclass
 
 class UserMessage(with_metaclass(ABCMeta, object)):
+    """
+    Message to be displayed to the user
+    """
     def __str__(self):
         return self.message
-
-    @abstractmethod
-    def __str__(self):
-        pass
 
     def __eq__(self, x):
         return str(self) == str(x)
 
+class ErrorMessage(UserMessage, RuntimeError):
+    """
+    Program error message to be displayed to the user
+    """
+
 class UserError(UserMessage, RuntimeError):
-    pass
+    """
+    Error, caused by improper usage of the program,
+    to be displayed to the user
+    """
+
+class SystemCommandError(UserMessage):
+    def __init__(self, rc, command):
+        self.rc = rc
+        self.command = command
+
+    @property
+    def message(self):
+        return self._message + " rc = {0} Command: {1!r}".format(
+            self.rc,
+            self.command
+        )
 
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
@@ -98,3 +117,16 @@ class CompareScriptCrashed(CompareScriptError):
             self.argv,
             self.stderr,
         )
+
+class FailedToDownloadSrcRPMError(ErrorMessage, SystemCommandError):
+    _message = "Failed to download source rpm."
+
+class FailedToExtractSrcRPM(ErrorMessage, SystemCommandError):
+    _message = "Failed to extract source rpm."
+
+class SrcRPMExtractedMessage(UserMessage):
+    def __init__(self, dir):
+        self.dir = dir
+
+    def __str__(self):
+        return 'Extracted source rpm to {0}'.format(self.dir)

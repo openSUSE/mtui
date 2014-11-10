@@ -685,32 +685,11 @@ class CommandPrompt(cmd.Cmd):
                 ))
 
     @requires_update
-    def do_source_extract(self, args):
+    def do_source_extract(self, _):
         """
         Extracts current source RPMs to a local temporary directory.
-        If no filename is given, the whole package content is extracted.
-
-        source_extract [filename]
-        Keyword arguments:
-        filename -- filename to extract
         """
-
-        with chdir(self.metadata.local_wd()):
-            rc = os.system('wget -q -r -nd -l2 --no-parent -A "*src.rpm" {0}/'.format(self.metadata.repository))
-
-            if rc:
-                self.log.error('failed to fetch src rpm')
-                return
-
-            rc = os.system('for i in *src.rpm; do name=$(rpm -qp --queryformat "%{{NAME}}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories {0}; cd ..; done'.format(args.strip()))
-
-            if rc:
-                self.log.error('failed to extract src rpm')
-                return
-
-        self.log.info('src rpm was extracted to {0}'.format(
-            self.metadata.local_wd()
-        ))
+        self.metadata.extract_source_rpm()
 
     @requires_update
     def do_source_diff(self, args):
@@ -1080,7 +1059,8 @@ class CommandPrompt(cmd.Cmd):
             self.println('\n'.join(updater(
                 self.targets,
                 self.metadata.patches,
-                self.metadata.get_package_list()).commands
+                self.metadata.get_package_list(),
+                self.metadata).commands
             ))
             del updater
 
@@ -2153,7 +2133,11 @@ class CommandPrompt(cmd.Cmd):
                 targets[target].add_history(['downgrade', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
 
             try:
-                downgrader(targets, self.metadata.get_package_list(), self.metadata.patches).run()
+                downgrader(
+                    targets,
+                    self.metadata.get_package_list(),
+                    self.metadata.patches
+                ).run()
             except Exception:
                 out.critical('failed to downgrade target systems')
                 return
@@ -2211,7 +2195,14 @@ class CommandPrompt(cmd.Cmd):
             out.info('preparing')
 
             try:
-                preparer(targets, self.metadata.get_package_list(), force=force, installed_only=installed, testing=testing).run()
+                preparer(
+                    targets,
+                    self.metadata.get_package_list(),
+                    self.metadata,
+                    force = force,
+                    installed_only = installed,
+                    testing = testing
+                ).run()
             except Exception:
                 out.critical('failed to prepare target systems')
                 return False
@@ -2309,11 +2300,11 @@ class CommandPrompt(cmd.Cmd):
             out.debug("chosen updater: %s" % repr(updater))
 
             try:
-                updater(targets, self.metadata.patches, self.metadata.get_package_list()).run()
+                updater(targets, self.metadata.patches, self.metadata.get_package_list(), self.metadata).run()
             except Exception:
                 out.critical('failed to update target systems')
                 Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
-                return
+                raise
             except KeyboardInterrupt:
                 out.info('update process canceled')
                 return
