@@ -23,6 +23,15 @@ class UserError(UserMessage, RuntimeError):
     to be displayed to the user
     """
 
+class HostIsNotConnectedError(UserError, ValueError):
+    """
+    Thrown when user requests an operation to be performed on a host
+    that is not connected.
+    """
+    def __init__(self, host):
+        self.host = host
+        self.message = "Host {0!r} is not connected".format(host)
+
 class SystemCommandError(UserMessage):
     def __init__(self, rc, command):
         self.rc = rc
