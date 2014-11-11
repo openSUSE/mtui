@@ -14,6 +14,7 @@ from mtui.utils import chdir
 from mtui.utils import requires_update
 from mtui.utils import ass_is
 from mtui.utils import ass_isL
+from mtui.utils import DictWithInjections
 from mtui.xdg import save_cache_path
 from mtui.messages import TestReportNotLoadedError
 
@@ -121,3 +122,16 @@ class TestAssIs:
             (Foo(), TestAssIs),
         ]:
             yield raises(AssertionError)(ass_is), x, y
+
+def test_dict_with_injections():
+    class Foo(Exception):
+        pass
+
+    d = DictWithInjections({1: 2, 3: 4}, key_error = Foo)
+    eq_(d[1], 2)
+    try:
+        d[4]
+    except Foo:
+        pass
+    else:
+        ok_(False, "Expected Foo to be raised")

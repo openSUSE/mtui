@@ -297,3 +297,20 @@ def get_release(systems):
             return release
 
     raise UnknownSystemError(systems)
+
+class DictWithInjections(dict):
+    def __init__(self, *args, **kw):
+        try:
+            self.key_error = kw['key_error']
+        except KeyError:
+            self.key_error = KeyError
+        else:
+            del kw['key_error']
+
+        super(DictWithInjections, self).__init__(*args, **kw)
+
+    def __getitem__(self, x):
+        try:
+            return super(DictWithInjections, self).__getitem__(x)
+        except KeyError:
+            raise self.key_error(x)

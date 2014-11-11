@@ -14,6 +14,13 @@ from mtui.target import *
 from mtui.rpmver import *
 from mtui.utils import *
 
+from mtui.messages import MissingPreparerError
+from mtui.messages import MissingUpdaterError
+from mtui.messages import MissingInstallerError
+from mtui.messages import MissingUninstallerError
+from mtui.messages import MissingDowngraderError
+
+
 class UpdateError(Exception):
 
     def __init__(self, reason, host=None):
@@ -241,7 +248,7 @@ class RedHatUpdate(Update):
             'yum -y update %s' % ' '.join(packages),
         ]
 
-Updater = {
+Updater = DictWithInjections({
     '11': ZypperUpToSLE11Update,
     '12': ZypperSLE12Update,
     '114': openSuseUpdate,
@@ -249,7 +256,7 @@ Updater = {
     '9': OnlineUpdate,
     'OES': RugUpdate,
     'YUM': RedHatUpdate,
-}
+}, key_error = MissingUpdaterError)
 
 
 class Prepare(object):
@@ -401,13 +408,16 @@ class RedHatPrepare(Prepare):
 
         self.commands = commands
 
-Preparer = {
+
+
+
+Preparer = DictWithInjections({
     '11': ZypperPrepare,
     '12': ZypperPrepare,
     '114': ZypperPrepare,
     '10': OldZypperPrepare,
     'YUM': RedHatPrepare,
-}
+}, key_error = MissingPreparerError)
 
 
 class Downgrade(object):
@@ -580,13 +590,13 @@ class RedHatDowngrade(Downgrade):
         super(RedHatDowngrade, self).__init__(*a, **kw)
         self.commands = ['yum -y downgrade %s' % ' '.join(self.packages)]
 
-Downgrader = {
+Downgrader = DictWithInjections({
     '11': ZypperDowngrade,
     '12': ZypperDowngrade,
     '114': ZypperDowngrade,
     '10': OldZypperDowngrade,
     'YUM': RedHatDowngrade,
-}
+}, key_error = MissingDowngraderError)
 
 class Install(object):
 
@@ -683,13 +693,13 @@ class RedHatInstall(Install):
         self.commands = commands
 
 
-Installer = {
+Installer = DictWithInjections({
     '11': ZypperInstall,
     '12': ZypperInstall,
     '114': ZypperInstall,
     '10': ZypperInstall,
     'YUM': RedHatInstall,
-}
+}, key_error = MissingInstallerError)
 
 
 class ZypperUninstall(Install):
@@ -715,10 +725,10 @@ class RedHatUninstall(Install):
         self.commands = commands
 
 
-Uninstaller = {
+Uninstaller = DictWithInjections({
     '11': ZypperUninstall,
     '12': ZypperUninstall,
     '114': ZypperUninstall,
     '10': ZypperUninstall,
     'YUM': RedHatUninstall,
-}
+}, key_error = MissingUninstallerError)

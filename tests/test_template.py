@@ -25,6 +25,7 @@ from mtui.updater import UnknownSystemError
 from mtui.target import Target
 from mtui.types.md5 import MD5Hash
 from mtui.types.obs import RequestReviewID
+from mtui import messages
 from .utils import LogFake
 from .utils import StringIO
 from .utils import touch
@@ -585,3 +586,21 @@ def check_release(report, systems, result):
 def test_get_release_exc():
     for r in testreports():
         yield raises(UnknownSystemError)(check_release), r, {'foo': ''}, unused
+
+def test_get_doers():
+    t = TRF(OBSTestReport)
+    t.get_release = lambda: unused
+
+    cases = [
+        (t.get_preparer, messages.MissingPreparerError),
+        (t.get_updater, messages.MissingUpdaterError),
+        (t.get_installer, messages.MissingInstallerError),
+        (t.get_uninstaller, messages.MissingUninstallerError),
+        (t.get_downgrader, messages.MissingDowngraderError),
+    ]
+
+    for fn, exc in cases:
+        yield raises(exc)(fn)
+
+    for fn, _ in cases:
+        yield raises(messages.MissingDoerError)(fn)
