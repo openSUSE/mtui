@@ -126,35 +126,16 @@ class HostsUnlock(Command):
     @staticmethod
     def completer(hosts):
         def wrap(text, line, begidx, endidx):
-            # TODO: there is argcomplete package as bach completion for
-            # argparse that may simplyfi this. But declares support for
-            # 2.7 and 3.3 only
-            synonyms = [("-h", "--help"), ("-a",),  ("-f", "--force")]
-            choices = set(flatten(synonyms) + hosts.names())
-
-            ls = line.split(" ")
-            ls.pop(0)
-
-            for l in ls:
-                if len(l) >= 2 and l[0] == "-" and l[1] != "-":
-                    if len(l) > 2:
-                        for c in list(l[1:]):
-                            ls.append("-" + c)
-
-                        continue
-
-                for s in synonyms:
-                    if l in s:
-                        choices = choices - set(s)
-
-            endchoices = []
-            for c in choices:
-                if text == c:
-                    return [c]
-                if text == c[0:len(text)]:
-                    endchoices.append(c)
-
-            return endchoices
+            return complete_choices(
+                [
+                    ("-h", "--help"),
+                    ("-a",),
+                    ("-f", "--force")
+                ],
+                line,
+                text,
+                hosts.names()
+            )
         return wrap
 
 class ListPackages(Command):

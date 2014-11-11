@@ -313,6 +313,10 @@ def complete_choices(synonyms, line, text, hostnames = None):
     :param line: line from L{cmd.Cmd} completion callback
     :param text: text from L{cmd.Cmd} completion callback
     """
+    # TODO: there is argcomplete package as bash completion for
+    # argparse that may simplify this, but it declares support for
+    # 2.7 and 3.3 only
+
     if not hostnames:
         hostnames = []
 
