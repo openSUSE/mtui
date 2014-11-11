@@ -23,7 +23,9 @@ class UserError(UserMessage, RuntimeError):
     to be displayed to the user
     """
 
-class SystemCommandError(UserMessage):
+class SystemCommandError(ErrorMessage):
+    _message = "Command failed."
+
     def __init__(self, rc, command):
         self.rc = rc
         self.command = command
@@ -118,10 +120,10 @@ class CompareScriptCrashed(CompareScriptError):
             self.stderr,
         )
 
-class FailedToDownloadSrcRPMError(ErrorMessage, SystemCommandError):
+class FailedToDownloadSrcRPMError(SystemCommandError):
     _message = "Failed to download source rpm."
 
-class FailedToExtractSrcRPM(ErrorMessage, SystemCommandError):
+class FailedToExtractSrcRPM(SystemCommandError):
     _message = "Failed to extract source rpm."
 
 class SrcRPMExtractedMessage(UserMessage):
