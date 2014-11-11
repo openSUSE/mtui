@@ -130,3 +130,10 @@ class SrcRPMExtractedMessage(UserMessage):
 
     def __str__(self):
         return 'Extracted source rpm to {0}'.format(self.dir)
+
+class PackageRevisionHasntChangedWarning(UserMessage):
+    _msg = "Revision of package {0!r} hasn't changed, " \
+         + "it's most likely already updated. skipping."
+
+    def __init__(self, package):
+        self.message =  self._msg.format(package)
