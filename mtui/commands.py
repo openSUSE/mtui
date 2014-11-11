@@ -4,6 +4,10 @@ from abc import ABCMeta, abstractmethod
 from gettext import gettext as _
 import traceback
 import os
+import errno
+
+from subprocess import Popen
+from time import sleep
 
 from .argparse import ArgumentParser
 from mtui.target import HostsGroupException, TargetLockedError
@@ -231,6 +235,76 @@ class ListPackages(Command):
             version,
             state
         ))
+
+class ReportBug(Command):
+    """
+    Open mtui bugzilla with fields common for all mtui bugs prefilled
+    """
+    command = "report-bug"
+    stable = '3.0b2'
+
+    def __init__(self, *a, **kw):
+        try:
+            self.popen = kw['popen']
+        except KeyError:
+            pass
+        else:
+            del kw['popen']
+
+        super(ReportBug, self).__init__(*a, **kw)
+
+    def run(self):
+        url = self.config.report_bug_url
+
+        if self.args.print_url:
+            self.println(url)
+            return
+
+        args = ["xdg-open", url]
+        try:
+            p = self.popen(args)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                raise messages.SystemCommandNotFoundError(args[0])
+            else:
+                raise
+
+        # xdg-open starts the appropriate command and waits for it
+        # to exit.
+        # Assuming to propagate it's return code to the caller.
+        # However we don't want to block the mtui prompt.
+
+        sleep(1)
+        # So we wait a second to let the xdg-open do it's forks and
+        # execs
+        rc = p.poll()
+        if rc is None:
+            # and if by now it did not return, we'll assume it done it's
+            # job successfully and kill it, leaving it's child still
+            # running reparented to init.
+            p.kill()
+        elif rc != 0:
+            # otherwise raise error if ended with non-zero
+            raise messages.SystemCommandError(rc, args)
+        else:
+            # otherwise log a debug message as this state is expected
+            # not to happen and we might be interested in knowing about
+            # when it does.
+            self.logger.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            "-p", "--print-url",
+            help = 'just print url to the stdout',
+            action = 'store_true',
+        )
+
+        return parser
+
+    @staticmethod
+    def completer(hosts):
+        return []
 
 class Whoami(Command):
     """

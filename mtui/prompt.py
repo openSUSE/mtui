@@ -129,9 +129,12 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
         self._add_subcommand(commands.ListPackages)
+        self._add_subcommand(commands.ReportBug)
         self.sys = sys_ or sys
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
+        self.identchars += '-'
+        # support commands with dashes in them
 
     def println(self, msg = '', eol = '\n'):
         return self.stdout.write(msg + eol)

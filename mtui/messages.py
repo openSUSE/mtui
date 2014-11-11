@@ -23,6 +23,13 @@ class UserError(UserMessage, RuntimeError):
     to be displayed to the user
     """
 
+class SystemCommandNotFoundError(ErrorMessage):
+    _msg = "Command {0!r} not found"
+
+    def __init__(self, command):
+        self.command = command
+        self.message = self._msg.format(command)
+
 class SystemCommandError(ErrorMessage):
     _message = "Command failed."
 
@@ -36,6 +43,9 @@ class SystemCommandError(ErrorMessage):
             self.rc,
             self.command
         )
+
+class UnexpectedlyFastCleanExitFromXdgOpen(UserMessage):
+    message = "xdg-open finished successfully but suspiciously too fast"
 
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
