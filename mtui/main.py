@@ -11,6 +11,7 @@ import shutil
 from traceback import format_exc
 import warnings
 from argparse import FileType
+from subprocess import CalledProcessError
 
 from .argparse import ArgumentParser
 from .argparse import ArgsParseFailure
@@ -19,6 +20,7 @@ from mtui.config import config
 from mtui.prompt import CommandPrompt
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
+from mtui.messages import SvnCheckoutInterruptedError
 from mtui import __version__
 
 def get_parser(sys):
@@ -130,7 +132,11 @@ def run_mtui(
 
     prompt = Prompt(config, log)
     if update:
-        prompt.load_update(update, not bool(args.sut))
+        try:
+            prompt.load_update(update, not bool(args.sut))
+        except (SvnCheckoutInterruptedError, CalledProcessError) as e:
+            log.error(e)
+            return 1
 
     if args.sut:
         for x in args.sut:
