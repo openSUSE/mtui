@@ -12,6 +12,7 @@ from time import sleep
 from .argparse import ArgumentParser
 from mtui.target import HostsGroupException, TargetLockedError
 from mtui.utils import flatten
+from mtui.utils import complete_choices
 from mtui.utils import blue, yellow, green, red
 from mtui import messages
 from mtui.utils import requires_update
@@ -303,8 +304,11 @@ class ReportBug(Command):
         return parser
 
     @staticmethod
-    def completer(hosts):
-        return []
+    def completer(_):
+        def wrap(text, line, begidx, endidx):
+            return complete_choices([("-p", "--print-url"),], line, text)
+
+        return wrap
 
 class Whoami(Command):
     """

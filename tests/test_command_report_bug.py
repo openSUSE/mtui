@@ -110,3 +110,14 @@ def test_xdg_open_returned_0():
 
     cmd.run()
     eq_(cmd.logger.debugs, [UnexpectedlyFastCleanExitFromXdgOpen()])
+
+def test_completer():
+    def test(in_, out):
+        eq_(set(ReportBug.completer([])(*in_)), set(out))
+
+    xs = [
+        (['--', 'report-bug --', 11, 13], ["--print-url"]),
+        (['-', 'report-bug -', 11, 12], ["-p", "--print-url"])
+    ]
+    for i, o in xs:
+        yield test, i, o
