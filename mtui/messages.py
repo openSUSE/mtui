@@ -130,3 +130,14 @@ class SrcRPMExtractedMessage(UserMessage):
 
     def __str__(self):
         return 'Extracted source rpm to {0}'.format(self.dir)
+
+class LocationChangedMessage(UserMessage):
+    def __init__(self, old, new):
+        self.old = old
+        self.new = new
+
+    @property
+    def message(self):
+        return 'changed location from {0!r} to {1!r}'.format(
+            self.old, self.new
+        )
