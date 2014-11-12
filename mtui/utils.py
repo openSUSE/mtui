@@ -314,3 +314,51 @@ class DictWithInjections(dict):
             return super(DictWithInjections, self).__getitem__(x)
         except KeyError:
             raise self.key_error(x)
+
+def complete_choices(synonyms, line, text, hostnames = None):
+    """
+    :returns: [str] completion choices appropriate for given line and
+        text
+
+    :type synonyms: [[str]]
+    :param synonyms: each element of the list is a list of
+        synonymous arguments. Example: [("-a", "--all")]
+
+    :type hostnames: [str] or None
+    :param hostnames: hostnames to add to possible completions
+
+    :param line: line from L{cmd.Cmd} completion callback
+    :param text: text from L{cmd.Cmd} completion callback
+    """
+    # TODO: there is argcomplete package as bash completion for
+    # argparse that may simplify this, but it declares support for
+    # 2.7 and 3.3 only
+
+    if not hostnames:
+        hostnames = []
+
+    choices = set(flatten(synonyms) + hostnames)
+
+    ls = line.split(" ")
+    ls.pop(0)
+
+    for l in ls:
+        if len(l) >= 2 and l[0] == "-" and l[1] != "-":
+            if len(l) > 2:
+                for c in list(l[1:]):
+                    ls.append("-" + c)
+
+                continue
+
+        for s in synonyms:
+            if l in s:
+                choices = choices - set(s)
+
+    endchoices = []
+    for c in choices:
+        if text == c:
+            return [c]
+        if text == c[0:len(text)]:
+            endchoices.append(c)
+
+    return endchoices

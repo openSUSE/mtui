@@ -39,7 +39,16 @@ class HostIsNotConnectedError(UserError, ValueError):
         self.host = host
         self.message = "Host {0!r} is not connected".format(host)
 
-class SystemCommandError(UserMessage):
+class SystemCommandNotFoundError(ErrorMessage):
+    _msg = "Command {0!r} not found"
+
+    def __init__(self, command):
+        self.command = command
+        self.message = self._msg.format(command)
+
+class SystemCommandError(ErrorMessage):
+    _message = "Command failed."
+
     def __init__(self, rc, command):
         self.rc = rc
         self.command = command
@@ -50,6 +59,9 @@ class SystemCommandError(UserMessage):
             self.rc,
             self.command
         )
+
+class UnexpectedlyFastCleanExitFromXdgOpen(UserMessage):
+    message = "xdg-open finished successfully but suspiciously too fast"
 
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
@@ -134,10 +146,10 @@ class CompareScriptCrashed(CompareScriptError):
             self.stderr,
         )
 
-class FailedToDownloadSrcRPMError(ErrorMessage, SystemCommandError):
+class FailedToDownloadSrcRPMError(SystemCommandError):
     _message = "Failed to download source rpm."
 
-class FailedToExtractSrcRPM(ErrorMessage, SystemCommandError):
+class FailedToExtractSrcRPM(SystemCommandError):
     _message = "Failed to extract source rpm."
 
 class SrcRPMExtractedMessage(UserMessage):

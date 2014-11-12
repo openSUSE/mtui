@@ -154,6 +154,10 @@ class Config(object):
             ('use_keyring', ('mtui', 'use_keyring'),
                 False, bool, self.config.getboolean),
 
+            ('report_bug_url', ('mtui', 'report_bug_url'),
+                'https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI'
+            ),
+
             ('location', ('mtui', 'location'),
              'default'),
             # process location last as that needs to access

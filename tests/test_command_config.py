@@ -88,6 +88,7 @@ def test_config_show():
             , ("refhosts_https_expiration"  , "43200")
             , ("refhosts_path"              , "'foo-refhosts'")
             , ("use_keyring"                , 'False')
+            , ('report_bug_url'             , "'https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI'")
             , ("location"                   , "'default'")
         ]]):
             eq_(actual,expected)

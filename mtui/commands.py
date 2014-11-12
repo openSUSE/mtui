@@ -4,10 +4,15 @@ from abc import ABCMeta, abstractmethod
 from gettext import gettext as _
 import traceback
 import os
+import errno
+
+from subprocess import Popen
+from time import sleep
 
 from .argparse import ArgumentParser
 from mtui.target import HostsGroupException, TargetLockedError
 from mtui.utils import flatten
+from mtui.utils import complete_choices
 from mtui.utils import blue, yellow, green, red
 from mtui import messages
 from mtui.utils import requires_update
@@ -123,35 +128,16 @@ class HostsUnlock(Command):
     @staticmethod
     def completer(hosts):
         def wrap(text, line, begidx, endidx):
-            # TODO: there is argcomplete package as bach completion for
-            # argparse that may simplyfi this. But declares support for
-            # 2.7 and 3.3 only
-            synonyms = [("-h", "--help"), ("-a",),  ("-f", "--force")]
-            choices = set(flatten(synonyms) + hosts.names())
-
-            ls = line.split(" ")
-            ls.pop(0)
-
-            for l in ls:
-                if len(l) >= 2 and l[0] == "-" and l[1] != "-":
-                    if len(l) > 2:
-                        for c in list(l[1:]):
-                            ls.append("-" + c)
-
-                        continue
-
-                for s in synonyms:
-                    if l in s:
-                        choices = choices - set(s)
-
-            endchoices = []
-            for c in choices:
-                if text == c:
-                    return [c]
-                if text == c[0:len(text)]:
-                    endchoices.append(c)
-
-            return endchoices
+            return complete_choices(
+                [
+                    ("-h", "--help"),
+                    ("-a",),
+                    ("-f", "--force")
+                ],
+                line,
+                text,
+                hosts.names()
+            )
         return wrap
 
 class ListPackages(Command):
@@ -241,6 +227,79 @@ class ListPackages(Command):
             version,
             state
         ))
+
+class ReportBug(Command):
+    """
+    Open mtui bugzilla with fields common for all mtui bugs prefilled
+    """
+    command = "report-bug"
+    stable = '3.0b2'
+
+    def __init__(self, *a, **kw):
+        try:
+            self.popen = kw['popen']
+        except KeyError:
+            pass
+        else:
+            del kw['popen']
+
+        super(ReportBug, self).__init__(*a, **kw)
+
+    def run(self):
+        url = self.config.report_bug_url
+
+        if self.args.print_url:
+            self.println(url)
+            return
+
+        args = ["xdg-open", url]
+        try:
+            p = self.popen(args)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                raise messages.SystemCommandNotFoundError(args[0])
+            else:
+                raise
+
+        # xdg-open starts the appropriate command and waits for it
+        # to exit.
+        # Assuming to propagate it's return code to the caller.
+        # However we don't want to block the mtui prompt.
+
+        sleep(1)
+        # So we wait a second to let the xdg-open do it's forks and
+        # execs
+        rc = p.poll()
+        if rc is None:
+            # and if by now it did not return, we'll assume it done it's
+            # job successfully and kill it, leaving it's child still
+            # running reparented to init.
+            p.kill()
+        elif rc != 0:
+            # otherwise raise error if ended with non-zero
+            raise messages.SystemCommandError(rc, args)
+        else:
+            # otherwise log a debug message as this state is expected
+            # not to happen and we might be interested in knowing about
+            # when it does.
+            self.logger.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            "-p", "--print-url",
+            help = 'just print url to the stdout',
+            action = 'store_true',
+        )
+
+        return parser
+
+    @staticmethod
+    def completer(_):
+        def wrap(text, line, begidx, endidx):
+            return complete_choices([("-p", "--print-url"),], line, text)
+
+        return wrap
 
 class Whoami(Command):
     """
