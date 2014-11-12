@@ -63,6 +63,13 @@ class SystemCommandError(ErrorMessage):
 class UnexpectedlyFastCleanExitFromXdgOpen(UserMessage):
     message = "xdg-open finished successfully but suspiciously too fast"
 
+class SvnCheckoutInterruptedError(ErrorMessage):
+    _msg = "Svn checkout of {0!r} interrupted"
+
+    def __init__(self, uri):
+        self.uri = uri
+        self.message = self._msg.format(uri)
+
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
         return 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'

@@ -29,6 +29,7 @@ from mtui.messages import FailedToDownloadSrcRPMError
 from mtui.messages import FailedToExtractSrcRPM
 from mtui.messages import SrcRPMExtractedMessage
 from mtui import messages
+from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.utils import ass_is, ass_isL
 
@@ -64,7 +65,10 @@ def testreport_svn_checkout(config, log, uri):
 
     with chdir(config.template_dir):
         # FIXME: use python module to perform svn checkout
-        os.system('svn co {0}'.format(uri))
+        try:
+            subprocess.check_call(['svn', 'co', uri])
+        except KeyboardInterrupt:
+            raise SvnCheckoutInterruptedError(uri)
 
 class Scripts(object):
     def __init__(self, scripts):
