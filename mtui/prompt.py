@@ -26,6 +26,7 @@ from os.path import splitext
 from datetime import datetime
 from traceback import print_exc
 
+from mtui import messages
 from mtui.rpmver import *
 from mtui.target import *
 from mtui.export import *
@@ -782,7 +783,7 @@ class CommandPrompt(cmd.Cmd):
                     continue
 
                 if installed[name]['commit'] == updated[name]['commit']:
-                    out.warning('revision of package %s hasn\'t changed, it\'s most likely aready updated. skipping.' % name)
+                    out.warning(messages.PackageRevisionHasntChangedWarning(name))
                     continue
 
                 diff = os.path.join(destination, '%s-%s.diff' % (name, args))

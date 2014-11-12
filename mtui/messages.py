@@ -141,3 +141,10 @@ class LocationChangedMessage(UserMessage):
         return 'changed location from {0!r} to {1!r}'.format(
             self.old, self.new
         )
+
+class PackageRevisionHasntChangedWarning(UserMessage):
+    _msg = "Revision of package {0!r} hasn't changed, " \
+         + "it's most likely already updated. skipping."
+
+    def __init__(self, package):
+        self.message =  self._msg.format(package)
