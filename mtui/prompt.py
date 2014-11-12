@@ -1805,10 +1805,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_set_location, args)
             return
 
-        self.log.info('changed location from {0!r}" to {0!r}'.format(
-            self.config.location,
-            args
-        ))
+        self.log.info(messages.LocationChangedMessage(self.config.location, args))
         self.config.location = args
 
     def complete_set_location(self, text, line, begidx, endidx):
