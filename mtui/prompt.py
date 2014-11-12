@@ -893,54 +893,6 @@ class CommandPrompt(cmd.Cmd):
                         result
                     ))
 
-    @requires_update
-    def do_list_packages(self, args):
-        """
-        Lists current installed package versions from the targets if a
-        target is specified. If none is specified, all required package
-        versions which should be installed after the update are listed.
-        If version 0 is shown for a package, the package is not installed.
-
-        list_packages [hostname]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        if args:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
-
-            for host in sorted(targets.values()):
-                host.query_versions()
-                self.println('packages on {} ({}):'.format(
-                    host.hostname,
-                    host.system
-                ))
-                for package in host.packages:
-                    current = host.packages[package].current
-                    required = self.metadata.packages[package]
-                    if current == '0':
-                        state = blue('not installed')
-                    elif RPMVersion(current) > RPMVersion(required):
-                        state = red('too recent')
-                    elif RPMVersion(current) < RPMVersion(required):
-                        state = yellow('update needed')
-                    else:
-                        state = green('updated')
-
-                    self.println('{0:30}: {1:15} {2}'.format(
-                        package,
-                        host.packages[package].current,
-                        state
-                    ))
-
-                self.println()
-        else:
-            for (package, version) in self.metadata.packages.items():
-                self.println('{0:30}: {1}'.format(package, version))
-
     def complete_list_packages(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 

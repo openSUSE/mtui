@@ -29,6 +29,7 @@ from mtui import messages
 from mtui.utils import unwords
 from mtui.utils import ass_is, ass_isL
 from mtui.utils import get_release
+from mtui.messages import HostIsNotConnectedError
 
 out = logging.getLogger('mtui')
 
@@ -78,8 +79,7 @@ class HostsGroup(object):
         available = [x.host for x in self.hosts]
         for x in hosts:
             if not x in available:
-                m = "Host {0} is not connected".format(repr(x))
-                raise ValueError(m)
+                raise HostIsNotConnectedError(x)
 
         return HostsGroup([x for x in self.hosts if x.host in hosts])
 
