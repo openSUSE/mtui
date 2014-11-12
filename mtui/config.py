@@ -13,6 +13,8 @@ except ImportError:
 
 from mtui import __version__
 from traceback import format_exc
+from mtui.refhost import RefhostsFactory
+from mtui.messages import InvalidLocationError
 
 try:
     import keyring
@@ -47,12 +49,27 @@ class Config(object):
         except configparser.Error as e:
             out.error(e)
 
-    def __init__(self):
+    def __init__(self, refhosts = RefhostsFactory):
+        self.refhosts = refhosts
+        self._location = 'default'
         self.read()
 
         self._define_config_options()
         self._parse_config()
         self._handle_testopia_cred()
+
+    @property
+    def location(self):
+        return self._location
+
+    @location.setter
+    def location(self, x):
+        xs = self.refhosts(self, out).get_locations()
+        if x not in xs:
+            out.error(InvalidLocationError(x, xs))
+            return
+
+        self._location = x
 
     def _parse_config(self):
         for datum in self.data:
@@ -86,9 +103,6 @@ class Config(object):
 
             ('session_user', ('mtui', 'user'),
              getpass.getuser),
-
-            ('location', ('mtui', 'location'),
-             'default'),
 
             ('interface_version', ('mtui', 'interface_version'),
              __version__),
@@ -139,6 +153,11 @@ class Config(object):
 
             ('use_keyring', ('mtui', 'use_keyring'),
                 False, bool, self.config.getboolean),
+
+            ('location', ('mtui', 'location'),
+             'default'),
+            # process location last as that needs to access
+            # RefhostsFactory which need access to parts of config.
         ]
 
         add_normalizer = lambda x: x if len(x) > 3 \

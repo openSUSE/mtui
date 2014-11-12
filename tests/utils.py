@@ -22,6 +22,7 @@ from time import sleep
 
 from mtui.template import OBSTestReport
 from mtui.template import SwampTestReport
+from mtui.refhost import Refhosts
 
 from mtui.target import RunCommand
 from mtui.target import FileUpload
@@ -68,6 +69,20 @@ class LogFake:
 class LogFakeStr(LogFake):
     _conv = lambda _, x: str(x)
 
+class RefhostsFake(Refhosts):
+    def _parse_refhosts(self, hostmap):
+        self.t_hostmap = hostmap
+
+    def get_locations(self):
+        return [
+            'default',
+            'foobar',
+            'foolocation',
+            'quux',
+            'prague',
+            'nuremberg'
+        ]
+
 class ConfigFake(Config):
     """
     Make sure the interface of the fake is the same as the real one by
@@ -77,10 +92,10 @@ class ConfigFake(Config):
 
     To set different desired values in testcase, just assign them.
     """
-    def __init__(self, overrides=None):
-        super(ConfigFake, self).__init__()
+    def __init__(self, overrides = None, refhosts = RefhostsFake):
+        super(ConfigFake, self).__init__(refhosts = refhosts)
         if overrides:
-            for k,v in overrides.items():
+            for k, v in overrides.items():
                 self.set_option(k, v)
 
     def read(self):

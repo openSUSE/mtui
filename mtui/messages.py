@@ -171,3 +171,12 @@ class MissingUninstallerError(MissingDoerError):
 
 class MissingDowngraderError(MissingDoerError):
     name = "Downgrader"
+
+class InvalidLocationError(UserError):
+    _msg = "Invalid location {0!r}. Available locations: {1}"
+
+    def __init__(self, requested, available):
+        self.requested = requested
+        self.available = available
+
+        self.message = self._msg.format(requested, ", ".join(available))

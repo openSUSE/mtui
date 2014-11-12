@@ -4,12 +4,13 @@ from mtui.commands import Whoami
 from mtui.config import Config
 from .utils import StringIO
 from .utils import SysFake
+from .utils import RefhostsFake
 
 def test_whoami():
     class PromptFake:
         metadata = None
 
-    cg = Config()
+    cg = Config(refhosts = RefhostsFake)
     cg.session_user = 'foo'
     c = Whoami([], [], cg, SysFake(), None, PromptFake())
     c.get_pid = lambda: 666
