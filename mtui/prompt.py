@@ -1805,8 +1805,9 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_set_location, args)
             return
 
-        self.log.info(messages.LocationChangedMessage(self.config.location, args))
+        old = self.config.location
         self.config.location = args
+        self.log.info(messages.LocationChangedMessage(old, args))
 
     def complete_set_location(self, text, line, begidx, endidx):
         refhost = self._refhosts()
