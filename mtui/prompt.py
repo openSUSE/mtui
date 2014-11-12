@@ -1065,36 +1065,6 @@ class CommandPrompt(cmd.Cmd):
             ))
             del updater
 
-    @requires_update
-    def do_list_downgrade_commands(self, args):
-        """
-        List all commands which are invoked when downgrading packages on the
-        target hosts.
-
-        list_downgrade_commands
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            self.parse_error(self.do_list_update_commands, args)
-        else:
-
-            release = self.metadata.get_release()
-
-            try:
-                downgrader = Downgrader[release]
-            except KeyError:
-                out.critical('no downgrader available for %s' % release)
-                return
-
-            self.println('\n'.join(downgrader(
-                self.targets,
-                self.metadata.get_package_list(),
-                self.metadata.patches).commands
-            ))
-            del downgrader
-
     def do_testopia_list(self, args):
         """
         List all Testopia package testcases for the current product.

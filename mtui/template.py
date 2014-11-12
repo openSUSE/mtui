@@ -28,6 +28,7 @@ from mtui.messages import QadbReportCommentLengthWarning
 from mtui.messages import FailedToDownloadSrcRPMError
 from mtui.messages import FailedToExtractSrcRPM
 from mtui.messages import SrcRPMExtractedMessage
+from mtui import messages
 from mtui import updater
 from mtui.utils import ass_is, ass_isL
 
@@ -311,20 +312,23 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def get_release(self):
         return updater.get_release(list(self.systems.values()))
 
+    def _get_doer(self, registry):
+        return registry[self.get_release()]
+
     def get_preparer(self):
-        return updater.Preparer[self.get_release()]
+        return self._get_doer(updater.Preparer)
 
     def get_updater(self):
-        return updater.Updater[self.get_release()]
+        return self._get_doer(updater.Updater)
 
     def get_installer(self):
-        return updater.Installer[self.get_release()]
+        return self._get_doer(updater.Installer)
 
     def get_uninstaller(self):
-        return updater.Uninstaller[self.get_release()]
+        return self._get_doer(updater.Uninstaller)
 
     def get_downgrader(self):
-        return updater.Downgrader[self.get_release()]
+        return self._get_doer(updater.Downgrader)
 
     def scripts_src_dir(self):
         if self._scripts_src_dir:

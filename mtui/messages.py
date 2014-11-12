@@ -148,3 +148,26 @@ class PackageRevisionHasntChangedWarning(UserMessage):
 
     def __init__(self, package):
         self.message =  self._msg.format(package)
+
+class MissingDoerError(ErrorMessage):
+    def __init__(self, release):
+        self.release = release
+
+    @property
+    def message(self):
+        return "Missing {0} for {1}".format(self.name, self.release)
+
+class MissingPreparerError(MissingDoerError):
+    name = "Preparer"
+
+class MissingUpdaterError(MissingDoerError):
+    name = "Updater"
+
+class MissingInstallerError(MissingDoerError):
+    name = "Installer"
+
+class MissingUninstallerError(MissingDoerError):
+    name = "Uninstaller"
+
+class MissingDowngraderError(MissingDoerError):
+    name = "Downgrader"
