@@ -16,9 +16,9 @@ except ImportError:
 
 from mtui.refhost import _RefhostsFactory
 from mtui.refhost import RefhostsFactory
-from mtui.refhost import Refhosts
 from mtui.refhost import RefhostsResolveFailed
 from .utils import LogFake
+from .utils import RefhostsFake
 from .utils import get_nonexistent_path
 from .utils import ConstMtimeStat
 from .utils import ConstFloat
@@ -159,9 +159,6 @@ def test_rf_call_invalid_resolver():
 # }}}
 
 # {{{ Test resolvers
-class RefhostsFake(Refhosts):
-    def _parse_refhosts(self, hostmap):
-        self.t_hostmap = hostmap
 
 def test_rf_rh():
     """

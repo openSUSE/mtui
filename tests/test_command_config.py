@@ -71,7 +71,6 @@ def test_config_show():
             , ("template_dir"               , "'foo-template'")
             , ("local_tempdir"              , "'/tmp'")
             , ("session_user"               , "'foo-user'")
-            , ("location"                   , "'default'")
             , ("interface_version"          , "'66.6'")
             , ("connection_timeout"         , "300")
             , ("svn_path"                   , "'svn+ssh://svn@qam.suse.de/testreports'")
@@ -89,6 +88,7 @@ def test_config_show():
             , ("refhosts_https_expiration"  , "43200")
             , ("refhosts_path"              , "'foo-refhosts'")
             , ("use_keyring"                , 'False')
+            , ("location"                   , "'default'")
         ]]):
             eq_(actual,expected)
 

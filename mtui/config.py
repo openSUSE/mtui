@@ -49,7 +49,8 @@ class Config(object):
         except configparser.Error as e:
             out.error(e)
 
-    def __init__(self):
+    def __init__(self, refhosts = RefhostsFactory):
+        self.refhosts = refhosts
         self._location = 'default'
         self.read()
 
@@ -63,7 +64,7 @@ class Config(object):
 
     @location.setter
     def location(self, x):
-        xs = RefhostsFactory(self, out).get_locations()
+        xs = self.refhosts(self, out).get_locations()
         if x not in xs:
             out.error(InvalidLocationError(x, xs))
             return
