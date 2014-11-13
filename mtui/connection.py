@@ -114,7 +114,7 @@ class Connection(object):
             # "ssh root@..." invocation helps in most cases.
             self.client.connect(
                 hostname = opts.get('hostname', self.hostname),
-                port = opts.get('port', self.port),
+                port = int(opts.get('port', self.port)),
                 username = opts.get('user', 'root'),
                 key_filename = opts.get('identityfile', None),
             )
