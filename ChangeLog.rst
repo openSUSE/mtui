@@ -2,6 +2,48 @@
 ChangeLog
 #########
 
+3.0
+###
+
+Bugfixes
+========
+
+* bsc#902519 - mtui 3.0.0b2: No such file or directory:
+  '/home/<username>/.ssh/config'
+
+* bsc#903255 - Print errors when config parsing errors happen
+
+* bsc#905115 - mtui reports packages as too recent but they aren't (SLE12)
+
+* bsc#903282 - refsearch.py doesn't search for tag 'we'
+
+* bsc#904672 - mtui typo in source_diff build error message
+
+* bsc#904222 - set_location wrong changing output
+
+* bsc#904701 - MTUI list_downgrade_commands missing and help option linked
+  to "list_update_commands" (edit)
+
+* bsc#904224 - mtui set_location accepts invalid location
+
+* bsc#902689 - Traceback returned when incorrect parameters provided with
+  list_packages
+
+* bsc#904381 - mtui continues even when svn repo is not "accessible"
+
+New features
+============
+
+* bsc#860234 - New command: report-bug to open web browser pointed to
+  mtui bugzilla with fields common for all mtui bugs prefilled
+
+* Commands unlock and config stabilized since the 3.0 version
+
+Internal
+========
+
+* More improvements to compatibility with python 3
+
 3.0.0b2
 #######
 
