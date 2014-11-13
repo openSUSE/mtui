@@ -15,7 +15,7 @@ setup(
 
     install_requires = [
         "paramiko",
-        'xdg',
+        'pyxdg',
     ],
 
     # dependencies not on cheeseshop:
