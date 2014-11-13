@@ -1,5 +1,4 @@
 from __future__ import absolute_import
-import argparse
 from abc import ABCMeta, abstractmethod
 from gettext import gettext as _
 import traceback
@@ -29,6 +28,20 @@ class Command(with_metaclass(ABCMeta, object)):
         Derived classes must set this property.
         Version must include at least major and minor
     """
+    _check_subparser = None
+    """
+    :type _check_subparser: str
+    :param _check_subparser: Name of the subparser attribute if the
+        derived class uses subparsers.
+
+        On python 3 L{Command.parse_args} then checks if the attribute
+        is set in parsed L{argparse.Namespace} and if not, prints an
+        error message.
+
+        This behaviour changed between python 2 an 3 where python2
+        argparse printed the error message by itself but python3
+        returns an empty Namespace instance instead.
+    """
 
     def __init__(self, args, hosts, config, sys, logger, prompt):
         """
@@ -49,7 +62,16 @@ class Command(with_metaclass(ABCMeta, object)):
     @classmethod
     def parse_args(cls, args, sys):
         args = [] if args is '' else args.split(" ")
-        return cls.argparser(sys).parse_args(args)
+        p = cls.argparser(sys)
+        pa = p.parse_args(args)
+
+        if cls._check_subparser and not hasattr(pa, cls._check_subparser):
+            # workaround for python3 to keep same behaviour as with
+            # python2
+            # see https://gist.github.com/yaccz/2b7835b1e9429ee35ae5
+            p.error("too few arguments")
+
+        return pa
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -333,6 +355,7 @@ class Config(Command):
     """
     command = "config"
     stable = '3.0'
+    _check_subparser = "func"
 
     def run(self):
         getattr(self, self.args.func)()
