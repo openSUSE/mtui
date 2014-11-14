@@ -2,6 +2,14 @@
 ChangeLog
 #########
 
+3.0.1
+#####
+
+Bugfixes
+========
+
+* Bug 903295 - MTUI hangs on host with non-standard connection port
+
 3.0
 ###
 
