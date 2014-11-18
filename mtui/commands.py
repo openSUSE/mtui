@@ -261,7 +261,7 @@ class ReportBug(Command):
         try:
             self.popen = kw['popen']
         except KeyError:
-            pass
+            self.popen = Popen
         else:
             del kw['popen']
 

@@ -4,6 +4,7 @@ from nose.tools import eq_
 from nose.tools import ok_
 
 from errno import ENOENT
+from subprocess import Popen
 
 from mtui.commands import ReportBug
 from mtui.prompt import CommandPrompt
@@ -121,3 +122,9 @@ def test_completer():
     ]
     for i, o in xs:
         yield test, i, o
+
+def test_has_default_popen():
+    c, l, s = ConfigFake(), LogFake(), SysFake()
+    cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
+        CommandPrompt(c, l))
+    eq_(cmd.popen, Popen)
