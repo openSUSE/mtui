@@ -1591,7 +1591,7 @@ class CommandPrompt(cmd.Cmd):
         submit.append('echo \'echo -n "%s"\' > /tmp/pwdask' % password)
         submit.append('chmod 700 /tmp/pwdask')
         submit.append('SSH_ASKPASS=/tmp/pwdask DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c \'{2}\''.format(
-            self.metadata.md5,
+            self.metadata.id,
             username,
             comment
         ))
@@ -1712,7 +1712,7 @@ class CommandPrompt(cmd.Cmd):
             tr.load_systems_from_testplatforms()
             self.targets = tr.connect_targets()
 
-        if self.metadata and self.metadata.md5 is self.session:
+        if self.metadata and self.metadata.id is self.session:
             self.set_prompt(None)
         self.metadata = tr
 
