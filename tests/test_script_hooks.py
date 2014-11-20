@@ -170,8 +170,8 @@ def test_compare_script():
         warning = s.log.warnings[0]
         ok_(isinstance(warning, messages.CompareScriptFailed))
         eq_(warning.argv, [s.path, pre_f, post_f])
-        eq_(warning.stdout, '')
-        ok_('ERROR: found new rpm license texts' in warning.stderr)
-        ok_('-foo' in warning.stderr)
-        ok_('+bar' in warning.stderr)
+        eq_(warning.stdout, b'')
+        ok_(b'ERROR: found new rpm license texts' in warning.stderr)
+        ok_(b'-foo' in warning.stderr)
+        ok_(b'+bar' in warning.stderr)
         eq_(warning.rc, 1)
