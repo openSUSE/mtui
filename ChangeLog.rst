@@ -2,6 +2,16 @@
 ChangeLog
 #########
 
+3.0.2
+#####
+
+bugfixes
+========
+
+* bsc#905964 - command testsuite_submit: on sle12
+
+* bsc#906541 - 'report bug' not working
+
 3.0.1
 #####
 
