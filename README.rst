@@ -20,17 +20,20 @@ openSUSE and SUSE
 Packages are available at `IBS QA:Maintenance project
 <https://build.suse.de/project/show/QA:Maintenance>`_.
 
-Add the appropriate repository to your system
+Add the appropriate repository to your system.
+
+You can find the proper address on the `project repositories page
+<https://build.suse.de/project/repositories/QA:Maintenance>`_ for each
+distribution under the "Go to download repository" link.
+
+For example for openSUSE Factory the command would be:
 
 .. sourcecode:: bash
 
-    zypper ar <repo-link>
+    zypper ar http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Factory
 
-You can find the proper ``<repo-link>`` on the `project repositories page
-<https://build.suse.de/project/repositories/QA:Maintenance>`_ for each
-distribution under the the "Go to download repository" link.
-
-Then you can run
+Once you have the repository added,
+you can install the package normally
 
 .. sourcecode:: bash
 
