@@ -39,7 +39,7 @@ you can install the package normally
 
     zypper in mtui
 
-and get mtui with the apropriate dependecies as well.
+and get mtui with the appropriate dependencies as well.
 
 Gentoo
 ======
