@@ -30,6 +30,13 @@ Contents
     developer
     support
 
+Authors
+#######
+
+* Christian Kornacker <ckornacker@suse.com>
+* Heiko Rommel <rommel@suse.de>
+* Jan Matějka <jmatejka@suse.cz>
+* Roman Neuhauser <rneuhauser@suse.cz>
 
 Indices and tables
 ##################
