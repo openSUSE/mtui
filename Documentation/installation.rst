@@ -17,18 +17,16 @@ each distribution under the "Go to download repository" link.
 
 For example for openSUSE Factory the command would be:
 
-.. sourcecode:: bash
+.. code-block:: text
 
-    zypper ar http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Factory
+    # zypper ar http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Factory
 
-Once you have the repository added,
-you can install the package normally
-
-.. sourcecode:: bash
-
-    zypper in mtui
-
+Once you have the repository added, you can install the package normally
 and get mtui with the appropriate dependencies as well.
+
+.. code-block:: text
+
+    # zypper in mtui
 
 Gentoo
 ######

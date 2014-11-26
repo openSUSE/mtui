@@ -2,42 +2,70 @@
 Developer Documentation
 #######################
 
-Submitting code
+Automated Tests
 ###############
 
-* Fork the repository.
+You can run unit tests with
 
-  * create your personal one on git.suse.de
+.. code-block:: text
 
-  * clone stable one
+   $ make check
 
-* commit code
+or with coverage
 
-* push to your personal repository as a feature/bugfix branch
+.. code-block:: text
 
-* send git request-pull
+   $ make checkcover
 
-git commit keywords
+And you can find `acceptance test suite`_ at `git.suse.de`_
+
+.. _acceptance test suite: http://git.suse.de/?p=yac/mtui-test-acceptance.git;a=summary
+.. _git.suse.de: http://git.suse.de
+
+Commit keywords
+###############
+
+Bug ID references
+=================
+
+Referencing bugzilla.suse.com bugs
+
+.. code-block:: text
+
+    bsc#<ID>
+
+Referencing bugzilla.novell.com (old) bugs
+
+.. code-block:: text
+
+    bnc#<ID>
+
+Documentation
+#############
+
+Uses `Sphinx`_.
+
+Build with
+
+.. code-block:: text
+
+    $ cd mtui.git/Documentation
+    $ make html
+
+.. _Sphinx: http://sphinx-doc.org/
+
+Release Engineering
 ###################
 
-For referencing Novell Bugzilla bug numbers use format::
+Versioning scheme
+=================
 
-    bnc#<N>
+Versioning scheme is based on `SemVer 2.0`_
 
-where N is the bug number.
-
-API Documentation
-#################
-
-For API Documentation use `epydoc <http://epydoc.sourceforge.net/>`_
-format with the `rst markup
-<http://epydoc.sourceforge.net/manual-fields.html>`_.
-
-Internal rewrite is underway, so pay attention to the `:deprecated:`
-markers.
+.. _SemVer 2.0: http://semver.org/spec/v2.0.0.html
 
 Release Process
-###############
+===============
 
 * update ChangeLog and mtui.__version__
 
@@ -45,10 +73,8 @@ Release Process
 
 * python setup.py sdist
 
-* bump ebuild & test
+* bump supported packages (see installation) and test them
 
-* bump rpm & test
+* merge bumped packages into stable repositories
 
-* merge ebuild & rpm changes to stable overlay/repository
-
-* publish tarball on webserver
+* publish source tarball and push git tag
