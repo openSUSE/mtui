@@ -75,6 +75,10 @@ Release Process
 
 * bump supported packages (see installation) and test them
 
+* build html docs
+
 * merge bumped packages into stable repositories
 
 * publish source tarball and push git tag
+
+* publish the html docs
