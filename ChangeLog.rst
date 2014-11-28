@@ -2,10 +2,23 @@
 ChangeLog
 #########
 
+3.0.3
+#####
+
+Bugfixes
+========
+
+* bsc#904885 mtui: traceback when dependency issues occur in update
+
+New features
+============
+
+* Added sphinx generator for Documentation
+
 3.0.2
 #####
 
-bugfixes
+Bugfixes
 ========
 
 * bsc#905964 - command testsuite_submit: on sle12
