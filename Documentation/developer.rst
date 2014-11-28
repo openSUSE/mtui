@@ -67,14 +67,18 @@ Versioning scheme is based on `SemVer 2.0`_
 Release Process
 ===============
 
-* update ChangeLog and mtui.__version__
+* update ``ChangeLog`` and ``mtui.__version__``
 
-* git tag v<version>
+* ``git tag v<version>``
 
-* python setup.py sdist
+* ``python setup.py sdist``
 
 * bump supported packages (see installation) and test them
 
+* build html docs
+
 * merge bumped packages into stable repositories
 
-* publish source tarball and push git tag
+* publish source tarball and the html docs
+
+* push git tag ``git push <remote> v<version>``
