@@ -19,7 +19,7 @@ For example for openSUSE Factory the command would be:
 
 .. code-block:: text
 
-    # zypper ar http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Factory
+    # zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Factory qa-maintenance
 
 Once you have the repository added, you can install the package normally
 and get mtui with the appropriate dependencies as well.
