@@ -1,7 +1,8 @@
 from nose.tools import ok_, eq_, raises
 
 from mtui.target import TargetLock, RemoteLock, TargetLockedError
-from mtui.config import Config
+
+from .utils import ConfigFake
 
 import errno
 
@@ -13,9 +14,7 @@ def test_error_opening_lockfile_other_than_missing_raises():
         def open(self, fn):
             raise IOError()
 
-    c = Config
-    c.session_user = 'foo'
-    l = TargetLock(ConnMock(), c)
+    l = TargetLock(ConnMock(), ConfigFake(dict(session_user = 'foo')))
     l.load()
 
 def test_not_locked_on_missing_lockfile():
@@ -27,10 +26,7 @@ def test_not_locked_on_missing_lockfile():
             e.errno = errno.ENOENT
             raise e
 
-    c = Config
-    c.session_user = 'foo'
-
-    l = TargetLock(ConnMock(), c)
+    l = TargetLock(ConnMock(), ConfigFake(dict(session_user = 'foo')))
     l.load()
 
 def test_not_locked_on_empty_lockfile():
@@ -51,11 +47,9 @@ def test_not_locked_on_empty_lockfile():
             return self.lockfile
 
 
-    c = Config
-    c.session_user = 'foo'
     conn = ConnMock()
 
-    l = TargetLock(conn, c)
+    l = TargetLock(conn, ConfigFake(dict(session_user = 'foo')))
     eq_(l.is_locked(), False)
     ok_(conn.lockfile.closed)
 
@@ -105,11 +99,9 @@ def test_lock_locks():
         def open(self, fn, mode):
             return self.lockfile
 
-    c = Config
-    c.session_user = 'foo'
     conn = ConnMock()
 
-    l = TargetLock(conn, c)
+    l = TargetLock(conn, ConfigFake(dict(session_user = 'foo')))
     l.is_locked = lambda: False
     l.timestamp_factory = lambda: "00-00"
     l.i_am_pid = 666
@@ -128,10 +120,7 @@ def test_unlock_doesnt_unlock_unlocked():
         def remove(self, fn):
             ok_(False)
 
-    c = Config
-    c.session_user = 'foo'
-
-    l = TargetLock(ConnMock(), c)
+    l = TargetLock(ConnMock(), ConfigFake(dict(session_user = 'foo')))
     l.i_am_pid = 666
 
     rl = RemoteLock()
@@ -140,10 +129,7 @@ def test_unlock_doesnt_unlock_unlocked():
     l.unlock()
 
 def test_lock_is_mine():
-    c = Config
-    c.session_user = 'foo'
-
-    l = TargetLock(None, c)
+    l = TargetLock(None, ConfigFake(dict(session_user = 'foo')))
     l.i_am_pid = 666
 
     rl = RemoteLock()
@@ -166,10 +152,7 @@ class ConnRemovingMock(object):
 def test_lock_unlocks():
     conn = ConnRemovingMock()
 
-    c = Config
-    c.session_user = 'foo'
-
-    l = TargetLock(conn, c)
+    l = TargetLock(conn, ConfigFake(dict(session_user = 'foo')))
     l.i_am_pid = 666
     l.load = lambda: None
 
@@ -187,10 +170,7 @@ def _unlock_post_cond(l, conn):
 
 
 def test_lock_doesnt_unlock():
-    c = Config
-    c.session_user = 'bar'
-
-    l = TargetLock(None, c)
+    l = TargetLock(None, ConfigFake(dict(session_user = 'bar')))
     l.is_locked = lambda: True
     l.is_mine = lambda: False
     def x(*a, **kw):
@@ -213,12 +193,9 @@ def test_lock_doesnt_unlock():
     eq_(l.test_mark, ((),{}))
 
 def test_lock_force_unlock():
-    c = Config
-    c.session_user = 'bar'
-
     conn = ConnRemovingMock()
 
-    l = TargetLock(conn, c)
+    l = TargetLock(conn, ConfigFake(dict(session_user = 'bar')))
     l.is_locked = lambda: True
     l.is_mine = lambda: False
 
@@ -231,9 +208,6 @@ def test_lock_force_unlock():
     _unlock_post_cond(l, conn)
 
 def _test_remote_lock_reset_lockFactory(exc_factory):
-    c = Config
-    c.session_user = 'bar'
-
     class Lockfile:
         def readline(self):
             return "00-00:foo:666:kek"
@@ -252,10 +226,7 @@ def _test_remote_lock_reset_lockFactory(exc_factory):
             else:
                 exc_factory()
 
-    c = Config
-    c.session_user = 'foo'
-
-    return TargetLock(ConnMock(), c)
+    return TargetLock(ConnMock(), ConfigFake(dict(session_user = 'foo')))
 
 def test_remote_lock_reset_on_enoent():
     def fx():

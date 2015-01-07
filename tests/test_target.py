@@ -6,7 +6,7 @@ from mtui.target import TargetLock, RemoteLock, Target
 from mtui.target import LockedTargets
 from mtui import messages
 from mtui.connection import Connection
-from mtui.config import Config
+from .utils import ConfigFake
 from .utils import LogFake
 from .utils import LogFakeStr
 from .utils import unused
@@ -29,10 +29,7 @@ def TF(hostname, lock = None, connection = None, log = None):
 def test_legacy_locked_target_is_locked():
     t = Target('foo', 'bar', connect = False)
 
-    c = Config
-    c.session_user = 'foo'
-
-    t._lock = TargetLock(None, c)
+    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')))
     t._lock.load = lambda: None
 
     rl = RemoteLock()
@@ -53,10 +50,7 @@ def test_legacy_locked_target_is_locked():
 def test_legacy_lock_is_own():
     t = Target('foo', 'bar', connect = False)
 
-    c = Config
-    c.session_user = 'quux'
-
-    t._lock = TargetLock(None, c)
+    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'quux')))
     t._lock.load = lambda: None
 
     rl = RemoteLock()
@@ -80,10 +74,7 @@ def test_legacy_lock_is_own():
 def test_legacy_target_set_locks():
     t = Target('foo', 'bar', connect = False)
 
-    c = Config
-    c.session_user = 'foo'
-
-    t._lock = TargetLock(None, c)
+    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')))
     t._lock.load = lambda: None
     def lock(*a, **kw):
         t.locked_with = (a, kw)
@@ -123,10 +114,7 @@ def test_target_unlock():
     t.state = None
     # state is irrelevant
 
-    c = Config
-    c.session_user = 'foo'
-
-    t._lock = TargetLock(None, c)
+    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')))
     t._lock.load = lambda: None
 
     def x(*a, **kw):
@@ -140,10 +128,7 @@ def test_target_unlock():
 def test_locked_target_is_locked():
     t = Target('foo', 'bar', connect = False)
 
-    c = Config
-    c.session_user = 'foo'
-
-    t._lock = TargetLock(None, c)
+    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')))
     t._lock.is_locked = lambda: False
     t._lock.i_am_pid = 666
     t._lock.timestamp_factory = lambda: '00-00'

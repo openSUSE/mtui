@@ -1,7 +1,7 @@
 from nose.tools import ok_, eq_
 
 from mtui.commands import Whoami
-from mtui.config import Config
+from .utils import ConfigFake
 from .utils import StringIO
 from .utils import SysFake
 from .utils import RefhostsFake
@@ -10,8 +10,7 @@ def test_whoami():
     class PromptFake:
         metadata = None
 
-    cg = Config(refhosts = RefhostsFake)
-    cg.session_user = 'foo'
+    cg = ConfigFake(dict(session_user = 'foo'))
     c = Whoami([], [], cg, SysFake(), None, PromptFake())
     c.get_pid = lambda: 666
     c.run()

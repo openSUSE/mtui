@@ -3,7 +3,6 @@
 from nose.tools import eq_
 
 from mtui import commands
-from mtui.config import Config
 from mtui.template import TestReport
 from mtui.prompt import CommandAlreadyBoundError
 from .utils import StringIO
@@ -43,8 +42,7 @@ def test_config():
         > config
     shows usage
     """
-    c = ConfigFake()
-    c.interface_version = commands.Config.stable
+    c = ConfigFake(dict(interface_version = commands.Config.stable))
     eq_(_run_config("config", c), "usage: config [-h] {show} ...\n")
 
 def test_config_show():
@@ -54,13 +52,14 @@ def test_config_show():
     shows the full config file
     """
 
-    c = ConfigFake()
-    # redefine options which depend on environment
-    c.datadir = 'foo-data'
-    c.template_dir = 'foo-template'
-    c.refhosts_path = 'foo-refhosts'
-    c.session_user = 'foo-user'
-    c.interface_version = '66.6'
+    c = ConfigFake(dict(
+        # redefine options which depend on environment
+        datadir = 'foo-data'
+      , template_dir = 'foo-template'
+      , refhosts_path = 'foo-refhosts'
+      , session_user = 'foo-user'
+      , interface_version = '66.6'
+    ))
 
     for actual,expected in zip_longest(
           [ (opt, val)
@@ -100,8 +99,9 @@ def test_config_show_one():
     shows the x attribute
     """
 
-    c = ConfigFake()
-    c.datadir = 'foo-data'
-    c.interface_version = commands.Config.stable
+    c = ConfigFake(dict(
+        datadir = 'foo-data'
+      , interface_version = commands.Config.stable
+    ))
     eq_(_run_config("config show datadir", c),
         "datadir = 'foo-data'\n")
