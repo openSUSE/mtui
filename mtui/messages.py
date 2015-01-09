@@ -215,3 +215,6 @@ class InvalidLocationError(UserError):
         self.available = available
 
         self.message = self._msg.format(requested, ", ".join(available))
+
+class InvalidOBSDistURL(ErrorMessage):
+    pass

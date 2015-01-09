@@ -1,6 +1,8 @@
+import re
 from itertools import count
 from mtui.utils import zip_longest
 from mtui.utils import check_eq
+from mtui import messages
 from argparse import ArgumentTypeError
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):
@@ -89,3 +91,16 @@ def _apply_parser(f, x, cnt):
         new = ComponentParseError(cnt, f, x)
         new.__cause__ = e
         raise new
+
+class DistURL(object):
+    _disturl_sre = re.compile('obs://[^/]+/([^/]+)/[^/]+/(\w+)-([^/]+)')
+
+    def __init__(self, url):
+        m = self._disturl_sre.match(url)
+        if not m:
+            raise messages.InvalidOBSDistURL(url)
+
+        self.disturl = url
+        self.project = m.group(1)
+        self.commit  = m.group(2)
+        self.package = m.group(3)

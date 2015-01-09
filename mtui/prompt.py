@@ -38,6 +38,7 @@ from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
 from mtui.types import MD5Hash
+from mtui.types import obs
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
 from mtui import updater
@@ -738,11 +739,11 @@ class CommandPrompt(cmd.Cmd):
         destination = self.metadata.local_wd()
 
         if not glob.glob(os.path.join(destination, '*', '*.spec')):
-            self.do_source_extract('')
+            self.metadata.extract_source_rpm()
 
         for rpmfile in glob.glob(os.path.join(destination, '*.src.rpm')):
             try:
-                match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
+                rpmf = RPMFile(rpmfile)
             except Exception as error:
                 out.critical('failed to open %s: %s' % (rpmfile, error))
                 if unicode(error) == u'public key not available':
@@ -751,12 +752,12 @@ class CommandPrompt(cmd.Cmd):
                     out.critical('cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
                 continue
 
-            if match:
-                disturl = match.group(0)
-                project = match.group(1)
-                commit = match.group(2)
-                name = match.group(3)
-                updated[name] = {'project': project, 'commit': commit, 'disturl': disturl}
+            try:
+                durl = obs.DistURL(rpmf.disturl)
+            except messages.ErrorMessage as e:
+                out.warning(e)
+            else:
+                updated[durl.package] = durl
 
         # if there are src.rpm package names which are not reflected by
         # binary rpms, check all binary rpms for this specific
@@ -769,24 +770,26 @@ class CommandPrompt(cmd.Cmd):
         for package in search_list:
             RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % package).run()
 
-            for target in targets:
-                line = targets[target].lastout().split('\n')[0]
-                match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', line)
-                if match:
-                    disturl = match.group(0)
-                    project = match.group(1)
-                    commit = match.group(2)
-                    name = match.group(3)
-                    installed[name] = {'project': project, 'commit': commit, 'disturl': disturl}
+            for target in targets.values():
+                line = target.lastout().split('\n')[0]
+
+                try:
+                    durl = obs.DistURL(line)
+                except messages.ErrorMessage as e:
+                    out.warning(e)
+                else:
+                    installed[durl.package] = durl
 
         for name in updated.keys():
             try:
-                assert(installed[name] and updated[name])
+                di = installed[name]
+                du = updated[name]
+                assert(di and du)
             except (AssertionError, KeyError):
                 out.warning('osc disturl not found for package %s. skipping.' % name)
                 continue
 
-            if installed[name]['commit'] == updated[name]['commit']:
+            if di.commit == du.commit:
                 out.warning(messages.PackageRevisionHasntChangedWarning(name))
                 continue
 
@@ -794,11 +797,21 @@ class CommandPrompt(cmd.Cmd):
             if args == 'source':
                 with open(diff, 'w+') as f:
                     try:
-                        f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
-                            installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
+                        f.write(osc.core.server_diff(
+                              'https://api.suse.de'
+                            , di.project
+                            , name
+                            , di.commit
+                            , du.project
+                            , name
+                            , du.commit
+                            , unified=True
+                        ))
                     except Exception as error:
                         out.error('failed to diff packages: %s', error)
                         return
+
+                out.info('wrote diff locally to %s' % diff)
 
             elif args == 'build':
                 RunCommand(targets, 'which osc').run()
@@ -809,10 +822,7 @@ class CommandPrompt(cmd.Cmd):
                 for state in ['new', 'old']:
                     sourcedir = os.path.join(destination, name, state)
                     builddir = os.path.join(destination, name, state, 'BUILD')
-                    if state == 'new':
-                        disturl = updated[name]['disturl']
-                    else:
-                        disturl = installed[name]['disturl']
+                    disturl = du.disturl if state == 'new' else di.disturl
 
                     RunCommand(targets, 'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui').run()
                     RunCommand(targets, 'mkdir -p %s' % builddir).run()
@@ -822,9 +832,6 @@ class CommandPrompt(cmd.Cmd):
 
                 RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
 
-            if args == 'source':
-                out.info('wrote diff locally to %s' % diff)
-            elif args == 'build':
                 out.info('wrote diff remotely to %s' % diff)
 
     def complete_source_diff(self, text, line, begidx, endidx):
