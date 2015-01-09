@@ -757,7 +757,11 @@ class CommandPrompt(cmd.Cmd):
             except messages.ErrorMessage as e:
                 out.warning(e)
             else:
-                updated[durl.package] = durl
+                # NOTE: it's important not to confuse rpmf.name and
+                # durl.package. See L{obs.DistURL}
+                out.debug("rpmf.name: %s" % rpmf.name)
+                out.debug("durl.package: %s" % durl.package)
+                updated[rpmf.name] = durl
 
         # if there are src.rpm package names which are not reflected by
         # binary rpms, check all binary rpms for this specific
@@ -800,10 +804,10 @@ class CommandPrompt(cmd.Cmd):
                         f.write(osc.core.server_diff(
                               'https://api.suse.de'
                             , di.project
-                            , name
+                            , di.package
                             , di.commit
                             , du.project
-                            , name
+                            , du.package
                             , du.commit
                             , unified=True
                         ))

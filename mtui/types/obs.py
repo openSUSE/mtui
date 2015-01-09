@@ -95,6 +95,19 @@ def _apply_parser(f, x, cnt):
 class DistURL(object):
     _disturl_sre = re.compile('obs://[^/]+/([^/]+)/[^/]+/(\w+)-([^/]+)')
 
+    package = None
+    """
+    :type package: str
+    :param package: package name
+        Warning: On packages from SLE12 testing repositories this seems
+            to be rather "<package-name>.<repository>"
+
+        This is usable with OBS commands that expect this kind of
+        format, like those in source_diff. However, if you need really
+        just the <package-name> you need to find another way or how to
+        reliably parse this format into it's components.
+    """
+
     def __init__(self, url):
         m = self._disturl_sre.match(url)
         if not m:

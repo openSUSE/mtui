@@ -217,4 +217,5 @@ class InvalidLocationError(UserError):
         self.message = self._msg.format(requested, ", ".join(available))
 
 class InvalidOBSDistURL(ErrorMessage):
-    pass
+    def __init__(self, url):
+        self.message = "Invalid OBS DistURL: {0!r}".format(url)
