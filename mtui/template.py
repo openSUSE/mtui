@@ -451,16 +451,19 @@ class TestReport(with_metaclass(ABCMeta, object)):
             ('Packages'  , ' '.join(sorted(self.get_package_list()))),
             ('Testreport', self._testreport_url()),
             ('Repository', self.repository),
-        ] + [(x.upper(), y) for x,y in self.patches.items()]
+        ] + [(x.upper(), y) for x,y in self.patches.items()
+        ] + [('Testplatform', x) for x in self.testplatforms
+        ]
 
     def show_yourself(self, writer):
-        self._aligned_write(writer, dict(self._show_yourself_data()))
+        self._aligned_write(writer, self._show_yourself_data())
 
     def _aligned_write(self, writer, data):
         """
-        :type data: dict
+        :type data:  [(str, str)]
+        :param data: (key, value)
         """
-        for x in sorted(data.items()):
+        for x in sorted(data):
             writer.write("{0:15}: {1}\n".format(*x))
 
     def _testreport_url(self):
