@@ -37,16 +37,27 @@ class TestTestReport_show_yourself(TestCase):
             'Packages': 'drbd drbd-bash-completion',
             'Testreport': 'http://qam.suse.de/testreports/{0}/log'.format(uid),
             'Repository': 'http://download.suse.de/ibs/SUSE:/Maintenance:/32/',
-        }
+        }.items()
 
     def test_md5(self):
         uid = MD5Hash('0a27320617cd0d989b2ed1bcc5682c0f')
         data = self.common_data(uid)
-        data.update({
-            'MD5SUM': uid,
-            'SWAMP ID': '54755',
-            'SAT': '8438',
-        })
+        data += [
+            ('MD5SUM', uid),
+            ('SWAMP ID', '54755'),
+            ('SAT', '8438'),
+        ] + [('Testplatform', ";".join(x)) for x in [
+                [
+                    'base=sles(major=11,minor=sp3)',
+                    'arch=[i386,ia64,ppc64,s390x,x86_64]',
+                    'addon=hae(major=11,minor=sp3)',
+                ], [
+                    'base=sles(major=11,minor=sp3)',
+                    'arch=[x86_64]',
+                    'addon=rt(major=11,minor=sp3)',
+                ]
+            ]
+        ]
 
         lines = [
             '',
@@ -64,23 +75,14 @@ class TestTestReport_show_yourself(TestCase):
             'Packages: drbd >= 8.4.4-0.18.1, drbd-bash-completion >= 8.4.4-0.18.1',
             'SRCRPMs: drbd',
             'Test Plan Reviewers: {Reviewer}',
-            'Testplatform: ' + ';'.join([
-                'base=sles(major=11,minor=sp3)',
-                'arch=[i386,ia64,ppc64,s390x,x86_64]',
-                'addon=hae(major=11,minor=sp3)',
-            ]),
-            'Testplatform: ' + ';'.join([
-                'base=sles(major=11,minor=sp3)',
-                'arch=[x86_64]',
-                'addon=rt(major=11,minor=sp3)',
-            ]),
+        ] + [ "{0}: {1}".format(x, y) for x, y in data if x == 'Testplatform'
         ]
 
         self._run(TestableSwampTestReport, lines, data)
 
     def _run(self, report, lines_in, expected):
         tr = TRF(report)
-        tr.t_tpl = StringIO("\n".join(lines_in).format(**expected))
+        tr.t_tpl = StringIO("\n".join(lines_in).format(**dict(expected)))
         tr.read(unused)
 
         s = StringIO()
@@ -94,10 +96,12 @@ class TestTestReport_show_yourself(TestCase):
         uid = RequestReviewID("SUSE:Maintenance:32:36609")
 
         data = self.common_data(uid)
-        data.update({
-            'ReviewRequestID': str(uid),
-            'Rating': 'moderate',
-        })
+        data += [
+            ('ReviewRequestID', str(uid)),
+            ('Rating', 'moderate'),
+            ('Testplatform', 'base=sles(major=12,minor=);arch=[s390x,x86_64]'),
+            ('Testplatform', 'base=sled(major=12,minor=);arch=[x86_64]')
+        ]
 
         lines = [
             'Products: SLE-SERVER 12 (x86_64, s390x, ppc64le), SLE-DESKTOP 12 (x86_64)',
@@ -110,8 +114,7 @@ class TestTestReport_show_yourself(TestCase):
             'Packages: drbd >= 8.4.4-0.18.1, drbd-bash-completion >= 8.4.4-0.18.1',
             'SRCRPMs: drbd',
             'Suggested Test Plan Reviewers: {Reviewer}',
-            'Testplatform: base=sles(major=12,minor=);arch=[s390x,x86_64]',
-            'Testplatform: base=sled(major=12,minor=);arch=[x86_64]',
+        ] + [ "{0}: {1}".format(x, y) for x, y in data if x == 'Testplatform'
         ]
 
         self._run(TestableOBSTestReport, lines, data)
