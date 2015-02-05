@@ -1,6 +1,8 @@
+import re
 from itertools import count
 from mtui.utils import zip_longest
 from mtui.utils import check_eq
+from mtui import messages
 from argparse import ArgumentTypeError
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):
@@ -89,3 +91,29 @@ def _apply_parser(f, x, cnt):
         new = ComponentParseError(cnt, f, x)
         new.__cause__ = e
         raise new
+
+class DistURL(object):
+    _disturl_sre = re.compile('obs://[^/]+/([^/]+)/[^/]+/(\w+)-([^/]+)')
+
+    package = None
+    """
+    :type package: str
+    :param package: package name
+        Warning: On packages from SLE12 testing repositories this seems
+            to be rather "<package-name>.<repository>"
+
+        This is usable with OBS commands that expect this kind of
+        format, like those in source_diff. However, if you need really
+        just the <package-name> you need to find another way or how to
+        reliably parse this format into it's components.
+    """
+
+    def __init__(self, url):
+        m = self._disturl_sre.match(url)
+        if not m:
+            raise messages.InvalidOBSDistURL(url)
+
+        self.disturl = url
+        self.project = m.group(1)
+        self.commit  = m.group(2)
+        self.package = m.group(3)

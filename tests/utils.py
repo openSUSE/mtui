@@ -240,3 +240,9 @@ def wait_for_ctrlc():
             sleep(10)
     except KeyboardInterrupt:
         pass
+
+def merged_dict(x, y):
+    """
+    Returns new dict with items from `y` merged into `x`
+    """
+    return dict(x.items() + y.items())

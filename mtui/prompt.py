@@ -38,6 +38,7 @@ from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
 from mtui.types import MD5Hash
+from mtui.types import obs
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
 from mtui import updater
@@ -715,118 +716,127 @@ class CommandPrompt(cmd.Cmd):
         type     -- "build" or "source" diff
         """
 
-        if args in ['source', 'build']:
-            try:
-                import osc
-                from osc import commandline
-            except:
-                out.error('missing osc module. please install osc and setup an account.')
-                return
-
-            api_config_options = {'https://api.suse.de': {'http_headers': [], 'sslcertck': True, 'user': 'qa', 'pass': 'qa'}}
-            osc.conf.config['api_host_options'] = api_config_options
-            osc.conf.config['debug'] = 0
-            osc.conf.config['verbose'] = 0
-            osc.conf.config['http_debug'] = 0
-
-            targets = enabled_targets(self.targets)
-
-            updated = {}
-            installed = {}
-            destination = self.metadata.local_wd()
-
-            if not glob.glob(os.path.join(destination, '*', '*.spec')):
-                self.do_source_extract('')
-
-            for rpmfile in glob.glob(os.path.join(destination, '*.src.rpm')):
-                try:
-                    match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', RPMFile(rpmfile).disturl)
-                except Exception as error:
-                    out.critical('failed to open %s: %s' % (rpmfile, error))
-                    if unicode(error) == u'public key not available':
-                        out.critical('Public key is not available.')
-                        out.critical('In order to import new keys, you should run the following command as root:')
-                        out.critical('cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
-                    continue
-
-                if match:
-                    disturl = match.group(0)
-                    project = match.group(1)
-                    commit = match.group(2)
-                    name = match.group(3)
-                    updated[name] = {'project': project, 'commit': commit, 'disturl': disturl}
-
-            # if there are src.rpm package names which are not reflected by
-            # binary rpms, check all binary rpms for this specific
-            # src.rpm/disturl name
-            if [x for x in updated.keys() if x not in self.metadata.get_package_list()]:
-                search_list = self.metadata.get_package_list()
-            else:
-                search_list = list(updated.keys())
-
-            for package in search_list:
-                RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % package).run()
-
-                for target in targets:
-                    line = targets[target].lastout().split('\n')[0]
-                    match = re.search('obs://.*/(.*)/.*/(\w+)-(.*)', line)
-                    if match:
-                        disturl = match.group(0)
-                        project = match.group(1)
-                        commit = match.group(2)
-                        name = match.group(3)
-                        installed[name] = {'project': project, 'commit': commit, 'disturl': disturl}
-
-            for name in updated.keys():
-                try:
-                    assert(installed[name] and updated[name])
-                except (AssertionError, KeyError):
-                    out.warning('osc disturl not found for package %s. skipping.' % name)
-                    continue
-
-                if installed[name]['commit'] == updated[name]['commit']:
-                    out.warning(messages.PackageRevisionHasntChangedWarning(name))
-                    continue
-
-                diff = os.path.join(destination, '%s-%s.diff' % (name, args))
-                if args == 'source':
-                    with open(diff, 'w+') as f:
-                        try:
-                            f.write(osc.core.server_diff('https://api.suse.de', installed[name]['project'], name,
-                                installed[name]['commit'], updated[name]['project'], name, updated[name]['commit'], unified=True))
-                        except Exception as error:
-                            out.error('failed to diff packages: %s', error)
-                            return
-
-                elif args == 'build':
-                    RunCommand(targets, 'which osc').run()
-                    for target in targets:
-                        if targets[target].lastexit() != 0:
-                            out.error('osc is missing on %s. skipping.' % target)
-
-                    for state in ['new', 'old']:
-                        sourcedir = os.path.join(destination, name, state)
-                        builddir = os.path.join(destination, name, state, 'BUILD')
-                        if state == 'new':
-                            disturl = updated[name]['disturl']
-                        else:
-                            disturl = installed[name]['disturl']
-
-                        RunCommand(targets, 'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui').run()
-                        RunCommand(targets, 'mkdir -p %s' % builddir).run()
-                        RunCommand(targets, 'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
-                        RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
-                                % (sourcedir, name, builddir, sourcedir, name)).run()
-
-                    RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
-
-                if args == 'source':
-                    out.info('wrote diff locally to %s' % diff)
-                elif args == 'build':
-                    out.info('wrote diff remotely to %s' % diff)
-
-        else:
+        if args not in ['source', 'build']:
             self.parse_error(self.do_source_diff, args)
+
+        try:
+            import osc
+            from osc import commandline
+        except:
+            out.error('missing osc module. please install osc and setup an account.')
+            return
+
+        api_config_options = {'https://api.suse.de': {'http_headers': [], 'sslcertck': True, 'user': 'qa', 'pass': 'qa'}}
+        osc.conf.config['api_host_options'] = api_config_options
+        osc.conf.config['debug'] = 0
+        osc.conf.config['verbose'] = 0
+        osc.conf.config['http_debug'] = 0
+
+        targets = enabled_targets(self.targets)
+
+        updated = {}
+        installed = {}
+        destination = self.metadata.local_wd()
+
+        if not glob.glob(os.path.join(destination, '*', '*.spec')):
+            self.metadata.extract_source_rpm()
+
+        for rpmfile in glob.glob(os.path.join(destination, '*.src.rpm')):
+            try:
+                rpmf = RPMFile(rpmfile)
+            except Exception as error:
+                out.critical('failed to open %s: %s' % (rpmfile, error))
+                if unicode(error) == u'public key not available':
+                    out.critical('Public key is not available.')
+                    out.critical('In order to import new keys, you should run the following command as root:')
+                    out.critical('cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
+                continue
+
+            try:
+                durl = obs.DistURL(rpmf.disturl)
+            except messages.ErrorMessage as e:
+                out.warning(e)
+            else:
+                # NOTE: it's important not to confuse rpmf.name and
+                # durl.package. See L{obs.DistURL}
+                out.debug("rpmf.name: %s" % rpmf.name)
+                out.debug("durl.package: %s" % durl.package)
+                updated[rpmf.name] = durl
+
+        # if there are src.rpm package names which are not reflected by
+        # binary rpms, check all binary rpms for this specific
+        # src.rpm/disturl name
+        if [x for x in updated.keys() if x not in self.metadata.get_package_list()]:
+            search_list = self.metadata.get_package_list()
+        else:
+            search_list = list(updated.keys())
+
+        for package in search_list:
+            RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % package).run()
+
+            for target in targets.values():
+                line = target.lastout().split('\n')[0]
+
+                try:
+                    durl = obs.DistURL(line)
+                except messages.ErrorMessage as e:
+                    out.warning(e)
+                else:
+                    installed[durl.package] = durl
+
+        for name in updated.keys():
+            try:
+                di = installed[name]
+                du = updated[name]
+                assert(di and du)
+            except (AssertionError, KeyError):
+                out.warning('osc disturl not found for package %s. skipping.' % name)
+                continue
+
+            if di.commit == du.commit:
+                out.warning(messages.PackageRevisionHasntChangedWarning(name))
+                continue
+
+            diff = os.path.join(destination, '%s-%s.diff' % (name, args))
+            if args == 'source':
+                with open(diff, 'w+') as f:
+                    try:
+                        f.write(osc.core.server_diff(
+                              'https://api.suse.de'
+                            , di.project
+                            , di.package
+                            , di.commit
+                            , du.project
+                            , du.package
+                            , du.commit
+                            , unified=True
+                        ))
+                    except Exception as error:
+                        out.error('failed to diff packages: %s', error)
+                        return
+
+                out.info('wrote diff locally to %s' % diff)
+
+            elif args == 'build':
+                RunCommand(targets, 'which osc').run()
+                for target in targets:
+                    if targets[target].lastexit() != 0:
+                        out.error('osc is missing on %s. skipping.' % target)
+
+                for state in ['new', 'old']:
+                    sourcedir = os.path.join(destination, name, state)
+                    builddir = os.path.join(destination, name, state, 'BUILD')
+                    disturl = du.disturl if state == 'new' else di.disturl
+
+                    RunCommand(targets, 'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui').run()
+                    RunCommand(targets, 'mkdir -p %s' % builddir).run()
+                    RunCommand(targets, 'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
+                    RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
+                            % (sourcedir, name, builddir, sourcedir, name)).run()
+
+                RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
+
+                out.info('wrote diff remotely to %s' % diff)
 
     def complete_source_diff(self, text, line, begidx, endidx):
         return [i for i in ['source', 'build'] if i.startswith(text)]
