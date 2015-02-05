@@ -2,6 +2,16 @@
 ChangeLog
 #########
 
+3.0.4
+#####
+
+Bugfixes
+========
+
+* [no ticket] - Command source_diff works with SLE 12 updates
+
+* bsc#911686 - command list_metadata shows testplatforms
+
 3.0.3
 #####
 
