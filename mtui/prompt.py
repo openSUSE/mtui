@@ -37,6 +37,7 @@ from mtui.testopia import *
 from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
+from mtui.refhost import Attributes
 from mtui.types import MD5Hash
 from mtui.types import obs
 from mtui.template import OBSUpdateID
@@ -368,8 +369,9 @@ class CommandPrompt(cmd.Cmd):
             # loading other set of hosts for running the current update
             # on
             try:
-                refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
-                hosts = refhost.search()
+                hosts = refhost.search(Attributes.from_testplatform(
+                    args.replace('Testplatform: ', '')
+                ))
             except (ValueError, KeyError):
                 hosts = []
                 out.error('failed to parse Testplatform string')

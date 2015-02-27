@@ -19,6 +19,7 @@ from mtui.target import TargetI
 from mtui.target import RunCommand
 from mtui.target import FileUpload
 from mtui.refhost import RefhostsFactory
+from mtui.refhost import Attributes
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
@@ -416,8 +417,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         refhosts = self.refhostsFactory(self.config, self.log)
 
         try:
-            refhosts.set_attributes_from_testplatform(testplatform)
-            hostnames = refhosts.search()
+            hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
         except (ValueError, KeyError):
             hostnames = []
             msg = 'failed to parse testplatform {0!r}'
