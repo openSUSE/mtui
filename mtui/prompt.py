@@ -355,83 +355,82 @@ class CommandPrompt(cmd.Cmd):
         # there is also improved version in
         # qa-maintenance/various-tools.git/refhosts-search
 
-        if args:
-            attributes = Attributes()
-            refhost = self._refhosts()
-
-            if 'Testplatform:' in args:
-                # USECASE: this branch is handling a case where user loads mtui
-                # without a testreport and copies the Testplatform: line
-                # from some testreport into search_hosts or autoadd or
-                # loading other set of hosts for running the current update
-                # on
-                try:
-                    refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
-                    hosts = refhost.search()
-                except (ValueError, KeyError):
-                    hosts = []
-                    out.error('failed to parse Testplatform string')
-            elif refhost.get_host_attributes(args):
-                hosts = [args]
-            else:
-                for _tag in args.split(' '):
-                    tag = _tag.lower()
-                    match = re.search('(\d+)\.(\d+)', tag)
-                    if match:
-                        attributes.major = match.group(1)
-                        attributes.minor = match.group(2)
-                    if tag in attributes.tags['products']:
-                        attributes.product = tag
-                    if tag in attributes.tags['archs']:
-                        attributes.archs.append(tag)
-                    if tag in attributes.tags['addons']:
-                        attributes.addons.update({tag:{}})
-                    if tag in attributes.tags['major']:
-                        attributes.major = tag
-                    if tag in attributes.tags['minor']:
-                        attributes.minor = tag
-                    if tag == 'kernel':
-                        attributes.kernel = True
-                    if tag == 'ltss':
-                        attributes.ltss = True
-                    if tag == 'minimal':
-                        attributes.minimal = True
-                    if tag == '!kernel':
-                        attributes.kernel = False
-                    if tag == '!ltss':
-                        attributes.ltss = False
-                    if tag == '!minimal':
-                        attributes.minimal = False
-                    if tag == 'xenu':
-                        attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
-                    if tag == 'xen0':
-                        attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
-                    if tag == 'xen':
-                        attributes.virtual.update({'hypervisor':'xen'})
-                    if tag == 'kvm':
-                        attributes.virtual.update({'hypervisor':'kvm'})
-                    if tag == 'vmware':
-                        attributes.virtual.update({'hypervisor':'vmware'})
-                    if tag == 'host':
-                        attributes.virtual.update({'mode':'host'})
-                    if tag == 'guest':
-                        attributes.virtual.update({'mode':'guest'})
-
-                hosts = refhost.search(attributes)
-
-                # check if some tags were passed to the attributes object which has
-                # all archs set by default
-                if not set(str(attributes).split()) ^ set(attributes.tags["archs"]):
-                    return []
-
-            for hostname in set(hosts):
-                hosttags = refhost.get_host_attributes(hostname)
-                self.println('{0:25}: {1}'.format(hostname, hosttags))
-
-            return hosts
-
-        else:
+        if not args:
             self.parse_error(self.do_search_hosts, args)
+
+        attributes = Attributes()
+        refhost = self._refhosts()
+
+        if 'Testplatform:' in args:
+            # USECASE: this branch is handling a case where user loads mtui
+            # without a testreport and copies the Testplatform: line
+            # from some testreport into search_hosts or autoadd or
+            # loading other set of hosts for running the current update
+            # on
+            try:
+                refhost.set_attributes_from_testplatform(args.replace('Testplatform: ', ''))
+                hosts = refhost.search()
+            except (ValueError, KeyError):
+                hosts = []
+                out.error('failed to parse Testplatform string')
+        elif refhost.get_host_attributes(args):
+            hosts = [args]
+        else:
+            for _tag in args.split(' '):
+                tag = _tag.lower()
+                match = re.search('(\d+)\.(\d+)', tag)
+                if match:
+                    attributes.major = match.group(1)
+                    attributes.minor = match.group(2)
+                if tag in attributes.tags['products']:
+                    attributes.product = tag
+                if tag in attributes.tags['archs']:
+                    attributes.archs.append(tag)
+                if tag in attributes.tags['addons']:
+                    attributes.addons.update({tag:{}})
+                if tag in attributes.tags['major']:
+                    attributes.major = tag
+                if tag in attributes.tags['minor']:
+                    attributes.minor = tag
+                if tag == 'kernel':
+                    attributes.kernel = True
+                if tag == 'ltss':
+                    attributes.ltss = True
+                if tag == 'minimal':
+                    attributes.minimal = True
+                if tag == '!kernel':
+                    attributes.kernel = False
+                if tag == '!ltss':
+                    attributes.ltss = False
+                if tag == '!minimal':
+                    attributes.minimal = False
+                if tag == 'xenu':
+                    attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
+                if tag == 'xen0':
+                    attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
+                if tag == 'xen':
+                    attributes.virtual.update({'hypervisor':'xen'})
+                if tag == 'kvm':
+                    attributes.virtual.update({'hypervisor':'kvm'})
+                if tag == 'vmware':
+                    attributes.virtual.update({'hypervisor':'vmware'})
+                if tag == 'host':
+                    attributes.virtual.update({'mode':'host'})
+                if tag == 'guest':
+                    attributes.virtual.update({'mode':'guest'})
+
+            hosts = refhost.search(attributes)
+
+            # check if some tags were passed to the attributes object which has
+            # all archs set by default
+            if not set(str(attributes).split()) ^ set(attributes.tags["archs"]):
+                return []
+
+        for hostname in set(hosts):
+            hosttags = refhost.get_host_attributes(hostname)
+            self.println('{0:25}: {1}'.format(hostname, hosttags))
+
+        return hosts
 
     def complete_search_hosts(self, text, line, begidx, endidx):
         attributes = Attributes()
