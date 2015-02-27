@@ -116,6 +116,132 @@ class Attributes(object):
         """python-2.x compat"""
         return self.__bool__()
 
+    @classmethod
+    def from_testplatform(cls, testplatform):
+        """
+        Create a attribute object based on a testplatform string
+
+        Keyword arguments:
+        testplatform -- testplatform string to return the attributes for
+
+        """
+
+        # testreport string example: base=sled(major=10,minor=sp4);arch=[i386,x86_64]
+
+        requests = {}
+        attributes = Attributes()
+        attributes.kernel = False
+        attributes.ltss = False
+        attributes.minimal = False
+
+        # split patterns to base, arch, addon, tags
+        patterns = testplatform.split(';')
+        for pattern in patterns:
+            # get assignements for each pattern, like name = 'base',
+            # content = sled(major=10,minor=sp4)
+            try:
+                name, content = pattern.split('=', 1)
+            except ValueError:
+                out.error('error when parsing line "%s"' % testplatform)
+                continue
+
+            # get all subpatterns and parameters, like subpattern = 'sled'
+            # parameters = major=10,minor=sp4
+            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
+            for match in matches:
+                    subpattern = match[0]
+                    parameters = match[1]
+                    # split parameter assignments in key and value, like
+                    # key = major, value = 10
+                    for parameter in parameters.split(','):
+                        key, value = parameter.split('=', 1)
+                        try:
+                            # add key and value to the name/subpattern dict
+                            requests[name][subpattern].update({key:value})
+                        except KeyError as error:
+                            # if name or subpattern do not yet exist in the dict,
+                            # create them. first make sure which one is missing:
+                            # name or supbattern
+                            if name == error.args[0]:
+                                requests[name] = {subpattern:{key:value}}
+                            else:
+                                requests[name][subpattern] = {key:value}
+            # add all required architectures to the dict
+            if name == 'arch':
+                match = re.search('\[(.*)\]', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+            # add all required tags to the dict (like kernel or ltss)
+            if name == 'tags':
+                match = re.search('\((.*)\)', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+            # add all required virtual descriptors to the dict (like "mode" or "hypervisor")
+            if name == 'virtual':
+                match = re.search('\((.*)\)', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+
+        # assign the findings to the attributes object
+        attributes.archs = requests['arch']
+        # currently, just one base product is supported
+        attributes.product = list(requests['base'].keys())[0]
+        try:
+            attributes.major = requests['base'][attributes.product]['major']
+        except KeyError:
+            pass
+        try:
+            attributes.minor = requests['base'][attributes.product]['minor']
+        except KeyError:
+            pass
+
+        try:
+            tags = requests['tags']
+        except KeyError:
+            tags = []
+
+        # if we found tags in the testplatform string, add them to the attributes
+        for tag in tags:
+            if tag == 'vmware':
+                attributes.virtual.update({'hypervisor':'vmware'})
+            if tag == 'xen':
+                attributes.virtual.update({'hypervisor':'xen'})
+            if tag == 'kernel':
+                attributes.kernel = True
+            if tag == 'ltss':
+                attributes.ltss = True
+            if tag == 'minimal':
+                attributes.minimal = True
+
+        try:
+            # add adons to the attributes
+            for addon in requests['addon']:
+                try:
+                    # if no version is required, leave them empty
+                    major = requests['addon'][addon]['major']
+                except:
+                    major = ''
+                try:
+                    minor = requests['addon'][addon]['minor']
+                except:
+                    minor = ''
+                attributes.addons.update({addon:{'major':major,'minor':minor}})
+        except KeyError:
+            pass
+
+        try:
+            # add virtual descriptors to the attributes (may overwrite xen tag)
+            for descriptor in requests['virtual']:
+                for parameter in descriptor.split(','):
+                    key = parameter.split('=')[0]
+                    value = parameter.split('=')[1]
+
+                    attributes.virtual.update({key:value})
+        except KeyError:
+            pass
+
+        return attributes
+
 class Refhosts(object):
 
     def __init__(self, hostmap, location=None, attributes=Attributes()):
@@ -540,130 +666,6 @@ class Refhosts(object):
 
         # set the attributes of the current object. consider returning
         # the attributes object as well
-        self.attributes = attributes
-
-    def set_attributes_from_testplatform(self, testplatform):
-        """create a attribute object based on a testplatform string
-
-        Keyword arguments:
-        testplatform -- testplatform string to return the attributes for
-
-        """
-
-        # testreport string example: base=sled(major=10,minor=sp4);arch=[i386,x86_64]
-
-        requests = {}
-        attributes = Attributes()
-        attributes.kernel = False
-        attributes.ltss = False
-        attributes.minimal = False
-
-        # split patterns to base, arch, addon, tags
-        patterns = testplatform.split(';')
-        for pattern in patterns:
-            # get assignements for each pattern, like name = 'base',
-            # content = sled(major=10,minor=sp4)
-            try:
-                name, content = pattern.split('=', 1)
-            except ValueError:
-                out.error('error when parsing line "%s"' % testplatform)
-                continue
-
-            # get all subpatterns and parameters, like subpattern = 'sled'
-            # parameters = major=10,minor=sp4
-            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
-            for match in matches:
-                    subpattern = match[0]
-                    parameters = match[1]
-                    # split parameter assignments in key and value, like
-                    # key = major, value = 10
-                    for parameter in parameters.split(','):
-                        key, value = parameter.split('=', 1)
-                        try:
-                            # add key and value to the name/subpattern dict
-                            requests[name][subpattern].update({key:value})
-                        except KeyError as error:
-                            # if name or subpattern do not yet exist in the dict,
-                            # create them. first make sure which one is missing:
-                            # name or supbattern
-                            if name == error.args[0]:
-                                requests[name] = {subpattern:{key:value}}
-                            else:
-                                requests[name][subpattern] = {key:value}
-            # add all required architectures to the dict
-            if name == 'arch':
-                match = re.search('\[(.*)\]', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-            # add all required tags to the dict (like kernel or ltss)
-            if name == 'tags':
-                match = re.search('\((.*)\)', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-            # add all required virtual descriptors to the dict (like "mode" or "hypervisor")
-            if name == 'virtual':
-                match = re.search('\((.*)\)', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-
-        # assign the findings to the attributes object
-        attributes.archs = requests['arch']
-        # currently, just one base product is supported
-        attributes.product = list(requests['base'].keys())[0]
-        try:
-            attributes.major = requests['base'][attributes.product]['major']
-        except KeyError:
-            pass
-        try:
-            attributes.minor = requests['base'][attributes.product]['minor']
-        except KeyError:
-            pass
-
-        try:
-            tags = requests['tags']
-        except KeyError:
-            tags = []
-
-        # if we found tags in the testplatform string, add them to the attributes
-        for tag in tags:
-            if tag == 'vmware':
-                attributes.virtual.update({'hypervisor':'vmware'})
-            if tag == 'xen':
-                attributes.virtual.update({'hypervisor':'xen'})
-            if tag == 'kernel':
-                attributes.kernel = True
-            if tag == 'ltss':
-                attributes.ltss = True
-            if tag == 'minimal':
-                attributes.minimal = True
-
-        try:
-            # add adons to the attributes
-            for addon in requests['addon']:
-                try:
-                    # if no version is required, leave them empty
-                    major = requests['addon'][addon]['major']
-                except:
-                    major = ''
-                try:
-                    minor = requests['addon'][addon]['minor']
-                except:
-                    minor = ''
-                attributes.addons.update({addon:{'major':major,'minor':minor}})
-        except KeyError:
-            pass
-
-        try:
-            # add virtual descriptors to the attributes (may overwrite xen tag)
-            for descriptor in requests['virtual']:
-                for parameter in descriptor.split(','):
-                    key = parameter.split('=')[0]
-                    value = parameter.split('=')[1]
-
-                    attributes.virtual.update({key:value})
-        except KeyError:
-            pass
-
         self.attributes = attributes
 
 class RefhostsResolveFailed(RuntimeError):
