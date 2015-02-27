@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<definitions>
+  <location name="default">
+    <host arch="x86_64" name="shran.example.com">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <kernel>true</kernel>
+      <addon property="weak" name="sdk"/>
+    </host>
+  </location>
+  <location name="foolocation">
+    <host arch="x86_64" name="fletcher.example.com">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.example.com">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
+    </host>
+    <host arch="i386" name="cunningham.example.com">
+      <product name="sles">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.example.com">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+      <addon property="weak" name="hae"/>
+    </host>
+    <host arch="i386" name="rivers.example.com">
+      <product name="sled">
+        <version>
+          <major>11</major>
+          <minor>sp3</minor>
+        </version>
+      </product>
+      <virtual property="weak" mode="guest" host="enterprise-nx01.example.com">kvm</virtual>
+      <addon property="weak" name="sdk"/>
+    </host>
+  </location>
+</definitions>
