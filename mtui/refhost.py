@@ -31,7 +31,7 @@ class Attributes(object):
     """
 
     tags = {'products':['sled', 'sles', 'opensuse', 'studio', 'slms', 'sles4vmware', 'manager', 'rhel', 'sle'],
-             'archs':['i386', 'x86_64', 'ppc', 'ppc64', 's390', 's390x', 'ia64', 'iseries'],
+             'archs':['i386', 'x86_64', 'ppc', 'ppc64', 'ppc64le', 's390', 's390x', 'ia64', 'iseries'],
              'major':['9', '10', '11', '12', '5', '6'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
              'addons':['webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner', 'smt', 'manager-client', 'rt', 'we'],
