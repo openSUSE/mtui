@@ -178,8 +178,14 @@ def test_rf_rp():
     """
     Test L{_RefhostsFactory.resolve_path} calls and returns Refhosts
     """
-    f = RefhostsFactory
-    f.refhosts_factory = RefhostsFake
+    f = _RefhostsFactory(
+      unused
+    , unused
+    , unused
+    , unused
+    , unused
+    , RefhostsFake
+    )
     c = ConfigFake(overrides = dict(
         refhosts_path = '/tmp/foobar'
         , location = 'foobar'))
