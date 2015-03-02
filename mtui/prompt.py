@@ -370,7 +370,8 @@ class CommandPrompt(cmd.Cmd):
             # on
             try:
                 hosts = refhost.search(Attributes.from_testplatform(
-                    args.replace('Testplatform: ', '')
+                  args.replace('Testplatform: ', '')
+                , self.log
                 ))
             except (ValueError, KeyError):
                 hosts = []

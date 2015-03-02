@@ -117,7 +117,7 @@ class Attributes(object):
         return self.__bool__()
 
     @classmethod
-    def from_testplatform(cls, testplatform):
+    def from_testplatform(cls, testplatform, log):
         """
         Create a attribute object based on a testplatform string
 
@@ -142,7 +142,7 @@ class Attributes(object):
             try:
                 name, content = pattern.split('=', 1)
             except ValueError:
-                out.error('error when parsing line "%s"' % testplatform)
+                log.error('error when parsing line "%s"' % testplatform)
                 continue
 
             # get all subpatterns and parameters, like subpattern = 'sled'

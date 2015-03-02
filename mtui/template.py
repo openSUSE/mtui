@@ -417,7 +417,10 @@ class TestReport(with_metaclass(ABCMeta, object)):
         refhosts = self.refhostsFactory(self.config, self.log)
 
         try:
-            hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
+            hostnames = refhosts.search(Attributes.from_testplatform(
+                  testplatform
+                , self.log
+            ))
         except (ValueError, KeyError):
             hostnames = []
             msg = 'failed to parse testplatform {0!r}'
