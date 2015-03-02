@@ -4,7 +4,6 @@
 #
 
 import re
-import logging
 import os
 import time
 import errno
@@ -18,9 +17,6 @@ from mtui.xdg import save_cache_path
 from mtui.utils import atomic_write_file
 
 from traceback import format_exc
-
-out = logging.getLogger('mtui')
-
 
 class Attributes(object):
     """Host attributes which get loaded from the xml or serve as search criteria
