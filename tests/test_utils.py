@@ -20,6 +20,7 @@ from mtui.messages import TestReportNotLoadedError
 
 from .utils import unused
 from .utils import LogFake
+from .utils import LogTestingWrap
 
 class TestEnsureDirExists(TestCase):
     def setUp(self):
@@ -135,3 +136,43 @@ def test_dict_with_injections():
         pass
     else:
         ok_(False, "Expected Foo to be raised")
+
+def test_empty_logger_is_empty():
+    eq_(
+          LogTestingWrap(LogFake()).all()
+        , dict(
+              errors    = []
+            , warnings  = []
+            , debugs    = []
+            , infos     = []
+            , criticals = []
+        )
+    )
+    eq_(LogTestingWrap().all(), LogTestingWrap.empty())
+
+def test_LogTestingWrap():
+    """
+    Test messages for each level are returned for that level by all()
+    """
+    l = LogFake()
+    l.error(1)
+    l.warning(2)
+    l.debug(3)
+    l.info(4)
+    l.critical(5)
+
+    ltw = LogTestingWrap(LogFake()) \
+        .error(1) \
+        .warning(2) \
+        .debug(3) \
+        .info(4) \
+        .critical(5)
+
+    eq_(LogTestingWrap(l).all(), ltw.all())
+    eq_(LogTestingWrap(l).all(), dict(
+          errors    = [1]
+        , warnings  = [2]
+        , debugs    = [3]
+        , infos     = [4]
+        , criticals = [5]
+    ))
