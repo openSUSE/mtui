@@ -11,10 +11,11 @@ from xml.sax import saxutils
 
 from mtui.config import *
 from mtui.connector.bugzilla import *
+from mtui.utils import nottest
 
 out = logging.getLogger('mtui')
 
-
+@nottest
 class Testopia(object):
     """Managing Testopia testcases
 
@@ -310,4 +311,3 @@ class Testopia(object):
         self.update_testcase_list()
 
         return
-

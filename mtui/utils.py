@@ -28,6 +28,11 @@ except ImportError:
     from itertools import izip_longest as zip_longest
 
 try:
+    from nose.tools import nottest
+except ImportError:
+    nottest = lambda x: x
+
+try:
     xrange
 except NameError:
     xrange = range

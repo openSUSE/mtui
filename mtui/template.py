@@ -32,12 +32,7 @@ from mtui import messages
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.utils import ass_is, ass_isL
-
-try:
-    from nose.tools import nottest
-    has_nose = True
-except ImportError:
-    has_nose = False
+from mtui.utils import nottest
 
 class _TemplateIOError(IOError):
     """
@@ -137,6 +132,7 @@ class OBSUpdateID(UpdateID):
 class TestReportAlreadyLoaded(RuntimeError):
     pass
 
+@nottest
 class TestReport(with_metaclass(ABCMeta, object)):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
@@ -694,6 +690,3 @@ class OBSTestReport(TestReport):
             self.repository,
             3
         )
-
-if has_nose:
-    TestReport = nottest(TestReport)
