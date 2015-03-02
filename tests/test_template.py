@@ -28,6 +28,7 @@ from mtui.types.md5 import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui import messages
 from .utils import LogFake
+from .utils import LogTestingWrap
 from .utils import StringIO
 from .utils import touch
 from .utils import ConfigFake
@@ -423,12 +424,14 @@ def test_TestReport_refhosts_from_tp():
 
         eq_(tr._refhosts_from_tp(case.testplatform), case.hosts, case.name)
         eq_(
-              tr.log.warnings
-            , [x.format(**case.__dict__) for x in case.warnings]
-            , case.name
+              LogTestingWrap(tr.log).all()
+            , dict([(k, [v.format(**case.__dict__) for v in vs])
+                for k,vs in case.logs.items()
+            ])
+        #    , case.name
         )
 
-    Case = namedtuple('Case', ['name', 'testplatform', 'hosts', 'warnings'])
+    Case = namedtuple('Case', ['name', 'testplatform', 'hosts', 'logs'])
 
     cases = [
         Case(
@@ -438,17 +441,22 @@ def test_TestReport_refhosts_from_tp():
                   'fletcher.example.com': 'sles11sp3-x86_64'
                 , 'cunningham.example.com': 'sles11sp3-i386'
             }
-            , []
+            , LogTestingWrap().all()
         ), Case(
               'failure to parse testplatform'
             , 'unparsable testplatform'
             , {}
-            , ["failed to parse testplatform '{testplatform}'"]
+            , LogTestingWrap().\
+                warning("failed to parse testplatform '{testplatform}'").\
+                error('error when parsing line "{testplatform}"').\
+                all()
         ), Case(
               'nothing found in refhosts'
             , 'base=sles(major=11,minor=sp3);arch=[ppc64]'
             , {}
-            , ["nothing found for testplatform '{testplatform}'"]
+            , LogTestingWrap().\
+                warning("nothing found for testplatform '{testplatform}'").\
+                all()
         )
     ]
 
