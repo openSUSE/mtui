@@ -243,8 +243,7 @@ class Attributes(object):
         return attributes
 
 class Refhosts(object):
-
-    def __init__(self, hostmap, location=None, attributes=Attributes()):
+    def __init__(self, hostmap, log, location=None, attributes=Attributes()):
         """load refhosts.xml file and pass it to the xml parser
 
         Keyword arguments:
@@ -253,6 +252,7 @@ class Refhosts(object):
         attributes-- predefined search attributes
 
         """
+        self.log = log
 
         # default refhosts location is 'default' which is basically
         # nuremberg office
@@ -272,7 +272,7 @@ class Refhosts(object):
             self.data = minidom.parse(hostmap)
         except Exception as error:
             # nothing to do for us if we can't load the hosts
-            out.error('failed to parse refhosts.xml: %s' % error)
+            self.log.error('failed to parse refhosts.xml: %s' % error)
             raise
 
     def extract_name(self, element):
@@ -733,7 +733,7 @@ class _RefhostsFactory(object):
             log.warning("Refhosts: invalid resolver: {0}".format(name))
             raise
         else:
-            return resolver(config)
+            return resolver(config, log)
 
     def refresh_https_cache_if_needed(self, path, config):
         if self._is_https_cache_refresh_needed(path
@@ -754,14 +754,18 @@ class _RefhostsFactory(object):
     def refresh_https_cache(self, path, uri):
         self._write_file(self._urlopen(uri).read(), path)
 
-    def resolve_https(self, config):
+    def resolve_https(self, config, log):
         f = self.refhosts_cache_path
         self.refresh_https_cache_if_needed(f, config)
 
-        return self.refhosts_factory(f, config.location)
+        return self.refhosts_factory(f, log, config.location)
 
-    def resolve_path(self, config):
-        return self.refhosts_factory(config.refhosts_path, config.location)
+    def resolve_path(self, config, log):
+        return self.refhosts_factory(
+              config.refhosts_path
+            , log
+            , config.location
+        )
 
 RefhostsFactory = _RefhostsFactory(
   time.time

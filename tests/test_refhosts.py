@@ -168,7 +168,7 @@ def test_rf_rh():
         unused, RefhostsFake)
     f.refresh_https_cache_if_needed = CallLogger()
     c = ConfigFake(overrides = dict(location = 'quux'))
-    r = f.resolve_https(c)
+    r = f.resolve_https(c, LogFake())
     ok_(isinstance(r, f.refhosts_factory))
     eq_(r.location, c.location)
     eq_(r.t_hostmap, f.refhosts_cache_path)
@@ -189,7 +189,7 @@ def test_rf_rp():
     c = ConfigFake(overrides = dict(
         refhosts_path = '/tmp/foobar'
         , location = 'foobar'))
-    r = f.resolve_path(c)
+    r = f.resolve_path(c, LogFake())
     ok_(isinstance(r, f.refhosts_factory))
     eq_(r.location, c.location)
     eq_(r.t_hostmap, c.refhosts_path)
