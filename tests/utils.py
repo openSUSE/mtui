@@ -39,36 +39,73 @@ class SysFake(object):
         self.stdin = StringIO()
 
 class LogFake:
-    _conv = lambda _, x: x
     def __init__(self):
-        self.__setup(self._conv)
-
-    def __setup(self, conv):
-        self.__levels = ['error', 'warning', 'debug', 'info', 'critical']
-        for i in self.__levels:
-            setattr(self, i+"s", list())
-            setattr(self, i, (lambda i: lambda x: getattr(self, i).append(conv(x)))(i+"s"))
-            # because reasons
-
         self.t_setLevels = []
 
-    def __repr__(self):
-        return repr(self.__dict__)
+        self.errors    = []
+        self.warnings  = []
+        self.debugs    = []
+        self.infos     = []
+        self.criticals = []
 
-    def __str__(self):
-        return repr(self)
+    def _norm(self, x):
+        return x
+
+    def error   (self, x): self.__log('errors'   , x)
+    def warning (self, x): self.__log('warnings' , x)
+    def debug   (self, x): self.__log('debugs'   , x)
+    def info    (self, x): self.__log('infos'    , x)
+    def critical(self, x): self.__log('criticals', x)
+
+    def __log(self, level, msg):
+        getattr(self, level).append(self._norm(msg))
 
     def setLevel(self, level=None):
         self.t_setLevels.append(level)
 
+class LogTestingWrap(object):
+    """
+    Wraps LogFake object with interface to ease testing so tests are
+    more conscise but the added interface features can not interfere
+    with the code under test
+    """
+    def __init__(self, log = None):
+        self.log = log if log else LogFake()
+
+    @classmethod
+    def empty(cls):
+        return cls().all()
+
+    def all(self):
+        """
+        :returns: dict(level = [message])
+        """
+        return dict(
+              errors = self.log.errors
+            , warnings = self.log.warnings
+            , debugs = self.log.debugs
+            , infos = self.log.infos
+            , criticals = self.log.criticals
+        )
+
+    def error   (self, x): self.log.error(x)    ; return self
+    def warning (self, x): self.log.warning(x)  ; return self
+    def debug   (self, x): self.log.debug(x)    ; return self
+    def info    (self, x): self.log.info(x)     ; return self
+    def critical(self, x): self.log.critical(x) ; return self
+
+    def __repr__(self):
+        return repr(self.all())
+
+    def __str__(self):
+        return repr(self)
+
     def pprint(self):
-        pprint(dict([
-            (x, getattr(self, x))
-            for x in [i+"s" for i in self.__levels]
-        ]))
+        pprint(self.all())
 
 class LogFakeStr(LogFake):
-    _conv = lambda _, x: str(x)
+    def _norm(self, x):
+        return str(x)
 
 class RefhostsFake(Refhosts):
     def _parse_refhosts(self, hostmap):

@@ -4,7 +4,6 @@
 #
 
 import re
-import logging
 import os
 import time
 import errno
@@ -18,9 +17,6 @@ from mtui.xdg import save_cache_path
 from mtui.utils import atomic_write_file
 
 from traceback import format_exc
-
-out = logging.getLogger('mtui')
-
 
 class Attributes(object):
     """Host attributes which get loaded from the xml or serve as search criteria
@@ -116,9 +112,134 @@ class Attributes(object):
         """python-2.x compat"""
         return self.__bool__()
 
-class Refhosts(object):
+    @classmethod
+    def from_testplatform(cls, testplatform, log):
+        """
+        Create a attribute object based on a testplatform string
 
-    def __init__(self, hostmap, location=None, attributes=Attributes()):
+        Keyword arguments:
+        testplatform -- testplatform string to return the attributes for
+
+        """
+
+        # testreport string example: base=sled(major=10,minor=sp4);arch=[i386,x86_64]
+
+        requests = {}
+        attributes = Attributes()
+        attributes.kernel = False
+        attributes.ltss = False
+        attributes.minimal = False
+
+        # split patterns to base, arch, addon, tags
+        patterns = testplatform.split(';')
+        for pattern in patterns:
+            # get assignements for each pattern, like name = 'base',
+            # content = sled(major=10,minor=sp4)
+            try:
+                name, content = pattern.split('=', 1)
+            except ValueError:
+                log.error('error when parsing line "%s"' % testplatform)
+                continue
+
+            # get all subpatterns and parameters, like subpattern = 'sled'
+            # parameters = major=10,minor=sp4
+            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
+            for match in matches:
+                    subpattern = match[0]
+                    parameters = match[1]
+                    # split parameter assignments in key and value, like
+                    # key = major, value = 10
+                    for parameter in parameters.split(','):
+                        key, value = parameter.split('=', 1)
+                        try:
+                            # add key and value to the name/subpattern dict
+                            requests[name][subpattern].update({key:value})
+                        except KeyError as error:
+                            # if name or subpattern do not yet exist in the dict,
+                            # create them. first make sure which one is missing:
+                            # name or supbattern
+                            if name == error.args[0]:
+                                requests[name] = {subpattern:{key:value}}
+                            else:
+                                requests[name][subpattern] = {key:value}
+            # add all required architectures to the dict
+            if name == 'arch':
+                match = re.search('\[(.*)\]', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+            # add all required tags to the dict (like kernel or ltss)
+            if name == 'tags':
+                match = re.search('\((.*)\)', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+            # add all required virtual descriptors to the dict (like "mode" or "hypervisor")
+            if name == 'virtual':
+                match = re.search('\((.*)\)', content)
+                if match:
+                    requests[name] = match.group(1).split(',')
+
+        # assign the findings to the attributes object
+        attributes.archs = requests['arch']
+        # currently, just one base product is supported
+        attributes.product = list(requests['base'].keys())[0]
+        try:
+            attributes.major = requests['base'][attributes.product]['major']
+        except KeyError:
+            pass
+        try:
+            attributes.minor = requests['base'][attributes.product]['minor']
+        except KeyError:
+            pass
+
+        try:
+            tags = requests['tags']
+        except KeyError:
+            tags = []
+
+        # if we found tags in the testplatform string, add them to the attributes
+        for tag in tags:
+            if tag == 'vmware':
+                attributes.virtual.update({'hypervisor':'vmware'})
+            if tag == 'xen':
+                attributes.virtual.update({'hypervisor':'xen'})
+            if tag == 'kernel':
+                attributes.kernel = True
+            if tag == 'ltss':
+                attributes.ltss = True
+            if tag == 'minimal':
+                attributes.minimal = True
+
+        try:
+            # add adons to the attributes
+            for addon in requests['addon']:
+                try:
+                    # if no version is required, leave them empty
+                    major = requests['addon'][addon]['major']
+                except:
+                    major = ''
+                try:
+                    minor = requests['addon'][addon]['minor']
+                except:
+                    minor = ''
+                attributes.addons.update({addon:{'major':major,'minor':minor}})
+        except KeyError:
+            pass
+
+        try:
+            # add virtual descriptors to the attributes (may overwrite xen tag)
+            for descriptor in requests['virtual']:
+                for parameter in descriptor.split(','):
+                    key = parameter.split('=')[0]
+                    value = parameter.split('=')[1]
+
+                    attributes.virtual.update({key:value})
+        except KeyError:
+            pass
+
+        return attributes
+
+class Refhosts(object):
+    def __init__(self, hostmap, log, location=None, attributes=Attributes()):
         """load refhosts.xml file and pass it to the xml parser
 
         Keyword arguments:
@@ -127,6 +248,7 @@ class Refhosts(object):
         attributes-- predefined search attributes
 
         """
+        self.log = log
 
         # default refhosts location is 'default' which is basically
         # nuremberg office
@@ -146,7 +268,7 @@ class Refhosts(object):
             self.data = minidom.parse(hostmap)
         except Exception as error:
             # nothing to do for us if we can't load the hosts
-            out.error('failed to parse refhosts.xml: %s' % error)
+            self.log.error('failed to parse refhosts.xml: %s' % error)
             raise
 
     def extract_name(self, element):
@@ -542,130 +664,6 @@ class Refhosts(object):
         # the attributes object as well
         self.attributes = attributes
 
-    def set_attributes_from_testplatform(self, testplatform):
-        """create a attribute object based on a testplatform string
-
-        Keyword arguments:
-        testplatform -- testplatform string to return the attributes for
-
-        """
-
-        # testreport string example: base=sled(major=10,minor=sp4);arch=[i386,x86_64]
-
-        requests = {}
-        attributes = Attributes()
-        attributes.kernel = False
-        attributes.ltss = False
-        attributes.minimal = False
-
-        # split patterns to base, arch, addon, tags
-        patterns = testplatform.split(';')
-        for pattern in patterns:
-            # get assignements for each pattern, like name = 'base',
-            # content = sled(major=10,minor=sp4)
-            try:
-                name, content = pattern.split('=', 1)
-            except ValueError:
-                out.error('error when parsing line "%s"' % testplatform)
-                continue
-
-            # get all subpatterns and parameters, like subpattern = 'sled'
-            # parameters = major=10,minor=sp4
-            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
-            for match in matches:
-                    subpattern = match[0]
-                    parameters = match[1]
-                    # split parameter assignments in key and value, like
-                    # key = major, value = 10
-                    for parameter in parameters.split(','):
-                        key, value = parameter.split('=', 1)
-                        try:
-                            # add key and value to the name/subpattern dict
-                            requests[name][subpattern].update({key:value})
-                        except KeyError as error:
-                            # if name or subpattern do not yet exist in the dict,
-                            # create them. first make sure which one is missing:
-                            # name or supbattern
-                            if name == error.args[0]:
-                                requests[name] = {subpattern:{key:value}}
-                            else:
-                                requests[name][subpattern] = {key:value}
-            # add all required architectures to the dict
-            if name == 'arch':
-                match = re.search('\[(.*)\]', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-            # add all required tags to the dict (like kernel or ltss)
-            if name == 'tags':
-                match = re.search('\((.*)\)', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-            # add all required virtual descriptors to the dict (like "mode" or "hypervisor")
-            if name == 'virtual':
-                match = re.search('\((.*)\)', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-
-        # assign the findings to the attributes object
-        attributes.archs = requests['arch']
-        # currently, just one base product is supported
-        attributes.product = list(requests['base'].keys())[0]
-        try:
-            attributes.major = requests['base'][attributes.product]['major']
-        except KeyError:
-            pass
-        try:
-            attributes.minor = requests['base'][attributes.product]['minor']
-        except KeyError:
-            pass
-
-        try:
-            tags = requests['tags']
-        except KeyError:
-            tags = []
-
-        # if we found tags in the testplatform string, add them to the attributes
-        for tag in tags:
-            if tag == 'vmware':
-                attributes.virtual.update({'hypervisor':'vmware'})
-            if tag == 'xen':
-                attributes.virtual.update({'hypervisor':'xen'})
-            if tag == 'kernel':
-                attributes.kernel = True
-            if tag == 'ltss':
-                attributes.ltss = True
-            if tag == 'minimal':
-                attributes.minimal = True
-
-        try:
-            # add adons to the attributes
-            for addon in requests['addon']:
-                try:
-                    # if no version is required, leave them empty
-                    major = requests['addon'][addon]['major']
-                except:
-                    major = ''
-                try:
-                    minor = requests['addon'][addon]['minor']
-                except:
-                    minor = ''
-                attributes.addons.update({addon:{'major':major,'minor':minor}})
-        except KeyError:
-            pass
-
-        try:
-            # add virtual descriptors to the attributes (may overwrite xen tag)
-            for descriptor in requests['virtual']:
-                for parameter in descriptor.split(','):
-                    key = parameter.split('=')[0]
-                    value = parameter.split('=')[1]
-
-                    attributes.virtual.update({key:value})
-        except KeyError:
-            pass
-
-        self.attributes = attributes
-
 class RefhostsResolveFailed(RuntimeError):
     pass
 
@@ -731,7 +729,7 @@ class _RefhostsFactory(object):
             log.warning("Refhosts: invalid resolver: {0}".format(name))
             raise
         else:
-            return resolver(config)
+            return resolver(config, log)
 
     def refresh_https_cache_if_needed(self, path, config):
         if self._is_https_cache_refresh_needed(path
@@ -752,14 +750,18 @@ class _RefhostsFactory(object):
     def refresh_https_cache(self, path, uri):
         self._write_file(self._urlopen(uri).read(), path)
 
-    def resolve_https(self, config):
+    def resolve_https(self, config, log):
         f = self.refhosts_cache_path
         self.refresh_https_cache_if_needed(f, config)
 
-        return self.refhosts_factory(f, config.location)
+        return self.refhosts_factory(f, log, config.location)
 
-    def resolve_path(self, config):
-        return self.refhosts_factory(config.refhosts_path, config.location)
+    def resolve_path(self, config, log):
+        return self.refhosts_factory(
+              config.refhosts_path
+            , log
+            , config.location
+        )
 
 RefhostsFactory = _RefhostsFactory(
   time.time

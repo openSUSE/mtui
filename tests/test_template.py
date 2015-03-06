@@ -5,6 +5,7 @@ from unittest import TestCase
 
 from collections import namedtuple
 from tempfile import mkdtemp, mkstemp
+from temps import tmpdir
 from os.path import join
 from os.path import dirname
 from errno import EINTR, ENOENT, EPERM, EEXIST
@@ -27,6 +28,7 @@ from mtui.types.md5 import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui import messages
 from .utils import LogFake
+from .utils import LogTestingWrap
 from .utils import StringIO
 from .utils import touch
 from .utils import ConfigFake
@@ -403,67 +405,63 @@ def test_TestReport_load_systems_from_testplatforms():
     for i in tps:
         eq_(tr.systems[i], i+"val")
 
-class RefhostFake:
-    def __init__(self, xml, location):
-        eq_(xml, 'fooxml')
-        eq_(location, 'foolocation')
-
-    def set_attributes_from_testplatform(self, x):
-        self.t_tp = x
-
-    def search(self):
-        return [self.t_tp]
-
-    def get_host_systemname(self, x):
-        return x+"_system"
-
-    @staticmethod
-    def t_config():
-        c = ConfigFake()
-        c.refhosts_path = 'fooxml'
-        c.refhosts_resolvers = 'path'
-        c.location = 'foolocation'
-        c.template_dir = 'footpldir'
-
-        return c
-
 def test_TestReport_refhosts_from_tp():
     """
-    Test L{TestReport._refhosts_from_tp} - happy path
+    Test L{TestReport._refhosts_from_tp}
     """
-    tr = TRF(SwampTestReport, config = RefhostFake.t_config())
+    def check(case):
+        tr = TRF(
+              SwampTestReport
+            , config = ConfigFake(
+                overrides = dict(
+                      refhosts_path = join(dirname(__file__), "fixtures", "refhosts.xml")
+                    , refhosts_resolvers = 'path'
+                    , location = 'foolocation'
+                    , template_dir = 'footpldir'
+                )
+            )
+        )
 
-    tr.refhostsFactory.refhosts_factory = RefhostFake
-    eq_(tr._refhosts_from_tp('foo'), {'foo': 'foo_system'})
+        eq_(tr._refhosts_from_tp(case.testplatform), case.hosts, case.name)
+        eq_(
+              LogTestingWrap(tr.log).all()
+            , dict([(k, [v.format(**case.__dict__) for v in vs])
+                for k,vs in case.logs.items()
+            ])
+        #    , case.name
+        )
 
-def test_TestReport_refhosts_from_tp_ValueError():
-    """
-    Test L{TestReport._refhosts_from_tp} - failure while setting
-    attributes
-    """
-    class RefhostFake_(RefhostFake):
-        def set_attributes_from_testplatform(self, x):
-            raise ValueError(x)
+    Case = namedtuple('Case', ['name', 'testplatform', 'hosts', 'logs'])
 
-    tr = TRF(SwampTestReport, config = RefhostFake.t_config())
+    cases = [
+        Case(
+              'happy path'
+            , 'base=sles(major=11,minor=sp3);arch=[i386,x86_64]'
+            , {
+                  'fletcher.example.com': 'sles11sp3-x86_64'
+                , 'cunningham.example.com': 'sles11sp3-i386'
+            }
+            , LogTestingWrap().all()
+        ), Case(
+              'failure to parse testplatform'
+            , 'unparsable testplatform'
+            , {}
+            , LogTestingWrap().\
+                warning("failed to parse testplatform '{testplatform}'").\
+                error('error when parsing line "{testplatform}"').\
+                all()
+        ), Case(
+              'nothing found in refhosts'
+            , 'base=sles(major=11,minor=sp3);arch=[ppc64]'
+            , {}
+            , LogTestingWrap().\
+                warning("nothing found for testplatform '{testplatform}'").\
+                all()
+        )
+    ]
 
-    tr.refhostsFactory.refhosts_factory = RefhostFake_
-    eq_(tr._refhosts_from_tp('footp'), {})
-    eq_(tr.log.warnings, ["failed to parse testplatform 'footp'"])
-
-def test_TestReport_refhosts_from_tp_emptyresult():
-    """
-    Test L{TestReport._refhosts_from_tp} - nothing found in refhosts
-    """
-    class RefhostFake_(RefhostFake):
-        def search(self):
-            return []
-
-    tr = TRF(SwampTestReport, config = RefhostFake.t_config())
-
-    tr.refhostsFactory.refhosts_factory = RefhostFake_
-    eq_(tr._refhosts_from_tp('footp'), {})
-    eq_(tr.log.warnings, ["nothing found for testplatform 'footp'"])
+    for c in cases:
+        yield check, c
 
 # {{{ template parser
 def test_TestReportParse_parsed_md5():

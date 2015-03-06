@@ -163,10 +163,6 @@ def test_compare_script():
 
         s.run([t])
 
-        from pprint import pprint
-        pprint(s.path)
-        s.log.pprint()
-
         warning = s.log.warnings[0]
         ok_(isinstance(warning, messages.CompareScriptFailed))
         eq_(warning.argv, [s.path, pre_f, post_f])
