@@ -287,14 +287,12 @@ class Refhosts(object):
         return element.getAttribute('name')
 
     def search(self, attributes=None):
-        """search for hosts based on the attributes and return a list
+        """
+        Return hosts matching `attributes`
 
-        Keyword arguments:
-        attributes -- attributes object to serach for
-
+        :return: [str]
         """
 
-        results = []
         # if no attributes were set, search by the default attributes
         if attributes is not None:
             self.attributes = attributes
@@ -303,9 +301,7 @@ class Refhosts(object):
         if not archs:
             archs = attributes.tags['archs']
 
-        # if we don't get a matching host on the location, search for the
-        # same host in our default location
-
+        results = []
         # workaround for multiple-arch-searches since the default location
         # isn't used if the overlay location returns at least one host.
         # example: searching for i386 and s390x doesn't search for s390x
@@ -313,19 +309,24 @@ class Refhosts(object):
         # overlay location.
         for arch in archs:
             self.attributes.archs = [arch]
-            try:
-                # get correct location element from a list of location elements
-                location_element = list(filter(self.is_location_element, self.data.getElementsByTagName('location')))[0]
-                # extract hostname on all hosts matching the filter criteria
-                hosts = list(map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host'))))
-                assert(hosts)
-            except (AssertionError, IndexError):
-                # host not found in specified location, try again in default location
-                location_element = list(filter(self.is_default_location_element, self.data.getElementsByTagName('location')))[0]
-                hosts = list(map(self.extract_name, filter(self.check_attributes, location_element.getElementsByTagName('host'))))
 
-            if hosts:
-                results = results + hosts
+            hosts = list(map(
+                self.extract_name
+              , filter(self.check_attributes, self._location_hosts(self.location))
+            ))
+
+            if hosts == []:
+                try:
+                    hosts = list(map(
+                        self.extract_name
+                      , filter(
+                            self.check_attributes
+                          , self._location_hosts(self._default_location)
+                    )))
+                except messages.InvalidLocationError:
+                    pass
+
+            results += hosts
 
         self.attributes.archs = archs
         return results
@@ -349,14 +350,14 @@ class Refhosts(object):
         :type  location: string
         """
         xs = list(filter(
-          lambda e: operator.eq(e.getAttribute('name'), location)
-        , self.data.getElementsByTagName('location')
+            lambda e: operator.eq(e.getAttribute('name'), location)
+          , self.data.getElementsByTagName('location')
         ))
 
         if xs == []:
             raise messages.InvalidLocationError(
-              location
-            , self.get_locations()
+                location
+              , self.get_locations()
             )
 
         return xs
@@ -551,15 +552,16 @@ class Refhosts(object):
 
         attributes = Attributes()
 
-        try:
-            # search for the hostname in all host elements below the specified location
-            location_element = list(filter(self.is_location_element, self.data.getElementsByTagName('location')))[0]
-            nodes = list([x for x in location_element.getElementsByTagName('host') if x.getAttribute('name') == hostname])
-            assert(len(nodes))
-        except (AssertionError, IndexError):
-            # if no matchin hostnames are found, search again in the default location
-            location_element = list(filter(self.is_default_location_element, self.data.getElementsByTagName('location')))[0]
-            nodes = list([x for x in location_element.getElementsByTagName('host') if x.getAttribute('name') == hostname])
+        nodes = filter(
+          lambda e: operator.eq(e.getAttribute('name'), hostname)
+        , self._location_hosts(self.location)
+        )
+
+        if nodes == []:
+            nodes = filter(
+              lambda e: operator.eq(e.getAttribute('name'), hostname)
+            , self._location_hosts(self._default_location)
+            )
 
         # technically this iterates over all found host elements.
         # but since we just return one attribute object, we choose the first
