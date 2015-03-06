@@ -109,18 +109,10 @@ class LogFakeStr(LogFake):
         return str(x)
 
 class RefhostsFake(Refhosts):
-    def _parse_refhosts(self, hostmap):
-        self.t_hostmap = hostmap
-
-    def get_locations(self):
-        return [
-            'default',
-            'foobar',
-            'foolocation',
-            'quux',
-            'prague',
-            'nuremberg'
-        ]
+    def __init__(self, *a, **kw):
+        xs = list(a)
+        xs[0] = refhosts_fixtures['basic']
+        super(RefhostsFake, self).__init__(*xs, **kw)
 
 def _find_refhosts_fixtures():
     def p(*xs):
