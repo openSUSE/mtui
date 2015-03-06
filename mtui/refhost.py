@@ -4,6 +4,7 @@
 #
 
 import re
+import operator
 import os
 import time
 import errno
@@ -15,6 +16,8 @@ except ImportError:
 from xml.dom import minidom
 from mtui.xdg import save_cache_path
 from mtui.utils import atomic_write_file
+from mtui.utils import flatten
+from mtui import messages
 
 from traceback import format_exc
 
@@ -326,6 +329,37 @@ class Refhosts(object):
 
         self.attributes.archs = archs
         return results
+
+    def _location_hosts(self, location):
+        """
+        :returns: List of <host> elements for `location`
+
+        :type  location: string
+        """
+        return flatten([
+            x.getElementsByTagName('host')
+            for x in self._locations(location)
+        ])
+
+    def _locations(self, location):
+        """
+        :returns: <location> elements for `location`
+        :raises: L{messages.InvalidLocationError}
+
+        :type  location: string
+        """
+        xs = list(filter(
+          lambda e: operator.eq(e.getAttribute('name'), location)
+        , self.data.getElementsByTagName('location')
+        ))
+
+        if xs == []:
+            raise messages.InvalidLocationError(
+              location
+            , self.get_locations()
+            )
+
+        return xs
 
     def check_attributes(self, element):
         """check attributes of a specific host xml element
