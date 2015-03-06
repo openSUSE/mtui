@@ -29,6 +29,7 @@ from .utils import unused
 from .utils import ConfigFake
 from .utils import CallLogger
 from .utils import StringIO
+from .utils import refhosts_fixtures
 
 def test_factory_instance():
     ok_(isinstance(RefhostsFactory, _RefhostsFactory))
@@ -193,16 +194,16 @@ def test_rf_rp():
     , unused
     , unused
     , unused
-    , RefhostsFake
+    , Refhosts
     )
     c = ConfigFake(overrides = dict(
-        refhosts_path = '/tmp/foobar'
-        , location = 'foobar'))
+        refhosts_path = refhosts_fixtures['basic']
+        , location = 'foolocation'))
     l = LogTestingWrap()
     r = f.resolve_path(c, l.log)
     ok_(isinstance(r, f.refhosts_factory))
     eq_(r.location, c.location)
-    eq_(r.t_hostmap, c.refhosts_path)
+    eq_(len(r._location_hosts(c.location)), 3)
     eq_(l.all(), LogTestingWrap.empty())
 # }}}
 
