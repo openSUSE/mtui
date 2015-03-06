@@ -362,6 +362,12 @@ class Refhosts(object):
 
         return xs
 
+    def check_location_sanity(self, location):
+        """
+        :raises: L{messages.InvalidLocationError}
+        """
+        self._locations(location)
+
     def check_attributes(self, element):
         """check attributes of a specific host xml element
 
