@@ -17,6 +17,7 @@ except ImportError:
 from mtui.refhost import _RefhostsFactory
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import RefhostsResolveFailed
+from mtui.refhost import Refhosts
 from .utils import LogFake
 from .utils import LogTestingWrap
 from .utils import RefhostsFake
@@ -165,15 +166,20 @@ def test_rf_rh():
     """
     Test L{_RefhostsFactory.resolve_https} calls and returns Refhosts
     """
-    f = _RefhostsFactory(unused, unused, unused, unused,
-        unused, RefhostsFake)
+    tmp = NamedTemporaryFile()
+    tmp.write(
+        '<?xml version="1.0" encoding="utf-8"?>' \
+        + '<definitions></definitions>'
+    )
+    tmp.flush()
+
+    f = _RefhostsFactory(unused, unused, unused, unused, tmp.name)
     f.refresh_https_cache_if_needed = CallLogger()
-    c = ConfigFake(overrides = dict(location = 'quux'))
+    c = ConfigFake(overrides = dict(location = 'foolocation'))
     l = LogTestingWrap()
     r = f.resolve_https(c, l.log)
     ok_(isinstance(r, f.refhosts_factory))
     eq_(r.location, c.location)
-    eq_(r.t_hostmap, f.refhosts_cache_path)
     eq_(len(f.refresh_https_cache_if_needed.calls), 1)
     eq_(l.all(), LogTestingWrap.empty())
 
