@@ -239,6 +239,8 @@ class Attributes(object):
         return attributes
 
 class Refhosts(object):
+    _default_location = 'default'
+
     def __init__(self, hostmap, log, location=None, attributes=Attributes()):
         """load refhosts.xml file and pass it to the xml parser
 
@@ -253,7 +255,7 @@ class Refhosts(object):
         # default refhosts location is 'default' which is basically
         # nuremberg office
         if location is None:
-            self.location = 'default'
+            self.location = self._default_location
         else:
             self.location = location
 
@@ -500,7 +502,7 @@ class Refhosts(object):
 
         """
 
-        if element.getAttribute('name') == 'default':
+        if element.getAttribute('name') == self._default_location:
             return True
         else:
             return False
