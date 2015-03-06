@@ -315,7 +315,7 @@ class Refhosts(object):
               , filter(self.check_attributes, self._location_hosts(self.location))
             ))
 
-            if hosts == []:
+            if hosts == [] and self.location != self._default_location:
                 try:
                     hosts = list(map(
                         self.extract_name
@@ -557,7 +557,7 @@ class Refhosts(object):
         , self._location_hosts(self.location)
         )
 
-        if nodes == []:
+        if nodes == [] and self.location != self._default_location:
             nodes = filter(
               lambda e: operator.eq(e.getAttribute('name'), hostname)
             , self._location_hosts(self._default_location)
