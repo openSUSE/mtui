@@ -36,6 +36,7 @@ from .utils import get_nonexistent_path
 from .utils import unused
 from .utils import testreports
 from .utils import TRF
+from .utils import refhosts_fixtures
 
 from traceback import format_exc
 
@@ -414,7 +415,7 @@ def test_TestReport_refhosts_from_tp():
               SwampTestReport
             , config = ConfigFake(
                 overrides = dict(
-                      refhosts_path = join(dirname(__file__), "fixtures", "refhosts.xml")
+                      refhosts_path = refhosts_fixtures['basic']
                     , refhosts_resolvers = 'path'
                     , location = 'foolocation'
                     , template_dir = 'footpldir'

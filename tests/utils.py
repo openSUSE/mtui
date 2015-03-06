@@ -14,6 +14,7 @@ try:
 except ImportError:
     from ConfigParser import ConfigParser
 from os.path import exists
+import os.path
 from posix import stat_result
 from tempfile import mktemp
 from random import randrange
@@ -120,6 +121,21 @@ class RefhostsFake(Refhosts):
             'prague',
             'nuremberg'
         ]
+
+def _find_refhosts_fixtures():
+    def p(*xs):
+        return os.path.join(
+            os.path.dirname(__file__)
+          , "fixtures"
+          , "refhosts"
+          , *xs
+        )
+
+    return dict([(os.path.splitext(os.path.basename(x))[0], p(x))
+        for x in os.listdir(p())
+    ])
+
+refhosts_fixtures = _find_refhosts_fixtures()
 
 class ConfigFake(Config):
     """
