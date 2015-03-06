@@ -15,7 +15,7 @@ def test_happy():
     """
     c, l = ConfigFake(), LogFake()
     old = c.location
-    new = "nuremberg"
+    new = "foolocation"
     ok_(old != new, "precondition check")
 
     cp = CommandPrompt(c, l, SysFake())
