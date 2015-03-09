@@ -14,6 +14,8 @@ try:
 except ImportError:
     from urllib2 import URLError
 
+from mtui import messages
+from mtui.refhost import Attributes
 from mtui.refhost import _RefhostsFactory
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import RefhostsResolveFailed
@@ -282,6 +284,40 @@ def test_rf_rhc():
     eq_(len(f._write_file.calls), 1)
     eq_(f._write_file.calls[0][0][0], "fooxml")
 # }}}
+
+def check_search(loc, fixture, expect):
+    l = LogTestingWrap()
+    r = Refhosts(
+        refhosts_fixtures[fixture]
+      , l.log
+      , loc
+    )
+    a = Attributes()
+    a.major = '11'
+    a.minor = 'sp3'
+    eq_(r.search(a), expect)
+    eq_(l.all(), LogTestingWrap().all())
+
+def test_search_with_mutliple_locations():
+    check_search(
+        "foolocation"
+      , 'multiple-locations'
+      , ["cunningham.example.com", "fletcher.example.com"]
+    )
+
+def test_search_no_fallback():
+    """
+    Test fallback hosts are not returned when all needed hosts were
+    found in the requested location
+    """
+    check_search(
+        "foolocation"
+      , "basic"
+      , [
+            "cunningham.example.com"
+          , "rivers.example.com"
+          , "fletcher.example.com"
+    ])
 
 # {{{ dependency checks
 def test_rf_stat():
