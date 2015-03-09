@@ -513,14 +513,16 @@ class Refhosts(object):
         return True
 
     def get_locations(self):
-        """return list of all available locations
+        """
+        Return available locations
 
-        Keyword arguments:
-        None
-
+        :returns: set of strings
         """
 
-        return [ element.getAttribute('name') for element in self.data.getElementsByTagName('location') ]
+        return set([
+            e.getAttribute('name')
+            for e in self.data.getElementsByTagName('location')
+        ])
 
     def is_location_element(self, element):
         """check if the location element is the specified one
