@@ -524,32 +524,6 @@ class Refhosts(object):
             for e in self.data.getElementsByTagName('location')
         ])
 
-    def is_location_element(self, element):
-        """check if the location element is the specified one
-
-        Keyword arguments:
-        element -- location xml element
-
-        """
-
-        if element.getAttribute('name') == self.location:
-            return True
-        else:
-            return False
-
-    def is_default_location_element(self, element):
-        """check if the location element is the default location element
-
-        Keyword arguments:
-        element -- location xml element
-
-        """
-
-        if element.getAttribute('name') == self._default_location:
-            return True
-        else:
-            return False
-
     def get_host_attributes(self, hostname):
         """return attributes object for the hostname
 
