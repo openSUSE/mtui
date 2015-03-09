@@ -32,6 +32,7 @@ from .utils import ConfigFake
 from .utils import CallLogger
 from .utils import StringIO
 from .utils import refhosts_fixtures
+from .utils import random_alphanum
 
 def test_factory_instance():
     ok_(isinstance(RefhostsFactory, _RefhostsFactory))
@@ -318,6 +319,38 @@ def test_search_no_fallback():
           , "rivers.example.com"
           , "fletcher.example.com"
     ])
+
+def test_check_location_sanity():
+    """
+    Test Refhosts.check_location_sanity returns for valid locations
+    and raises for invalid ones
+    """
+    locs = [random_alphanum(1, 10) for _ in range(0, 5)]
+    while True:
+        invalid = random_alphanum(1, 10)
+        if invalid not in locs:
+            break
+
+    tmp = NamedTemporaryFile()
+    tmp.write(
+        '<?xml version="1.0" encoding="utf-8"?><definitions>'
+      + ''.join(['<location name="{}"></location>'.format(x)
+            for x in locs])
+      + '</definitions>'
+    )
+    tmp.flush()
+
+    l = LogTestingWrap()
+    r = Refhosts(tmp.name, l.log)
+    for loc in locs:
+        r.check_location_sanity(loc)
+
+    try:
+        r.check_location_sanity(invalid)
+    except messages.InvalidLocationError:
+        pass
+    else:
+        ok_(False, "Expected messages.InvalidLocationError")
 
 # {{{ dependency checks
 def test_rf_stat():

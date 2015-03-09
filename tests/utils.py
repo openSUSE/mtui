@@ -15,9 +15,10 @@ except ImportError:
     from ConfigParser import ConfigParser
 from os.path import exists
 import os.path
+import string
+import random
 from posix import stat_result
 from tempfile import mktemp
-from random import randrange
 from datetime import date
 from time import sleep
 
@@ -212,14 +213,14 @@ def rand_maintenance_id():
     :return: int random id of maintenance id component in OBS review
         request id
     """
-    return randrange(1, 9999)
+    return random.randrange(1, 9999)
 
 def rand_review_id():
     """
     :return: int random id of review id component in OBS review
         request id
     """
-    return randrange(1, 9999)
+    return random.randrange(1, 9999)
 
 def testreports():
     return [OBSTestReport, SwampTestReport]
@@ -291,3 +292,9 @@ def merged_dict(x, y):
     Returns new dict with items from `y` merged into `x`
     """
     return dict(x.items() + y.items())
+
+def random_alphanum(min_, max_):
+    return ''.join(random.sample(
+        string.digits + string.uppercase + string.lowercase
+      , random.randint(min_, max_)
+    ))
