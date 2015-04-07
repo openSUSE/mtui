@@ -14,9 +14,11 @@ try:
 except ImportError:
     from ConfigParser import ConfigParser
 from os.path import exists
+import os.path
+import string
+import random
 from posix import stat_result
 from tempfile import mktemp
-from random import randrange
 from datetime import date
 from time import sleep
 
@@ -108,18 +110,25 @@ class LogFakeStr(LogFake):
         return str(x)
 
 class RefhostsFake(Refhosts):
-    def _parse_refhosts(self, hostmap):
-        self.t_hostmap = hostmap
+    def __init__(self, *a, **kw):
+        xs = list(a)
+        xs[0] = refhosts_fixtures['basic']
+        super(RefhostsFake, self).__init__(*xs, **kw)
 
-    def get_locations(self):
-        return [
-            'default',
-            'foobar',
-            'foolocation',
-            'quux',
-            'prague',
-            'nuremberg'
-        ]
+def _find_refhosts_fixtures():
+    def p(*xs):
+        return os.path.join(
+            os.path.dirname(__file__)
+          , "fixtures"
+          , "refhosts"
+          , *xs
+        )
+
+    return dict([(os.path.splitext(os.path.basename(x))[0], p(x))
+        for x in os.listdir(p())
+    ])
+
+refhosts_fixtures = _find_refhosts_fixtures()
 
 class ConfigFake(Config):
     """
@@ -204,14 +213,14 @@ def rand_maintenance_id():
     :return: int random id of maintenance id component in OBS review
         request id
     """
-    return randrange(1, 9999)
+    return random.randrange(1, 9999)
 
 def rand_review_id():
     """
     :return: int random id of review id component in OBS review
         request id
     """
-    return randrange(1, 9999)
+    return random.randrange(1, 9999)
 
 def testreports():
     return [OBSTestReport, SwampTestReport]
@@ -283,3 +292,9 @@ def merged_dict(x, y):
     Returns new dict with items from `y` merged into `x`
     """
     return dict(x.items() + y.items())
+
+def random_alphanum(min_, max_):
+    return ''.join(random.sample(
+        string.digits + string.uppercase + string.lowercase
+      , random.randint(min_, max_)
+    ))

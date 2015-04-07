@@ -14,9 +14,12 @@ try:
 except ImportError:
     from urllib2 import URLError
 
+from mtui import messages
+from mtui.refhost import Attributes
 from mtui.refhost import _RefhostsFactory
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import RefhostsResolveFailed
+from mtui.refhost import Refhosts
 from .utils import LogFake
 from .utils import LogTestingWrap
 from .utils import RefhostsFake
@@ -28,6 +31,8 @@ from .utils import unused
 from .utils import ConfigFake
 from .utils import CallLogger
 from .utils import StringIO
+from .utils import refhosts_fixtures
+from .utils import random_alphanum
 
 def test_factory_instance():
     ok_(isinstance(RefhostsFactory, _RefhostsFactory))
@@ -165,15 +170,20 @@ def test_rf_rh():
     """
     Test L{_RefhostsFactory.resolve_https} calls and returns Refhosts
     """
-    f = _RefhostsFactory(unused, unused, unused, unused,
-        unused, RefhostsFake)
+    tmp = NamedTemporaryFile()
+    tmp.write(
+        '<?xml version="1.0" encoding="utf-8"?>' \
+        + '<definitions></definitions>'
+    )
+    tmp.flush()
+
+    f = _RefhostsFactory(unused, unused, unused, unused, tmp.name)
     f.refresh_https_cache_if_needed = CallLogger()
-    c = ConfigFake(overrides = dict(location = 'quux'))
+    c = ConfigFake(overrides = dict(location = 'foolocation'))
     l = LogTestingWrap()
     r = f.resolve_https(c, l.log)
     ok_(isinstance(r, f.refhosts_factory))
     eq_(r.location, c.location)
-    eq_(r.t_hostmap, f.refhosts_cache_path)
     eq_(len(f.refresh_https_cache_if_needed.calls), 1)
     eq_(l.all(), LogTestingWrap.empty())
 
@@ -187,16 +197,16 @@ def test_rf_rp():
     , unused
     , unused
     , unused
-    , RefhostsFake
+    , Refhosts
     )
     c = ConfigFake(overrides = dict(
-        refhosts_path = '/tmp/foobar'
-        , location = 'foobar'))
+        refhosts_path = refhosts_fixtures['basic']
+        , location = 'foolocation'))
     l = LogTestingWrap()
     r = f.resolve_path(c, l.log)
     ok_(isinstance(r, f.refhosts_factory))
     eq_(r.location, c.location)
-    eq_(r.t_hostmap, c.refhosts_path)
+    eq_(len(r._location_hosts(c.location)), 3)
     eq_(l.all(), LogTestingWrap.empty())
 # }}}
 
@@ -275,6 +285,72 @@ def test_rf_rhc():
     eq_(len(f._write_file.calls), 1)
     eq_(f._write_file.calls[0][0][0], "fooxml")
 # }}}
+
+def check_search(loc, fixture, expect):
+    l = LogTestingWrap()
+    r = Refhosts(
+        refhosts_fixtures[fixture]
+      , l.log
+      , loc
+    )
+    a = Attributes()
+    a.major = '11'
+    a.minor = 'sp3'
+    eq_(r.search(a), expect)
+    eq_(l.all(), LogTestingWrap().all())
+
+def test_search_with_mutliple_locations():
+    check_search(
+        "foolocation"
+      , 'multiple-locations'
+      , ["cunningham.example.com", "fletcher.example.com"]
+    )
+
+def test_search_no_fallback():
+    """
+    Test fallback hosts are not returned when all needed hosts were
+    found in the requested location
+    """
+    check_search(
+        "foolocation"
+      , "basic"
+      , [
+            "cunningham.example.com"
+          , "rivers.example.com"
+          , "fletcher.example.com"
+    ])
+
+def test_check_location_sanity():
+    """
+    Test Refhosts.check_location_sanity returns for valid locations
+    and raises for invalid ones
+    """
+    locs = [random_alphanum(1, 10) for _ in range(0, 5)]
+    while True:
+        invalid = random_alphanum(1, 10)
+        if invalid not in locs:
+            break
+
+    tmp = NamedTemporaryFile()
+    tmp.write(
+        '<?xml version="1.0" encoding="utf-8"?><definitions>'
+      + ''.join(['<location name="{}"></location>'.format(x)
+            for x in locs])
+      + '</definitions>'
+    )
+    tmp.flush()
+
+    l = LogTestingWrap()
+    r = Refhosts(tmp.name, l.log)
+    for loc in locs:
+        r.check_location_sanity(loc)
+
+    try:
+        r.check_location_sanity(invalid)
+    except messages.InvalidLocationError:
+        pass
+    else:
+        ok_(False, "Expected messages.InvalidLocationError")
 
 # {{{ dependency checks
 def test_rf_stat():

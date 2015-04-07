@@ -245,7 +245,7 @@ def test_load_update_doesnt_leave_previous_session():
 
 def test_set_location():
     p = CommandPrompt(ConfigFake(), LogFake())
-    loc = 'prague'
+    loc = 'foolocation'
     ok_(p.config.location != loc)
     p.do_set_location(loc)
     eq_(p.config.location, loc)

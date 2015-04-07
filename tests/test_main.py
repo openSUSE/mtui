@@ -136,7 +136,7 @@ def test_main_config_overrides():
     """
     Test argv options override their config counterparts
     """
-    location = 'prague'
+    location = 'foolocation'
     template_dir = '/home/foo/bar/'
     timeout = '666'
 

@@ -16,7 +16,7 @@ class ArgsFake(object):
 
 def test_merge_args():
     af = ArgsFake()
-    af.location = 'prague'
+    af.location = 'foolocation'
     c = ConfigFake()
 
     ok_(af.location != c.location, "tautological setup")

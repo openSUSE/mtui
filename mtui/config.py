@@ -64,9 +64,10 @@ class Config(object):
 
     @location.setter
     def location(self, x):
-        xs = self.refhosts(self, out).get_locations()
-        if x not in xs:
-            out.error(InvalidLocationError(x, xs))
+        try:
+            self.refhosts(self, out).check_location_sanity(x)
+        except InvalidLocationError as e:
+            out.error(e)
             return
 
         self._location = x
