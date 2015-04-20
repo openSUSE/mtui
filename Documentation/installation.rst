@@ -33,7 +33,7 @@ Gentoo
 
 Packages are available at internal `gentoo QAM overlay`_
 
-.. _gentoo QAM overlay: http://git.suse.de/?p=maintenance/gentoo-overlay.git
+.. _gentoo QAM overlay: https://gitlab.suse.de/qa-maintenance/gentoo-overlay
 
 Source
 ######

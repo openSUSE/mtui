@@ -17,10 +17,10 @@ or with coverage
 
    $ make checkcover
 
-And you can find `acceptance test suite`_ at `git.suse.de`_
+And you can find `acceptance test suite`_ at `gitlab.suse.de`_
 
-.. _acceptance test suite: http://git.suse.de/?p=yac/mtui-test-acceptance.git;a=summary
-.. _git.suse.de: http://git.suse.de
+.. _acceptance test suite: https://gitlab.suse.de/qa-maintenance/mtui-acceptance-tests
+.. _gitlab.suse.de: https://gitlab.suse.de
 
 Commit keywords
 ###############
