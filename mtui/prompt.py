@@ -773,6 +773,8 @@ class CommandPrompt(cmd.Cmd):
         else:
             search_list = list(updated.keys())
 
+        out.debug("search_list: {}".format(search_list))
+
         for package in search_list:
             RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % package).run()
 
@@ -784,7 +786,10 @@ class CommandPrompt(cmd.Cmd):
                 except messages.ErrorMessage as e:
                     out.warning(e)
                 else:
-                    installed[durl.package] = durl
+                    installed[package] = durl
+
+        out.debug("updated: {}".format(updated.keys()))
+        out.debug("installed: {}".format(installed.keys()))
 
         for name in updated.keys():
             try:
