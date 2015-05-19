@@ -786,7 +786,7 @@ class CommandPrompt(cmd.Cmd):
                 except messages.ErrorMessage as e:
                     out.warning(e)
                 else:
-                    installed[durl.package] = durl
+                    installed[package] = durl
 
         out.debug("updated: {}".format(updated.keys()))
         out.debug("installed: {}".format(installed.keys()))
