@@ -2234,8 +2234,8 @@ class CommandPrompt(cmd.Cmd):
                 if len(not_installed):
                     out.warning('%s: these packages are not installed: %s' % (target, not_installed))
 
-            if missing and prompt_user('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
-                return
+            if missing:
+                out.warning('%s: these packages are missing: %s' % (target, not_installed))
 
             if script:
                 self.metadata.script_hooks(PreScript).run(targets.values())
@@ -2258,7 +2258,6 @@ class CommandPrompt(cmd.Cmd):
             if newpackage:
                 self.do_prepare('%s,testing' % args)
 
-            missing = False
             for target in targets:
                 targets[target].add_history(['update', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
                 packages = targets[target].packages
@@ -2274,16 +2273,11 @@ class CommandPrompt(cmd.Cmd):
 
                     if after is not None and after != '0':
                         if RPMVersion(before) == RPMVersion(after):
-                            missing = True
                             out.warning('%s: package was not updated: %s (%s)' % (target, package, after))
 
                         if RPMVersion(after) < RPMVersion(required):
-                            missing = True
                             out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
                                         required))
-
-            if missing and prompt_user("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
-                return
 
             if script:
                 self.metadata.script_hooks(PostScript).run(targets.values())

@@ -2,6 +2,17 @@
 ChangeLog
 #########
 
+next
+####
+
+Bugfixes
+========
+
+* bsc#919207 - mtui: update w/o scripts, unattended
+   - added parametr "noscript" to update command
+   - User prompts in update command changed just to warnings, this means for you that these 
+     cases will no longer block the update but you should pay more attentation 
+     to those warnings now for cases where these warnings are not false positives
 3.0.4
 #####
 
