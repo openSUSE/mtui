@@ -2165,7 +2165,7 @@ class CommandPrompt(cmd.Cmd):
         right after the update. To skip the preparation procedure, append
         "noprepare" to the argument list.
 
-        update <hostname>[,newpackage][,noprepare]
+        update <hostname>[,newpackage][,noprepare][,noscript]
         Keyword arguments:
         hostname -- hostname from the target list or "all"
         """
@@ -2177,6 +2177,7 @@ class CommandPrompt(cmd.Cmd):
         prepare = True
         missing = False
         newpackage = False
+        script = True
 
         parameter = args.split(',')
 
@@ -2195,6 +2196,10 @@ class CommandPrompt(cmd.Cmd):
         if 'noprepare' in parameter:
             prepare = False
             parameter.remove('noprepare')
+
+        if 'noscript' in parameter:
+            script = False
+            parameter.remove('noscript')
 
         args = ','.join(parameter)
         targets = enabled_targets(self.targets)
@@ -2232,7 +2237,8 @@ class CommandPrompt(cmd.Cmd):
             if missing and prompt_user('there were missing packages. cancel update process? (y/N) ', ['y', 'yes'], self.interactive):
                 return
 
-            self.metadata.script_hooks(PreScript).run(targets.values())
+            if script:
+                self.metadata.script_hooks(PreScript).run(targets.values())
 
             out.info('updating')
 
@@ -2279,9 +2285,10 @@ class CommandPrompt(cmd.Cmd):
             if missing and prompt_user("some packages haven't been updated. cancel update process? (y/N) ", ['y', 'yes'], self.interactive):
                 return
 
-            self.metadata.script_hooks(PostScript).run(targets.values())
-            self.metadata.script_hooks(CompareScript).run(targets.values())
-            FileDelete(targets.values(), self.metadata.target_wd('output')).run()
+            if script:
+                self.metadata.script_hooks(PostScript).run(targets.values())
+                self.metadata.script_hooks(CompareScript).run(targets.values())
+                FileDelete(targets.values(), self.metadata.target_wd('output')).run()
 
         Notification('MTUI', 'updating %s finished' % self.session).show()
         out.info('done')
