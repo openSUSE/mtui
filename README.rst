@@ -29,6 +29,7 @@ Contents
     installation
     developer
     support
+    faq
 
 Authors
 #######
