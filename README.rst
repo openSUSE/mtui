@@ -27,6 +27,7 @@ Contents
     :maxdepth: 2
 
     installation
+    user
     developer
     support
     faq
