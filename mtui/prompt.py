@@ -1457,12 +1457,13 @@ class CommandPrompt(cmd.Cmd):
         if not args:
             self.parse_error(self.do_run, args)
 
+        args = args.split(",")
         targets = enabled_targets(self.targets)
 
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, set(targets) & set(args.split(',')))
+        if args[0] != 'all':
+            targets = selected_targets(targets, set(targets) & set(args))
 
-        command = ''.join(set(args.split(',')) - set(self.targets) - set(['all']))
+        command = ''.join(set(args) - set(self.targets) - set(['all']))
 
         for target in targets.keys():
             lock = targets[target].locked()
