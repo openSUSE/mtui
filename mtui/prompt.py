@@ -1454,38 +1454,38 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if args:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, set(targets) & set(args.split(',')))
-
-            command = ''.join(set(args.split(',')) - set(self.targets) - set(['all']))
-
-            for target in targets.keys():
-                lock = targets[target].locked()
-                if lock.locked and lock.comment and not lock.own():
-                    out.critical('host %s is exclusively locked by %s (%s). skipping.' % (target, lock.user, lock.comment))
-                    del targets[target]
-
-            if targets:
-                try:
-                    RunCommand(targets, command).run()
-                except KeyboardInterrupt:
-                    return
-
-                output = []
-
-                for target in targets:
-                    output.append('%s:~> %s [%s]' % (target, targets[target].lastin(), targets[target].lastexit()))
-                    map(output.append, targets[target].lastout().split('\n'))
-                    if targets[target].lasterr():
-                        map(output.append, ['stderr:'] + targets[target].lasterr().split('\n'))
-
-                page(output, self.interactive)
-                out.info('done')
-        else:
+        if not args:
             self.parse_error(self.do_run, args)
+
+        targets = enabled_targets(self.targets)
+
+        if args.split(',')[0] != 'all':
+            targets = selected_targets(targets, set(targets) & set(args.split(',')))
+
+        command = ''.join(set(args.split(',')) - set(self.targets) - set(['all']))
+
+        for target in targets.keys():
+            lock = targets[target].locked()
+            if lock.locked and lock.comment and not lock.own():
+                out.critical('host %s is exclusively locked by %s (%s). skipping.' % (target, lock.user, lock.comment))
+                del targets[target]
+
+        if targets:
+            try:
+                RunCommand(targets, command).run()
+            except KeyboardInterrupt:
+                return
+
+            output = []
+
+            for target in targets:
+                output.append('%s:~> %s [%s]' % (target, targets[target].lastin(), targets[target].lastexit()))
+                map(output.append, targets[target].lastout().split('\n'))
+                if targets[target].lasterr():
+                    map(output.append, ['stderr:'] + targets[target].lasterr().split('\n'))
+
+            page(output, self.interactive)
+            out.info('done')
 
     def complete_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
