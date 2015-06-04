@@ -2,6 +2,7 @@ from nose.tools import ok_, eq_, raises
 
 from paramiko import SSHException
 
+from mtui import prompt
 from mtui.target import TargetLock, RemoteLock, Target
 from mtui.target import LockedTargets
 from mtui import messages
@@ -13,7 +14,8 @@ from .utils import unused
 from .utils import hostnames
 from .utils import StringIO
 
-def TF(hostname, lock = None, connection = None, log = None):
+def TF(hostname, lock = None, connection = None, log = None
+, state = 'enabled', connect = True):
     """
     TargetFactory
     """
@@ -24,6 +26,8 @@ def TF(hostname, lock = None, connection = None, log = None):
     if connection:
         kw['connection'] = connection
 
+    kw['state'] = state
+    kw['connect'] = connect
     return Target(hostname, unused, **kw)
 
 def test_legacy_locked_target_is_locked():
@@ -249,3 +253,30 @@ class TestLockedTargets(object):
         except MyErr as e:
             eq_(str(e), m)
             self._check_locks(ts, False)
+
+
+def test_enabled_targets():
+    bar = TF("bar", state = 'enabled', connect = False)
+    qux = TF("qux", state = 'dryrun', connect = False)
+
+    xs = dict([(x.hostname, x) for x in [
+      TF("foo", state = 'disabled', connect = False)
+    , bar
+    , TF("baz", state = 'disabled', connect = False)
+    , qux
+    , TF("quux", state = 'disabled', connect = False)
+    ]])
+
+    eq_(prompt.enabled_targets(xs), {
+      bar.hostname: bar
+    , qux.hostname: qux
+    })
+
+def test_selected_targets():
+    eq_(
+      prompt.selected_targets(
+        dict(a = 1, b = 2, c = 3, d = 4)
+      , ['a', 'd']
+      )
+    , dict(a = 1, d = 4)
+    )
