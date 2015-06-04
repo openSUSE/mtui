@@ -5,14 +5,19 @@ ChangeLog
 next
 ####
 
-Bugfixes
-========
+New features
+============
 
-* bsc#919207 - mtui: update w/o scripts, unattended
-   - added parametr "noscript" to update command
-   - User prompts in update command changed just to warnings, this means for you that these 
-     cases will no longer block the update but you should pay more attentation 
-     to those warnings now for cases where these warnings are not false positives
+* bsc#919207 - update without scripts, unattended
+  - added parametr "noscript" to update command
+
+  - User prompts "there are missing packages ..." and
+    "some packages haven't been updated ..." in update command were
+    changed just to warnings. This means for you that these cases will
+    no longer block the update but you should pay more attention to
+    those warnings now for cases where these warnings are not false
+    positives
+
 3.0.4
 #####
 
