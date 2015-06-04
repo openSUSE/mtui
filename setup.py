@@ -47,5 +47,11 @@ setup(
 
     entry_points = {
         'console_scripts': ['mtui = mtui.main:main']},
-    scripts = ['refsearch.py']
+    scripts = ['refsearch.py'],
+
+    classifiers = [
+      'Programming Language :: Python :: 2'
+    , 'Operating System :: POSIX :: Linux'
+    , 'Environment :: Console'
+    ]
 )
