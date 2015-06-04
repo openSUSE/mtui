@@ -5,6 +5,7 @@
 
 from functools import reduce
 
+import itertools
 import os
 import sys
 import stat
@@ -1460,10 +1461,20 @@ class CommandPrompt(cmd.Cmd):
         args = args.split(",")
         targets = enabled_targets(self.targets)
 
-        if args[0] != 'all':
-            targets = selected_targets(targets, set(targets) & set(args))
+        def match_target(x):
+            return x.strip() in set(set(targets) | set(['all']))
 
-        command = ''.join(set(args) - set(self.targets) - set(['all']))
+        command = ','.join(list(itertools.dropwhile(match_target, args)))
+
+        # Note: args stripping happens after command is constructed as
+        # doing it before could change the resulting command.
+        args = [x.strip() for x in args]
+
+        if args[0] != 'all':
+            targets = selected_targets(
+              targets
+            , itertools.takewhile(match_target, args)
+            )
 
         for target in targets.keys():
             lock = targets[target].locked()
