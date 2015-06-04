@@ -111,6 +111,10 @@ class CommandPrompt(cmd.Cmd):
         self.interactive = True
 
         self.targets = {}
+        """
+        :type  targets: dict(hostname = L{Target})
+            where hostname = str
+        """
         self.metadata = None
 
         self.homedir = os.path.expanduser('~')
@@ -2898,28 +2902,34 @@ class CompareScript(Script):
 
 
 def enabled_targets(targets):
-    temporary_targets = {}
+    """
+    :type targets: dict(hostname = L{Target})
+        where hostname = str
 
-    for target in targets:
-        try:
-            if targets[target].state != 'disabled':
-                temporary_targets[target] = targets[target]
-        except KeyError:
-            out.warning('host %s not in database' % target)
+    :returns: dict(hostname = L{Target})
+        where hostname = str
+    """
+    return dict(filter(
+      lambda x: x[1].state != 'disabled'
+    , targets.items()
+    ))
 
-    return temporary_targets
+def selected_targets(available, wanted):
+    """
+    :type available: dict(hostname = L{Target})
+        where hostname = str
 
+    :type wanted: [hostname]
+        where hostname = str
 
-def selected_targets(targets, target_list):
-    temporary_targets = {}
+    :returns: dict(hostname = L{Target})
+        where hostname = str
+    """
+    for x in wanted:
+        if not available.has_key(x):
+            out.warning('host %s not in database' % x)
 
-    for target in target_list:
-        try:
-            temporary_targets[target] = targets[target]
-        except KeyError:
-            out.warning('host %s not in database' % target)
-
-    return temporary_targets
+    return dict([x for x in available.items() if x[0] in wanted])
 
 def user_deprecation(out, msg):
     out.warning(msg)
