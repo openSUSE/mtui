@@ -314,7 +314,13 @@ class TestReport(with_metaclass(ABCMeta, object)):
         return updater.get_release(list(self.systems.values()))
 
     def _get_doer(self, registry):
-        return registry[self.get_release()]
+        return registry[self._get_updater_id()]
+
+    @abstractmethod
+    def _get_updater_id(self):
+        """
+        :return: str Identifier of adaptee to use from `mtui.updater`
+        """
 
     def get_preparer(self):
         return self._get_doer(updater.Preparer)
@@ -601,6 +607,9 @@ class SwampTestReport(TestReport):
     def id(self):
         return self.md5
 
+    def _get_updater_id(self):
+        return self.get_release()
+
     def _show_yourself_data(self):
         return [
             ('MD5SUM'  , self.md5),
@@ -667,6 +676,13 @@ class OBSTestReport(TestReport):
     @property
     def id(self):
         return self.rrid
+
+    def _get_updater_id(self):
+        rel = self.get_release()
+        if rel == '11':
+            return '12'
+
+        return rel
 
     def _parse_line(self, line):
         if super(OBSTestReport, self)._parse_line(line):
