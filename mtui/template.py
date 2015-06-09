@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import os
-import re
 from os.path import join, dirname
 from errno import ENOENT
 from errno import EEXIST
@@ -32,6 +31,7 @@ from mtui.messages import SrcRPMExtractedMessage
 from mtui import messages
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
+from mtui.parsemeta import OBSMetadataParser, SWAMPMetadataParser
 from mtui.utils import ass_is, ass_isL
 from mtui.utils import nottest
 
@@ -232,6 +232,12 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         self.copy_scripts()
 
+    @abstractmethod
+    def _parser(self):
+        """
+        :returns: L{MetadataParser}
+        """
+
     def _parse(self, tpl):
         """
         Parse qam testreport template into self attributes
@@ -243,63 +249,12 @@ class TestReport(with_metaclass(ABCMeta, object)):
         if self.path:
             raise TestReportAlreadyLoaded(self.path)
 
+        parser = self._parser()
+
         for line in tpl.readlines():
-            self._parse_line(line)
+            parser.parse_line(self, line)
 
         self._warn_missing_fields()
-
-    def _parse_line(self, line):
-        """
-        :return: bool True if line was parsed, otherwise False
-        """
-        match = re.search('Category: (.+)', line)
-        if match:
-            self.category = match.group(1)
-            return True
-
-        match = re.search('Packager: (.+)', line)
-        if match:
-            self.packager = match.group(1)
-            return True
-
-        match = re.search('Packages: (.+)', line)
-        if match:
-            self.packages = dict([(pack.split()[0], pack.split()[2]) for pack in match.group(1).split(',')])
-            return True
-
-        match = re.search('Test Plan Reviewer(?:s)?: (.+)', line)
-        if match:
-            self.reviewer = match.group(1)
-            return True
-
-        match = re.search('Bug #(\d+) \("(.*)"\):', line)  # deprecated
-        if match:
-            self.bugs[match.group(1)] = match.group(2)
-            return True
-
-        match = re.search('Testplatform: (.*)', line)
-        if match:
-            self.testplatforms.append(match.group(1))
-            return True
-
-        match = re.search('(.*-.*) \(reference host: (\S+).*\)', line)
-        if match:
-            if '?' not in match.group(2):
-                self.systems[match.group(2)] = match.group(1)
-            return True
-
-        match = re.search('Bugs: (.*)', line)
-        if match:
-            for bug in match.group(1).split(','):
-                self.bugs[bug.strip(' ')] = 'Description not available'
-            return True
-
-        m = re.match('Repository: (.+)', line)
-        if m:
-            self.repository = m.group(1)
-            return True
-
-        return False
 
     def _warn_missing_fields(self):
         missing = [x for x in self._attrs if not getattr(self, x)]
@@ -617,41 +572,8 @@ class SwampTestReport(TestReport):
         ] + super(SwampTestReport, self)._show_yourself_data()
 
 
-    def _parse_line(self, line):
-        if super(SwampTestReport, self)._parse_line(line):
-            return True
-
-        match = re.search('MD5 sum: (.+)', line)
-        if match:
-            self.md5 = MD5Hash(match.group(1))
-            return True
-
-        match = re.search('YOU Patch No: (\d+)', line)
-        if match:
-            self.patches['you'] = match.group(1)
-            return True
-
-        match = re.search('ZYPP Patch No: (\d+)', line)
-        if match:
-            self.patches['zypp'] = match.group(1)
-            return True
-
-        match = re.search('SAT Patch No: (\d+)', line)
-        if match:
-            self.patches['sat'] = match.group(1)
-            return True
-
-        match = re.search('RES Patch No: (\d+)', line)
-        if match:
-            self.patches['res'] = match.group(1)
-            return True
-
-        match = re.search('SUBSWAMPID: (\d+)', line)
-        if match:
-            self.swampid = match.group(1)
-            return True
-
-        return False
+    def _parser(self):
+        return SWAMPMetadataParser()
 
     def download_source_rpm(self):
         download_source_rpm(
@@ -684,19 +606,8 @@ class OBSTestReport(TestReport):
 
         return rel
 
-    def _parse_line(self, line):
-        if super(OBSTestReport, self)._parse_line(line):
-            return True
-
-        m = re.match('Rating: (.+)', line)
-        if m:
-            self.rating = m.group(1)
-            return True
-
-        m = re.match('ReviewRequestID: (.+)', line)
-        if m:
-            self.rrid = RequestReviewID(m.group(1))
-            return True
+    def _parser(self):
+        return OBSMetadataParser()
 
     def _show_yourself_data(self):
         return [
