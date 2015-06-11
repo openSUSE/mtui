@@ -292,6 +292,31 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def get_downgrader(self):
         return self._get_doer(updater.Downgrader)
 
+    def list_update_commands(self, targets, display):
+        '''
+        :type  targets: dict(hostname = L{Target})
+            where hostname = str
+        :display: callable(str -> None)
+        '''
+        updater = self.get_updater()
+
+        display('\n'.join(updater(
+            targets,
+            self.patches,
+            self.get_package_list(),
+            self).commands
+        ))
+        del updater
+
+    def perform_update(self, targets):
+        '''
+        :type  targets: dict(hostname = L{Target})
+            where hostname = str
+        '''
+        updater = self.get_updater()
+        self.log.debug("chosen updater: %s" % repr(updater))
+        updater(targets, self.patches, self.get_package_list(), self).run()
+
     def scripts_src_dir(self):
         if self._scripts_src_dir:
             return self._scripts_src_dir

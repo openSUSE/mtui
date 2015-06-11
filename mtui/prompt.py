@@ -1007,16 +1007,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             self.parse_error(self.do_list_update_commands, args)
         else:
-
-            updater = self.metadata.get_updater()
-
-            self.println('\n'.join(updater(
-                self.targets,
-                self.metadata.patches,
-                self.metadata.get_package_list(),
-                self.metadata).commands
-            ))
-            del updater
+            self.metadata.list_update_commands(self.targets, self.println)
 
     @requires_update
     def do_testopia_list(self, args):
@@ -2240,13 +2231,11 @@ class CommandPrompt(cmd.Cmd):
 
             out.info('updating')
 
-            updater = self.metadata.get_updater()
-            out.debug("chosen updater: %s" % repr(updater))
-
             try:
-                updater(targets, self.metadata.patches, self.metadata.get_package_list(), self.metadata).run()
+                self.metadata.perform_update(targets)
             except Exception:
                 out.critical('failed to update target systems')
+                out.debug(format_exc())
                 Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
                 raise
             except KeyboardInterrupt:
