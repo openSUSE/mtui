@@ -2,8 +2,8 @@
 ChangeLog
 #########
 
-next
-####
+4.0.0
+#####
 
 New features
 ============
@@ -17,6 +17,25 @@ New features
     no longer block the update but you should pay more attention to
     those warnings now for cases where these warnings are not false
     positives
+
+* Improved documentation. Updated FAQ and brand new `User's Manual`__
+
+.. __: http://qam.suse.de/projects/mtui/4.0.0/
+
+Bugfixes
+########
+
+* bsc#919950 - `refsearch.py` and `search_hosts` doesn't find ppc64le
+
+* bsc#930555 - broken `source_diff` on sle12 manifested as
+  warning: osc disturl not found for package ntp. skipping
+
+* bsc#929238 - replace ssh -X with -Y in `terms` invocations
+
+* bsc#932002 - `run` mangles command containing ",".
+
+* bsc#933103 -  make mtui work with SLE11 updates coming from
+  Build Service
 
 3.0.4
 #####
@@ -135,7 +154,7 @@ New features
 
 * SLE 12 critical features support. Such as load_template,
   list_packages, source_extract, source_verify, install, uninstall,
-    update, downgrade and export.
+  update, downgrade and export.
 
 * New config option mtui.use_keyring so using keyring can be disabled
     for mtui if the keyring module is present on the system.
