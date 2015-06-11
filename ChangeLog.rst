@@ -18,6 +18,9 @@ New features
     those warnings now for cases where these warnings are not false
     positives
 
+* bsc#933103 -  make mtui work with SLE11 updates coming from
+  Build Service
+
 * Improved documentation. Updated FAQ and brand new `User's Manual`__
 
 .. __: http://qam.suse.de/projects/mtui/4.0.0/
@@ -33,9 +36,6 @@ Bugfixes
 * bsc#929238 - replace ssh -X with -Y in `terms` invocations
 
 * bsc#932002 - `run` mangles command containing ",".
-
-* bsc#933103 -  make mtui work with SLE11 updates coming from
-  Build Service
 
 3.0.4
 #####
