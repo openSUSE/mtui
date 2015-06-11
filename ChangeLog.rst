@@ -154,7 +154,7 @@ New features
 
 * SLE 12 critical features support. Such as load_template,
   list_packages, source_extract, source_verify, install, uninstall,
-    update, downgrade and export.
+  update, downgrade and export.
 
 * New config option mtui.use_keyring so using keyring can be disabled
     for mtui if the keyring module is present on the system.
