@@ -303,30 +303,6 @@ class CommandPrompt(cmd.Cmd):
             out.error('failed to load reference hosts data')
             raise
 
-    def get_installer(self):
-        return self._get_updater("installer")
-
-    def get_uninstaller(self):
-        return self._get_updater("uninstaller")
-
-    def _get_updater(self, kind):
-        """
-        :return: an updater instance
-
-        Just passes the call to metadata if they exist. Otherwise try
-        to get the updater from `self.targets`.
-
-        Currently it is first match wins so if we are connected to different
-        system it won't work. But it's ok, it never did.
-        """
-        if self.metadata:
-            return getattr(self.metadata, "get_" + kind)()
-
-        register = kind[0].upper() + kind[1:]
-        return getattr(updater, register)[updater.get_release([
-            x.system for x in self.targets.values()
-        ])]
-
     def target_tempdir(self, *path):
         if self.metadata:
             return self.metadata.target_wd(*path)
@@ -1979,6 +1955,7 @@ class CommandPrompt(cmd.Cmd):
         else:
             return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_install(self, args):
         """
         Installs packages from the current active repository.
@@ -2002,7 +1979,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            installer = self.get_installer()
+            installer = self.metadata.get_installer()
 
             out.info('installing')
             for target in targets:
@@ -2022,6 +1999,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_install(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_uninstall(self, args):
         """
         Removes packages from the system.
@@ -2044,7 +2022,7 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            uninstaller = self.get_uninstaller()
+            uninstaller = self.metadata.get_uninstaller()
 
             out.info('removing')
             try:
