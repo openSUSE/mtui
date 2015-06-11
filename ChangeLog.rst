@@ -23,7 +23,7 @@ New features
 .. __: http://qam.suse.de/projects/mtui/4.0.0/
 
 Bugfixes
-########
+========
 
 * bsc#919950 - `refsearch.py` and `search_hosts` doesn't find ppc64le
 
