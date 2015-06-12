@@ -546,6 +546,26 @@ class TestsuiteComment(object):
     def edit_text(self):
         self._user_str = self._text_editor(str(self))
 
+class NullTestReport(TestReport):
+    _type = "No"
+
+    def __init__(tr, config, log, _date = date, *a, **kw):
+        super(NullTestReport, tr).__init__(config, log, _date, *a, **kw)
+        tr.id = None
+
+    def __bool__(tr):
+        return False
+
+    def __nonzero__(tr):
+        '''python-2.x compat, see __bool__()'''
+        return tr.__bool__()
+
+    def _get_updater_id(tr):
+        return None
+
+    def _parser(tr):
+        return None
+
 class SwampTestReport(TestReport):
     _type = "SWAMP"
 

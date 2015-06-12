@@ -41,6 +41,7 @@ from .argparse import ArgsParseFailure
 from mtui.refhost import Attributes
 from mtui.types import MD5Hash
 from mtui.types import obs
+from mtui.template import NullTestReport
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
 from mtui import updater
@@ -116,7 +117,7 @@ class CommandPrompt(cmd.Cmd):
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         """
-        self.metadata = None
+        self.metadata = NullTestReport(config, log)
 
         self.homedir = os.path.expanduser('~')
         self.config = config
@@ -1654,10 +1655,7 @@ class CommandPrompt(cmd.Cmd):
 
         session = args.strip()
         if not session:
-            if self.metadata:
-                session = self.metadata.id
-            else:
-                session = None
+            session = self.metadata.id
 
         self.set_prompt(session)
         self.session = session

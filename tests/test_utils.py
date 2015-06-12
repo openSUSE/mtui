@@ -85,6 +85,9 @@ def test_save_cache_path():
     ok_(len(p) > 9)
 
 class TestRequiresUpdate:
+    class HasId(object):
+        id = 69
+
     class PromptFake:
         def __init__(self, metadata, log):
             self.metadata = metadata
@@ -95,7 +98,7 @@ class TestRequiresUpdate:
             pass
 
     def test_happy_path(self):
-        p = self.PromptFake(True, LogFake())
+        p = self.PromptFake(self.HasId, LogFake())
         p.foo()
         eq_(p.log.errors,  [])
 

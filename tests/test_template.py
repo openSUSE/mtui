@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from nose.tools import ok_, eq_, raises
+from nose.tools import assert_false, ok_, eq_, raises
 from unittest import TestCase
 
 from collections import namedtuple
@@ -16,6 +16,7 @@ from datetime import date
 
 from mtui.template import _TemplateIOError
 from mtui.template import TestReport
+from mtui.template import NullTestReport
 from mtui.template import SwampTestReport
 from mtui.template import OBSTestReport
 from mtui.template import TestsuiteComment
@@ -513,6 +514,11 @@ def test_obs_get_testsuite_comment():
         tr.rrid,
         date.today().strftime("%d/%m/%y"),
     ))
+
+def test_NullTestReport():
+    tr = NullTestReport(ConfigFake(), LogFake(), date.today())
+    assert_false(tr)
+    eq_(tr.id, None)
 
 def test_TC_edit_text():
     """
