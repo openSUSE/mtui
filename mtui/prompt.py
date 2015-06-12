@@ -311,11 +311,7 @@ class CommandPrompt(cmd.Cmd):
             Otherwise ${CWD}/downloads
         """
         path = ['downloads'] + list(path)
-        return (
-            self.metadata.report_wd
-            if self.metadata
-            else ensure_dir_exists
-        )(*path, **kw)
+        return self.metadata.report_wd(*path, **kw)
 
     def _parse_args(self, args):
         tavailable = set(self.targets.keys()) | set(['all'])

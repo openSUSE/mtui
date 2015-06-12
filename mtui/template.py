@@ -586,6 +586,7 @@ class NullTestReport(TestReport):
     def __init__(tr, config, log, _date = date, *a, **kw):
         super(NullTestReport, tr).__init__(config, log, _date, *a, **kw)
         tr.id = None
+        tr.path = join(os.getcwd(), "None")
 
     def __bool__(tr):
         return False
