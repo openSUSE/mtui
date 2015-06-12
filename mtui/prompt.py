@@ -2426,11 +2426,10 @@ class CommandPrompt(cmd.Cmd):
         filename -- save log as file filename
         """
 
-        path = args.strip() if args is not None else ''
+        path = [args.strip()] if args else []
+        self._do_save_impl(*path)
 
-        if not path:
-            path = 'log.xml'
-
+    def _do_save_impl(self, path = 'log.xml'):
         if not path.startswith('/'):
             dir_ = os.path.dirname(self.metadata.path) if self.metadata else ''
             path = os.path.join(dir_, 'output', path)
@@ -2467,7 +2466,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if not prompt_user('save log? (Y/n) ', ['n', 'no'], self.interactive):
-            self.do_save(None)
+            self._do_save_impl()
 
         args_ = [args] if args in ('reboot', 'poweroff') else []
 
