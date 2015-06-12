@@ -1560,12 +1560,12 @@ class CommandPrompt(cmd.Cmd):
         re_add = []
         for hostname, target in self.targets.items():
             target.close()
-            re_add.append("{0},{1}".format(hostname, target.system))
+            re_add.append((hostname, target.system))
 
         self.load_update(update)
 
-        for x in re_add:
-            self.do_add_host(x)
+        for hostname, system in re_add:
+            self.connect_system_if_unconnected(hostname, system)
 
     def load_update(self, update, autoconnect=True):
         update.config = self.config
