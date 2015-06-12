@@ -304,13 +304,6 @@ class CommandPrompt(cmd.Cmd):
             out.error('failed to load reference hosts data')
             raise
 
-    def target_tempdir(self, *path):
-        if self.metadata:
-            return self.metadata.target_wd(*path)
-
-        path = [self.config.target_tempdir] + list(path)
-        return join(*path)
-
     def downloads_wd(self, *path, **kw):
         """
         :return: str directory for downloads.
@@ -2157,7 +2150,7 @@ class CommandPrompt(cmd.Cmd):
             if not os.path.isfile(filename):
                 continue
 
-            remote = self.target_tempdir(os.path.basename(filename))
+            remote = self.metadata.target_wd(os.path.basename(filename))
 
             FileUpload(self.targets.values(), filename, remote).run()
             self.log.info('uploaded {0} to {1}'.format(filename, remote))

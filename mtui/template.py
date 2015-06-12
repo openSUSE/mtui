@@ -594,6 +594,9 @@ class NullTestReport(TestReport):
         '''python-2.x compat, see __bool__()'''
         return tr.__bool__()
 
+    def target_wd(self, *paths):
+        return join(self.config.target_tempdir, *paths)
+
     def _get_updater_id(tr):
         return None
 
