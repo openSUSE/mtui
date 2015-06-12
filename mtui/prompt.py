@@ -806,7 +806,7 @@ class CommandPrompt(cmd.Cmd):
         specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
 
         if not specfiles:
-            self.do_source_extract('*.spec')
+            self.metadata.extract_source_rpm()
             specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
             if not specfiles:
                 out.error('failed to load specfile')
@@ -2329,7 +2329,7 @@ class CommandPrompt(cmd.Cmd):
                 filename = '*.spec'
             path = os.path.join(self.metadata.local_wd(), '*', filename)
             if not glob.glob(path):
-                self.do_source_extract('')
+                self.metadata.extract_source_rpm()
         else:
             self.parse_error(self.do_edit, args)
             return
