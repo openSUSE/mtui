@@ -1017,6 +1017,7 @@ class CommandPrompt(cmd.Cmd):
             ))
             del updater
 
+    @requires_update
     def do_testopia_list(self, args):
         """
         List all Testopia package testcases for the current product.
@@ -1059,6 +1060,7 @@ class CommandPrompt(cmd.Cmd):
             self.println('{}/tr_show_case.cgi?case_id={}'.format(url, case_id))
             self.println()
 
+    @requires_update
     def do_testopia_show(self, args):
         """
         Show Testopia testcase
@@ -1118,6 +1120,7 @@ class CommandPrompt(cmd.Cmd):
         if not line.count(','):
             return self.complete_testopia_testcaselist(text, line, begidx, endidx)
 
+    @requires_update
     def do_testopia_create(self, args):
         """
         Create new Testopia package testcase.
@@ -1182,6 +1185,7 @@ class CommandPrompt(cmd.Cmd):
         if not line.count(','):
             return self.complete_packagelist(text, line, begidx, endidx)
 
+    @requires_update
     def do_testopia_edit(self, args):
         """
         Edit already existing Testopia package testcase.
@@ -1288,6 +1292,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.metadata.show_yourself(self.sys.stdout)
 
+    @requires_update
     def do_list_versions(self, args):
         """
         Prints the package version history in chronological order.
@@ -1562,6 +1567,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_testsuite_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_testsuite_submit(self, args):
         """
         Submits the ctcs2 testsuite results to qadb.suse.de.
