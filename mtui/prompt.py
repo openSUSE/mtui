@@ -341,7 +341,6 @@ class CommandPrompt(cmd.Cmd):
         if not args:
             self.parse_error(self.do_search_hosts, args)
 
-        attributes = Attributes()
         refhost = self._refhosts()
 
         if 'Testplatform:' in args:
@@ -356,54 +355,12 @@ class CommandPrompt(cmd.Cmd):
                 , self.log
                 ))
             except (ValueError, KeyError):
-                hosts = []
                 out.error('failed to parse Testplatform string')
+                return []
         elif refhost.get_host_attributes(args):
             hosts = [args]
         else:
-            for _tag in args.split(' '):
-                tag = _tag.lower()
-                match = re.search('(\d+)\.(\d+)', tag)
-                if match:
-                    attributes.major = match.group(1)
-                    attributes.minor = match.group(2)
-                if tag in attributes.tags['products']:
-                    attributes.product = tag
-                if tag in attributes.tags['archs']:
-                    attributes.archs.append(tag)
-                if tag in attributes.tags['addons']:
-                    attributes.addons.update({tag:{}})
-                if tag in attributes.tags['major']:
-                    attributes.major = tag
-                if tag in attributes.tags['minor']:
-                    attributes.minor = tag
-                if tag == 'kernel':
-                    attributes.kernel = True
-                if tag == 'ltss':
-                    attributes.ltss = True
-                if tag == 'minimal':
-                    attributes.minimal = True
-                if tag == '!kernel':
-                    attributes.kernel = False
-                if tag == '!ltss':
-                    attributes.ltss = False
-                if tag == '!minimal':
-                    attributes.minimal = False
-                if tag == 'xenu':
-                    attributes.virtual.update({'mode':'guest', 'hypervisor':'xen'})
-                if tag == 'xen0':
-                    attributes.virtual.update({'mode':'host', 'hypervisor':'xen'})
-                if tag == 'xen':
-                    attributes.virtual.update({'hypervisor':'xen'})
-                if tag == 'kvm':
-                    attributes.virtual.update({'hypervisor':'kvm'})
-                if tag == 'vmware':
-                    attributes.virtual.update({'hypervisor':'vmware'})
-                if tag == 'host':
-                    attributes.virtual.update({'mode':'host'})
-                if tag == 'guest':
-                    attributes.virtual.update({'mode':'guest'})
-
+            attributes = Attributes.from_search_hosts_query(args)
             hosts = refhost.search(attributes)
 
             # check if some tags were passed to the attributes object which has

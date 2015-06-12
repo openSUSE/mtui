@@ -116,6 +116,55 @@ class Attributes(object):
         return self.__bool__()
 
     @classmethod
+    def from_search_hosts_query(cls, q):
+        attrs = Attributes()
+
+        for _tag in q.split(' '):
+            tag = _tag.lower()
+            match = re.search('(\d+)\.(\d+)', tag)
+            if match:
+                attrs.major = match.group(1)
+                attrs.minor = match.group(2)
+            if tag in attrs.tags['products']:
+                attrs.product = tag
+            if tag in attrs.tags['archs']:
+                attrs.archs.append(tag)
+            if tag in attrs.tags['addons']:
+                attrs.addons.update(dict(tag = dict()))
+            if tag in attrs.tags['major']:
+                attrs.major = tag
+            if tag in attrs.tags['minor']:
+                attrs.minor = tag
+            if tag == 'kernel':
+                attrs.kernel = True
+            if tag == 'ltss':
+                attrs.ltss = True
+            if tag == 'minimal':
+                attrs.minimal = True
+            if tag == '!kernel':
+                attrs.kernel = False
+            if tag == '!ltss':
+                attrs.ltss = False
+            if tag == '!minimal':
+                attrs.minimal = False
+            if tag == 'xenu':
+                attrs.virtual.update(dict(mode = 'guest', hypervisor = 'xen'))
+            if tag == 'xen0':
+                attrs.virtual.update(dict(mode = 'host', hypervisor = 'xen'))
+            if tag == 'xen':
+                attrs.virtual.update(dict(hypervisor = 'xen'))
+            if tag == 'kvm':
+                attrs.virtual.update(dict(hypervisor = 'kvm'))
+            if tag == 'vmware':
+                attrs.virtual.update(dict(hypervisor = 'vmware'))
+            if tag == 'host':
+                attrs.virtual.update(dict(mode = 'host'))
+            if tag == 'guest':
+                attrs.virtual.update(dict(mode = 'guest'))
+
+        return attrs
+
+    @classmethod
     def from_testplatform(cls, testplatform, log):
         """
         Create a attribute object based on a testplatform string
