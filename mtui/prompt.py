@@ -324,6 +324,27 @@ class CommandPrompt(cmd.Cmd):
             else ensure_dir_exists
         )(*path, **kw)
 
+    def _parse_args(self, args):
+        tavailable = set(self.targets.keys()) | set(['all'])
+        tselected = set()
+        params = set()
+        in_targets = True
+
+        for arg in args.split(','):
+            if in_targets:
+                if arg.strip() in tavailable:
+                    tselected.add(arg.strip())
+                else:
+                    in_targets = False
+                    params.add(arg)
+
+        if 'all' in tselected:
+            targets = enabled_targets(self.targets)
+        else:
+            targets = selected_targets(enabled_targets(self.targets), tselected)
+
+        return (targets, params)
+
     def do_search_hosts(self, args):
         """
         Seach hosts by by the specified attributes. A attribute tag could also be a
@@ -515,20 +536,15 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
+            targets, params = self._parse_args(args)
+
             filters = ['connect', 'disconnect', 'install', 'update', 'downgrade']
 
-            option = []
-            parameters = args.split(',')
-            [ option.append('-e ":%s"' % x) for x in set(parameters) & set(filters)]
+            option = [('-e ":%s"' % x) for x in set(params) & set(filters)]
 
-            hosts = ','.join(set(parameters) & set(list(self.targets) + ['all']))
-
-            count = 10
-            targets = enabled_targets(self.targets)
-
-            if hosts.split(',')[0] != 'all':
-                count = 50
-                targets = selected_targets(targets, hosts.split(','))
+            count = 50
+            if len(targets) == len(self.targets):
+                count = 10
 
             if targets:
                 if option:
@@ -1228,10 +1244,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
+            targets, _ = self._parse_args(args)
 
             output = []
 
@@ -1296,23 +1309,8 @@ class CommandPrompt(cmd.Cmd):
         if not args:
             self.parse_error(self.do_run, args)
 
-        args = args.split(",")
-        targets = enabled_targets(self.targets)
-
-        def match_target(x):
-            return x.strip() in set(set(targets) | set(['all']))
-
-        command = ','.join(list(itertools.dropwhile(match_target, args)))
-
-        # Note: args stripping happens after command is constructed as
-        # doing it before could change the resulting command.
-        args = [x.strip() for x in args]
-
-        if args[0] != 'all':
-            targets = selected_targets(
-              targets
-            , itertools.takewhile(match_target, args)
-            )
+        targets, params = self._parse_args(args)
+        command, = params
 
         for target in targets.keys():
             lock = targets[target].locked()
@@ -1352,10 +1350,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             path = config.target_testsuitedir
 
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
+            targets, _ = self._parse_args(args)
 
             for target in targets:
                 self.println('testsuites on {} ({}):'.format(target, targets[target].system))
@@ -1380,19 +1375,13 @@ class CommandPrompt(cmd.Cmd):
         testsuite  -- testsuite-run command
         """
 
-        (args, _, command) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if not(args and command):
+        if not (targets and params):
             self.parse_error(self.do_testsuite_run, args)
             return
 
-        targets = enabled_targets(self.targets)
-
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
-
-        if not targets:
-            return
+        command, = params
 
         if not command.startswith('/'):
             command = os.path.join(config.target_testsuitedir, command.strip())
@@ -1435,16 +1424,13 @@ class CommandPrompt(cmd.Cmd):
         testsuite  -- testsuite-run command
         """
 
-        (args, _, command) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if not(args and command):
+        if not (targets and params):
             self.parse_error(self.do_testsuite_submit, args)
             return
 
-        targets = enabled_targets(self.targets)
-
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
+        command, = params
 
         name = os.path.basename(command).replace('-run', '')
         username = config.session_user
@@ -1620,13 +1606,10 @@ class CommandPrompt(cmd.Cmd):
         state    -- enabled, disabled
         """
 
-        (args, _, state) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if args and state:
-            targets = enabled_targets(self.targets)
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
+        if targets and params:
+            state, = params
 
             if state == 'enabled':
                 comment = user_input('comment: ').strip()
@@ -1685,13 +1668,10 @@ class CommandPrompt(cmd.Cmd):
         state    -- enabled, disabled, dryrun, parallel, serial
         """
 
-        (args, _, state) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if args and state:
-            targets = self.targets
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
+        if targets and params:
+            state, = params
 
             if state in ['enabled', 'disabled', 'dryrun']:
                 for target in targets:
@@ -1754,13 +1734,10 @@ class CommandPrompt(cmd.Cmd):
         timeout  -- timeout value in seconds
         """
 
-        (args, _, timeout) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if args and timeout:
-            targets = self.targets
-
-            if args.split(',')[0] != 'all':
-                targets = selected_targets(targets, args.split(','))
+        if targets and params:
+            timeout, = params
 
             try:
                 value = int(timeout)
@@ -1790,16 +1767,13 @@ class CommandPrompt(cmd.Cmd):
         repository -- repository, TESTING or UPDATE
         """
 
-        (args, _, name) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if not (args and name):
+        if not (targets and params):
             self.parse_error(self.do_set_repo, args)
             return
 
-        targets = enabled_targets(self.targets)
-
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
+        name, = params
 
         with LockedTargets([self.targets[x] for x in targets]):
             for t in [self.targets[x] for x in targets]:
@@ -1823,16 +1797,13 @@ class CommandPrompt(cmd.Cmd):
         package  -- package name
         """
 
-        (args, _, packages) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if not(args and packages):
+        if not (targets and params):
             self.parse_error(self.do_install, args)
             return
 
-        targets = enabled_targets(self.targets)
-
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
+        packages, = params
 
         if targets:
             installer = self.metadata.get_installer()
@@ -1866,16 +1837,13 @@ class CommandPrompt(cmd.Cmd):
         package  -- package name
         """
 
-        (args, _, packages) = args.rpartition(',')
+        targets, params = self._parse_args(args)
 
-        if not(args and packages):
+        if not (targets and params):
             self.parse_error(self.do_uninstall, args)
             return
 
-        targets = enabled_targets(self.targets)
-
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
+        packages, = params
 
         if targets:
             uninstaller = self.metadata.get_uninstaller()
@@ -1906,14 +1874,11 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if not args:
+        targets, params = self._parse_args(args)
+
+        if (not targets) or params:
             self.parse_error(self.do_downgrade, args)
             return
-
-        targets = enabled_targets(self.targets)
-
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
 
         if targets:
             downgrader = self.metadata.get_downgrader()
@@ -1955,15 +1920,11 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if not args:
+        targets, params = self._parse_args(args)
+
+        if not targets:
             self.parse_error(self.do_prepare, args)
             return
-
-        params = args.split(',')
-        targets = enabled_targets(self.targets)
-
-        if params[0] != 'all':
-            targets = selected_targets(targets, params)
 
         opts = dict(
             force = False,
@@ -2016,15 +1977,14 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if not args:
+        targets, params = self._parse_args(args)
+
+        if not targets:
             self.parse_error(self.do_update, args)
             return
 
         params = args.split(',')
 
-        targets = enabled_targets(self.targets)
-        if params[0] != 'all':
-            targets = selected_targets(targets, params)
 
         prepare = dict()
 
@@ -2125,15 +2085,9 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        if not args:
-            args = 'all'
-
         command = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
 
-        targets = enabled_targets(self.targets)
-
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
+        targets, _ = self._parse_args(args)
 
         if targets:
             try:
