@@ -2092,7 +2092,7 @@ class CommandPrompt(cmd.Cmd):
         none
         """
 
-        exitcode = os.system('cd %s; svn up' % os.path.dirname(self.metadata.path))
+        exitcode = os.system('cd %s; svn up' % self.metadata.report_wd())
 
         if exitcode != 0:
             out.error('updating template failed, returncode: %s' % exitcode)
@@ -2112,7 +2112,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             message = '-m "%s"' % args
 
-        exitcode = os.system('cd %s; svn up; svn ci %s' % (os.path.dirname(self.metadata.path), message))
+        exitcode = os.system('cd %s; svn up; svn ci %s' % (self.metadata.report_wd(), message))
 
         if exitcode != 0:
             out.error('committing template failed, returncode: %s' % exitcode)
@@ -2345,7 +2345,7 @@ class CommandPrompt(cmd.Cmd):
 
     def _do_save_impl(self, path = 'log.xml'):
         if not path.startswith('/'):
-            dir_ = os.path.dirname(self.metadata.path) if self.metadata else ''
+            dir_ = self.metadata.report_wd()
             path = os.path.join(dir_, 'output', path)
 
         ensure_dir_exists(os.path.dirname(path))
