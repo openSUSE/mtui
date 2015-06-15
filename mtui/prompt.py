@@ -2120,20 +2120,18 @@ class CommandPrompt(cmd.Cmd):
             targets = selected_targets(targets, args.split(','))
 
         if targets:
-            preparer = self.metadata.get_preparer()
             out.info('preparing')
 
             try:
-                preparer(
+                self.metadata.perform_prepare(
                     targets,
-                    self.metadata.get_package_list(),
-                    self.metadata,
                     force = force,
                     installed_only = installed,
                     testing = testing
-                ).run()
+                )
             except Exception:
                 out.critical('failed to prepare target systems')
+                out.debug(format_exc())
                 return False
             except KeyboardInterrupt:
                 out.info('preparation process canceled')

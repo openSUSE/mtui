@@ -308,6 +308,15 @@ class TestReport(with_metaclass(ABCMeta, object)):
         ))
         del updater
 
+    def perform_prepare(self, targets, **kw):
+        preparer = self.get_preparer()
+        preparer(
+            targets,
+            self.get_package_list(),
+            self,
+            **kw
+        ).run()
+
     def perform_update(self, targets):
         '''
         :type  targets: dict(hostname = L{Target})
