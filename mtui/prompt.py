@@ -304,15 +304,6 @@ class CommandPrompt(cmd.Cmd):
             out.error('failed to load reference hosts data')
             raise
 
-    def downloads_wd(self, *path, **kw):
-        """
-        :return: str directory for downloads.
-            If template is loaded, it's ${report directory}/downloads
-            Otherwise ${CWD}/downloads
-        """
-        path = ['downloads'] + list(path)
-        return self.metadata.report_wd(*path, **kw)
-
     def _parse_args(self, args):
         tavailable = set(self.targets.keys()) | set(['all'])
         tselected = set()
@@ -2169,7 +2160,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_get, args)
             return
 
-        local = self.downloads_wd(os.path.basename(args), filepath=True)
+        local = self.metadata.downloads_wd(os.path.basename(args), filepath=True)
 
         FileDownload(self.targets.values(), args, local, True).run()
         self.log.info('downloaded {0} to {1}'.format(args, local))

@@ -496,6 +496,15 @@ class TestReport(with_metaclass(ABCMeta, object)):
         """
         return join(self.report_wd(), *["scripts"] + list(paths))
 
+    def downloads_wd(self, *path, **kw):
+        """
+        :return: str directory for downloads.
+            If template is loaded, it's ${report directory}/downloads
+            Otherwise ${CWD}/downloads
+        """
+        path = ['downloads'] + list(path)
+        return self.report_wd(*path, **kw)
+
     def pkg_list_file(self):
         return self.report_wd('packages-list.txt', filepath = True)
 
