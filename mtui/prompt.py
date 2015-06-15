@@ -112,12 +112,11 @@ class CommandPrompt(cmd.Cmd):
         cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
 
-        self.targets = {}
-        """
-        :type  targets: dict(hostname = L{Target})
-            where hostname = str
-        """
         self.metadata = NullTestReport(config, log)
+        self.targets = self.metadata.targets
+        """
+        alias to ease refactoring
+        """
 
         self.homedir = os.path.expanduser('~')
         self.config = config
@@ -1541,11 +1540,12 @@ class CommandPrompt(cmd.Cmd):
 
         if autoconnect:
             tr.load_systems_from_testplatforms()
-            self.targets = tr.connect_targets()
+            tr.connect_targets()
 
         if self.metadata and self.metadata.id is self.session:
             self.set_prompt(None)
         self.metadata = tr
+        self.targets = tr.targets
 
     def do_set_location(self, args):
         """

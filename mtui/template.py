@@ -183,6 +183,11 @@ class TestReport(with_metaclass(ABCMeta, object)):
         :type systems: dict str -> str
         :param systems: hostname -> system
         """
+        self.targets = {}
+        """
+        :type  targets: dict(hostname = L{Target})
+            where hostname = str
+        """
         self.bugs = {}
         self.testplatforms = []
         self.category = ""
@@ -406,7 +411,9 @@ class TestReport(with_metaclass(ABCMeta, object)):
                 # the network/ssh code really can't KeyboardInterrupt
                 self.log.warning('skipping host {0}'.format(host))
 
-        return targets
+        for t in self.targets:
+            del self.targets[t]
+        self.targets.update(targets)
 
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config, self.log)
