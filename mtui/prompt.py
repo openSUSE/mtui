@@ -806,7 +806,7 @@ class CommandPrompt(cmd.Cmd):
         specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
 
         if not specfiles:
-            self.do_source_extract('*.spec')
+            self.metadata.extract_source_rpm()
             specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
             if not specfiles:
                 out.error('failed to load specfile')
@@ -1560,12 +1560,12 @@ class CommandPrompt(cmd.Cmd):
         re_add = []
         for hostname, target in self.targets.items():
             target.close()
-            re_add.append("{0},{1}".format(hostname, target.system))
+            re_add.append((hostname, target.system))
 
         self.load_update(update)
 
-        for x in re_add:
-            self.do_add_host(x)
+        for hostname, system in re_add:
+            self.connect_system_if_unconnected(hostname, system)
 
     def load_update(self, update, autoconnect=True):
         update.config = self.config
@@ -1959,27 +1959,25 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_prepare, args)
             return
 
-        force = False
-        installed = False
-        testing = False
-
-        parameter = args.split(',')
-        if 'force' in parameter:
-            force = True
-            parameter.remove('force')
-        if 'installed' in parameter:
-            installed = True
-            parameter.remove('installed')
-        if 'testing' in parameter:
-            testing = True
-            parameter.remove('testing')
-
-        args = ','.join(parameter)
+        params = args.split(',')
         targets = enabled_targets(self.targets)
 
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
+        if params[0] != 'all':
+            targets = selected_targets(targets, params)
 
+        opts = dict(
+            force = False,
+            installed = False,
+            testing = False,
+        )
+
+        for opt in opts:
+            if opt in params:
+                opts[opt] = True
+
+        self._do_prepare_impl(targets, **opts)
+
+    def _do_prepare_impl(self, targets, force = False, installed = False, testing = False):
         if targets:
             out.info('preparing')
 
@@ -2022,44 +2020,26 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_update, args)
             return
 
-        prepare = True
-        missing = False
-        newpackage = False
-        script = True
+        params = args.split(',')
 
-        parameter = args.split(',')
+        targets = enabled_targets(self.targets)
+        if params[0] != 'all':
+            targets = selected_targets(targets, params)
+
+        prepare = dict()
 
         # don't install new packages when doing a noninteractive kernel update
         if not self.interactive and [x for x in self.metadata.packages if x in ['-kmp-', 'kernel-default']]:
-            try:
-                parameter.remove('newpackage')
-            except ValueError:
-                pass
-            parameter.append('installed')
+            if 'newpackage' in params:
+                params.remove('newpackage')
+            prepare['installed'] = True
 
-        if 'newpackage' in parameter:
-            newpackage = True
-            parameter.remove('newpackage')
-
-        if 'noprepare' in parameter:
-            prepare = False
-            parameter.remove('noprepare')
-
-        if 'noscript' in parameter:
-            script = False
-            parameter.remove('noscript')
-
-        args = ','.join(parameter)
-        targets = enabled_targets(self.targets)
-
-        if prepare:
-            if self.do_prepare(args) is False:
+        if 'noprepare' not in params:
+            if self._do_prepare_impl(targets, **prepare) is False:
                 return
 
-        if args.split(',')[0] != 'all':
-            targets = selected_targets(targets, args.split(','))
-
         with LockedTargets([self.targets[x] for x in targets]):
+            missing = False
             for target in targets:
                 not_installed = []
                 packages = targets[target].packages
@@ -2085,7 +2065,7 @@ class CommandPrompt(cmd.Cmd):
             if missing:
                 out.warning('%s: these packages are missing: %s' % (target, not_installed))
 
-            if script:
+            if 'noscript' not in params:
                 self.metadata.script_hooks(PreScript).run(targets.values())
 
             out.info('updating')
@@ -2101,8 +2081,8 @@ class CommandPrompt(cmd.Cmd):
                 out.info('update process canceled')
                 return
 
-            if newpackage:
-                self.do_prepare('%s,testing' % args)
+            if 'newpackage' in params:
+                self._do_prepare_impl(targets, testing = True, **prepare)
 
             for target in targets:
                 targets[target].add_history(['update', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
@@ -2125,7 +2105,7 @@ class CommandPrompt(cmd.Cmd):
                             out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
                                         required))
 
-            if script:
+            if 'noscript' not in params:
                 self.metadata.script_hooks(PostScript).run(targets.values())
                 self.metadata.script_hooks(CompareScript).run(targets.values())
                 FileDelete(targets.values(), self.metadata.target_wd('output')).run()
@@ -2329,7 +2309,7 @@ class CommandPrompt(cmd.Cmd):
                 filename = '*.spec'
             path = os.path.join(self.metadata.local_wd(), '*', filename)
             if not glob.glob(path):
-                self.do_source_extract('')
+                self.metadata.extract_source_rpm()
         else:
             self.parse_error(self.do_edit, args)
             return
@@ -2426,11 +2406,10 @@ class CommandPrompt(cmd.Cmd):
         filename -- save log as file filename
         """
 
-        path = args.strip() if args is not None else ''
+        path = [args.strip()] if args else []
+        self._do_save_impl(*path)
 
-        if not path:
-            path = 'log.xml'
-
+    def _do_save_impl(self, path = 'log.xml'):
         if not path.startswith('/'):
             dir_ = os.path.dirname(self.metadata.path) if self.metadata else ''
             path = os.path.join(dir_, 'output', path)
@@ -2467,7 +2446,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if not prompt_user('save log? (Y/n) ', ['n', 'no'], self.interactive):
-            self.do_save(None)
+            self._do_save_impl()
 
         args_ = [args] if args in ('reboot', 'poweroff') else []
 
