@@ -2177,7 +2177,7 @@ class CommandPrompt(cmd.Cmd):
         out.info('done')
 
     def complete_update(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage', 'noprepare'])
+        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage', 'noprepare', 'noscript'])
 
     def do_list_sessions(self, args):
         """
