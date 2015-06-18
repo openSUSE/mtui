@@ -383,7 +383,8 @@ def test_TestReport_connect_targets():
     tr = TRF(SwampTestReport)
     tr.targetFactory = TargetFake
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
-    ts = tr.connect_targets()
+    tr.connect_targets()
+    ts = tr.targets
 
     eq_(len(ts), 2)
 

@@ -183,6 +183,11 @@ class TestReport(with_metaclass(ABCMeta, object)):
         :type systems: dict str -> str
         :param systems: hostname -> system
         """
+        self.targets = {}
+        """
+        :type  targets: dict(hostname = L{Target})
+            where hostname = str
+        """
         self.bugs = {}
         self.testplatforms = []
         self.category = ""
@@ -406,7 +411,9 @@ class TestReport(with_metaclass(ABCMeta, object)):
                 # the network/ssh code really can't KeyboardInterrupt
                 self.log.warning('skipping host {0}'.format(host))
 
-        return targets
+        for t in self.targets:
+            del self.targets[t]
+        self.targets.update(targets)
 
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config, self.log)
@@ -495,6 +502,15 @@ class TestReport(with_metaclass(ABCMeta, object)):
         because that's handled by L{TestReport.copy_scripts}
         """
         return join(self.report_wd(), *["scripts"] + list(paths))
+
+    def downloads_wd(self, *path, **kw):
+        """
+        :return: str directory for downloads.
+            If template is loaded, it's ${report directory}/downloads
+            Otherwise ${CWD}/downloads
+        """
+        path = ['downloads'] + list(path)
+        return self.report_wd(*path, **kw)
 
     def pkg_list_file(self):
         return self.report_wd('packages-list.txt', filepath = True)
@@ -586,6 +602,7 @@ class NullTestReport(TestReport):
     def __init__(tr, config, log, _date = date, *a, **kw):
         super(NullTestReport, tr).__init__(config, log, _date, *a, **kw)
         tr.id = None
+        tr.path = join(os.getcwd(), "None")
 
     def __bool__(tr):
         return False
@@ -593,6 +610,9 @@ class NullTestReport(TestReport):
     def __nonzero__(tr):
         '''python-2.x compat, see __bool__()'''
         return tr.__bool__()
+
+    def target_wd(self, *paths):
+        return join(self.config.target_tempdir, *paths)
 
     def _get_updater_id(tr):
         return None

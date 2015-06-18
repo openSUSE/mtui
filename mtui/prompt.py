@@ -112,12 +112,11 @@ class CommandPrompt(cmd.Cmd):
         cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
 
-        self.targets = {}
-        """
-        :type  targets: dict(hostname = L{Target})
-            where hostname = str
-        """
         self.metadata = NullTestReport(config, log)
+        self.targets = self.metadata.targets
+        """
+        alias to ease refactoring
+        """
 
         self.homedir = os.path.expanduser('~')
         self.config = config
@@ -303,26 +302,6 @@ class CommandPrompt(cmd.Cmd):
         except Exception:
             out.error('failed to load reference hosts data')
             raise
-
-    def target_tempdir(self, *path):
-        if self.metadata:
-            return self.metadata.target_wd(*path)
-
-        path = [self.config.target_tempdir] + list(path)
-        return join(*path)
-
-    def downloads_wd(self, *path, **kw):
-        """
-        :return: str directory for downloads.
-            If template is loaded, it's ${report directory}/downloads
-            Otherwise ${CWD}/downloads
-        """
-        path = ['downloads'] + list(path)
-        return (
-            self.metadata.report_wd
-            if self.metadata
-            else ensure_dir_exists
-        )(*path, **kw)
 
     def _parse_args(self, args):
         tavailable = set(self.targets.keys()) | set(['all'])
@@ -1561,11 +1540,12 @@ class CommandPrompt(cmd.Cmd):
 
         if autoconnect:
             tr.load_systems_from_testplatforms()
-            self.targets = tr.connect_targets()
+            tr.connect_targets()
 
         if self.metadata and self.metadata.id is self.session:
             self.set_prompt(None)
         self.metadata = tr
+        self.targets = tr.targets
 
     def do_set_location(self, args):
         """
@@ -2112,7 +2092,7 @@ class CommandPrompt(cmd.Cmd):
         none
         """
 
-        exitcode = os.system('cd %s; svn up' % os.path.dirname(self.metadata.path))
+        exitcode = os.system('cd %s; svn up' % self.metadata.report_wd())
 
         if exitcode != 0:
             out.error('updating template failed, returncode: %s' % exitcode)
@@ -2132,7 +2112,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             message = '-m "%s"' % args
 
-        exitcode = os.system('cd %s; svn up; svn ci %s' % (os.path.dirname(self.metadata.path), message))
+        exitcode = os.system('cd %s; svn up; svn ci %s' % (self.metadata.report_wd(), message))
 
         if exitcode != 0:
             out.error('committing template failed, returncode: %s' % exitcode)
@@ -2157,7 +2137,7 @@ class CommandPrompt(cmd.Cmd):
             if not os.path.isfile(filename):
                 continue
 
-            remote = self.target_tempdir(os.path.basename(filename))
+            remote = self.metadata.target_wd(os.path.basename(filename))
 
             FileUpload(self.targets.values(), filename, remote).run()
             self.log.info('uploaded {0} to {1}'.format(filename, remote))
@@ -2180,7 +2160,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_get, args)
             return
 
-        local = self.downloads_wd(os.path.basename(args), filepath=True)
+        local = self.metadata.downloads_wd(os.path.basename(args), filepath=True)
 
         FileDownload(self.targets.values(), args, local, True).run()
         self.log.info('downloaded {0} to {1}'.format(args, local))
@@ -2365,7 +2345,7 @@ class CommandPrompt(cmd.Cmd):
 
     def _do_save_impl(self, path = 'log.xml'):
         if not path.startswith('/'):
-            dir_ = os.path.dirname(self.metadata.path) if self.metadata else ''
+            dir_ = self.metadata.report_wd()
             path = os.path.join(dir_, 'output', path)
 
         ensure_dir_exists(os.path.dirname(path))
