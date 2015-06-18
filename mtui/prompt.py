@@ -893,20 +893,20 @@ class CommandPrompt(cmd.Cmd):
         if not self.testopia.testcases:
             out.info('no testcases found')
 
-        for case_id in self.testopia.testcases:
-            summary = self.testopia.testcases[case_id]['summary']
-            if self.testopia.testcases[case_id]['status'] == 'disabled':
+        for tcid, tc in self.testopia.testcases.items():
+            summary = tc['summary']
+            if tc['status'] == 'disabled':
                 status = red('disabled')
-            elif self.testopia.testcases[case_id]['status'] == 'confirmed':
+            elif tc['status'] == 'confirmed':
                 status = green('confirmed')
             else:
                 status = yellow('proposed')
-            if self.testopia.testcases[case_id]['automated'] == 'yes':
+            if tc['automated'] == 'yes':
                 automated = 'automated'
             else:
                 automated = 'manual'
             self.println('{0:40}: {1} ({2})'.format(summary, status, automated))
-            self.println('{}/tr_show_case.cgi?case_id={}'.format(url, case_id))
+            self.println('{}/tr_show_case.cgi?case_id={}'.format(url, tcid))
             self.println()
 
     @requires_update
