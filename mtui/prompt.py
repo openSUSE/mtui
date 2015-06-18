@@ -2092,10 +2092,11 @@ class CommandPrompt(cmd.Cmd):
         none
         """
 
-        exitcode = os.system('cd %s; svn up' % self.metadata.report_wd())
-
-        if exitcode != 0:
-            out.error('updating template failed, returncode: %s' % exitcode)
+        try:
+            subprocess.check_call('svn up'.split(), cwd = self.metadata.report_wd())
+        except Exception:
+            out.error('updating template failed')
+            out.debug(format_exc())
 
     @requires_update
     def do_commit(self, args):
@@ -2108,14 +2109,15 @@ class CommandPrompt(cmd.Cmd):
         message  -- commit message
         """
 
-        message = ''
-        if args:
-            message = '-m "%s"' % args
+        msg = ['-m', args] if args else []
 
-        exitcode = os.system('cd %s; svn up; svn ci %s' % (self.metadata.report_wd(), message))
-
-        if exitcode != 0:
-            out.error('committing template failed, returncode: %s' % exitcode)
+        checkout = self.metadata.report_wd()
+        try:
+            subprocess.check_call('svn up'.split(), cwd = checkout)
+            subprocess.check_call('svn ci'.split() + msg, cwd = checkout)
+        except Exception:
+            out.error('committing template failed')
+            out.debug(format_exc())
 
     def do_put(self, args):
         """
@@ -2189,9 +2191,10 @@ class CommandPrompt(cmd.Cmd):
             path = os.path.join(dirname, filename)
             if os.path.isfile(path):
                 try:
-                    os.system('%s %s' % (path, ' '.join(hosts)))
+                    subprocess.check_call([path] + hosts)
                 except Exception:
                     out.error('running %s failed' % filename)
+                    out.debug(format_exc())
             else:
                 out.error('%s script not found, make sure term.%s.sh exists' % (args, args))
                 self.parse_error(self.do_terms, args)
@@ -2248,7 +2251,11 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_edit, args)
             return
 
-        os.system('{0} {1}'.format(editor, path))
+        try:
+            subprocess.check_call([editor, path])
+        except Exception:
+            out.error("failed to run %s" % editor)
+            out.debug(format_exc())
 
     def complete_edit(self, text, line, begidx, endidx):
         if 'file,' in line:
