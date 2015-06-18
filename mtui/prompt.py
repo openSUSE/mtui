@@ -865,6 +865,15 @@ class CommandPrompt(cmd.Cmd):
         else:
             self.metadata.list_update_commands(self.targets, self.println)
 
+    def ensure_testopia_loaded(self, *packages):
+        try:
+            assert(self.testopia.testcases and not packages)
+        except (AttributeError, AssertionError):
+            self.testopia = Testopia(
+                self.metadata.get_release()
+              , packages or self.metadata.get_package_list()
+            )
+
     @requires_update
     def do_testopia_list(self, args):
         """
@@ -877,15 +886,7 @@ class CommandPrompt(cmd.Cmd):
         package  -- packag to display testcases for
         """
 
-        try:
-            assert(self.testopia.testcases and not args)
-        except (AttributeError, AssertionError):
-            release = self.metadata.get_release()
-            packages = args.split(',')
-            if not packages[0]:
-                packages = self.metadata.get_package_list()
-
-            self.testopia = Testopia(release, packages)
+        self.ensure_testopia_loaded(*filter(None, args.split(',')))
 
         url = config.bugzilla_url
 
@@ -922,13 +923,7 @@ class CommandPrompt(cmd.Cmd):
             cases = []
             url = config.bugzilla_url
 
-            try:
-                assert(self.testopia)
-            except (AttributeError, AssertionError):
-                release = self.metadata.get_release()
-                packages = self.metadata.get_package_list()
-
-                self.testopia = Testopia(release, packages)
+            self.ensure_testopia_loaded()
 
             for case in args.split(','):
                 case = case.replace('_', ' ')
@@ -986,13 +981,7 @@ class CommandPrompt(cmd.Cmd):
             fields = ['requirement:', 'setup:', 'breakdown:', 'action:', 'effect:']
             (package, _, summary) = args.partition(',')
 
-            try:
-                assert(self.testopia)
-            except (AttributeError, AssertionError):
-                release = self.metadata.get_release()
-                packages = self.metadata.get_package_list()
-
-                self.testopia = Testopia(release, packages)
+            self.ensure_testopia_loaded()
 
             fields.insert(0, 'status: proposed')
             fields.insert(0, 'automated: no')
@@ -1049,13 +1038,7 @@ class CommandPrompt(cmd.Cmd):
             url = config.bugzilla_url
             fields = ['summary', 'automated', 'status', 'requirement', 'setup', 'breakdown', 'action', 'effect']
 
-            try:
-                assert(self.testopia)
-            except (AttributeError, AssertionError):
-                release = self.metadata.get_release()
-                packages = self.metadata.get_package_list()
-
-                self.testopia = Testopia(release, packages)
+            self.ensure_testopia_loaded()
 
             case = args.replace('_', ' ')
             try:
@@ -2443,12 +2426,7 @@ class CommandPrompt(cmd.Cmd):
         return [i for i in self.metadata.get_package_list() if i.startswith(text) and i not in line]
 
     def complete_testopia_testcaselist(self, text, line, begidx, endidx):
-        try:
-            assert(self.testopia.testcases)
-        except (AttributeError, AssertionError):
-            release = self.metadata.get_release()
-            packages = self.metadata.get_package_list()
-            self.testopia = Testopia(release, packages)
+        self.ensure_testopia_loaded()
 
         testcases = [ i['summary'].replace(' ', '_') for i in self.testopia.testcases.values() ]
         return [i for i in testcases if i.startswith(text) and i not in line]
