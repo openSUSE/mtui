@@ -303,19 +303,23 @@ class CommandPrompt(cmd.Cmd):
             out.error('failed to load reference hosts data')
             raise
 
-    def _parse_args(self, args):
+    def _parse_args(self, cmdline, params_type):
         tavailable = set(self.targets.keys()) | set(['all'])
         tselected = set()
-        params = set()
-        in_targets = True
+        params = None
 
-        for arg in args.split(','):
-            if in_targets:
-                if arg.strip() in tavailable:
-                    tselected.add(arg.strip())
-                else:
-                    in_targets = False
-                    params.add(arg)
+        while True:
+            arg, _, rest = cmdline.strip().partition(',')
+            if arg.strip() in tavailable:
+                tselected.add(arg.strip())
+                cmdline = rest
+            else:
+                break
+
+        if params_type == str:
+            params = cmdline.strip()
+        elif params_type == set:
+            params = set([arg.strip() for arg in cmdline.split(',')])
 
         if 'all' in tselected:
             targets = enabled_targets(self.targets)
@@ -515,7 +519,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            targets, params = self._parse_args(args)
+            targets, params = self._parse_args(args, set)
 
             filters = ['connect', 'disconnect', 'install', 'update', 'downgrade']
 
@@ -1206,7 +1210,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            targets, _ = self._parse_args(args)
+            targets, _ = self._parse_args(args, None)
 
             output = []
 
@@ -1271,8 +1275,7 @@ class CommandPrompt(cmd.Cmd):
         if not args:
             self.parse_error(self.do_run, args)
 
-        targets, params = self._parse_args(args)
-        command, = params
+        targets, command = self._parse_args(args, str)
 
         for target in targets.keys():
             lock = targets[target].locked()
@@ -1312,7 +1315,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             path = config.target_testsuitedir
 
-            targets, _ = self._parse_args(args)
+            targets, _ = self._parse_args(args, None)
 
             for target in targets:
                 self.println('testsuites on {} ({}):'.format(target, targets[target].system))
@@ -1337,13 +1340,11 @@ class CommandPrompt(cmd.Cmd):
         testsuite  -- testsuite-run command
         """
 
-        targets, params = self._parse_args(args)
+        targets, command = self._parse_args(args, str)
 
-        if not (targets and params):
+        if not (targets and command):
             self.parse_error(self.do_testsuite_run, args)
             return
-
-        command, = params
 
         if not command.startswith('/'):
             command = os.path.join(config.target_testsuitedir, command.strip())
@@ -1386,13 +1387,11 @@ class CommandPrompt(cmd.Cmd):
         testsuite  -- testsuite-run command
         """
 
-        targets, params = self._parse_args(args)
+        targets, command = self._parse_args(args, str)
 
-        if not (targets and params):
+        if not (targets and command):
             self.parse_error(self.do_testsuite_submit, args)
             return
-
-        command, = params
 
         name = os.path.basename(command).replace('-run', '')
         username = config.session_user
@@ -1569,10 +1568,9 @@ class CommandPrompt(cmd.Cmd):
         state    -- enabled, disabled
         """
 
-        targets, params = self._parse_args(args)
+        targets, state = self._parse_args(args, str)
 
-        if targets and params:
-            state, = params
+        if targets and state:
 
             if state == 'enabled':
                 comment = user_input('comment: ').strip()
@@ -1631,10 +1629,9 @@ class CommandPrompt(cmd.Cmd):
         state    -- enabled, disabled, dryrun, parallel, serial
         """
 
-        targets, params = self._parse_args(args)
+        targets, state = self._parse_args(args, str)
 
-        if targets and params:
-            state, = params
+        if targets and state:
 
             if state in ['enabled', 'disabled', 'dryrun']:
                 for target in targets:
@@ -1697,11 +1694,9 @@ class CommandPrompt(cmd.Cmd):
         timeout  -- timeout value in seconds
         """
 
-        targets, params = self._parse_args(args)
+        targets, timeout = self._parse_args(args, str)
 
-        if targets and params:
-            timeout, = params
-
+        if targets and timeout:
             try:
                 value = int(timeout)
             except Exception:
@@ -1730,13 +1725,11 @@ class CommandPrompt(cmd.Cmd):
         repository -- repository, TESTING or UPDATE
         """
 
-        targets, params = self._parse_args(args)
+        targets, name = self._parse_args(args, str)
 
-        if not (targets and params):
+        if not (targets and name):
             self.parse_error(self.do_set_repo, args)
             return
-
-        name, = params
 
         with LockedTargets([self.targets[x] for x in targets]):
             for t in [self.targets[x] for x in targets]:
@@ -1760,13 +1753,11 @@ class CommandPrompt(cmd.Cmd):
         package  -- package name
         """
 
-        targets, params = self._parse_args(args)
+        targets, packages = self._parse_args(args, str)
 
-        if not (targets and params):
+        if not (targets and packages):
             self.parse_error(self.do_install, args)
             return
-
-        packages, = params
 
         if targets:
             installer = self.metadata.get_installer()
@@ -1800,13 +1791,11 @@ class CommandPrompt(cmd.Cmd):
         package  -- package name
         """
 
-        targets, params = self._parse_args(args)
+        targets, packages = self._parse_args(args, str)
 
-        if not (targets and params):
+        if not (targets and packages):
             self.parse_error(self.do_uninstall, args)
             return
-
-        packages, = params
 
         if targets:
             uninstaller = self.metadata.get_uninstaller()
@@ -1837,9 +1826,9 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        targets, params = self._parse_args(args)
+        targets, _ = self._parse_args(args, None)
 
-        if (not targets) or params:
+        if (not targets) or _:
             self.parse_error(self.do_downgrade, args)
             return
 
@@ -1883,7 +1872,7 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        targets, params = self._parse_args(args)
+        targets, params = self._parse_args(args, set)
 
         if not targets:
             self.parse_error(self.do_prepare, args)
@@ -1940,14 +1929,11 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list or "all"
         """
 
-        targets, params = self._parse_args(args)
+        targets, params = self._parse_args(args, set)
 
         if not targets:
             self.parse_error(self.do_update, args)
             return
-
-        params = args.split(',')
-
 
         prepare = dict()
 
@@ -2050,7 +2036,7 @@ class CommandPrompt(cmd.Cmd):
 
         command = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
 
-        targets, _ = self._parse_args(args)
+        targets, _ = self._parse_args(args, None)
 
         if targets:
             try:
