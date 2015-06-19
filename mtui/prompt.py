@@ -321,7 +321,7 @@ class CommandPrompt(cmd.Cmd):
         elif params_type == set:
             params = set([arg.strip() for arg in cmdline.split(',') if arg.strip()])
 
-        if 'all' in tselected:
+        if 'all' in tselected or tselected == set():
             targets = enabled_targets(self.targets)
         else:
             targets = selected_targets(enabled_targets(self.targets), tselected)
@@ -456,13 +456,13 @@ class CommandPrompt(cmd.Cmd):
         hostname -- hostname from the target list
         """
 
-        if args:
-            if args == 'all':
-                [ self.targets[x].close() or self.targets.pop(x) for x in set(self.targets)]
-            else:
-                [ self.targets[x].close() or self.targets.pop(x) for x in set(args.split(',')) & set(self.targets)]
-        else:
+        if not args:
             self.parse_error(self.do_remove_host, args)
+            return
+
+        targets, _ = self._parse_args(args, None)
+        for tgt in targets:
+            self.targets[tgt].close() or self.targets.pop(tgt)
 
     def complete_remove_host(self, text, line, begidx, endidx):
         return self.complete_hostlist_with_all(text, line, begidx, endidx)
@@ -577,7 +577,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_hosts, args)
         else:
 
-            targets = enabled_targets(self.targets)
+            targets, _ = self._parse_args(args, None)
 
             for host in sorted(targets.values()):
                 system = '(%s)' % host.system
@@ -656,7 +656,9 @@ class CommandPrompt(cmd.Cmd):
         type     -- "build" or "source" diff
         """
 
-        if args not in ['source', 'build']:
+        targets, mode = self._parse_args(args, str)
+
+        if mode not in ['source', 'build']:
             self.parse_error(self.do_source_diff, args)
 
         try:
@@ -671,8 +673,6 @@ class CommandPrompt(cmd.Cmd):
         osc.conf.config['debug'] = 0
         osc.conf.config['verbose'] = 0
         osc.conf.config['http_debug'] = 0
-
-        targets = enabled_targets(self.targets)
 
         updated = {}
         installed = {}
@@ -742,8 +742,8 @@ class CommandPrompt(cmd.Cmd):
                 out.warning(messages.PackageRevisionHasntChangedWarning(name))
                 continue
 
-            diff = os.path.join(destination, '%s-%s.diff' % (name, args))
-            if args == 'source':
+            diff = os.path.join(destination, '%s-%s.diff' % (name, mode))
+            if mode == 'source':
                 with open(diff, 'w+') as f:
                     try:
                         f.write(osc.core.server_diff(
@@ -762,7 +762,7 @@ class CommandPrompt(cmd.Cmd):
 
                 out.info('wrote diff locally to %s' % diff)
 
-            elif args == 'build':
+            elif mode == 'build':
                 RunCommand(targets, 'which osc').run()
                 for target in targets:
                     if targets[target].lastexit() != 0:
@@ -1140,12 +1140,12 @@ class CommandPrompt(cmd.Cmd):
         package  -- packagename to show version history
         """
 
-        if args:
-            packages = args.replace(',', ' ')
+        targets, params = self._parse_args(args, set)
+
+        if params:
+            packages = ' '.join(params)
         else:
             packages = ' '.join(self.metadata.get_package_list())
-
-        targets = enabled_targets(self.targets)
 
         history = {}
 
@@ -1243,7 +1243,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            targets = selected_targets(self.targets, [args])
+            targets, _ = self._parse_args(args, None)
 
             for target in targets.keys():
                 targets[target].shell()
