@@ -319,7 +319,7 @@ class CommandPrompt(cmd.Cmd):
         if params_type == str:
             params = cmdline.strip()
         elif params_type == set:
-            params = set([arg.strip() for arg in cmdline.split(',')])
+            params = set([arg.strip() for arg in cmdline.split(',') if arg.strip()])
 
         if 'all' in tselected:
             targets = enabled_targets(self.targets)
