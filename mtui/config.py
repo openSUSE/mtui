@@ -133,7 +133,7 @@ class Config(object):
              '/usr/share/qa/tools'),
 
             ('testopia_interface', ('testopia', 'interface'),
-             'https://apibugzilla.novell.com/tr_xmlrpc.cgi'),
+             'https://apibugzilla.novell.com/xmlrpc.cgi'),
 
             ('testopia_user', ('testopia', 'user'), ''),
             ('testopia_pass', ('testopia', 'pass'), ''),

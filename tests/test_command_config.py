@@ -78,7 +78,7 @@ def test_config_show():
             , ("repclean_path"              , "'/mounts/qam/rep-clean/rep-clean.sh'")
             , ("target_tempdir"             , "'/tmp'")
             , ("target_testsuitedir"        , "'/usr/share/qa/tools'")
-            , ("testopia_interface"         , "'https://apibugzilla.novell.com/tr_xmlrpc.cgi'")
+            , ("testopia_interface"         , "'https://apibugzilla.novell.com/xmlrpc.cgi'")
             , ("testopia_user"              , "''")
             , ("testopia_pass"              , "''")
             , ("chdir_to_template_dir"      , "False")
