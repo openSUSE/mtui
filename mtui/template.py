@@ -19,6 +19,8 @@ from mtui.target import RunCommand
 from mtui.target import FileUpload
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
+from mtui.testopia import Testopia
+
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
@@ -213,6 +215,11 @@ class TestReport(with_metaclass(ABCMeta, object)):
         :type attrs: [str]
         :param attrs: attributes expected to exist on `self` after
             parsing the template
+        """
+
+        self.testopia = None
+        """
+        :type testopia: L{Testopia}
         """
 
     def _copytree(_, *args, **kw):
@@ -570,6 +577,17 @@ class TestReport(with_metaclass(ABCMeta, object)):
                 raise FailedToExtractSrcRPM(rc, cmd)
 
         self.log.info(SrcRPMExtractedMessage(self.local_wd()))
+
+    def load_testopia(self, *packages):
+        try:
+            assert(self.testopia.testcases and not packages)
+        except (AttributeError, AssertionError):
+            self.testopia = Testopia(
+                self.get_release()
+              , packages or self.get_package_list()
+            )
+
+        return self.testopia
 
 class TestsuiteComment(object):
     _max_comment_len = 100

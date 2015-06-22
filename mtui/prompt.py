@@ -34,7 +34,6 @@ from mtui.utils import *
 from mtui.refhost import *
 from mtui.config import *
 from mtui.notification import *
-from mtui.testopia import *
 from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
@@ -869,13 +868,7 @@ class CommandPrompt(cmd.Cmd):
             self.metadata.list_update_commands(self.targets, self.println)
 
     def ensure_testopia_loaded(self, *packages):
-        try:
-            assert(self.testopia.testcases and not packages)
-        except (AttributeError, AssertionError):
-            self.testopia = Testopia(
-                self.metadata.get_release()
-              , packages or self.metadata.get_package_list()
-            )
+        self.testopia = self.metadata.load_testopia(*packages)
 
     @requires_update
     def do_testopia_list(self, args):
