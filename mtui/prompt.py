@@ -415,8 +415,7 @@ class CommandPrompt(cmd.Cmd):
                 self.targets[hostname].hostname
             ))
         except KeyError:
-            p_list = self.metadata.get_package_list() if self.metadata else []
-            self.targets[hostname] = Target(hostname, system, p_list)
+            self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list())
 
             if self.metadata:
                 self.metadata.systems[hostname] = system
