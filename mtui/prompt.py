@@ -939,11 +939,11 @@ class CommandPrompt(cmd.Cmd):
                     continue
 
                 if testcase:
-                    self.println('%s %s'.format(blue('Testcase summary:'), testcase['summary']))
-                    self.println('%s %s'.format(blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
-                    self.println('%s %s'.format(blue('Testcase automated:'), testcase['automated']))
-                    self.println('%s %s'.format(blue('Testcase status:'), testcase['status']))
-                    self.println('%s %s'.format(blue('Testcase requirements:'), testcase['requirement']))
+                    self.println('%s %s' % (blue('Testcase summary:'), testcase['summary']))
+                    self.println('%s %s' % (blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
+                    self.println('%s %s' % (blue('Testcase automated:'), testcase['automated']))
+                    self.println('%s %s' % (blue('Testcase status:'), testcase['status']))
+                    self.println('%s %s' % (blue('Testcase requirements:'), testcase['requirement']))
                     if testcase['setup']:
                         self.println(blue('Testcase setup:'))
                         self.println(testcase['setup'])
