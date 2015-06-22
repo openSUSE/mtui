@@ -331,6 +331,18 @@ class TestReport(with_metaclass(ABCMeta, object)):
         self.log.debug("chosen updater: %s" % repr(updater))
         updater(targets, self.patches, self.get_package_list(), self).run()
 
+    def perform_downgrade(self, targets):
+        tool = self.get_downgrader()
+        tool(targets, self.get_package_list(), self.patches).run()
+
+    def perform_install(self, targets, packages):
+        tool = self.get_installer()
+        tool(targets, packages).run()
+
+    def perform_uninstall(self, targets, packages):
+        tool = self.get_uninstaller()
+        tool(targets, packages).run()
+
     def scripts_src_dir(self):
         if self._scripts_src_dir:
             return self._scripts_src_dir

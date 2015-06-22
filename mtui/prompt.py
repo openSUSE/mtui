@@ -1760,14 +1760,12 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if targets:
-            installer = self.metadata.get_installer()
-
             out.info('installing')
             for target in targets:
                 targets[target].add_history(['install', packages])
 
             try:
-                installer(targets, packages.split()).run()
+                self.metadata.perform_install(targets, packages.split())
             except Exception:
                 out.critical('failed to install packages')
                 return
@@ -1798,11 +1796,9 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if targets:
-            uninstaller = self.metadata.get_uninstaller()
-
             out.info('removing')
             try:
-                uninstaller(targets, packages.split()).run()
+                self.metadata.perform_uninstall(targets, packages.split())
             except Exception:
                 out.critical('failed to remove packages')
                 return
@@ -1833,18 +1829,12 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if targets:
-            downgrader = self.metadata.get_downgrader()
-
             out.info('downgrading')
             for target in targets:
                 targets[target].add_history(['downgrade', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
 
             try:
-                downgrader(
-                    targets,
-                    self.metadata.get_package_list(),
-                    self.metadata.patches
-                ).run()
+                self.metadata.perform_downgrade(targets)
             except Exception:
                 out.critical('failed to downgrade target systems')
                 return
