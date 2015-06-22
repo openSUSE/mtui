@@ -21,6 +21,9 @@ from traceback import format_exc
 
 from mtui.connection import *
 from mtui.xmlout import *
+
+from mtui import utils
+
 from mtui.utils import *
 from mtui.utils import unlines
 from mtui.config import *
@@ -28,7 +31,6 @@ from mtui.rpmver import RPMVersion
 from mtui import messages
 from mtui.utils import unwords
 from mtui.utils import ass_is, ass_isL
-from mtui.utils import get_release
 from mtui.messages import HostIsNotConnectedError
 
 out = logging.getLogger('mtui')
@@ -516,7 +518,7 @@ class Target(TargetI):
         else:
             repclean.close()
 
-        if get_release([self.system]) == '12':
+        if utils.get_release([self.system]) == '12':
             if name == "TESTING" and not testreport:
                 raise RuntimeError("Target.set_repo can't be used without testreport on sle12 systems")
 

@@ -21,6 +21,8 @@ from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
+from mtui import utils
+
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
@@ -278,7 +280,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         return list(self.packages.keys())
 
     def get_release(self):
-        return updater.get_release(list(self.systems.values()))
+        return utils.get_release(list(self.systems.values()))
 
     def _get_doer(self, registry):
         return registry[self._get_updater_id()]
