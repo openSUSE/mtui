@@ -223,14 +223,8 @@ class CommandPrompt(cmd.Cmd):
 
         self.commandFactory(subcmd, args).run()
 
-    def _hostsGroupFactory(self):
-        """
-        :returns: L{HostsGroup} consisting of enabled hosts only
-        """
-        return HostsGroup(list(enabled_targets(self.targets).values()))
-
     def commandFactory(self, cmd, args=None):
-        hosts = self._hostsGroupFactory()
+        hosts = self.targets.select(enabled = True)
         return cmd(args, hosts, self.config, self.sys, self.log, self)
 
     def do_help(self, arg):
@@ -283,7 +277,7 @@ class CommandPrompt(cmd.Cmd):
                 raise AttributeError(str(x))
             else:
                 return log_exception(Exception, out.error)\
-                    (c.completer(self._hostsGroupFactory()))
+                    (c.completer(self.targets.select(enabled = True)))
         else:
             argparser = c.argparser(self.sys)
             clsdict = {
@@ -321,9 +315,9 @@ class CommandPrompt(cmd.Cmd):
             params = set([arg.strip() for arg in cmdline.split(',') if arg.strip()])
 
         if 'all' in tselected or tselected == set():
-            targets = enabled_targets(self.targets)
+            targets = self.targets.select(enabled = True)
         else:
-            targets = selected_targets(enabled_targets(self.targets), tselected)
+            targets = self.targets.select(tselected, enabled = True)
 
         return (targets, params)
 
@@ -460,7 +454,8 @@ class CommandPrompt(cmd.Cmd):
 
         targets, _ = self._parse_args(args, None)
         for tgt in targets:
-            self.targets[tgt].close() or self.targets.pop(tgt)
+            self.targets[tgt].close()
+            self.targets.pop(tgt)
 
     def complete_remove_host(self, text, line, begidx, endidx):
         return self.complete_hostlist_with_all(text, line, begidx, endidx)
@@ -2385,10 +2380,10 @@ class CommandPrompt(cmd.Cmd):
         return [i for i in list(self.targets) + ['all'] + appendix if i.startswith(text) and i not in line]
 
     def complete_enabled_hostlist(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in list(enabled_targets(self.targets)) + appendix if i.startswith(text) and i not in line]
+        return [i for i in list(self.targets.select(enabled = True)) + appendix if i.startswith(text) and i not in line]
 
     def complete_enabled_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in list(enabled_targets(self.targets)) + ['all'] + appendix if i.startswith(text) and i not in line]
+        return [i for i in list(self.targets.select(enabled = True)) + ['all'] + appendix if i.startswith(text) and i not in line]
 
     def complete_packagelist(self, text, line, begidx, endidx, appendix=[]):
         return [i for i in self.metadata.get_package_list() if i.startswith(text) and i not in line]
@@ -2602,36 +2597,6 @@ class CompareScript(Script):
 
         logger(msg(argv, stdout, stderr, rc))
 
-
-def enabled_targets(targets):
-    """
-    :type targets: dict(hostname = L{Target})
-        where hostname = str
-
-    :returns: dict(hostname = L{Target})
-        where hostname = str
-    """
-    return dict(filter(
-      lambda x: x[1].state != 'disabled'
-    , targets.items()
-    ))
-
-def selected_targets(available, wanted):
-    """
-    :type available: dict(hostname = L{Target})
-        where hostname = str
-
-    :type wanted: [hostname]
-        where hostname = str
-
-    :returns: dict(hostname = L{Target})
-        where hostname = str
-    """
-    for x in wanted:
-        if not available.has_key(x):
-            out.warning('host %s not in database' % x)
-
-    return dict([x for x in available.items() if x[0] in wanted])
 
 def user_deprecation(out, msg):
     out.warning(msg)

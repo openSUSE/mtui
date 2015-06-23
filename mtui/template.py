@@ -13,6 +13,7 @@ from abc import abstractmethod
 from datetime import date
 import subprocess
 
+from mtui.target import HostsGroup
 from mtui.target import Target
 from mtui.target import TargetI
 from mtui.target import RunCommand
@@ -187,7 +188,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         :type systems: dict str -> str
         :param systems: hostname -> system
         """
-        self.targets = {}
+        self.targets = HostsGroup([])
         """
         :type  targets: dict(hostname = L{Target})
             where hostname = str

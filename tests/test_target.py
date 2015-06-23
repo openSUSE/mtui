@@ -253,30 +253,3 @@ class TestLockedTargets(object):
         except MyErr as e:
             eq_(str(e), m)
             self._check_locks(ts, False)
-
-
-def test_enabled_targets():
-    bar = TF("bar", state = 'enabled', connect = False)
-    qux = TF("qux", state = 'dryrun', connect = False)
-
-    xs = dict([(x.hostname, x) for x in [
-      TF("foo", state = 'disabled', connect = False)
-    , bar
-    , TF("baz", state = 'disabled', connect = False)
-    , qux
-    , TF("quux", state = 'disabled', connect = False)
-    ]])
-
-    eq_(prompt.enabled_targets(xs), {
-      bar.hostname: bar
-    , qux.hostname: qux
-    })
-
-def test_selected_targets():
-    eq_(
-      prompt.selected_targets(
-        dict(a = 1, b = 2, c = 3, d = 4)
-      , ['a', 'd']
-      )
-    , dict(a = 1, d = 4)
-    )

@@ -72,18 +72,25 @@ class HostsGroup(object):
         """
         :param targets: list of L{Target}
         """
-        self.hosts = hosts
+        self.hosts = dict([(h.host, h) for h in hosts])
 
-    def select(self, hosts):
+    def select(self, hosts = [], enabled = None):
         if hosts == []:
+            if enabled:
+                return HostsGroup(filter(
+                  lambda h: h.state != 'disabled'
+                , self.hosts.values()
+                ))
             return self
 
-        available = [x.host for x in self.hosts]
         for x in hosts:
-            if not x in available:
+            if not x in self.hosts:
                 raise HostIsNotConnectedError(x)
 
-        return HostsGroup([x for x in self.hosts if x.host in hosts])
+        return HostsGroup([
+            h for hn, h in self.hosts.items()
+                if hn in hosts and ((not enabled) or h.state != 'disabled')
+        ])
 
     def unlock(self, *a, **kw):
         es = []
@@ -106,8 +113,30 @@ class HostsGroup(object):
     def __getitem__(self, x):
         return self.hosts[x]
 
+    def __iter__(self):
+        return self.hosts.__iter__()
+
+    def __len__(self):
+        return len(self.hosts)
+
+    def items(self):
+        return self.hosts.items()
+
+    def keys(self):
+        return self.hosts.keys()
+
+    def pop(self, *a, **kw):
+        return self.hosts.pop(*a, **kw)
+
+    def update(self, *a, **kw):
+        return self.hosts.update(*a, **kw)
+
+    def values(self):
+        return self.hosts.values()
+
     def names(self):
         return [x.hostname for x in self]
+
 
 class TargetLockedError(Exception):
     pass

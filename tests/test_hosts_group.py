@@ -14,8 +14,8 @@ def test_select_hosts():
     hg2 = hg.select(['a', 'c'])
     ok_(isinstance(hg2, HostsGroup))
     eq_(len(hg2.hosts), 2)
-    ok_(a in hg2.hosts)
-    ok_(c in hg2.hosts)
+    ok_(a in hg2.hosts.values())
+    ok_(c in hg2.hosts.values())
 
 def test_select_nohosts():
     a = Target('a', None, connect=False)

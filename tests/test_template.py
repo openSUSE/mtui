@@ -521,6 +521,32 @@ def test_NullTestReport():
     assert_false(tr)
     eq_(tr.id, None)
 
+def test_select():
+    class TargetFake(Target):
+        def __init__(self, *args, **kw):
+            super(TargetFake, self).__init__(*args, connect = False, **kw)
+        def add_history(self, comment):
+            pass
+    tr = NullTestReport(ConfigFake(), LogFake(), date.today())
+    tr.targetFactory = TargetFake
+    tr.add_host('foo', 'fubar')
+    tr.add_host('bar', 'snafu')
+    tr.add_host('qux', 'snafubar')
+    tr.connect_targets()
+    ts = tr.targets
+    ts['qux'].state = 'disabled'
+
+    def s(s): return set(s.split())
+
+    selected = set(ts.select().keys())
+    eq_(selected, set('foo bar qux'.split()))
+    selected = set(ts.select('bar qux'.split()).keys())
+    eq_(selected, set('bar qux'.split()))
+    selected = set(ts.select(enabled = True).keys())
+    eq_(selected, set('foo bar'.split()))
+    selected = set(ts.select(['qux'], enabled = True).keys())
+    eq_(selected, set())
+
 def test_TC_edit_text():
     """
     Test L{TestsuiteComment.__str__} returns the new string after
