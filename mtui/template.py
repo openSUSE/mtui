@@ -337,15 +337,21 @@ class TestReport(with_metaclass(ABCMeta, object)):
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         '''
+        targets.add_history(['update', str(self.id), ' '.join(self.get_package_list())])
+
         updater = self.get_updater()
         self.log.debug("chosen updater: %s" % repr(updater))
         updater(targets, self.patches, self.get_package_list(), self).run()
 
     def perform_downgrade(self, targets):
+        targets.add_history(['downgrade', str(self.id), ' '.join(self.get_package_list())])
+
         tool = self.get_downgrader()
         tool(targets, self.get_package_list(), self.patches).run()
 
     def perform_install(self, targets, packages):
+        targets.add_history(['install', packages])
+
         tool = self.get_installer()
         tool(targets, packages).run()
 

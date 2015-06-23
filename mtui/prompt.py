@@ -1747,9 +1747,6 @@ class CommandPrompt(cmd.Cmd):
 
         if targets:
             out.info('installing')
-            for target in targets:
-                targets[target].add_history(['install', packages])
-
             try:
                 self.metadata.perform_install(targets, packages.split())
             except Exception:
@@ -1816,9 +1813,6 @@ class CommandPrompt(cmd.Cmd):
 
         if targets:
             out.info('downgrading')
-            for target in targets:
-                targets[target].add_history(['downgrade', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
-
             try:
                 self.metadata.perform_downgrade(targets)
             except Exception:
@@ -1970,7 +1964,6 @@ class CommandPrompt(cmd.Cmd):
                 self._do_prepare_impl(targets, testing = True, **prepare)
 
             for target in targets:
-                targets[target].add_history(['update', str(self.metadata.id), ' '.join(self.metadata.get_package_list())])
                 packages = targets[target].packages
 
                 targets[target].query_versions()

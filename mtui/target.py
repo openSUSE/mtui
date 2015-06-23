@@ -110,6 +110,10 @@ class HostsGroup(object):
 
         return rs
 
+    def add_history(self, data):
+        for tgt in self.hosts.values():
+            tgt.add_history(data)
+
     def __getitem__(self, x):
         return self.hosts[x]
 
