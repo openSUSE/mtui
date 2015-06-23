@@ -153,11 +153,17 @@ def test_compare_script():
 
         t = Target(hostnames.foo, unused, connect=False)
 
-        pre_f = s._pre_file(t)
+        def output_path(phase):
+            return tr.report_wd(
+                'output/scripts/%s.check_new_licenses.%s' % (phase, t.hostname),
+                filepath = True
+            )
+
+        pre_f = output_path('pre')
         with open(pre_f, 'w') as f:
             f.write("foo")
 
-        post_f = s._post_file(t)
+        post_f = output_path('post')
         with open(post_f, 'w') as f:
             f.write("bar")
 

@@ -2544,19 +2544,13 @@ class CompareScript(Script):
             filepath = True
         )
 
-    def _pre_file(self, t):
-        return self._result(PreScript.subdir, t)
-
-    def _post_file(self, t):
-        return self._result(PostScript.subdir, t)
-
     def _run_single_target(self, t):
         ass_is(t, TargetI)
 
         argv = [
             self.path,
-            self._pre_file(t),
-            self._post_file(t),
+            self._result(PreScript.subdir, t),
+            self._result(PostScript.subdir, t),
         ]
 
         self.log.debug("running {0}".format(argv))
