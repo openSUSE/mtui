@@ -1986,7 +1986,7 @@ class CommandPrompt(cmd.Cmd):
             if 'noscript' not in params:
                 self.metadata.run_scripts(PostScript, targets)
                 self.metadata.run_scripts(CompareScript, targets)
-                FileDelete(targets.values(), self.metadata.target_wd('output')).run()
+                targets.remove(self.metadata.target_wd('output'))
 
         Notification('MTUI', 'updating %s finished' % self.session).show()
         out.info('done')

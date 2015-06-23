@@ -117,6 +117,9 @@ class HostsGroup(object):
     def names(self):
         return list(self.hosts.keys())
 
+    def remove(self, path):
+        return FileDelete(self.hosts.values(), path).run()
+
     def run(self, cmd):
         return RunCommand(self.hosts, cmd).run()
 
