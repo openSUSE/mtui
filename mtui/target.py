@@ -113,6 +113,9 @@ class HostsGroup(object):
     def __getitem__(self, x):
         return self.hosts[x]
 
+    def __setitem__(self, k, v):
+        self.hosts[k] = v
+
     def __iter__(self):
         return self.hosts.__iter__()
 
