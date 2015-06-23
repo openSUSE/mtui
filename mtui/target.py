@@ -117,6 +117,9 @@ class HostsGroup(object):
     def names(self):
         return list(self.hosts.keys())
 
+    def run(self, cmd):
+        return RunCommand(self.hosts, cmd).run()
+
     ## dict interface
 
     def __getitem__(self, x):
