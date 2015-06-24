@@ -117,6 +117,9 @@ class HostsGroup(object):
     def names(self):
         return list(self.hosts.keys())
 
+    def put(self, local, remote):
+        return FileUpload(self.hosts.values(), local, remote).run()
+
     def remove(self, path):
         return FileDelete(self.hosts.values(), path).run()
 

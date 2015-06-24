@@ -2079,7 +2079,7 @@ class CommandPrompt(cmd.Cmd):
 
             remote = self.metadata.target_wd(os.path.basename(filename))
 
-            FileUpload(self.targets.values(), filename, remote).run()
+            self.targets.put(filename, remote)
             self.log.info('uploaded {0} to {1}'.format(filename, remote))
 
     def complete_put(self, text, line, begidx, endidx):
