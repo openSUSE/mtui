@@ -26,9 +26,6 @@ from mtui.template import OBSTestReport
 from mtui.template import SwampTestReport
 from mtui.refhost import Refhosts
 
-from mtui.target import RunCommand
-from mtui.target import FileUpload
-
 from pprint import pprint
 
 unused = None
@@ -243,24 +240,6 @@ def TRF(tr, config = None, log = None, date_ = None, **kw):
         date_ = date
 
     return tr(config, log, date_, **kw)
-
-def SF(s, tr, path):
-    """
-    L{Script} Factory
-
-    :type s: L{Script} class
-    :type tr: L{TestReport} instance
-
-    :type path: str
-    :param path: path to the script
-    """
-    return s(
-        tr,
-        path,
-        LogFake(),
-        FileUpload,
-        RunCommand,
-    )
 
 class MD5HexdigestFactory(object):
     def __init__(self):

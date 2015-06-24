@@ -9,14 +9,15 @@ from mtui.prompt import PreScript
 from mtui.prompt import PostScript
 from mtui.prompt import CompareScript
 from mtui.template import SwampTestReport
+from mtui.target import FileUpload
 from mtui.target import RunCommand
 from mtui.target import HostsGroup
 from mtui.target import Target
 from mtui import messages
 
 from .utils import TRF
-from .utils import SF
 from .utils import ConfigFake
+from .utils import LogFake
 from .utils import new_md5
 from .utils import hostnames
 from .utils import unused
@@ -120,7 +121,7 @@ def test_compare_script():
         tr.read(tpl)
 
         script = tr.scripts_wd("compare", "compare_new_licenses.sh")
-        s = SF(CompareScript, tr, script)
+        s = CompareScript(tr, script, LogFake(), FileUpload, RunCommand)
         eq_(s.path, script)
 
         t = Target(hostnames.foo, unused, connect=False)
