@@ -15,7 +15,6 @@ import subprocess
 
 from mtui.target import HostsGroup
 from mtui.target import Target
-from mtui.target import TargetI
 from mtui.target import RunCommand
 from mtui.target import FileUpload
 from mtui.refhost import RefhostsFactory

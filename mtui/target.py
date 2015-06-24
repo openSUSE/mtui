@@ -388,10 +388,7 @@ class TargetLock(object):
 
         return True
 
-class TargetI(object):
-    pass
-
-class Target(TargetI):
+class Target(object):
     def __init__(self, hostname, system, packages=[], state='enabled',
         timeout=300, exclusive=False, connect=True, logger=None,
         lock=TargetLock, connection=Connection):
@@ -885,7 +882,6 @@ class ThreadedMethod(threading.Thread):
 
 class ThreadedTargetGroup(object):
     def __init__(self, targets):
-        ass_isL(targets, TargetI)
 
         self.targets = targets
 
@@ -917,7 +913,6 @@ class FileDelete(ThreadedTargetGroup):
         self.path = path
 
     def mk_cmd(self, t):
-        ass_is(t, TargetI)
         return [t.remove, [self.path]]
 
 class FileUpload(ThreadedTargetGroup):
@@ -927,12 +922,10 @@ class FileUpload(ThreadedTargetGroup):
         self.remote = remote
 
     def mk_cmd(self, t):
-        ass_is(t, TargetI)
         return [t.put, [self.local, self.remote]]
 
 class FileDownload(ThreadedTargetGroup):
     def __init__(self, targets, remote, local, postfix=False):
-        ass_isL(targets, TargetI)
         super(FileDownload, self).__init__(targets)
 
         self.remote = remote
@@ -941,7 +934,7 @@ class FileDownload(ThreadedTargetGroup):
 
     def local_name(self, t):
         """
-        :type t: L{TargetI} instance
+        :type t: L{Target} instance
         """
         if not self.postfix:
             return self.local
@@ -949,13 +942,10 @@ class FileDownload(ThreadedTargetGroup):
         return '{0}.{1}'.format(self.local, t.hostname)
 
     def mk_cmd(self, t):
-        ass_is(t, TargetI)
         return [t.get, [self.remote, self.local_name(t)]]
 
 class RunCommand(object):
     def __init__(self, targets, command):
-        ass_isL(targets.values(), TargetI)
-
         self.targets = targets
         self.command = command
 

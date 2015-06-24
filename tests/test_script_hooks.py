@@ -11,7 +11,6 @@ from mtui.prompt import CompareScript
 from mtui.template import SwampTestReport
 from mtui.target import RunCommand
 from mtui.target import HostsGroup
-from mtui.target import TargetI
 from mtui.target import Target
 from mtui import messages
 
@@ -34,7 +33,7 @@ class RunCommandFake(RunCommand):
     def run(self):
         pass
 
-class TargetFake(TargetI):
+class TargetFake(object):
     def __init__(self, hostname, lastout, lasterr):
         self.host = hostname
         self.hostname = hostname

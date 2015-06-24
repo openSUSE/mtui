@@ -2440,8 +2440,6 @@ class Script(object):
         """
         :type targets: [L{Target}]
         """
-        ass_isL(targets, TargetI)
-
         try:
             self.log.info('running {0}'.format(self))
             self._run(targets)
@@ -2461,8 +2459,6 @@ class Script(object):
         """
         :returns: str "fully qualified" file name
         """
-        ass_is(target, TargetI, True)
-
         if not subdir:
             subdir = self.subdir
 
@@ -2480,17 +2476,14 @@ class PreScript(Script):
 
     def result_file(self, target):
         """
-        :type target: L{TargetI} instance
+        :type target: L{Target} instance
         """
-        ass_is(target, TargetI)
         return self.results_wd(self._filename(target), filepath = True)
 
     def remote_pkglist_path(self):
         return self.testreport.target_wd('package-list.txt')
 
     def _run(self, targets):
-        ass_isL(targets, TargetI)
-
         self.file_uploader(
             targets,
             self.path,
@@ -2532,7 +2525,6 @@ class CompareScript(Script):
     subdir = "compare"
 
     def _run(self, ts):
-        ass_isL(ts, TargetI)
         for t in ts:
             self._run_single_target(t)
 
@@ -2545,8 +2537,6 @@ class CompareScript(Script):
         )
 
     def _run_single_target(self, t):
-        ass_is(t, TargetI)
-
         argv = [
             self.path,
             self._result(PreScript.subdir, t),
