@@ -2102,7 +2102,7 @@ class CommandPrompt(cmd.Cmd):
 
         local = self.metadata.downloads_wd(os.path.basename(args), filepath=True)
 
-        FileDownload(self.targets.values(), args, local, True).run()
+        self.targets.get(args, local)
         self.log.info('downloaded {0} to {1}'.format(args, local))
 
     def do_terms(self, args):
