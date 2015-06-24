@@ -221,11 +221,10 @@ class CommandPrompt(cmd.Cmd):
         except ArgsParseFailure:
             return
 
-        self.commandFactory(subcmd, args).run()
-
-    def commandFactory(self, cmd, args=None):
-        hosts = self.targets.select(enabled = True)
-        return cmd(args, hosts, self.config, self.sys, self.log, self)
+        subcmd(
+            args, self.targets.select(enabled = True),
+            self.config, self.sys, self.log, self
+        ).run()
 
     def do_help(self, arg):
         # FIXME: see L{CommandPrompt.__getattr__}
