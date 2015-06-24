@@ -1945,7 +1945,7 @@ class CommandPrompt(cmd.Cmd):
                 out.warning('%s: these packages are missing: %s' % (target, not_installed))
 
             if 'noscript' not in params:
-                self.metadata.script_hooks(PreScript).run(targets.values())
+                self.metadata.run_scripts(PreScript, targets)
 
             out.info('updating')
 
@@ -1984,8 +1984,8 @@ class CommandPrompt(cmd.Cmd):
                                         required))
 
             if 'noscript' not in params:
-                self.metadata.script_hooks(PostScript).run(targets.values())
-                self.metadata.script_hooks(CompareScript).run(targets.values())
+                self.metadata.run_scripts(PostScript, targets)
+                self.metadata.run_scripts(CompareScript, targets)
                 FileDelete(targets.values(), self.metadata.target_wd('output')).run()
 
         Notification('MTUI', 'updating %s finished' % self.session).show()

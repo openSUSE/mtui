@@ -71,18 +71,6 @@ def testreport_svn_checkout(config, log, uri):
         except KeyboardInterrupt:
             raise SvnCheckoutInterruptedError(uri)
 
-class Scripts(object):
-    def __init__(self, scripts):
-        """
-        :type scripts: [L{Script}]
-        """
-        self.scripts = scripts
-
-    def run(self, targets):
-        ass_isL(targets, TargetI)
-
-        for x in self.scripts:
-            x.run(targets)
 
 class UpdateID(object):
     def __init__(self, id_, testreport_factory, testreport_svn_checkout):
@@ -559,18 +547,18 @@ class TestReport(with_metaclass(ABCMeta, object)):
             self.id
         )
 
-    def script_hooks(self, s):
+    def run_scripts(self, s, targets):
         """
         :type s: L{Script} class
         """
 
         d = s.absolute_subdir(self)
 
-        return Scripts([
-            s(self, join(d, x), self.log, self.file_uploader, self.cmd_runner)
-            for r, _, fs in os.walk(d) if r == d
-            for x in fs
-        ])
+        for r, _, fs in os.walk(d):
+            if r == d:
+                for f in fs:
+                    x = s(self, join(d, f), self.log, self.file_uploader, self.cmd_runner)
+                    x.run(targets.values())
 
     def download_source_rpm(self):
         raise NotImplementedError()
