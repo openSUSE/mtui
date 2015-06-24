@@ -1945,7 +1945,7 @@ class CommandPrompt(cmd.Cmd):
                 out.warning('%s: these packages are missing: %s' % (target, not_installed))
 
             if 'noscript' not in params:
-                self.metadata.script_hooks(PreScript).run(targets.values())
+                self.metadata.run_scripts(PreScript, targets)
 
             out.info('updating')
 
@@ -1984,8 +1984,8 @@ class CommandPrompt(cmd.Cmd):
                                         required))
 
             if 'noscript' not in params:
-                self.metadata.script_hooks(PostScript).run(targets.values())
-                self.metadata.script_hooks(CompareScript).run(targets.values())
+                self.metadata.run_scripts(PostScript, targets)
+                self.metadata.run_scripts(CompareScript, targets)
                 FileDelete(targets.values(), self.metadata.target_wd('output')).run()
 
         Notification('MTUI', 'updating %s finished' % self.session).show()
@@ -2429,19 +2429,10 @@ class Script(object):
             self.name,
         )
 
-    @classmethod
-    def absolute_subdir(cls, tr):
-        """
-        :type tr: L{TestReport}
-        """
-        return tr.scripts_wd(cls.subdir)
-
     def run(self, targets):
         """
         :type targets: [L{Target}]
         """
-        ass_isL(targets, TargetI)
-
         try:
             self.log.info('running {0}'.format(self))
             self._run(targets)
@@ -2461,8 +2452,6 @@ class Script(object):
         """
         :returns: str "fully qualified" file name
         """
-        ass_is(target, TargetI, True)
-
         if not subdir:
             subdir = self.subdir
 
@@ -2478,19 +2467,10 @@ class PreScript(Script):
     def remote_path(self):
         return self.testreport.target_wd(self._filename())
 
-    def result_file(self, target):
-        """
-        :type target: L{TargetI} instance
-        """
-        ass_is(target, TargetI)
-        return self.results_wd(self._filename(target), filepath = True)
-
     def remote_pkglist_path(self):
         return self.testreport.target_wd('package-list.txt')
 
     def _run(self, targets):
-        ass_isL(targets, TargetI)
-
         self.file_uploader(
             targets,
             self.path,
@@ -2505,25 +2485,22 @@ class PreScript(Script):
 
         self.cmd_runner(
             dict([(t.hostname, t) for t in targets]),
-            self.mk_command()
+            "{exe} -r {repository} -p {pkg_list_file} {id}".format(
+                exe = self.remote_path(),
+                repository = self.testreport.repository,
+                pkg_list_file = self.remote_pkglist_path(),
+                id  = self.testreport.id,
+            )
         ).run()
 
         for t in targets:
-            fname = self.result_file(t)
+            fname = self.results_wd(self._filename(t), filepath = True)
             try:
                 with open(fname, 'w') as f:
                     f.write(t.lastout())
                     f.write(t.lasterr())
             except IOError as e:
                 self.log.error(messages.FailedToWriteScriptResult(fname, e))
-
-    def mk_command(self):
-        return "{exe} -r {repository} -p {pkg_list_file} {id}".format(
-            exe = self.remote_path(),
-            repository = self.testreport.repository,
-            pkg_list_file = self.remote_pkglist_path(),
-            id  = self.testreport.id,
-        )
 
 class PostScript(PreScript):
     subdir = "post"
@@ -2532,7 +2509,6 @@ class CompareScript(Script):
     subdir = "compare"
 
     def _run(self, ts):
-        ass_isL(ts, TargetI)
         for t in ts:
             self._run_single_target(t)
 
@@ -2544,19 +2520,11 @@ class CompareScript(Script):
             filepath = True
         )
 
-    def _pre_file(self, t):
-        return self._result(PreScript.subdir, t)
-
-    def _post_file(self, t):
-        return self._result(PostScript.subdir, t)
-
     def _run_single_target(self, t):
-        ass_is(t, TargetI)
-
         argv = [
             self.path,
-            self._pre_file(t),
-            self._post_file(t),
+            self._result(PreScript.subdir, t),
+            self._result(PostScript.subdir, t),
         ]
 
         self.log.debug("running {0}".format(argv))

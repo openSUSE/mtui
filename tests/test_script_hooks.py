@@ -9,52 +9,19 @@ from mtui.prompt import PreScript
 from mtui.prompt import PostScript
 from mtui.prompt import CompareScript
 from mtui.template import SwampTestReport
+from mtui.target import FileUpload
 from mtui.target import RunCommand
-from mtui.target import TargetI
+from mtui.target import HostsGroup
 from mtui.target import Target
 from mtui import messages
 
 from .utils import TRF
-from .utils import SF
 from .utils import ConfigFake
+from .utils import LogFake
 from .utils import new_md5
 from .utils import hostnames
 from .utils import unused
 from mtui.utils import unlines
-
-scripts = [PreScript, PostScript, CompareScript]
-
-def test_script_list():
-    for x in scripts:
-        yield check_script_list, x
-
-def check_script_list(s):
-    """
-    Tests L{TestReport.script_hooks} returns expected script objects
-
-    Fakes only TestReport template.
-    """
-    with tmpdir() as wdir:
-        c = ConfigFake(overrides = dict(template_dir = wdir))
-        tr = TRF(SwampTestReport, config = c)
-
-        md5 = new_md5()
-        tpl = join(wdir, md5)
-        os.makedirs(tpl)
-        tpl = join(tpl, "log")
-
-        with open(tpl, 'w') as f:
-            f.write("MD5SUM: {0}\n".format(md5))
-
-        srcscripts = set([x for x in os.listdir("./scripts/" + s.subdir)])
-
-        tr.read(tpl)
-        scripts = tr.script_hooks(s).scripts
-        ok_(len(scripts) > 0)
-        for x in scripts:
-            ok_(isinstance(x, s))
-            ok_(x.name in srcscripts)
-            srcscripts -= set([x.name])
 
 class FileUploadFake:
     def __init__(self, targets, local_path, remote_path):
@@ -67,8 +34,9 @@ class RunCommandFake(RunCommand):
     def run(self):
         pass
 
-class TargetFake(TargetI):
+class TargetFake(object):
     def __init__(self, hostname, lastout, lasterr):
+        self.host = hostname
         self.hostname = hostname
         self._lastout = lastout
         self._lasterr = lasterr
@@ -85,7 +53,7 @@ def test_run_remotes():
 
 def check_run_remotes(s):
     """
-    Tests `TestReport.script_hooks(s).run(ts)` results into
+    Tests `TestReport.run_scripts(s, ts)` results into
     "the script output" (by faked Target) written into result file
 
     Fakes
@@ -126,10 +94,15 @@ def check_run_remotes(s):
         stderr = "bar stderr"
 
         target = TargetFake(hostnames.foo, stdout, stderr)
-        ss = tr.script_hooks(s)
-        ss.run([target])
+        tr.run_scripts(s, HostsGroup([target]))
 
-        with open(ss.scripts[0].result_file(target), 'r') as f:
+        def output_path():
+            return tr.report_wd(
+                'output/scripts/%s.%s.%s' % (s.subdir, sname, target.hostname),
+                filepath = True
+            )
+
+        with open(output_path(), 'r') as f:
             eq_(f.readlines(), [stdout, stderr])
 
 def test_compare_script():
@@ -148,16 +121,22 @@ def test_compare_script():
         tr.read(tpl)
 
         script = tr.scripts_wd("compare", "compare_new_licenses.sh")
-        s = SF(CompareScript, tr, script)
+        s = CompareScript(tr, script, LogFake(), FileUpload, RunCommand)
         eq_(s.path, script)
 
         t = Target(hostnames.foo, unused, connect=False)
 
-        pre_f = s._pre_file(t)
+        def output_path(phase):
+            return tr.report_wd(
+                'output/scripts/%s.check_new_licenses.%s' % (phase, t.hostname),
+                filepath = True
+            )
+
+        pre_f = output_path('pre')
         with open(pre_f, 'w') as f:
             f.write("foo")
 
-        post_f = s._post_file(t)
+        post_f = output_path('post')
         with open(post_f, 'w') as f:
             f.write("bar")
 
