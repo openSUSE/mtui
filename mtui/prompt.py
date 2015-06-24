@@ -2467,12 +2467,6 @@ class PreScript(Script):
     def remote_path(self):
         return self.testreport.target_wd(self._filename())
 
-    def result_file(self, target):
-        """
-        :type target: L{Target} instance
-        """
-        return self.results_wd(self._filename(target), filepath = True)
-
     def remote_pkglist_path(self):
         return self.testreport.target_wd('package-list.txt')
 
@@ -2495,7 +2489,7 @@ class PreScript(Script):
         ).run()
 
         for t in targets:
-            fname = self.result_file(t)
+            fname = self.results_wd(self._filename(t), filepath = True)
             try:
                 with open(fname, 'w') as f:
                     f.write(t.lastout())
