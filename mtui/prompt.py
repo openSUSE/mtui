@@ -2485,7 +2485,12 @@ class PreScript(Script):
 
         self.cmd_runner(
             dict([(t.hostname, t) for t in targets]),
-            self.mk_command()
+            "{exe} -r {repository} -p {pkg_list_file} {id}".format(
+                exe = self.remote_path(),
+                repository = self.testreport.repository,
+                pkg_list_file = self.remote_pkglist_path(),
+                id  = self.testreport.id,
+            )
         ).run()
 
         for t in targets:
@@ -2496,14 +2501,6 @@ class PreScript(Script):
                     f.write(t.lasterr())
             except IOError as e:
                 self.log.error(messages.FailedToWriteScriptResult(fname, e))
-
-    def mk_command(self):
-        return "{exe} -r {repository} -p {pkg_list_file} {id}".format(
-            exe = self.remote_path(),
-            repository = self.testreport.repository,
-            pkg_list_file = self.remote_pkglist_path(),
-            id  = self.testreport.id,
-        )
 
 class PostScript(PreScript):
     subdir = "post"
