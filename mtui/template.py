@@ -551,7 +551,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         :type s: L{Script} class
         """
 
-        d = s.absolute_subdir(self)
+        d = self.scripts_wd(s.subdir)
 
         for r, _, fs in os.walk(d):
             if r == d:

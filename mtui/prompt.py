@@ -2429,13 +2429,6 @@ class Script(object):
             self.name,
         )
 
-    @classmethod
-    def absolute_subdir(cls, tr):
-        """
-        :type tr: L{TestReport}
-        """
-        return tr.scripts_wd(cls.subdir)
-
     def run(self, targets):
         """
         :type targets: [L{Target}]
