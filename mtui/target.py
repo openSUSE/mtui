@@ -631,25 +631,7 @@ class Target(object):
             # failed to spawn shell
             out.error('%s: failed to spawn shell')
 
-    def put_file(self, local, remote):
-        msg = '{target}: put_file: {local} -> {remote}'
-        msg = msg.format({
-            'target' : self,
-            'local'  : local,
-            'remote' : remote,
-        })
-        out.debug(msg)
-        try:
-            return self.connection.put(local, remote)
-        except Exception as e:
-            msg += "failed: {0}".format(str(e))
-            out.error(msg)
-            raise
-
     def put(self, local, remote):
-        """
-        :deprecated: by Target.put_file
-        """
         if self.state == 'enabled':
             out.debug('%s: sending "%s"' % (self.hostname, local))
             try:
