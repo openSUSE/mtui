@@ -94,7 +94,7 @@ class HostsGroup(object):
 
     def unlock(self, *a, **kw):
         es = []
-        for x in self.hosts:
+        for x in self.hosts.values():
             try:
                 x.unlock(*a, **kw)
             except Exception as e:
@@ -105,10 +105,15 @@ class HostsGroup(object):
 
     def query_versions(self, packages):
         rs = {}
-        for x in self.hosts:
+        for x in self.hosts.values():
             rs[x] = x.query_package_versions(packages)
 
         return rs
+
+    def names(self):
+        return list(self.hosts.keys())
+
+    ## dict interface
 
     def __getitem__(self, x):
         return self.hosts[x]
@@ -121,6 +126,9 @@ class HostsGroup(object):
 
     def __len__(self):
         return len(self.hosts)
+
+    def copy(self):
+        return HostsGroup(self.hosts.values())
 
     def items(self):
         return self.hosts.items()
@@ -136,9 +144,6 @@ class HostsGroup(object):
 
     def values(self):
         return self.hosts.values()
-
-    def names(self):
-        return [x.hostname for x in self]
 
 
 class TargetLockedError(Exception):
