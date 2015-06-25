@@ -592,21 +592,12 @@ class Package(object):
         self.required = None
         self.current = None
 
-    def set_versions(self, before=None, after=None, required=None, current=None, versions=[]):
+    def set_versions(self, before=None, after=None, required=None):
         if before is not None:
             self.before = before
         if after is not None:
             self.after = after
         if required is not None:
             self.required = required
-        if current is not None:
-            self.current = current
-        if versions:
-            self.before = versions[0]
-            self.after = versions[1]
-            self.required = versions[2]
-
-    def get_versions(self):
-        return [self.before, self.after, self.required]
 
 
