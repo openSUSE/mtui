@@ -4,6 +4,8 @@
 from os.path import basename
 from os.path import splitext
 
+from traceback import format_exc
+
 import subprocess
 
 from mtui import messages
@@ -152,9 +154,10 @@ class CompareScript(Script):
         stdout = subprocess.PIPE,
         stderr = subprocess.PIPE,
       )
-    except Exception as e:
+    except EnvironmentError as e:
       t.log.append([' '.join(argv), '', '', 0x100, 0])
       self.log.critical(messages.StartingCompareScriptError(e, argv))
+      self.log.debug(format_exc())
       return
 
     (stdout, stderr) = p.communicate()
