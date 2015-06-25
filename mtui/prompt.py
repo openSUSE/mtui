@@ -526,9 +526,9 @@ class CommandPrompt(cmd.Cmd):
 
             if targets:
                 if option:
-                    RunCommand(targets, 'tac /var/log/mtui.log | grep -m %s %s | tac' % (count, ' '.join(option))).run()
+                    targets.run('tac /var/log/mtui.log | grep -m %s %s | tac' % (count, ' '.join(option)))
                 else:
-                    RunCommand(targets, 'tail -n %s /var/log/mtui.log' % count).run()
+                    targets.run('tail -n %s /var/log/mtui.log' % count)
 
             for host in sorted(targets.values()):
                 self.println('history from {} ({}):'.format(
@@ -709,7 +709,7 @@ class CommandPrompt(cmd.Cmd):
         out.debug("search_list: {}".format(search_list))
 
         for package in search_list:
-            RunCommand(targets, 'rpm -q --qf "%%{DISTURL}" %s' % package).run()
+            targets.run('rpm -q --qf "%%{DISTURL}" %s' % package)
 
             for target in targets.values():
                 line = target.lastout().split('\n')[0]
@@ -758,7 +758,7 @@ class CommandPrompt(cmd.Cmd):
                 out.info('wrote diff locally to %s' % diff)
 
             elif mode == 'build':
-                RunCommand(targets, 'which osc').run()
+                targets.run('which osc')
                 for target in targets:
                     if targets[target].lastexit() != 0:
                         out.error('osc is missing on %s. skipping.' % target)
@@ -768,13 +768,13 @@ class CommandPrompt(cmd.Cmd):
                     builddir = os.path.join(destination, name, state, 'BUILD')
                     disturl = du.disturl if state == 'new' else di.disturl
 
-                    RunCommand(targets, 'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui').run()
-                    RunCommand(targets, 'mkdir -p %s' % builddir).run()
-                    RunCommand(targets, 'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl)).run()
-                    RunCommand(targets, 'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
-                            % (sourcedir, name, builddir, sourcedir, name)).run()
+                    targets.run('echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui')
+                    targets.run('mkdir -p %s' % builddir)
+                    targets.run('cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl))
+                    targets.run('rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
+                            % (sourcedir, name, builddir, sourcedir, name))
 
-                RunCommand(targets, 'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff)).run()
+                targets.run('diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff))
 
                 out.info('wrote diff remotely to %s' % diff)
 
@@ -1144,7 +1144,7 @@ class CommandPrompt(cmd.Cmd):
             else:
                 query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | uniq" % packages
 
-            RunCommand(targets, query).run()
+            targets.run(query)
 
             for target in targets:
                 try:
@@ -1274,7 +1274,7 @@ class CommandPrompt(cmd.Cmd):
 
         if targets:
             try:
-                RunCommand(targets, command).run()
+                targets.run(command)
             except KeyboardInterrupt:
                 return
 
@@ -1345,7 +1345,7 @@ class CommandPrompt(cmd.Cmd):
         name = os.path.basename(command).replace('-run', '')
 
         try:
-            RunCommand(targets, command).run()
+            targets.run(command)
         except KeyboardInterrupt:
             out.info('testsuite run canceled')
             return
@@ -1401,29 +1401,26 @@ class CommandPrompt(cmd.Cmd):
         ))
         submit.append('rm /tmp/pwdask')
 
-        for target in targets:
-            for command in submit:
-                try:
-                    temp = {target:targets[target]}
-                    RunCommand(temp, command).run()
-                except KeyboardInterrupt:
-                    return
+        for command in submit:
+            try:
+                targets.run(command)
+            except KeyboardInterrupt:
+                return
 
-                if 'remote_qa_db_report.pl' in command:
-                    if targets[target].lastexit() != 0:
-                        out.critical('submitting testsuite results failed on %s:' % target)
-                        self.println('{}:~> {} [{}]'.format(target, name, targets[target].lastexit()))
-                        self.println(targets[target].lastout())
-                        if targets[target].lasterr():
-                            self.println(targets[target].lasterr())
+            if 'remote_qa_db_report.pl' in command:
+                for hn, tgt in targets.items():
+                    if tgt.lastexit() != 0:
+                        out.critical('submitting testsuite results failed on %s:' % hn)
+                        self.println('{}:~> {} [{}]'.format(hn, name, tgt.lastexit()))
+                        self.println(tgt.lastout())
+                        if tgt.lasterr():
+                            self.println(tgt.lasterr())
                     else:
-                        match = re.search('(http://.*/submission.php.submission_id=\d+)', targets[target].lasterr())
+                        match = re.search('(http://.*/submission.php.submission_id=\d+)', tgt.lasterr())
                         if match:
-                            system = targets[target].system
-                            out.info('submission for %s (%s): %s' % (target, system, match.group(1)))
+                            out.info('submission for %s (%s): %s' % (hn, tgt.system, match.group(1)))
                         else:
-                            out.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (target,
-                                         target))
+                            out.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (hn, hn))
 
         out.info('done')
 
@@ -1989,7 +1986,7 @@ class CommandPrompt(cmd.Cmd):
             if 'noscript' not in params:
                 self.metadata.run_scripts(PostScript, targets)
                 self.metadata.run_scripts(CompareScript, targets)
-                FileDelete(targets.values(), self.metadata.target_wd('output')).run()
+                targets.remove(self.metadata.target_wd('output'))
 
         Notification('MTUI', 'updating %s finished' % self.session).show()
         out.info('done')
@@ -2012,7 +2009,7 @@ class CommandPrompt(cmd.Cmd):
 
         if targets:
             try:
-                RunCommand(targets, command).run()
+                targets.run(command)
             except KeyboardInterrupt:
                 return
 
@@ -2082,7 +2079,7 @@ class CommandPrompt(cmd.Cmd):
 
             remote = self.metadata.target_wd(os.path.basename(filename))
 
-            FileUpload(self.targets.values(), filename, remote).run()
+            self.targets.put(filename, remote)
             self.log.info('uploaded {0} to {1}'.format(filename, remote))
 
     def complete_put(self, text, line, begidx, endidx):
@@ -2105,7 +2102,7 @@ class CommandPrompt(cmd.Cmd):
 
         local = self.metadata.downloads_wd(os.path.basename(args), filepath=True)
 
-        FileDownload(self.targets.values(), args, local, True).run()
+        self.targets.get(args, local)
         self.log.info('downloaded {0} to {1}'.format(args, local))
 
     def do_terms(self, args):

@@ -117,6 +117,18 @@ class HostsGroup(object):
     def names(self):
         return list(self.hosts.keys())
 
+    def get(self, remote, local):
+        return FileDownload(self.hosts.values(), remote, local, True).run()
+
+    def put(self, local, remote):
+        return FileUpload(self.hosts.values(), local, remote).run()
+
+    def remove(self, path):
+        return FileDelete(self.hosts.values(), path).run()
+
+    def run(self, cmd):
+        return RunCommand(self.hosts, cmd).run()
+
     ## dict interface
 
     def __getitem__(self, x):
@@ -619,25 +631,7 @@ class Target(object):
             # failed to spawn shell
             out.error('%s: failed to spawn shell')
 
-    def put_file(self, local, remote):
-        msg = '{target}: put_file: {local} -> {remote}'
-        msg = msg.format({
-            'target' : self,
-            'local'  : local,
-            'remote' : remote,
-        })
-        out.debug(msg)
-        try:
-            return self.connection.put(local, remote)
-        except Exception as e:
-            msg += "failed: {0}".format(str(e))
-            out.error(msg)
-            raise
-
     def put(self, local, remote):
-        """
-        :deprecated: by Target.put_file
-        """
         if self.state == 'enabled':
             out.debug('%s: sending "%s"' % (self.hostname, local))
             try:
