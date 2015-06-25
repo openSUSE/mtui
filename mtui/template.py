@@ -152,7 +152,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         self.log = log
         self._date = date
 
-        self._scripts_src_dir = scripts_src_dir
+        self._scripts_src_dir = scripts_src_dir or join(config.datadir, 'scripts')
         self.directory = config.template_dir
 
         # Note: the default values here are unchanged from the previous
@@ -343,19 +343,13 @@ class TestReport(with_metaclass(ABCMeta, object)):
         tool = self.get_uninstaller()
         tool(targets, packages).run()
 
-    def scripts_src_dir(self):
-        if self._scripts_src_dir:
-            return self._scripts_src_dir
-
-        return join(self.config.datadir, 'scripts')
-
     def copy_scripts(self):
         if not self.path:
             raise RuntimeError("Called while missing path")
 
         # copy check_* and compare_* scripts to the template directory
         # TODO: do not override
-        src = self.scripts_src_dir()
+        src = self._scripts_src_dir
         dst = self.scripts_wd()
 
         ignore = shutil.ignore_patterns('*.svn')
