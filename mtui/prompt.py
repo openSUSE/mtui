@@ -1131,61 +1131,97 @@ class CommandPrompt(cmd.Cmd):
 
         targets, params = self._parse_args(args, set)
 
-        if params:
-            packages = ' '.join(params)
+        packages = params or self.metadata.get_package_list()
+
+        if not targets:
+            return
+
+        if int(self.metadata.get_release()) > 10:
+            query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -u"
         else:
-            packages = ' '.join(self.metadata.get_package_list())
+            query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -u"
 
-        history = {}
+        targets.run(query % ' '.join(packages))
 
-        if targets:
-            if int(self.metadata.get_release()) > 10:
-                query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | uniq" % packages
-            else:
-                query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | uniq" % packages
+        # this is a bit convoluted because the data is aggregated
+        # on display (see the example below) but acquired piecemeal
+        # in random order.
+        #
+        # input for a single target:
+        #
+        #   line = PKKGNAME +SP PKGVER
+        #   host = *(line EOL)
 
-            targets.run(query)
+        # by_host_pkg[hostname][package] = [version, ...]
+        by_host_pkg = dict()
+        for hn, t in targets.items():
+            by_host_pkg[hn] = dict()
+            for line in t.lastout().split('\n'):
+                match = re.search('(\S+)\s+(\S+)', line)
+                if not match: continue
+                pkg, ver = match.group(1), match.group(2)
+                by_host_pkg[hn].setdefault(pkg, []).append(ver)
 
-            for target in targets:
-                try:
-                    checksum = reduce(lambda x, y: x + y, map(ord, targets[target].lastout()))
-                except TypeError:
-                    continue
+        # by_pkg_vers[package][(version, ...)] = [hostname, ...]
+        by_pkg_vers = dict()
+        for hn, pvs in by_host_pkg.items():
+            for pkg, vs in pvs.items():
+                by_pkg_vers.setdefault(pkg, dict()).setdefault(tuple(vs), []).append(hn)
 
-                try:
-                    history[checksum].append(target)
-                except KeyError:
-                    history[checksum] = []
-                    history[checksum].append(target)
+        # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
+        by_hosts_pkg = dict()
+        for pkg, vshs in by_pkg_vers.items():
+            for vs, hs in vshs.items():
+                by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
-            for path in history:
-                name = ''
-                release = {}
+        """
+        example output:
 
-                if len(history) > 1:
-                    self.println('version history from:')
-                    for target in history[path]:
-                        self.println('  {} ({})'.format(target, targets[target].system))
+        mtui> list_versions
+        version history from:
+          s390vsl048.suse.de (sles12None-s390x)
+
+        libzmq3:
+        -> 4.0.4-2.1
+
+        zeromq-devel:
+        -> 4.0.4-2.1
+
+        version history from:
+          edna.qam.suse.de (sles12None-x86_64)
+          bart.qam.suse.de (sled12None-x86_64)
+          moe.qam.suse.de (sles12None-x86_64)
+
+        libzmq3:
+        -> 4.0.4-4.1
+          -> 4.0.4-2.1
+
+        zeromq-devel:
+        -> 4.0.4-4.1
+          -> 4.0.4-2.1
+
+        --
+        FIXME: output of this command includes the wording "version history",
+          while it lists versions available from the host's repositories
+          (uses `zypper search`).
+
+        """
+
+
+        for hs, pvs in by_hosts_pkg.items():
+            if len(by_hosts_pkg) > 1:
+                self.println('version history from:')
+                for hn in hs:
+                    self.println('  {} ({})'.format(hn, targets[hn].system))
                 self.println()
 
-                lines = targets[target].lastout().split('\n')
-                for line in lines:
-                    match = re.search('([^\s]+)\s+([^\s]+)', line)
-                    if match:
-                        name = match.group(1)
-                        try:
-                            release[name].append(match.group(2))
-                        except KeyError:
-                            release[name] = []
-                            release[name].append(match.group(2))
-
-                for package in release:
-                    self.println('{}:'.format(package))
-                    indent = 0
-                    for version in sorted(release[package], key=RPMVersion, reverse=True):
-                        self.println('  ' * indent + '-> {}'.format(version))
-                        indent = indent + 1
-                    self.println()
+            for pkg, vers in pvs:
+                self.println('{}:'.format(pkg))
+                indent = 0
+                for ver in sorted(vers, key = RPMVersion, reverse = True):
+                    self.println('  ' * indent + '-> {}'.format(ver))
+                    indent = indent + 1
+                self.println()
 
     def do_show_log(self, args):
         """
