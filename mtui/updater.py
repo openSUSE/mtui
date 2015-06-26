@@ -20,6 +20,9 @@ from mtui.messages import MissingInstallerError
 from mtui.messages import MissingUninstallerError
 from mtui.messages import MissingDowngraderError
 
+import logging
+out = logging.getLogger('mtui')
+
 
 class UpdateError(Exception):
 

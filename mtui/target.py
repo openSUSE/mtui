@@ -15,7 +15,6 @@ try:
 except ImportError:
     from Queue import Queue
 import signal
-import logging
 import getpass
 from traceback import format_exc
 
@@ -32,8 +31,6 @@ from mtui import messages
 from mtui.utils import unwords
 from mtui.utils import ass_is, ass_isL
 from mtui.messages import HostIsNotConnectedError
-
-out = logging.getLogger('mtui')
 
 queue = Queue()
 
