@@ -144,17 +144,13 @@ class TestReport(with_metaclass(ABCMeta, object)):
             type.
         """
 
-    def __init__(self, config, log, date, file_uploader = FileUpload,
-    cmd_runner = RunCommand, scripts_src_dir = None):
+    def __init__(self, config, log, date, scripts_src_dir = None):
         """
         :type today: f :: L{datetime.date}
         """
         self.config = config
         self.log = log
         self._date = date
-
-        self.file_uploader = file_uploader
-        self.cmd_runner = cmd_runner
 
         self._scripts_src_dir = scripts_src_dir
         self.directory = config.template_dir
@@ -557,8 +553,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
         for r, _, fs in os.walk(d):
             if r == d:
                 for f in fs:
-                    x = s(self, join(d, f), self.log, self.file_uploader, self.cmd_runner)
-                    x.run(targets.values())
+                    x = s(self, join(d, f), self.log)
+                    x.run(targets)
 
     def download_source_rpm(self):
         raise NotImplementedError()

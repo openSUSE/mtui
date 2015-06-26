@@ -9,8 +9,6 @@ from mtui.prompt import PreScript
 from mtui.prompt import PostScript
 from mtui.prompt import CompareScript
 from mtui.template import SwampTestReport
-from mtui.target import FileUpload
-from mtui.target import RunCommand
 from mtui.target import HostsGroup
 from mtui.target import Target
 from mtui import messages
@@ -22,17 +20,6 @@ from .utils import new_md5
 from .utils import hostnames
 from .utils import unused
 from mtui.utils import unlines
-
-class FileUploadFake:
-    def __init__(self, targets, local_path, remote_path):
-        pass
-
-    def run(self):
-        pass
-
-class RunCommandFake(RunCommand):
-    def run(self):
-        pass
 
 class TargetFake(object):
     def __init__(self, hostname, lastout, lasterr):
@@ -46,6 +33,12 @@ class TargetFake(object):
 
     def lasterr(self):
         return self._lasterr
+
+class HostsGroupFake(HostsGroup):
+    def __init__(self, targets):
+        super(HostsGroupFake, self).__init__(targets)
+    def put(self, *a, **kw): pass
+    def run(self, *a, **kw): pass
 
 def test_run_remotes():
     for x in [PreScript, PostScript]:
@@ -75,8 +68,6 @@ def check_run_remotes(s):
         tr = TRF(
             SwampTestReport,
             config          = c,
-            file_uploader   = FileUploadFake,
-            cmd_runner      = RunCommandFake,
             scripts_src_dir = scripts_src
         )
 
@@ -94,7 +85,7 @@ def check_run_remotes(s):
         stderr = "bar stderr"
 
         target = TargetFake(hostnames.foo, stdout, stderr)
-        tr.run_scripts(s, HostsGroup([target]))
+        tr.run_scripts(s, HostsGroupFake([target]))
 
         def output_path():
             return tr.report_wd(
@@ -121,7 +112,7 @@ def test_compare_script():
         tr.read(tpl)
 
         script = tr.scripts_wd("compare", "compare_new_licenses.sh")
-        s = CompareScript(tr, script, LogFake(), FileUpload, RunCommand)
+        s = CompareScript(tr, script, LogFake())
         eq_(s.path, script)
 
         t = Target(hostnames.foo, unused, connect=False)

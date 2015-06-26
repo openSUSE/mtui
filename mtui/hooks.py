@@ -22,7 +22,7 @@ class Script(object):
   FIXME: should be an abstract attribute
   """
 
-  def __init__(self, tr, path, log, file_uploader, cmd_runner):
+  def __init__(self, tr, path, log):
     """
     :type path: str
     :param path: absolute path to the script
@@ -31,8 +31,6 @@ class Script(object):
     self.name = basename(path)
     self.testreport = tr
     self.log = log
-    self.file_uploader = file_uploader
-    self.cmd_runner = cmd_runner
 
   def __repr__(self):
     return "<{0}.{1} {2} for {3}>".format(
@@ -90,29 +88,26 @@ class PreScript(Script):
     return self.testreport.target_wd('package-list.txt')
 
   def _run(self, targets):
-    self.file_uploader(
-      targets,
+    targets.put(
       self.path,
       self.remote_path(),
-    ).run()
+    )
 
-    self.file_uploader(
-      targets,
+    targets.put(
       self.testreport.pkg_list_file(),
       self.remote_pkglist_path(),
-    ).run()
+    )
 
-    self.cmd_runner(
-      dict([(t.hostname, t) for t in targets]),
-        "{exe} -r {repository} -p {pkg_list_file} {id}".format(
-          exe = self.remote_path(),
-          repository = self.testreport.repository,
-          pkg_list_file = self.remote_pkglist_path(),
-          id  = self.testreport.id,
+    targets.run(
+      "{exe} -r {repository} -p {pkg_list_file} {id}".format(
+        exe = self.remote_path(),
+        repository = self.testreport.repository,
+        pkg_list_file = self.remote_pkglist_path(),
+        id  = self.testreport.id,
       )
-    ).run()
+    )
 
-    for t in targets:
+    for t in targets.values():
       fname = self.results_wd(self._filename(t), filepath = True)
       try:
         with open(fname, 'w') as f:
