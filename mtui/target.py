@@ -701,7 +701,7 @@ class Target(object):
         :deprecated: by is_locked method
         """
         out.debug('%s: getting mtui lock state' % self.hostname)
-        lock = Locked(False)
+        lock = Locked(out, False)
 
         if self.state != 'enabled':
             return lock
@@ -1001,7 +1001,8 @@ class RunCommand(object):
 
 class Locked(object):
 
-    def __init__(self, locked=False, user='nobody', timestamp=0, pid=0, comment=None):
+    def __init__(self, log, locked=False, user='nobody', timestamp=0, pid=0, comment=None):
+        self.log = log
         self.locked = locked
         self.user = user
         self.timestamp = timestamp
@@ -1011,12 +1012,12 @@ class Locked(object):
     def own(self):
         u = self._getuser()
         if not self.user == u:
-            out.debug("user: %s != %s",self.user, u)
+            self.log.debug("user: %s != %s" % (self.user, u))
             return False
 
         p = str(self._getpid())
         if not self.pid == p:
-            out.debug("pid: %s != %s", self.pid, p)
+            self.log.debug("pid: %s != %s" % ( self.pid, p))
             return False
 
         return True
