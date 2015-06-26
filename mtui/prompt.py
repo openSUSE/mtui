@@ -1129,51 +1129,6 @@ class CommandPrompt(cmd.Cmd):
         package  -- packagename to show version history
         """
 
-        targets, params = self._parse_args(args, set)
-
-        packages = params or self.metadata.get_package_list()
-
-        if not targets:
-            return
-
-        if int(self.metadata.get_release()) > 10:
-            query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -u"
-        else:
-            query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -u"
-
-        targets.run(query % ' '.join(packages))
-
-        # this is a bit convoluted because the data is aggregated
-        # on display (see the example below) but acquired piecemeal
-        # in random order.
-        #
-        # input for a single target:
-        #
-        #   line = PKKGNAME +SP PKGVER
-        #   host = *(line EOL)
-
-        # by_host_pkg[hostname][package] = [version, ...]
-        by_host_pkg = dict()
-        for hn, t in targets.items():
-            by_host_pkg[hn] = dict()
-            for line in t.lastout().split('\n'):
-                match = re.search('(\S+)\s+(\S+)', line)
-                if not match: continue
-                pkg, ver = match.group(1), match.group(2)
-                by_host_pkg[hn].setdefault(pkg, []).append(ver)
-
-        # by_pkg_vers[package][(version, ...)] = [hostname, ...]
-        by_pkg_vers = dict()
-        for hn, pvs in by_host_pkg.items():
-            for pkg, vs in pvs.items():
-                by_pkg_vers.setdefault(pkg, dict()).setdefault(tuple(vs), []).append(hn)
-
-        # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
-        by_hosts_pkg = dict()
-        for pkg, vshs in by_pkg_vers.items():
-            for vs, hs in vshs.items():
-                by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
-
         """
         example output:
 
@@ -1207,9 +1162,17 @@ class CommandPrompt(cmd.Cmd):
 
         """
 
+        targets, params = self._parse_args(args, set)
 
-        for hs, pvs in by_hosts_pkg.items():
-            if len(by_hosts_pkg) > 1:
+        if not targets:
+            return
+
+        packages = params or self.metadata.get_package_list()
+
+        hosts_pvs = self.metadata.list_versions(targets, packages)
+
+        for hs, pvs in hosts_pvs.items():
+            if len(hosts_pvs) > 1:
                 self.println('version history from:')
                 for hn in hs:
                     self.println('  {} ({})'.format(hn, targets[hn].system))
