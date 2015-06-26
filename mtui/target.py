@@ -416,9 +416,6 @@ class Target(object):
         self.TargetLock = lock
         self.Connection = connection
 
-        if logger is None:
-            # for backwards compatibility
-            logger = out
         self.logger = logger
         self.state = state
         """
@@ -478,7 +475,7 @@ class Target(object):
                     self.packages[p].current = '0'
         elif self.state == 'dryrun':
 
-            out.info('dryrun: %s running "rpm -q %s"' % (self.hostname, packages))
+            self.logger.info('dryrun: %s running "rpm -q %s"' % (self.hostname, packages))
             self.log.append(['rpm -q %s' % packages, 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
@@ -513,20 +510,20 @@ class Target(object):
         return packages
 
     def query_version(self, package):
-        out.debug('%s: querying current %s version' % (self.hostname, package))
+        self.logger.debug('%s: querying current %s version' % (self.hostname, package))
         self.query_versions(package)
         return self.packages[package].current
 
     def disable_repo(self, repo):
-        out.debug('%s: disabling repo %s' % (self.hostname, repo))
+        self.logger.debug('%s: disabling repo %s' % (self.hostname, repo))
         self.run('zypper mr -d %s' % repo)
 
     def enable_repo(self, repo):
-        out.debug('%s: enabling repo %s' % (self.hostname, repo))
+        self.logger.debug('%s: enabling repo %s' % (self.hostname, repo))
         self.run('zypper mr -e %s' % repo)
 
     def set_timeout(self, value):
-        out.debug('%s: setting timeout to %s' % (self.hostname, value))
+        self.logger.debug('%s: setting timeout to %s' % (self.hostname, value))
         self.connection.timeout = value
 
     def get_timeout(self):
@@ -587,25 +584,25 @@ class Target(object):
 
             cmd = "{0} {1}".format(command, params[name])
 
-        out.debug('{0}: enabling {1} repos'.format(self.hostname, name))
+        self.logger.debug('{0}: enabling {1} repos'.format(self.hostname, name))
         self.run(cmd)
 
     def run(self, command, lock=None):
         if self.state == 'enabled':
-            out.debug('%s: running "%s"' % (self.hostname, command))
+            self.logger.debug('%s: running "%s"' % (self.hostname, command))
             time_before = timestamp()
             try:
                 exitcode = self.connection.run(command, lock)
             except CommandTimeout:
-                out.critical('%s: command "%s" timed out' % (self.hostname, command))
+                self.logger.critical('%s: command "%s" timed out' % (self.hostname, command))
                 exitcode = -1
             except AssertionError:
-                out.debug('zombie command terminated')
-                out.debug(format_exc())
+                self.logger.debug('zombie command terminated')
+                self.logger.debug(format_exc())
                 return
             except Exception:
                 # failed to run command
-                out.error('%s: failed to run command "%s"' % (self.hostname, command))
+                self.logger.error('%s: failed to run command "%s"' % (self.hostname, command))
                 exitcode = -1
 
             time_after = timestamp()
@@ -613,40 +610,40 @@ class Target(object):
             self.log.append([command, self.connection.stdout, self.connection.stderr, exitcode, runtime])
         elif self.state == 'dryrun':
 
-            out.info('dryrun: %s running "%s"' % (self.hostname, command))
+            self.logger.info('dryrun: %s running "%s"' % (self.hostname, command))
             self.log.append([command, 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
             self.log.append(['', '', '', 0, 0])
 
     def shell(self):
-        out.debug('%s: spawning shell' % self.hostname)
+        self.logger.debug('%s: spawning shell' % self.hostname)
 
         try:
             self.connection.shell()
         except Exception:
             # failed to spawn shell
-            out.error('%s: failed to spawn shell')
+            self.logger.error('%s: failed to spawn shell')
 
     def put(self, local, remote):
         if self.state == 'enabled':
-            out.debug('%s: sending "%s"' % (self.hostname, local))
+            self.logger.debug('%s: sending "%s"' % (self.hostname, local))
             try:
                 return self.connection.put(local, remote)
             except EnvironmentError as error:
-                out.error('%s: failed to send %s: %s' % (self.hostname, local, error.strerror))
+                self.logger.error('%s: failed to send %s: %s' % (self.hostname, local, error.strerror))
         elif self.state == 'dryrun':
-            out.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
+            self.logger.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
 
     def get(self, remote, local):
         if self.state == 'enabled':
-            out.debug('%s: receiving "%s"' % (self.hostname, remote))
+            self.logger.debug('%s: receiving "%s"' % (self.hostname, remote))
             try:
                 return self.connection.get(remote, local)
             except EnvironmentError as error:
-                out.error('%s: failed to get %s: %s' % (self.hostname, remote, error.strerror))
+                self.logger.error('%s: failed to get %s: %s' % (self.hostname, remote, error.strerror))
         elif self.state == 'dryrun':
-            out.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
+            self.logger.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
 
     def lastin(self):
         try:
@@ -697,8 +694,8 @@ class Target(object):
         """
         :deprecated: by is_locked method
         """
-        out.debug('%s: getting mtui lock state' % self.hostname)
-        lock = Locked(out, False)
+        self.logger.debug('%s: getting mtui lock state' % self.hostname)
+        lock = Locked(self.logger, False)
 
         if self.state != 'enabled':
             return lock
@@ -706,7 +703,7 @@ class Target(object):
         try:
             lock.locked = self._lock.is_locked()
         except Exception:
-            out.error("Reading remote lock failed for {0}".\
+            self.logger.error("Reading remote lock failed for {0}".\
                 format(self.host))
             return lock
 
@@ -739,18 +736,18 @@ class Target(object):
         try:
             self.unlock()
         except TargetLockedError:
-            out.debug('unable to remove lock from %s. lock is probably not held by this session' % self.hostname)
+            self.logger.debug('unable to remove lock from %s. lock is probably not held by this session' % self.hostname)
         except:
             pass
 
     def add_history(self, comment):
         if self.state == 'enabled':
-            out.debug('%s: adding history entry' % self.hostname)
+            self.logger.debug('%s: adding history entry' % self.hostname)
             try:
                 filename = os.path.join('/', 'var', 'log', 'mtui.log')
                 historyfile = self.connection.open(filename, 'a+')
             except Exception as error:
-                out.error('failed to open history file: %s' % error)
+                self.logger.error('failed to open history file: %s' % error)
                 return
 
             now = timestamp()
@@ -766,7 +763,7 @@ class Target(object):
             return self.connection.listdir(path)
         except IOError as error:
             if error.errno == errno.ENOENT:
-                out.debug('%s: directory %s does not exist' % (self.hostname, path))
+                self.logger.debug('%s: directory %s does not exist' % (self.hostname, path))
             return []
 
     def remove(self, path):
@@ -774,17 +771,17 @@ class Target(object):
             self.connection.remove(path)
         except IOError as error:
             if error.errno == errno.ENOENT:
-                out.debug('%s: path %s does not exist' % (self.hostname, path))
+                self.logger.debug('%s: path %s does not exist' % (self.hostname, path))
             else:
                 try:
                     # might be a directory
                     self.connection.rmdir(path)
                 except IOError:
-                    out.warning('unable to remove %s on %s' % (path, self.hostname))
+                    self.logger.warning('unable to remove %s on %s' % (path, self.hostname))
 
     def close(self, action=None):
         def alarm_handler(signum, frame):
-            out.warning('timeout reached on %s' % self.hostname)
+            self.logger.warning('timeout reached on %s' % self.hostname)
             raise CommandTimeout('close')
 
         handler = signal.signal(signal.SIGALRM, alarm_handler)
@@ -801,13 +798,13 @@ class Target(object):
             pass
         else:
             if action == 'reboot':
-                out.info('rebooting %s' % self.hostname)
+                self.logger.info('rebooting %s' % self.hostname)
                 self.run('reboot')
             elif action == 'poweroff':
-                out.info('powering off %s' % self.hostname)
+                self.logger.info('powering off %s' % self.hostname)
                 self.run('halt')
             else:
-                out.info('closing connection to %s' % self.hostname)
+                self.logger.info('closing connection to %s' % self.hostname)
 
         if self.connection:
             self.connection.close()
