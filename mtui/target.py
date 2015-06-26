@@ -15,7 +15,6 @@ try:
 except ImportError:
     from Queue import Queue
 import signal
-import getpass
 from traceback import format_exc
 
 from mtui.connection import *
@@ -24,12 +23,9 @@ from mtui.xmlout import *
 from mtui import utils
 
 from mtui.utils import *
-from mtui.utils import unlines
 from mtui.config import *
 from mtui.rpmver import RPMVersion
 from mtui import messages
-from mtui.utils import unwords
-from mtui.utils import ass_is, ass_isL
 from mtui.messages import HostIsNotConnectedError
 
 queue = Queue()
@@ -488,7 +484,7 @@ class Target(object):
             where
               package = str
         """
-        self.run('rpm -q {0}'.format(unwords(packages)))
+        self.run('rpm -q {0}'.format(' '.join(packages)))
 
         packages = {}
         for line in re.split('\n+', self.lastout()):

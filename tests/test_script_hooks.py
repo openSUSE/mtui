@@ -19,7 +19,6 @@ from .utils import LogFake
 from .utils import new_md5
 from .utils import hostnames
 from .utils import unused
-from mtui.utils import unlines
 
 class TargetFake(object):
     def __init__(self, hostname, lastout, lasterr):
