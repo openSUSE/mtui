@@ -11,6 +11,7 @@ from traceback import format_exc
 from abc import ABCMeta
 from abc import abstractmethod
 from datetime import date
+import re
 import subprocess
 
 from mtui.target import HostsGroup
@@ -584,6 +585,47 @@ class TestReport(with_metaclass(ABCMeta, object)):
             )
 
         return self.testopia
+
+    def list_versions(self, targets, packages):
+        if int(self.get_release()) > 10:
+            query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -u"
+        else:
+            query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -u"
+
+        targets.run(query % ' '.join(packages))
+
+        # this is a bit convoluted because the data is aggregated
+        # on display (see the example in CommandPrompt#do_list_versions)
+        # but acquired piecemeal in random order.
+        #
+        # input for a single target:
+        #
+        #   line = PKKGNAME +SP PKGVER
+        #   input = *(line EOL)
+
+        # by_host_pkg[hostname][package] = [version, ...]
+        by_host_pkg = dict()
+        for hn, t in targets.items():
+            by_host_pkg[hn] = dict()
+            for line in t.lastout().split('\n'):
+                match = re.search('(\S+)\s+(\S+)', line)
+                if not match: continue
+                pkg, ver = match.group(1), match.group(2)
+                by_host_pkg[hn].setdefault(pkg, []).append(ver)
+
+        # by_pkg_vers[package][(version, ...)] = [hostname, ...]
+        by_pkg_vers = dict()
+        for hn, pvs in by_host_pkg.items():
+            for pkg, vs in pvs.items():
+                by_pkg_vers.setdefault(pkg, dict()).setdefault(tuple(vs), []).append(hn)
+
+        # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
+        by_hosts_pkg = dict()
+        for pkg, vshs in by_pkg_vers.items():
+            for vs, hs in vshs.items():
+                by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
+
+        return by_hosts_pkg
 
 class TestsuiteComment(object):
     _max_comment_len = 100
