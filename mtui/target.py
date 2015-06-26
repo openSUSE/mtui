@@ -262,13 +262,10 @@ class TargetLock(object):
 
     filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
 
-    def __init__(self, connection, config, out=None):
+    def __init__(self, connection, config, logger):
         self.connection = connection
 
-        if not out:
-            out = logging.getLogger("mtui")
-
-        self.out = out
+        self.log = logger
         self.connection = connection
 
         self.i_am_user = config.session_user
@@ -284,7 +281,7 @@ class TargetLock(object):
         """
         :returns None:
         """
-        self.out.debug('%s: getting mtui lock state' %
+        self.log.debug('%s: getting mtui lock state' %
             self.connection.hostname)
 
         self._lock = RemoteLock() # make sure lock is reset.
@@ -329,7 +326,7 @@ class TargetLock(object):
                 # setting a different comment may be desired.
                 raise TargetLockedError(self.locked_by_msg())
 
-        out.debug('%s: setting lock' % self.connection.hostname)
+        self.log.debug('%s: setting lock' % self.connection.hostname)
 
         rl = RemoteLock()
         rl.user = self.i_am_user
@@ -340,7 +337,7 @@ class TargetLock(object):
         try:
             lockfile = self.connection.open(self.filename, 'w+')
         except Exception as e:
-            out.error('failed to open lockfile: %s' % e)
+            self.log.error('failed to open lockfile: %s' % e)
             raise
 
         lockfile.write(rl.to_lockfile())
@@ -379,7 +376,7 @@ class TargetLock(object):
             if e.errno == errno.ENOENT:
                 pass
         except Exception as e:
-            out.error('failed to remove lockfile: %s' % e)
+            self.log.error('failed to remove lockfile: %s' % e)
             raise
 
         self._lock = RemoteLock()
