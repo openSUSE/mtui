@@ -57,7 +57,7 @@ class Update(object):
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
                     self.targets[target].set_locked()
-                    thread = ThreadedMethod(queue)
+                    thread = ThreadedMethod(queue, out)
                     thread.setDaemon(True)
                     thread.start()
 
@@ -284,7 +284,7 @@ class Prepare(object):
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
                     self.targets[target].set_locked()
-                    thread = ThreadedMethod(queue)
+                    thread = ThreadedMethod(queue, out)
                     thread.setDaemon(True)
                     thread.start()
 
@@ -446,7 +446,7 @@ class Downgrade(object):
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
                     self.targets[target].set_locked()
-                    thread = ThreadedMethod(queue)
+                    thread = ThreadedMethod(queue, out)
                     thread.setDaemon(True)
                     thread.start()
 
@@ -617,7 +617,7 @@ class Install(object):
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
                     self.targets[target].set_locked()
-                    thread = ThreadedMethod(queue)
+                    thread = ThreadedMethod(queue, out)
                     thread.setDaemon(True)
                     thread.start()
 
