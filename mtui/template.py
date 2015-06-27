@@ -400,6 +400,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
             try:
                 targets[host] = self.targetFactory(host, system,
                     self.get_package_list(),
+                    logger = self.log,
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
             except Exception as e:
