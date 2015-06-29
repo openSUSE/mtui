@@ -52,29 +52,29 @@ class Update(object):
         skipped = False
 
         try:
-            for target in self.targets:
-                lock = self.targets[target].locked()
+            for t in self.targets.values():
+                lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
-                    out.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
+                    out.warning('host %s is locked since %s by %s. skipping.' % (t.hostname, lock.time(), lock.user))
                     if lock.comment:
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
-                    self.targets[target].set_locked()
+                    t.set_locked()
                     thread = ThreadedMethod(queue)
                     thread.setDaemon(True)
                     thread.start()
 
             if skipped:
-                for target in self.targets:
+                for t in self.targets.values():
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
                 raise UpdateError('Hosts locked')
 
-            for target in self.targets:
-                queue.put([self.targets[target].set_repo, ['TESTING', self.testreport]])
+            for t in self.targets.values():
+                queue.put([t.set_repo, ['TESTING', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()
@@ -84,16 +84,15 @@ class Update(object):
             for command in self.commands:
                 self.targets.run(command)
 
-                for target in self.targets:
-                    self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
-                                self.targets[target].lasterr(), self.targets[target].lastexit())
+                for t in self.targets.values():
+                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
         except:
             raise
         finally:
-            for target in self.targets:
+            for t in self.targets.values():
                 if not lock.locked:  # wasn't locked earlier by set_host_lock
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
 
@@ -279,57 +278,55 @@ class Prepare(object):
         skipped = False
 
         try:
-            for target in self.targets:
-                lock = self.targets[target].locked()
+            for t in self.targets.values():
+                lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
-                    out.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
+                    out.warning('host %s is locked since %s by %s. skipping.' % (t.hostname, lock.time(), lock.user))
                     if lock.comment:
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
-                    self.targets[target].set_locked()
+                    t.set_locked()
                     thread = ThreadedMethod(queue)
                     thread.setDaemon(True)
                     thread.start()
 
             if skipped:
-                for target in self.targets:
+                for t in self.targets.values():
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
                 raise UpdateError('Hosts locked')
 
-            for target in self.targets:
+            for t in self.targets.values():
                 if self.testing:
-                    queue.put([self.targets[target].set_repo, ['TESTING', self.testreport]])
+                    queue.put([t.set_repo, ['TESTING', self.testreport]])
                 else:
-                    queue.put([self.targets[target].set_repo, ['UPDATE', self.testreport]])
+                    queue.put([t.set_repo, ['UPDATE', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()
 
             queue.join()
 
-            for target in self.targets:
-                if self.targets[target].lasterr():
-                    out.critical('failed to prepare host %s. stopping.\n# %s\n%s' % (target, self.targets[target].lastin(),
-                                 self.targets[target].lasterr()))
+            for t in self.targets.values():
+                if t.lasterr():
+                    out.critical('failed to prepare host %s. stopping.\n# %s\n%s' % (t.hostname, t.lastin(), t.lasterr()))
                     return
 
             for command in self.commands:
                 self.targets.run(command)
 
-                for target in self.targets:
-                    self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
-                                self.targets[target].lasterr(), self.targets[target].lastexit())
+                for t in self.targets.values():
+                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
         except:
             raise
         finally:
-            for target in self.targets:
+            for t in self.targets.values():
                 if not lock.locked:  # wasn't locked earlier by set_host_lock
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
 
@@ -441,44 +438,43 @@ class Downgrade(object):
         versions = {}
 
         try:
-            for target in self.targets:
-                lock = self.targets[target].locked()
+            for t in self.targets.values():
+                lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
-                    out.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
+                    out.warning('host %s is locked since %s by %s. skipping.' % (t.hostname, lock.time(), lock.user))
                     if lock.comment:
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
-                    self.targets[target].set_locked()
+                    t.set_locked()
                     thread = ThreadedMethod(queue)
                     thread.setDaemon(True)
                     thread.start()
 
             if skipped:
-                for target in self.targets:
+                for t in self.targets.values():
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
                 raise UpdateError('Hosts locked')
 
-            for target in self.targets:
-                queue.put([self.targets[target].set_repo, ['UPDATE']])
+            for t in self.targets.values():
+                queue.put([t.set_repo, ['UPDATE']])
 
             while queue.unfinished_tasks:
                 spinner()
 
             queue.join()
 
-            for target in self.targets:
-                if self.targets[target].lasterr():
-                    out.critical('failed to downgrade host %s. stopping.\n# %s\n%s' % (target, self.targets[target].lastin(),
-                                 self.targets[target].lasterr()))
+            for t in self.targets.values():
+                if t.lasterr():
+                    out.critical('failed to downgrade host %s. stopping.\n# %s\n%s' % (t.hostname, t.lastin(), t.lasterr()))
                     return
 
             self.targets.run(self.list_command)
-            for target in self.targets:
-                lines = self.targets[target].lastout().split('\n')
+            for hn, t in self.targets.items():
+                lines = t.lastout().split('\n')
                 release = {}
                 for line in lines:
                     match = re.search('(.*) = (.*)', line)
@@ -494,28 +490,27 @@ class Downgrade(object):
                 for name in release:
                     version = sorted(release[name], key=RPMVersion, reverse=True)[0]
                     try:
-                        versions[target].update({name:version})
+                        versions[hn].update({name:version})
                     except KeyError:
-                        versions[target] = {}
-                        versions[target].update({name:version})
+                        versions[hn] = {}
+                        versions[hn].update({name:version})
 
             for command in self.pre_commands:
                 self.targets.run(command)
 
             for package in self.packages:
                 temp = self.targets.copy()
-                for target in self.targets:
+                for hn in self.targets:
                     try:
-                        command = self.install_command % (package, package, versions[target][package])
-                        self.commands.update({target:command})
+                        command = self.install_command % (package, package, versions[hn][package])
+                        self.commands.update({hn:command})
                     except KeyError:
-                        del temp[target]
+                        del temp[hn]
 
                 temp.run(self.commands)
 
-                for target in self.targets:
-                    self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
-                                self.targets[target].lasterr(), self.targets[target].lastexit())
+                for t in self.targets.values():
+                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
 
             for command in self.post_commands:
                 self.targets.run(command)
@@ -523,10 +518,10 @@ class Downgrade(object):
         except:
             raise
         finally:
-            for target in self.targets:
+            for t in self.targets.values():
                 if not lock.locked:  # wasn't locked earlier by set_host_lock
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
 
@@ -612,23 +607,23 @@ class Install(object):
         skipped = False
 
         try:
-            for target in self.targets:
-                lock = self.targets[target].locked()
+            for t in self.targets.values():
+                lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
-                    out.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
+                    out.warning('host %s is locked since %s by %s. skipping.' % (t.hostname, lock.time(), lock.user))
                     if lock.comment:
                         out.info("%s's comment: %s" % (lock.user, lock.comment))
                 else:
-                    self.targets[target].set_locked()
+                    t.set_locked()
                     thread = ThreadedMethod(queue)
                     thread.setDaemon(True)
                     thread.start()
 
             if skipped:
-                for target in self.targets:
+                for t in self.targets.values():
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
                 raise UpdateError('Hosts locked')
@@ -636,16 +631,15 @@ class Install(object):
             for command in self.commands:
                 self.targets.run(command)
 
-                for target in self.targets:
-                    self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
-                                self.targets[target].lasterr(), self.targets[target].lastexit())
+                for t in self.targets.values():
+                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
         except:
             raise
         finally:
-            for target in self.targets:
+            for t in self.targets.values():
                 if not lock.locked:  # wasn't locked earlier by set_host_lock
                     try:
-                        self.targets[target].remove_lock()
+                        t.remove_lock()
                     except AssertionError:
                         pass
 
