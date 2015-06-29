@@ -856,8 +856,6 @@ class ThreadedMethod(threading.Thread):
             except:
                 return
 
-            out.debug('running method %s(%s)' % (method.__name__, parameter))
-
             try:
                 method(*parameter)
             except:
