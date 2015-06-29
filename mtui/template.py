@@ -309,6 +309,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def perform_prepare(self, targets, **kw):
         preparer = self.get_preparer()
         preparer(
+            self.log,
             targets,
             self.get_package_list(),
             self,
@@ -324,23 +325,23 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         updater = self.get_updater()
         self.log.debug("chosen updater: %s" % repr(updater))
-        updater(targets, self.patches, self.get_package_list(), self).run()
+        updater(self.log, targets, self.patches, self.get_package_list(), self).run()
 
     def perform_downgrade(self, targets):
         targets.add_history(['downgrade', str(self.id), ' '.join(self.get_package_list())])
 
         tool = self.get_downgrader()
-        tool(targets, self.get_package_list(), self.patches).run()
+        tool(self.log, targets, self.get_package_list(), self.patches).run()
 
     def perform_install(self, targets, packages):
         targets.add_history(['install', packages])
 
         tool = self.get_installer()
-        tool(targets, packages).run()
+        tool(self.log, targets, packages).run()
 
     def perform_uninstall(self, targets, packages):
         tool = self.get_uninstaller()
-        tool(targets, packages).run()
+        tool(self.log, targets, packages).run()
 
     def copy_scripts(self):
         if not self.path:
