@@ -33,8 +33,8 @@ def usage():
     print()
 
 def main():
-    config = Config()
     log = logging.getLogger('mtui')
+    config = Config(log)
 
     try:
         (opts, args) = getopt.getopt(sys.argv[1:], 'hl:', ['help', 'location='])
