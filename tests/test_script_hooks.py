@@ -131,7 +131,7 @@ def test_compare_script():
         with open(post_f, 'w') as f:
             f.write("bar")
 
-        s.run([t])
+        s.run(HostsGroup([t]))
 
         warning = s.log.warnings[0]
         ok_(isinstance(warning, messages.CompareScriptFailed))

@@ -48,7 +48,7 @@ class Script(object):
 
   def run(self, targets):
     """
-    :type targets: [L{Target}]
+    :type targets: [{HostsGroup}]
     """
     try:
       self.log.info('running {0}'.format(self))
@@ -122,8 +122,8 @@ class PostScript(PreScript):
 class CompareScript(Script):
   subdir = "compare"
 
-  def _run(self, ts):
-    for t in ts:
+  def _run(self, targets):
+    for t in targets.values():
       self._run_single_target(t)
 
   def _result(self, s, t):

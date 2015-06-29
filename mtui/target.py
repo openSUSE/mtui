@@ -842,10 +842,9 @@ class Package(object):
 
 class ThreadedMethod(threading.Thread):
 
-    def __init__(self, queue, logger):
+    def __init__(self, queue):
         threading.Thread.__init__(self)
         self.queue = queue
-        self.log = logger
 
     def run(self):
         while True:
@@ -853,8 +852,6 @@ class ThreadedMethod(threading.Thread):
                 (method, parameter) = self.queue.get(timeout=10)
             except:
                 return
-
-            self.log.debug('running method %s(%s)' % (method.__name__, parameter))
 
             try:
                 method(*parameter)
@@ -872,7 +869,7 @@ class ThreadedTargetGroup(object):
         self.targets = targets
 
     def mk_thread(self):
-        thread = ThreadedMethod(queue, self.log)
+        thread = ThreadedMethod(queue)
         thread.setDaemon(True)
         thread.start()
 
@@ -948,7 +945,7 @@ class RunCommand(object):
 
         try:
             for target in parallel:
-                thread = ThreadedMethod(queue, self.log)
+                thread = ThreadedMethod(queue)
                 thread.setDaemon(True)
                 thread.start()
                 if type(self.command) == dict:
@@ -963,7 +960,7 @@ class RunCommand(object):
 
             for target in serial:
                 prompt_user('press Enter key to proceed with %s' % serial[target].hostname, '')
-                thread = ThreadedMethod(queue, self.log)
+                thread = ThreadedMethod(queue)
                 thread.setDaemon(True)
                 thread.start()
                 queue.put([serial[target].run, [self.command, lock]])
