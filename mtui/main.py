@@ -16,7 +16,7 @@ from subprocess import CalledProcessError
 from .argparse import ArgumentParser
 from .argparse import ArgsParseFailure
 from mtui.log import create_logger
-from mtui.config import config
+from mtui.config import Config
 from mtui.prompt import CommandPrompt
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
@@ -95,10 +95,12 @@ def get_parser(sys):
     return p
 
 def main():
+    logger = create_logger()
+    cfg = Config(logger)
     sys.exit(run_mtui(
       sys
-    , config
-    , create_logger()
+    , cfg
+    , logger
     , CommandPrompt
     ))
 

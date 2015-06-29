@@ -5,7 +5,6 @@
 
 import os
 import getpass
-import logging
 try:
     import configparser
 except ImportError:
@@ -256,4 +255,3 @@ class Config(object):
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout
 
-config = Config(logging.getLogger('mtui'))
