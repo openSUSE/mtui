@@ -15,7 +15,7 @@ from subprocess import CalledProcessError
 
 from .argparse import ArgumentParser
 from .argparse import ArgsParseFailure
-from mtui import log as _crap_imported_for_side_effects
+from mtui.log import create_logger
 from mtui.config import config
 from mtui.prompt import CommandPrompt
 from mtui.template import OBSUpdateID
@@ -98,7 +98,7 @@ def main():
     sys.exit(run_mtui(
       sys
     , config
-    , logging.getLogger('mtui')
+    , create_logger()
     , CommandPrompt
     ))
 

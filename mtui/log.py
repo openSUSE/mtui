@@ -13,9 +13,6 @@ COLOR_SEQ = "\033[1;%dm"
 
 COLORS = {'WARNING': YELLOW, 'INFO': GREEN, 'DEBUG': BLUE, 'CRITICAL': RED, 'ERROR': RED}
 
-out = logging.getLogger('mtui')
-
-
 class ColorFormatter(logging.Formatter):
 
     def __init__(self, msg):
@@ -42,10 +39,11 @@ class ColorFormatter(logging.Formatter):
         return logging.Formatter.format(self, record)
 
 
-# set default loglevel to INFO
-out.setLevel(level=logging.INFO)
-handler = logging.StreamHandler()
-formatter = ColorFormatter('%(levelname)s: %(message)s')
-handler.setFormatter(formatter)
-out.addHandler(handler)
-
+def create_logger():
+    out = logging.getLogger('mtui')
+    out.setLevel(level=logging.INFO)
+    handler = logging.StreamHandler()
+    formatter = ColorFormatter('%(levelname)s: %(message)s')
+    handler.setFormatter(formatter)
+    out.addHandler(handler)
+    return out
