@@ -17,6 +17,19 @@ from mtui.utils import prompt_user
 queue = Queue()
 
 
+class UpdateError(Exception):
+  def __init__(self, reason, host=None):
+    self.reason = reason
+    self.host = host
+
+  def __str__(self):
+    if self.host is None:
+      string = self.reason
+    else:
+      string = '%s: %s' % (self.host, self.reason)
+    return repr(string)
+
+
 class ThreadedMethod(threading.Thread):
   def __init__(self, queue):
     threading.Thread.__init__(self)
