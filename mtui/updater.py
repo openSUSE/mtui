@@ -82,7 +82,7 @@ class Update(object):
             queue.join()
 
             for command in self.commands:
-                RunCommand(self.targets, command).run()
+                self.targets.run(command)
 
                 for target in self.targets:
                     self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
@@ -318,7 +318,7 @@ class Prepare(object):
                     return
 
             for command in self.commands:
-                RunCommand(self.targets, command).run()
+                self.targets.run(command)
 
                 for target in self.targets:
                     self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
@@ -476,7 +476,7 @@ class Downgrade(object):
                                  self.targets[target].lasterr()))
                     return
 
-            RunCommand(self.targets, self.list_command).run()
+            self.targets.run(self.list_command)
             for target in self.targets:
                 lines = self.targets[target].lastout().split('\n')
                 release = {}
@@ -500,7 +500,7 @@ class Downgrade(object):
                         versions[target].update({name:version})
 
             for command in self.pre_commands:
-                RunCommand(self.targets, command).run()
+                self.targets.run(command)
 
             for package in self.packages:
                 temp = self.targets.copy()
@@ -511,14 +511,14 @@ class Downgrade(object):
                     except KeyError:
                         del temp[target]
 
-                RunCommand(temp, self.commands).run()
+                temp.run(self.commands)
 
                 for target in self.targets:
                     self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
                                 self.targets[target].lasterr(), self.targets[target].lastexit())
 
             for command in self.post_commands:
-                RunCommand(self.targets, command).run()
+                self.targets.run(command)
 
         except:
             raise
@@ -634,7 +634,7 @@ class Install(object):
                 raise UpdateError('Hosts locked')
 
             for command in self.commands:
-                RunCommand(self.targets, command).run()
+                self.targets.run(command)
 
                 for target in self.targets:
                     self._check(self.targets[target], self.targets[target].lastin(), self.targets[target].lastout(),
