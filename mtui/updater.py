@@ -44,8 +44,9 @@ class Update(object):
     def __init__(self, targets, patches, packages, testreport):
         self.targets = targets
         self.patches = patches
-        self.commands = []
+        self.packages = packages
         self.testreport = testreport
+        self.commands = []
 
     def run(self):
         skipped = False
@@ -248,7 +249,7 @@ class RedHatUpdate(Update):
         self.commands = [
             'export LANG=',
             'yum repolist',
-            'yum -y update %s' % ' '.join(packages),
+            'yum -y update %s' % ' '.join(self.packages),
         ]
 
 Updater = DictWithInjections({
