@@ -47,7 +47,7 @@ class Testopia(object):
         password = config.testopia_pass
 
         self.log.debug('creating Testopia Interface at %s' % interface)
-        self.bugzilla = Bugzilla(interface, username, password)
+        self.bugzilla = Bugzilla(self.log, interface, username, password)
 
         # cache testcases since Testopia is slow
         self.update_testcase_list()

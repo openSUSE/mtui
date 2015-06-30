@@ -3,13 +3,10 @@
 # manage connection to Bugzilla
 #
 
-import logging
 try:
     import xmlrpc.client as xmlrpclib
 except ImportError:
     import xmlrpclib
-
-out = logging.getLogger('mtui')
 
 
 class Bugzilla(object):
@@ -23,7 +20,7 @@ class Bugzilla(object):
 
     """
 
-    def __init__(self, interface, username="", password=""):
+    def __init__(self, logger, interface, username="", password=""):
         """create xmlrpclib.ServerProxy object for communication
 
         creates a ServerProxy XMLRPC instance with Bugzilla credentials
@@ -32,6 +29,8 @@ class Bugzilla(object):
         None
 
         """
+
+        self.log = logger
 
         # just basic auth for the start
         self.url = interface.replace('://', '://%s:%s@' % (username, password))
@@ -53,15 +52,15 @@ class Bugzilla(object):
             method = getattr(self.proxy, service)
             return method(*query)
         except AttributeError:
-            out.critical('service "%s" does not exist.' % service)
+            self.log.critical('service "%s" does not exist.' % service)
             raise
         except xmlrpclib.ProtocolError as error:
             if error.errcode == 401:
-                out.critical('failed to authorize with Bugzilla')
+                self.log.critical('failed to authorize with Bugzilla')
             raise
         except xmlrpclib.Fault as error:
             if error.faultCode == 32000:
-                out.critical('testcase does not exist')
+                self.log.critical('testcase does not exist')
             raise
 
 
