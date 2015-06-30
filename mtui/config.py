@@ -22,8 +22,6 @@ except ImportError:
     # disable keyring support since python-keyring is missing
     keyring = None
 
-out = logging.getLogger('mtui')
-
 class InvalidOptionNameError(RuntimeError):
     pass
 
@@ -47,9 +45,10 @@ class Config(object):
         try:
             self.config.read(self.configfiles)
         except configparser.Error as e:
-            out.error(e)
+            self.log.error(e)
 
-    def __init__(self, refhosts = RefhostsFactory):
+    def __init__(self, logger, refhosts = RefhostsFactory):
+        self.log = logger
         self.refhosts = refhosts
         self._location = 'default'
         self.read()
@@ -65,9 +64,9 @@ class Config(object):
     @location.setter
     def location(self, x):
         try:
-            self.refhosts(self, out).check_location_sanity(x)
+            self.refhosts(self, self.log).check_location_sanity(x)
         except InvalidLocationError as e:
-            out.error(e)
+            self.log.error(e)
             return
 
         self._location = x
@@ -85,7 +84,7 @@ class Config(object):
                     val = default
 
             setattr(self, attr, fixup(val))
-            out.debug('config.%s set to "%s"' % (attr, val))
+            self.log.debug('config.%s set to "%s"' % (attr, val))
 
     def _define_config_options(self):
         normalizer = lambda x: x
@@ -198,29 +197,29 @@ class Config(object):
 
     def _handle_testopia_cred(self):
         if not self.use_keyring:
-            out.debug("keyring disabled by configuration")
+            self.log.debug("keyring disabled by configuration")
             return
 
         if not keyring:
-            out.warning("keyring library not available")
+            self.log.warning("keyring library not available")
             return
 
-        out.debug('querying keyring for Testopia password')
+        self.log.debug('querying keyring for Testopia password')
         if self.testopia_pass and self.testopia_user:
             try:
                 keyring.set_password('Testopia', self.testopia_user,
                     self.testopia_pass)
             except Exception:
-                out.warning('failed to add Testopia password to the keyring')
-                out.debug(format_exc())
+                self.log.warning('failed to add Testopia password to the keyring')
+                self.log.debug(format_exc())
         elif self.testopia_user:
             try:
                 self.testopia_pass = keyring.get_password('Testopia', self.testopia_user)
             except Exception:
-                out.warning('failed to get Testopia password from the keyring')
-                out.debug(format_exc())
+                self.log.warning('failed to get Testopia password from the keyring')
+                self.log.debug(format_exc())
 
-        out.debug('config.testopia_pass = {0!r}'.format(
+        self.log.debug('config.testopia_pass = {0!r}'.format(
             self.testopia_pass))
 
     def _get_option(self, secopt, getter):
@@ -232,12 +231,12 @@ class Config(object):
             return getter(*secopt)
         except (configparser.NoSectionError, configparser.NoOptionError):
             msg = 'Config option {0}.{1} not found.'
-            out.debug(msg.format(*secopt))
+            self.log.debug(msg.format(*secopt))
             raise
         except Exception:
             msg = 'Config option {0}.{1} extraction from {2} ' + \
                 'failed.'
-            out.error(msg.format(secopt + (self.configfiles, )))
+            self.log.error(msg.format(secopt + (self.configfiles, )))
             raise
 
     def merge_args(self, args):
@@ -257,4 +256,4 @@ class Config(object):
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout
 
-config = Config()
+config = Config(logging.getLogger('mtui'))

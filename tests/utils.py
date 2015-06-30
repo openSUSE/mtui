@@ -137,7 +137,7 @@ class ConfigFake(Config):
     To set different desired values in testcase, just assign them.
     """
     def __init__(self, overrides = None, refhosts = RefhostsFake):
-        super(ConfigFake, self).__init__(refhosts = refhosts)
+        super(ConfigFake, self).__init__(LogFake(), refhosts = refhosts)
         if overrides:
             for k, v in overrides.items():
                 self.set_option(k, v)

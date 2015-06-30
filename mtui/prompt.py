@@ -36,7 +36,7 @@ from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
 from mtui.config import *
-from mtui.notification import *
+from mtui.notification import Notification
 from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
@@ -51,8 +51,6 @@ from mtui.utils import requires_update
 from mtui.utils import ass_is, ass_isL
 
 from distutils.version import StrictVersion
-
-out = logging.getLogger('mtui')
 
 try:
     unicode
@@ -170,7 +168,7 @@ class CommandPrompt(cmd.Cmd):
         try:
             readline.read_history_file('%s/.mtui_history' % self.homedir)
         except IOError as e:
-            out.debug('failed to open history file: %s' % str(e))
+            self.log.debug('failed to open history file: %s' % str(e))
 
     def _add_subcommand(self, cmd):
         if cmd.command in self.commands:
@@ -278,7 +276,7 @@ class CommandPrompt(cmd.Cmd):
             except KeyError:
                 raise AttributeError(str(x))
             else:
-                return log_exception(Exception, out.error)\
+                return log_exception(Exception, self.log.error)\
                     (c.completer(self.targets.select(enabled = True)))
         else:
             argparser = c.argparser(self.sys)
@@ -295,7 +293,7 @@ class CommandPrompt(cmd.Cmd):
         try:
             return RefhostsFactory(self.config, self.log)
         except Exception:
-            out.error('failed to load reference hosts data')
+            self.log.error('failed to load reference hosts data')
             raise
 
     def _parse_args(self, cmdline, params_type):
@@ -354,7 +352,7 @@ class CommandPrompt(cmd.Cmd):
                 , self.log
                 ))
             except (ValueError, KeyError):
-                out.error('failed to parse Testplatform string')
+                self.log.error('failed to parse Testplatform string')
                 return []
         elif refhost.get_host_attributes(args):
             hosts = [args]
@@ -406,11 +404,11 @@ class CommandPrompt(cmd.Cmd):
 
     def connect_system_if_unconnected(self, hostname, system):
         try:
-            out.warning('already connected to {0}. skipping.'.format(
+            self.log.warning('already connected to {0}. skipping.'.format(
                 self.targets[hostname].hostname
             ))
         except KeyError:
-            self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list(), logger = out)
+            self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list(), logger = self.log)
 
             if self.metadata:
                 self.metadata.systems[hostname] = system
@@ -660,7 +658,7 @@ class CommandPrompt(cmd.Cmd):
             import osc
             from osc import commandline
         except:
-            out.error('missing osc module. please install osc and setup an account.')
+            self.log.error('missing osc module. please install osc and setup an account.')
             return
 
         api_config_options = {'https://api.suse.de': {'http_headers': [], 'sslcertck': True, 'user': 'qa', 'pass': 'qa'}}
@@ -680,22 +678,22 @@ class CommandPrompt(cmd.Cmd):
             try:
                 rpmf = RPMFile(rpmfile)
             except Exception as error:
-                out.critical('failed to open %s: %s' % (rpmfile, error))
+                self.log.critical('failed to open %s: %s' % (rpmfile, error))
                 if unicode(error) == u'public key not available':
-                    out.critical('Public key is not available.')
-                    out.critical('In order to import new keys, you should run the following command as root:')
-                    out.critical('cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
+                    self.log.critical('Public key is not available.')
+                    self.log.critical('In order to import new keys, you should run the following command as root:')
+                    self.log.critical('cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
                 continue
 
             try:
                 durl = obs.DistURL(rpmf.disturl)
             except messages.ErrorMessage as e:
-                out.warning(e)
+                self.log.warning(e)
             else:
                 # NOTE: it's important not to confuse rpmf.name and
                 # durl.package. See L{obs.DistURL}
-                out.debug("rpmf.name: %s" % rpmf.name)
-                out.debug("durl.package: %s" % durl.package)
+                self.log.debug("rpmf.name: %s" % rpmf.name)
+                self.log.debug("durl.package: %s" % durl.package)
                 updated[rpmf.name] = durl
 
         # if there are src.rpm package names which are not reflected by
@@ -706,7 +704,7 @@ class CommandPrompt(cmd.Cmd):
         else:
             search_list = list(updated.keys())
 
-        out.debug("search_list: {}".format(search_list))
+        self.log.debug("search_list: {}".format(search_list))
 
         for package in search_list:
             targets.run('rpm -q --qf "%%{DISTURL}" %s' % package)
@@ -717,12 +715,12 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     durl = obs.DistURL(line)
                 except messages.ErrorMessage as e:
-                    out.warning(e)
+                    self.log.warning(e)
                 else:
                     installed[package] = durl
 
-        out.debug("updated: {}".format(updated.keys()))
-        out.debug("installed: {}".format(installed.keys()))
+        self.log.debug("updated: {}".format(updated.keys()))
+        self.log.debug("installed: {}".format(installed.keys()))
 
         for name in updated.keys():
             try:
@@ -730,11 +728,11 @@ class CommandPrompt(cmd.Cmd):
                 du = updated[name]
                 assert(di and du)
             except (AssertionError, KeyError):
-                out.warning('osc disturl not found for package %s. skipping.' % name)
+                self.log.warning('osc disturl not found for package %s. skipping.' % name)
                 continue
 
             if di.commit == du.commit:
-                out.warning(messages.PackageRevisionHasntChangedWarning(name))
+                self.log.warning(messages.PackageRevisionHasntChangedWarning(name))
                 continue
 
             diff = os.path.join(destination, '%s-%s.diff' % (name, mode))
@@ -752,16 +750,16 @@ class CommandPrompt(cmd.Cmd):
                             , unified=True
                         ))
                     except Exception as error:
-                        out.error('failed to diff packages: %s', error)
+                        self.log.error('failed to diff packages: %s', error)
                         return
 
-                out.info('wrote diff locally to %s' % diff)
+                self.log.info('wrote diff locally to %s' % diff)
 
             elif mode == 'build':
                 targets.run('which osc')
                 for target in targets:
                     if targets[target].lastexit() != 0:
-                        out.error('osc is missing on %s. skipping.' % target)
+                        self.log.error('osc is missing on %s. skipping.' % target)
 
                 for state in ['new', 'old']:
                     sourcedir = os.path.join(destination, name, state)
@@ -776,7 +774,7 @@ class CommandPrompt(cmd.Cmd):
 
                 targets.run('diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff))
 
-                out.info('wrote diff remotely to %s' % diff)
+                self.log.info('wrote diff remotely to %s' % diff)
 
     def complete_source_diff(self, text, line, begidx, endidx):
         return [i for i in ['source', 'build'] if i.startswith(text)]
@@ -803,10 +801,10 @@ class CommandPrompt(cmd.Cmd):
             self.metadata.extract_source_rpm()
             specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
             if not specfiles:
-                out.error('failed to load specfile')
+                self.log.error('failed to load specfile')
                 return
 
-        out.debug("Found specfiles: {0}".format(specfiles))
+        self.log.debug("Found specfiles: {0}".format(specfiles))
         for specfile in specfiles:
             patches = {}
             with open(specfile, 'r') as spec:
@@ -824,7 +822,7 @@ class CommandPrompt(cmd.Cmd):
             self.println()
 
             if not patches:
-                out.warning('no patch entries found in specfile {0}'
+                self.log.warning('no patch entries found in specfile {0}'
                     .format(specfile))
             else:
                 self.println('Patches in {}:'.format(specfile))
@@ -884,7 +882,7 @@ class CommandPrompt(cmd.Cmd):
         url = config.bugzilla_url
 
         if not self.testopia.testcases:
-            out.info('no testcases found')
+            self.log.info('no testcases found')
 
         for tcid, tc in self.testopia.testcases.items():
             summary = tc['summary']
@@ -989,7 +987,7 @@ class CommandPrompt(cmd.Cmd):
                 return
 
             if edited == '\n'.join(fields):
-                out.warning('testcase was not modified. not uploading.')
+                self.log.warning('testcase was not modified. not uploading.')
                 return
 
             template = edited.replace('\n', '|br|')
@@ -1009,9 +1007,9 @@ class CommandPrompt(cmd.Cmd):
             try:
                 case_id = self.testopia.create_testcase(testcase)
             except Exception:
-                out.error('failed to create testcase')
+                self.log.error('failed to create testcase')
             else:
-                out.info('created testcase %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
+                self.log.info('created testcase %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
 
         else:
             self.parse_error(self.do_testopia_create, args)
@@ -1045,7 +1043,7 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     case_id = [ k for k, v in self.testopia.testcases.items() if v['summary'].replace('_', ' ') in case ][0]
                 except IndexError:
-                    out.critical('case_id for testcase %s not found' % case)
+                    self.log.critical('case_id for testcase %s not found' % case)
                     return
 
             testcase = self.testopia.get_testcase(case_id)
@@ -1064,7 +1062,7 @@ class CommandPrompt(cmd.Cmd):
                 return
 
             if edited == '\n'.join(template):
-                out.warning('testcase was not modified. not uploading.')
+                self.log.warning('testcase was not modified. not uploading.')
                 return
 
             template = edited.replace('\n', '|br|')
@@ -1080,9 +1078,9 @@ class CommandPrompt(cmd.Cmd):
             try:
                 self.testopia.modify_testcase(case_id, testcase)
             except Exception:
-                out.error('failed to modify testcase %s' % case_id)
+                self.log.error('failed to modify testcase %s' % case_id)
             else:
-                out.info('testcase saved: %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
+                self.log.info('testcase saved: %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
         else:
             self.parse_error(self.do_testopia_edit, args)
 
@@ -1278,7 +1276,7 @@ class CommandPrompt(cmd.Cmd):
         for target in targets.keys():
             lock = targets[target].locked()
             if lock.locked and lock.comment and not lock.own():
-                out.critical('host %s is exclusively locked by %s (%s). skipping.' % (target, lock.user, lock.comment))
+                self.log.critical('host %s is exclusively locked by %s (%s). skipping.' % (target, lock.user, lock.comment))
                 del targets[target]
 
         if targets:
@@ -1296,7 +1294,7 @@ class CommandPrompt(cmd.Cmd):
                     map(output.append, ['stderr:'] + targets[target].lasterr().split('\n'))
 
             page(output, self.interactive)
-            out.info('done')
+            self.log.info('done')
 
     def complete_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1356,7 +1354,7 @@ class CommandPrompt(cmd.Cmd):
         try:
             targets.run(command)
         except KeyboardInterrupt:
-            out.info('testsuite run canceled')
+            self.log.info('testsuite run canceled')
             return
 
         for target in targets:
@@ -1365,7 +1363,7 @@ class CommandPrompt(cmd.Cmd):
             if targets[target].lasterr():
                 self.println(targets[target].lasterr())
 
-        out.info('done')
+        self.log.info('done')
 
     def complete_testsuite_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1405,7 +1403,7 @@ class CommandPrompt(cmd.Cmd):
         if len(s) > self._max_comment_len:
             self.log.warning(QadbReportCommentLengthWarning())
 
-        out.info('please specify rd-qa NIS password')
+        self.log.info('please specify rd-qa NIS password')
         password = getpass.getpass()
 
         submit = []
@@ -1427,7 +1425,7 @@ class CommandPrompt(cmd.Cmd):
             if 'remote_qa_db_report.pl' in command:
                 for hn, tgt in targets.items():
                     if tgt.lastexit() != 0:
-                        out.critical('submitting testsuite results failed on %s:' % hn)
+                        self.log.critical('submitting testsuite results failed on %s:' % hn)
                         self.println('{}:~> {} [{}]'.format(hn, name, tgt.lastexit()))
                         self.println(tgt.lastout())
                         if tgt.lasterr():
@@ -1435,11 +1433,11 @@ class CommandPrompt(cmd.Cmd):
                     else:
                         match = re.search('(http://.*/submission.php.submission_id=\d+)', tgt.lasterr())
                         if match:
-                            out.info('submission for %s (%s): %s' % (hn, tgt.system, match.group(1)))
+                            self.log.info('submission for %s (%s): %s' % (hn, tgt.system, match.group(1)))
                         else:
-                            out.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (hn, hn))
+                            self.log.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (hn, hn))
 
-        out.info('done')
+        self.log.info('done')
 
     def complete_testsuite_submit(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1583,9 +1581,9 @@ class CommandPrompt(cmd.Cmd):
 
                 if state == 'enabled':
                     if lock.locked:
-                        out.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
+                        self.log.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
                         if lock.comment:
-                            out.info("%s's comment: %s" % (lock.user, lock.comment))
+                            self.log.info("%s's comment: %s" % (lock.user, lock.comment))
 
                         continue
                     else:
@@ -1595,11 +1593,11 @@ class CommandPrompt(cmd.Cmd):
                     if husv <=  self._interface_version:
                         msg = "set_host_lock <host>,disable has been"
                         msg += " deprecated in favor of unlock command"
-                        user_deprecation(out, msg)
+                        user_deprecation(self.log, msg)
                     try:
                         targets[target].remove_lock()
                     except AssertionError:
-                        out.warning('host %s not locked by us. skipping.' % target)
+                        self.log.warning('host %s not locked by us. skipping.' % target)
                 else:
                     self.parse_error(self.do_set_host_lock, args)
         else:
@@ -1675,7 +1673,7 @@ class CommandPrompt(cmd.Cmd):
         levels = {'warning': logging.WARNING, 'info': logging.INFO, 'debug': logging.DEBUG}
 
         if args in levels.keys():
-            out.setLevel(level=levels[args])
+            self.log.setLevel(level=levels[args])
         else:
             self.parse_error(self.do_set_log_level, args)
 
@@ -1703,7 +1701,7 @@ class CommandPrompt(cmd.Cmd):
             try:
                 value = int(timeout)
             except Exception:
-                out.error('wrong timeout value: %s' % timeout)
+                self.log.error('wrong timeout value: %s' % timeout)
                 self.parse_error(self.do_set_timeout, args)
                 return
 
@@ -1763,17 +1761,17 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if targets:
-            out.info('installing')
+            self.log.info('installing')
             try:
                 self.metadata.perform_install(targets, packages.split())
             except Exception:
-                out.critical('failed to install packages')
+                self.log.critical('failed to install packages')
                 return
             except KeyboardInterrupt:
-                out.info('installation process canceled')
+                self.log.info('installation process canceled')
                 return
             else:
-                out.info('done')
+                self.log.info('done')
 
     def complete_install(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1796,17 +1794,17 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if targets:
-            out.info('removing')
+            self.log.info('removing')
             try:
                 self.metadata.perform_uninstall(targets, packages.split())
             except Exception:
-                out.critical('failed to remove packages')
+                self.log.critical('failed to remove packages')
                 return
             except KeyboardInterrupt:
-                out.info('uninstallation process canceled')
+                self.log.info('uninstallation process canceled')
                 return
             else:
-                out.info('done')
+                self.log.info('done')
 
     def complete_uninstall(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1829,17 +1827,17 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if targets:
-            out.info('downgrading')
+            self.log.info('downgrading')
             try:
                 self.metadata.perform_downgrade(targets)
             except Exception:
-                out.critical('failed to downgrade target systems')
+                self.log.critical('failed to downgrade target systems')
                 return
             except KeyboardInterrupt:
-                out.info('downgrade process canceled')
+                self.log.info('downgrade process canceled')
                 return
             else:
-                out.info('done')
+                self.log.info('done')
 
     def complete_downgrade(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1879,7 +1877,7 @@ class CommandPrompt(cmd.Cmd):
 
     def _do_prepare_impl(self, targets, force = False, installed = False, testing = False):
         if targets:
-            out.info('preparing')
+            self.log.info('preparing')
 
             try:
                 self.metadata.perform_prepare(
@@ -1889,14 +1887,14 @@ class CommandPrompt(cmd.Cmd):
                     testing = testing
                 )
             except Exception:
-                out.critical('failed to prepare target systems')
-                out.debug(format_exc())
+                self.log.critical('failed to prepare target systems')
+                self.log.debug(format_exc())
                 return False
             except KeyboardInterrupt:
-                out.info('preparation process canceled')
+                self.log.info('preparation process canceled')
                 return False
             else:
-                out.info('done')
+                self.log.info('done')
 
     def complete_prepare(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed', 'testing'])
@@ -1953,28 +1951,28 @@ class CommandPrompt(cmd.Cmd):
                         not_installed.append(package)
                     else:
                         if RPMVersion(before) >= RPMVersion(required):
-                            out.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
+                            self.log.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
 
                 if len(not_installed):
-                    out.warning('%s: these packages are not installed: %s' % (target, not_installed))
+                    self.log.warning('%s: these packages are not installed: %s' % (target, not_installed))
 
             if missing:
-                out.warning('%s: these packages are missing: %s' % (target, not_installed))
+                self.log.warning('%s: these packages are missing: %s' % (target, not_installed))
 
             if 'noscript' not in params:
                 self.metadata.run_scripts(PreScript, targets)
 
-            out.info('updating')
+            self.log.info('updating')
 
             try:
                 self.metadata.perform_update(targets)
             except Exception:
-                out.critical('failed to update target systems')
-                out.debug(format_exc())
-                Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
+                self.log.critical('failed to update target systems')
+                self.log.debug(format_exc())
+                Notification(self.log, 'MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
                 raise
             except KeyboardInterrupt:
-                out.info('update process canceled')
+                self.log.info('update process canceled')
                 return
 
             if 'newpackage' in params:
@@ -1994,10 +1992,10 @@ class CommandPrompt(cmd.Cmd):
 
                     if after is not None and after != '0':
                         if RPMVersion(before) == RPMVersion(after):
-                            out.warning('%s: package was not updated: %s (%s)' % (target, package, after))
+                            self.log.warning('%s: package was not updated: %s (%s)' % (target, package, after))
 
                         if RPMVersion(after) < RPMVersion(required):
-                            out.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
+                            self.log.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
                                         required))
 
             if 'noscript' not in params:
@@ -2005,8 +2003,8 @@ class CommandPrompt(cmd.Cmd):
                 self.metadata.run_scripts(CompareScript, targets)
                 targets.remove(self.metadata.target_wd('output'))
 
-        Notification('MTUI', 'updating %s finished' % self.session).show()
-        out.info('done')
+        Notification(self.log, 'MTUI', 'updating %s finished' % self.session).show()
+        self.log.info('done')
 
     def complete_update(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage', 'noprepare', 'noscript'])
@@ -2050,8 +2048,8 @@ class CommandPrompt(cmd.Cmd):
         try:
             subprocess.check_call('svn up'.split(), cwd = self.metadata.report_wd())
         except Exception:
-            out.error('updating template failed')
-            out.debug(format_exc())
+            self.log.error('updating template failed')
+            self.log.debug(format_exc())
 
     @requires_update
     def do_commit(self, args):
@@ -2071,8 +2069,8 @@ class CommandPrompt(cmd.Cmd):
             subprocess.check_call('svn up'.split(), cwd = checkout)
             subprocess.check_call('svn ci'.split() + msg, cwd = checkout)
         except Exception:
-            out.error('committing template failed')
-            out.debug(format_exc())
+            self.log.error('committing template failed')
+            self.log.debug(format_exc())
 
     def do_put(self, args):
         """
@@ -2148,10 +2146,10 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     subprocess.check_call([path] + hosts)
                 except Exception:
-                    out.error('running %s failed' % filename)
-                    out.debug(format_exc())
+                    self.log.error('running %s failed' % filename)
+                    self.log.debug(format_exc())
             else:
-                out.error('%s script not found, make sure term.%s.sh exists' % (args, args))
+                self.log.error('%s script not found, make sure term.%s.sh exists' % (args, args))
                 self.parse_error(self.do_terms, args)
         else:
 
@@ -2189,7 +2187,7 @@ class CommandPrompt(cmd.Cmd):
         # all but the file command needs template data. skip if template
         # isn't loaded
         if not self.metadata and command != 'file':
-            out.error('no testing template loaded')
+            self.log.error('no testing template loaded')
             return
 
         if command == 'file':
@@ -2209,8 +2207,8 @@ class CommandPrompt(cmd.Cmd):
         try:
             subprocess.check_call([editor, path])
         except Exception:
-            out.error("failed to run %s" % editor)
-            out.debug(format_exc())
+            self.log.error("failed to run %s" % editor)
+            self.log.debug(format_exc())
 
     def complete_edit(self, text, line, begidx, endidx):
         if 'file,' in line:
@@ -2265,17 +2263,17 @@ class CommandPrompt(cmd.Cmd):
             output.add_target(targets[target])
 
         try:
-            template = xml_to_template(self.metadata.path, output.pretty(), hostname)
+            template = xml_to_template(self.log, self.metadata.path, output.pretty(), hostname)
         except Exception:
-            out.error('failed to export XML')
+            self.log.error('failed to export XML')
             return
 
         if os.path.exists(filename) and not force:
-            out.warning('file %s exists.' % filename)
+            self.log.warning('file %s exists.' % filename)
             if not prompt_user('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
                 filename += '.' + timestamp()
 
-        out.info('exporting XML to %s' % filename)
+        self.log.info('exporting XML to %s' % filename)
         try:
             with open(filename, 'w') as f:
                 f.write('\n'.join(l.rstrip().encode('utf-8') for l in template))
@@ -2405,9 +2403,9 @@ class CommandPrompt(cmd.Cmd):
 
     def parse_error(self, method, args):
         self.println()
-        out.error('failed to parse command: %s %s' % (method.__name__.replace('do_', ''), args))
+        self.log.error('failed to parse command: %s %s' % (method.__name__.replace('do_', ''), args))
         self.println('{}: {}'.format(method.__name__.replace('do_', ''), method.__doc__))
 
 
-def user_deprecation(out, msg):
-    out.warning(msg)
+def user_deprecation(log, msg):
+    log.warning(msg)
