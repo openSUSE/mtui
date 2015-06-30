@@ -10,9 +10,9 @@ import time
 import fcntl
 import struct
 import termios
-import logging
 import tempfile
 import readline
+import subprocess
 import re
 from errno import EEXIST
 
@@ -42,8 +42,6 @@ try:
 except NameError:
     user_input = input
 
-out = logging.getLogger('mtui')
-
 flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
 
 def timestamp():
@@ -54,23 +52,14 @@ def edit_text(text):
     editor = os.environ.get('EDITOR', 'vi')
     tmpfile = tempfile.NamedTemporaryFile()
 
-    try:
-        with open(tmpfile.name, 'w') as tmp:
-            tmp.write(text)
-    except Exception:
-        out.error('failed to write temp file')
+    with open(tmpfile.name, 'w') as tmp:
+        tmp.write(text)
 
-    try:
-        os.system('%s %s' % (editor, tmpfile.name))
-    except Exception:
-        out.error('failed to open temp file')
+    subprocess.check_call((editor, tmpfile.name))
 
-    try:
-        with open(tmpfile.name, 'r') as tmp:
-            text = tmp.read().strip('\n')
-            text = text.replace("'", '"')
-    except Exception:
-        out.error('failed to read temp file')
+    with open(tmpfile.name, 'r') as tmp:
+        text = tmp.read().strip('\n')
+        text = text.replace("'", '"')
 
     del tmpfile
 

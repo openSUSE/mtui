@@ -19,7 +19,6 @@ from mtui.template import TestReport
 from mtui.template import NullTestReport
 from mtui.template import SwampTestReport
 from mtui.template import OBSTestReport
-from mtui.template import TestsuiteComment
 from mtui.template import SwampUpdateID
 from mtui.template import _TemplateIOError
 from mtui.template import QadbReportCommentLengthWarning
@@ -500,7 +499,6 @@ def test_swamp_get_testsuite_comment():
     tr = TRF(SwampTestReport, date_ = date)
     tr.md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
     comment = tr.get_testsuite_comment("tsuite")
-    ok_(isinstance(comment, TestsuiteComment))
     eq_(str(comment), "testing tsuite on SWAMP {0} on {1}".format(
         tr.md5,
         date.today().strftime("%d/%m/%y"),
@@ -510,7 +508,6 @@ def test_obs_get_testsuite_comment():
     tr = TRF(OBSTestReport, date_ = date)
     tr.rrid = RequestReviewID("SUSE:Maintenance:1:1")
     comment = tr.get_testsuite_comment("tsuite")
-    ok_(isinstance(comment, TestsuiteComment))
     eq_(str(comment), "testing tsuite on OBS {0} on {1}".format(
         tr.rrid,
         date.today().strftime("%d/%m/%y"),
@@ -546,39 +543,6 @@ def test_select():
     eq_(selected, set('foo bar'.split()))
     selected = set(ts.select(['qux'], enabled = True).keys())
     eq_(selected, set())
-
-def test_TC_edit_text():
-    """
-    Test L{TestsuiteComment.__str__} returns the new string after
-    L{TestsuiteComment.edit_text} was executed.
-    """
-    tc = TestsuiteComment(LogFake(), "foo", "bar", date.today(),
-        text_editor = lambda _: "meh"
-    )
-    ok_(str(tc).startswith("testing bar on foo on "))
-    tc.edit_text()
-    eq_(str(tc), "meh")
-
-def test_TC_str_warning():
-    """
-    Test L{TestsuiteComment.__str__} issues the warning when comment too
-    long
-    """
-    tc = TestsuiteComment(LogFake(), unused, unused, date.today(),
-        lambda _: "-" * TestsuiteComment._max_comment_len
-    )
-
-    tc.edit_text()
-    str(tc)
-    eq_(tc.log.warnings, [])
-
-    tc = TestsuiteComment(LogFake(), unused, unused, date.today(),
-        lambda _: "-" * (TestsuiteComment._max_comment_len+1)
-    )
-    tc.edit_text()
-    eq_(tc.log.warnings, [])
-    str(tc)
-    eq_(tc.log.warnings.pop(), QadbReportCommentLengthWarning())
 
 def test_get_release():
     cases = [

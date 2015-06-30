@@ -981,7 +981,12 @@ class CommandPrompt(cmd.Cmd):
             fields.insert(0, 'package: %s' % package)
             fields.insert(0, 'summary: %s' % summary)
 
-            edited = edit_text('\n'.join(fields))
+            try:
+                edited = edit_text('\n'.join(fields))
+            except subprocess.CalledProcessError as e:
+                self.log.error("editor failed: %s" % e)
+                self.log.debug(format_exc())
+                return
 
             if edited == '\n'.join(fields):
                 out.warning('testcase was not modified. not uploading.')
@@ -1051,7 +1056,12 @@ class CommandPrompt(cmd.Cmd):
             for field in fields:
                 template.append('%s: %s' % (field, testcase[field]))
 
-            edited = edit_text('\n'.join(template))
+            try:
+                edited = edit_text('\n'.join(template))
+            except subprocess.CalledProcessError as e:
+                self.log.error("editor failed: %s" % e)
+                self.log.debug(format_exc())
+                return
 
             if edited == '\n'.join(template):
                 out.warning('testcase was not modified. not uploading.')
@@ -1385,7 +1395,15 @@ class CommandPrompt(cmd.Cmd):
         username = config.session_user
 
         comment = self.metadata.get_testsuite_comment(name)
-        comment.edit_text()
+        try:
+            comment = edit_text(comment)
+        except subprocess.CalledProcessError as e:
+            self.log.error("editor failed: %s" % e)
+            self.log.debug(format_exc())
+            return
+
+        if len(s) > self._max_comment_len:
+            self.log.warning(QadbReportCommentLengthWarning())
 
         out.info('please specify rd-qa NIS password')
         password = getpass.getpass()

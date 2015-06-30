@@ -27,7 +27,6 @@ from mtui import utils
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
-from mtui.utils import edit_text
 from mtui.five import with_metaclass
 from mtui.messages import QadbReportCommentLengthWarning
 from mtui.messages import FailedToDownloadSrcRPMError
@@ -523,12 +522,10 @@ class TestReport(with_metaclass(ABCMeta, object)):
         return self.report_wd('packages-list.txt', filepath = True)
 
     def get_testsuite_comment(self, testsuite):
-        return TestsuiteComment(
-            self.log,
-            "{0} {1}".format(self._type, self.id),
+        return 'testing %s on %s on %s' % (
             testsuite,
-            self._date.today(),
-            text_editor = edit_text
+            "%s %s" % (self._type, self.id),
+            self._date.today().strftime('%d/%m/%y'),
         )
 
     def __repr__(self):
@@ -618,42 +615,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         return by_hosts_pkg
 
-class TestsuiteComment(object):
-    _max_comment_len = 100
-
-    def __init__(self, log, update_id, testsuite, date, text_editor = None):
-        """
-        :type update_id: str
-        :type testsuite: str or None
-        :type date: L{datetime.date}
-        :type text_editor: f :: str -> str
-        """
-        self.update_id = update_id
-        self.log = log
-        self.date = date
-        self.testsuite = testsuite
-
-        self._user_str = None
-        self._text_editor = text_editor
-
-    def _to_str(self):
-        if self._user_str:
-            return self._user_str
-
-        return 'testing {2} on {0} on {1}'.format(
-            self.update_id,
-            self.date.strftime('%d/%m/%y'),
-            self.testsuite
-        )
-
-    def __str__(self):
-        xs = self._to_str()
-        if len(xs) > self._max_comment_len:
-            self.log.warning(QadbReportCommentLengthWarning())
-        return xs
-
-    def edit_text(self):
-        self._user_str = self._text_editor(str(self))
 
 class NullTestReport(TestReport):
     _type = "No"
