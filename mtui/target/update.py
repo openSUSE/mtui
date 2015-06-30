@@ -9,6 +9,8 @@ from mtui.target.actions import ThreadedMethod
 from mtui.target.actions import queue
 from mtui.target.actions import spinner
 
+from mtui.utils import yellow
+
 
 class Update(object):
   def __init__(self, logger, targets, patches, packages, testreport):
