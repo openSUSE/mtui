@@ -13,7 +13,6 @@ import socket
 import termios
 import tty
 import getpass
-import logging
 import warnings
 import logging
 from traceback import format_exc
@@ -23,8 +22,6 @@ with warnings.catch_warnings():
     import paramiko
 
 from mtui.utils import *
-
-out = logging.getLogger('mtui')
 
 
 class CommandTimeout(Exception):
@@ -46,7 +43,7 @@ class Connection(object):
 
     """manage SSH and SFTP connections"""
 
-    def __init__(self, hostname, port, timeout):
+    def __init__(self, logger, hostname, port, timeout):
         """opens SSH channel to specified host
 
         Tries AuthKey Authentication and falls back to password mode in case of errors.
@@ -63,6 +60,8 @@ class Connection(object):
         # uncomment to enable separate paramiko connection logging
 
         # paramiko.util.log_to_file("/tmp/paramiko.log")
+
+        self.log = logger
 
         self.hostname = hostname
 
@@ -104,11 +103,11 @@ class Connection(object):
                 cfg.parse(fd)
         except IOError as e:
             if e.errno != errno.ENOENT:
-                out.warning(e)
+                self.log.warning(e)
         opts = cfg.lookup(self.hostname)
 
         try:
-            out.debug('connecting to %s:%s' % (self.hostname, self.port))
+            self.log.debug('connecting to %s:%s' % (self.hostname, self.port))
             # if this fails, the user most likely has none or an outdated
             # hostkey for the specified host. checking back with a manual
             # "ssh root@..." invocation helps in most cases.
@@ -123,8 +122,8 @@ class Connection(object):
             # if public key auth fails, fallback to a password prompt.
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.
-            out.warning('Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly' % self.hostname)
-            out.warning('Trying manually, please enter the root password')
+            self.log.warning('Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly' % self.hostname)
+            self.log.warning('Trying manually, please enter the root password')
             password = getpass.getpass()
 
             try:
@@ -134,15 +133,15 @@ class Connection(object):
                 # if a wrong password was set, don't connect to the host and
                 # reraise the exception hoping it's catched somewhere in an
                 # upper layer.
-                out.error('Authentication failed on %s: wrong password' % self.hostname)
+                self.log.error('Authentication failed on %s: wrong password' % self.hostname)
                 raise
         except paramiko.SSHException:
             # unspecified general SSHException. the host/sshd is probably not available.
-            out.error('SSHException while connecting to %s' % self.hostname)
+            self.log.error('SSHException while connecting to %s' % self.hostname)
             raise
         except Exception as error:
             # general Exception
-            out.error('%s: %s' % (self.hostname, error))
+            self.log.error('%s: %s' % (self.hostname, error))
             raise
 
     def reconnect(self):
@@ -156,7 +155,7 @@ class Connection(object):
         # if self.is_active():
         #    return
 
-        out.debug('lost connection to %s:%s, reconnecting' % (self.hostname, self.port))
+        self.log.debug('lost connection to %s:%s, reconnecting' % (self.hostname, self.port))
 
         # wait 10s and try to reconnect
         select.select([], [], [], 10)
@@ -184,7 +183,7 @@ class Connection(object):
         self.close_session()
         """
 
-        out.debug('creating new session at %s:%s' % (self.hostname, self.port))
+        self.log.debug('creating new session at %s:%s' % (self.hostname, self.port))
         try:
             transport = self.client.get_transport()
 
@@ -213,7 +212,7 @@ class Connection(object):
     def close_session(self, session=None):
         """close the current session"""
 
-        out.debug('closing session at %s:%s' % (self.hostname, self.port))
+        self.log.debug('closing session at %s:%s' % (self.hostname, self.port))
         try:
             self.session.shutdown(2)
             self.session.close()
@@ -285,7 +284,7 @@ class Connection(object):
 
                     for line in buffer.split('\n'):
                         if line:
-                            out.debug(line)
+                            self.log.debug(line)
 
                 if session.recv_stderr_ready():
                     buffer = session.recv_stderr(1024)
@@ -293,7 +292,7 @@ class Connection(object):
 
                     for line in buffer.split('\n'):
                         if line:
-                            out.debug(line)
+                            self.log.debug(line)
 
                 if not buffer:
                     break
@@ -392,7 +391,7 @@ class Connection(object):
             except Exception:
                 pass
 
-        out.debug('transmitting %s to %s:%s:%s' % (local, self.hostname, self.port, remote))
+        self.log.debug('transmitting %s to %s:%s:%s' % (local, self.hostname, self.port, remote))
         sftp.put(local, remote)
 
         # make file executable since it's probably a script which needs to be run
@@ -413,7 +412,7 @@ class Connection(object):
 
         try:
             sftp = self.client.open_sftp()
-            out.debug('transmitting %s:%s:%s to %s' % (self.hostname, self.port, remote, local))
+            self.log.debug('transmitting %s:%s:%s to %s' % (self.hostname, self.port, remote, local))
             sftp.get(remote, local)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
@@ -431,7 +430,7 @@ class Connection(object):
 
         """
 
-        out.debug('getting %s:%s:%s listing' % (self.hostname, self.port, path))
+        self.log.debug('getting %s:%s:%s listing' % (self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             return sftp.listdir(path)
@@ -444,15 +443,15 @@ class Connection(object):
     def open(self, filename, mode='r', bufsize=-1):
         """open remote file for reading"""
 
-        out.debug('{0} open({1}, {2})'.format(
+        self.log.debug('{0} open({1}, {2})'.format(
               repr(self)
             , filename
             , mode
         ))
         try:
-            out.debug("  -> self.client.open_sftp")
+            self.log.debug("  -> self.client.open_sftp")
             sftp = self.client.open_sftp()
-            out.debug("  -> sftp.open")
+            self.log.debug("  -> sftp.open")
             return sftp.open(filename, mode, bufsize)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
@@ -464,13 +463,13 @@ class Connection(object):
             # doing sftp.open() so let's log any other exception here,
             # just in case it gets eaten by some caller in mtui
             # bnc#880934
-            out.debug(format_exc())
+            self.log.debug(format_exc())
             raise
 
     def remove(self, path):
         """delete remote file"""
 
-        out.debug('deleting file %s:%s:%s' % (self.hostname, self.port, path))
+        self.log.debug('deleting file %s:%s:%s' % (self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             return sftp.remove(path)
@@ -483,7 +482,7 @@ class Connection(object):
     def rmdir(self, path):
         """delete remote directory"""
 
-        out.debug('deleting dir %s:%s:%s' % (self.hostname, self.port, path))
+        self.log.debug('deleting dir %s:%s:%s' % (self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             items = self.listdir(path)
@@ -524,6 +523,6 @@ class Connection(object):
 
         """
 
-        out.debug('closing connection to %s:%s' % (self.hostname, self.port))
+        self.log.debug('closing connection to %s:%s' % (self.hostname, self.port))
         self.client.close()
 

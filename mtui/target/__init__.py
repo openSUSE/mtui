@@ -202,7 +202,7 @@ class Target(object):
     def connect(self):
         try:
             self.logger.info('connecting to %s' % self.hostname)
-            self.connection = self.Connection(self.host, self.port, self.timeout)
+            self.connection = self.Connection(self.logger, self.host, self.port, self.timeout)
         except Exception as e:
             self.logger.critical(messages.ConnectingTargetFailedMessage(
                 self.hostname, e
