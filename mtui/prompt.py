@@ -36,7 +36,7 @@ from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
 from mtui.config import *
-from mtui.notification import *
+from mtui.notification import Notification
 from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
@@ -1969,7 +1969,7 @@ class CommandPrompt(cmd.Cmd):
             except Exception:
                 self.log.critical('failed to update target systems')
                 self.log.debug(format_exc())
-                Notification('MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
+                Notification(self.log, 'MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
                 raise
             except KeyboardInterrupt:
                 self.log.info('update process canceled')
@@ -2003,7 +2003,7 @@ class CommandPrompt(cmd.Cmd):
                 self.metadata.run_scripts(CompareScript, targets)
                 targets.remove(self.metadata.target_wd('output'))
 
-        Notification('MTUI', 'updating %s finished' % self.session).show()
+        Notification(self.log, 'MTUI', 'updating %s finished' % self.session).show()
         self.log.info('done')
 
     def complete_update(self, text, line, begidx, endidx):
