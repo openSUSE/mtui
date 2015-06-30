@@ -2263,7 +2263,7 @@ class CommandPrompt(cmd.Cmd):
             output.add_target(targets[target])
 
         try:
-            template = xml_to_template(self.metadata.path, output.pretty(), hostname)
+            template = xml_to_template(self.log, self.metadata.path, output.pretty(), hostname)
         except Exception:
             self.log.error('failed to export XML')
             return

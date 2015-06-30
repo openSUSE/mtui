@@ -4,16 +4,13 @@
 #
 
 import os
-import logging
 import codecs
 import xml.dom.minidom
 
 from mtui.rpmver import *
 
-out = logging.getLogger('mtui')
 
-
-def xml_to_template(template, xmldata, updatehost=None):
+def xml_to_template(logger, template, xmldata, updatehost=None):
     """ export mtui xml data to an existing maintenance template
 
     simple method to export package versions and
@@ -25,6 +22,8 @@ def xml_to_template(template, xmldata, updatehost=None):
     updatehost-- forced hostname for the update log
 
     """
+
+    out = logger
 
     with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
         t = f.readlines()
