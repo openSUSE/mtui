@@ -4,7 +4,6 @@
 #
 
 import re
-import logging
 import collections
 
 from xml.sax import saxutils
@@ -12,8 +11,6 @@ from xml.sax import saxutils
 from mtui.config import *
 from mtui.connector.bugzilla import *
 from mtui.utils import nottest
-
-out = logging.getLogger('mtui')
 
 @nottest
 class Testopia(object):
@@ -29,7 +26,7 @@ class Testopia(object):
     status = { 3:'disabled', 2:'confirmed', 1:'proposed' }
     automated = { 1:'yes', 0:'no' }
 
-    def __init__(self, product=None, packages=None):
+    def __init__(self, logger, product=None, packages=None):
         """create xmlrpclib.ServerProxy object for communication
 
         creates a ServerProxy XMLRPC instance with Testopie credentials
@@ -39,6 +36,7 @@ class Testopia(object):
 
         """
 
+        self.log = logger
         self.testcases = {}
         self.product = product
         self.packages = packages
@@ -48,7 +46,7 @@ class Testopia(object):
         username = config.testopia_user
         password = config.testopia_pass
 
-        out.debug('creating Testopia Interface at %s' % interface)
+        self.log.debug('creating Testopia Interface at %s' % interface)
         self.bugzilla = Bugzilla(interface, username, password)
 
         # cache testcases since Testopia is slow
@@ -82,7 +80,7 @@ class Testopia(object):
                 try:
                     datafield['isautomated'] = automated[datafield.pop('automated')]
                 except KeyError as error:
-                    out.critical('unknown value for automated: %s. using default.' % error)
+                    self.log.critical('unknown value for automated: %s. using default.' % error)
             elif key == 'status':
                 status = {}
                 for k, v in self.status.items():
@@ -90,16 +88,16 @@ class Testopia(object):
                 try:
                     datafield['case_status_id'] = status[datafield.pop('status')]
                 except KeyError as error:
-                    out.critical('unknown value for status: %s. using default.' % error)
+                    self.log.critical('unknown value for status: %s. using default.' % error)
 
         return datafield
 
     def update_testcase_list(self):
-        out.debug('updating Testopia testcase list')
+        self.log.debug('updating Testopia testcase list')
         self.testcases = self.get_testcase_list()
 
     def append_testcase_cache(self, case_id, testcase):
-        out.debug('writing testcase %s to cache' % case_id)
+        self.log.debug('writing testcase %s to cache' % case_id)
         self.casebuffer.append({'case_id':case_id, 'testcase':testcase})
 
     def remove_testcase_cache(self, case_id):
@@ -109,7 +107,7 @@ class Testopia(object):
                 element = case
 
         if element:
-            out.debug('removing testcase %s from cache' % element['case_id'])
+            self.log.debug('removing testcase %s from cache' % element['case_id'])
             self.casebuffer.remove(element)
 
     def get_testcase_list(self):
@@ -130,13 +128,13 @@ class Testopia(object):
         except AssertionError:
             return {}
 
-        out.debug('getting testcase list for packages %s in testplan %s' % (self.packages, self.plans[self.product]))
+        self.log.debug('getting testcase list for packages %s in testplan %s' % (self.packages, self.plans[self.product]))
         tags = ','.join([ 'packagename_{name},testcase_{name}'.format(name=i) for i in self.packages ])
 
         try:
             response = self.bugzilla.query_interface('TestCase.list', {'tags':tags, 'tags_type':'anyexact', 'plan_id':self.plans[self.product]})
         except Exception:
-            out.critical('failed to query TestCase.list')
+            self.log.critical('failed to query TestCase.list')
             return {}
 
         # since we're too lazy to copy testcases over to our latest products,
@@ -144,8 +142,8 @@ class Testopia(object):
         if not response:
             response = self.bugzilla.query_interface('TestCase.list', {'tags':tags, 'tags_type':'anyexact', 'plan_id':self.plans['10']})
             if response:
-                out.warning('found testcases for product 10 while %s was empty' % self.product)
-                out.warning('please consider migrating the testcases to product %s' % self.product)
+                self.log.warning('found testcases for product 10 while %s was empty' % self.product)
+                self.log.warning('please consider migrating the testcases to product %s' % self.product)
 
         for case in response:
             cases[case['case_id']] = {'summary':case['summary'], 'status':self.status[case['case_status_id']],
@@ -170,13 +168,13 @@ class Testopia(object):
 
         for case in self.casebuffer:
             if case['case_id'] == case_id:
-                out.debug('found testcase %s in cache' % case_id)
+                self.log.debug('found testcase %s in cache' % case_id)
                 return case['testcase']
 
         try:
             response = self.bugzilla.query_interface('TestCase.get', case_id)
         except Exception:
-            out.critical('failed to query TestCase.get')
+            self.log.critical('failed to query TestCase.get')
             return {}
 
         # first, import mandatory fields
@@ -186,7 +184,7 @@ class Testopia(object):
                         'status':self.status[response['case_status_id']],
                         'automated':self.automated[response['isautomated']]}
         except KeyError:
-            out.error('testcase %s not found' % case_id)
+            self.log.error('testcase %s not found' % case_id)
             return {}
 
         # import optional fields
@@ -224,10 +222,10 @@ class Testopia(object):
         try:
             plans = self.plans[self.product]
         except KeyError:
-            out.error('no testplan found for product %s' % self.product)
+            self.log.error('no testplan found for product %s' % self.product)
             raise
 
-        out.debug('creating testcase for product %s' % self.product)
+        self.log.debug('creating testcase for product %s' % self.product)
 
         testcase = {'status': 2,
                     'category': 2919,
@@ -246,7 +244,7 @@ class Testopia(object):
         try:
             response = self.bugzilla.query_interface('TestCase.create', testcase)
         except Exception:
-            out.critical('failed to query TestCase.create')
+            self.log.critical('failed to query TestCase.create')
             raise
 
         self.testcases.update({response['case_id']:{'summary':response['summary'], 'status':self.status[response['case_status_id']],
@@ -281,19 +279,19 @@ class Testopia(object):
         try:
             self.bugzilla.query_interface('TestCase.update', case_id, update)
         except Exception:
-            out.critical('failed to query TestCase.update')
+            self.log.critical('failed to query TestCase.update')
             raise
 
         try:
             self.bugzilla.query_interface('TestCase.store_text', case_id, action, effect, setup, breakdown)
         except Exception:
-            out.critical('failed to query TestCase.store_text')
+            self.log.critical('failed to query TestCase.store_text')
             raise
 
         try:
             tags = self.bugzilla.query_interface('TestCase.get_tags', case_id )
         except Exception:
-            out.critical('failed to query TestCase.get_tags')
+            self.log.critical('failed to query TestCase.get_tags')
             raise
 
         new_tags = set([ tag.replace('packagename_', 'testcase_') for tag in tags if tag.startswith('packagename') ]) - set(tags)
@@ -301,10 +299,10 @@ class Testopia(object):
             try:
                 tags = self.bugzilla.query_interface('TestCase.add_tag', case_id, list(new_tags))
             except Exception:
-                out.critical('failed to query TestCase.add_tag')
+                self.log.critical('failed to query TestCase.add_tag')
                 raise
 
-        out.debug('values for testcase %s stored' % case_id)
+        self.log.debug('values for testcase %s stored' % case_id)
         # remove testcase from cache to get the updated version on
         # the next query
         self.remove_testcase_cache(case_id)
