@@ -18,7 +18,6 @@ from mtui.xmlout import *
 from mtui import utils
 
 from mtui.utils import *
-from mtui.config import *
 from mtui.rpmver import RPMVersion
 from mtui import messages
 from mtui.messages import HostIsNotConnectedError
@@ -210,7 +209,7 @@ class Target(object):
             ))
             raise
 
-        self._lock = self.TargetLock(self.connection, config, self.logger)
+        self._lock = self.TargetLock(self.connection, self.config, self.logger)
         if self.is_locked():
             # NOTE: the condition was originally locked and lock.comment
             # idk why.
@@ -298,8 +297,8 @@ class Target(object):
 
     def _upload_repclean(self):
         """copy over local rep-clean script"""
-        datadir = config.datadir
-        tempdir = config.target_tempdir
+        datadir = self.config.datadir
+        tempdir = self.config.target_tempdir
         try:
             for item in ['rep-clean.sh', 'rep-clean.conf']:
                 filename = os.path.join(
@@ -319,7 +318,7 @@ class Target(object):
         if name not in ["UPDATE", "TESTING"]:
             raise ValueError("invalid name `%s`" % name)
 
-        command = config.repclean_path
+        command = self.config.repclean_path
 
         try:
             repclean = self.connection.open(command, 'r')
@@ -518,7 +517,7 @@ class Target(object):
                 return
 
             now = timestamp()
-            user = config.session_user
+            user = self.config.session_user
             try:
                 historyfile.write('%s:%s:%s\n' % (now, user, ':'.join(comment)))
                 historyfile.close()
