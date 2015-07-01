@@ -4,10 +4,13 @@ from nose.tools import raises
 
 from mtui.messages import HostIsNotConnectedError
 
+def make_target(hostname):
+    return Target(hostname, None, connect = False)
+
 def test_select_hosts():
-    a = Target('a', None, connect=False)
-    b = Target('b', None, connect=False)
-    c = Target('c', None, connect=False)
+    a = make_target('a')
+    b = make_target('b')
+    c = make_target('c')
 
     hg = HostsGroup([a, b, c])
 
@@ -18,7 +21,7 @@ def test_select_hosts():
     ok_(c in hg2.hosts.values())
 
 def test_select_nohosts():
-    a = Target('a', None, connect=False)
+    a = make_target('a')
 
     hg = HostsGroup([a])
 
