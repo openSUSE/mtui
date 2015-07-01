@@ -4,8 +4,10 @@ from nose.tools import raises
 
 from mtui.messages import HostIsNotConnectedError
 
+from utils import ConfigFake
+
 def make_target(hostname):
-    return Target(hostname, None, connect = False)
+    return Target(ConfigFake(), hostname, None, connect = False)
 
 def test_select_hosts():
     a = make_target('a')

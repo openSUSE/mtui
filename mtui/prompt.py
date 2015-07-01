@@ -408,7 +408,7 @@ class CommandPrompt(cmd.Cmd):
                 self.targets[hostname].hostname
             ))
         except KeyError:
-            self.targets[hostname] = Target(hostname, system, self.metadata.get_package_list(), logger = self.log)
+            self.targets[hostname] = Target(self.config, hostname, system, self.metadata.get_package_list(), logger = self.log)
 
             if self.metadata:
                 self.metadata.systems[hostname] = system

@@ -398,7 +398,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         for (host, system) in self.systems.items():
             try:
-                targets[host] = self.targetFactory(host, system,
+                targets[host] = self.targetFactory(self.config, host, system,
                     self.get_package_list(),
                     logger = self.log,
                     timeout=self.config.connection_timeout)

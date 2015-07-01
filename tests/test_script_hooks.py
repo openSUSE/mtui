@@ -97,9 +97,10 @@ def check_run_remotes(s):
 
 def test_compare_script():
     with tmpdir() as wdir:
+        cfg = ConfigFake(dict(template_dir = wdir))
         tr = TRF(
             SwampTestReport,
-            config = ConfigFake(dict(template_dir = wdir)),
+            config = cfg,
         )
 
         md5 = new_md5()
@@ -114,7 +115,7 @@ def test_compare_script():
         s = CompareScript(tr, script, LogFake())
         eq_(s.path, script)
 
-        t = Target(hostnames.foo, unused, connect=False)
+        t = Target(cfg, hostnames.foo, unused, connect=False)
 
         def output_path(phase):
             return tr.report_wd(

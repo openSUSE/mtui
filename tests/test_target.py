@@ -14,7 +14,7 @@ from .utils import unused
 from .utils import hostnames
 from .utils import StringIO
 
-def TF(hostname, lock = None, connection = None, logger = None
+def TF(cfg, hostname, lock = None, connection = None, logger = None
 , state = 'enabled', connect = True):
     """
     TargetFactory
@@ -28,12 +28,13 @@ def TF(hostname, lock = None, connection = None, logger = None
 
     kw['state'] = state
     kw['connect'] = connect
-    return Target(hostname, unused, **kw)
+    return Target(cfg or ConfigFake(), hostname, unused, **kw)
 
 def test_legacy_locked_target_is_locked():
-    t = TF('foo', connect = False, logger = LogFake())
+    cfg = ConfigFake(dict(session_user = 'foo'))
+    t = TF(cfg, 'foo', connect = False, logger = LogFake())
 
-    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')), LogFake())
+    t._lock = TargetLock(None, cfg, LogFake())
     t._lock.load = lambda: None
 
     rl = RemoteLock()
@@ -52,9 +53,10 @@ def test_legacy_locked_target_is_locked():
     eq_(lock.own(), False)
 
 def test_legacy_lock_is_own():
-    t = TF('foo', connect = False, logger = LogFake())
+    cfg = ConfigFake(dict(session_user = 'quux'))
+    t = TF(cfg, 'foo', connect = False, logger = LogFake())
 
-    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'quux')), LogFake())
+    t._lock = TargetLock(None, cfg, LogFake())
     t._lock.load = lambda: None
 
     rl = RemoteLock()
@@ -76,9 +78,10 @@ def test_legacy_lock_is_own():
 
 
 def test_legacy_target_set_locks():
-    t = TF('foo', connect = False, logger = LogFake())
+    cfg = ConfigFake(dict(session_user = 'foo'))
+    t = TF(cfg, 'foo', connect = False, logger = LogFake())
 
-    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')), LogFake())
+    t._lock = TargetLock(None, cfg, LogFake())
     t._lock.load = lambda: None
     def lock(*a, **kw):
         t.locked_with = (a, kw)
@@ -88,7 +91,7 @@ def test_legacy_target_set_locks():
     eq_(t.locked_with, (('foo',), {}))
 
 def test_legacy_target_remove_lock_on_enabled():
-    t = TF('foo', connect = False, logger = LogFake())
+    t = TF(None, 'foo', connect = False, logger = LogFake())
     eq_(t.state, "enabled")
 
     t.unlock_called = False
@@ -101,7 +104,7 @@ def test_legacy_target_remove_lock_on_enabled():
 
 
 def test_legacy_target_remove_lock_on_disabled():
-    t = TF('foo', connect = False, logger = LogFake())
+    t = TF(None, 'foo', connect = False, logger = LogFake())
     t.state = 'disabled'
 
     # FIXME: this will easily yield false negative
@@ -114,11 +117,12 @@ def test_legacy_target_remove_lock_on_disabled():
     eq_(t.unlock_called, False)
 
 def test_target_unlock():
-    t = TF('foo', connect = False, logger = LogFake())
+    cfg = ConfigFake(dict(session_user = 'foo'))
+    t = TF(cfg, 'foo', connect = False, logger = LogFake())
     t.state = None
     # state is irrelevant
 
-    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')), LogFake())
+    t._lock = TargetLock(None, cfg, LogFake())
     t._lock.load = lambda: None
 
     def x(*a, **kw):
@@ -130,9 +134,10 @@ def test_target_unlock():
     eq_(t.test_mark, ((False,),{})) # ((force), {})
 
 def test_locked_target_is_locked():
-    t = TF('foo', connect = False, logger = LogFake())
+    cfg = ConfigFake(dict(session_user = 'foo'))
+    t = TF(cfg, 'foo', connect = False, logger = LogFake())
 
-    t._lock = TargetLock(None, ConfigFake(dict(session_user = 'foo')), LogFake())
+    t._lock = TargetLock(None, cfg, LogFake())
     t._lock.is_locked = lambda: False
     t._lock.i_am_pid = 666
     t._lock.timestamp_factory = lambda: '00-00'
@@ -145,7 +150,7 @@ def test_locked_target_is_locked():
     eq_(t.test_mark, (('fuu',), {}))
 
 def test_put_repclean_fail():
-    t = TF('foo', connect = False, logger = LogFake())
+    t = TF(None, 'foo', connect = False, logger = LogFake())
     t.logger = LogFake()
     def put():
         raise Exception()
@@ -156,7 +161,7 @@ def test_put_repclean_fail():
 
 class TestTargetConnect(object):
     def test_happy_path(self):
-        t = TF("foo", connection = ConnectionFake, lock = TargetLockFake)
+        t = TF(None, "foo", connection = ConnectionFake, lock = TargetLockFake)
         ok_(t.connection)
 
     def test_connection_error(self):
@@ -166,7 +171,7 @@ class TestTargetConnect(object):
 
         l = LogFakeStr()
         try:
-            t = TF(hostnames.foo, connection = ConnFake, logger = l, lock = TargetLockFake)
+            t = TF(None, hostnames.foo, connection = ConnFake, logger = l, lock = TargetLockFake)
         except SSHException:
             eq_(l.criticals, [
                 str(messages.ConnectingTargetFailedMessage(hostnames.foo, "bar"))
@@ -191,7 +196,7 @@ class TestTargetConnect(object):
                 super(LockFake, self).__init__(*a, **kw)
                 self.lock()
 
-        t = TF(hostnames.foo, connection = ConnFake, lock = TargetLock)
+        t = TF(None, hostnames.foo, connection = ConnFake, lock = TargetLock)
         eq_(t.logger.warnings, ["{0} is locked by alice.".format(hostnames.foo)])
 
 class TargetLockFake(object):
@@ -226,9 +231,9 @@ class TestLockedTargets(object):
 
     def test_happy_path(self):
         ts = [
-            TF(hostnames.foo, lock = TargetLockFake, connection = ConnectionFake),
-            TF(hostnames.bar, lock = TargetLockFake, connection = ConnectionFake),
-            TF(hostnames.qux, lock = TargetLockFake, connection = ConnectionFake),
+            TF(None, hostnames.foo, lock = TargetLockFake, connection = ConnectionFake),
+            TF(None, hostnames.bar, lock = TargetLockFake, connection = ConnectionFake),
+            TF(None, hostnames.qux, lock = TargetLockFake, connection = ConnectionFake),
         ]
 
         self._check_locks(ts, False)
@@ -239,9 +244,9 @@ class TestLockedTargets(object):
 
     def test_reraise(self):
         ts = [
-            TF(hostnames.foo, lock = TargetLockFake, connection = ConnectionFake),
-            TF(hostnames.bar, lock = TargetLockFake, connection = ConnectionFake),
-            TF(hostnames.qux, lock = TargetLockFake, connection = ConnectionFake),
+            TF(None, hostnames.foo, lock = TargetLockFake, connection = ConnectionFake),
+            TF(None, hostnames.bar, lock = TargetLockFake, connection = ConnectionFake),
+            TF(None, hostnames.qux, lock = TargetLockFake, connection = ConnectionFake),
         ]
 
         self._check_locks(ts, False)

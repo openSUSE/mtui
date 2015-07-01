@@ -164,7 +164,7 @@ class HostsGroup(object):
 
 
 class Target(object):
-    def __init__(self, hostname, system, packages=[], state='enabled',
+    def __init__(self, config, hostname, system, packages=[], state='enabled',
         timeout=300, exclusive=False, connect=True, logger=None,
         lock=TargetLock, connection=Connection):
         """
@@ -174,6 +174,7 @@ class Target(object):
                 having the target automatically connect
         """
 
+        self.config = config
         self.host, _, self.port = hostname.partition(':')
         self.hostname = hostname
         self.system = system
