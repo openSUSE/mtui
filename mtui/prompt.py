@@ -35,7 +35,7 @@ from mtui.target import *
 from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
-from mtui.notification import Notification
+import mtui.notification as notification
 from mtui import commands, strict_version
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
@@ -143,7 +143,7 @@ class CommandPrompt(cmd.Cmd):
         # support commands with dashes in them
 
     def notify_user(self, msg, class_ = None):
-        Notification(self.log, 'MTUI', msg, class_).show()
+        notification.display(self.log, 'MTUI', msg, class_)
 
     def println(self, msg = '', eol = '\n'):
         return self.stdout.write(msg + eol)
