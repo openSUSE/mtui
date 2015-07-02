@@ -14,11 +14,12 @@ from mtui.target.actions import spinner
 
 
 class Downgrade(object):
-  def __init__(self, logger, targets, packages, patches):
+  def __init__(self, logger, targets, packages, patches, testreport):
     self.log = logger
     self.targets = targets
     self.packages = packages
     self.patches = patches
+    self.testreport = testreport
 
     self.commands = {}
     self.install_command = None
@@ -53,7 +54,7 @@ class Downgrade(object):
         raise UpdateError('Hosts locked')
 
       for t in self.targets.values():
-        queue.put([t.set_repo, ['UPDATE']])
+        queue.put([t.set_repo, ['UPDATE', self.testreport]])
 
       while queue.unfinished_tasks:
         spinner()

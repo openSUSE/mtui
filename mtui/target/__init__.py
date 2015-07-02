@@ -314,44 +314,23 @@ class Target(object):
         conffile = os.path.join(tempdir, 'rep-clean.conf')
         return (scriptfile, conffile)
 
-    def set_repo(self, name, testreport = None):
-        if name not in ["UPDATE", "TESTING"]:
-            raise ValueError("invalid name `%s`" % name)
+    def set_repo(self, name, testreport):
+        self.logger.debug('{0}: enabling {1} repos'.format(self.hostname, name))
+        testreport.set_repo(self, name)
 
-        command = self.config.repclean_path
+    def run_repclean(self, args):
+        exe = self.config.repclean_path
+        argv = (exe,) + args
 
         try:
-            repclean = self.connection.open(command, 'r')
+            fd = self.connection.open(exe, 'r')
         except IOError:
-            x = self._upload_repclean()
-            command = '{0} -F {1}'.format(*x)
+            exe, cfg = self._upload_repclean()
+            argv = (exe, '-F', cfg,) + args
         else:
-            repclean.close()
+            fd.close()
 
-        if utils.get_release([self.system]) == '12':
-            if name == "TESTING" and not testreport:
-                raise RuntimeError("Target.set_repo can't be used without testreport on sle12 systems")
-
-            cmd = "{repclean} -z"
-
-            if name == "TESTING":
-                cmd += "; {repclean} -i {incident_id}"
-
-            cmd = cmd.format(
-                repclean = command,
-                incident_id = testreport.rrid.maintenance_id if testreport else None
-            )
-
-        else:
-            params = dict(
-                TESTING = '-t',
-                UPDATE  = '-n'
-            )
-
-            cmd = "{0} {1}".format(command, params[name])
-
-        self.logger.debug('{0}: enabling {1} repos'.format(self.hostname, name))
-        self.run(cmd)
+        self.run(' '.join(map(str, argv)))
 
     def run(self, command, lock=None):
         if self.state == 'enabled':

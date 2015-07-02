@@ -331,7 +331,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         targets.add_history(['downgrade', str(self.id), ' '.join(self.get_package_list())])
 
         tool = self.get_downgrader()
-        tool(self.log, targets, self.get_package_list(), self.patches).run()
+        tool(self.log, targets, self.get_package_list(), self.patches, self).run()
 
     def perform_install(self, targets, packages):
         targets.add_history(['install', packages])
@@ -678,6 +678,12 @@ class SwampTestReport(TestReport):
             2
         )
 
+    def set_repo(self, target, name):
+        argv = ('-n',)
+        if name == 'TESTING':
+            argv = ('-t',)
+        target.run_repclean(argv)
+
 class OBSTestReport(TestReport):
     _type = "OBS"
 
@@ -717,3 +723,9 @@ class OBSTestReport(TestReport):
             self.repository,
             3
         )
+
+    def set_repo(self, target, name):
+        argv = ('-z',)
+        if name == 'TESTING':
+            argv = ('-z', '-i', self.rrid.maintenance_id,)
+        target.run_repclean(argv)

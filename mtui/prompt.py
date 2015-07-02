@@ -1713,6 +1713,7 @@ class CommandPrompt(cmd.Cmd):
     def complete_set_timeout(self, text, line, begidx, endidx):
         return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
+    @requires_update
     def do_set_repo(self, args):
         """
         Sets the software repositories to UPDATE or TESTING. Multiple
@@ -1727,13 +1728,18 @@ class CommandPrompt(cmd.Cmd):
 
         targets, name = self._parse_args(args, str)
 
+        if name.upper() not in ["UPDATE", "TESTING"]:
+            raise ValueError("invalid name `%s`" % name)
+
+        name = name.upper()
+
         if not (targets and name):
             self.parse_error(self.do_set_repo, args)
             return
 
         with LockedTargets([self.targets[x] for x in targets]):
             for t in [self.targets[x] for x in targets]:
-                t.set_repo(name.upper(), self.metadata)
+                t.set_repo(name, self.metadata)
 
     def complete_set_repo(self, text, line, begidx, endidx):
         if line.count(','):
