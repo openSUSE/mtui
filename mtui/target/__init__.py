@@ -440,7 +440,7 @@ class Target(object):
         :deprecated: by is_locked method
         """
         self.logger.debug('%s: getting mtui lock state' % self.hostname)
-        lock = Locked(self.logger, False)
+        lock = Locked(self.logger, self.config.session_user, False)
 
         if self.state != 'enabled':
             return lock
