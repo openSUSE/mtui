@@ -68,7 +68,6 @@ def test_legacy_lock_is_own():
 
     lock = t.locked()
     lock._getpid = lambda: 666
-    lock._getuser = lambda: 'quux'
     eq_(lock.locked, True)
     eq_(lock.user, 'quux')
     eq_(lock.pid, '666')

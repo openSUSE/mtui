@@ -6,7 +6,6 @@ from __future__ import print_function
 import errno
 import os
 
-from mtui.config import config
 from mtui.utils import timestamp
 
 
@@ -249,7 +248,8 @@ class TargetLock(object):
 
 
 class Locked(object):
-  def __init__(self, log, locked=False, user='nobody', timestamp=0, pid=0, comment=None):
+  def __init__(self, log, myself, locked=False, user='nobody', timestamp=0, pid=0, comment=None):
+    self.myself = myself
     self.log = log
     self.locked = locked
     self.user = user
@@ -258,7 +258,7 @@ class Locked(object):
     self.comment = comment
 
   def own(self):
-    u = self._getuser()
+    u = self.myself
     if not self.user == u:
       self.log.debug("user: %s != %s" % (self.user, u))
       return False
@@ -269,9 +269,6 @@ class Locked(object):
       return False
 
     return True
-
-  def _getuser(self):
-    return config.session_user
 
   def _getpid(self):
     return os.getpid()
