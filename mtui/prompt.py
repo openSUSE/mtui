@@ -142,6 +142,9 @@ class CommandPrompt(cmd.Cmd):
         self.identchars += '-'
         # support commands with dashes in them
 
+    def notify_user(self, msg, class_ = None):
+        Notification(self.log, 'MTUI', msg, class_).show()
+
     def println(self, msg = '', eol = '\n'):
         return self.stdout.write(msg + eol)
 
@@ -1974,7 +1977,7 @@ class CommandPrompt(cmd.Cmd):
             except Exception:
                 self.log.critical('failed to update target systems')
                 self.log.debug(format_exc())
-                Notification(self.log, 'MTUI', 'updating %s failed' % self.session, 'stock_dialog-error').show()
+                self.notify_user('updating %s failed' % self.session, 'stock_dialog-error')
                 raise
             except KeyboardInterrupt:
                 self.log.info('update process canceled')
@@ -2008,7 +2011,7 @@ class CommandPrompt(cmd.Cmd):
                 self.metadata.run_scripts(CompareScript, targets)
                 targets.remove(self.metadata.target_wd('output'))
 
-        Notification(self.log, 'MTUI', 'updating %s finished' % self.session).show()
+        self.notify_user('updating %s finished' % self.session)
         self.log.info('done')
 
     def complete_update(self, text, line, begidx, endidx):
