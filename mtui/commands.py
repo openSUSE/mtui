@@ -213,7 +213,7 @@ class ListPackages(Command):
         if not pkgs:
             raise messages.MissingPackagesError()
 
-        for target, pvs in hosts.query_versions(pkgs).items():
+        for target, pvs in hosts.query_versions(pkgs):
             self.println("packages on {0} ({1}):".format(
                 target.hostname,
                 target.system,
