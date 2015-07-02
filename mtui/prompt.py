@@ -35,7 +35,6 @@ from mtui.target import *
 from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
-from mtui.config import *
 from mtui.notification import Notification
 from mtui import commands, strict_version
 from mtui.utils import log_exception
@@ -879,7 +878,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.ensure_testopia_loaded(*filter(None, args.split(',')))
 
-        url = config.bugzilla_url
+        url = self.config.bugzilla_url
 
         if not self.testopia.testcases:
             self.log.info('no testcases found')
@@ -912,7 +911,7 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             cases = []
-            url = config.bugzilla_url
+            url = self.config.bugzilla_url
 
             self.ensure_testopia_loaded()
 
@@ -967,7 +966,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            url = config.bugzilla_url
+            url = self.config.bugzilla_url
             testcase = {}
             fields = ['requirement:', 'setup:', 'breakdown:', 'action:', 'effect:']
             (package, _, summary) = args.partition(',')
@@ -1031,7 +1030,7 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             template = []
-            url = config.bugzilla_url
+            url = self.config.bugzilla_url
             fields = ['summary', 'automated', 'status', 'requirement', 'setup', 'breakdown', 'action', 'effect']
 
             self.ensure_testopia_loaded()
@@ -1104,7 +1103,7 @@ class CommandPrompt(cmd.Cmd):
 
         buglist = ','.join(sorted(self.metadata.bugs.keys()))
 
-        url = config.bugzilla_url
+        url = self.config.bugzilla_url
 
         self.println('Buglist: {}/buglist.cgi?bug_id={}'.format(url, buglist))
         for (bug, description) in self.metadata.bugs.items():
@@ -1309,7 +1308,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            path = config.target_testsuitedir
+            path = self.config.target_testsuitedir
 
             targets, _ = self._parse_args(args, None)
 
@@ -1343,7 +1342,7 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if not command.startswith('/'):
-            command = os.path.join(config.target_testsuitedir, command.strip())
+            command = os.path.join(self.config.target_testsuitedir, command.strip())
 
         command = 'export TESTS_LOGDIR=/var/log/qa/{0}; {1}'.format(
             self.metadata.id,
@@ -1390,7 +1389,7 @@ class CommandPrompt(cmd.Cmd):
             return
 
         name = os.path.basename(command).replace('-run', '')
-        username = config.session_user
+        username = self.config.session_user
 
         comment = self.metadata.get_testsuite_comment(name)
         try:

@@ -8,7 +8,6 @@ import collections
 
 from xml.sax import saxutils
 
-from mtui.config import *
 from mtui.connector.bugzilla import *
 from mtui.utils import nottest
 
@@ -26,7 +25,7 @@ class Testopia(object):
     status = { 3:'disabled', 2:'confirmed', 1:'proposed' }
     automated = { 1:'yes', 0:'no' }
 
-    def __init__(self, logger, product=None, packages=None):
+    def __init__(self, config, logger, product=None, packages=None):
         """create xmlrpclib.ServerProxy object for communication
 
         creates a ServerProxy XMLRPC instance with Testopie credentials
