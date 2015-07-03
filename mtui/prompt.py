@@ -1189,20 +1189,22 @@ class CommandPrompt(cmd.Cmd):
 
             output = []
 
-            for host in sorted(targets.values()):
-                output.append('log from %s:' % host.hostname)
-                for line in host.log:
-                    output.append('%s:~> %s [%s]' % (host.hostname, line[0], line[3]))
-                    output.append('stdout:')
-                    map(output.append, line[1].split('\n'))
-                    output.append('stderr:')
-                    map(output.append, line[2].split('\n'))
+            targets.report_log(self._do_show_log, output.append)
 
             page(output, self.interactive)
 
         else:
 
             self.parse_error(self.do_show_log, args)
+
+    def _do_show_log(self, hostname, hostlog, sink):
+        sink('log from %s:' % hostname)
+        for cmdline, stdout, stderr, exitcode in hostlog:
+            sink('%s:~> %s [%s]' % (hostname, cmdline, exitcode))
+            sink('stdout:')
+            map(sink, stdout.split('\n'))
+            sink('stderr:')
+            map(sink, stderr.split('\n'))
 
     def complete_show_log(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)

@@ -160,6 +160,10 @@ class HostsGroup(object):
         for hn in sorted(self.hosts.keys()):
             self.hosts[hn].report_sessions(sink)
 
+    def report_log(self, sink, arg):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_log(sink, arg)
+
     ## dict interface
 
     def __getitem__(self, x):
@@ -606,6 +610,9 @@ class Target(object):
 
     def report_sessions(self, sink):
         return sink(self.hostname, self.system, self.lastout())
+
+    def report_log(self, sink, arg):
+        return sink(self.hostname, self.log, arg)
 
 
 class Package(object):
