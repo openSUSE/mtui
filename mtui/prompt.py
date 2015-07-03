@@ -1338,13 +1338,16 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('testsuite run canceled')
             return
 
-        for target in targets:
-            self.println('{}:~> {}-testsuite [{}]'.format(target, name, targets[target].lastexit()))
-            self.println(targets[target].lastout())
-            if targets[target].lasterr():
-                self.println(targets[target].lasterr())
+        for hn, t in targets.items():
+            t.report_testsuite_results(self._do_testsuite_run, name)
 
         self.log.info('done')
+
+    def _do_testsuite_run(self, hostname, exit, stdout, stderr, suitename):
+        self.println('{}:~> {}-testsuite [{}]'.format(hostname, suitename, exit))
+        self.println(stdout)
+        if stderr:
+            self.println(stderr)
 
     def complete_testsuite_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
