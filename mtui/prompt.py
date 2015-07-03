@@ -1098,14 +1098,15 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_bugs, args)
             return
 
-        buglist = ','.join(sorted(self.metadata.bugs.keys()))
+        self.metadata.list_bugs(self._do_list_bugs, self.config.bugzilla_url)
 
-        url = self.config.bugzilla_url
+    def _do_list_bugs(self, bugs, url):
+        ids = sorted(bugs.keys())
 
-        self.println('Buglist: {}/buglist.cgi?bug_id={}'.format(url, buglist))
-        for (bug, description) in self.metadata.bugs.items():
+        self.println('Buglist: {}/buglist.cgi?bug_id={}'.format(url, ','.join(ids)))
+        for (bug, summary) in [(bug, bugs[bug]) for bug in ids]:
             self.println()
-            self.println('Bug #{0:5}: {1}'.format(bug, description))
+            self.println('Bug #{0:5}: {1}'.format(bug, summary))
             self.println('{}/show_bug.cgi?id={}'.format(url, bug))
 
     @requires_update

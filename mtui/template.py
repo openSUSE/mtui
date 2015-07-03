@@ -449,6 +449,9 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def add_host(self, hostname, system):
         self.systems[hostname] = system
 
+    def list_bugs(self, sink, arg):
+        return sink(self.bugs, arg)
+
     def _show_yourself_data(self):
         return [
             ('Category'  , self.category),
