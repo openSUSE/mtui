@@ -1172,10 +1172,9 @@ class CommandPrompt(cmd.Cmd):
         if not targets:
             return
 
-        packages = params or self.metadata.get_package_list()
+        self.metadata.list_versions(self._do_list_versions, targets, params)
 
-        hosts_pvs = self.metadata.list_versions(targets, packages)
-
+    def _do_list_versions(self, targets, hosts_pvs):
         for hs, pvs in hosts_pvs.items():
             if len(hosts_pvs) > 1:
                 self.println('version history from:')

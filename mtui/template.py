@@ -580,11 +580,13 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         return self.testopia
 
-    def list_versions(self, targets, packages):
+    def list_versions(self, sink, targets, packages):
         if int(self.get_release()) > 10:
             query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -u"
         else:
             query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -u"
+
+        packages = packages or self.get_package_list()
 
         targets.run(query % ' '.join(packages))
 
@@ -619,7 +621,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
             for vs, hs in vshs.items():
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
-        return by_hosts_pkg
+        return sink(targets, by_hosts_pkg)
 
 
 class NullTestReport(TestReport):
