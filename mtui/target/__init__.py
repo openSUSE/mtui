@@ -129,6 +129,10 @@ class HostsGroup(object):
     def run(self, cmd):
         return RunCommand(self.hosts, cmd).run()
 
+    def report_self(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_self(sink)
+
     ## dict interface
 
     def __getitem__(self, x):
@@ -561,6 +565,8 @@ class Target(object):
 
         return
 
+    def report_self(self, sink):
+        return sink(self.hostname, self.system, self.state, self.exclusive)
 
 class Package(object):
 

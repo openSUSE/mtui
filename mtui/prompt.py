@@ -458,31 +458,29 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            self.parse_error(self.do_list_hosts, args)
+            return self.parse_error(self.do_list_hosts, args)
+
+        self.targets.report_self(self._do_list_host)
+
+    def _do_list_host(self, hostname, system, state, exclusive):
+        if exclusive:
+            mode = 'serial'
         else:
+            mode = 'parallel'
 
-            targets = self.targets
+        if state == 'enabled':
+            state = green('Enabled')
+        elif state == 'dryrun':
+            state = yellow('Dryrun')
+        else:
+            state = red('Disabled')
 
-            for host in sorted(targets.values()):
-                if host.exclusive:
-                    mode = 'serial'
-                else:
-                    mode = 'parallel'
-
-                if host.state == 'enabled':
-                    state = green('Enabled')
-                elif host.state == 'dryrun':
-                    state = yellow('Dryrun')
-                else:
-                    state = red('Disabled')
-
-                system = '(%s)' % host.system
-                self.println('{0:20} {1:20}: {2} ({3})'.format(
-                    host.hostname,
-                    system,
-                    state,
-                    mode
-                ))
+        self.println('{0:20} {1:20}: {2} ({3})'.format(
+            hostname,
+            '(%s)' % system,
+            state,
+            mode
+        ))
 
     def do_list_history(self, args):
         """
