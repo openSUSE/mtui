@@ -2013,9 +2013,11 @@ class CommandPrompt(cmd.Cmd):
             except KeyboardInterrupt:
                 return
 
-        for host in sorted(targets.values()):
-            self.println('sessions on {} ({}):'.format(host.hostname, host.system))
-            self.println(host.lastout())
+        targets.report_sessions(self._do_list_sessions)
+
+    def _do_list_sessions(self, hostname, system, stdout):
+        self.println('sessions on {} ({}):'.format(hostname, system))
+        self.println(stdout)
 
     def complete_list_sessions(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
