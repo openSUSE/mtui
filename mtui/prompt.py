@@ -1290,16 +1290,16 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            path = self.config.target_testsuitedir
-
             targets, _ = self._parse_args(args, None)
 
-            for target in targets:
-                self.println('testsuites on {} ({}):'.format(target, targets[target].system))
-                self.println('\n'.join([i for i in sorted(targets[target].listdir(path)) if i.endswith('-run')]))
-                self.println()
+            targets.report_testsuites(self._do_testsuite_list, self.config.target_testsuitedir)
         else:
             self.parse_error(self.do_testsuite_list, args)
+
+    def _do_testsuite_list(self, hostname, system, suites):
+        self.println('testsuites on {} ({}):'.format(hostname, system))
+        self.println('\n'.join([i for i in sorted(suites) if i.endswith('-run')]))
+        self.println()
 
     def complete_testsuite_list(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
