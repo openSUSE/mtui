@@ -354,9 +354,12 @@ class CommandPrompt(cmd.Cmd):
 
         for hostname in set(hosts):
             hosttags = refhost.get_host_attributes(hostname)
-            self.println('{0:25}: {1}'.format(hostname, hosttags))
+            self._do_search_hosts(hostname, hosttags)
 
         return hosts
+
+    def _do_search_hosts(self, hostname, hosttags):
+        self.println('{0:25}: {1}'.format(hostname, hosttags))
 
     def complete_search_hosts(self, text, line, begidx, endidx):
         attributes = Attributes()
