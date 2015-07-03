@@ -507,36 +507,31 @@ class CommandPrompt(cmd.Cmd):
             if len(targets) == len(self.targets):
                 count = 10
 
-            if targets:
-                if option:
-                    targets.run('tac /var/log/mtui.log | grep -m %s %s | tac' % (count, ' '.join(option)))
-                else:
-                    targets.run('tail -n %s /var/log/mtui.log' % count)
-
-            for host in sorted(targets.values()):
-                self.println('history from {} ({}):'.format(
-                    host.hostname,
-                    host.system
-                ))
-                lines = host.lastout().split('\n')
-                lines.reverse()
-                for line in lines:
-                    try:
-                        when = line.split(':')[0]
-                        who = line.split(':')[1]
-                        event = ':'.join(line.split(':')[2:])
-                    except IndexError:
-                        continue
-
-                    time = datetime.fromtimestamp(float(when))
-                    self.println('{}, {}: {}'.format(
-                        time.strftime('%A, %d.%m.%Y %H:%M'),
-                        who,
-                        event
-                    ))
-                self.println()
+            targets.report_history(self._do_list_history, count, option)
         else:
             self.parse_error(self.do_list_history, args)
+
+    def _do_list_history(self, hostname, system, lines):
+        self.println('history from {} ({}):'.format(
+            hostname,
+            system
+        ))
+        lines.reverse()
+        for line in lines:
+            try:
+                when = line.split(':')[0]
+                who = line.split(':')[1]
+                event = ':'.join(line.split(':')[2:])
+            except IndexError:
+                continue
+
+            time = datetime.fromtimestamp(float(when))
+            self.println('{}, {}: {}'.format(
+                time.strftime('%A, %d.%m.%Y %H:%M'),
+                who,
+                event
+            ))
+        self.println()
 
     def complete_list_history(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx,

@@ -127,11 +127,26 @@ class HostsGroup(object):
         return FileDelete(self.hosts.values(), path).run()
 
     def run(self, cmd):
+        return self._run(cmd)
+
+    def _run(self, cmd):
         return RunCommand(self.hosts, cmd).run()
 
     def report_self(self, sink):
         for hn in sorted(self.hosts.keys()):
             self.hosts[hn].report_self(sink)
+
+    def report_history(self, sink, count, events):
+        if events:
+            self._run('tac /var/log/mtui.log | grep -m %s %s | tac' % (
+                count,
+                ' '.join([('-e ":%s"' % e) for e in events]),
+            ))
+        else:
+            self._run('tail -n %s /var/log/mtui.log' % count)
+
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_history(sink)
 
     ## dict interface
 
@@ -567,6 +582,9 @@ class Target(object):
 
     def report_self(self, sink):
         return sink(self.hostname, self.system, self.state, self.exclusive)
+
+    def report_history(self, sink):
+        return sink(self.hostname, self.system, self.lastout().split('\n'))
 
 class Package(object):
 
