@@ -591,16 +591,14 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_timeout, args)
         else:
 
-            targets = self.targets
+            self.targets.report_timeout(self._do_list_timeout)
 
-            for host in sorted(targets.values()):
-                system = '(%s)' % host.system
-                timeout = host.get_timeout()
-                self.println('{0:20} {1:20}: {2}s'.format(
-                    host.hostname,
-                    system,
-                    timeout
-                ))
+    def _do_list_timeout(self, hostname, system, timeout):
+        self.println('{0:20} {1:20}: {2}s'.format(
+            hostname,
+            '(%s)' % system,
+            timeout,
+        ))
 
     @requires_update
     def do_source_extract(self, _):

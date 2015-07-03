@@ -152,6 +152,10 @@ class HostsGroup(object):
         for hn in sorted(self.hosts.keys()):
             self.hosts[hn].report_locks(sink)
 
+    def report_timeout(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_timeout(sink)
+
     ## dict interface
 
     def __getitem__(self, x):
@@ -592,6 +596,9 @@ class Target(object):
 
     def report_locks(self, sink):
         return sink(self.hostname, self.system, self.locked())
+
+    def report_timeout(self, sink):
+        return sink(self.hostname, self.system, self.get_timeout())
 
 class Package(object):
 
