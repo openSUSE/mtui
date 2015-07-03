@@ -148,6 +148,10 @@ class HostsGroup(object):
         for hn in sorted(self.hosts.keys()):
             self.hosts[hn].report_history(sink)
 
+    def report_locks(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_locks(sink)
+
     ## dict interface
 
     def __getitem__(self, x):
@@ -585,6 +589,9 @@ class Target(object):
 
     def report_history(self, sink):
         return sink(self.hostname, self.system, self.lastout().split('\n'))
+
+    def report_locks(self, sink):
+        return sink(self.hostname, self.system, self.locked())
 
 class Package(object):
 

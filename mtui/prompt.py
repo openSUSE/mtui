@@ -552,30 +552,31 @@ class CommandPrompt(cmd.Cmd):
 
             targets, _ = self._parse_args(args, None)
 
-            for host in sorted(targets.values()):
-                system = '(%s)' % host.system
-                lock = host.locked()
-                if lock.locked:
-                    if lock.own():
-                        lockedby = 'me'
-                    else:
-                        lockedby = lock.user
+            targets.report_locks(self._do_list_locks)
 
-                    self.println(eol = '', msg = '{0:20} {1:20}: {2}'.format(
-                        host.hostname,
-                        system,
-                        yellow('since {} by {}'.format(lock.time(), lockedby))
-                    ))
-                    if lock.comment:
-                        self.println(' : {}'.format(lock.comment))
-                    else:
-                        self.println()
-                else:
-                    self.println('{0:20} {1:20}: {2}'.format(
-                        host.hostname,
-                        system,
-                        green('not locked')
-                    ))
+    def _do_list_locks(self, hostname, system, lock):
+        system = '(%s)' % system
+        if lock.locked:
+            if lock.own():
+                lockedby = 'me'
+            else:
+                lockedby = lock.user
+
+            self.println(eol = '', msg = '{0:20} {1:20}: {2}'.format(
+                hostname,
+                system,
+                yellow('since {} by {}'.format(lock.time(), lockedby))
+            ))
+            if lock.comment:
+                self.println(' : {}'.format(lock.comment))
+            else:
+                self.println()
+        else:
+            self.println('{0:20} {1:20}: {2}'.format(
+                hostname,
+                system,
+                green('not locked')
+            ))
 
     def do_list_timeout(self, args):
         """
