@@ -914,25 +914,37 @@ class CommandPrompt(cmd.Cmd):
                     continue
 
                 if testcase:
-                    self.println('%s %s' % (blue('Testcase summary:'), testcase['summary']))
-                    self.println('%s %s' % (blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
-                    self.println('%s %s' % (blue('Testcase automated:'), testcase['automated']))
-                    self.println('%s %s' % (blue('Testcase status:'), testcase['status']))
-                    self.println('%s %s' % (blue('Testcase requirements:'), testcase['requirement']))
-                    if testcase['setup']:
-                        self.println(blue('Testcase setup:'))
-                        self.println(testcase['setup'])
-                    if testcase['breakdown']:
-                        self.println(blue('Testcase breakdown:'))
-                        self.println(testcase['breakdown'])
-                    self.println(blue('Testcase actions:'))
-                    self.println(testcase['action'])
-                    if testcase['effect']:
-                        self.println(blue('Testcase effect:'))
-                        self.println(testcase['effect'])
-
+                    self._do_testopia_show(
+                        url, case_id,
+                        testcase['summary'],
+                        testcase['status'],
+                        testcase['automated'],
+                        testcase['requirement'],
+                        testcase['setup'],
+                        testcase['action'],
+                        testcase['breakdown'],
+                        testcase['effect'],
+                    )
         else:
             self.parse_error(self.do_testopia_show, args)
+
+    def _do_testopia_show(url, case_id, summary, status, automated, requirement, setup, action, breakdown, effect):
+        self.println('%s %s' % (blue('Testcase summary:'), summary))
+        self.println('%s %s' % (blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
+        self.println('%s %s' % (blue('Testcase automated:'), automated))
+        self.println('%s %s' % (blue('Testcase status:'), status))
+        self.println('%s %s' % (blue('Testcase requirements:'), requirement))
+        if setup:
+            self.println(blue('Testcase setup:'))
+            self.println(setup)
+        if breakdown:
+            self.println(blue('Testcase breakdown:'))
+            self.println(breakdown)
+        self.println(blue('Testcase actions:'))
+        self.println(action)
+        if effect:
+            self.println(blue('Testcase effect:'))
+            self.println(effect)
 
     def complete_testopia_show(self, text, line, begidx, endidx):
         if not line.count(','):
