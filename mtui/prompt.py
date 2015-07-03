@@ -867,20 +867,22 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('no testcases found')
 
         for tcid, tc in self.testopia.testcases.items():
-            summary = tc['summary']
-            if tc['status'] == 'disabled':
-                status = red('disabled')
-            elif tc['status'] == 'confirmed':
-                status = green('confirmed')
-            else:
-                status = yellow('proposed')
-            if tc['automated'] == 'yes':
-                automated = 'automated'
-            else:
-                automated = 'manual'
-            self.println('{0:40}: {1} ({2})'.format(summary, status, automated))
-            self.println('{}/tr_show_case.cgi?case_id={}'.format(url, tcid))
-            self.println()
+            self._do_testopia_list(url, tc['summary'], tc['status'], tc['automated'])
+
+    def _do_testopia_list(self, url, summary, status, automated):
+        if status == 'disabled':
+            status = red('disabled')
+        elif status == 'confirmed':
+            status = green('confirmed')
+        else:
+            status = yellow('proposed')
+        if automated == 'yes':
+            automated = 'automated'
+        else:
+            automated = 'manual'
+        self.println('{0:40}: {1} ({2})'.format(summary, status, automated))
+        self.println('{}/tr_show_case.cgi?case_id={}'.format(url, tcid))
+        self.println()
 
     @requires_update
     def do_testopia_show(self, args):
