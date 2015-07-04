@@ -775,55 +775,21 @@ class CommandPrompt(cmd.Cmd):
         if args:
             self.parse_error(self.do_source_verify, args)
 
-        destination = self.metadata.local_wd()
+        self.metadata.list_patches(self._do_list_patches)
 
-        specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
-
-        if not specfiles:
-            self.metadata.extract_source_rpm()
-            specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
-            if not specfiles:
-                self.log.error('failed to load specfile')
-                return
-
-        self.log.debug("Found specfiles: {0}".format(specfiles))
-        for specfile in specfiles:
-            patches = {}
-            with open(specfile, 'r') as spec:
-                content = spec.readlines()
-
-            for line in content:
-                match = re.search('^Name:\W+(.*)', line)
-                if match:
-                    name = match.group(1)
-
-                match = re.search('^(Patch\d*):\W+(.*)', line)
-                if match:
-                    patches[match.group(1)] = match.group(2)
-
+    def _do_list_patches(self, allpatches):
+        for specfile, patches in allpatches:
             self.println()
 
-            if not patches:
-                self.log.warning('no patch entries found in specfile {0}'
-                    .format(specfile))
-            else:
-                self.println('Patches in {}:'.format(specfile))
+            self.println('Patches in {}:'.format(specfile))
 
-                for patch in patches:
-                    num = ''.join(filter(str.isdigit, patch)) or 0
-                    if num == 0 and re.findall('\'%patch\W+', str(content)):
-                        result = green('applied')
-                    elif re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
-                        result = green('applied')
-                    elif re.findall('patch.*%%{P:%s}' % num, str(content)):
-                        result = green('applied')
-                    else:
-                        result = red('not applied')
+            for pn, fn, applied in patches:
+                if applied:
+                    result = green('applied')
+                else:
+                    result = red('not applied')
 
-                    self.println('{0:45}: {1}'.format(
-                        patches[patch].replace('name}', name),
-                        result
-                    ))
+                self.println('{0:45}: {1}'.format(fn, result,))
 
     def complete_list_packages(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
