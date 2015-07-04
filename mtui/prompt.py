@@ -66,9 +66,9 @@ class CmdQueue(list):
     Echos prompt with the command that's being popped (and about to be
     executed
     """
-    def __init__(self, iterable, prompt, term = None):
+    def __init__(self, iterable, prompt, term):
         self.prompt = prompt
-        self.term = term or sys
+        self.term = term
         list.__init__(self, iterable)
 
     def pop(self, i):
@@ -104,9 +104,9 @@ class CommandPrompt(cmd.Cmd):
     # frameworks. Eg. cement. Maybe there's something in twisted, which
     # would be great if it could replace the ssh layer as well.
 
-    def __init__(self, config, log, sys_=None):
+    def __init__(self, config, log, sys):
         self.set_prompt()
-        self.sys = sys_ or sys
+        self.sys = sys
 
         cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
@@ -136,7 +136,6 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Config)
         self._add_subcommand(commands.ListPackages)
         self._add_subcommand(commands.ReportBug)
-        self.sys = sys_ or sys
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -186,7 +185,7 @@ class CommandPrompt(cmd.Cmd):
         if not self.interactive:
             q.append("quit")
 
-        self.cmdqueue = CmdQueue(q, self.prompt, term = self.sys)
+        self.cmdqueue = CmdQueue(q, self.prompt, self.sys)
 
     def cmdloop(self):
         """
@@ -2361,7 +2360,7 @@ class CommandPrompt(cmd.Cmd):
         except:
             pass
 
-        sys.exit(0)
+        self.sys.exit(0)
 
     def complete_quit(self, text, line, begidx, endidx, appendix=[]):
         return [i for i in ["reboot", "poweroff"] if i.startswith(text)]

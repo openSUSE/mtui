@@ -19,6 +19,7 @@ from tests.prompt import make_cp
 
 from .utils import LogFake
 from .utils import ConfigFake
+from .utils import SysFake
 from .utils import unused
 
 class FakeCommandFactory(object):
@@ -46,8 +47,13 @@ class TestableCommandPrompt(CommandPrompt):
     t_stop_calls = 0
     t_eof_called = False
 
-    def __init__(self, *a, **kw):
-        CommandPrompt.__init__(self, *a, **kw)
+    def __init__(self, config = None, log = None, sys = None):
+        CommandPrompt.__init__(
+            self,
+            config = config or ConfigFake(),
+            log = log or LogFake(),
+            sys = sys or SysFake(),
+        )
         self._add_subcommand(FakeCommandFactory())
         self.t_foo_called = []
         self.t_preloop_counter = 0
@@ -159,7 +165,7 @@ class TestableCmdQueue(CmdQueue):
 def test_cmdqueue():
     it = [1,3,2]
     p = "prompt"
-    q = TestableCmdQueue(it, p)
+    q = TestableCmdQueue(it, p, SysFake())
     eq_(q, it)
     eq_(q.prompt, p)
 

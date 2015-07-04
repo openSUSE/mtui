@@ -132,7 +132,7 @@ def run_mtui(
 
     update = args.md5 or args.review_id
 
-    prompt = Prompt(config, log)
+    prompt = Prompt(config, log, sys)
     if update:
         try:
             prompt.load_update(update, not bool(args.sut))
