@@ -41,6 +41,9 @@ class FakeCommandFactory(object):
         c.factory = self
         return c
 
+class CPDFake(object):
+    def __init__(self, *a, **kw): pass
+
 @nottest
 class TestableCommandPrompt(CommandPrompt):
     t_read_history_called = False
@@ -53,6 +56,7 @@ class TestableCommandPrompt(CommandPrompt):
             config = config or ConfigFake(),
             log = log or LogFake(),
             sys = sys or SysFake(),
+            display_factory = CPDFake,
         )
         self._add_subcommand(FakeCommandFactory())
         self.t_foo_called = []
