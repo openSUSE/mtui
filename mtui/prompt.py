@@ -7,9 +7,6 @@ from functools import reduce
 
 import itertools
 import os
-import sys
-import stat
-import errno
 import cmd
 import logging
 import readline
@@ -17,14 +14,6 @@ import subprocess
 import glob
 import re
 import getpass
-import shutil
-from traceback import print_exc
-from os.path import join
-from os.path import isfile
-from os.path import basename
-from os.path import splitext
-
-from datetime import datetime
 
 from mtui import messages
 from mtui.hooks import PreScript
@@ -36,18 +25,15 @@ from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
 import mtui.notification as notification
-from mtui import commands, strict_version
+from mtui import commands
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
 from mtui.refhost import Attributes
-from mtui.types import MD5Hash
 from mtui.types import obs
 from mtui.template import NullTestReport
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
-from mtui import updater
 from mtui.utils import requires_update
-from mtui.utils import ass_is, ass_isL
 
 from distutils.version import StrictVersion
 
