@@ -23,7 +23,8 @@ import os
 import argparse
 from distutils.version import StrictVersion
 
-from .utils import LogFake
+from tests.prompt import make_cp
+
 from .utils import ConfigFake
 from .utils import StringIO
 from .utils import SysFake
@@ -42,7 +43,7 @@ def test_do_help():
     Test CommandPrompt.do_help print helps properly for class-defined
     commands.
     """
-    cp = CommandPrompt(ConfigFake(dict(interface_version = ComMock2_0.stable)), LogFake(), SysFake())
+    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock2_0.stable)))
 
     cp.do_help("commock")
     eq_(cp.sys.stdout.getvalue(), "*** No help on commock\n")
@@ -62,7 +63,7 @@ def test_getattr():
     Because that's what L{cmd.Cmd} resolves command names to.
     """
 
-    cp = CommandPrompt(ConfigFake(dict(interface_version = ComMock2_0.stable)), LogFake())
+    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock2_0.stable)))
     attr="do_"+ComMock2_0.command
     ok_(not hasattr(cp, attr))
 
@@ -80,7 +81,7 @@ def test_getnames():
     Test L{CommandPrompt.getnames} returns commands including the
     class-defined ones.
     """
-    cp = CommandPrompt(ConfigFake(dict(interface_version = ComMock2_0.stable)), LogFake())
+    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock2_0.stable)))
     attr = "do_"+ComMock2_0.command
     ok_(attr not in cp.get_names())
     cp._add_subcommand(ComMock2_0)
@@ -94,7 +95,7 @@ def test_command_prompt_init():
     current mtui version unless defined by config.
     """
     c = ConfigFake()
-    cp = CommandPrompt(c, LogFake())
+    cp = make_cp(config = c)
     ok_(c is cp.config)
 
     eq_(cp._interface_version, StrictVersion(__version__))
@@ -145,7 +146,7 @@ def test_command_argparse_fail():
         def run(self):
             ok_(False)
 
-    cp = CommandPrompt(ConfigFake(), LogFake(), SysFake())
+    cp = make_cp()
     cp._add_subcommand(ComMock)
 
     cp.onecmd('commock -foo')
@@ -159,7 +160,7 @@ def test_command_doesnt_run_on_help():
         def run(self):
             ok_(False)
 
-    cp = CommandPrompt(ConfigFake(dict(interface_version = ComMock.stable)), LogFake(), SysFake())
+    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock.stable)))
     cp._add_subcommand(ComMock)
     cp.onecmd('commock -h')
     eq_(cp.sys.stdout.getvalue(), 'usage: commock [-h]\n\noptional '+

@@ -15,6 +15,8 @@ from mtui.template import SwampTestReport
 
 from distutils.version import StrictVersion
 
+from tests.prompt import make_cp
+
 from .utils import LogFake
 from .utils import ConfigFake
 from .utils import unused
@@ -244,7 +246,7 @@ def test_load_update_doesnt_leave_previous_session():
     eq_(cp.session, None)
 
 def test_set_location():
-    p = CommandPrompt(ConfigFake(), LogFake())
+    p = make_cp()
     loc = 'foolocation'
     ok_(p.config.location != loc)
     p.do_set_location(loc)
