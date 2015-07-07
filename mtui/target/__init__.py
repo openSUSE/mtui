@@ -626,7 +626,7 @@ class Target(object):
         return sink(self.hostname, self.system, self.listdir(suitedir))
 
     def report_testsuite_results(self, sink, suitename):
-        return sink(self.hostname, t.lastexit(), t.lastout(), t.lasterr(), suitename)
+        return sink(self.hostname, self.lastexit(), self.lastout(), self.lasterr(), suitename)
 
 class Package(object):
 
