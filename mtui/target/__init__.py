@@ -7,7 +7,6 @@
 from __future__ import print_function
 
 import os
-import sys
 import re
 import signal
 from traceback import format_exc
@@ -26,9 +25,6 @@ from mtui.target.actions import FileDelete
 from mtui.target.actions import FileDownload
 from mtui.target.actions import FileUpload
 from mtui.target.actions import RunCommand
-from mtui.target.actions import ThreadedMethod
-from mtui.target.actions import queue
-from mtui.target.actions import spinner
 
 from mtui.target.locks import Locked
 from mtui.target.locks import LockedTargets
@@ -318,11 +314,6 @@ class Target(object):
 
         return packages
 
-    def query_version(self, package):
-        self.logger.debug('%s: querying current %s version' % (self.hostname, package))
-        self.query_versions(package)
-        return self.packages[package].current
-
     def disable_repo(self, repo):
         self.logger.debug('%s: disabling repo %s' % (self.hostname, repo))
         self.run('zypper mr -d %s' % repo)
@@ -454,12 +445,6 @@ class Target(object):
     def lastexit(self):
         try:
             return self.log[-1][3]
-        except:
-            return ''
-
-    def lastruntime(self):
-        try:
-            return self.log[-1][4]
         except:
             return ''
 
