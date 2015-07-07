@@ -441,12 +441,13 @@ class TestReport(with_metaclass(ABCMeta, object)):
                 msg = 'nothing found for testplatform {0!r}'
                 self.log.warning(msg.format(testplatform))
 
-        return dict([(hn, refhosts.get_host_systemname(hn))
-                    for hn in hostnames])
+        self.systems.update(dict(
+            [(hn, refhosts.get_host_systemname(hn)) for hn in hostnames]
+        ))
 
     def load_systems_from_testplatforms(self):
         for tp in self.testplatforms:
-            self.systems.update(self._refhosts_from_tp(tp))
+            self._refhosts_from_tp(tp)
 
     def add_host(self, hostname, system):
         self.systems[hostname] = system

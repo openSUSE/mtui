@@ -238,21 +238,6 @@ def test_TestReport_connect_targets():
         eq_(t.hostname, k)
         eq_(t.system, v)
 
-def test_TestReport_load_systems_from_testplatforms():
-    tr = TRF(SwampTestReport)
-    tps = ['t1', 't2']
-    tr.testplatforms = deepcopy(tps)
-    tr._refhosts_from_tp = lambda x: dict([(x, x+"val")])
-
-    eq_(tr._refhosts_from_tp('f'), {'f': 'fval'})
-    tr.systems = {'foo': 'bar'}
-    tr.load_systems_from_testplatforms()
-
-    eq_(len(tr.systems), 3)
-    del tr.systems['foo']
-    for i in tps:
-        eq_(tr.systems[i], i+"val")
-
 def test_TestReport_refhosts_from_tp():
     """
     Test L{TestReport._refhosts_from_tp}
@@ -270,7 +255,8 @@ def test_TestReport_refhosts_from_tp():
             )
         )
 
-        eq_(tr._refhosts_from_tp(case.testplatform), case.hosts, case.name)
+        tr._refhosts_from_tp(case.testplatform)
+        eq_(set(case.hosts.keys()), set(tr.systems.keys()))
         eq_(
               LogTestingWrap(tr.log).all()
             , dict([(k, [v.format(**case.__dict__) for v in vs])
