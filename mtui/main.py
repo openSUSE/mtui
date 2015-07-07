@@ -138,7 +138,7 @@ def run_mtui(
     prompt = Prompt(config, log, sys, Display)
     if update:
         try:
-            prompt.load_update(update, not bool(args.sut))
+            prompt.load_update(update, autoconnect = not bool(args.sut))
         except (SvnCheckoutInterruptedError, CalledProcessError) as e:
             log.error(e)
             return 1

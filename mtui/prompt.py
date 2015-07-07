@@ -1273,12 +1273,12 @@ class CommandPrompt(cmd.Cmd):
             target.close()
             re_add.append((hostname, target.system))
 
-        self.load_update(update)
+        self.load_update(update, autoconnect = True)
 
         for hostname, system in re_add:
             self.connect_system_if_unconnected(hostname, system)
 
-    def load_update(self, update, autoconnect=True):
+    def load_update(self, update, autoconnect):
         tr = update.make_testreport(self.config, self.log)
 
         if autoconnect:
