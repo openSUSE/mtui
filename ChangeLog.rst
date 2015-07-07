@@ -2,6 +2,36 @@
 ChangeLog
 #########
 
+5.0.0
+#####
+
+Backwards incompatible
+======================
+
+- Install command now works only with loaded testreport.
+  7195e52c4d48f821cd3dafe88940e009dad0a153
+
+- Commands list_scripts, add_scripts, remove_scripts dropped.
+  065a2d1036057c2dac02688a7b61ae4a03aa0b7f
+
+- Run command now bails out if any of the hosts is locked instead of
+  continuing to run on unlocked hosts.
+  433a5f86c70ee98605b60bf7ffa286dab69c3262
+
+New features
+============
+
+- Some commands accepting a list of targets to run at, like
+  `run all,echo foo` can omit the targets to mean `all`, so previous
+  command is identical to `run echo foo`.
+  229e5ffb1de0f7da51808697acea02b3982427b7
+
+Bugfixes
+========
+
+- Proper rep-clean call with OBS updates on SLE11
+  cbefda8bdfcf8f4b65df039036fb813b3cdb7681
+
 4.0.0
 #####
 
