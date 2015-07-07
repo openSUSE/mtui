@@ -1080,13 +1080,7 @@ class CommandPrompt(cmd.Cmd):
 
         targets, command = self._parse_args(args, str)
 
-        for target in targets.keys():
-            lock = targets[target].locked()
-            if lock.locked and lock.comment and not lock.own():
-                self.log.critical('host %s is exclusively locked by %s (%s). skipping.' % (target, lock.user, lock.comment))
-                del targets[target]
-
-        if targets:
+        with LockedTargets(targets.values()):
             try:
                 targets.run(command)
             except KeyboardInterrupt:
