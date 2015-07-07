@@ -2,6 +2,16 @@
 ChangeLog
 #########
 
+5.0.1
+#####
+
+Bugfixes
+========
+
+- Added mtui.target package to the module. This caused 5.0.0 to be
+  completely unusable when installed via setup.py
+  (or distribution tarball)
+
 5.0.0
 #####
 
