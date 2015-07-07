@@ -76,7 +76,7 @@ class UpdateID(object):
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def make_testreport(self, config, logger):
+    def make_testreport(self, config, logger, autoconnect = True):
         tr = self.testreport_factory(
             config,
             logger,
@@ -96,6 +96,9 @@ class UpdateID(object):
             )
 
             tr.read(trpath)
+
+        if autoconnect:
+            tr.connect_targets()
 
         return tr
 
@@ -221,6 +224,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
             os.chdir(dirname(path))
 
         self.copy_scripts()
+
+        self.load_systems_from_testplatforms()
 
     @abstractmethod
     def _parser(self):

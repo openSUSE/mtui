@@ -1279,11 +1279,7 @@ class CommandPrompt(cmd.Cmd):
             self.connect_system_if_unconnected(hostname, system)
 
     def load_update(self, update, autoconnect):
-        tr = update.make_testreport(self.config, self.log)
-
-        if autoconnect:
-            tr.load_systems_from_testplatforms()
-            tr.connect_targets()
+        tr = update.make_testreport(self.config, self.log, autoconnect = autoconnect)
 
         if self.metadata and self.metadata.id is self.session:
             self.set_prompt(None)
