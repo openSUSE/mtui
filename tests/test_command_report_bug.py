@@ -7,16 +7,17 @@ from errno import ENOENT
 from subprocess import Popen
 
 from mtui.commands import ReportBug
-from mtui.prompt import CommandPrompt
 from mtui.messages import SystemCommandError
 from mtui.messages import SystemCommandNotFoundError
 from mtui.messages import UnexpectedlyFastCleanExitFromXdgOpen
+
+from tests.prompt import make_cp
+
 from .utils import StringIO
 from .utils import ConfigFake
 from .utils import LogFake
 from .utils import SysFake
 from .utils import unused
-from .test_prompt import TestableCommandPrompt
 
 def test_print_url():
     """
@@ -27,7 +28,7 @@ def test_print_url():
 
     c, l, s = ConfigFake(), LogFake(), SysFake()
     cmd = ReportBug(ReportBug.parse_args("-p", s), [], c, s, l,
-        CommandPrompt(c, l), popen = raiser)
+        make_cp(config = c, logger = l, sys = s), popen = raiser)
 
     cmd.run()
     eq_(cmd.sys.stdout.getvalue(), c.report_bug_url + "\n")
@@ -49,7 +50,7 @@ def test_xdg_open_happy():
 
     c, l, s = ConfigFake(), LogFake(), SysFake()
     cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        CommandPrompt(c, l), popen = PopenFake)
+        make_cp(config = c, logger = l, sys = s), popen = PopenFake)
 
     cmd.run()
     eq_(cmd.sys.stdout.getvalue(), "")
@@ -69,7 +70,7 @@ def test_xdg_open_failed():
 
     c, l, s = ConfigFake(), LogFake(), SysFake()
     cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        CommandPrompt(c, l), popen = PopenFake)
+        make_cp(config = c, logger = l, sys = s), popen = PopenFake)
 
     try:
         cmd.run()
@@ -87,7 +88,7 @@ def test_xdg_open_failed_to_exec():
 
     c, l, s = ConfigFake(), LogFake(), SysFake()
     cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        CommandPrompt(c, l), popen = popen_fake)
+        make_cp(config = c, logger = l, sys = s), popen = popen_fake)
 
     try:
         cmd.run()
@@ -107,7 +108,7 @@ def test_xdg_open_returned_0():
 
     c, l, s = ConfigFake(), LogFake(), SysFake()
     cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        CommandPrompt(c, l), popen = PopenFake)
+        make_cp(config = c, logger = l, sys = s), popen = PopenFake)
 
     cmd.run()
     eq_(cmd.logger.debugs, [UnexpectedlyFastCleanExitFromXdgOpen()])
@@ -126,5 +127,5 @@ def test_completer():
 def test_has_default_popen():
     c, l, s = ConfigFake(), LogFake(), SysFake()
     cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        CommandPrompt(c, l))
+        make_cp(config = c, logger = l, sys = s))
     eq_(cmd.popen, Popen)

@@ -52,7 +52,7 @@ def main():
         usage()
         sys.exit(2)
 
-    p = CommandPrompt(config, log)
+    p = CommandPrompt(config, log, sys)
     p.do_search_hosts(" ".join(search))
 
 main()

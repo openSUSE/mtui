@@ -127,7 +127,50 @@ class HostsGroup(object):
         return FileDelete(self.hosts.values(), path).run()
 
     def run(self, cmd):
+        return self._run(cmd)
+
+    def _run(self, cmd):
         return RunCommand(self.hosts, cmd).run()
+
+    def report_self(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_self(sink)
+
+    def report_history(self, sink, count, events):
+        if events:
+            self._run('tac /var/log/mtui.log | grep -m %s %s | tac' % (
+                count,
+                ' '.join([('-e ":%s"' % e) for e in events]),
+            ))
+        else:
+            self._run('tail -n %s /var/log/mtui.log' % count)
+
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_history(sink)
+
+    def report_locks(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_locks(sink)
+
+    def report_timeout(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_timeout(sink)
+
+    def report_sessions(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_sessions(sink)
+
+    def report_log(self, sink, arg):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_log(sink, arg)
+
+    def report_testsuites(self, sink, arg):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_testsuites(sink, arg)
+
+    def report_testsuite_results(self, sink, arg):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_testsuite_results(sink, arg)
 
     ## dict interface
 
@@ -561,6 +604,29 @@ class Target(object):
 
         return
 
+    def report_self(self, sink):
+        return sink(self.hostname, self.system, self.state, self.exclusive)
+
+    def report_history(self, sink):
+        return sink(self.hostname, self.system, self.lastout().split('\n'))
+
+    def report_locks(self, sink):
+        return sink(self.hostname, self.system, self.locked())
+
+    def report_timeout(self, sink):
+        return sink(self.hostname, self.system, self.get_timeout())
+
+    def report_sessions(self, sink):
+        return sink(self.hostname, self.system, self.lastout())
+
+    def report_log(self, sink, arg):
+        return sink(self.hostname, self.log, arg)
+
+    def report_testsuites(self, sink, suitedir):
+        return sink(self.hostname, self.system, self.listdir(suitedir))
+
+    def report_testsuite_results(self, sink, suitename):
+        return sink(self.hostname, t.lastexit(), t.lastout(), t.lasterr(), suitename)
 
 class Package(object):
 

@@ -7,9 +7,6 @@ from functools import reduce
 
 import itertools
 import os
-import sys
-import stat
-import errno
 import cmd
 import logging
 import readline
@@ -17,14 +14,6 @@ import subprocess
 import glob
 import re
 import getpass
-import shutil
-from traceback import print_exc
-from os.path import join
-from os.path import isfile
-from os.path import basename
-from os.path import splitext
-
-from datetime import datetime
 
 from mtui import messages
 from mtui.hooks import PreScript
@@ -36,18 +25,15 @@ from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
 import mtui.notification as notification
-from mtui import commands, strict_version
+from mtui import commands
 from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
 from mtui.refhost import Attributes
-from mtui.types import MD5Hash
 from mtui.types import obs
 from mtui.template import NullTestReport
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
-from mtui import updater
 from mtui.utils import requires_update
-from mtui.utils import ass_is, ass_isL
 
 from distutils.version import StrictVersion
 
@@ -66,9 +52,9 @@ class CmdQueue(list):
     Echos prompt with the command that's being popped (and about to be
     executed
     """
-    def __init__(self, iterable, prompt, term = None):
+    def __init__(self, iterable, prompt, term):
         self.prompt = prompt
-        self.term = term or sys
+        self.term = term
         list.__init__(self, iterable)
 
     def pop(self, i):
@@ -104,13 +90,13 @@ class CommandPrompt(cmd.Cmd):
     # frameworks. Eg. cement. Maybe there's something in twisted, which
     # would be great if it could replace the ssh layer as well.
 
-    def __init__(self, config, log, sys_=None):
+    def __init__(self, config, log, sys, display_factory):
         self.set_prompt()
-        self.sys = sys_ or sys
+        self.sys = sys
 
         cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
-
+        self.display = display_factory(self.sys.stdout)
         self.metadata = NullTestReport(config, log)
         self.targets = self.metadata.targets
         """
@@ -136,7 +122,6 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Config)
         self._add_subcommand(commands.ListPackages)
         self._add_subcommand(commands.ReportBug)
-        self.sys = sys_ or sys
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -186,7 +171,7 @@ class CommandPrompt(cmd.Cmd):
         if not self.interactive:
             q.append("quit")
 
-        self.cmdqueue = CmdQueue(q, self.prompt, term = self.sys)
+        self.cmdqueue = CmdQueue(q, self.prompt, self.sys)
 
     def cmdloop(self):
         """
@@ -369,7 +354,7 @@ class CommandPrompt(cmd.Cmd):
 
         for hostname in set(hosts):
             hosttags = refhost.get_host_attributes(hostname)
-            self.println('{0:25}: {1}'.format(hostname, hosttags))
+            self.display.search_hosts(hostname, hosttags)
 
         return hosts
 
@@ -473,31 +458,9 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            self.parse_error(self.do_list_hosts, args)
-        else:
+            return self.parse_error(self.do_list_hosts, args)
 
-            targets = self.targets
-
-            for host in sorted(targets.values()):
-                if host.exclusive:
-                    mode = 'serial'
-                else:
-                    mode = 'parallel'
-
-                if host.state == 'enabled':
-                    state = green('Enabled')
-                elif host.state == 'dryrun':
-                    state = yellow('Dryrun')
-                else:
-                    state = red('Disabled')
-
-                system = '(%s)' % host.system
-                self.println('{0:20} {1:20}: {2} ({3})'.format(
-                    host.hostname,
-                    system,
-                    state,
-                    mode
-                ))
+        self.targets.report_self(self.display.list_host)
 
     def do_list_history(self, args):
         """
@@ -524,34 +487,7 @@ class CommandPrompt(cmd.Cmd):
             if len(targets) == len(self.targets):
                 count = 10
 
-            if targets:
-                if option:
-                    targets.run('tac /var/log/mtui.log | grep -m %s %s | tac' % (count, ' '.join(option)))
-                else:
-                    targets.run('tail -n %s /var/log/mtui.log' % count)
-
-            for host in sorted(targets.values()):
-                self.println('history from {} ({}):'.format(
-                    host.hostname,
-                    host.system
-                ))
-                lines = host.lastout().split('\n')
-                lines.reverse()
-                for line in lines:
-                    try:
-                        when = line.split(':')[0]
-                        who = line.split(':')[1]
-                        event = ':'.join(line.split(':')[2:])
-                    except IndexError:
-                        continue
-
-                    time = datetime.fromtimestamp(float(when))
-                    self.println('{}, {}: {}'.format(
-                        time.strftime('%A, %d.%m.%Y %H:%M'),
-                        who,
-                        event
-                    ))
-                self.println()
+            targets.report_history(self.display.list_history, count, option)
         else:
             self.parse_error(self.do_list_history, args)
 
@@ -574,30 +510,7 @@ class CommandPrompt(cmd.Cmd):
 
             targets, _ = self._parse_args(args, None)
 
-            for host in sorted(targets.values()):
-                system = '(%s)' % host.system
-                lock = host.locked()
-                if lock.locked:
-                    if lock.own():
-                        lockedby = 'me'
-                    else:
-                        lockedby = lock.user
-
-                    self.println(eol = '', msg = '{0:20} {1:20}: {2}'.format(
-                        host.hostname,
-                        system,
-                        yellow('since {} by {}'.format(lock.time(), lockedby))
-                    ))
-                    if lock.comment:
-                        self.println(' : {}'.format(lock.comment))
-                    else:
-                        self.println()
-                else:
-                    self.println('{0:20} {1:20}: {2}'.format(
-                        host.hostname,
-                        system,
-                        green('not locked')
-                    ))
+            targets.report_locks(self.display.list_locks)
 
     def do_list_timeout(self, args):
         """
@@ -612,16 +525,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_timeout, args)
         else:
 
-            targets = self.targets
-
-            for host in sorted(targets.values()):
-                system = '(%s)' % host.system
-                timeout = host.get_timeout()
-                self.println('{0:20} {1:20}: {2}s'.format(
-                    host.hostname,
-                    system,
-                    timeout
-                ))
+            self.targets.report_timeout(self.display.list_timeout)
 
     @requires_update
     def do_source_extract(self, _):
@@ -795,55 +699,7 @@ class CommandPrompt(cmd.Cmd):
         if args:
             self.parse_error(self.do_source_verify, args)
 
-        destination = self.metadata.local_wd()
-
-        specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
-
-        if not specfiles:
-            self.metadata.extract_source_rpm()
-            specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
-            if not specfiles:
-                self.log.error('failed to load specfile')
-                return
-
-        self.log.debug("Found specfiles: {0}".format(specfiles))
-        for specfile in specfiles:
-            patches = {}
-            with open(specfile, 'r') as spec:
-                content = spec.readlines()
-
-            for line in content:
-                match = re.search('^Name:\W+(.*)', line)
-                if match:
-                    name = match.group(1)
-
-                match = re.search('^(Patch\d*):\W+(.*)', line)
-                if match:
-                    patches[match.group(1)] = match.group(2)
-
-            self.println()
-
-            if not patches:
-                self.log.warning('no patch entries found in specfile {0}'
-                    .format(specfile))
-            else:
-                self.println('Patches in {}:'.format(specfile))
-
-                for patch in patches:
-                    num = ''.join(filter(str.isdigit, patch)) or 0
-                    if num == 0 and re.findall('\'%patch\W+', str(content)):
-                        result = green('applied')
-                    elif re.findall('\'%%%s%s\W+' % ('patch', num), str(content)):
-                        result = green('applied')
-                    elif re.findall('patch.*%%{P:%s}' % num, str(content)):
-                        result = green('applied')
-                    else:
-                        result = red('not applied')
-
-                    self.println('{0:45}: {1}'.format(
-                        patches[patch].replace('name}', name),
-                        result
-                    ))
+        self.metadata.list_patches(self.display.list_patches)
 
     def complete_list_packages(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -887,20 +743,7 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('no testcases found')
 
         for tcid, tc in self.testopia.testcases.items():
-            summary = tc['summary']
-            if tc['status'] == 'disabled':
-                status = red('disabled')
-            elif tc['status'] == 'confirmed':
-                status = green('confirmed')
-            else:
-                status = yellow('proposed')
-            if tc['automated'] == 'yes':
-                automated = 'automated'
-            else:
-                automated = 'manual'
-            self.println('{0:40}: {1} ({2})'.format(summary, status, automated))
-            self.println('{}/tr_show_case.cgi?case_id={}'.format(url, tcid))
-            self.println()
+            self.display.testopia_list(url, tcid, tc['summary'], tc['status'], tc['automated'])
 
     @requires_update
     def do_testopia_show(self, args):
@@ -932,23 +775,17 @@ class CommandPrompt(cmd.Cmd):
                     continue
 
                 if testcase:
-                    self.println('%s %s' % (blue('Testcase summary:'), testcase['summary']))
-                    self.println('%s %s' % (blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
-                    self.println('%s %s' % (blue('Testcase automated:'), testcase['automated']))
-                    self.println('%s %s' % (blue('Testcase status:'), testcase['status']))
-                    self.println('%s %s' % (blue('Testcase requirements:'), testcase['requirement']))
-                    if testcase['setup']:
-                        self.println(blue('Testcase setup:'))
-                        self.println(testcase['setup'])
-                    if testcase['breakdown']:
-                        self.println(blue('Testcase breakdown:'))
-                        self.println(testcase['breakdown'])
-                    self.println(blue('Testcase actions:'))
-                    self.println(testcase['action'])
-                    if testcase['effect']:
-                        self.println(blue('Testcase effect:'))
-                        self.println(testcase['effect'])
-
+                    self.display.testopia_show(
+                        url, case_id,
+                        testcase['summary'],
+                        testcase['status'],
+                        testcase['automated'],
+                        testcase['requirement'],
+                        testcase['setup'],
+                        testcase['action'],
+                        testcase['breakdown'],
+                        testcase['effect'],
+                    )
         else:
             self.parse_error(self.do_testopia_show, args)
 
@@ -1104,15 +941,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_bugs, args)
             return
 
-        buglist = ','.join(sorted(self.metadata.bugs.keys()))
-
-        url = self.config.bugzilla_url
-
-        self.println('Buglist: {}/buglist.cgi?bug_id={}'.format(url, buglist))
-        for (bug, description) in self.metadata.bugs.items():
-            self.println()
-            self.println('Bug #{0:5}: {1}'.format(bug, description))
-            self.println('{}/show_bug.cgi?id={}'.format(url, bug))
+        self.metadata.list_bugs(self.display.list_bugs, self.config.bugzilla_url)
 
     @requires_update
     def do_list_metadata(self, args):
@@ -1177,24 +1006,7 @@ class CommandPrompt(cmd.Cmd):
         if not targets:
             return
 
-        packages = params or self.metadata.get_package_list()
-
-        hosts_pvs = self.metadata.list_versions(targets, packages)
-
-        for hs, pvs in hosts_pvs.items():
-            if len(hosts_pvs) > 1:
-                self.println('version history from:')
-                for hn in hs:
-                    self.println('  {} ({})'.format(hn, targets[hn].system))
-                self.println()
-
-            for pkg, vers in pvs:
-                self.println('{}:'.format(pkg))
-                indent = 0
-                for ver in sorted(vers, key = RPMVersion, reverse = True):
-                    self.println('  ' * indent + '-> {}'.format(ver))
-                    indent = indent + 1
-                self.println()
+        self.metadata.list_versions(self.display.list_versions, targets, params)
 
     def do_show_log(self, args):
         """
@@ -1212,14 +1024,7 @@ class CommandPrompt(cmd.Cmd):
 
             output = []
 
-            for host in sorted(targets.values()):
-                output.append('log from %s:' % host.hostname)
-                for line in host.log:
-                    output.append('%s:~> %s [%s]' % (host.hostname, line[0], line[3]))
-                    output.append('stdout:')
-                    map(output.append, line[1].split('\n'))
-                    output.append('stderr:')
-                    map(output.append, line[2].split('\n'))
+            targets.report_log(self.display.show_log, output.append)
 
             page(output, self.interactive)
 
@@ -1311,14 +1116,9 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            path = self.config.target_testsuitedir
-
             targets, _ = self._parse_args(args, None)
 
-            for target in targets:
-                self.println('testsuites on {} ({}):'.format(target, targets[target].system))
-                self.println('\n'.join([i for i in sorted(targets[target].listdir(path)) if i.endswith('-run')]))
-                self.println()
+            targets.report_testsuites(self.display.testsuite_list, self.config.target_testsuitedir)
         else:
             self.parse_error(self.do_testsuite_list, args)
 
@@ -1359,11 +1159,8 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('testsuite run canceled')
             return
 
-        for target in targets:
-            self.println('{}:~> {}-testsuite [{}]'.format(target, name, targets[target].lastexit()))
-            self.println(targets[target].lastout())
-            if targets[target].lasterr():
-                self.println(targets[target].lasterr())
+        for hn, t in targets.items():
+            t.report_testsuite_results(self.display.testsuite_run, name)
 
         self.log.info('done')
 
@@ -2036,9 +1833,7 @@ class CommandPrompt(cmd.Cmd):
             except KeyboardInterrupt:
                 return
 
-        for host in sorted(targets.values()):
-            self.println('sessions on {} ({}):'.format(host.hostname, host.system))
-            self.println(host.lastout())
+        targets.report_sessions(self.display.list_sessions)
 
     def complete_list_sessions(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -2361,7 +2156,7 @@ class CommandPrompt(cmd.Cmd):
         except:
             pass
 
-        sys.exit(0)
+        self.sys.exit(0)
 
     def complete_quit(self, text, line, begidx, endidx, appendix=[]):
         return [i for i in ["reboot", "poweroff"] if i.startswith(text)]

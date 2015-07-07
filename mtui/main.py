@@ -18,6 +18,7 @@ from .argparse import ArgsParseFailure
 from mtui.log import create_logger
 from mtui.config import Config
 from mtui.prompt import CommandPrompt
+from mtui.display import CommandPromptDisplay
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
 from mtui.messages import SvnCheckoutInterruptedError
@@ -102,6 +103,7 @@ def main():
     , cfg
     , logger
     , CommandPrompt
+    , CommandPromptDisplay
     ))
 
 def run_mtui(
@@ -109,6 +111,7 @@ def run_mtui(
 , config
 , log
 , Prompt
+, Display
 ):
     p = get_parser(sys)
     try:
@@ -132,7 +135,7 @@ def run_mtui(
 
     update = args.md5 or args.review_id
 
-    prompt = Prompt(config, log)
+    prompt = Prompt(config, log, sys, Display)
     if update:
         try:
             prompt.load_update(update, not bool(args.sut))

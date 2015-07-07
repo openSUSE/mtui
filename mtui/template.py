@@ -449,6 +449,50 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def add_host(self, hostname, system):
         self.systems[hostname] = system
 
+    def list_bugs(self, sink, arg):
+        return sink(self.bugs, arg)
+
+    def list_patches(self, sink):
+        destination = self.local_wd()
+
+        specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
+
+        if not specfiles:
+            self.extract_source_rpm()
+            specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
+            if not specfiles:
+                self.log.error('failed to load specfile')
+                return
+
+        self.log.debug("Found specfiles: {0}".format(specfiles))
+        allpatches = []
+        for specfile in specfiles:
+            patches = []
+            with open(specfile, 'r') as spec:
+                content = spec.read()
+
+            match = re.search(r'^Name:\s*(.*)', content, re.MULTILINE)
+            if match:
+                name = match.group(1)
+
+            for pn, fn in re.findall(r'^(Patch\d*):\s*(.*)', content, re.MULTILINE):
+                fn = fn.replace('%{name}', name)
+                num = pn[5:]
+                applied = False
+                if re.findall(r'^%%patch%s\W+' % num, content, re.MULTILINE):
+                    applied = True
+                elif re.findall(r'patch.*%%{P:%s}' % num or 0, content, re.MULTILINE):
+                    applied = True
+                patches.append([pn, fn, applied])
+
+            if not patches:
+                self.log.warning('no patch entries found in specfile {0}'
+                    .format(specfile))
+            else:
+                allpatches.append([specfile, patches])
+
+        return sink(allpatches)
+
     def _show_yourself_data(self):
         return [
             ('Category'  , self.category),
@@ -577,11 +621,13 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         return self.testopia
 
-    def list_versions(self, targets, packages):
+    def list_versions(self, sink, targets, packages):
         if int(self.get_release()) > 10:
             query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -u"
         else:
             query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -u"
+
+        packages = packages or self.get_package_list()
 
         targets.run(query % ' '.join(packages))
 
@@ -616,7 +662,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
             for vs, hs in vshs.items():
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
-        return by_hosts_pkg
+        return sink(targets, by_hosts_pkg)
 
 
 class NullTestReport(TestReport):

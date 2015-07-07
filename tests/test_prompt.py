@@ -15,8 +15,11 @@ from mtui.template import SwampTestReport
 
 from distutils.version import StrictVersion
 
+from tests.prompt import make_cp
+
 from .utils import LogFake
 from .utils import ConfigFake
+from .utils import SysFake
 from .utils import unused
 
 class FakeCommandFactory(object):
@@ -38,14 +41,23 @@ class FakeCommandFactory(object):
         c.factory = self
         return c
 
+class CPDFake(object):
+    def __init__(self, *a, **kw): pass
+
 @nottest
 class TestableCommandPrompt(CommandPrompt):
     t_read_history_called = False
     t_stop_calls = 0
     t_eof_called = False
 
-    def __init__(self, *a, **kw):
-        CommandPrompt.__init__(self, *a, **kw)
+    def __init__(self, config = None, log = None, sys = None):
+        CommandPrompt.__init__(
+            self,
+            config = config or ConfigFake(),
+            log = log or LogFake(),
+            sys = sys or SysFake(),
+            display_factory = CPDFake,
+        )
         self._add_subcommand(FakeCommandFactory())
         self.t_foo_called = []
         self.t_preloop_counter = 0
@@ -157,7 +169,7 @@ class TestableCmdQueue(CmdQueue):
 def test_cmdqueue():
     it = [1,3,2]
     p = "prompt"
-    q = TestableCmdQueue(it, p)
+    q = TestableCmdQueue(it, p, SysFake())
     eq_(q, it)
     eq_(q.prompt, p)
 
@@ -244,7 +256,7 @@ def test_load_update_doesnt_leave_previous_session():
     eq_(cp.session, None)
 
 def test_set_location():
-    p = CommandPrompt(ConfigFake(), LogFake())
+    p = make_cp()
     loc = 'foolocation'
     ok_(p.config.location != loc)
     p.do_set_location(loc)

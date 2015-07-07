@@ -3,8 +3,10 @@
 from nose.tools import eq_
 from nose.tools import ok_
 
-from mtui.prompt import CommandPrompt
 from mtui.messages import LocationChangedMessage
+
+from tests.prompt import make_cp
+
 from .utils import ConfigFake
 from .utils import LogFake
 from .utils import SysFake
@@ -13,12 +15,12 @@ def test_happy():
     """
     Test config.location changes to new and proper info message is logged
     """
-    c, l = ConfigFake(), LogFake()
+    c = ConfigFake()
     old = c.location
     new = "foolocation"
     ok_(old != new, "precondition check")
 
-    cp = CommandPrompt(c, l, SysFake())
+    cp = make_cp(config = c)
     cp.do_set_location(new)
 
     eq_(cp.log.infos, [LocationChangedMessage(old, new)])
