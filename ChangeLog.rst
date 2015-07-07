@@ -2,6 +2,15 @@
 ChangeLog
 #########
 
+5.0.2
+#####
+
+Bugfixes
+========
+
+- Broken testsuite_run - threw NameError exceptions
+  03d34af1a0b0d0dd5bedba3817cc80490252d03c
+
 5.0.1
 #####
 
