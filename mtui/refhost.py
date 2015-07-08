@@ -130,7 +130,7 @@ class Attributes(object):
             if tag in attrs.tags['archs']:
                 attrs.archs.append(tag)
             if tag in attrs.tags['addons']:
-                attrs.addons.update(dict(tag = dict()))
+                attrs.addons.update({tag: dict()})
             if tag in attrs.tags['major']:
                 attrs.major = tag
             if tag in attrs.tags['minor']:
