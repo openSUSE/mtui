@@ -81,7 +81,7 @@ class Attributes(object):
         if self.minimal:
             minimal = 'minimal'
 
-        for addon in self.addons:
+        for addon in sorted(self.addons.keys()):
             # add addon name followed by addon version to the string
             addons = ' '.join([addons, addon])
 
@@ -98,7 +98,7 @@ class Attributes(object):
                 addons = ' '.join([addons, '%s.%s' % (major, minor)])
 
 
-        archs = ' '.join(set(self.archs))
+        archs = ' '.join(sorted(set(self.archs)))
 
         rep = ' '.join([self.product, version, archs, kernel, ltss, minimal, self.virtual['mode'], self.virtual['hypervisor'], addons])
         return ' '.join(rep.split())
@@ -231,7 +231,7 @@ class Attributes(object):
                     requests[name] = match.group(1).split(',')
 
         # assign the findings to the attributes object
-        attributes.archs = requests['arch']
+        attributes.archs = sorted(requests['arch'])
         # currently, just one base product is supported
         attributes.product = list(requests['base'].keys())[0]
         try:
