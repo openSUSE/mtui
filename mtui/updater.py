@@ -35,12 +35,11 @@ class ZypperUpToSLE11Update(ZypperUpdate):
     def __init__(self, *a, **kw):
         super(ZypperUpToSLE11Update, self).__init__(*a, **kw)
 
-        try:
-            patch = self.patches['sat']
-        except KeyError:
+        if not self.patches.has_key('sat'):
             self.log.critical('required SAT patch number for zypper update not found')
             return
 
+        patch = self.patches['sat']
         self.commands = [
             'export LANG=',
             'zypper lr -puU',
@@ -70,12 +69,11 @@ class openSuseUpdate(Update):
     def __init__(self, *a, **kw):
         super(openSuseUpdate, self).__init__(*a, **kw)
 
-        try:
-            patch = self.patches['sat']
-        except KeyError:
+        if not self.patches.has_key('sat'):
             self.log.critical('required SAT patch number for zypper update not found')
             return
 
+        patch = self.patches['sat']
         self.commands = [
             'export LANG=',
             'zypper -v lr -puU',
@@ -87,12 +85,11 @@ class OldZypperUpdate(Update):
     def __init__(self, *a, **kw):
         super(OldZypperUpdate, self).__init__(*a, **kw)
 
-        try:
-            patch = self.patches['zypp']
-        except KeyError:
+        if not self.patches.has_key('zypp'):
             self.log.critical('required ZYPP patch number for zypper update not found')
             return
 
+        patch = self.patches['zypp']
         self.commands = [
             'export LANG=',
             'zypper sl',
@@ -105,12 +102,11 @@ class OnlineUpdate(Update):
     def __init__(self, *a, **kw):
         super(OnlineUpdate, self).__init__(*a, **kw)
 
-        try:
-            patch = self.patches['you']
-        except KeyError:
+        if not self.patches.has_key('you'):
             self.log.critical('required YOU patch number for online_update update not found')
             return
 
+        patch = self.patches['you']
         self.commands = [
             'export LANG=',
             'find /var/lib/YaST2/you/ -name patch-%s' % patch,
@@ -122,12 +118,11 @@ class RugUpdate(Update):
     def __init__(self, *a, **kw):
         super(RugUpdate, self).__init__(*a, **kw)
 
-        try:
-            patch = self.patches['you']
-        except KeyError:
+        if not self.patches.has_key('you'):
             self.log.critical('required YOU patch number for rug update not found')
             return
 
+        patch = self.patches['you']
         self.commands = [
             'export LANG=',
             'rug sl',
@@ -242,12 +237,11 @@ class OldZypperDowngrade(Downgrade):
     def __init__(self, *a, **kw):
         super(OldZypperDowngrade, self).__init__(*a, **kw)
 
-        try:
-            patch = self.patches['zypp']
-        except KeyError:
+        if not self.patches.has_key('zypp'):
             self.log.critical('required ZYPP patch number for zypper downgrade not found')
             return
 
+        patch = self.patches['zypp']
         self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(self.packages)
         self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
 

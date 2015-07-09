@@ -75,19 +75,11 @@ class Downgrade(object):
           if match:
             name = match.group(1)
             version = match.group(2)
-            try:
-              release[name].append(version)
-            except KeyError:
-              release[name] = []
-              release[name].append(version)
+            release.setdefault(name, []).append(version)
 
         for name in release:
           version = sorted(release[name], key=RPMVersion, reverse=True)[0]
-          try:
-            versions[hn].update({name:version})
-          except KeyError:
-            versions[hn] = {}
-            versions[hn].update({name:version})
+          versions.setdefault(hn, dict()).update({name: version})
 
       for command in self.pre_commands:
         self.targets.run(command)

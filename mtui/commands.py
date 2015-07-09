@@ -258,12 +258,7 @@ class ReportBug(Command):
     stable = '3.0b2'
 
     def __init__(self, *a, **kw):
-        try:
-            self.popen = kw['popen']
-        except KeyError:
-            self.popen = Popen
-        else:
-            del kw['popen']
+        self.popen = kw.pop('popen', Popen)
 
         super(ReportBug, self).__init__(*a, **kw)
 

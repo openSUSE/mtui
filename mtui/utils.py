@@ -290,12 +290,7 @@ def get_release(systems):
 
 class DictWithInjections(dict):
     def __init__(self, *args, **kw):
-        try:
-            self.key_error = kw['key_error']
-        except KeyError:
-            self.key_error = KeyError
-        else:
-            del kw['key_error']
+        self.key_error = kw.pop('key_error', KeyError)
 
         super(DictWithInjections, self).__init__(*args, **kw)
 

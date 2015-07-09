@@ -199,10 +199,11 @@ class CommandPrompt(cmd.Cmd):
     def onecmd(self, line):
         # FIXME: see L{CommandPrompt.__getattr__}
         cmd_, arg, line = self.parseline(line)
-        try:
-            subcmd = self.commands[cmd_]
-        except KeyError:
+
+        if not self.commands.has_key(cmd_):
             return cmd.Cmd.onecmd(self, line)
+
+        subcmd = self.commands[cmd_]
 
         try:
             args = subcmd.parse_args(arg, self.sys)
@@ -216,12 +217,11 @@ class CommandPrompt(cmd.Cmd):
 
     def do_help(self, arg):
         # FIXME: see L{CommandPrompt.__getattr__}
-        try:
-            cmd_ = self.commands[arg]
-        except KeyError:
+        if not self.commands.has_key(arg):
             return cmd.Cmd.do_help(self, arg)
-        else:
-            cmd_.argparser(self.sys).print_help()
+
+        cmd_ = self.commands[arg]
+        cmd_.argparser(self.sys).print_help()
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
@@ -249,28 +249,23 @@ class CommandPrompt(cmd.Cmd):
         # 2. fix L{Command} so that it provides __call__ and the
         #    Command instance can be returned for "do_<cmd>", therefore
         #    removing the need to override both do_help and onecmd.
-        try:
-            y = x
-            if isinstance(y, str):
-                y = y.replace("do_","")
+
+        y = x.replace("do_","")
+        if self.commands.has_key(y):
             c = self.commands[y]
-        except KeyError:
-            try:
-                y = x
-                if isinstance(y, str):
-                    y = y.replace("complete_","")
-                c = self.commands[y]
-            except KeyError:
-                raise AttributeError(str(x))
-            else:
-                return log_exception(Exception, self.log.error)\
-                    (c.completer(self.targets.select(enabled = True)))
-        else:
             argparser = c.argparser(self.sys)
             clsdict = {
                 '__doc__': argparser.format_help()
             }
             return type(x, (object,), clsdict)
+
+        y = x.replace("complete_","")
+        if self.commands.has_key(y):
+            c = self.commands[y]
+            return log_exception(Exception, self.log.error) \
+                (c.completer(self.targets.select(enabled = True)))
+
+        raise AttributeError(str(x))
     # }}}
 
     def emptyline(self):
@@ -390,15 +385,16 @@ class CommandPrompt(cmd.Cmd):
         return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
 
     def connect_system_if_unconnected(self, hostname, system):
-        try:
+        if self.targets[hostname].has_key(hostname):
             self.log.warning('already connected to {0}. skipping.'.format(
                 self.targets[hostname].hostname
             ))
-        except KeyError:
-            self.targets[hostname] = Target(self.config, hostname, system, self.metadata.get_package_list(), logger = self.log)
+            return
 
-            if self.metadata:
-                self.metadata.systems[hostname] = system
+        self.targets[hostname] = Target(self.config, hostname, system, self.metadata.get_package_list(), logger = self.log)
+
+        if self.metadata:
+            self.metadata.systems[hostname] = system
 
     def do_add_host(self, args):
         """
