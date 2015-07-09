@@ -11,14 +11,11 @@ from mtui.utils import *
 
 class XMLOutput(object):
 
-    def __init__(self, metadata=None):
+    def __init__(self):
         impl = xml.dom.minidom.getDOMImplementation()
 
         self.output = impl.createDocument(None, 'update', None)
         self.update = self.output.documentElement
-
-        if metadata is not None:
-            self.add_header(metadata)
 
     def add_header(self, metadata):
         self.update.setAttribute('md5', str(metadata.md5))

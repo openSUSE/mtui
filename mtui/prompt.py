@@ -2047,16 +2047,8 @@ class CommandPrompt(cmd.Cmd):
         if parameters:
             filename = parameters[0]
 
-        targets = self.targets
-
-        output = XMLOutput()
-        output.add_header(self.metadata)
-
-        for target in targets:
-            output.add_target(targets[target])
-
         try:
-            template = xml_to_template(self.log, self.metadata.path, output.pretty(), hostname)
+            template = xml_to_template(self.log, self.metadata.path, self.metadata.generate_xmllog(), hostname)
         except Exception:
             self.log.error('failed to export XML')
             return
@@ -2111,15 +2103,8 @@ class CommandPrompt(cmd.Cmd):
 
         self.log.info('saving output to {0}'.format(path))
 
-        output = XMLOutput()
-        if self.metadata:
-            output.add_header(self.metadata)
-
-        for target in self.targets.values():
-            output.add_target(target)
-
         with open(path, 'w') as f:
-            f.write(output.pretty())
+            f.write(self.metadata.generate_xmllog())
 
     def do_quit(self, args):
         """

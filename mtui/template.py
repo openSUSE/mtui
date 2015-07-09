@@ -664,6 +664,19 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         return sink(targets, by_hosts_pkg)
 
+    def generate_xmllog(self):
+        from mtui.xmlout import XMLOutput
+
+        output = XMLOutput()
+
+        if self:
+            output.add_header(self)
+
+        for t in self.targets.values():
+            output.add_target(t)
+
+        return output.pretty()
+
 
 class NullTestReport(TestReport):
     _type = "No"
