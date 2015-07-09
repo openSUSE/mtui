@@ -23,11 +23,11 @@ Add the appropriate repository to your system.
 You can find the proper address on the `project repositories page`_ for
 each distribution under the "Go to download repository" link.
 
-For example for openSUSE Factory the command would be:
+For example for openSUSE Tumbleweed the command would be:
 
 .. code-block:: text
 
-    # zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Factory qa-maintenance
+    # zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Tumbleweed qa-maintenance
 
 Once you have the repository added, you can install the package normally
 and get mtui with the appropriate dependencies as well.
