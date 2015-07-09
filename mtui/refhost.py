@@ -81,24 +81,18 @@ class Attributes(object):
         if self.minimal:
             minimal = 'minimal'
 
-        for addon in self.addons:
+        for addon in sorted(self.addons.keys()):
             # add addon name followed by addon version to the string
             addons = ' '.join([addons, addon])
 
-            try:
-                major = self.addons[addon]['major']
-            except KeyError:
-                major = ""
-            try:
-                minor = self.addons[addon]['minor']
-            except KeyError:
-                minor = ""
+            major = self.addons[addon].get('major', '')
+            minor = self.addons[addon].get('minor', '')
 
             if major or minor:
                 addons = ' '.join([addons, '%s.%s' % (major, minor)])
 
 
-        archs = ' '.join(set(self.archs))
+        archs = ' '.join(sorted(set(self.archs)))
 
         rep = ' '.join([self.product, version, archs, kernel, ltss, minimal, self.virtual['mode'], self.virtual['hypervisor'], addons])
         return ' '.join(rep.split())
@@ -125,42 +119,36 @@ class Attributes(object):
             if match:
                 attrs.major = match.group(1)
                 attrs.minor = match.group(2)
+            if tag in attrs.tags['major']:
+                attrs.major = tag
+            if tag in attrs.tags['minor']:
+                attrs.minor = tag
+
             if tag in attrs.tags['products']:
                 attrs.product = tag
             if tag in attrs.tags['archs']:
                 attrs.archs.append(tag)
             if tag in attrs.tags['addons']:
                 attrs.addons.update({tag: dict()})
-            if tag in attrs.tags['major']:
-                attrs.major = tag
-            if tag in attrs.tags['minor']:
-                attrs.minor = tag
-            if tag == 'kernel':
-                attrs.kernel = True
-            if tag == 'ltss':
-                attrs.ltss = True
-            if tag == 'minimal':
-                attrs.minimal = True
-            if tag == '!kernel':
-                attrs.kernel = False
-            if tag == '!ltss':
-                attrs.ltss = False
-            if tag == '!minimal':
-                attrs.minimal = False
+
+            if tag in ('kernel', 'ltss', 'minimal'):
+                setattr(attrs, tag, True)
+
+            if tag in ('!kernel', '!ltss', '!minimal'):
+                setattr(attrs, tag[1:], False)
+
+            if tag in ('xen', 'kvm', 'vmware'):
+                attrs.virtual.update(hypervisor = tag)
+
             if tag == 'xenu':
-                attrs.virtual.update(dict(mode = 'guest', hypervisor = 'xen'))
+                attrs.virtual.update(mode = 'guest', hypervisor = 'xen')
             if tag == 'xen0':
-                attrs.virtual.update(dict(mode = 'host', hypervisor = 'xen'))
-            if tag == 'xen':
-                attrs.virtual.update(dict(hypervisor = 'xen'))
-            if tag == 'kvm':
-                attrs.virtual.update(dict(hypervisor = 'kvm'))
-            if tag == 'vmware':
-                attrs.virtual.update(dict(hypervisor = 'vmware'))
+                attrs.virtual.update(mode = 'host', hypervisor = 'xen')
+
             if tag == 'host':
-                attrs.virtual.update(dict(mode = 'host'))
+                attrs.virtual.update(mode = 'host')
             if tag == 'guest':
-                attrs.virtual.update(dict(mode = 'guest'))
+                attrs.virtual.update(mode = 'guest')
 
         return attrs
 
@@ -193,100 +181,65 @@ class Attributes(object):
                 log.error('error when parsing line "%s"' % testplatform)
                 continue
 
-            # get all subpatterns and parameters, like subpattern = 'sled'
-            # parameters = major=10,minor=sp4
-            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
-            for match in matches:
-                    subpattern = match[0]
-                    parameters = match[1]
-                    # split parameter assignments in key and value, like
-                    # key = major, value = 10
-                    for parameter in parameters.split(','):
-                        key, value = parameter.split('=', 1)
-                        try:
-                            # add key and value to the name/subpattern dict
-                            requests[name][subpattern].update({key:value})
-                        except KeyError as error:
-                            # if name or subpattern do not yet exist in the dict,
-                            # create them. first make sure which one is missing:
-                            # name or supbattern
-                            if name == error.args[0]:
-                                requests[name] = {subpattern:{key:value}}
-                            else:
-                                requests[name][subpattern] = {key:value}
             # add all required architectures to the dict
             if name == 'arch':
                 match = re.search('\[(.*)\]', content)
                 if match:
                     requests[name] = match.group(1).split(',')
+                continue
+
             # add all required tags to the dict (like kernel or ltss)
-            if name == 'tags':
-                match = re.search('\((.*)\)', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
             # add all required virtual descriptors to the dict (like "mode" or "hypervisor")
-            if name == 'virtual':
+            if name in ('tags', 'virtual'):
                 match = re.search('\((.*)\)', content)
                 if match:
                     requests[name] = match.group(1).split(',')
+                continue
+
+            scope = requests.setdefault(name, dict())
+            # get all subpatterns and parameters, like subpattern = 'sled'
+            # parameters = major=10,minor=sp4
+            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
+            for match in matches:
+                subpattern = match[0]
+                parameters = match[1]
+                # split parameter assignments in key and value, like
+                # key = major, value = 10
+                scope.setdefault(subpattern, dict()) \
+                    .update([p.split('=', 1) for p in parameters.split(',')])
 
         # assign the findings to the attributes object
-        attributes.archs = requests['arch']
+        attributes.archs = sorted(requests['arch'])
         # currently, just one base product is supported
         attributes.product = list(requests['base'].keys())[0]
-        try:
-            attributes.major = requests['base'][attributes.product]['major']
-        except KeyError:
-            pass
-        try:
-            attributes.minor = requests['base'][attributes.product]['minor']
-        except KeyError:
-            pass
+        base = requests['base'][attributes.product]
+        if base.has_key('major'):
+            attributes.major = base['major']
+        if base.has_key('minor'):
+            attributes.minor = base['minor']
 
-        try:
-            tags = requests['tags']
-        except KeyError:
-            tags = []
+        tags = requests.get('tags', [])
 
         # if we found tags in the testplatform string, add them to the attributes
         for tag in tags:
-            if tag == 'vmware':
-                attributes.virtual.update({'hypervisor':'vmware'})
-            if tag == 'xen':
-                attributes.virtual.update({'hypervisor':'xen'})
-            if tag == 'kernel':
-                attributes.kernel = True
-            if tag == 'ltss':
-                attributes.ltss = True
-            if tag == 'minimal':
-                attributes.minimal = True
+            if tag in ('vmware', 'xen'):
+                attributes.virtual.update(hypervisor = tag)
+            if tag in ('kernel', 'ltss', 'minimal'):
+                setattr(attributes, tag, True)
 
-        try:
-            # add adons to the attributes
-            for addon in requests['addon']:
-                try:
-                    # if no version is required, leave them empty
-                    major = requests['addon'][addon]['major']
-                except:
-                    major = ''
-                try:
-                    minor = requests['addon'][addon]['minor']
-                except:
-                    minor = ''
-                attributes.addons.update({addon:{'major':major,'minor':minor}})
-        except KeyError:
-            pass
+        # add adons to the attributes
+        addons = requests.get('addon', dict())
+        for addon, aversion in addons.items():
+            # if no version is required, leave them empty
+            major = aversion.get('major', '')
+            minor = aversion.get('minor', '')
+            attributes.addons.setdefault(addon, dict()).update(major = major, minor = minor)
 
-        try:
-            # add virtual descriptors to the attributes (may overwrite xen tag)
-            for descriptor in requests['virtual']:
-                for parameter in descriptor.split(','):
-                    key = parameter.split('=')[0]
-                    value = parameter.split('=')[1]
-
-                    attributes.virtual.update({key:value})
-        except KeyError:
-            pass
+        # add virtual descriptors to the attributes (may overwrite xen tag)
+        for descriptor in requests.get('virtual', []):
+            for parameter in descriptor.split(','):
+                key, value = parameter.split('=', 1)
+                attributes.virtual[key] = value
 
         return attributes
 
