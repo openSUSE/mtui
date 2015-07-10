@@ -27,51 +27,51 @@ class XMLOutput(object):
         self.update.setAttribute('category', metadata.category)
 
     def add_target(self, target):
-        hostnode = self.get_new_machine_node(target.hostname)
+        hostnode = self.add_host(target.hostname)
         self.set_attribute(hostnode, 'system', target.system)
 
-        statusnode = self.get_new_status_node(hostnode, 'before')
+        statusnode = self.add_package_state(hostnode, 'before')
         for package in target.packages:
-            packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].before))
+            self.add_package(statusnode, package, str(target.packages[package].before))
 
-        statusnode = self.get_new_status_node(hostnode, 'after')
+        statusnode = self.add_package_state(hostnode, 'after')
         for package in target.packages:
-            packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].after))
+            self.add_package(statusnode, package, str(target.packages[package].after))
 
-        lognode = self.get_new_log_node(hostnode)
+        lognode = self.add_log(hostnode)
 
         for (command, stdout, stderr, exitcode, runtime) in target.log:
             command = command.decode('ascii', 'replace').encode('ascii', 'replace')
             stdout = stdout.decode('ascii', 'replace').encode('ascii', 'replace')
             stderr = stderr.decode('ascii', 'replace').encode('ascii', 'replace')
-            self.get_new_command_node(lognode, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
+            self.add_command(lognode, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
 
-    def get_new_machine_node(self, hostname):
+    def add_host(self, hostname):
         self.machine = self.output.createElement('host')
         self.machine.setAttribute('hostname', hostname)
         self.update.appendChild(self.machine)
 
         return self.machine
 
-    def get_new_status_node(self, parent, state):
+    def add_package_state(self, parent, state):
         node = self.output.createElement(state)
         self.machine.appendChild(node)
 
         return node
 
-    def get_new_package_node(self, parent, name, version):
+    def add_package(self, parent, name, version):
         package = self.output.createElement('package')
         package.setAttribute('name', name)
         package.setAttribute('version', version)
         parent.appendChild(package)
 
-    def get_new_log_node(self, parent):
+    def add_log(self, parent):
         self.log = self.output.createElement('log')
         self.machine.appendChild(self.log)
 
         return self.log
 
-    def get_new_command_node(self, parent, command, output, exitcode, runtime):
+    def add_command(self, parent, command, output, exitcode, runtime):
         node = self.output.createElement('command')
         node.setAttribute('name', command)
         node.setAttribute('return', str(exitcode))
