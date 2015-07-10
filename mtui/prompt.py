@@ -1727,31 +1727,28 @@ class CommandPrompt(cmd.Cmd):
                 if self._do_prepare_impl(targets, **prepare) is False:
                     return
 
-            missing = False
-            for target in targets:
+            for hn, t in targets.items():
                 not_installed = []
-                packages = targets[target].packages
 
-                targets[target].query_versions()
+                t.query_versions()
 
-                for package in packages:
-                    required = self.metadata.packages[package]
-                    before = targets[target].packages[package].current
+                for pkgname, pkg in t.packages.items():
+                    required = self.metadata.packages[pkgname]
+                    before = pkg.current
 
-                    packages[package].set_versions(before=before, required=required)
+                    pkg.set_versions(before=before, required=required)
 
                     if before is None or before == '0':
-                        missing = True
-                        not_installed.append(package)
+                        not_installed.append(pkgname)
                     else:
                         if RPMVersion(before) >= RPMVersion(required):
-                            self.log.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
+                            self.log.warning('%s: package is too recent: %s (%s, target version is %s)' % (hn, pkgname, before, required))
 
                 if len(not_installed):
-                    self.log.warning('%s: these packages are not installed: %s' % (target, not_installed))
+                    self.log.warning('%s: these packages are not installed: %s' % (hn, not_installed))
 
-            if missing:
-                self.log.warning('%s: these packages are missing: %s' % (target, not_installed))
+            if not_installed:
+                self.log.warning('%s: these packages are missing: %s' % (hn, not_installed))
 
             if 'noscript' not in params:
                 self.metadata.run_scripts(PreScript, targets)
@@ -1772,24 +1769,23 @@ class CommandPrompt(cmd.Cmd):
             if 'newpackage' in params:
                 self._do_prepare_impl(targets, testing = True, **prepare)
 
-            for target in targets:
-                packages = targets[target].packages
+            for hn, t in targets.items():
 
-                targets[target].query_versions()
+                t.query_versions()
 
-                for package in packages:
-                    before = packages[package].before
-                    required = packages[package].required
-                    after = targets[target].packages[package].current
+                for pkgname, pkg in t.packages.items():
+                    before = pkg.before
+                    required = pkg.required
+                    after = pkg.current
 
-                    packages[package].set_versions(after=after)
+                    pkg.set_versions(after=after)
 
                     if after is not None and after != '0':
                         if RPMVersion(before) == RPMVersion(after):
-                            self.log.warning('%s: package was not updated: %s (%s)' % (target, package, after))
+                            self.log.warning('%s: package was not updated: %s (%s)' % (hn, pkgname, after))
 
                         if RPMVersion(after) < RPMVersion(required):
-                            self.log.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
+                            self.log.warning('%s: package does not match required version: %s (%s, required %s)' % (hn, pkgname, after,
                                         required))
 
             if 'noscript' not in params:
