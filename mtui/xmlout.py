@@ -32,24 +32,15 @@ class XMLOutput(object):
         hostnode.setAttribute('system', target.system)
         self.update.appendChild(hostnode)
 
-        statusnode = self.add_package_state(hostnode, 'before')
-        for package in target.packages:
-            self.add_package(statusnode, package, str(target.packages[package].before))
+        self.add_package_state(hostnode, target, 'before')
+        self.add_package_state(hostnode, target, 'after')
 
-        statusnode = self.add_package_state(hostnode, 'after')
-        for package in target.packages:
-            self.add_package(statusnode, package, str(target.packages[package].after))
+        self.add_log(hostnode, target)
 
-        lognode = self.add_log(hostnode)
-
-        for (command, stdout, stderr, exitcode, runtime) in target.log:
-            command = command.decode('ascii', 'replace').encode('ascii', 'replace')
-            stdout = stdout.decode('ascii', 'replace').encode('ascii', 'replace')
-            stderr = stderr.decode('ascii', 'replace').encode('ascii', 'replace')
-            self.add_command(lognode, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
-
-    def add_package_state(self, parent, state):
+    def add_package_state(self, parent, target, state):
         node = self.output.createElement(state)
+        for package in target.packages:
+            self.add_package(node, package, str(getattr(target.packages[package], state)))
         parent.appendChild(node)
 
         return node
@@ -60,11 +51,16 @@ class XMLOutput(object):
         package.setAttribute('version', version)
         parent.appendChild(package)
 
-    def add_log(self, parent):
-        self.log = self.output.createElement('log')
-        parent.appendChild(self.log)
+    def add_log(self, parent, target):
+        node = self.output.createElement('log')
 
-        return self.log
+        for (command, stdout, stderr, exitcode, runtime) in target.log:
+            command = command.decode('ascii', 'replace').encode('ascii', 'replace')
+            stdout = stdout.decode('ascii', 'replace').encode('ascii', 'replace')
+            stderr = stderr.decode('ascii', 'replace').encode('ascii', 'replace')
+            self.add_command(node, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
+
+        parent.appendChild(node)
 
     def add_command(self, parent, command, output, exitcode, runtime):
         node = self.output.createElement('command')
