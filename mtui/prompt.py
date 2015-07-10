@@ -1722,11 +1722,11 @@ class CommandPrompt(cmd.Cmd):
                 params.remove('newpackage')
             prepare['installed'] = True
 
-        if 'noprepare' not in params:
-            if self._do_prepare_impl(targets, **prepare) is False:
-                return
-
         with LockedTargets([self.targets[x] for x in targets]):
+            if 'noprepare' not in params:
+                if self._do_prepare_impl(targets, **prepare) is False:
+                    return
+
             missing = False
             for target in targets:
                 not_installed = []
