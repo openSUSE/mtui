@@ -27,15 +27,15 @@ class XMLOutput(object):
         self.update.setAttribute('category', metadata.category)
 
     def add_target(self, target):
-        hostnode = self.output.createElement('host')
-        hostnode.setAttribute('hostname', target.hostname)
-        hostnode.setAttribute('system', target.system)
-        self.update.appendChild(hostnode)
+        node = self.output.createElement('host')
+        node.setAttribute('hostname', target.hostname)
+        node.setAttribute('system', target.system)
+        self.update.appendChild(node)
 
-        self.add_package_state(hostnode, target, 'before')
-        self.add_package_state(hostnode, target, 'after')
+        self.add_package_state(node, target, 'before')
+        self.add_package_state(node, target, 'after')
 
-        self.add_log(hostnode, target)
+        self.add_log(node, target)
 
     def add_package_state(self, parent, target, state):
         node = self.output.createElement(state)
@@ -46,10 +46,10 @@ class XMLOutput(object):
         return node
 
     def add_package(self, parent, name, version):
-        package = self.output.createElement('package')
-        package.setAttribute('name', name)
-        package.setAttribute('version', version)
-        parent.appendChild(package)
+        node = self.output.createElement('package')
+        node.setAttribute('name', name)
+        node.setAttribute('version', version)
+        parent.appendChild(node)
 
     def add_log(self, parent, target):
         node = self.output.createElement('log')
@@ -67,8 +67,7 @@ class XMLOutput(object):
         node.setAttribute('name', command)
         node.setAttribute('return', str(exitcode))
         node.setAttribute('time', str(runtime))
-        text = self.output.createTextNode(output)
-        node.appendChild(text)
+        node.appendChild(self.output.createTextNode(output))
         parent.appendChild(node)
 
     def pretty(self):
