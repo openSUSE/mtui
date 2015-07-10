@@ -16,9 +16,6 @@ import re
 import getpass
 
 from mtui import messages
-from mtui.hooks import PreScript
-from mtui.hooks import PostScript
-from mtui.hooks import CompareScript
 from mtui.rpmver import *
 from mtui.target import *
 from mtui.utils import *
@@ -1708,82 +1705,18 @@ class CommandPrompt(cmd.Cmd):
                 params.remove('newpackage')
             prepare['installed_only'] = True
 
-        with LockedTargets([self.targets[x] for x in targets]):
-            if 'noprepare' not in params:
-                self.metadata.perform_prepare(
-                    targets,
-                    **prepare
-                )
+        self.log.info('updating')
 
-            for hn, t in targets.items():
-                not_installed = []
-
-                t.query_versions()
-
-                for pkgname, pkg in t.packages.items():
-                    required = self.metadata.packages[pkgname]
-                    before = pkg.current
-
-                    pkg.set_versions(before=before, required=required)
-
-                    if before is None or before == '0':
-                        not_installed.append(pkgname)
-                    else:
-                        if RPMVersion(before) >= RPMVersion(required):
-                            self.log.warning('%s: package is too recent: %s (%s, target version is %s)' % (hn, pkgname, before, required))
-
-                if len(not_installed):
-                    self.log.warning('%s: these packages are not installed: %s' % (hn, not_installed))
-
-            if not_installed:
-                self.log.warning('%s: these packages are missing: %s' % (hn, not_installed))
-
-            if 'noscript' not in params:
-                self.metadata.run_scripts(PreScript, targets)
-
-            self.log.info('updating')
-
-            try:
-                self.metadata.perform_update(targets)
-            except Exception:
-                self.log.critical('failed to update target systems')
-                self.log.debug(format_exc())
-                self.notify_user('updating %s failed' % self.session, 'stock_dialog-error')
-                raise
-            except KeyboardInterrupt:
-                self.log.info('update process canceled')
-                return
-
-            if 'newpackage' in params:
-                self.metadata.perform_prepare(
-                    targets,
-                    testing = True,
-                    **prepare
-                )
-
-            for hn, t in targets.items():
-
-                t.query_versions()
-
-                for pkgname, pkg in t.packages.items():
-                    before = pkg.before
-                    required = pkg.required
-                    after = pkg.current
-
-                    pkg.set_versions(after=after)
-
-                    if after is not None and after != '0':
-                        if RPMVersion(before) == RPMVersion(after):
-                            self.log.warning('%s: package was not updated: %s (%s)' % (hn, pkgname, after))
-
-                        if RPMVersion(after) < RPMVersion(required):
-                            self.log.warning('%s: package does not match required version: %s (%s, required %s)' % (hn, pkgname, after,
-                                        required))
-
-            if 'noscript' not in params:
-                self.metadata.run_scripts(PostScript, targets)
-                self.metadata.run_scripts(CompareScript, targets)
-                targets.remove(self.metadata.target_wd('output'))
+        try:
+            self.metadata.perform_update(targets, params, prepare)
+        except Exception:
+            self.log.critical('failed to update target systems')
+            self.log.debug(format_exc())
+            self.notify_user('updating %s failed' % self.session, 'stock_dialog-error')
+            raise
+        except KeyboardInterrupt:
+            self.log.info('update process canceled')
+            return
 
         self.notify_user('updating %s finished' % self.session)
         self.log.info('done')

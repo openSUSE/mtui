@@ -5,9 +5,9 @@ from os.path import join
 from os.path import dirname
 import os
 
-from mtui.prompt import PreScript
-from mtui.prompt import PostScript
-from mtui.prompt import CompareScript
+from mtui.hooks import PreScript
+from mtui.hooks import PostScript
+from mtui.hooks import CompareScript
 from mtui.template import SwampTestReport
 from mtui.target import HostsGroup
 from mtui.target import Target

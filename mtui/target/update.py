@@ -9,6 +9,13 @@ from mtui.target.actions import ThreadedMethod
 from mtui.target.actions import queue
 from mtui.target.actions import spinner
 
+from mtui.target.locks import LockedTargets
+
+from mtui.hooks import PreScript
+from mtui.hooks import PostScript
+from mtui.hooks import CompareScript
+
+from mtui.rpmver import RPMVersion
 from mtui.utils import yellow
 
 
@@ -21,7 +28,39 @@ class Update(object):
     self.testreport = testreport
     self.commands = []
 
-  def run(self):
+  def run(self, params, prepare):
+    with LockedTargets(self.targets.values()):
+      self._run(params, prepare)
+
+  def _run(self, params, prepare):
+    if 'noprepare' not in params:
+      self.testreport.perform_prepare(self.targets, **prepare)
+
+    for hn, t in self.targets.items():
+      not_installed = []
+
+      t.query_versions()
+
+      for pkgname, pkg in t.packages.items():
+        required = self.testreport.packages[pkgname]
+        before = pkg.current
+
+        pkg.set_versions(before = before, required = required)
+
+        if before is None or before == '0':
+          not_installed.append(pkgname)
+        else:
+          if RPMVersion(before) >= RPMVersion(required):
+            self.log.warning('%s: package is too recent: %s (%s, target version is %s)' % (hn, pkgname, before, required))
+
+      if not_installed:
+        self.log.warning('%s: these packages are missing: %s' % (hn, not_installed))
+
+    if 'noscript' not in params:
+      self.testreport.run_scripts(PreScript, self.targets)
+
+    self.log.info('updating')
+
     skipped = False
 
     try:
@@ -68,6 +107,32 @@ class Update(object):
             t.remove_lock()
           except AssertionError:
             pass
+
+    if 'newpackage' in params:
+      self.testreport.perform_prepare(self.targets, testing = True, **prepare)
+
+    for hn, t in self.targets.items():
+      t.query_versions()
+
+      for pkgname, pkg in t.packages.items():
+        before = pkg.before
+        required = pkg.required
+        after = pkg.current
+
+        pkg.set_versions(after=after)
+
+        if after is not None and after != '0':
+          if RPMVersion(before) == RPMVersion(after):
+            self.log.warning('%s: package was not updated: %s (%s)' % (hn, pkgname, after))
+
+          if RPMVersion(after) < RPMVersion(required):
+            self.log.warning('%s: package does not match required version: %s (%s, required %s)' % (hn, pkgname, after, required))
+
+    if 'noscript' not in params:
+      self.testreport.run_scripts(PostScript, self.targets)
+      self.testreport.run_scripts(CompareScript, self.targets)
+      self.targets.remove(self.testreport.target_wd('output'))
+
 
   def _check(self, target, stdin, stdout, stderr, exitcode):
     if 'zypper' in stdin and exitcode == 104:
