@@ -27,8 +27,10 @@ class XMLOutput(object):
         self.update.setAttribute('category', metadata.category)
 
     def add_target(self, target):
-        hostnode = self.add_host(target.hostname)
-        self.set_attribute(hostnode, 'system', target.system)
+        hostnode = self.machine = self.output.createElement('host')
+        self.machine.setAttribute('hostname', target.hostname)
+        self.machine.setAttribute('system', target.system)
+        self.update.appendChild(self.machine)
 
         statusnode = self.add_package_state(hostnode, 'before')
         for package in target.packages:
@@ -45,13 +47,6 @@ class XMLOutput(object):
             stdout = stdout.decode('ascii', 'replace').encode('ascii', 'replace')
             stderr = stderr.decode('ascii', 'replace').encode('ascii', 'replace')
             self.add_command(lognode, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
-
-    def add_host(self, hostname):
-        self.machine = self.output.createElement('host')
-        self.machine.setAttribute('hostname', hostname)
-        self.update.appendChild(self.machine)
-
-        return self.machine
 
     def add_package_state(self, parent, state):
         node = self.output.createElement(state)
@@ -79,9 +74,6 @@ class XMLOutput(object):
         text = self.output.createTextNode(output)
         node.appendChild(text)
         parent.appendChild(node)
-
-    def set_attribute(self, node, name, value):
-        self.machine.setAttribute(name, value)
 
     def pretty(self):
         return filter_ansi(self.output.toprettyxml())
