@@ -21,7 +21,6 @@ from mtui.hooks import PostScript
 from mtui.hooks import CompareScript
 from mtui.rpmver import *
 from mtui.target import *
-from mtui.export import *
 from mtui.utils import *
 from mtui.refhost import *
 import mtui.notification as notification
@@ -2048,7 +2047,7 @@ class CommandPrompt(cmd.Cmd):
             filename = parameters[0]
 
         try:
-            template = xml_to_template(self.log, self.metadata.path, self.metadata.generate_xmllog(), hostname)
+            template = self.metadata.generate_templatefile(hostname)
         except Exception:
             self.log.error('failed to export XML')
             return
