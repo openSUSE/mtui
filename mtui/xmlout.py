@@ -11,14 +11,11 @@ from mtui.utils import *
 
 class XMLOutput(object):
 
-    def __init__(self, metadata=None):
+    def __init__(self):
         impl = xml.dom.minidom.getDOMImplementation()
 
         self.output = impl.createDocument(None, 'update', None)
         self.update = self.output.documentElement
-
-        if metadata is not None:
-            self.add_header(metadata)
 
     def add_header(self, metadata):
         self.update.setAttribute('md5', str(metadata.md5))
@@ -30,61 +27,48 @@ class XMLOutput(object):
         self.update.setAttribute('category', metadata.category)
 
     def add_target(self, target):
-        hostnode = self.get_new_machine_node(target.hostname)
-        self.set_attribute(hostnode, 'system', target.system)
+        node = self.output.createElement('host')
+        node.setAttribute('hostname', target.hostname)
+        node.setAttribute('system', target.system)
+        self.update.appendChild(node)
 
-        statusnode = self.get_new_status_node(hostnode, 'before')
+        self.add_package_state(node, target, 'before')
+        self.add_package_state(node, target, 'after')
+
+        self.add_log(node, target)
+
+    def add_package_state(self, parent, target, state):
+        node = self.output.createElement(state)
         for package in target.packages:
-            packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].before))
+            self.add_package(node, package, str(getattr(target.packages[package], state)))
+        parent.appendChild(node)
 
-        statusnode = self.get_new_status_node(hostnode, 'after')
-        for package in target.packages:
-            packagenode = self.get_new_package_node(statusnode, package, str(target.packages[package].after))
+        return node
 
-        lognode = self.get_new_log_node(hostnode)
+    def add_package(self, parent, name, version):
+        node = self.output.createElement('package')
+        node.setAttribute('name', name)
+        node.setAttribute('version', version)
+        parent.appendChild(node)
+
+    def add_log(self, parent, target):
+        node = self.output.createElement('log')
 
         for (command, stdout, stderr, exitcode, runtime) in target.log:
             command = command.decode('ascii', 'replace').encode('ascii', 'replace')
             stdout = stdout.decode('ascii', 'replace').encode('ascii', 'replace')
             stderr = stderr.decode('ascii', 'replace').encode('ascii', 'replace')
-            self.get_new_command_node(lognode, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
+            self.add_command(node, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
 
-    def get_new_machine_node(self, hostname):
-        self.machine = self.output.createElement('host')
-        self.machine.setAttribute('hostname', hostname)
-        self.update.appendChild(self.machine)
+        parent.appendChild(node)
 
-        return self.machine
-
-    def get_new_status_node(self, parent, state):
-        node = self.output.createElement(state)
-        self.machine.appendChild(node)
-
-        return node
-
-    def get_new_package_node(self, parent, name, version):
-        package = self.output.createElement('package')
-        package.setAttribute('name', name)
-        package.setAttribute('version', version)
-        parent.appendChild(package)
-
-    def get_new_log_node(self, parent):
-        self.log = self.output.createElement('log')
-        self.machine.appendChild(self.log)
-
-        return self.log
-
-    def get_new_command_node(self, parent, command, output, exitcode, runtime):
+    def add_command(self, parent, command, output, exitcode, runtime):
         node = self.output.createElement('command')
         node.setAttribute('name', command)
         node.setAttribute('return', str(exitcode))
         node.setAttribute('time', str(runtime))
-        text = self.output.createTextNode(output)
-        node.appendChild(text)
+        node.appendChild(self.output.createTextNode(output))
         parent.appendChild(node)
-
-    def set_attribute(self, node, name, value):
-        self.machine.setAttribute(name, value)
 
     def pretty(self):
         return filter_ansi(self.output.toprettyxml())

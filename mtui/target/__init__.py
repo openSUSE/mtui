@@ -12,7 +12,6 @@ import signal
 from traceback import format_exc
 
 from mtui.connection import *
-from mtui.xmlout import *
 
 from mtui import utils
 
