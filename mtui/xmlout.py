@@ -27,10 +27,10 @@ class XMLOutput(object):
         self.update.setAttribute('category', metadata.category)
 
     def add_target(self, target):
-        hostnode = self.machine = self.output.createElement('host')
-        self.machine.setAttribute('hostname', target.hostname)
-        self.machine.setAttribute('system', target.system)
-        self.update.appendChild(self.machine)
+        hostnode = self.output.createElement('host')
+        hostnode.setAttribute('hostname', target.hostname)
+        hostnode.setAttribute('system', target.system)
+        self.update.appendChild(hostnode)
 
         statusnode = self.add_package_state(hostnode, 'before')
         for package in target.packages:
@@ -50,7 +50,7 @@ class XMLOutput(object):
 
     def add_package_state(self, parent, state):
         node = self.output.createElement(state)
-        self.machine.appendChild(node)
+        parent.appendChild(node)
 
         return node
 
@@ -62,7 +62,7 @@ class XMLOutput(object):
 
     def add_log(self, parent):
         self.log = self.output.createElement('log')
-        self.machine.appendChild(self.log)
+        parent.appendChild(self.log)
 
         return self.log
 
