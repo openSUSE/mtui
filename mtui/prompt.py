@@ -1657,38 +1657,24 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_prepare, args)
             return
 
-        opts = dict(
-            force = False,
-            installed = False,
-            testing = False,
-        )
+        self.log.info('preparing')
 
-        for opt in opts:
-            if opt in params:
-                opts[opt] = True
-
-        self._do_prepare_impl(targets, **opts)
-
-    def _do_prepare_impl(self, targets, force = False, installed = False, testing = False):
-        if targets:
-            self.log.info('preparing')
-
-            try:
-                self.metadata.perform_prepare(
-                    targets,
-                    force = force,
-                    installed_only = installed,
-                    testing = testing
-                )
-            except Exception:
-                self.log.critical('failed to prepare target systems')
-                self.log.debug(format_exc())
-                return False
-            except KeyboardInterrupt:
-                self.log.info('preparation process canceled')
-                return False
-            else:
-                self.log.info('done')
+        try:
+            self.metadata.perform_prepare(
+                targets,
+                force = 'force' in params,
+                installed_only = 'installed' in params,
+                testing = 'testing' in params,
+            )
+        except Exception:
+            self.log.critical('failed to prepare target systems')
+            self.log.debug(format_exc())
+            return False
+        except KeyboardInterrupt:
+            self.log.info('preparation process canceled')
+            return False
+        else:
+            self.log.info('done')
 
     def complete_prepare(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed', 'testing'])
@@ -1720,12 +1706,14 @@ class CommandPrompt(cmd.Cmd):
         if not self.interactive and [x for x in self.metadata.packages if x in ['-kmp-', 'kernel-default']]:
             if 'newpackage' in params:
                 params.remove('newpackage')
-            prepare['installed'] = True
+            prepare['installed_only'] = True
 
         with LockedTargets([self.targets[x] for x in targets]):
             if 'noprepare' not in params:
-                if self._do_prepare_impl(targets, **prepare) is False:
-                    return
+                self.metadata.perform_prepare(
+                    targets,
+                    **prepare
+                )
 
             for hn, t in targets.items():
                 not_installed = []
@@ -1767,7 +1755,11 @@ class CommandPrompt(cmd.Cmd):
                 return
 
             if 'newpackage' in params:
-                self._do_prepare_impl(targets, testing = True, **prepare)
+                self.metadata.perform_prepare(
+                    targets,
+                    testing = True,
+                    **prepare
+                )
 
             for hn, t in targets.items():
 
