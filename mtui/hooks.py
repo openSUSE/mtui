@@ -81,16 +81,13 @@ class Script(object):
 class PreScript(Script):
   subdir = "pre"
 
-  def remote_path(self):
-    return self.testreport.target_wd(self._filename())
-
   def remote_pkglist_path(self):
     return self.testreport.target_wd('package-list.txt')
 
   def _run(self, targets):
     targets.put(
       self.path,
-      self.remote_path(),
+      self.testreport.target_wd(self._filename()),
     )
 
     targets.put(
@@ -100,7 +97,7 @@ class PreScript(Script):
 
     targets.run(
       "{exe} -r {repository} -p {pkg_list_file} {id}".format(
-        exe = self.remote_path(),
+        exe = self.testreport.target_wd(self._filename()),
         repository = self.testreport.repository,
         pkg_list_file = self.remote_pkglist_path(),
         id  = self.testreport.id,
