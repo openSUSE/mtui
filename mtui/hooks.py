@@ -29,6 +29,7 @@ class Script(object):
     """
     self.path = path
     self.name = basename(path)
+    self.bname = splitext(self.name)[0]
     self.testreport = tr
     self.log = log
 
@@ -57,24 +58,11 @@ class Script(object):
       self.log.warning('skipping {0}'.format(self))
       return
 
-  def _filename(self, target = None, subdir = None):
-    """
-    :returns: str "fully qualified" file name
-    """
-    if not subdir:
-      subdir = self.subdir
-
-    xs = [subdir, splitext(self.name)[0]]
-    if target:
-      xs.append(target.hostname)
-
-    return ".".join(xs)
-
 class PreScript(Script):
   subdir = "pre"
 
   def _run(self, targets):
-    rname = self.testreport.target_wd(self._filename())
+    rname = self.testreport.target_wd("%s.%s" % (self.subdir, self.bname))
     targets.put(
       self.path,
       rname,
@@ -97,7 +85,7 @@ class PreScript(Script):
     for t in targets.values():
       fname = self.testreport.report_wd(
         'output/scripts',
-        self._filename(t),
+        "%s.%s.%s" % (self.subdir, self.bname, t.hostname),
         filepath = True,
       )
       try:
@@ -120,10 +108,7 @@ class CompareScript(Script):
   def _result(self, s, t):
     return self.testreport.report_wd(
       'output/scripts',
-      self._filename(
-        subdir = s,
-        target = t,
-      ).replace("compare_", "check_"),
+      "%s.%s.%s" % (s, self.bname.replace("compare_", "check_"), t.hostname),
       filepath = True,
     )
 
