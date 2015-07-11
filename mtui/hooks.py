@@ -74,9 +74,10 @@ class PreScript(Script):
   subdir = "pre"
 
   def _run(self, targets):
+    rname = self.testreport.target_wd(self._filename())
     targets.put(
       self.path,
-      self.testreport.target_wd(self._filename()),
+      rname,
     )
 
     targets.put(
@@ -86,7 +87,7 @@ class PreScript(Script):
 
     targets.run(
       "{exe} -r {repository} -p {pkg_list_file} {id}".format(
-        exe = self.testreport.target_wd(self._filename()),
+        exe = rname,
         repository = self.testreport.repository,
         pkg_list_file = self.testreport.target_wd('package-list.txt'),
         id  = self.testreport.id,
