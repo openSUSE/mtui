@@ -47,6 +47,13 @@ class Script(object):
       self.name,
     )
 
+  def _result(self, T, bname, t):
+    return self.testreport.report_wd(*T.result_parts(bname, t.hostname), filepath = True)
+
+  @classmethod
+  def result_parts(T, *basename):
+    return ('output/scripts', '.'.join((T.subdir,) + basename))
+
   def run(self, targets):
     """
     :type targets: [{HostsGroup}]
@@ -83,11 +90,7 @@ class PreScript(Script):
     )
 
     for t in targets.values():
-      fname = self.testreport.report_wd(
-        'output/scripts',
-        "%s.%s.%s" % (self.subdir, self.bname, t.hostname),
-        filepath = True,
-      )
+      fname = self._result(type(self), self.bname, t)
       try:
         with open(fname, 'w') as f:
           f.write(t.lastout())
@@ -105,18 +108,12 @@ class CompareScript(Script):
     for t in targets.values():
       self._run_single_target(t)
 
-  def _result(self, s, t):
-    return self.testreport.report_wd(
-      'output/scripts',
-      "%s.%s.%s" % (s, self.bname.replace("compare_", "check_"), t.hostname),
-      filepath = True,
-    )
-
   def _run_single_target(self, t):
+    bcheck = self.bname.replace("compare_", "check_")
     argv = [
       self.path,
-      self._result(PreScript.subdir, t),
-      self._result(PostScript.subdir, t),
+      self._result(PreScript, bcheck, t),
+      self._result(PostScript, bcheck, t),
     ]
 
     self.log.debug("running {0}".format(argv))
