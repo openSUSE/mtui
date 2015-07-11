@@ -57,14 +57,6 @@ class Script(object):
       self.log.warning('skipping {0}'.format(self))
       return
 
-  def results_wd(self, *path, **kw):
-    return self.testreport.report_wd(
-      'output',
-      'scripts',
-      *path,
-      **kw
-    )
-
   def _filename(self, target = None, subdir = None):
     """
     :returns: str "fully qualified" file name
@@ -102,7 +94,11 @@ class PreScript(Script):
     )
 
     for t in targets.values():
-      fname = self.results_wd(self._filename(t), filepath = True)
+      fname = self.testreport.report_wd(
+        'output/scripts',
+        self._filename(t),
+        filepath = True,
+      )
       try:
         with open(fname, 'w') as f:
           f.write(t.lastout())
@@ -121,11 +117,13 @@ class CompareScript(Script):
       self._run_single_target(t)
 
   def _result(self, s, t):
-    return self.results_wd(self._filename(
+    return self.testreport.report_wd(
+      'output/scripts',
+      self._filename(
         subdir = s,
         target = t,
       ).replace("compare_", "check_"),
-      filepath = True
+      filepath = True,
     )
 
   def _run_single_target(self, t):
