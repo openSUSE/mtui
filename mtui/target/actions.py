@@ -107,7 +107,7 @@ class FileDownload(ThreadedTargetGroup):
     self.local = local
 
   def mk_cmd(self, t):
-    return [t.get, [self.remote, '{0}.{1}'.format(self.local, t.hostname)]]
+    return [t.get, [self.remote, self.local]]
 
 
 class RunCommand(object):
