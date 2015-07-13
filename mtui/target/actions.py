@@ -100,24 +100,14 @@ class FileUpload(ThreadedTargetGroup):
 
 
 class FileDownload(ThreadedTargetGroup):
-  def __init__(self, targets, remote, local, postfix=False):
+  def __init__(self, targets, remote, local):
     super(FileDownload, self).__init__(targets)
 
     self.remote = remote
     self.local = local
-    self.postfix = postfix
-
-  def local_name(self, t):
-    """
-    :type t: L{Target} instance
-    """
-    if not self.postfix:
-      return self.local
-
-    return '{0}.{1}'.format(self.local, t.hostname)
 
   def mk_cmd(self, t):
-    return [t.get, [self.remote, self.local_name(t)]]
+    return [t.get, [self.remote, '{0}.{1}'.format(self.local, t.hostname)]]
 
 
 class RunCommand(object):

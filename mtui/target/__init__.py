@@ -113,7 +113,7 @@ class HostsGroup(object):
         return list(self.hosts.keys())
 
     def get(self, remote, local):
-        return FileDownload(self.hosts.values(), remote, local, True).run()
+        return FileDownload(self.hosts.values(), remote, local).run()
 
     def put(self, local, remote):
         return FileUpload(self.hosts.values(), local, remote).run()
