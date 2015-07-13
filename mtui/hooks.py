@@ -76,7 +76,7 @@ class PreScript(Script):
     )
 
     targets.put(
-      self.testreport.pkg_list_file(),
+      self.testreport.report_wd('packages-list.txt', filepath = True),
       self.testreport.target_wd('package-list.txt'),
     )
 
