@@ -29,6 +29,7 @@ class Script(object):
     """
     self.path = path
     self.name = basename(path)
+    self.bname = splitext(self.name)[0]
     self.testreport = tr
     self.log = log
 
@@ -46,6 +47,13 @@ class Script(object):
       self.name,
     )
 
+  def _result(self, T, bname, t):
+    return self.testreport.report_wd(*T.result_parts(bname, t.hostname), filepath = True)
+
+  @classmethod
+  def result_parts(T, *basename):
+    return ('output/scripts', '.'.join((T.subdir,) + basename))
+
   def run(self, targets):
     """
     :type targets: [{HostsGroup}]
@@ -57,58 +65,32 @@ class Script(object):
       self.log.warning('skipping {0}'.format(self))
       return
 
-  def results_wd(self, *path, **kw):
-    return self.testreport.report_wd(
-      'output',
-      'scripts',
-      *path,
-      **kw
-    )
-
-  def _filename(self, target = None, subdir = None):
-    """
-    :returns: str "fully qualified" file name
-    """
-    if not subdir:
-      subdir = self.subdir
-
-    xs = [subdir, splitext(self.name)[0]]
-    if target:
-      xs.append(target.hostname)
-
-    return ".".join(xs)
-
 class PreScript(Script):
   subdir = "pre"
 
-  def remote_path(self):
-    return self.testreport.target_wd(self._filename())
-
-  def remote_pkglist_path(self):
-    return self.testreport.target_wd('package-list.txt')
-
   def _run(self, targets):
+    rname = self.testreport.target_wd("%s.%s" % (self.subdir, self.bname))
     targets.put(
       self.path,
-      self.remote_path(),
+      rname,
     )
 
     targets.put(
-      self.testreport.pkg_list_file(),
-      self.remote_pkglist_path(),
+      self.testreport.report_wd('packages-list.txt', filepath = True),
+      self.testreport.target_wd('package-list.txt'),
     )
 
     targets.run(
       "{exe} -r {repository} -p {pkg_list_file} {id}".format(
-        exe = self.remote_path(),
+        exe = rname,
         repository = self.testreport.repository,
-        pkg_list_file = self.remote_pkglist_path(),
+        pkg_list_file = self.testreport.target_wd('package-list.txt'),
         id  = self.testreport.id,
       )
     )
 
     for t in targets.values():
-      fname = self.results_wd(self._filename(t), filepath = True)
+      fname = self._result(type(self), self.bname, t)
       try:
         with open(fname, 'w') as f:
           f.write(t.lastout())
@@ -126,19 +108,12 @@ class CompareScript(Script):
     for t in targets.values():
       self._run_single_target(t)
 
-  def _result(self, s, t):
-    return self.results_wd(self._filename(
-        subdir = s,
-        target = t,
-      ).replace("compare_", "check_"),
-      filepath = True
-    )
-
   def _run_single_target(self, t):
+    bcheck = self.bname.replace("compare_", "check_")
     argv = [
       self.path,
-      self._result(PreScript.subdir, t),
-      self._result(PostScript.subdir, t),
+      self._result(PreScript, bcheck, t),
+      self._result(PostScript, bcheck, t),
     ]
 
     self.log.debug("running {0}".format(argv))

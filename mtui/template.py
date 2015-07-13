@@ -563,9 +563,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
         path = ['downloads'] + list(path)
         return self.report_wd(*path, **kw)
 
-    def pkg_list_file(self):
-        return self.report_wd('packages-list.txt', filepath = True)
-
     def get_testsuite_comment(self, testsuite):
         return 'testing %s on %s on %s' % (
             testsuite,
