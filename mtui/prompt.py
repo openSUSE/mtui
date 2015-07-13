@@ -16,9 +16,6 @@ import re
 import getpass
 
 from mtui import messages
-from mtui.hooks import PreScript
-from mtui.hooks import PostScript
-from mtui.hooks import CompareScript
 from mtui.rpmver import *
 from mtui.target import *
 from mtui.utils import *
@@ -1657,38 +1654,24 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_prepare, args)
             return
 
-        opts = dict(
-            force = False,
-            installed = False,
-            testing = False,
-        )
+        self.log.info('preparing')
 
-        for opt in opts:
-            if opt in params:
-                opts[opt] = True
-
-        self._do_prepare_impl(targets, **opts)
-
-    def _do_prepare_impl(self, targets, force = False, installed = False, testing = False):
-        if targets:
-            self.log.info('preparing')
-
-            try:
-                self.metadata.perform_prepare(
-                    targets,
-                    force = force,
-                    installed_only = installed,
-                    testing = testing
-                )
-            except Exception:
-                self.log.critical('failed to prepare target systems')
-                self.log.debug(format_exc())
-                return False
-            except KeyboardInterrupt:
-                self.log.info('preparation process canceled')
-                return False
-            else:
-                self.log.info('done')
+        try:
+            self.metadata.perform_prepare(
+                targets,
+                force = 'force' in params,
+                installed_only = 'installed' in params,
+                testing = 'testing' in params,
+            )
+        except Exception:
+            self.log.critical('failed to prepare target systems')
+            self.log.debug(format_exc())
+            return False
+        except KeyboardInterrupt:
+            self.log.info('preparation process canceled')
+            return False
+        else:
+            self.log.info('done')
 
     def complete_prepare(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed', 'testing'])
@@ -1720,82 +1703,20 @@ class CommandPrompt(cmd.Cmd):
         if not self.interactive and [x for x in self.metadata.packages if x in ['-kmp-', 'kernel-default']]:
             if 'newpackage' in params:
                 params.remove('newpackage')
-            prepare['installed'] = True
+            prepare['installed_only'] = True
 
-        if 'noprepare' not in params:
-            if self._do_prepare_impl(targets, **prepare) is False:
-                return
+        self.log.info('updating')
 
-        with LockedTargets([self.targets[x] for x in targets]):
-            missing = False
-            for target in targets:
-                not_installed = []
-                packages = targets[target].packages
-
-                targets[target].query_versions()
-
-                for package in packages:
-                    required = self.metadata.packages[package]
-                    before = targets[target].packages[package].current
-
-                    packages[package].set_versions(before=before, required=required)
-
-                    if before is None or before == '0':
-                        missing = True
-                        not_installed.append(package)
-                    else:
-                        if RPMVersion(before) >= RPMVersion(required):
-                            self.log.warning('%s: package is too recent: %s (%s, target version is %s)' % (target, package, before, required))
-
-                if len(not_installed):
-                    self.log.warning('%s: these packages are not installed: %s' % (target, not_installed))
-
-            if missing:
-                self.log.warning('%s: these packages are missing: %s' % (target, not_installed))
-
-            if 'noscript' not in params:
-                self.metadata.run_scripts(PreScript, targets)
-
-            self.log.info('updating')
-
-            try:
-                self.metadata.perform_update(targets)
-            except Exception:
-                self.log.critical('failed to update target systems')
-                self.log.debug(format_exc())
-                self.notify_user('updating %s failed' % self.session, 'stock_dialog-error')
-                raise
-            except KeyboardInterrupt:
-                self.log.info('update process canceled')
-                return
-
-            if 'newpackage' in params:
-                self._do_prepare_impl(targets, testing = True, **prepare)
-
-            for target in targets:
-                packages = targets[target].packages
-
-                targets[target].query_versions()
-
-                for package in packages:
-                    before = packages[package].before
-                    required = packages[package].required
-                    after = targets[target].packages[package].current
-
-                    packages[package].set_versions(after=after)
-
-                    if after is not None and after != '0':
-                        if RPMVersion(before) == RPMVersion(after):
-                            self.log.warning('%s: package was not updated: %s (%s)' % (target, package, after))
-
-                        if RPMVersion(after) < RPMVersion(required):
-                            self.log.warning('%s: package does not match required version: %s (%s, required %s)' % (target, package, after,
-                                        required))
-
-            if 'noscript' not in params:
-                self.metadata.run_scripts(PostScript, targets)
-                self.metadata.run_scripts(CompareScript, targets)
-                targets.remove(self.metadata.target_wd('output'))
+        try:
+            self.metadata.perform_update(targets, params, prepare)
+        except Exception:
+            self.log.critical('failed to update target systems')
+            self.log.debug(format_exc())
+            self.notify_user('updating %s failed' % self.session, 'stock_dialog-error')
+            raise
+        except KeyboardInterrupt:
+            self.log.info('update process canceled')
+            return
 
         self.notify_user('updating %s finished' % self.session)
         self.log.info('done')
