@@ -1697,18 +1697,10 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_update, args)
             return
 
-        prepare = dict()
-
-        # don't install new packages when doing a noninteractive kernel update
-        if not self.interactive and [x for x in self.metadata.packages if x in ['-kmp-', 'kernel-default']]:
-            if 'newpackage' in params:
-                params.remove('newpackage')
-            prepare['installed_only'] = True
-
         self.log.info('updating')
 
         try:
-            self.metadata.perform_update(targets, params, prepare)
+            self.metadata.perform_update(targets, params)
         except Exception:
             self.log.critical('failed to update target systems')
             self.log.debug(format_exc())

@@ -28,13 +28,13 @@ class Update(object):
     self.testreport = testreport
     self.commands = []
 
-  def run(self, params, prepare):
+  def run(self, params):
     with LockedTargets(self.targets.values()):
-      self._run(params, prepare)
+      self._run(params)
 
-  def _run(self, params, prepare):
+  def _run(self, params):
     if 'noprepare' not in params:
-      self.testreport.perform_prepare(self.targets, **prepare)
+      self.testreport.perform_prepare(self.targets)
 
     for hn, t in self.targets.items():
       not_installed = []
@@ -109,7 +109,7 @@ class Update(object):
             pass
 
     if 'newpackage' in params:
-      self.testreport.perform_prepare(self.targets, testing = True, **prepare)
+      self.testreport.perform_prepare(self.targets, testing = True)
 
     for hn, t in self.targets.items():
       t.query_versions()

@@ -321,7 +321,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
             **kw
         ).run()
 
-    def perform_update(self, targets, params, prepare):
+    def perform_update(self, targets, params):
         '''
         :type  targets: dict(hostname = L{Target})
             where hostname = str
@@ -330,7 +330,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         updater = self.get_updater()
         self.log.debug("chosen updater: %s" % repr(updater))
-        updater(self.log, targets, self.patches, self.get_package_list(), self).run(params, prepare)
+        updater(self.log, targets, self.patches, self.get_package_list(), self).run(params)
 
     def perform_downgrade(self, targets):
         targets.add_history(['downgrade', str(self.id), ' '.join(self.get_package_list())])
