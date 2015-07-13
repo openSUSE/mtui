@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-from os.path import join, dirname
+from os.path import join, basename, dirname
 from errno import ENOENT
 from errno import EEXIST
 import shutil
@@ -306,6 +306,11 @@ class TestReport(with_metaclass(ABCMeta, object)):
         ))
         del updater
 
+    def perform_get(self, targets, remote):
+        local = self.report_wd('downloads', basename(remote), filepath = True)
+
+        targets.get(remote, local)
+
     def perform_prepare(self, targets, **kw):
         preparer = self.get_preparer()
         preparer(
@@ -553,15 +558,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
         because that's handled by L{TestReport.copy_scripts}
         """
         return join(self.report_wd(), *["scripts"] + list(paths))
-
-    def downloads_wd(self, *path, **kw):
-        """
-        :return: str directory for downloads.
-            If template is loaded, it's ${report directory}/downloads
-            Otherwise ${CWD}/downloads
-        """
-        path = ['downloads'] + list(path)
-        return self.report_wd(*path, **kw)
 
     def get_testsuite_comment(self, testsuite):
         return 'testing %s on %s on %s' % (

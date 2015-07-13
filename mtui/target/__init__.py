@@ -113,7 +113,7 @@ class HostsGroup(object):
         return list(self.hosts.keys())
 
     def get(self, remote, local):
-        return FileDownload(self.hosts.values(), remote, local, True).run()
+        return FileDownload(self.hosts.values(), remote, local).run()
 
     def put(self, local, remote):
         return FileUpload(self.hosts.values(), local, remote).run()
@@ -414,8 +414,10 @@ class Target(object):
             self.logger.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
 
     def get(self, remote, local):
+        local = '%s.%s' % (local, self.hostname)
+
         if self.state == 'enabled':
-            self.logger.debug('%s: receiving "%s"' % (self.hostname, remote))
+            self.logger.debug('%s: receiving "%s" into "%s' % (self.hostname, remote, local))
             try:
                 return self.connection.get(remote, local)
             except EnvironmentError as error:
