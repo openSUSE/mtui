@@ -1828,10 +1828,9 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_get, args)
             return
 
-        local = self.metadata.downloads_wd(os.path.basename(args), filepath=True)
+        self.metadata.perform_get(self.targets, args)
 
-        self.targets.get(args, local)
-        self.log.info('downloaded {0} to {1}'.format(args, local))
+        self.log.info('downloaded {0}'.format(args))
 
     def do_terms(self, args):
         """
