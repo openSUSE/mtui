@@ -50,9 +50,7 @@ def test_UID_mtr_success():
     l = LogFake()
 
     u = UpdateID('82407e2d7113cfde72f65d81e4ffee61', TestReportFake, unused)
-    u.config = c
-    u.log = l
-    tr = u.make_testreport()
+    tr = u.make_testreport(c, l)
 
     ok_(isinstance(tr, TestReportFake))
     eq_(c, tr.init_args[0])
@@ -102,10 +100,8 @@ def test_UID_mtr_with_checkout():
     co = CheckoutFake()
 
     u = UpdateID('82407e2d7113cfde72f65d81e4ffee61', TestReportFake, co)
-    u.config = c
-    u.log = l
 
-    tr = u.make_testreport()
+    tr = u.make_testreport(c, l)
 
     ok_(isinstance(tr, TestReportFake))
     eq_(c, tr.init_args[0])
@@ -169,10 +165,8 @@ def test_UID_mtr_failing_after_checkout():
     l = LogFake()
 
     u = UpdateID('82407e2d7113cfde72f65d81e4ffee61', tr, co)
-    u.config = c
-    u.log = l
 
-    tr = u.make_testreport()
+    tr = u.make_testreport(c, l)
   except _TemplateIOError as e:
     eq_(e.errno, errno.ENOENT)
     eq_(co.calls, 1)
@@ -231,11 +225,9 @@ def test_UID_mtr_other_ioerror():
     l = LogFake()
 
     u = UpdateID('82407e2d7113cfde72f65d81e4ffee61', tr, checkout)
-    u.config = c
-    u.log = l
 
     try:
-      tr = u.make_testreport()
+      tr = u.make_testreport(c, l)
     except _TemplateIOError as e:
       eq_(e.errno, errno.EACCES)
       eq_(tr.init_calls, 1)

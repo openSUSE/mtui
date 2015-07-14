@@ -77,13 +77,13 @@ class UpdateID(object):
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def make_testreport(self):
+    def make_testreport(self, config, logger):
         tr = self.testreport_factory(
-            self.config,
-            self.log,
+            config,
+            logger,
             date = date
         )
-        trpath = join(self.config.template_dir, str(self.id), 'log')
+        trpath = join(config.template_dir, str(self.id), 'log')
 
         try:
             tr.read(trpath)
@@ -92,9 +92,9 @@ class UpdateID(object):
                 raise
 
             self._vcs_checkout(
-                self.config,
-                self.log,
-                join(self.config.svn_path, str(self.id))
+                config,
+                logger,
+                join(config.svn_path, str(self.id))
             )
 
             tr.read(trpath)

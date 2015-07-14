@@ -1278,10 +1278,7 @@ class CommandPrompt(cmd.Cmd):
             self.connect_system_if_unconnected(hostname, system)
 
     def load_update(self, update, autoconnect=True):
-        update.config = self.config
-        update.log = self.log
-
-        tr = update.make_testreport()
+        tr = update.make_testreport(self.config, self.log)
 
         if autoconnect:
             tr.load_systems_from_testplatforms()
