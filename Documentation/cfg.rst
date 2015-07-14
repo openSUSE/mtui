@@ -288,12 +288,9 @@ Example
 ::
 
    [mtui]
-   interface_version = 3.0
-   template_dir = ~/qam/templates
-   chdir_to_template_dir = True
-   location = prague
+   template_dir = <where you want to store testreport checkouts>
+   location = <your location>
 
    [testopia]
    user = <your Bugzilla ID>
    pass = <your Bugzilla passwd>
-
