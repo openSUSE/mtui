@@ -28,10 +28,22 @@ class Config(object):
     """Read and store the variables from mtui config files"""
     # FIXME: change str paths to L{filepath.FilePath}
 
-    def __init__(self, logger, refhosts = RefhostsFactory):
+    def __init__(self, logger, refhosts = RefhostsFactory, paths = None):
         self.log = logger
         self.refhosts = refhosts
         self._location = 'default'
+
+
+        try:
+            # FIXME: gotta read config overide from env instead of argv
+            # because this crap is used as a singleton all over the
+            # place
+            self.configfiles = [os.environ['MTUI_CONF']]
+        except KeyError:
+            self.configfiles = paths or [
+              '/etc/mtui.cfg'
+            , os.path.expanduser('~/.mtuirc')
+            ]
         self.read()
 
         self._define_config_options()
@@ -39,17 +51,6 @@ class Config(object):
         self._handle_testopia_cred()
 
     def read(self):
-        try:
-            # FIXME: gotta read config overide from env instead of argv
-            # because this crap is used as a singleton all over the
-            # place
-            self.configfiles = [os.environ['MTUI_CONF']]
-        except KeyError:
-            self.configfiles = [
-                os.path.join('/', 'etc', 'mtui.cfg'),
-                os.path.expanduser('~/.mtuirc')
-            ]
-
         self.config = configparser.SafeConfigParser()
         try:
             self.config.read(self.configfiles)
