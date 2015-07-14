@@ -181,21 +181,6 @@ def test_cmdqueue():
     eq_(el0, 3)
     eq_(q.t_echo_prompt_calls, [1,3])
 
-def test_interface_version_setter():
-    cp = TestableCommandPrompt(ConfigFake(), LogFake())
-    v = '66.0'
-    cp.set_interface_version(v)
-    eq_(cp._interface_version, StrictVersion(v))
-
-    sv = StrictVersion(v)
-    cp.set_interface_version(sv)
-    ok_(cp._interface_version is sv)
-
-def test_interface_version_getter():
-    cp = TestableCommandPrompt(ConfigFake(), LogFake())
-    cp._interface_version = StrictVersion('66.6')
-    cp.get_interface_version() is cp._interface_version
-
 def test_commandFactory():
     """
     Test objects get passed in to commands properly
