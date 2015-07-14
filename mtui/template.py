@@ -77,18 +77,16 @@ class UpdateID(object):
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def _template_path(self):
-        return join(self.config.template_dir, str(self.id), 'log')
-
     def make_testreport(self):
         tr = self.testreport_factory(
             self.config,
             self.log,
             date = date
         )
+        trpath = join(self.config.template_dir, str(self.id), 'log')
 
         try:
-            tr.read(self._template_path())
+            tr.read(trpath)
         except _TemplateIOError as e:
             if e.errno != ENOENT:
                 raise
@@ -99,7 +97,7 @@ class UpdateID(object):
                 join(self.config.svn_path, str(self.id))
             )
 
-            tr.read(self._template_path())
+            tr.read(trpath)
 
         return tr
 
