@@ -10,31 +10,12 @@ from .utils import ConfigFake
 from .utils import LogFake
 from .utils import SysFake
 from .test_prompt import TestableCommandPrompt
+from .prompt import make_cp
 
 try:
     from itertools import zip_longest
 except ImportError:
     from itertools import izip_longest as zip_longest
-
-
-# FIXME: the command objects needs to be constructed via CommandPrompt
-# due to CDC's braindead implementation. See
-# L{CommandPrompt.__getattr__}
-
-def _run_config(in_, config):
-    """
-    :return: str stdout of the Config command
-
-    note the burden of setting appropriate interface_version is on the
-    user.
-    """
-    cp = TestableCommandPrompt(config, LogFake(), SysFake())
-    try:
-        cp._add_subcommand(commands.Config)
-    except CommandAlreadyBoundError:
-        pass
-    cp.onecmd(in_)
-    return cp.stdout.getvalue()
 
 def test_config():
     """
@@ -42,8 +23,9 @@ def test_config():
         > config
     shows usage
     """
-    c = ConfigFake(dict(interface_version = commands.Config.stable))
-    eq_(_run_config("config", c), "usage: config [-h] {show} ...\n")
+    cp = make_cp()
+    cp.onecmd("config")
+    eq_(cp.stdout.getvalue(), "usage: config [-h] {show} ...\n")
 
 def test_config_show():
     """
@@ -58,19 +40,20 @@ def test_config_show():
       , template_dir = 'foo-template'
       , refhosts_path = 'foo-refhosts'
       , session_user = 'foo-user'
-      , interface_version = '66.6'
     ))
+
+    cp = make_cp(config = c)
+    cp.onecmd("config show")
 
     for actual,expected in zip_longest(
           [ (opt, val)
-            for x in _run_config("config show", c).splitlines()
+            for x in cp.stdout.getvalue().splitlines()
             for opt, _, val in [x.partition(" = ")]]
         , [("{0:<25}".format(opt), val) for (opt, val) in
             [ ("datadir"                    , "'foo-data'")
             , ("template_dir"               , "'foo-template'")
             , ("local_tempdir"              , "'/tmp'")
             , ("session_user"               , "'foo-user'")
-            , ("interface_version"          , "'66.6'")
             , ("connection_timeout"         , "300")
             , ("svn_path"                   , "'svn+ssh://svn@qam.suse.de/testreports'")
             , ("bugzilla_url"               , "'https://bugzilla.novell.com'")
@@ -101,7 +84,7 @@ def test_config_show_one():
 
     c = ConfigFake(dict(
         datadir = 'foo-data'
-      , interface_version = commands.Config.stable
     ))
-    eq_(_run_config("config show datadir", c),
-        "datadir = 'foo-data'\n")
+    cp = make_cp(config = c)
+    cp.onecmd("config show datadir")
+    eq_(cp.stdout.getvalue(), "datadir = 'foo-data'\n")

@@ -6,9 +6,8 @@ That is
 
 1. L{Command} class itself.
 
-2. L{CommandPrompt}s handling (adding & executing) of L{Command}
-   classes. Especially with regard to the
-   L{mtui.config.interface_version} feature.
+2. L{CommandPrompt}s adding & executing of L{Command}
+   classes.
 """
 
 from nose.tools import ok_, eq_
@@ -35,7 +34,6 @@ NEW_STYLE_CMD='unlock'
 
 
 class ComMock2_0(Command):
-    stable = '2.0'
     command = 'commock'
 
 def test_do_help():
@@ -43,7 +41,7 @@ def test_do_help():
     Test CommandPrompt.do_help print helps properly for class-defined
     commands.
     """
-    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock2_0.stable)))
+    cp = make_cp()
 
     cp.do_help("commock")
     eq_(cp.sys.stdout.getvalue(), "*** No help on commock\n")
@@ -63,11 +61,10 @@ def test_getattr():
     Because that's what L{cmd.Cmd} resolves command names to.
     """
 
-    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock2_0.stable)))
+    cp = make_cp()
     attr="do_"+ComMock2_0.command
     ok_(not hasattr(cp, attr))
 
-    cp._interface_version = StrictVersion(ComMock2_0.stable)
     cp._add_subcommand(ComMock2_0)
     r = getattr(cp, attr)
     ok_('usage: '+ComMock2_0.command in r.__doc__)
@@ -81,7 +78,7 @@ def test_getnames():
     Test L{CommandPrompt.getnames} returns commands including the
     class-defined ones.
     """
-    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock2_0.stable)))
+    cp = make_cp()
     attr = "do_"+ComMock2_0.command
     ok_(attr not in cp.get_names())
     cp._add_subcommand(ComMock2_0)
@@ -89,46 +86,14 @@ def test_getnames():
     ok_(attr in names)
     ok_('do_'+OLD_STYLE_CMD in names)
 
-def test_command_prompt_init():
-    """
-    Test L{CommandPrompt} is initialized with interface_version =
-    current mtui version unless defined by config.
-    """
-    c = ConfigFake()
-    cp = make_cp(config = c)
-    ok_(c is cp.config)
-
-    eq_(cp._interface_version, StrictVersion(__version__))
-
 def test_add_subcommand():
     """
-    Test L{CommandPrompt._add_subcommand} handles (adds or skips)
-    class-defined commands properly with regard to requested
-    interface_version
+    Test L{CommandPrompt._add_subcommand} adds class-defined commands
     """
-
-    class TestableCP(CommandPrompt):
-        def __init__(self):
-            # FIXME: inits are overriden to prevent definition of
-            # production commands and faking of other dependencies
-            self.commands = {}
-
-    cp = TestableCP()
-    # set lower version than ComMock2_0
-    cp._interface_version = StrictVersion(
-        ".".join([str(x) for x in map(add,
-            StrictVersion(ComMock2_0.stable).version, (-1, 1, 0))])
-    )
-
-    eq_(list(cp.commands.values()), [])
+    cp = make_cp()
+    ok_(ComMock2_0 not in cp.commands.values())
     cp._add_subcommand(ComMock2_0)
-    eq_(list(cp.commands.values()), [])
-
-    cp = TestableCP()
-    cp._interface_version = StrictVersion(ComMock2_0.stable)
-    eq_(list(cp.commands.values()), [])
-    cp._add_subcommand(ComMock2_0)
-    eq_(list(cp.commands.values()), [ComMock2_0])
+    ok_(ComMock2_0 in cp.commands.values())
 
 def test_command_argparse_fail():
     """
@@ -137,10 +102,6 @@ def test_command_argparse_fail():
     the command itself is NOT executed.
     """
     class ComMock(Command):
-        stable = '1.0'
-        # only to keep the interface.
-        # class-defined commands were introduced in >1.0,
-        # therefore this command should always be active.
         command = 'commock'
 
         def run(self):
@@ -160,7 +121,7 @@ def test_command_doesnt_run_on_help():
         def run(self):
             ok_(False)
 
-    cp = make_cp(config = ConfigFake(dict(interface_version = ComMock.stable)))
+    cp = make_cp()
     cp._add_subcommand(ComMock)
     cp.onecmd('commock -h')
     eq_(cp.sys.stdout.getvalue(), 'usage: commock [-h]\n\noptional '+

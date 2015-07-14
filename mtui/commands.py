@@ -21,13 +21,6 @@ from mtui.messages import HostIsNotConnectedError
 from mtui.messages import ListPackagesAllHost
 
 class Command(with_metaclass(ABCMeta, object)):
-    stable = None
-    """
-    :type stable: str
-    :param stable: Major version since which the command is stabilized.
-        Derived classes must set this property.
-        Version must include at least major and minor
-    """
     _check_subparser = None
     """
     :type _check_subparser: str
@@ -119,7 +112,6 @@ class Command(with_metaclass(ABCMeta, object)):
 
 class HostsUnlock(Command):
     command = 'unlock'
-    stable  = '3.0'
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -164,7 +156,6 @@ class HostsUnlock(Command):
 
 class ListPackages(Command):
     command = 'list_packages'
-    stable = '2.0'
 
     state_map = {
         None: blue("not installed"),
@@ -255,7 +246,6 @@ class ReportBug(Command):
     Open mtui bugzilla with fields common for all mtui bugs prefilled
     """
     command = "report-bug"
-    stable = '3.0b2'
 
     def __init__(self, *a, **kw):
         self.popen = kw.pop('popen', Popen)
@@ -329,7 +319,6 @@ class Whoami(Command):
     TODO: consolidate these into a SessionIdentity object
     """
     command = 'whoami'
-    stable = '2.0'
 
     def get_pid(self):
         return os.getpid()
@@ -349,7 +338,6 @@ class Config(Command):
     Display and manipulate (TODO) configuration in runtime.
     """
     command = "config"
-    stable = '3.0'
     _check_subparser = "func"
 
     def run(self):

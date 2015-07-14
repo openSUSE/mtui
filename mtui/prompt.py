@@ -104,8 +104,6 @@ class CommandPrompt(cmd.Cmd):
         self.log = log
         self.datadir = self.config.datadir
 
-        self.set_interface_version(config.interface_version)
-
         self.testopia = None
 
         readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
@@ -129,24 +127,6 @@ class CommandPrompt(cmd.Cmd):
     def println(self, msg = '', eol = '\n'):
         return self.stdout.write(msg + eol)
 
-    def get_interface_version(self):
-        """
-        :return: L{StrictVersion} instance
-        """
-        return self._interface_version
-
-    def set_interface_version(self, x):
-        """
-        :type x: L{StrictVersion} or convertible to it.
-        :param x: version
-
-        :return: None
-        """
-        if not isinstance(x, StrictVersion):
-            x = StrictVersion(x)
-
-        self._interface_version = x
-
     def _read_history(self):
         try:
             readline.read_history_file('%s/.mtui_history' % self.homedir)
@@ -156,9 +136,6 @@ class CommandPrompt(cmd.Cmd):
     def _add_subcommand(self, cmd):
         if cmd.command in self.commands:
             raise CommandAlreadyBoundError(cmd.command)
-
-        if self._interface_version < StrictVersion(cmd.stable):
-            return
 
         self.commands[cmd.command] = cmd
 
@@ -1374,11 +1351,10 @@ class CommandPrompt(cmd.Cmd):
                     else:
                         targets[target].set_locked(comment)
                 elif state == 'disabled':
-                    husv = StrictVersion(commands.HostsUnlock.stable)
-                    if husv <=  self._interface_version:
-                        msg = "set_host_lock <host>,disable has been"
-                        msg += " deprecated in favor of unlock command"
-                        user_deprecation(self.log, msg)
+                    msg = "set_host_lock <host>,disable has been"
+                    msg += " deprecated in favor of unlock command"
+                    user_deprecation(self.log, msg)
+
                     try:
                         targets[target].remove_lock()
                     except AssertionError:

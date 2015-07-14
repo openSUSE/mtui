@@ -56,17 +56,6 @@ default
 
 MTUI expects testing scripts in this directory.
 
-mtui.interface_version
-~~~~~~~~~~~~~~~~~~~~~~
-
-type
-  versionstring
-default
-  implementation-specified
-
-Used to enable unfinished features.
-See ChangeLog.rst for available API versions.
-
 mtui.location
 ~~~~~~~~~~~~~
 
