@@ -288,9 +288,7 @@ Example
 ::
 
    [mtui]
-   interface_version = 3.0
    template_dir = <where you want to store testreport checkouts>
-   chdir_to_template_dir = True
    location = <your location>
 
    [testopia]
