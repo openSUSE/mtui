@@ -100,28 +100,6 @@ class PromptFake(object):
     def set_cmdqueueu(self, queue):
         self.t_cmdqueues.append(queue)
 
-@nottest
-class TestReportFake(object):
-    def __init__(self, config, log):
-        self.config = config
-        self.log = log
-        self.t_load_systems_from_testplatforms = 0
-        self.t_connect_targets = 0
-
-    def load_systems_from_testplatforms(self):
-        self.t_load_systems_from_testplatforms += 1
-
-    def connect_targets(self):
-        self.t_connect_targets += 1
-
-@nottest
-class TestReportFactoryFake(OneShotFactory):
-    def __init__(self):
-        super(TestReportFactoryFake, self).__init__(TestReportFake)
-
-    def _make_product(self, config, log, md5=None):
-        return TestReportFake(config, log)
-
 def test_main():
     """
     Test main happy path without args gets to running the prompt cmdloop
