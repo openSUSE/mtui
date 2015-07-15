@@ -225,7 +225,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         self.copy_scripts()
 
-        self.load_systems_from_testplatforms()
+        for tp in self.testplatforms:
+            self._refhosts_from_tp(tp)
 
     @abstractmethod
     def _parser(self):
@@ -458,10 +459,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
         self.systems.update(dict(
             [(hn, refhosts.get_host_systemname(hn)) for hn in hostnames]
         ))
-
-    def load_systems_from_testplatforms(self):
-        for tp in self.testplatforms:
-            self._refhosts_from_tp(tp)
 
     def list_bugs(self, sink, arg):
         return sink(self.bugs, arg)
