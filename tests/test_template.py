@@ -226,9 +226,8 @@ def test_TestReport_connect_targets():
             self.t_history.append(comment)
 
     tr = TRF(SwampTestReport)
-    tr.targetFactory = TargetFake
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
-    tr.connect_targets()
+    tr.connect_targets(make_target = TargetFake)
     ts = tr.targets
 
     eq_(len(ts), 2)
@@ -355,13 +354,12 @@ def test_select():
         def add_history(self, comment):
             pass
     tr = NullTestReport(ConfigFake(), LogFake())
-    tr.targetFactory = TargetFake
     tr.systems.update(
       foo = 'fubar',
       bar = 'snafu',
       qux = 'snafubar',
     )
-    tr.connect_targets()
+    tr.connect_targets(make_target = TargetFake)
     ts = tr.targets
     ts['qux'].state = 'disabled'
 

@@ -131,7 +131,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
     # Firstly, it might clear some things up to change the open/read
     # things to file-like interface.
 
-    targetFactory = Target
     refhostsFactory = RefhostsFactory
 
     @property
@@ -392,12 +391,12 @@ class TestReport(with_metaclass(ABCMeta, object)):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
-    def connect_targets(self):
+    def connect_targets(self, make_target = Target):
         targets = {}
 
         for (host, system) in self.systems.items():
             try:
-                targets[host] = self.targetFactory(self.config, host, system,
+                targets[host] = make_target(self.config, host, system,
                     self.get_package_list(),
                     logger = self.log,
                     timeout=self.config.connection_timeout)
