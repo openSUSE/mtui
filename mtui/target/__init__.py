@@ -184,6 +184,9 @@ class HostsGroup(object):
     def copy(self):
         return HostsGroup(self.hosts.values())
 
+    def has_key(self, *a, **kw):
+        return self.hosts.has_key(*a, **kw)
+
     def items(self):
         return self.hosts.items()
 
