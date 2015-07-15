@@ -77,6 +77,14 @@ class RequestReviewID(object):
             self.review_id
         )
 
+    def __hash__(self):
+        return hash(str(self))
+
+    def __eq__(lhs, rhs):
+        return str(lhs) == str(rhs)
+
+    def __ne__(lhs, rhs):
+        return not lhs.__eq__(rhs)
 
 def _apply_parser(f, x, cnt):
     if not f or not cnt:
