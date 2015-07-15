@@ -392,10 +392,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
     def connect_targets(self):
-        # TODO: duplicated in:
-        #   autoadd
-        #   add_host
-        #   load_template
         targets = {}
 
         for (host, system) in self.systems.items():
@@ -423,6 +419,24 @@ class TestReport(with_metaclass(ABCMeta, object)):
         for t in self.targets:
             del self.targets[t]
         self.targets.update(targets)
+
+    def add_target(self, hostname, system):
+        if hostname in self.targets:
+            self.log.warning('already connected to {0}. skipping.'.format(
+                self.targets[hostname].hostname
+            ))
+            return
+
+        self.targets[hostname] = Target(
+            self.config,
+            hostname,
+            system,
+            self.get_package_list(),
+            logger = self.log,
+        )
+
+        if self:
+            self.systems[hostname] = system
 
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config, self.log)
