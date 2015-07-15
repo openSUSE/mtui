@@ -463,9 +463,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
         for tp in self.testplatforms:
             self._refhosts_from_tp(tp)
 
-    def add_host(self, hostname, system):
-        self.systems[hostname] = system
-
     def list_bugs(self, sink, arg):
         return sink(self.bugs, arg)
 

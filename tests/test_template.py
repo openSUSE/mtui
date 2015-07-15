@@ -356,9 +356,11 @@ def test_select():
             pass
     tr = NullTestReport(ConfigFake(), LogFake())
     tr.targetFactory = TargetFake
-    tr.add_host('foo', 'fubar')
-    tr.add_host('bar', 'snafu')
-    tr.add_host('qux', 'snafubar')
+    tr.systems.update(
+      foo = 'fubar',
+      bar = 'snafu',
+      qux = 'snafubar',
+    )
     tr.connect_targets()
     ts = tr.targets
     ts['qux'].state = 'disabled'
