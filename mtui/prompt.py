@@ -385,7 +385,7 @@ class CommandPrompt(cmd.Cmd):
         return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
 
     def connect_system_if_unconnected(self, hostname, system):
-        if self.targets[hostname].has_key(hostname):
+        if self.targets.has_key(hostname):
             self.log.warning('already connected to {0}. skipping.'.format(
                 self.targets[hostname].hostname
             ))
