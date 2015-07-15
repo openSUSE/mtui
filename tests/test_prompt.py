@@ -229,9 +229,9 @@ def test_set_session_name_auto_no_testreport():
 
 def test_load_update_doesnt_leave_previous_session():
     class FakeUpdate:
-        def make_testreport(self):
+        def make_testreport(self, c, l):
             md5 = MD5Hash('11111111111111111111111111111111')
-            return SwampTestReport(ConfigFake(), LogFake(), unused)
+            return SwampTestReport(c, l, unused)
 
     cp = TestableCommandPrompt(ConfigFake(), LogFake())
     cp.metadata = SwampTestReport(ConfigFake(), LogFake(), unused)
