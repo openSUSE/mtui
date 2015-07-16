@@ -99,9 +99,9 @@ class HostsGroup(object):
             raise HostsGroupException(es)
 
     def query_versions(self, packages):
-        rs = {}
+        rs = []
         for x in self.hosts.values():
-            rs[x] = x.query_package_versions(packages)
+            rs.append((x, x.query_package_versions(packages)))
 
         return rs
 

@@ -266,10 +266,10 @@ def merged_dict(x, y):
     """
     Returns new dict with items from `y` merged into `x`
     """
-    return dict(x.items() + y.items())
+    return dict(x, **y)
 
 def random_alphanum(min_, max_):
     return ''.join(random.sample(
-        string.digits + string.uppercase + string.lowercase
+        string.digits + string.ascii_uppercase + string.ascii_lowercase
       , random.randint(min_, max_)
     ))
