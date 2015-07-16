@@ -1,10 +1,12 @@
+from __future__ import absolute_import
+
 from mtui.target import HostsGroup, Target
 from nose.tools import ok_, eq_
 from nose.tools import raises
 
 from mtui.messages import HostIsNotConnectedError
 
-from utils import ConfigFake
+from tests.utils import ConfigFake
 
 def make_target(hostname):
     return Target(ConfigFake(), hostname, None, connect = False)
