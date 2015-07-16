@@ -10,7 +10,6 @@ import stat
 from traceback import format_exc
 from abc import ABCMeta
 from abc import abstractmethod
-from datetime import date
 import re
 import subprocess
 
@@ -81,7 +80,6 @@ class UpdateID(object):
         tr = self.testreport_factory(
             config,
             logger,
-            date = date
         )
         trpath = join(config.template_dir, str(self.id), 'log')
 
@@ -141,13 +139,9 @@ class TestReport(with_metaclass(ABCMeta, object)):
             type.
         """
 
-    def __init__(self, config, log, date, scripts_src_dir = None):
-        """
-        :type today: f :: L{datetime.date}
-        """
+    def __init__(self, config, log, scripts_src_dir = None):
         self.config = config
         self.log = log
-        self._date = date
 
         self._scripts_src_dir = scripts_src_dir or join(config.datadir, 'scripts')
         self.directory = config.template_dir
@@ -557,11 +551,11 @@ class TestReport(with_metaclass(ABCMeta, object)):
         """
         return join(self.report_wd(), *["scripts"] + list(paths))
 
-    def get_testsuite_comment(self, testsuite):
+    def get_testsuite_comment(self, testsuite, date):
         return 'testing %s on %s on %s' % (
             testsuite,
             "%s %s" % (self._type, self.id),
-            self._date.today().strftime('%d/%m/%y'),
+            date,
         )
 
     def __repr__(self):
@@ -676,8 +670,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
 class NullTestReport(TestReport):
     _type = "No"
 
-    def __init__(tr, config, log, _date = date, *a, **kw):
-        super(NullTestReport, tr).__init__(config, log, _date, *a, **kw)
+    def __init__(tr, config, log, *a, **kw):
+        super(NullTestReport, tr).__init__(config, log, *a, **kw)
         tr.id = None
         tr.path = join(os.getcwd(), "None")
 

@@ -12,7 +12,6 @@ from errno import EINTR, ENOENT, EPERM, EEXIST
 import shutil
 import os
 from copy import deepcopy
-from datetime import date
 
 from mtui.template import TestReport
 from mtui.template import NullTestReport
@@ -343,25 +342,23 @@ def test_TestReportParse_parsed_testplatform():
 # }}}
 
 def test_swamp_get_testsuite_comment():
-    tr = TRF(SwampTestReport, date_ = date)
+    tr = TRF(SwampTestReport)
     tr.md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
-    comment = tr.get_testsuite_comment("tsuite")
-    eq_(str(comment), "testing tsuite on SWAMP {0} on {1}".format(
+    comment = tr.get_testsuite_comment("tsuite", "a beach")
+    eq_(str(comment), "testing tsuite on SWAMP {0} on a beach".format(
         tr.md5,
-        date.today().strftime("%d/%m/%y"),
     ))
 
 def test_obs_get_testsuite_comment():
-    tr = TRF(OBSTestReport, date_ = date)
+    tr = TRF(OBSTestReport)
     tr.rrid = RequestReviewID("SUSE:Maintenance:1:1")
-    comment = tr.get_testsuite_comment("tsuite")
-    eq_(str(comment), "testing tsuite on OBS {0} on {1}".format(
+    comment = tr.get_testsuite_comment("tsuite", "a horse")
+    eq_(str(comment), "testing tsuite on OBS {0} on a horse".format(
         tr.rrid,
-        date.today().strftime("%d/%m/%y"),
     ))
 
 def test_NullTestReport():
-    tr = NullTestReport(ConfigFake(), LogFake(), date.today())
+    tr = NullTestReport(ConfigFake(), LogFake())
     assert_false(tr)
     eq_(tr.id, None)
 
@@ -371,7 +368,7 @@ def test_select():
             super(TargetFake, self).__init__(*args, connect = False, **kw)
         def add_history(self, comment):
             pass
-    tr = NullTestReport(ConfigFake(), LogFake(), date.today())
+    tr = NullTestReport(ConfigFake(), LogFake())
     tr.targetFactory = TargetFake
     tr.add_host('foo', 'fubar')
     tr.add_host('bar', 'snafu')

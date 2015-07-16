@@ -3,6 +3,7 @@
 # mtui command line prompt
 #
 
+from datetime import date
 from functools import reduce
 
 import itertools
@@ -1154,7 +1155,7 @@ class CommandPrompt(cmd.Cmd):
         name = os.path.basename(command).replace('-run', '')
         username = self.config.session_user
 
-        comment = self.metadata.get_testsuite_comment(name)
+        comment = self.metadata.get_testsuite_comment(name, date.today().strftime('%d/%m/%y'))
         try:
             comment = edit_text(comment)
         except subprocess.CalledProcessError as e:

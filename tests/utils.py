@@ -19,7 +19,6 @@ import string
 import random
 from posix import stat_result
 from tempfile import mktemp
-from datetime import date
 from time import sleep
 
 from mtui.template import OBSTestReport
@@ -229,17 +228,14 @@ class _Hostnames:
 
 hostnames = _Hostnames()
 
-def TRF(tr, config = None, log = None, date_ = None, **kw):
+def TRF(tr, config = None, log = None, **kw):
     if not config:
         config = ConfigFake()
 
     if not log:
         log = LogFake()
 
-    if not date:
-        date_ = date
-
-    return tr(config, log, date_, **kw)
+    return tr(config, log, **kw)
 
 class MD5HexdigestFactory(object):
     def __init__(self):
