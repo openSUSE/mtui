@@ -349,7 +349,7 @@ class CommandPrompt(cmd.Cmd):
         hosts = self.do_search_hosts(args)
 
         for hostname in hosts:
-            self.connect_system_if_unconnected(
+            self.metadata.add_target(
                 hostname,
                 refhost.get_host_systemname(hostname)
             )
@@ -357,18 +357,6 @@ class CommandPrompt(cmd.Cmd):
     def complete_autoadd(self, text, line, begidx, endidx):
         attributes = Attributes()
         return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
-
-    def connect_system_if_unconnected(self, hostname, system):
-        if hostname in self.targets:
-            self.log.warning('already connected to {0}. skipping.'.format(
-                self.targets[hostname].hostname
-            ))
-            return
-
-        self.targets[hostname] = Target(self.config, hostname, system, self.metadata.get_package_list(), logger = self.log)
-
-        if self.metadata:
-            self.metadata.systems[hostname] = system
 
     def do_add_host(self, args):
         """
@@ -391,7 +379,7 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_add_host, args)
             return
 
-        self.connect_system_if_unconnected(hostname, system)
+        self.metadata.add_target(hostname, system)
 
     def do_remove_host(self, args):
         """
@@ -1273,17 +1261,13 @@ class CommandPrompt(cmd.Cmd):
             target.close()
             re_add.append((hostname, target.system))
 
-        self.load_update(update)
+        self.load_update(update, autoconnect = True)
 
         for hostname, system in re_add:
-            self.connect_system_if_unconnected(hostname, system)
+            self.metadata.add_target(hostname, system)
 
-    def load_update(self, update, autoconnect=True):
-        tr = update.make_testreport(self.config, self.log)
-
-        if autoconnect:
-            tr.load_systems_from_testplatforms()
-            tr.connect_targets()
+    def load_update(self, update, autoconnect):
+        tr = update.make_testreport(self.config, self.log, autoconnect = autoconnect)
 
         if self.metadata and self.metadata.id is self.session:
             self.set_prompt(None)

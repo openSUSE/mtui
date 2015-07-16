@@ -229,7 +229,7 @@ def test_set_session_name_auto_no_testreport():
 
 def test_load_update_doesnt_leave_previous_session():
     class FakeUpdate:
-        def make_testreport(self, c, l):
+        def make_testreport(self, c, l, autoconnect):
             md5 = MD5Hash('11111111111111111111111111111111')
             return SwampTestReport(c, l, unused)
 

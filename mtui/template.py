@@ -76,7 +76,7 @@ class UpdateID(object):
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def make_testreport(self, config, logger):
+    def make_testreport(self, config, logger, autoconnect = True):
         tr = self.testreport_factory(
             config,
             logger,
@@ -96,6 +96,9 @@ class UpdateID(object):
             )
 
             tr.read(trpath)
+
+        if autoconnect:
+            tr.connect_targets()
 
         return tr
 
@@ -128,7 +131,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
     # Firstly, it might clear some things up to change the open/read
     # things to file-like interface.
 
-    targetFactory = Target
     refhostsFactory = RefhostsFactory
 
     @property
@@ -221,6 +223,9 @@ class TestReport(with_metaclass(ABCMeta, object)):
             os.chdir(dirname(path))
 
         self.copy_scripts()
+
+        for tp in self.testplatforms:
+            self._refhosts_from_tp(tp)
 
     @abstractmethod
     def _parser(self):
@@ -386,16 +391,12 @@ class TestReport(with_metaclass(ABCMeta, object)):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
-    def connect_targets(self):
-        # TODO: duplicated in:
-        #   autoadd
-        #   add_host
-        #   load_template
+    def connect_targets(self, make_target = Target):
         targets = {}
 
         for (host, system) in self.systems.items():
             try:
-                targets[host] = self.targetFactory(self.config, host, system,
+                targets[host] = make_target(self.config, host, system,
                     self.get_package_list(),
                     logger = self.log,
                     timeout=self.config.connection_timeout)
@@ -419,6 +420,24 @@ class TestReport(with_metaclass(ABCMeta, object)):
             del self.targets[t]
         self.targets.update(targets)
 
+    def add_target(self, hostname, system):
+        if hostname in self.targets:
+            self.log.warning('already connected to {0}. skipping.'.format(
+                self.targets[hostname].hostname
+            ))
+            return
+
+        self.targets[hostname] = Target(
+            self.config,
+            hostname,
+            system,
+            self.get_package_list(),
+            logger = self.log,
+        )
+
+        if self:
+            self.systems[hostname] = system
+
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config, self.log)
 
@@ -436,15 +455,9 @@ class TestReport(with_metaclass(ABCMeta, object)):
                 msg = 'nothing found for testplatform {0!r}'
                 self.log.warning(msg.format(testplatform))
 
-        return dict([(hn, refhosts.get_host_systemname(hn))
-                    for hn in hostnames])
-
-    def load_systems_from_testplatforms(self):
-        for tp in self.testplatforms:
-            self.systems.update(self._refhosts_from_tp(tp))
-
-    def add_host(self, hostname, system):
-        self.systems[hostname] = system
+        self.systems.update(dict(
+            [(hn, refhosts.get_host_systemname(hn)) for hn in hostnames]
+        ))
 
     def list_bugs(self, sink, arg):
         return sink(self.bugs, arg)

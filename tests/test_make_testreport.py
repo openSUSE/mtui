@@ -40,6 +40,8 @@ def test_UID_mtr_success():
       tr.read_calls += 1
       tr.read_args += [a]
       tr.read_kwargs += [kw]
+    def connect_targets(tr, *a, **kw):
+      pass
 
   d = mkdtemp()
 
@@ -79,6 +81,8 @@ def test_UID_mtr_with_checkout():
         e = _TemplateIOError()
         e.errno = errno.ENOENT
         raise e
+    def connect_targets(tr, *a, **kw):
+      pass
 
   class CheckoutFake:
     def __init__(co):
