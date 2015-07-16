@@ -224,20 +224,22 @@ class CommandPrompt(cmd.Cmd):
         #    Command instance can be returned for "do_<cmd>", therefore
         #    removing the need to override both do_help and onecmd.
 
-        y = x.replace("do_","")
-        if y in self.commands:
-            c = self.commands[y]
-            argparser = c.argparser(self.sys)
-            clsdict = {
-                '__doc__': argparser.format_help()
-            }
-            return type(x, (object,), clsdict)
+        if x.startswith('do_'):
+            y = x.replace('do_', '', 1)
+            if y in self.commands:
+                c = self.commands[y]
+                argparser = c.argparser(self.sys)
+                clsdict = {
+                    '__doc__': argparser.format_help()
+                }
+                return type(x, (object,), clsdict)
 
-        y = x.replace("complete_","")
-        if y in self.commands:
-            c = self.commands[y]
-            return log_exception(Exception, self.log.error) \
-                (c.completer(self.targets.select(enabled = True)))
+        if x.startswith('complete_'):
+            y = x.replace("complete_", "", 1)
+            if y in self.commands:
+                c = self.commands[y]
+                return log_exception(Exception, self.log.error) \
+                    (c.completer(self.targets.select(enabled = True)))
 
         raise AttributeError(str(x))
     # }}}
