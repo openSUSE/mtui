@@ -213,9 +213,9 @@ class Attributes(object):
         # currently, just one base product is supported
         attributes.product = list(requests['base'].keys())[0]
         base = requests['base'][attributes.product]
-        if base.has_key('major'):
+        if 'major' in base:
             attributes.major = base['major']
-        if base.has_key('minor'):
+        if 'minor' in base:
             attributes.minor = base['minor']
 
         tags = requests.get('tags', [])

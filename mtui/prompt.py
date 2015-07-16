@@ -174,7 +174,7 @@ class CommandPrompt(cmd.Cmd):
         # FIXME: see L{CommandPrompt.__getattr__}
         cmd_, arg, line = self.parseline(line)
 
-        if not self.commands.has_key(cmd_):
+        if cmd_ not in self.commands:
             return cmd.Cmd.onecmd(self, line)
 
         subcmd = self.commands[cmd_]
@@ -191,7 +191,7 @@ class CommandPrompt(cmd.Cmd):
 
     def do_help(self, arg):
         # FIXME: see L{CommandPrompt.__getattr__}
-        if not self.commands.has_key(arg):
+        if arg not in self.commands:
             return cmd.Cmd.do_help(self, arg)
 
         cmd_ = self.commands[arg]
@@ -225,7 +225,7 @@ class CommandPrompt(cmd.Cmd):
         #    removing the need to override both do_help and onecmd.
 
         y = x.replace("do_","")
-        if self.commands.has_key(y):
+        if y in self.commands:
             c = self.commands[y]
             argparser = c.argparser(self.sys)
             clsdict = {
@@ -234,7 +234,7 @@ class CommandPrompt(cmd.Cmd):
             return type(x, (object,), clsdict)
 
         y = x.replace("complete_","")
-        if self.commands.has_key(y):
+        if y in self.commands:
             c = self.commands[y]
             return log_exception(Exception, self.log.error) \
                 (c.completer(self.targets.select(enabled = True)))
@@ -359,7 +359,7 @@ class CommandPrompt(cmd.Cmd):
         return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
 
     def connect_system_if_unconnected(self, hostname, system):
-        if self.targets.has_key(hostname):
+        if hostname in self.targets:
             self.log.warning('already connected to {0}. skipping.'.format(
                 self.targets[hostname].hostname
             ))

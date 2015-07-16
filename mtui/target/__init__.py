@@ -169,6 +169,9 @@ class HostsGroup(object):
 
     ## dict interface
 
+    def __contains__(self, k):
+        return k in self.hosts
+
     def __getitem__(self, x):
         return self.hosts[x]
 
@@ -183,9 +186,6 @@ class HostsGroup(object):
 
     def copy(self):
         return HostsGroup(self.hosts.values())
-
-    def has_key(self, *a, **kw):
-        return self.hosts.has_key(*a, **kw)
 
     def items(self):
         return self.hosts.items()

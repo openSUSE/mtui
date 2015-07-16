@@ -35,7 +35,7 @@ class ZypperUpToSLE11Update(ZypperUpdate):
     def __init__(self, *a, **kw):
         super(ZypperUpToSLE11Update, self).__init__(*a, **kw)
 
-        if not self.patches.has_key('sat'):
+        if 'sat' not in self.patches:
             self.log.critical('required SAT patch number for zypper update not found')
             return
 
@@ -69,7 +69,7 @@ class openSuseUpdate(Update):
     def __init__(self, *a, **kw):
         super(openSuseUpdate, self).__init__(*a, **kw)
 
-        if not self.patches.has_key('sat'):
+        if 'sat' not in self.patches:
             self.log.critical('required SAT patch number for zypper update not found')
             return
 
@@ -85,7 +85,7 @@ class OldZypperUpdate(Update):
     def __init__(self, *a, **kw):
         super(OldZypperUpdate, self).__init__(*a, **kw)
 
-        if not self.patches.has_key('zypp'):
+        if 'zypp' not in self.patches:
             self.log.critical('required ZYPP patch number for zypper update not found')
             return
 
@@ -102,7 +102,7 @@ class OnlineUpdate(Update):
     def __init__(self, *a, **kw):
         super(OnlineUpdate, self).__init__(*a, **kw)
 
-        if not self.patches.has_key('you'):
+        if 'you' not in self.patches:
             self.log.critical('required YOU patch number for online_update update not found')
             return
 
@@ -118,7 +118,7 @@ class RugUpdate(Update):
     def __init__(self, *a, **kw):
         super(RugUpdate, self).__init__(*a, **kw)
 
-        if not self.patches.has_key('you'):
+        if 'you' not in self.patches:
             self.log.critical('required YOU patch number for rug update not found')
             return
 
@@ -237,7 +237,7 @@ class OldZypperDowngrade(Downgrade):
     def __init__(self, *a, **kw):
         super(OldZypperDowngrade, self).__init__(*a, **kw)
 
-        if not self.patches.has_key('zypp'):
+        if not 'zypp' in self.patches:
             self.log.critical('required ZYPP patch number for zypper downgrade not found')
             return
 
