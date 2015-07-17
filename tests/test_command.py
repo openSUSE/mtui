@@ -35,6 +35,9 @@ NEW_STYLE_CMD='unlock'
 
 class ComMock2_0(Command):
     command = 'commock'
+    @staticmethod
+    def completer(hosts):
+        return lambda *a, **kw: list()
 
 def test_do_help():
     """
@@ -61,17 +64,15 @@ def test_getattr():
     Because that's what L{cmd.Cmd} resolves command names to.
     """
 
+    cmd = ComMock2_0.command
     cp = make_cp()
-    attr="do_"+ComMock2_0.command
-    ok_(not hasattr(cp, attr))
 
+    ok_(not hasattr(cp, 'do_%s' % cmd), cmd)
     cp._add_subcommand(ComMock2_0)
-    r = getattr(cp, attr)
-    ok_('usage: '+ComMock2_0.command in r.__doc__)
 
-    attr = 'do_'+OLD_STYLE_CMD
-    r = getattr(cp, attr)
-    ok_(r == cp.do_update)
+    for p in 'complete_', 'do_', 'help_':
+        attr = p + cmd
+        ok_(callable(getattr(cp, attr)), attr)
 
 def test_getnames():
     """
