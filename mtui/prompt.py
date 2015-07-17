@@ -23,7 +23,6 @@ from mtui.utils import *
 from mtui.refhost import *
 import mtui.notification as notification
 from mtui import commands
-from mtui.utils import log_exception
 from .argparse import ArgsParseFailure
 from mtui.refhost import Attributes
 from mtui.types import obs
@@ -203,8 +202,14 @@ class CommandPrompt(cmd.Cmd):
             y = x.replace("complete_", "", 1)
             if y in self.commands:
                 c = self.commands[y]
-                return log_exception(Exception, self.log.error) \
-                    (c.completer(self.targets.select(enabled = True)))
+                def complete(*args, **kw):
+                    try:
+                        return c.completer(self.targets.select(enabled = True))(*args, **kw)
+                    except Exception as e:
+                        self.log.error(e)
+                        self.log.error(format_exc(e))
+                        raise e
+                return complete
 
         raise AttributeError(str(x))
     # }}}

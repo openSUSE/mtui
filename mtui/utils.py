@@ -164,19 +164,6 @@ def page(text, interactive=True):
         if prompt_user(prompt, "q"):
             return
 
-def log_exception(eclass, logger):
-    def wrap(fn):
-        def wrap2(*args, **kw):
-            try:
-                return fn(*args, **kw)
-            except Exception as e:
-                if isinstance(e, eclass):
-                    logger(e)
-                    logger(traceback.format_exc(e))
-                raise e
-        return wrap2
-    return wrap
-
 def ensure_dir_exists(*path, **kwargs):
     """
     :returns: str joined path with dirs created as needed.
