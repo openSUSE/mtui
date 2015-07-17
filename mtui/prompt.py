@@ -204,7 +204,7 @@ class CommandPrompt(cmd.Cmd):
                 c = self.commands[y]
                 def complete(*args, **kw):
                     try:
-                        return c.completer(self.targets.select(enabled = True))(*args, **kw)
+                        return c.complete(self.targets.select(enabled = True), *args, **kw)
                     except Exception as e:
                         self.log.error(e)
                         self.log.debug(format_exc(e))

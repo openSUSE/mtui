@@ -35,9 +35,6 @@ NEW_STYLE_CMD='unlock'
 
 class ComMock2_0(Command):
     command = 'commock'
-    @staticmethod
-    def completer(hosts):
-        return lambda *a, **kw: list()
 
 def test_do_help():
     """

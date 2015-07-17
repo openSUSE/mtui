@@ -85,7 +85,7 @@ class Command(with_metaclass(ABCMeta, object)):
         return p
 
     @staticmethod
-    def completer(hosts):
+    def complete(hosts, text, line, begidx, endidx):
         """
         :type hosts: L{mtui.target.HostsGroup}
         :returns: callable suitable for tab completion
@@ -140,19 +140,17 @@ class HostsUnlock(Command):
             ])
 
     @staticmethod
-    def completer(hosts):
-        def wrap(text, line, begidx, endidx):
-            return complete_choices(
-                [
-                    ("-h", "--help"),
-                    ("-a",),
-                    ("-f", "--force")
-                ],
-                line,
-                text,
-                hosts.names()
-            )
-        return wrap
+    def complete(hosts, text, line, begidx, endidx):
+        return complete_choices(
+            [
+                ("-h", "--help"),
+                ("-a",),
+                ("-f", "--force")
+            ],
+            line,
+            text,
+            hosts.names()
+        )
 
 class ListPackages(Command):
     command = 'list_packages'
@@ -302,11 +300,8 @@ class ReportBug(Command):
         return parser
 
     @staticmethod
-    def completer(_):
-        def wrap(text, line, begidx, endidx):
-            return complete_choices([("-p", "--print-url"),], line, text)
-
-        return wrap
+    def complete(_, text, line, begidx, endidx):
+        return complete_choices([("-p", "--print-url"),], line, text)
 
 class Whoami(Command):
     """

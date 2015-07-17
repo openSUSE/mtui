@@ -115,7 +115,7 @@ def test_xdg_open_returned_0():
 
 def test_completer():
     def test(in_, out):
-        eq_(set(ReportBug.completer([])(*in_)), set(out))
+        eq_(set(ReportBug.complete([], *in_)), set(out))
 
     xs = [
         (['--', 'report-bug --', 11, 13], ["--print-url"]),
