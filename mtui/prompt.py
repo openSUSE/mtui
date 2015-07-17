@@ -207,7 +207,7 @@ class CommandPrompt(cmd.Cmd):
                         return c.completer(self.targets.select(enabled = True))(*args, **kw)
                     except Exception as e:
                         self.log.error(e)
-                        self.log.error(format_exc(e))
+                        self.log.debug(format_exc(e))
                         raise e
                 return complete
 
