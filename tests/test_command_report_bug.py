@@ -19,6 +19,14 @@ from .utils import LogFake
 from .utils import SysFake
 from .utils import unused
 
+def make(args, **kw):
+    c = kw.pop('config', None) or ConfigFake()
+    l = kw.pop('logger', None) or LogFake()
+    s = kw.pop('sys', None) or SysFake()
+    cp = make_cp(config = c, logger = l, sys = s)
+    a = ReportBug.parse_args(args, s)
+    return ReportBug(a, [], c, s, l, cp, **kw)
+
 def test_print_url():
     """
     Test url is only printed when -p is given
@@ -26,9 +34,8 @@ def test_print_url():
     def raiser(*a, **kw):
         raise RuntimeError("Unexpected popen() call")
 
-    c, l, s = ConfigFake(), LogFake(), SysFake()
-    cmd = ReportBug(ReportBug.parse_args("-p", s), [], c, s, l,
-        make_cp(config = c, logger = l, sys = s), popen = raiser)
+    c = ConfigFake()
+    cmd = make("-p", config = c, popen = raiser)
 
     cmd.run()
     eq_(cmd.sys.stdout.getvalue(), c.report_bug_url + "\n")
@@ -48,12 +55,12 @@ def test_xdg_open_happy():
         def kill(self):
             return
 
-    c, l, s = ConfigFake(), LogFake(), SysFake()
-    cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        make_cp(config = c, logger = l, sys = s), popen = PopenFake)
+    c = ConfigFake()
+    s = SysFake()
+    cmd = make("", config = c, sys = s, popen = PopenFake)
 
     cmd.run()
-    eq_(cmd.sys.stdout.getvalue(), "")
+    eq_(s.stdout.getvalue(), "")
     eq_(PopenFake.args, [["xdg-open", c.report_bug_url]])
 
 
@@ -68,9 +75,8 @@ def test_xdg_open_failed():
         def poll(self):
             return 6
 
-    c, l, s = ConfigFake(), LogFake(), SysFake()
-    cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        make_cp(config = c, logger = l, sys = s), popen = PopenFake)
+    c = ConfigFake()
+    cmd = make("", config = c, popen = PopenFake)
 
     try:
         cmd.run()
@@ -86,9 +92,7 @@ def test_xdg_open_failed_to_exec():
     def popen_fake(*_):
         raise OSError(ENOENT, unused)
 
-    c, l, s = ConfigFake(), LogFake(), SysFake()
-    cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        make_cp(config = c, logger = l, sys = s), popen = popen_fake)
+    cmd = make("", popen = popen_fake)
 
     try:
         cmd.run()
@@ -106,12 +110,14 @@ def test_xdg_open_returned_0():
         def poll(self):
             return 0
 
-    c, l, s = ConfigFake(), LogFake(), SysFake()
-    cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        make_cp(config = c, logger = l, sys = s), popen = PopenFake)
+    cmd = make("", popen = PopenFake)
 
     cmd.run()
     eq_(cmd.logger.debugs, [UnexpectedlyFastCleanExitFromXdgOpen()])
+
+def test_has_default_popen():
+    cmd = make("")
+    eq_(cmd.popen, Popen)
 
 def test_completer():
     def test(in_, out):
@@ -123,9 +129,3 @@ def test_completer():
     ]
     for i, o in xs:
         yield test, i, o
-
-def test_has_default_popen():
-    c, l, s = ConfigFake(), LogFake(), SysFake()
-    cmd = ReportBug(ReportBug.parse_args("", s), [], c, s, l,
-        make_cp(config = c, logger = l, sys = s))
-    eq_(cmd.popen, Popen)
