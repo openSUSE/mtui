@@ -90,7 +90,7 @@ class Command(with_metaclass(ABCMeta, object)):
         :type hosts: L{mtui.target.HostsGroup}
         :returns: callable suitable for tab completion
         """
-        raise NotImplementedError
+        return lambda text, line, begidx, endidx: []
 
     @abstractmethod
     def run(self):
@@ -328,10 +328,6 @@ class Whoami(Command):
             self.config.session_user,
             str(self.get_pid()),
             ]))
-
-    @staticmethod
-    def completer(hosts):
-        raise NotImplementedError
 
 class Config(Command):
     """
