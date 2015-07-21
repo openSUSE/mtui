@@ -12,20 +12,10 @@ That is
 
 from nose.tools import ok_, eq_
 
-from mtui.prompt import CommandPrompt
 from mtui.commands import Command
-from mtui.template import TestReport
-from mtui import __version__
-from operator import add
-
-import os
-import argparse
-from distutils.version import StrictVersion
 
 from tests.prompt import make_cp
 
-from .utils import ConfigFake
-from .utils import StringIO
 from .utils import SysFake
 from .utils import unused
 

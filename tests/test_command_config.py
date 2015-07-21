@@ -2,14 +2,7 @@
 
 from nose.tools import eq_
 
-from mtui import commands
-from mtui.template import TestReport
-from mtui.prompt import CommandAlreadyBoundError
-from .utils import StringIO
 from .utils import ConfigFake
-from .utils import LogFake
-from .utils import SysFake
-from .test_prompt import TestableCommandPrompt
 from .prompt import make_cp
 
 try:

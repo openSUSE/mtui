@@ -10,7 +10,6 @@ try:
 except ImportError:
     import ConfigParser as configparser
 
-from mtui import __version__
 from traceback import format_exc
 from mtui.refhost import RefhostsFactory
 from mtui.messages import InvalidLocationError

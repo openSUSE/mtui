@@ -3,13 +3,11 @@
 from nose.tools import eq_
 from nose.tools import ok_
 from nose.tools import raises
-from nose.tools import nottest
 
 from mtui.main import get_parser
 from mtui.main import run_mtui
 from .utils import ConfigFake
 from .utils import SysFake
-from .utils import StringIO
 from .utils import OneShotFactory
 from .utils import LogFake
 from .utils import rand_maintenance_id

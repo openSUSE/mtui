@@ -2,7 +2,6 @@ from nose.tools import ok_, eq_, raises
 
 from paramiko import SSHException
 
-from mtui import prompt
 from mtui.target import TargetLock, RemoteLock, Target
 from mtui.target import LockedTargets
 from mtui import messages

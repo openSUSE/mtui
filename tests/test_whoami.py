@@ -2,9 +2,7 @@ from nose.tools import ok_, eq_
 
 from mtui.commands import Whoami
 from .utils import ConfigFake
-from .utils import StringIO
 from .utils import SysFake
-from .utils import RefhostsFake
 
 def test_whoami():
     class PromptFake:

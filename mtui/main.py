@@ -2,14 +2,8 @@
 
 from __future__ import absolute_import
 
-import os, glob, stat
 import sys
-import errno
-import getopt
 import logging
-import shutil
-from traceback import format_exc
-import warnings
 from argparse import FileType
 from subprocess import CalledProcessError
 

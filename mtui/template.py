@@ -15,8 +15,6 @@ import subprocess
 
 from mtui.target import HostsGroup
 from mtui.target import Target
-from mtui.target import RunCommand
-from mtui.target import FileUpload
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
 from mtui.testopia import Testopia
@@ -27,15 +25,12 @@ from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.five import with_metaclass
-from mtui.messages import QadbReportCommentLengthWarning
 from mtui.messages import FailedToDownloadSrcRPMError
 from mtui.messages import FailedToExtractSrcRPM
 from mtui.messages import SrcRPMExtractedMessage
-from mtui import messages
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser, SWAMPMetadataParser
-from mtui.utils import ass_is, ass_isL
 from mtui.utils import nottest
 
 class _TemplateIOError(IOError):

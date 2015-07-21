@@ -8,7 +8,6 @@ from mtui.prompt import CommandAlreadyBoundError
 from mtui.template import OBSTestReport
 from mtui.messages import HostIsNotConnectedError
 from mtui.messages import ListPackagesAllHost
-from .utils import StringIO
 from .utils import ConfigFake
 from .utils import LogFake
 from .utils import SysFake

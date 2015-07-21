@@ -5,21 +5,16 @@ from unittest import TestCase
 
 from collections import namedtuple
 from tempfile import mkdtemp, mkstemp
-from temps import tmpdir
 from os.path import join
-from os.path import dirname
-from errno import EINTR, ENOENT, EPERM, EEXIST
+from errno import ENOENT, EEXIST
 import shutil
 import os
-from copy import deepcopy
 
-from mtui.template import TestReport
 from mtui.template import NullTestReport
 from mtui.template import SwampTestReport
 from mtui.template import OBSTestReport
 from mtui.template import SwampUpdateID
 from mtui.template import _TemplateIOError
-from mtui.template import QadbReportCommentLengthWarning
 from mtui.updater import UnknownSystemError
 from mtui.target import Target
 from mtui.types.md5 import MD5Hash
@@ -35,8 +30,6 @@ from .utils import unused
 from .utils import testreports
 from .utils import TRF
 from .utils import refhosts_fixtures
-
-from traceback import format_exc
 
 # FIXME: use temps python package to manage tempdirs/files
 

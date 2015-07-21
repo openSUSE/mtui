@@ -1,7 +1,5 @@
 from __future__ import absolute_import
 from abc import ABCMeta, abstractmethod
-from gettext import gettext as _
-import traceback
 import os
 import errno
 
@@ -10,7 +8,6 @@ from time import sleep
 
 from .argparse import ArgumentParser
 from mtui.target import HostsGroupException, TargetLockedError
-from mtui.utils import flatten
 from mtui.utils import complete_choices
 from mtui.utils import blue, yellow, green, red
 from mtui import messages

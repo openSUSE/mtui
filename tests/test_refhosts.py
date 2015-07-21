@@ -4,9 +4,7 @@ from nose.tools import ok_, eq_
 from nose.tools import raises
 
 import os
-from tempfile import mkstemp
 from tempfile import NamedTemporaryFile
-from collections import namedtuple
 from posix import stat_result
 from errno import EPERM
 try:

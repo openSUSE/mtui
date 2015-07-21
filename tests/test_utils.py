@@ -4,7 +4,6 @@ from nose.tools import ok_, eq_, raises
 from unittest import TestCase
 
 import os
-import pwd
 import shutil
 from tempfile import mkdtemp
 from os.path import join
@@ -13,7 +12,6 @@ from mtui.utils import ensure_dir_exists
 from mtui.utils import chdir
 from mtui.utils import requires_update
 from mtui.utils import ass_is
-from mtui.utils import ass_isL
 from mtui.utils import DictWithInjections
 from mtui.xdg import save_cache_path
 from mtui.messages import TestReportNotLoadedError

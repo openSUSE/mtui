@@ -8,12 +8,9 @@ from nose.tools import nottest
 from mtui.prompt import CommandPrompt
 from mtui.prompt import CmdQueue
 from mtui.prompt import QuitLoop
-from mtui.template import TestReport
 from mtui.commands import Command
 from mtui.types.md5 import MD5Hash
 from mtui.template import SwampTestReport
-
-from distutils.version import StrictVersion
 
 from tests.prompt import make_cp
 

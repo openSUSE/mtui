@@ -6,7 +6,6 @@
 from datetime import date
 from functools import reduce
 
-import itertools
 import os
 import cmd
 import logging
@@ -17,7 +16,7 @@ import re
 import getpass
 
 from mtui import messages
-from mtui.rpmver import *
+from mtui.rpmver import RPMFile
 from mtui.target import *
 from mtui.utils import *
 from mtui.refhost import *
@@ -30,8 +29,6 @@ from mtui.template import NullTestReport
 from mtui.template import OBSUpdateID
 from mtui.template import SwampUpdateID
 from mtui.utils import requires_update
-
-from distutils.version import StrictVersion
 
 try:
     unicode
