@@ -20,6 +20,7 @@ from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
 from mtui.five import urlopen
+from mtui.rpmver import RPMFile
 
 from mtui import utils
 
@@ -605,16 +606,16 @@ class TestReport(with_metaclass(ABCMeta, object)):
             return []
 
     def extract_source_rpm(self):
-        with chdir(self.local_wd()):
-            self.download_source_rpm()
-
-            cmd = 'for i in *src.rpm; do name=$(rpm -qp --queryformat "%{NAME}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories; cd ..; done'
-            rc = os.system(cmd)
-
-            if rc:
-                raise FailedToExtractSrcRPM(rc, cmd)
-
-        self.log.info(SrcRPMExtractedMessage(self.local_wd()))
+        rpms = self.download_source_rpm()
+        for srpm, path in rpms.items():
+            dest = '%s/%s' % (self.local_wd(), RPMFile(path).name)
+            utils.mkdir_p(dest)
+            with chdir(dest):
+                cmd = 'rpm2cpio %s | cpio -idmu --no-absolute-filenames --quiet' % path
+                rc = os.system(cmd)
+                if rc:
+                    raise FailedToExtractSrcRPM(rc, cmd)
+                self.log.info(SrcRPMExtractedMessage(self.local_wd()))
 
     def load_testopia(self, *packages):
         try:
