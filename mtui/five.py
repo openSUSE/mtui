@@ -15,3 +15,7 @@ def with_metaclass(meta, *bases):
             return meta(name, bases, d)
     return type.__new__(metaclass, 'temporary_class', (), {})
 
+try:
+    from urllib.request import urlopen
+except ImportError:
+    from urllib import urlopen

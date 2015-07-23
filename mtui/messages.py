@@ -152,9 +152,6 @@ class CompareScriptCrashed(CompareScriptError):
             self.stderr,
         )
 
-class FailedToDownloadSrcRPMError(SystemCommandError):
-    _message = "Failed to download source rpm."
-
 class FailedToExtractSrcRPM(SystemCommandError):
     _message = "Failed to extract source rpm."
 
