@@ -608,14 +608,16 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def extract_source_rpm(self):
         rpms = self.download_source_rpm()
         for srpm, path in rpms.items():
-            dest = '%s/%s' % (self.local_wd(), RPMFile(path).name)
+            self.log.info("Extracting %s" % srpm)
+            name = RPMFile(path).name
+            dest = '%s/%s' % (self.local_wd(), name)
             utils.mkdir_p(dest)
             with chdir(dest):
                 cmd = 'rpm2cpio %s | cpio -idmu --no-absolute-filenames --quiet' % path
                 rc = os.system(cmd)
                 if rc:
                     raise FailedToExtractSrcRPM(rc, cmd)
-                self.log.info(SrcRPMExtractedMessage(self.local_wd()))
+                self.log.info(SrcRPMExtractedMessage(srpm, '%s/%s' % (self.local_wd(), name)))
 
     def load_testopia(self, *packages):
         try:
