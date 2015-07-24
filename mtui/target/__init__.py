@@ -170,6 +170,9 @@ class HostsGroup(object):
 
     ## dict interface
 
+    def __delitem__(self, x):
+        del self.hosts[x]
+
     def __getitem__(self, x):
         return self.hosts[x]
 
