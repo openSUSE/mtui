@@ -1548,8 +1548,9 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('downgrading')
             try:
                 self.metadata.perform_downgrade(targets)
-            except Exception:
+            except Exception as e:
                 self.log.critical('failed to downgrade target systems')
+                self.log.debug(format_exc(e))
                 return
             except KeyboardInterrupt:
                 self.log.info('downgrade process canceled')
