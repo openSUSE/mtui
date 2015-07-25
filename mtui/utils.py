@@ -6,6 +6,7 @@
 from __future__ import print_function
 
 import os
+import os.path as opa
 import time
 import fcntl
 import struct
@@ -164,6 +165,14 @@ def page(text, interactive=True):
         if prompt_user(prompt, "q"):
             return
 
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except EnvironmentError as e:
+        if e.errno == EEXIST and opa.isdir(path):
+            return
+        raise e
+
 def ensure_dir_exists(*path, **kwargs):
     """
     :returns: str joined path with dirs created as needed.
@@ -180,14 +189,10 @@ def ensure_dir_exists(*path, **kwargs):
     path = join(*path)
     dirn = dirname(path) if filepath else path
 
-    try:
-        os.makedirs(dirn)
-    except OSError as e:
-        if e.errno != EEXIST:
-            raise
-    else:
-        if callable(on_create):
-            on_create(path=dirn)
+    mkdir_p(dirn)
+
+    if callable(on_create):
+        on_create(path=dirn)
 
     return path
 

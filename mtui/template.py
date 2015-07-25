@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-from os.path import join, basename, dirname
+from os.path import join, split, basename, dirname
 from errno import ENOENT
 from errno import EEXIST
 import shutil
@@ -19,13 +19,16 @@ from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
+from mtui.five import urlopen
+from mtui.rpmver import RPMFile
+
 from mtui import utils
 
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.five import with_metaclass
-from mtui.messages import FailedToDownloadSrcRPMError
+from mtui.messages import QadbReportCommentLengthWarning
 from mtui.messages import FailedToExtractSrcRPM
 from mtui.messages import SrcRPMExtractedMessage
 from mtui.messages import SvnCheckoutInterruptedError
@@ -40,16 +43,6 @@ class _TemplateIOError(IOError):
     else in the process
     """
     pass
-
-def download_source_rpm(uri, recursion_level, system = subprocess.call):
-    cmd = 'wget -q -r -nd -l{1} --no-parent -A "*src.rpm" {0}/'.format(
-        uri,
-        recursion_level
-    )
-    rc = system(cmd, shell = True)
-
-    if rc:
-        raise FailedToDownloadSrcRPMError(rc, cmd)
 
 def testreport_svn_checkout(config, log, uri):
     ensure_dir_exists(
@@ -586,20 +579,45 @@ class TestReport(with_metaclass(ABCMeta, object)):
                     x = s(self, join(d, f), self.log)
                     x.run(targets)
 
+    def download_file(self, from_, into):
+        self.log.info("Downloading %s" % from_)
+        from contextlib import closing
+        with open(into, 'wb') as dst, closing(urlopen(from_)) as src:
+            dst.writelines(src)
+
     def download_source_rpm(self):
-        raise NotImplementedError()
+        try:
+            with open(self.report_wd('packages-list.txt', filepath = True), 'r') as fd:
+                paths = []
+                paths = dict()
+                for line in fd:
+                    tail = line.rstrip()
+                    if not tail.endswith('.src.rpm'): continue
+                    _, fname = split(tail)
+                    if fname in paths: continue
+                    url = '%s/%s' % (self.repository.rstrip('/'), tail)
+                    path = '%s/%s' % (self.local_wd(), basename(tail))
+                    self.download_file(url, into = path)
+                    paths[fname] = path
+                return paths
+        except Exception as e:
+            self.log.error("Failed to download source rpm")
+            self.log.debug(format_exc(e))
+            return []
 
     def extract_source_rpm(self):
-        with chdir(self.local_wd()):
-            self.download_source_rpm()
-
-            cmd = 'for i in *src.rpm; do name=$(rpm -qp --queryformat "%{NAME}" $i); mkdir -p $name; cd $name; rpm2cpio ../$i | cpio -i --unconditional --preserve-modification-time --make-directories; cd ..; done'
-            rc = os.system(cmd)
-
-            if rc:
-                raise FailedToExtractSrcRPM(rc, cmd)
-
-        self.log.info(SrcRPMExtractedMessage(self.local_wd()))
+        rpms = self.download_source_rpm()
+        for srpm, path in rpms.items():
+            self.log.info("Extracting %s" % srpm)
+            name = RPMFile(path).name
+            dest = '%s/%s' % (self.local_wd(), name)
+            utils.mkdir_p(dest)
+            with chdir(dest):
+                cmd = 'rpm2cpio %s | cpio -idmu --no-absolute-filenames --quiet' % path
+                rc = os.system(cmd)
+                if rc:
+                    raise FailedToExtractSrcRPM(rc, cmd)
+                self.log.info(SrcRPMExtractedMessage(srpm, '%s/%s' % (self.local_wd(), name)))
 
     def load_testopia(self, *packages):
         try:
@@ -690,6 +708,9 @@ class NullTestReport(TestReport):
         '''python-2.x compat, see __bool__()'''
         return tr.__bool__()
 
+    def download_source_rpm(self):
+        raise NotImplementedError()
+
     def target_wd(self, *paths):
         return join(self.config.target_tempdir, *paths)
 
@@ -727,12 +748,6 @@ class SwampTestReport(TestReport):
 
     def _parser(self):
         return SWAMPMetadataParser()
-
-    def download_source_rpm(self):
-        download_source_rpm(
-            self.repository,
-            2
-        )
 
     def set_repo(self, target, name):
         argv = ('-n',)
@@ -773,12 +788,6 @@ class OBSTestReport(TestReport):
             ('ReviewRequestID'  , self.rrid),
             ('Rating'           , self.rating),
         ] + super(OBSTestReport, self)._show_yourself_data()
-
-    def download_source_rpm(self):
-        download_source_rpm(
-            self.repository,
-            3
-        )
 
     def set_repo(self, target, name):
         argv = ('-z',)
