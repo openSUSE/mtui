@@ -229,7 +229,15 @@ class ZypperDowngrade(Downgrade):
     def __init__(self, *a, **kw):
         super(ZypperDowngrade, self).__init__(*a, **kw)
 
-        self.list_command = 'zypper se -s --match-exact -t package %s | grep -v "(System" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $2,"=",$4 }\'' % ' '.join(self.packages)
+        self.list_command = r'''
+            for p in %s; do \
+              zypper se -s --match-exact -t package $p; \
+            done \
+            | grep -v "(System" \
+            | grep ^[iv] \
+            | sed "s, ,,g" \
+            | awk -F "|" '{ print $2,"=",$4 }'
+        ''' % ' '.join(self.packages)
         self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
 
 
