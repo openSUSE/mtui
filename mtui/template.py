@@ -299,6 +299,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         updater = self.get_updater()
 
         display('\n'.join(updater(
+            self.log,
             targets,
             self.patches,
             self.get_package_list(),
