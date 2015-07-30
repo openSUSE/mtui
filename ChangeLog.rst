@@ -2,6 +2,40 @@
 ChangeLog
 #########
 
+5.0.3
+#####
+
+Bugfixes
+========
+
+- Fixes command testsuite_submit
+  bsc#939695 The new version cannot submit to QADB
+  71be1a827bb4620c80439beb378789e05232cb85
+  20b3f3bf293b592d001b4f824d799813b31173a7
+
+- script check_new_dependencies.sh no longer touches repositories.
+  43672a94940380b95f418ecf995d61e34310a4f5
+
+- bsc#939392 zypper search ignores arguments with "+" (plus) characters
+  bsc#939198 mtui is affected by a `zypper search` bug
+  dea147183aa94faa8764d372b93968e2fcc10692
+
+- bsc#939532 list_update_commands is broken
+  d191947acf861aa37542bd974f5bfea17b160798
+
+- bsc#939080 broken list_packages on packages wih "~" in version string
+  eb3af3397d7e4989ab96e2ee2390ac7095a2837d
+
+- Broken downgrade
+  bsc#939198 mtui is affected by a `zypper search` bug
+  7e571dc68386e32409cf141c345d16b03d63b114
+
+- bsc#937364 refsearch.py always emits traceback
+  6e91f9cdfb644d5f9c99d869656e9b6a6b43f81c
+
+- Fixed addon handling
+  adb51f53b62c8af67b5ff98e24e313943bba4a3d
+
 5.0.2
 #####
 
