@@ -1193,8 +1193,8 @@ class CommandPrompt(cmd.Cmd):
             self.log.debug(format_exc())
             return
 
-        if len(s) > self._max_comment_len:
-            self.log.warning(QadbReportCommentLengthWarning())
+        if len(comment) > 10:
+            self.log.warning(messages.QadbReportCommentLengthWarning())
 
         self.log.info('please specify rd-qa NIS password')
         password = getpass.getpass()
@@ -1629,8 +1629,9 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('downgrading')
             try:
                 self.metadata.perform_downgrade(targets)
-            except Exception:
+            except Exception as e:
                 self.log.critical('failed to downgrade target systems')
+                self.log.debug(format_exc(e))
                 return
             except KeyboardInterrupt:
                 self.log.info('downgrade process canceled')

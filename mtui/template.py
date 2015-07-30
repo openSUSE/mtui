@@ -299,6 +299,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         updater = self.get_updater()
 
         display('\n'.join(updater(
+            self.log,
             targets,
             self.patches,
             self.get_package_list(),
@@ -623,7 +624,14 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
     def list_versions(self, sink, targets, packages):
         if int(self.get_release()) > 10:
-            query = "zypper se -s --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $2 $4 }' | sort -u"
+            query = r'''
+                for p in %s; do \
+                    zypper search -s --match-exact -t package $p; \
+                done \
+                | egrep ^[iv] \
+                | awk -F '|' '{ print $2 $4 }' \
+                | sort -u
+            '''
         else:
             query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -u"
 

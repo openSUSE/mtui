@@ -170,6 +170,9 @@ class HostsGroup(object):
 
     ## dict interface
 
+    def __delitem__(self, x):
+        del self.hosts[x]
+
     def __getitem__(self, x):
         return self.hosts[x]
 
@@ -296,22 +299,16 @@ class Target(object):
             where
               package = str
         """
-        self.run('rpm -q {0}'.format(' '.join(packages)))
+        self.run('rpm -q --queryformat "%%{Name} %%{Version}-%%{Release}\n" %s' % ' '.join(packages))
 
         packages = {}
-        for line in re.split('\n+', self.lastout()):
-            match = re.search(r"^([a-zA-Z0-9_\-\+\.]*)-([a-zA-Z0-9_\.+]*)-([a-zA-Z0-9_\.]*)", line)
-            if match:
-                packages[match.group(1)] = RPMVersion('{0}-{1}'.format(
-                    match.group(2),
-                    match.group(3)
-                ))
-                continue
-
+        for line in self.lastout().splitlines():
             match = re.search('package (.*) is not installed', line)
             if match:
                 packages[match.group(1)] = None
-
+                continue
+            p, v = line.split()
+            packages[p] = RPMVersion(v)
         return packages
 
     def disable_repo(self, repo):

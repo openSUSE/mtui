@@ -8,6 +8,7 @@ import logging
 
 from mtui.refhost import Attributes
 from mtui.prompt import CommandPrompt
+from mtui.display import CommandPromptDisplay
 from mtui.config import Config
 
 def usage():
@@ -52,7 +53,7 @@ def main():
         usage()
         sys.exit(2)
 
-    p = CommandPrompt(config, log, sys)
+    p = CommandPrompt(config, log, sys, CommandPromptDisplay)
     p.do_search_hosts(" ".join(search))
 
 main()
