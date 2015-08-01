@@ -1120,7 +1120,7 @@ class CommandPrompt(cmd.Cmd):
             self.log.debug(format_exc())
             return
 
-        if len(s) > self._max_comment_len:
+        if len(comment) > 10:
             self.log.warning(messages.QadbReportCommentLengthWarning())
 
         self.log.info('please specify rd-qa NIS password')
