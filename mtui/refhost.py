@@ -95,12 +95,10 @@ class Attributes(object):
         return ' '.join(rep.split())
 
     def __bool__(self):
-        """return if attributes have been set on this object"""
-
-        if self.__str__():
-            return True
-        else:
-            return False
+        """
+        :returns: True if attributes have been set on this object
+        """
+        return bool(str(self))
 
     def __nonzero__(self):
         """python-2.x compat"""
