@@ -32,25 +32,6 @@ from mtui.target.locks import TargetLock
 from mtui.target.locks import TargetLockedError
 
 
-class HostsGroupException(Exception):
-    def __init__(self, es):
-        self.es = es
-        msg = "\n".join([str(x) for x in es])
-        Exception.__init__(self, msg)
-
-    def handle(self, xs):
-        new = []
-        for e in self.es:
-            handled = False
-            for x in xs:
-                if x[0](e):
-                    x[1](e)
-                    handled = True
-            if not handled:
-                new.append(e)
-        if new:
-            raise HostsGroupException(new)
-
 class HostsGroup(object):
     """
     Composite pattern for L{Target}
@@ -88,15 +69,11 @@ class HostsGroup(object):
         ])
 
     def unlock(self, *a, **kw):
-        es = []
         for x in self.hosts.values():
             try:
                 x.unlock(*a, **kw)
-            except Exception as e:
-                es.append(e)
-
-        if not es == []:
-            raise HostsGroupException(es)
+            except TargetLockedError as e:
+                pass # logged in Target#unlock
 
     def query_versions(self, packages):
         rs = []
@@ -462,7 +439,11 @@ class Target(object):
         self._lock.lock(comment)
 
     def unlock(self, force=False):
-        self._lock.unlock(force)
+        try:
+            self._lock.unlock(force)
+        except TargetLockedError as e:
+            self.logger.warning(e)
+            raise
 
     def locked(self):
         """

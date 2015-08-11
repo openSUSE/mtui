@@ -7,7 +7,7 @@ from subprocess import Popen
 from time import sleep
 
 from .argparse import ArgumentParser
-from mtui.target import HostsGroupException, TargetLockedError
+from mtui.target import TargetLockedError
 from mtui.utils import complete_choices
 from mtui.utils import blue, yellow, green, red
 from mtui import messages
@@ -128,13 +128,7 @@ class HostsUnlock(Command):
             self.logger.error(e)
             return
 
-        try:
-            hosts.unlock(force=args.force)
-        except HostsGroupException as e:
-            e.handle([
-                (lambda e: isinstance(e, TargetLockedError),
-                lambda e: self.logger.warning(e))
-            ])
+        hosts.unlock(force = args.force)
 
     @staticmethod
     def complete(hosts, text, line, begidx, endidx):
