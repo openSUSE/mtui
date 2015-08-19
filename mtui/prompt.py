@@ -13,7 +13,6 @@ import readline
 import subprocess
 import glob
 import re
-import getpass
 
 from mtui import messages
 from mtui.rpmver import RPMFile
@@ -1094,8 +1093,7 @@ class CommandPrompt(cmd.Cmd):
         Submits the ctcs2 testsuite results to qadb.suse.de.
         The comment field is populated with some attributes like SWAMPID or
         testsuite name, but can also be edited before the results get
-        submitted. Submitting results to qadb requires the rd-qa NIS
-        password.
+        submitted.
 
         testsuite_submit <hostname>,hostname,...,<testsuite>
         Keyword arguments:
@@ -1123,39 +1121,30 @@ class CommandPrompt(cmd.Cmd):
         if len(comment) > 10:
             self.log.warning(messages.QadbReportCommentLengthWarning())
 
-        self.log.info('please specify rd-qa NIS password')
-        password = getpass.getpass()
-
-        submit = []
-        submit.append('echo \'echo -n "%s"\' > /tmp/pwdask' % password)
-        submit.append('chmod 700 /tmp/pwdask')
-        submit.append('SSH_ASKPASS=/tmp/pwdask DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c \'{2}\''.format(
+        command = 'DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c \'{2}\''.format(
             self.metadata.id,
             username,
             comment
-        ))
-        submit.append('rm /tmp/pwdask')
+        )
 
-        for command in submit:
-            try:
-                targets.run(command)
-            except KeyboardInterrupt:
-                return
+        try:
+            targets.run(command)
+        except KeyboardInterrupt:
+            return
 
-            if 'remote_qa_db_report.pl' in command:
-                for hn, tgt in targets.items():
-                    if tgt.lastexit() != 0:
-                        self.log.critical('submitting testsuite results failed on %s:' % hn)
-                        self.println('{}:~> {} [{}]'.format(hn, name, tgt.lastexit()))
-                        self.println(tgt.lastout())
-                        if tgt.lasterr():
-                            self.println(tgt.lasterr())
-                    else:
-                        match = re.search('(http://.*/submission.php.submission_id=\d+)', tgt.lasterr())
-                        if match:
-                            self.log.info('submission for %s (%s): %s' % (hn, tgt.system, match.group(1)))
-                        else:
-                            self.log.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (hn, hn))
+        for hn, tgt in targets.items():
+            if tgt.lastexit() != 0:
+                self.log.critical('submitting testsuite results failed on %s:' % hn)
+                self.println('{}:~> {} [{}]'.format(hn, name, tgt.lastexit()))
+                self.println(tgt.lastout())
+                if tgt.lasterr():
+                    self.println(tgt.lasterr())
+            else:
+                match = re.search('(http://.*/submission.php.submission_id=\d+)', tgt.lasterr())
+                if match:
+                    self.log.info('submission for %s (%s): %s' % (hn, tgt.system, match.group(1)))
+                else:
+                    self.log.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (hn, hn))
 
         self.log.info('done')
 
