@@ -82,6 +82,6 @@ for p in $list; do
       # label each dependency with the dependent package so
       # compare_new_dependencies.sh knows what it's looking at and
       # can present to user which package is affected by each change.
-      s/^/$p: /
+      s/^/$p /
     "
 done
