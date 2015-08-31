@@ -589,7 +589,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def download_source_rpm(self):
         try:
             with open(self.report_wd('packages-list.txt', filepath = True), 'r') as fd:
-                paths = []
                 paths = dict()
                 for line in fd:
                     tail = line.rstrip()
@@ -604,7 +603,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         except Exception as e:
             self.log.error("Failed to download source rpm")
             self.log.debug(format_exc(e))
-            return []
+            return dict()
 
     def extract_source_rpm(self):
         rpms = self.download_source_rpm()
