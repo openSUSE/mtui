@@ -60,9 +60,11 @@ mtui.location
 ~~~~~~~~~~~~~
 
 type
-  enum: `beijing`, `cloud`, `consoles`, `default`, `misc`, `nuremberg`, `prague`
+  enum: locations defined in `refhosts.xml`_.
 default
   `default`
+
+.. _refhosts.xml: https://gitlab.suse.de/qa-maintenance/metadata/blob/master/refhosts.xml
 
 MTUI will limit reference hosts to those in `mtui.location`.
 If a required system cannot be found in `mtui.location`
