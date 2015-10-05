@@ -66,6 +66,10 @@ default
 
 .. _refhosts.xml: https://gitlab.suse.de/qa-maintenance/metadata/blob/master/refhosts.xml
 
+.. tip:: View valid locations using `refdb`_: `refdb -p location | sort | uniq`
+
+.. _refdb: https://gitlab.suse.de/rneuhauser/refdb/blob/master/README.rest
+
 MTUI will limit reference hosts to those in `mtui.location`.
 If a required system cannot be found in `mtui.location`
 it will be loaded from `default`.
