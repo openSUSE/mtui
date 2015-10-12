@@ -2,6 +2,274 @@
 ChangeLog
 #########
 
+6.0
+###
+
+Bugfixes
+========
+
+- Drop NIS.de password from testsuite_submit
+
+  The password is not used for a long time, if it ever was.
+
+  The authentication is really handled by ssh key added to our refhosts by
+  package `qa_lib_keys` which is a dependency of `qa_tools` package.
+
+  9b939d1b1cda250ab3923ce6433336087bdd42db
+
+- Merge branch 'extract-src-rpm'
+
+  * extract-src-rpm:
+    show more info messages about src.rpm extraction
+    reimplement extraction of src.rpm
+    reimplement downloading of src.rpm w/o wget
+
+  d5c11d9b10eb5d2805e691cfd7fa4fa9df660ddb
+
+- Merge branch 'bugfix'
+
+  * bugfix:
+    fix add_host / mtui -s, add HostsGroup#has_key
+
+  6778d3f919077de2ca4acf72a71fb6f89919173c
+
+- Merge branch 'drop-interface-version'
+  Not used anymore and poorly implemented as well.
+
+  1f2965b1a380ef94fb2894e3f21849729f7e4e84
+
+Documentation
+=============
+
+- Merge branch 'locations-refdb'
+  Add tip on finding locations using refdb
+
+  9c81373893ca186874aa700017d31db83bb89c2d
+
+- Merge branch 'improve-cfg-example'
+
+  * Drop unessential options from example
+  * Make cfg example consistent by using placeholders for actual values
+
+  52d5fcf5e3a00ea456a5d04f84890f632beae5c3
+
+- Add a note on minimal needed configuration
+
+  9b105dda44bf8de588e3c49c2f7876718030a918
+
+- Factory has been renamed to Tumbleweed
+
+  21af3fd3b264960834acc4ff92f224326b5a5056
+
+Backwards incompatible
+======================
+
+- CommandPrompt#do_update w/o a special case for kernel updates
+
+  do_update special-cased (noninteractive) kernel updates
+  to imply ',noprepare'.  feature removal communicated to kgw@.
+
+  to emulate previous behavior, put this in the mtui script:
+
+    prepare $hosts,installed
+    update $hosts,noprepare
+
+  a9e49c0677bc7792c1fa5d14868ac831a3a15ea9
+
+- HostsGroupException gone
+
+  HostsGroupException's purpose was to let all targets have a go
+  at massaging themselves even in presence of exceptions:
+  the issue was/is that HostsGroup has had no access to logging.
+  fixing that then involved a lot of uncertainty so we went for
+  the smaller source change instead, at the price of lost interface
+  simplicity.
+
+  the only use of HostsGroupException was in HostsGroup#unlock,
+  where it filtered out TargetLockedError exceptions and re-raised
+  a new HostsGroupException with the rest, losing the original
+  HostsGroupException's stacktrace in the process.
+
+  dropping this contraption, we're left with this state:
+
+  * Target#unlock logs TargetLockedError instances before they're let out
+  * HostsGroup#unlock catches and ignores TargetLockedError
+
+  this means that a bug in mtui won't have you waiting for all targets
+  in a doomed unlock command, and exceptions which are meant to escape
+  HostsGroup#unlock will finally have useful stacktraces.
+
+  d026dd70df14dcea9a6d43324a07cbe91c06790d
+
+Internal
+========
+
+- Merge branch 'do_get-sprawl'
+
+  * do_get-sprawl:
+    CommandPrompt#do_get goes through TestReport#perform_get
+    FileDownload leaves local filename munging to Target#get
+    FileDownload needs just one behavior
+
+  dc89a770df528ca8f097f77d557755efcb023a7c
+
+- Merge branch 'streamline-hooks'
+
+  * streamline-hooks:
+    TestReport#pkg_list_file inlined
+    CompareScript#_result generalized, in Script now
+    Script#_filename inlined
+    Script#_filename called fewer times
+    Script#results_wd inlined
+    PreScript#remote_pkglist_path inlined
+    PreScript#remote_path inlined
+
+  70a75a95440cd7db1e5b8f048c0aeb7630b20756
+
+- Merge branch 'gutted-do_update'
+
+  * gutted-do_update:
+    CommandPrompt#do_update gutted, code is now in Updater
+    CommandPrompt#_do_prepare_impl gone
+    CommandPrompt#do_update w/ less chatter
+    CommandPrompt#do_update locks hosts before 'prepare'
+
+  b531775b396b161385f4f0d42020bab3e60a4233
+
+- Merge branch 'xmllog'
+
+  * xmllog:
+    XMLOutput w/ normalized variable names
+    XMLOutput: add_package_state, add_log do more
+    XMLOutput w/o tricks w/ self.machine
+    XMLOutput: add_host, set_attribute inlined
+    XMLOutput w/ better method names
+    TestReport#generate_templatefile wraps xml_to_template
+    code deduplication around XMLOutput
+
+  f5a1c3e0b644ab088ee708fea45100ebd0f02586
+
+- curb KeyError (ab)use
+
+  esp. CommandPrompt#__getattr__ is much more readable now.
+
+  b10e35bb541bd7a8c82303f3693486bf9f0d37fd
+
+- Merge branch 'Attributes'
+
+  * Attributes:
+    from_search_hosts_query, from_testplatform: brevity
+    from_testplatform, __str__ keep archs, addons sorted
+    add tests for the Attributes class
+
+  027d89272d396a96e7954faf71af9db7a36e2138
+
+- Cleanup Attributes.__bool__
+
+  69f7632dd01b2b3679c6ab61229b86f77cf0a4c6
+
+- dead imports gone
+
+  e223524d2c35d2dcc5ad62e02bfdf54a75a5ebb7
+
+- dedup ReportBug tests
+
+  746a6989bf9b4939e41a6c682e2fc6c62793516f
+
+- Command.completer -> Command.complete
+
+  previous approach increased complexity for zero added value
+  as the returned function was getting called immediately anyway.
+
+  52f00a70c06346cf060a4b138a76546abe1f3c12
+
+- Merge branch 'fix-completion'
+
+  * fix-completion:
+    restore behavior: completers don't spew NotImplementedError
+
+  c3fd32ab5259ca3bed6134c2c546081406b21d48
+
+- Merge branch 'prompt-Cmd-yoyo'
+
+  * prompt-Cmd-yoyo:
+    demote log level of tracebacks from yac-style completers
+    utils.log_exception gone
+    CommandPrompt#onecmd, CommandPrompt#do_help gone
+    CommandPrompt#__getattr__ safety
+
+  076eec23a0eda13a41aa81c0eafbc11e8b4e5319
+
+- Merge branch 'py-3.x-compat'
+
+  * py-3.x-compat:
+    py-3.x compat: three details
+    py-3.x compat: don't pretend Target is a value
+
+  151c5746fdbd9b38fa6ced4ff89b18d63c3a6936
+
+- avoid dict#has_key: it's deprecated, gone from py3
+
+  the deprecation does not seem to be pointed out in any what's new
+  document, how cool is that?
+
+  `k in dict()` appeared in 2.2 [#1] (see [#2]), 2.5 described `has_key`
+  with "Equivalent to k in a, use that form in new code" [#3].  3.0 marks
+  the removal in [#4].
+
+  [#1] https://docs.python.org/2.2/lib/typesmapping.html
+  [#2] https://docs.python.org/2.2/whatsnew/node4.html
+  [#3] https://docs.python.org/2.5/lib/typesmapping.html
+  [#4] https://docs.python.org/3.0/whatsnew/3.0.html
+
+  1451fe3d4e3b941814211935622fdb6ab9d6d57a
+
+- Merge branch 'testreport-host-setup'
+
+  * testreport-host-setup:
+    TestReport#targetFactory pushed down to TestReport#connect_targets
+    TestReport#load_systems_from_testplatforms inlined
+    some dead fakes gone
+    TestReport#add_host is gone
+    CommandPrompt#connect_system_if_unconnected -> TestReport#add_target
+    TestReport#_refhosts_from_tp updates self.systems
+    CommandPrompt#load_update gives up micromanagement
+    CommandPrompt#load_update calls explicit about autoconnect
+
+  aeb5a0d1891ffdf80a233e4c1d67b5dadb65386b
+
+- TestReport w/o wholesale datetime.date dependency
+
+  all instantiations need not suffer the burden of providing a datetime
+  generator just for the benefit of TestReport#get_testsuite_comment,
+  this method now expects a string date representation in arguments.
+
+  5127ea22999ce53ba22058a6e6c67fc996d3ea31
+
+- Merge branch 'tests-parsemeta'
+
+  * tests-parsemeta:
+    better tests for template parsers
+    RequestReviewID is a value object
+
+  9b2ccc70f73766654629c2a445ca6b5c3f54b1f4
+
+- Merge branch 'tests-make_testreport'
+
+  * tests-make_testreport:
+    UpdateID#make_testreport takes config, logger
+    UpdateID#_template_path inlined
+    better tests for UpdateID#make_testreport
+    tests for UpdateID#make_testreport in separate file
+
+  e051bb06d97c789a41ce650f1cae989e5cb49c2f
+
+
+- Merge branch 'config-inject-read-paths'
+  Configs paths to read overridable via constructor
+
+  ebe51d16efb15f90d2a3ea47e5b1149e1edb618e
+
 5.0.4
 #####
 
