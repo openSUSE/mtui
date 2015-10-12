@@ -2,6 +2,16 @@
 ChangeLog
 #########
 
+5.0.4
+#####
+
+Bugfixes
+========
+
+- Fixes `check_new_dependencies` script which resulted in false
+  positives for updates with multiple packages and dependency changes.
+  f30bed850a963804d668e04697f12e1022999272
+
 5.0.3
 #####
 
