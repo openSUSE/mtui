@@ -17,7 +17,7 @@
 
 
 Name:           mtui
-Version:        5.0.4
+Version:        __VERSION__
 Release:        0
 Summary:        Maintenance Test Update Installer
 License:        SUSE-NonFree

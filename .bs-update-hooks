@@ -1,0 +1,9 @@
+bsu_version_hook()
+{
+  python3 setup.py --version
+}
+
+# these can be overriden on the command line or in .bs-update
+bsu_bs_apiurl=https://api.suse.de/
+bsu_bs_package=mtui
+bsu_specfiles=(mtui.spec)
