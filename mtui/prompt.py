@@ -4,7 +4,6 @@
 #
 
 from datetime import date
-from functools import reduce
 
 import os
 import cmd
