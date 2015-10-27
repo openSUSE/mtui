@@ -67,18 +67,23 @@ Versioning scheme is based on `SemVer 2.0`_
 Release Process
 ===============
 
+.. note:: command `isc` refers to `osc` with -A pointing to IBS
+
+* ``isc branch QA:Maintenace mtui``
+
 * update ``ChangeLog`` and ``mtui.__version__``
 
-* ``git tag v<version>``
+.. code-block:: bash
 
-* ``python setup.py sdist``
-
-* bump supported packages (see installation) and test them
-
-* build html docs
+  git commit ChangeLog.rst mtui.__init__ -m "Release <version>"
+  git tag -a v<version>
+  bs-update -P <your IBS QA:Maintenance branch> -d . HEAD
+  cd Documentation && make html
 
 * merge bumped packages into stable repositories
 
-* publish source tarball and the html docs
+* bump non-ibs packages manually (see installation) and test them
 
 * push git tag ``git push <remote> v<version>``
+
+* publish source tarball and the html docs
