@@ -1,7 +1,7 @@
 from abc import ABCMeta
 from mtui.five import with_metaclass
 
-class UserMessage(with_metaclass(ABCMeta, object)):
+class UserMessage(with_metaclass(ABCMeta, BaseException)):
     """
     Message to be displayed to the user
     """

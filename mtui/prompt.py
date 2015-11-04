@@ -158,7 +158,7 @@ class CommandPrompt(cmd.Cmd):
                 self.println()
             except QuitLoop:
                 return
-            except (messages.UserError, subprocess.CalledProcessError) as e:
+            except (messages.UserMessage, subprocess.CalledProcessError) as e:
                 self.log.error(e)
                 self.log.debug(format_exc())
             except Exception as e:
