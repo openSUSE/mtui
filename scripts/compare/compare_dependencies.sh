@@ -1,1 +1,0 @@
-../../helper/compare_dependencies.sh

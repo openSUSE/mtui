@@ -1,1 +1,0 @@
-../../helper/check_new_licenses.sh
