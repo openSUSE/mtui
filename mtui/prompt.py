@@ -565,8 +565,8 @@ class CommandPrompt(cmd.Cmd):
             if di.commit == du.commit:
                 self.log.warning(messages.PackageRevisionHasntChangedWarning(name))
                 continue
-
-            diff = os.path.join(destination, '%s-%s.diff' % (name, mode))
+            cwd = self.metadata.report_wd()            
+            diff = os.path.join(cwd, '%s-%s.diff' % (name, mode))
             if mode == 'source':
                 with open(diff, 'w+') as f:
                     try:
