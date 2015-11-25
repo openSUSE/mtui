@@ -500,12 +500,13 @@ class CommandPrompt(cmd.Cmd):
 
         updated = {}
         installed = {}
-        destination = self.metadata.local_wd()
+        tmpdir = self.metadata.local_wd()
+        dstdir = self.metadata.report_wd()
 
-        if not glob.glob(os.path.join(destination, '*', '*.spec')):
+        if not glob.glob(os.path.join(tmpdir, '*', '*.spec')):
             self.metadata.extract_source_rpm()
 
-        for rpmfile in glob.glob(os.path.join(destination, '*.src.rpm')):
+        for rpmfile in glob.glob(os.path.join(tmpdir, '*.src.rpm')):
             try:
                 rpmf = RPMFile(rpmfile)
             except Exception as error:
@@ -565,8 +566,9 @@ class CommandPrompt(cmd.Cmd):
             if di.commit == du.commit:
                 self.log.warning(messages.PackageRevisionHasntChangedWarning(name))
                 continue
-            cwd = self.metadata.report_wd()            
-            diff = os.path.join(cwd, '%s-%s.diff' % (name, mode))
+
+            diff = os.path.join(dstdir, '%s-%s.diff' % (name, mode))
+
             if mode == 'source':
                 with open(diff, 'w+') as f:
                     try:
@@ -593,8 +595,8 @@ class CommandPrompt(cmd.Cmd):
                         self.log.error('osc is missing on %s. skipping.' % target)
 
                 for state in ['new', 'old']:
-                    sourcedir = os.path.join(destination, name, state)
-                    builddir = os.path.join(destination, name, state, 'BUILD')
+                    sourcedir = os.path.join(tmpdir, name, state)
+                    builddir = os.path.join(tmpdir, name, state, 'BUILD')
                     disturl = du.disturl if state == 'new' else di.disturl
 
                     targets.run('echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui')
