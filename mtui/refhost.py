@@ -434,11 +434,9 @@ class Refhosts(object):
             except:
                 release = None
 
-            # product versions need to match if they are specified
-            if self.attributes.major:
-                assert(self.attributes.major == major)
-            if self.attributes.minor:
-                assert(self.attributes.minor == minor)
+            # product versions need to match
+            assert(self.attributes.major == ('' if major is None else major))
+            assert(self.attributes.minor == ('' if minor is None else minor))
             if self.attributes.release:
                 assert(self.attributes.release == release)
 
