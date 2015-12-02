@@ -67,23 +67,42 @@ Versioning scheme is based on `SemVer 2.0`_
 Release Process
 ===============
 
-.. note:: command `isc` refers to `osc` with -A pointing to IBS
+.. note::
 
-* ``isc branch QA:Maintenace mtui``
+  Command `isc` refers to `osc` with -A pointing to IBS,
+  and `$nv` is the new version.
 
-* update ``mtui.__version__``
+* branch the official package ::
 
-.. code-block:: bash
+    isc branch QA:Maintenace mtui
 
-  git commit mtui.__init__ -m "Release <version>"
-  git tag -a v<version>
-  bs-update -P <your IBS QA:Maintenance branch> -d . HEAD
-  cd Documentation && make html
+  We'll refer to the destination project with `$bp`.
 
-* merge bumped packages into stable repositories
+* update the changelog, `mtui.__version__` in `mtui/__init__.py`,
+  and build HTML docs::
+
+    sed -i "/^\(__version__\)\s*=.*/s//\1 = '$nv'/" mtui/__init__.py
+    cd Documentation && make html
+
+* if all went well you should commit, tag, and upload the new version
+  to IBS::
+
+    git commit mtui/__init__.py -m "Release $nv"
+    git tag -a -m "Release $nv" v$nv
+    bs-update -P $bp -d . v$nv
+
+* check the build results of the branched package, if there are no
+  failures, publish the tag and the package::
+
+    git push origin master v$nv
+    isc submitpac $br mtui QA:Maintenance
+    isc request accept ...
 
 * bump non-ibs packages manually (see installation) and test them
 
-* push git tag ``git push <remote> v<version>``
+* publish source tarball and the html docs::
 
-* publish source tarball and the html docs
+    scp ... root@qam.suse.de:/srv/www/qam.suse.de/media/distfiles
+    scp -r ... root@qam.suse.de:/srv/www/qam.suse.de/projects/mtui/$nv
+    ssh root@qam.suse.de "cd /srv/www/qam.suse.de/projects/mtui && ln -sf $nv latest"
+
