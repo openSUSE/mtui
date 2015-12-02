@@ -71,11 +71,11 @@ Release Process
 
 * ``isc branch QA:Maintenace mtui``
 
-* update ``ChangeLog`` and ``mtui.__version__``
+* update ``mtui.__version__``
 
 .. code-block:: bash
 
-  git commit ChangeLog.rst mtui.__init__ -m "Release <version>"
+  git commit mtui.__init__ -m "Release <version>"
   git tag -a v<version>
   bs-update -P <your IBS QA:Maintenance branch> -d . HEAD
   cd Documentation && make html
