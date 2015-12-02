@@ -75,7 +75,7 @@ install -Dm0755 term.gnome.sh term.kde.sh term.xterm.sh %{buildroot}%{_datadir}/
 
 %files
 %defattr(-,root,root,-)
-%doc README.rst ChangeLog.rst Documentation/*
+%doc README.rst Documentation/*
 %{_bindir}/mtui*
 %{_bindir}/refsearch.py
 %{_datadir}/mtui/*
