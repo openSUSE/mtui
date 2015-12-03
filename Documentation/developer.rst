@@ -95,7 +95,7 @@ Release Process
   failures, publish the tag and the package::
 
     git push origin master v$nv
-    isc submitpac $br mtui QA:Maintenance
+    isc submitpac $bp mtui QA:Maintenance
     isc request accept ...
 
 * bump non-ibs packages manually (see installation) and test them
