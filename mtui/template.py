@@ -175,7 +175,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
             'packager',
             'reviewer',
             'packages',
-            'systems',
             'bugs',
             'repository',
         ]
