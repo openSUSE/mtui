@@ -260,6 +260,7 @@ class CommandPrompt(cmd.Cmd):
 
         if not args:
             self.parse_error(self.do_search_hosts, args)
+            return
 
         refhost = self._refhosts()
 
@@ -484,6 +485,7 @@ class CommandPrompt(cmd.Cmd):
 
         if mode not in ['source', 'build']:
             self.parse_error(self.do_source_diff, args)
+            return
 
         try:
             import osc
@@ -625,6 +627,7 @@ class CommandPrompt(cmd.Cmd):
 
         if args:
             self.parse_error(self.do_source_verify, args)
+            return
 
         self.metadata.list_patches(self.display.list_patches)
 
@@ -1004,6 +1007,7 @@ class CommandPrompt(cmd.Cmd):
 
         if not args:
             self.parse_error(self.do_run, args)
+            return
 
         targets, command = self._parse_args(args, str)
 
