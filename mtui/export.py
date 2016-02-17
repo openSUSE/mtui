@@ -255,20 +255,6 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
     except ValueError:
         out.error('install log section not found in template. skipping.')
     else:
-        command_lines = 1
-
-        # read update commands from the template and search for them in
-        # the xml log. if they were found, add them just below the commands
-        # in the template
-
-        # increment command_lines if a update command was found in the template
-        # ie. if we are in the command section, and the current line is not empty
-        while t[i + command_lines] != '\n':
-            command_lines += 1
-
-        # go to the next newline after the last command in the template
-        current_line = i + command_lines
-
         # if an updatehost was set, search for the update log of that specific host.
         # if none was set, the first found update log is exported to the template.
         if updatehost is not None:
@@ -280,21 +266,19 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
 
         # add hostname to indicate from which host the log was exported
         updatehost = log.parentNode.getAttribute('hostname')
-        t.insert(current_line + 1, "log from %s\n" % updatehost)
 
-        # add the output of each command from bottom to top of the commandlist.
-        # other than from top to bottom, we save some arithmetics with the
-        # current_line/command_lines values this way round.
-        while command_lines:
-            current_line = i + command_lines
-            for child in log.childNodes:
-                try:
-                    if child.getAttribute('name') == t[current_line].strip('\n'):
-                        t.insert(current_line + 1, str(child.childNodes[0].nodeValue).replace('\t', ''))
-                        t[current_line] = '# ' + t[current_line]
-                except Exception:
-                    pass
-            command_lines -= 1
+        t = t[0:i]
+
+        t.append("log from %s\n" % updatehost)
+
+        for child in log.childNodes:
+            if not hasattr(child, 'getAttribute'): continue
+            cmd = child.getAttribute('name')
+            if not cmd.startswith('zypper '): continue
+            t.append('# %s\n%s\n' % (
+                cmd,
+                str(child.childNodes[0].nodeValue),
+            ))
 
     return t
 

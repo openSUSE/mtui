@@ -796,7 +796,13 @@ class OBSTestReport(TestReport):
         ] + super(OBSTestReport, self)._show_yourself_data()
 
     def set_repo(self, target, name):
-        argv = ('-z',)
-        if name == 'TESTING':
-            argv = ('-z', '-i', self.rrid.maintenance_id,)
-        target.run_repclean(argv)
+        if self.config.use_repose:
+            if name == 'TESTING':
+                target.run_repose('issue-add', self.report_wd())
+            else:
+                target.run_repose('issue-rm', str(self.rrid))
+        else:
+            argv = ('-z',)
+            if name == 'TESTING':
+                argv = ('-z', '-i', self.rrid.maintenance_id,)
+            target.run_repclean(argv)

@@ -41,26 +41,27 @@ class ZypperUpToSLE11Update(ZypperUpdate):
 
         patch = self.patches['sat']
         self.commands = [
-            'export LANG=',
-            'zypper lr -puU',
-            'zypper refresh',
-            'zypper patches | grep " %s "' % patch,
-            'for p in $(zypper patches | grep " %s " | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n install -l -y -t patch $p=%s; done' % (patch, patch),
+            r"""export LANG=""",
+            r"""zypper lr -puU""",
+            r"""zypper refresh""",
+            r"""zypper patches | grep ' %s '""" % patch,
+            r"""zypper patches | awk -F '|' '/ %s / { print $2; }' | while read p; do zypper -n install -l -y -t patch $p=%s; done""" % (patch, patch),
         ]
 
 
 class ZypperSLE12Update(ZypperUpdate):
     def __init__(self, *a, **kw):
         super(ZypperSLE12Update, self).__init__(*a, **kw)
-        repo = "TESTING-{0}".format(self.testreport.rrid.maintenance_id)
+        repat = ':p=%d' if self.testreport.config.use_repose else 'TESTING-%d'
+        repo = repat % (self.testreport.rrid.maintenance_id)
 
         self.commands = [
-            "export LANG=",
-            "zypper lr -puU",
-            "zypper refresh",
-            "zypper patches | grep {0}".format(repo),
-            "for p in $(zypper patches | grep {0} | awk 'BEGIN {{ FS=\"|\"; }} {{ print $2; }}'); do zypper -n install -l -y -t patch $p; done".format(repo),
-            "zypper patches | grep {0}".format(repo)
+            r"""export LANG=""",
+            r"""zypper lr -puU""",
+            r"""zypper refresh""",
+            r"""zypper patches | grep %s""" % repo,
+            r"""zypper patches | awk -F "|" '/%s\>/ { print $2; }' | while read p; do zypper -n install -l -y -t patch $p; done""" % repo,
+            r"""zypper patches | grep %s""" % repo,
         ]
 
 
@@ -91,11 +92,11 @@ class OldZypperUpdate(Update):
 
         patch = self.patches['zypp']
         self.commands = [
-            'export LANG=',
-            'zypper sl',
-            'zypper refresh',
-            'zypper patches | grep %s-0' % patch,
-            'for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n in -l -y -t patch $p; done' % patch,
+            r"""export LANG=""",
+            r"""zypper sl""",
+            r"""zypper refresh""",
+            r"""zypper patches | grep %s-0""" % patch,
+            r"""zypper patches | awk -F "|" '/%s-0/ { print $2; }') | while read p; do zypper -n in -l -y -t patch $p; done""" % patch,
         ]
 
 class OnlineUpdate(Update):

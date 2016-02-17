@@ -9,6 +9,7 @@ from __future__ import print_function
 import os
 import re
 import signal
+import subprocess
 from traceback import format_exc
 
 from mtui.connection import *
@@ -327,6 +328,31 @@ class Target(object):
     def set_repo(self, name, testreport):
         self.logger.debug('{0}: enabling {1} repos'.format(self.hostname, name))
         testreport.set_repo(self, name)
+
+    def run_repose(self, cmd, arg):
+        cmdline = [
+            'repose',
+            cmd,
+            ('root@%s' % (str(self.hostname),)),
+            '--',
+            arg,
+        ]
+        self.logger.info("local/%s: %s" % (self.hostname, ' '.join(cmdline)))
+        cld = subprocess.Popen(
+            cmdline,
+            close_fds = True,
+            stdin  = subprocess.PIPE,
+            stdout = subprocess.PIPE,
+            stderr = subprocess.PIPE,
+        )
+        cld.stdin.close()
+        ex = cld.wait()
+        data, logger = \
+            (cld.stdout, self.logger.info) \
+            if ex == 0 else \
+            (cld.stderr, self.logger.error)
+        for l in data:
+            logger("local/%s: %s" % (self.hostname, l.rstrip()))
 
     def run_repclean(self, args):
         exe = self.config.repclean_path

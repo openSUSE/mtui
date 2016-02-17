@@ -1882,8 +1882,10 @@ class CommandPrompt(cmd.Cmd):
 
         try:
             template = self.metadata.generate_templatefile(hostname)
-        except Exception:
+        except Exception as e:
             self.log.error('failed to export XML')
+            self.log.error(e)
+            self.log.debug(format_exc(e))
             return
 
         if os.path.exists(filename) and not force:

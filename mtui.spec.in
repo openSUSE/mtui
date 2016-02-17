@@ -30,6 +30,7 @@ Requires:       osc
 Requires:       python-paramiko
 Requires:       python-setuptools
 Requires:       python-xdg >= 0.21
+Requires:       repose
 Requires:       rpm-python
 Recommends:     python-keyring
 Recommends:     python-notify
