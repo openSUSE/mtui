@@ -422,6 +422,17 @@ class Connection(object):
 
         sftp.close()
 
+    # Similar to 'get' but handles folders.
+    def get_folder(self, remote_folder, local_folder):
+
+        sftp = self.client.open_sftp()
+        self.log.debug('transmitting %s:%s:%s to %s' % (self.hostname, self.port, remote_folder, local_folder))
+        files = self.listdir(remote_folder)
+        for f in files:
+               sftp.get("%s/%s" % (remote_folder, f), "%s%s.%s" % (local_folder, f, self.hostname))
+
+        sftp.close()
+
     def listdir(self, path='.'):
         """get directory listing of the remote host
 

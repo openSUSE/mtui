@@ -1729,9 +1729,11 @@ class CommandPrompt(cmd.Cmd):
 
     def do_get(self, args):
         """
-        Downloads a file from all enabled hosts. Multiple files can not be
+        Downloads a file from all enabled hosts. Multiple files cannot be
         selected. Files are saved in the $TEMPLATE_DIR/downloads/ subdirectory
-        with the hostname as file extension.
+        with the hostname as file extension. If the argument ends with a
+        slash '/', it will be treated as a folder and all its contents will
+        be downloaded.
 
         get <remote filename>
         Keyword arguments:

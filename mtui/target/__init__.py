@@ -415,16 +415,23 @@ class Target(object):
             self.logger.info('dryrun: put %s %s:%s' % (local, self.hostname, remote))
 
     def get(self, remote, local):
-        local = '%s.%s' % (local, self.hostname)
+
+        if remote.endswith('/'):
+            f = self.connection.get_folder
+            s = 'folder'
+        else:
+            f = self.connection.get
+            s = 'file'
+            local = '%s.%s' % (local, self.hostname)
 
         if self.state == 'enabled':
-            self.logger.debug('%s: receiving "%s" into "%s' % (self.hostname, remote, local))
+            self.logger.debug('%s: receiving %s "%s" into "%s' % (self.hostname, s, remote, local))
             try:
-                return self.connection.get(remote, local)
+                return f(remote, local)
             except EnvironmentError as error:
-                self.logger.error('%s: failed to get %s: %s' % (self.hostname, remote, error.strerror))
+                self.logger.error('%s: failed to get %s %s: %s' % (self.hostname, s, remote, error.strerror))
         elif self.state == 'dryrun':
-            self.logger.info('dryrun: get %s:%s %s' % (self.hostname, remote, local))
+            self.logger.info('dryrun: get %s %s:%s %s' % (self.hostname, s, remote, local))
 
     def lastin(self):
         try:
