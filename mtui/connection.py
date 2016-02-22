@@ -116,6 +116,7 @@ class Connection(object):
                 port = int(opts.get('port', self.port)),
                 username = opts.get('user', 'root'),
                 key_filename = opts.get('identityfile', None),
+                sock = paramiko.ProxyCommand(opts['proxycommand']) if 'proxycommand' in opts else None,
             )
 
         except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
