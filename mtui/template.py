@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-from os.path import join, split, basename, dirname
+from os.path import abspath, join, split, basename, dirname
 from errno import ENOENT
 from errno import EEXIST
 import shutil
@@ -204,7 +204,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
     def read(self, path):
         self._open_and_parse(path)
-        self.path = path
+        self.path = abspath(path)
 
         if self.config.chdir_to_template_dir:
             os.chdir(dirname(path))
