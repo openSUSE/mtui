@@ -347,12 +347,10 @@ class Target(object):
         )
         cld.stdin.close()
         ex = cld.wait()
-        data, logger = \
-            (cld.stdout, self.logger.info) \
-            if ex == 0 else \
-            (cld.stderr, self.logger.error)
-        for l in data:
-            logger("local/%s: %s" % (self.hostname, l.rstrip()))
+        logger = self.logger.info if ex == 0 else self.logger.error
+        for label, data in (('stdout', cld.stdout), ('stderr', cld.stderr)):
+            for l in data:
+                logger("local/%s %s: %s" % (self.hostname, label, l.rstrip()))
 
     def run_repclean(self, args):
         exe = self.config.repclean_path
