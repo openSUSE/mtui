@@ -431,7 +431,7 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            self.parse_error(self.do_list_hosts, args)
+            self.parse_error(self.do_list_locks, args)
         else:
 
             targets, _ = self._parse_args(args, None)
