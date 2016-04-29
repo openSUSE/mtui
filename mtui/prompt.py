@@ -431,12 +431,11 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            self.parse_error(self.do_list_locks, args)
-        else:
+            return self.parse_error(self.do_list_locks, args)
 
-            targets, _ = self._parse_args(args, None)
+        targets, _ = self._parse_args(args, None)
 
-            targets.report_locks(self.display.list_locks)
+        targets.report_locks(self.display.list_locks)
 
     def do_list_timeout(self, args):
         """
@@ -448,10 +447,9 @@ class CommandPrompt(cmd.Cmd):
         """
 
         if args:
-            self.parse_error(self.do_list_timeout, args)
-        else:
+            return self.parse_error(self.do_list_timeout, args)
 
-            self.targets.report_timeout(self.display.list_timeout)
+        self.targets.report_timeout(self.display.list_timeout)
 
     @requires_update
     def do_source_extract(self, _):
