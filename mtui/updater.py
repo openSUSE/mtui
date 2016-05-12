@@ -96,7 +96,7 @@ class OldZypperUpdate(Update):
             r"""zypper sl""",
             r"""zypper refresh""",
             r"""zypper patches | grep %s-0""" % patch,
-            r"""zypper patches | awk -F "|" '/%s-0/ { print $2; }') | while read p; do zypper -n in -l -y -t patch $p; done""" % patch,
+            r"""zypper patches | awk -F "|" '/%s-0/ { print $2; }' | while read p; do zypper -n in -l -y -t patch $p; done""" % patch,
         ]
 
 class OnlineUpdate(Update):
