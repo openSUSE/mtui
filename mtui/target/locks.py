@@ -69,7 +69,7 @@ class RemoteLock(object):
       return self
 
     line = line.strip()
-    line = line.split(":")
+    line = line.split(":", 3)
     if len(line) is 4:
       self.comment = line.pop()
 
