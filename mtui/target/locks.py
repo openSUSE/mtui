@@ -70,15 +70,16 @@ class RemoteLock(object):
 
     line = line.strip()
     line = line.split(":", 3)
-    if len(line) is 4:
-      self.comment = line.pop()
-
-    self.pid = int(line.pop())
-    self.user = line.pop()
-    self.timestamp = line.pop()
-
-    if line:
+    if len(line) < 3:
       raise ValueError('got weird format in lockfile')
+
+    if len(line) < 4:
+      line += [None]
+
+    self.timestamp = line[0]
+    self.user = line[1]
+    self.pid = int(line[2])
+    self.comment = line[3]
 
     return self
 
