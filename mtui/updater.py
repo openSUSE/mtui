@@ -62,6 +62,7 @@ class ZypperSLE12Update(ZypperUpdate):
             r"""zypper patches | grep %s""" % repo,
             r"""zypper patches | awk -F "|" '/%s\>/ { print $2; }' | while read p; do zypper -n install -l -y -t patch $p; done""" % repo,
             r"""zypper patches | grep %s""" % repo,
+            r"""zypper lr | awk -F "|" '/%s\>/ { print $2; }' | while read r; do zypper rr $r; done""" % repo,
         ]
 
 
