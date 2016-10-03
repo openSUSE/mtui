@@ -163,7 +163,6 @@ class CommandPrompt(cmd.Cmd):
             except Exception as e:
                 self.log.error(format_exc())
 
-    # {{{ overrides to support new style commands
     def get_names(self):
         names = cmd.Cmd.get_names(self)
         names = names + ["do_" + x for x in self.commands.keys()]
@@ -207,7 +206,6 @@ class CommandPrompt(cmd.Cmd):
                 return complete
 
         raise AttributeError(str(x))
-    # }}}
 
     def emptyline(self):
         return
@@ -1503,18 +1501,17 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_uninstall, args)
             return
 
-        if targets:
-            self.log.info('removing')
-            try:
-                self.metadata.perform_uninstall(targets, packages.split())
-            except Exception:
-                self.log.critical('failed to remove packages')
-                return
-            except KeyboardInterrupt:
-                self.log.info('uninstallation process canceled')
-                return
-            else:
-                self.log.info('done')
+        self.log.info('removing')
+        try:
+            self.metadata.perform_uninstall(targets, packages.split())
+        except Exception:
+            self.log.critical('failed to remove packages')
+            return
+        except KeyboardInterrupt:
+            self.log.info('uninstallation process canceled')
+            return
+        else:
+            self.log.info('done')
 
     def complete_uninstall(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
@@ -1536,19 +1533,18 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_downgrade, args)
             return
 
-        if targets:
-            self.log.info('downgrading')
-            try:
-                self.metadata.perform_downgrade(targets)
-            except Exception as e:
-                self.log.critical('failed to downgrade target systems')
-                self.log.debug(format_exc(e))
-                return
-            except KeyboardInterrupt:
-                self.log.info('downgrade process canceled')
-                return
-            else:
-                self.log.info('done')
+        self.log.info('downgrading')
+        try:
+            self.metadata.perform_downgrade(targets)
+        except Exception as e:
+            self.log.critical('failed to downgrade target systems')
+            self.log.debug(format_exc(e))
+            return
+        except KeyboardInterrupt:
+            self.log.info('downgrade process canceled')
+            return
+        else:
+            self.log.info('done')
 
     def complete_downgrade(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
