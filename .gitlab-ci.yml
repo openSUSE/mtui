@@ -4,7 +4,7 @@ test:
   script:
     - cd /builds/qa-maintenance/mtui
     - zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/SLE_12_SP1/ QA:Maintenance
-    - zypper install --no-confirm python-paramiko python-setuptools python-xdg repose rpm-python python-nose
+    - zypper install --no-confirm python-paramiko python-setuptools python-xdg repose rpm-python python-nose python-temps
     - make check
   tags:
     - qam
