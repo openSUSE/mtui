@@ -1,0 +1,11 @@
+image: ibs:latest
+
+test:
+  script:
+    - cd /builds/qa-maintenance/mtui
+    - zypper install --no-confirm python-paramiko python-setuptools python-xdg repose rpm-python python-nose
+    - make check
+  tags:
+    - qam
+  only:
+    - /^master.*$/
