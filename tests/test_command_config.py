@@ -47,7 +47,7 @@ def test_config_show():
             , ("template_dir"               , "'foo-template'")
             , ("local_tempdir"              , "'/tmp'")
             , ("session_user"               , "'foo-user'")
-            , ("use_repose"                 , "False")
+            , ("use_repose"                 , "True")
             , ("connection_timeout"         , "300")
             , ("svn_path"                   , "'svn+ssh://svn@qam.suse.de/testreports'")
             , ("bugzilla_url"               , "'https://bugzilla.novell.com'")

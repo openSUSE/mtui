@@ -104,7 +104,7 @@ class Config(object):
              getpass.getuser),
 
             ('use_repose', ('mtui', 'use_repose'),
-                False, bool, self.config.getboolean),
+                True, bool, self.config.getboolean),
 
             # connection.timeout appears to be in units of seconds as
             # indicated by
