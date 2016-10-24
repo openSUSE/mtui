@@ -31,8 +31,6 @@ from .utils import testreports
 from .utils import TRF
 from .utils import refhosts_fixtures
 
-# FIXME: use temps python package to manage tempdirs/files
-
 @raises(_TemplateIOError)
 def test_TestReport__open_and_parse_raises_templateioerror():
     class TestableReport(SwampTestReport):

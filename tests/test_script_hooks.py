@@ -1,6 +1,11 @@
 from nose.tools import eq_
 from nose.tools import ok_
-from temps import tmpdir
+
+try:
+    from tempfile import TemporaryDirectory
+except ImportError:
+    from temps import tmpdir as TemporaryDirectory
+
 from os.path import join
 from os.path import dirname
 import os
@@ -55,7 +60,7 @@ def check_run_remotes(s):
 
     3. Script upload and execution (as well as the Target)
     """
-    with tmpdir() as wdir:
+    with TemporaryDirectory() as wdir:
         sname = "script_x"
         scripts_src = join(wdir, "script_src")
         scripts_sub_src = join(scripts_src, s.subdir)

@@ -5,15 +5,15 @@ from mtui import __version__
 
 setup(
     name='mtui',
-    description = 'Maintenance Test Update Installer',
-    long_description = 'Command-line client for remote QAM test '+
-        'update installation and tracking.',
-    url = 'http://www.suse.com',
-    download_url = 'http://qam.suse.de/infrastructure/mtui/',
+    description='Maintenance Test Update Installer',
+    long_description='Command-line client for remote QAM test ' +
+    'update installation and tracking.',
+    url='http://www.suse.com',
+    download_url='http://qam.suse.de/infrastructure/mtui/',
 
-    version = __version__,
+    version=__version__,
 
-    install_requires = [
+    install_requires=[
         "paramiko",
         'pyxdg',
     ],
@@ -22,36 +22,34 @@ setup(
     # rpm (http://www.rpm.org) with python enabled
     # osc (http://en.opensuse.org/openSUSE:OSC)
 
-    extras_require = {
+    extras_require={
         'keyring': ['keyring'],
     },
     # extra dependencies:
     # notify (http://www.galago-project.org/specs/notification)
 
-    tests_require = [
+    tests_require=[
         'temps',
-        'nose',
+        'nose'
     ],
 
-    author = 'Christian Kornacker',
-    author_email = 'ckornacker@suse.de',
+    author='Christian Kornacker',
+    author_email='ckornacker@suse.de',
 
-    maintainer = 'SUSE QA Maintenance',
-    maintainer_email = 'qa-maintenance@suse.de',
+    maintainer='SUSE QA Maintenance',
+    maintainer_email='qa-maintenance@suse.de',
 
-    license = 'License :: Other/Proprietary License',
-    platforms = ['Linux', 'Mac OSX'],
-    keywords = ['SUSE', 'Maintenance', 'update', 'testing'],
+    license='License :: Other/Proprietary License',
+    platforms=['Linux', 'Mac OSX'],
+    keywords=['SUSE', 'Maintenance', 'update', 'testing'],
 
-    packages = ['mtui', 'mtui.connector', 'mtui.types', 'mtui.target'],
+    packages=['mtui', 'mtui.connector', 'mtui.types', 'mtui.target'],
 
-    entry_points = {
+    entry_points={
         'console_scripts': ['mtui = mtui.main:main']},
-    scripts = ['refsearch.py'],
+    scripts=['refsearch.py'],
 
-    classifiers = [
-      'Programming Language :: Python :: 2'
-    , 'Operating System :: POSIX :: Linux'
-    , 'Environment :: Console'
+    classifiers=[
+        'Programming Language :: Python :: 2', 'Operating System :: POSIX :: Linux', 'Environment :: Console'
     ]
 )
