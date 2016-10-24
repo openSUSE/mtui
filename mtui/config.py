@@ -20,18 +20,20 @@ except ImportError:
     # disable keyring support since python-keyring is missing
     keyring = None
 
+
 class InvalidOptionNameError(RuntimeError):
     pass
 
+
 class Config(object):
+
     """Read and store the variables from mtui config files"""
     # FIXME: change str paths to L{filepath.FilePath}
 
-    def __init__(self, logger, refhosts = RefhostsFactory, paths = None):
+    def __init__(self, logger, refhosts=RefhostsFactory, paths=None):
         self.log = logger
         self.refhosts = refhosts
         self._location = 'default'
-
 
         try:
             # FIXME: gotta read config overide from env instead of argv
@@ -40,8 +42,7 @@ class Config(object):
             self.configfiles = [os.environ['MTUI_CONF']]
         except KeyError:
             self.configfiles = paths or [
-              '/etc/mtui.cfg'
-            , os.path.expanduser('~/.mtuirc')
+                '/etc/mtui.cfg', os.path.expanduser('~/.mtuirc')
             ]
         self.read()
 
@@ -144,7 +145,7 @@ class Config(object):
             ('refhosts_https_uri', ('refhosts', 'https_uri'),
                 'https://qam.suse.de/metadata/refhosts.xml'),
             ('refhosts_https_expiration', ('refhosts',
-                'https_expiration'), 3600*12, int, self.config.getint),
+                                           'https_expiration'), 3600*12, int, self.config.getint),
 
             ('refhosts_path', ('refhosts', 'path'),
                 '/usr/share/suse-qam-metadata/refhosts.xml'),
@@ -155,7 +156,7 @@ class Config(object):
 
             ('report_bug_url', ('mtui', 'report_bug_url'),
                 'https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI'
-            ),
+             ),
 
             ('location', ('mtui', 'location'),
              'default'),
@@ -207,15 +208,19 @@ class Config(object):
         if self.testopia_pass and self.testopia_user:
             try:
                 keyring.set_password('Testopia', self.testopia_user,
-                    self.testopia_pass)
+                                     self.testopia_pass)
             except Exception:
-                self.log.warning('failed to add Testopia password to the keyring')
+                self.log.warning(
+                    'failed to add Testopia password to the keyring')
                 self.log.debug(format_exc())
         elif self.testopia_user:
             try:
-                self.testopia_pass = keyring.get_password('Testopia', self.testopia_user)
+                self.testopia_pass = keyring.get_password(
+                    'Testopia',
+                    self.testopia_user)
             except Exception:
-                self.log.warning('failed to get Testopia password from the keyring')
+                self.log.warning(
+                    'failed to get Testopia password from the keyring')
                 self.log.debug(format_exc())
 
         self.log.debug('config.testopia_pass = {0!r}'.format(
@@ -254,4 +259,3 @@ class Config(object):
 
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout
-

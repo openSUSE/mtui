@@ -33,16 +33,20 @@ try:
 except NameError:
     unicode = str
 
+
 class QuitLoop(RuntimeError):
     pass
 
+
 class CmdQueue(list):
+
     """
     Prerun support.
 
     Echos prompt with the command that's being popped (and about to be
     executed
     """
+
     def __init__(self, iterable, prompt, term):
         self.prompt = prompt
         self.term = term
@@ -56,8 +60,10 @@ class CmdQueue(list):
     def echo_prompt(self, val):
         self.term.stdout.write("{0}{1}\n".format(self.prompt, val))
 
+
 class CommandAlreadyBoundError(RuntimeError):
     pass
+
 
 class CommandPrompt(cmd.Cmd):
     # TODO: It's worth considering to remove the inherit of cmd.Cmd and
@@ -116,10 +122,10 @@ class CommandPrompt(cmd.Cmd):
         self.identchars += '-'
         # support commands with dashes in them
 
-    def notify_user(self, msg, class_ = None):
+    def notify_user(self, msg, class_=None):
         notification.display(self.log, 'MTUI', msg, class_)
 
-    def println(self, msg = '', eol = '\n'):
+    def println(self, msg='', eol='\n'):
         return self.stdout.write(msg + eol)
 
     def _read_history(self):
@@ -174,6 +180,7 @@ class CommandPrompt(cmd.Cmd):
             y = x.replace('help_', '', 1)
             if y in self.commands:
                 c = self.commands[y]
+
                 def help():
                     c.argparser(self.sys).print_help()
                 return help
@@ -182,13 +189,14 @@ class CommandPrompt(cmd.Cmd):
             y = x.replace('do_', '', 1)
             if y in self.commands:
                 c = self.commands[y]
+
                 def do(arg):
                     try:
                         args = c.parse_args(arg, self.sys)
                     except ArgsParseFailure:
                         return
                     c(
-                        args, self.targets.select(enabled = True),
+                        args, self.targets.select(enabled=True),
                         self.config, self.sys, self.log, self
                     ).run()
                 return do
@@ -197,9 +205,14 @@ class CommandPrompt(cmd.Cmd):
             y = x.replace("complete_", "", 1)
             if y in self.commands:
                 c = self.commands[y]
+
                 def complete(*args, **kw):
                     try:
-                        return c.complete(self.targets.select(enabled = True), *args, **kw)
+                        return c.complete(
+                            self.targets.select(
+                                enabled=True),
+                            *args,
+                            **kw)
                     except Exception as e:
                         self.log.error(e)
                         self.log.debug(format_exc(e))
@@ -235,12 +248,13 @@ class CommandPrompt(cmd.Cmd):
         if params_type == str:
             params = cmdline.strip()
         elif params_type == set:
-            params = set([arg.strip() for arg in cmdline.split(',') if arg.strip()])
+            params = set([arg.strip()
+                         for arg in cmdline.split(',') if arg.strip()])
 
         if 'all' in tselected or tselected == set():
-            targets = self.targets.select(enabled = True)
+            targets = self.targets.select(enabled=True)
         else:
-            targets = self.targets.select(tselected, enabled = True)
+            targets = self.targets.select(tselected, enabled=True)
 
         return (targets, params)
 
@@ -272,8 +286,7 @@ class CommandPrompt(cmd.Cmd):
             # on
             try:
                 hosts = refhost.search(Attributes.from_testplatform(
-                  args.replace('Testplatform: ', '')
-                , self.log
+                    args.replace('Testplatform: ', ''), self.log
                 ))
             except (ValueError, KeyError):
                 self.log.error('failed to parse Testplatform string')
@@ -297,7 +310,8 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_search_hosts(self, text, line, begidx, endidx):
         attributes = Attributes()
-        return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
+        return [item for sublist in attributes.tags.values(
+            ) for item in sublist if item.startswith(text) and item not in line]
 
     def do_autoadd(self, args):
         """
@@ -324,7 +338,8 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_autoadd(self, text, line, begidx, endidx):
         attributes = Attributes()
-        return [item for sublist in attributes.tags.values() for item in sublist if item.startswith(text) and item not in line]
+        return [item for sublist in attributes.tags.values(
+            ) for item in sublist if item.startswith(text) and item not in line]
 
     def do_add_host(self, args):
         """
@@ -405,7 +420,12 @@ class CommandPrompt(cmd.Cmd):
         if args:
             targets, params = self._parse_args(args, set)
 
-            filters = ['connect', 'disconnect', 'install', 'update', 'downgrade']
+            filters = [
+                'connect',
+                'disconnect',
+                'install',
+                'update',
+                'downgrade']
 
             option = [('-e ":%s"' % x) for x in set(params) & set(filters)]
 
@@ -418,8 +438,9 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_history, args)
 
     def complete_list_history(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx,
-                ['connect', 'disconnect', 'install', 'update', 'downgrade'])
+        return self.complete_enabled_hostlist_with_all(
+            text, line, begidx, endidx, [
+                'connect', 'disconnect', 'install', 'update', 'downgrade'])
 
     def do_list_locks(self, args):
         """
@@ -489,10 +510,14 @@ class CommandPrompt(cmd.Cmd):
             import osc
             from osc import commandline
         except:
-            self.log.error('missing osc module. please install osc and setup an account.')
+            self.log.error(
+                'missing osc module. please install osc and setup an account.')
             return
 
-        api_config_options = {'https://api.suse.de': {'http_headers': [], 'sslcertck': True, 'user': 'qa', 'pass': 'qa'}}
+        api_config_options = {
+            'https://api.suse.de':
+            {'http_headers': [], 'sslcertck': True, 'user': 'qa', 'pass':
+             'qa'}}
         osc.conf.config['api_host_options'] = api_config_options
         osc.conf.config['debug'] = 0
         osc.conf.config['verbose'] = 0
@@ -513,8 +538,10 @@ class CommandPrompt(cmd.Cmd):
                 self.log.critical('failed to open %s: %s' % (rpmfile, error))
                 if unicode(error) == u'public key not available':
                     self.log.critical('Public key is not available.')
-                    self.log.critical('In order to import new keys, you should run the following command as root:')
-                    self.log.critical('cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
+                    self.log.critical(
+                        'In order to import new keys, you should run the following command as root:')
+                    self.log.critical(
+                        'cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
                 continue
 
             try:
@@ -560,11 +587,14 @@ class CommandPrompt(cmd.Cmd):
                 du = updated[name]
                 assert(di and du)
             except (AssertionError, KeyError):
-                self.log.warning('osc disturl not found for package %s. skipping.' % name)
+                self.log.warning(
+                    'osc disturl not found for package %s. skipping.' %
+                    name)
                 continue
 
             if di.commit == du.commit:
-                self.log.warning(messages.PackageRevisionHasntChangedWarning(name))
+                self.log.warning(
+                    messages.PackageRevisionHasntChangedWarning(name))
                 continue
 
             diff = os.path.join(dstdir, '%s-%s.diff' % (name, mode))
@@ -572,16 +602,16 @@ class CommandPrompt(cmd.Cmd):
             if mode == 'source':
                 with open(diff, 'w+') as f:
                     try:
-                        f.write(osc.core.server_diff(
-                              'https://api.suse.de'
-                            , di.project
-                            , di.package
-                            , di.commit
-                            , du.project
-                            , du.package
-                            , du.commit
-                            , unified=True
-                        ))
+                        f.write(
+                            osc.core.server_diff(
+                                'https://api.suse.de',
+                                di.project,
+                                di.package,
+                                di.commit,
+                                du.project,
+                                du.package,
+                                du.commit,
+                                unified=True))
                     except Exception as error:
                         self.log.error('failed to diff packages: %s', error)
                         return
@@ -592,20 +622,28 @@ class CommandPrompt(cmd.Cmd):
                 targets.run('which osc')
                 for target in targets:
                     if targets[target].lastexit() != 0:
-                        self.log.error('osc is missing on %s. skipping.' % target)
+                        self.log.error(
+                            'osc is missing on %s. skipping.' %
+                            target)
 
                 for state in ['new', 'old']:
                     sourcedir = os.path.join(tmpdir, name, state)
                     builddir = os.path.join(tmpdir, name, state, 'BUILD')
                     disturl = du.disturl if state == 'new' else di.disturl
 
-                    targets.run('echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui')
+                    targets.run(
+                        'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui')
                     targets.run('mkdir -p %s' % builddir)
-                    targets.run('cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' % (sourcedir, disturl))
-                    targets.run('rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec'
-                            % (sourcedir, name, builddir, sourcedir, name))
+                    targets.run(
+                        'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' %
+                        (sourcedir, disturl))
+                    targets.run(
+                        'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec' %
+                        (sourcedir, name, builddir, sourcedir, name))
 
-                targets.run('diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' % (sourcedir, sourcedir, diff))
+                targets.run(
+                    'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' %
+                    (sourcedir, sourcedir, diff))
 
                 self.log.info('wrote diff remotely to %s' % diff)
 
@@ -630,7 +668,11 @@ class CommandPrompt(cmd.Cmd):
         self.metadata.list_patches(self.display.list_patches)
 
     def complete_list_packages(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     @requires_update
     def do_list_update_commands(self, args):
@@ -671,7 +713,12 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('no testcases found')
 
         for tcid, tc in self.testopia.testcases.items():
-            self.display.testopia_list(url, tcid, tc['summary'], tc['status'], tc['automated'])
+            self.display.testopia_list(
+                url,
+                tcid,
+                tc['summary'],
+                tc['status'],
+                tc['automated'])
 
     @requires_update
     def do_testopia_show(self, args):
@@ -694,7 +741,11 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     cases.append(str(int(case)))
                 except ValueError:
-                    cases = [ k for k, v in self.testopia.testcases.items() if v['summary'].replace('_', ' ') in case ]
+                    cases = [
+                        k for k,
+                        v in self.testopia.testcases.items() if v['summary'].replace(
+                            '_',
+                            ' ') in case]
 
             for case_id in cases:
                 testcase = self.testopia.get_testcase(case_id)
@@ -719,7 +770,11 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_testopia_show(self, text, line, begidx, endidx):
         if not line.count(','):
-            return self.complete_testopia_testcaselist(text, line, begidx, endidx)
+            return self.complete_testopia_testcaselist(
+                text,
+                line,
+                begidx,
+                endidx)
 
     @requires_update
     def do_testopia_create(self, args):
@@ -736,7 +791,12 @@ class CommandPrompt(cmd.Cmd):
         if args:
             url = self.config.bugzilla_url
             testcase = {}
-            fields = ['requirement:', 'setup:', 'breakdown:', 'action:', 'effect:']
+            fields = [
+                'requirement:',
+                'setup:',
+                'breakdown:',
+                'action:',
+                'effect:']
             (package, _, summary) = args.partition(',')
 
             self.ensure_testopia_loaded()
@@ -760,14 +820,19 @@ class CommandPrompt(cmd.Cmd):
             template = edited.replace('\n', '|br|')
 
             for field in fields:
-                template = template.replace('|br|%s:' % field.partition(':')[0], '\n%s:' % field.partition(':')[0])
+                template = template.replace(
+                    '|br|%s:' %
+                    field.partition(':')[0],
+                    '\n%s:' %
+                    field.partition(':')[0])
 
             lines = template.split('\n')
             for line in lines:
                 key, _, value = line.partition(':')
                 if key == 'package':
                     key = 'tags'
-                    value = 'packagename_{name},testcase_{name}'.format(name=value.strip())
+                    value = 'packagename_{name},testcase_{name}'.format(
+                        name=value.strip())
 
                 testcase[key] = value.strip()
 
@@ -776,7 +841,9 @@ class CommandPrompt(cmd.Cmd):
             except Exception:
                 self.log.error('failed to create testcase')
             else:
-                self.log.info('created testcase %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
+                self.log.info(
+                    'created testcase %s/tr_show_case.cgi?case_id=%s' %
+                    (url, case_id))
 
         else:
             self.parse_error(self.do_testopia_create, args)
@@ -799,7 +866,15 @@ class CommandPrompt(cmd.Cmd):
         if args:
             template = []
             url = self.config.bugzilla_url
-            fields = ['summary', 'automated', 'status', 'requirement', 'setup', 'breakdown', 'action', 'effect']
+            fields = [
+                'summary',
+                'automated',
+                'status',
+                'requirement',
+                'setup',
+                'breakdown',
+                'action',
+                'effect']
 
             self.ensure_testopia_loaded()
 
@@ -808,9 +883,15 @@ class CommandPrompt(cmd.Cmd):
                 case_id = str(int(case))
             except ValueError:
                 try:
-                    case_id = [ k for k, v in self.testopia.testcases.items() if v['summary'].replace('_', ' ') in case ][0]
+                    case_id = [
+                        k for k,
+                        v in self.testopia.testcases.items() if v['summary'].replace(
+                            '_',
+                            ' ') in case][0]
                 except IndexError:
-                    self.log.critical('case_id for testcase %s not found' % case)
+                    self.log.critical(
+                        'case_id for testcase %s not found' %
+                        case)
                     return
 
             testcase = self.testopia.get_testcase(case_id)
@@ -847,13 +928,19 @@ class CommandPrompt(cmd.Cmd):
             except Exception:
                 self.log.error('failed to modify testcase %s' % case_id)
             else:
-                self.log.info('testcase saved: %s/tr_show_case.cgi?case_id=%s' % (url, case_id))
+                self.log.info(
+                    'testcase saved: %s/tr_show_case.cgi?case_id=%s' %
+                    (url, case_id))
         else:
             self.parse_error(self.do_testopia_edit, args)
 
     def complete_testopia_edit(self, text, line, begidx, endidx):
         if not line.count(','):
-            return self.complete_testopia_testcaselist(text, line, begidx, endidx)
+            return self.complete_testopia_testcaselist(
+                text,
+                line,
+                begidx,
+                endidx)
 
     @requires_update
     def do_list_bugs(self, args):
@@ -869,7 +956,9 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_list_bugs, args)
             return
 
-        self.metadata.list_bugs(self.display.list_bugs, self.config.bugzilla_url)
+        self.metadata.list_bugs(
+            self.display.list_bugs,
+            self.config.bugzilla_url)
 
     @requires_update
     def do_list_metadata(self, args):
@@ -934,7 +1023,10 @@ class CommandPrompt(cmd.Cmd):
         if not targets:
             return
 
-        self.metadata.list_versions(self.display.list_versions, targets, params)
+        self.metadata.list_versions(
+            self.display.list_versions,
+            targets,
+            params)
 
     def do_show_log(self, args):
         """
@@ -961,7 +1053,11 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_show_log, args)
 
     def complete_show_log(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     def do_shell(self, args):
         """
@@ -1018,16 +1114,25 @@ class CommandPrompt(cmd.Cmd):
             output = []
 
             for target in targets:
-                output.append('%s:~> %s [%s]' % (target, targets[target].lastin(), targets[target].lastexit()))
+                output.append(
+                    '%s:~> %s [%s]' %
+                    (target,
+                     targets[target].lastin(),
+                        targets[target].lastexit()))
                 map(output.append, targets[target].lastout().split('\n'))
                 if targets[target].lasterr():
-                    map(output.append, ['stderr:'] + targets[target].lasterr().split('\n'))
+                    map(output.append, ['stderr:'] +
+                        targets[target].lasterr().split('\n'))
 
             page(output, self.interactive)
             self.log.info('done')
 
     def complete_run(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     def do_testsuite_list(self, args):
         """
@@ -1041,12 +1146,18 @@ class CommandPrompt(cmd.Cmd):
         if args:
             targets, _ = self._parse_args(args, None)
 
-            targets.report_testsuites(self.display.testsuite_list, self.config.target_testsuitedir)
+            targets.report_testsuites(
+                self.display.testsuite_list,
+                self.config.target_testsuitedir)
         else:
             self.parse_error(self.do_testsuite_list, args)
 
     def complete_testsuite_list(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     @requires_update
     def do_testsuite_run(self, args):
@@ -1068,7 +1179,9 @@ class CommandPrompt(cmd.Cmd):
             return
 
         if not command.startswith('/'):
-            command = os.path.join(self.config.target_testsuitedir, command.strip())
+            command = os.path.join(
+                self.config.target_testsuitedir,
+                command.strip())
 
         command = 'export TESTS_LOGDIR=/var/log/qa/{0}; {1}'.format(
             self.metadata.id,
@@ -1088,7 +1201,11 @@ class CommandPrompt(cmd.Cmd):
         self.log.info('done')
 
     def complete_testsuite_run(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     @requires_update
     def do_testsuite_submit(self, args):
@@ -1113,7 +1230,9 @@ class CommandPrompt(cmd.Cmd):
         name = os.path.basename(command).replace('-run', '')
         username = self.config.session_user
 
-        comment = self.metadata.get_testsuite_comment(name, date.today().strftime('%d/%m/%y'))
+        comment = self.metadata.get_testsuite_comment(
+            name,
+            date.today().strftime('%d/%m/%y'))
         try:
             comment = edit_text(comment)
         except subprocess.CalledProcessError as e:
@@ -1137,22 +1256,34 @@ class CommandPrompt(cmd.Cmd):
 
         for hn, tgt in targets.items():
             if tgt.lastexit() != 0:
-                self.log.critical('submitting testsuite results failed on %s:' % hn)
+                self.log.critical(
+                    'submitting testsuite results failed on %s:' %
+                    hn)
                 self.println('{}:~> {} [{}]'.format(hn, name, tgt.lastexit()))
                 self.println(tgt.lastout())
                 if tgt.lasterr():
                     self.println(tgt.lasterr())
             else:
-                match = re.search('(http://.*/submission.php.submission_id=\d+)', tgt.lasterr())
+                match = re.search(
+                    '(http://.*/submission.php.submission_id=\d+)',
+                    tgt.lasterr())
                 if match:
-                    self.log.info('submission for %s (%s): %s' % (hn, tgt.system, match.group(1)))
+                    self.log.info(
+                        'submission for %s (%s): %s' %
+                        (hn, tgt.system, match.group(1)))
                 else:
-                    self.log.critical('no submission found for %s. please use "show_log %s" to see what went wrong' % (hn, hn))
+                    self.log.critical(
+                        'no submission found for %s. please use "show_log %s" to see what went wrong' %
+                        (hn, hn))
 
         self.log.info('done')
 
     def complete_testsuite_submit(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     def do_set_session_name(self, args):
         """
@@ -1201,13 +1332,12 @@ class CommandPrompt(cmd.Cmd):
 
         if not update:
             raise ValueError("Couldn't match {0!r} to either of {1!r}".
-                format(id_, u_types))
+                             format(id_, u_types))
 
         if self.metadata:
             m = 'should i overwrite already loaded session {0}? (y/N) '
             if not prompt_user(m.format(self.metadata.id), ['y', 'yes'], self.interactive):
                 return
-
 
         # Reload hosts to which we already have a connection
         # close hosts we are already connected to but add them to the
@@ -1222,13 +1352,16 @@ class CommandPrompt(cmd.Cmd):
             target.close()
             re_add.append((hostname, target.system))
 
-        self.load_update(update, autoconnect = True)
+        self.load_update(update, autoconnect=True)
 
         for hostname, system in re_add:
             self.metadata.add_target(hostname, system)
 
     def load_update(self, update, autoconnect):
-        tr = update.make_testreport(self.config, self.log, autoconnect = autoconnect)
+        tr = update.make_testreport(
+            self.config,
+            self.log,
+            autoconnect=autoconnect)
 
         if self.metadata and self.metadata.id is self.session:
             self.set_prompt(None)
@@ -1255,7 +1388,8 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_set_location(self, text, line, begidx, endidx):
         refhost = self._refhosts()
-        return [i for i in refhost.get_locations() if i.startswith(text) and i not in line]
+        return [
+            i for i in refhost.get_locations() if i.startswith(text) and i not in line]
 
     def do_set_host_lock(self, args):
         """
@@ -1286,9 +1420,13 @@ class CommandPrompt(cmd.Cmd):
 
                 if state == 'enabled':
                     if lock.locked:
-                        self.log.warning('host %s is locked since %s by %s. skipping.' % (target, lock.time(), lock.user))
+                        self.log.warning(
+                            'host %s is locked since %s by %s. skipping.' %
+                            (target, lock.time(), lock.user))
                         if lock.comment:
-                            self.log.info("%s's comment: %s" % (lock.user, lock.comment))
+                            self.log.info(
+                                "%s's comment: %s" %
+                                (lock.user, lock.comment))
 
                         continue
                     else:
@@ -1301,7 +1439,9 @@ class CommandPrompt(cmd.Cmd):
                     try:
                         targets[target].remove_lock()
                     except AssertionError:
-                        self.log.warning('host %s not locked by us. skipping.' % target)
+                        self.log.warning(
+                            'host %s not locked by us. skipping.' %
+                            target)
                 else:
                     self.parse_error(self.do_set_host_lock, args)
         else:
@@ -1311,9 +1451,15 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_set_host_lock(self, text, line, begidx, endidx):
         if line.count(','):
-            return self.complete_enabled_hostlist(text, line, begidx, endidx, ['enabled', 'disabled'])
+            return self.complete_enabled_hostlist(
+                text, line, begidx, endidx, [
+                    'enabled', 'disabled'])
         else:
-            return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+            return self.complete_enabled_hostlist_with_all(
+                text,
+                line,
+                begidx,
+                endidx)
 
     def do_set_host_state(self, args):
         """
@@ -1356,7 +1502,9 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_set_host_state(self, text, line, begidx, endidx):
         if line.count(','):
-            return self.complete_hostlist(text, line, begidx, endidx, ['enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
+            return self.complete_hostlist(
+                text, line, begidx, endidx, [
+                    'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
@@ -1374,7 +1522,10 @@ class CommandPrompt(cmd.Cmd):
         loglevel   -- warning, info or debug
         """
 
-        levels = {'warning': logging.WARNING, 'info': logging.INFO, 'debug': logging.DEBUG}
+        levels = {
+            'warning': logging.WARNING,
+            'info': logging.INFO,
+            'debug': logging.DEBUG}
 
         if args in levels.keys():
             self.log.setLevel(level=levels[args])
@@ -1382,7 +1533,11 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_set_log_level, args)
 
     def complete_set_log_level(self, text, line, begidx, endidx):
-        return [i for i in ['warning', 'info', 'debug'] if i.startswith(text) and i not in line]
+        return [
+            i for i in [
+                'warning',
+                'info',
+                'debug'] if i.startswith(text) and i not in line]
 
     def do_set_timeout(self, args):
         """
@@ -1448,9 +1603,15 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_set_repo(self, text, line, begidx, endidx):
         if line.count(','):
-            return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['testing', 'update'])
+            return self.complete_enabled_hostlist_with_all(
+                text, line, begidx, endidx, [
+                    'testing', 'update'])
         else:
-            return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+            return self.complete_enabled_hostlist_with_all(
+                text,
+                line,
+                begidx,
+                endidx)
 
     @requires_update
     def do_install(self, args):
@@ -1484,7 +1645,11 @@ class CommandPrompt(cmd.Cmd):
                 self.log.info('done')
 
     def complete_install(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     @requires_update
     def do_uninstall(self, args):
@@ -1517,7 +1682,11 @@ class CommandPrompt(cmd.Cmd):
                 self.log.info('done')
 
     def complete_uninstall(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     @requires_update
     def do_downgrade(self, args):
@@ -1551,7 +1720,11 @@ class CommandPrompt(cmd.Cmd):
                 self.log.info('done')
 
     def complete_downgrade(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     @requires_update
     def do_prepare(self, args):
@@ -1579,9 +1752,9 @@ class CommandPrompt(cmd.Cmd):
         try:
             self.metadata.perform_prepare(
                 targets,
-                force = 'force' in params,
-                installed_only = 'installed' in params,
-                testing = 'testing' in params,
+                force='force' in params,
+                installed_only='installed' in params,
+                testing='testing' in params,
             )
         except Exception:
             self.log.critical('failed to prepare target systems')
@@ -1594,7 +1767,9 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('done')
 
     def complete_prepare(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['force', 'installed', 'testing'])
+        return self.complete_enabled_hostlist_with_all(
+            text, line, begidx, endidx, [
+                'force', 'installed', 'testing'])
 
     @requires_update
     def do_update(self, args):
@@ -1624,7 +1799,10 @@ class CommandPrompt(cmd.Cmd):
         except Exception:
             self.log.critical('failed to update target systems')
             self.log.debug(format_exc())
-            self.notify_user('updating %s failed' % self.session, 'stock_dialog-error')
+            self.notify_user(
+                'updating %s failed' %
+                self.session,
+                'stock_dialog-error')
             raise
         except KeyboardInterrupt:
             self.log.info('update process canceled')
@@ -1634,7 +1812,9 @@ class CommandPrompt(cmd.Cmd):
         self.log.info('done')
 
     def complete_update(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx, ['newpackage', 'noprepare', 'noscript'])
+        return self.complete_enabled_hostlist_with_all(
+            text, line, begidx, endidx, [
+                'newpackage', 'noprepare', 'noscript'])
 
     def do_list_sessions(self, args):
         """
@@ -1658,7 +1838,11 @@ class CommandPrompt(cmd.Cmd):
         targets.report_sessions(self.display.list_sessions)
 
     def complete_list_sessions(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(text, line, begidx, endidx)
+        return self.complete_enabled_hostlist_with_all(
+            text,
+            line,
+            begidx,
+            endidx)
 
     @requires_update
     def do_checkout(self, args):
@@ -1671,7 +1855,9 @@ class CommandPrompt(cmd.Cmd):
         """
 
         try:
-            subprocess.check_call('svn up'.split(), cwd = self.metadata.report_wd())
+            subprocess.check_call(
+                'svn up'.split(),
+                cwd=self.metadata.report_wd())
         except Exception:
             self.log.error('updating template failed')
             self.log.debug(format_exc())
@@ -1691,8 +1877,8 @@ class CommandPrompt(cmd.Cmd):
 
         checkout = self.metadata.report_wd()
         try:
-            subprocess.check_call('svn up'.split(), cwd = checkout)
-            subprocess.check_call('svn ci'.split() + msg, cwd = checkout)
+            subprocess.check_call('svn up'.split(), cwd=checkout)
+            subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
         except Exception:
             self.log.error('committing template failed')
             self.log.debug(format_exc())
@@ -1775,7 +1961,9 @@ class CommandPrompt(cmd.Cmd):
                     self.log.error('running %s failed' % filename)
                     self.log.debug(format_exc())
             else:
-                self.log.error('%s script not found, make sure term.%s.sh exists' % (args, args))
+                self.log.error(
+                    '%s script not found, make sure term.%s.sh exists' %
+                    (args, args))
                 self.parse_error(self.do_terms, args)
         else:
 
@@ -1838,15 +2026,33 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_edit(self, text, line, begidx, endidx):
         if 'file,' in line:
-            return self.complete_filelist(text.replace('file,', '', 1), line, begidx, endidx)
+            return self.complete_filelist(
+                text.replace(
+                    'file,',
+                    '',
+                    1),
+                line,
+                begidx,
+                endidx)
         if 'patch,' in line:
             specfile = glob.glob(self.metadata.local_wd(), '*', '*.spec')
             with open(specfile, 'r') as spec:
                 name = re.findall('Name:\W+(.*)', spec.read())[0]
                 spec.seek(0)
-                return [i for i in [s.replace('name}', name) for s in re.findall('Patch\d*:\W+(.*)', spec.read())] if i.startswith(text)]
+                return [
+                    i for i in [
+                        s.replace(
+                            'name}',
+                            name) for s in re.findall(
+                            'Patch\d*:\W+(.*)',
+                            spec.read())] if i.startswith(text)]
         else:
-            return [i for i in ['file,', 'template', 'specfile', 'patch,'] if i.startswith(text)]
+            return [
+                i for i in [
+                    'file,',
+                    'template',
+                    'specfile',
+                    'patch,'] if i.startswith(text)]
 
     @requires_update
     def do_export(self, args):
@@ -1896,9 +2102,13 @@ class CommandPrompt(cmd.Cmd):
         self.log.info('exporting XML to %s' % filename)
         try:
             with open(filename, 'w') as f:
-                f.write('\n'.join(l.rstrip().encode('utf-8') for l in template))
+                f.write('\n'.join(l.rstrip().encode('utf-8')
+                        for l in template))
         except IOError as error:
-            self.println('failed to write {}: {}'.format(filename, error.strerror))
+            self.println(
+                'failed to write {}: {}'.format(
+                    filename,
+                    error.strerror))
         else:
             self.println('wrote template to {}'.format(filename))
 
@@ -1923,7 +2133,7 @@ class CommandPrompt(cmd.Cmd):
         path = [args.strip()] if args else []
         self._do_save_impl(*path)
 
-    def _do_save_impl(self, path = 'log.xml'):
+    def _do_save_impl(self, path='log.xml'):
         if not path.startswith('/'):
             dir_ = self.metadata.report_wd()
             path = os.path.join(dir_, 'output', path)
@@ -1991,33 +2201,83 @@ class CommandPrompt(cmd.Cmd):
 
         filename = text.split('/')[-1]
 
-        return [dirname + i for i in os.listdir(dirname) if i.startswith(filename)]
+        return [
+            dirname +
+            i for i in os.listdir(dirname) if i.startswith(filename)]
 
     def complete_hostlist(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in list(self.targets) + appendix if i.startswith(text) and i not in line]
+        return [
+            i for i in list(
+                self.targets) +
+            appendix if i.startswith(text) and i not in line]
 
-    def complete_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in list(self.targets) + ['all'] + appendix if i.startswith(text) and i not in line]
+    def complete_hostlist_with_all(
+            self,
+            text,
+            line,
+            begidx,
+            endidx,
+            appendix=[]):
+        return [
+            i for i in list(
+                self.targets) +
+            ['all'] +
+            appendix if i.startswith(text) and i not in line]
 
-    def complete_enabled_hostlist(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in list(self.targets.select(enabled = True)) + appendix if i.startswith(text) and i not in line]
+    def complete_enabled_hostlist(
+            self,
+            text,
+            line,
+            begidx,
+            endidx,
+            appendix=[]):
+        return [
+            i for i in list(
+                self.targets.select(
+                    enabled=True)) +
+            appendix if i.startswith(text) and i not in line]
 
-    def complete_enabled_hostlist_with_all(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in list(self.targets.select(enabled = True)) + ['all'] + appendix if i.startswith(text) and i not in line]
+    def complete_enabled_hostlist_with_all(
+            self,
+            text,
+            line,
+            begidx,
+            endidx,
+            appendix=[]):
+        return [
+            i for i in list(
+                self.targets.select(
+                    enabled=True)) +
+            ['all'] +
+            appendix if i.startswith(text) and i not in line]
 
     def complete_packagelist(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in self.metadata.get_package_list() if i.startswith(text) and i not in line]
+        return [i for i in self.metadata.get_package_list() if i.startswith(
+            text) and i not in line]
 
     def complete_testopia_testcaselist(self, text, line, begidx, endidx):
         self.ensure_testopia_loaded()
 
-        testcases = [ i['summary'].replace(' ', '_') for i in self.testopia.testcases.values() ]
+        testcases = [
+            i['summary'].replace(
+                ' ',
+                '_') for i in self.testopia.testcases.values()]
         return [i for i in testcases if i.startswith(text) and i not in line]
 
     def parse_error(self, method, args):
         self.println()
-        self.log.error('failed to parse command: %s %s' % (method.__name__.replace('do_', ''), args))
-        self.println('{}: {}'.format(method.__name__.replace('do_', ''), method.__doc__))
+        self.log.error(
+            'failed to parse command: %s %s' %
+            (method.__name__.replace(
+                'do_',
+                ''),
+                args))
+        self.println(
+            '{}: {}'.format(
+                method.__name__.replace(
+                    'do_',
+                    ''),
+                method.__doc__))
 
 
 def user_deprecation(log, msg):

@@ -18,6 +18,7 @@ from mtui.template import SwampUpdateID
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import __version__
 
+
 def get_parser(sys):
     """
     :covered-by: tests.test_main.test_argparser_*
@@ -56,7 +57,7 @@ def get_parser(sys):
         type=str,
         action='append',
         help='cumulatively override default hosts from template \n'
-            "format: hostname,system"
+        "format: hostname,system"
     )
     p.add_argument(
         '-p', '--prerun',
@@ -66,7 +67,7 @@ def get_parser(sys):
     p.add_argument(
         '-w', '--connection_timeout',
         type=int,
-        help= 'override config mtui.connection_timeout'
+        help='override config mtui.connection_timeout'
     )
     p.add_argument(
         '-n', '--noninteractive',
@@ -89,23 +90,17 @@ def get_parser(sys):
 
     return p
 
+
 def main():
     logger = create_logger()
     cfg = Config(logger)
     sys.exit(run_mtui(
-      sys
-    , cfg
-    , logger
-    , CommandPrompt
-    , CommandPromptDisplay
+        sys, cfg, logger, CommandPrompt, CommandPromptDisplay
     ))
 
+
 def run_mtui(
-  sys
-, config
-, log
-, Prompt
-, Display
+    sys, config, log, Prompt, Display
 ):
     p = get_parser(sys)
     try:
@@ -132,7 +127,7 @@ def run_mtui(
     prompt = Prompt(config, log, sys, Display)
     if update:
         try:
-            prompt.load_update(update, autoconnect = not bool(args.sut))
+            prompt.load_update(update, autoconnect=not bool(args.sut))
         except (SvnCheckoutInterruptedError, CalledProcessError) as e:
             log.error(e)
             return 1
@@ -148,8 +143,8 @@ def run_mtui(
 
     if args.prerun:
         prompt.set_cmdqueue([x.rstrip()
-            for x in args.prerun.readlines()
-            if not x.startswith('#')])
+                             for x in args.prerun.readlines()
+                             if not x.startswith('#')])
 
     prompt.cmdloop()
     return 0

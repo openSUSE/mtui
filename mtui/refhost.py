@@ -18,7 +18,9 @@ from mtui import messages
 
 from traceback import format_exc
 
+
 class Attributes(object):
+
     """Host attributes which get loaded from the xml or serve as search criteria
 
     any tag specified here gets loaded as valid search tag in prompt.py
@@ -26,14 +28,66 @@ class Attributes(object):
 
     """
 
-    tags = {'products':['sled', 'sles', 'opensuse', 'studio', 'slms', 'sles4vmware', 'manager', 'rhel', 'sle'],
-             'archs':['i386', 'x86_64', 'ppc', 'ppc64', 'ppc64le', 's390', 's390x', 'ia64', 'iseries'],
-             'major':['9', '10', '11', '12', '5', '6'],
-             'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
-             'addons':['webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner', 'smt', 'manager-client', 'rt', 'we'],
-             'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm', 'vmware'],
-             'tags':['kernel', 'ltss', 'minimal']
-            }
+    tags = {
+        'products': [
+            'sled',
+            'sles',
+            'opensuse',
+            'studio',
+            'slms',
+            'sles4vmware',
+            'manager',
+            'rhel',
+            'sle'],
+        'archs': [
+            'i386',
+            'x86_64',
+            'ppc',
+            'ppc64',
+            'ppc64le',
+            's390',
+            's390x',
+            'ia64',
+            'iseries'],
+        'major': [
+            '9',
+            '10',
+            '11',
+            '12',
+            '5',
+            '6'],
+        'minor': [
+            'sp1',
+            'sp2',
+            'sp3',
+            'sp4',
+            '1',
+            '2',
+            '3',
+            '4'],
+        'addons': [
+            'webyast',
+            'webyast11',
+            'webyast12',
+            'sdk',
+            'hae',
+            'studiorunner',
+            'smt',
+            'manager-client',
+            'rt',
+            'we'],
+        'virtual': [
+            'xen',
+            'xenu',
+            'xen0',
+            'host',
+            'guest',
+            'kvm',
+            'vmware'],
+        'tags': [
+            'kernel',
+            'ltss',
+            'minimal']}
 
     def __init__(self):
         self.product = ""
@@ -50,7 +104,7 @@ class Attributes(object):
         self.minimal = None
         # mode should have "host", "guest" or an empty value
         # hypervisor is arbitrary, but most likely xen or kvm
-        self.virtual = {'mode':'', 'hypervisor':''}
+        self.virtual = {'mode': '', 'hypervisor': ''}
 
     def __str__(self):
         """humand readable output of the current attributes"""
@@ -88,10 +142,17 @@ class Attributes(object):
             if major or minor:
                 addons = ' '.join([addons, '%s.%s' % (major, minor)])
 
-
         archs = ' '.join(sorted(set(self.archs)))
 
-        rep = ' '.join([self.product, version, archs, kernel, ltss, minimal, self.virtual['mode'], self.virtual['hypervisor'], addons])
+        rep = ' '.join([self.product,
+                        version,
+                        archs,
+                        kernel,
+                        ltss,
+                        minimal,
+                        self.virtual['mode'],
+                        self.virtual['hypervisor'],
+                        addons])
         return ' '.join(rep.split())
 
     def __bool__(self):
@@ -133,17 +194,17 @@ class Attributes(object):
                 setattr(attrs, tag[1:], False)
 
             if tag in ('xen', 'kvm', 'vmware'):
-                attrs.virtual.update(hypervisor = tag)
+                attrs.virtual.update(hypervisor=tag)
 
             if tag == 'xenu':
-                attrs.virtual.update(mode = 'guest', hypervisor = 'xen')
+                attrs.virtual.update(mode='guest', hypervisor='xen')
             if tag == 'xen0':
-                attrs.virtual.update(mode = 'host', hypervisor = 'xen')
+                attrs.virtual.update(mode='host', hypervisor='xen')
 
             if tag == 'host':
-                attrs.virtual.update(mode = 'host')
+                attrs.virtual.update(mode='host')
             if tag == 'guest':
-                attrs.virtual.update(mode = 'guest')
+                attrs.virtual.update(mode='guest')
 
         return attrs
 
@@ -157,7 +218,8 @@ class Attributes(object):
 
         """
 
-        # testreport string example: base=sled(major=10,minor=sp4);arch=[i386,x86_64]
+        # testreport string example:
+        # base=sled(major=10,minor=sp4);arch=[i386,x86_64]
 
         requests = {}
         attributes = Attributes()
@@ -184,7 +246,8 @@ class Attributes(object):
                 continue
 
             # add all required tags to the dict (like kernel or ltss)
-            # add all required virtual descriptors to the dict (like "mode" or "hypervisor")
+            # add all required virtual descriptors to the dict (like "mode" or
+            # "hypervisor")
             if name in ('tags', 'virtual'):
                 match = re.search('\((.*)\)', content)
                 if match:
@@ -215,10 +278,11 @@ class Attributes(object):
 
         tags = requests.get('tags', [])
 
-        # if we found tags in the testplatform string, add them to the attributes
+        # if we found tags in the testplatform string, add them to the
+        # attributes
         for tag in tags:
             if tag in ('vmware', 'xen'):
-                attributes.virtual.update(hypervisor = tag)
+                attributes.virtual.update(hypervisor=tag)
             if tag in ('kernel', 'ltss', 'minimal'):
                 setattr(attributes, tag, True)
 
@@ -228,7 +292,11 @@ class Attributes(object):
             # if no version is required, leave them empty
             major = aversion.get('major', '')
             minor = aversion.get('minor', '')
-            attributes.addons.setdefault(addon, dict()).update(major = major, minor = minor)
+            attributes.addons.setdefault(
+                addon,
+                dict()).update(
+                major=major,
+                minor=minor)
 
         # add virtual descriptors to the attributes (may overwrite xen tag)
         for descriptor in requests.get('virtual', []):
@@ -237,6 +305,7 @@ class Attributes(object):
                 attributes.virtual[key] = value
 
         return attributes
+
 
 class Refhosts(object):
     _default_location = 'default'
@@ -307,19 +376,17 @@ class Refhosts(object):
         for arch in archs:
             self.attributes.archs = [arch]
 
-            hosts = list(map(
-                self.extract_name
-              , filter(self.check_attributes, self._location_hosts(self.location))
-            ))
+            hosts = list(
+                map(self.extract_name,
+                    filter(self.check_attributes, self._location_hosts(
+                        self.location))))
 
             if hosts == [] and self.location != self._default_location:
                 try:
                     hosts = list(map(
-                        self.extract_name
-                      , filter(
-                            self.check_attributes
-                          , self._location_hosts(self._default_location)
-                    )))
+                        self.extract_name, filter(
+                            self.check_attributes, self._location_hosts(self._default_location)
+                            )))
                 except messages.InvalidLocationError:
                     pass
 
@@ -346,15 +413,16 @@ class Refhosts(object):
 
         :type  location: string
         """
-        xs = list(filter(
-            lambda e: operator.eq(e.getAttribute('name'), location)
-          , self.data.getElementsByTagName('location')
-        ))
+        xs = list(
+            filter(
+                lambda e: operator.eq(
+                    e.getAttribute('name'),
+                    location),
+                self.data.getElementsByTagName('location')))
 
         if xs == []:
             raise messages.InvalidLocationError(
-                location
-              , self.get_locations()
+                location, self.get_locations()
             )
 
         return xs
@@ -383,14 +451,18 @@ class Refhosts(object):
 
             if self.attributes.product:
                 # current host product is the searched product
-                product = element.getElementsByTagName('product')[0].getAttribute('name')
+                product = element.getElementsByTagName(
+                    'product')[0].getAttribute('name')
                 if self.attributes.product == "sle":
                     product = product[0:-1]
                 assert(product == self.attributes.product)
 
             for addon in self.attributes.addons:
                 # each addon in the search attributes is available on this host
-                assert(addon in map(self.extract_name, element.getElementsByTagName('addon')))
+                assert(
+                    addon in map(
+                        self.extract_name,
+                        element.getElementsByTagName('addon')))
 
             for node in element.getElementsByTagName('addon'):
                 name = self.extract_name(node)
@@ -403,11 +475,13 @@ class Refhosts(object):
                     # on each host
                     continue
                 try:
-                    major = node.getElementsByTagName('major')[0].firstChild.data
+                    major = node.getElementsByTagName(
+                        'major')[0].firstChild.data
                 except:
                     major = ''
                 try:
-                    minor = node.getElementsByTagName('minor')[0].firstChild.data
+                    minor = node.getElementsByTagName(
+                        'minor')[0].firstChild.data
                 except:
                     minor = ''
                 # check if the searched version numbers match the installed
@@ -430,7 +504,8 @@ class Refhosts(object):
             except:
                 minor = None
             try:
-                release = node.getElementsByTagName('release')[0].firstChild.data
+                release = node.getElementsByTagName(
+                    'release')[0].firstChild.data
             except:
                 release = None
 
@@ -447,7 +522,9 @@ class Refhosts(object):
                 if self.attributes.kernel:
                     assert(node.firstChild.data == 'true')
                 elif self.attributes.kernel is False:
-                    assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
+                    assert(
+                        node.getAttribute('property') == 'weak'
+                        or node.firstChild.data == 'false')
             except IndexError:
                 # kernel element not found for the host. make sure we do not
                 # require the host to be a kernel host
@@ -461,7 +538,9 @@ class Refhosts(object):
                 if self.attributes.ltss:
                     assert(node.firstChild.data == 'true')
                 elif self.attributes.ltss is False:
-                    assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
+                    assert(
+                        node.getAttribute('property') == 'weak'
+                        or node.firstChild.data == 'false')
             except IndexError:
                 # ltss element not found for the host. make sure we do not
                 # require the host to be a ltss host
@@ -475,7 +554,9 @@ class Refhosts(object):
                 if self.attributes.minimal:
                     assert(node.firstChild.data == 'true')
                 elif self.attributes.minimal is False:
-                    assert(node.getAttribute('property') == 'weak' or node.firstChild.data == 'false')
+                    assert(
+                        node.getAttribute('property') == 'weak'
+                        or node.firstChild.data == 'false')
             except IndexError:
                 # minimal element not found for the host. make sure we do not
                 # require the host to be a minimal host
@@ -486,7 +567,9 @@ class Refhosts(object):
             except IndexError:
                 # no virtual element found for the host. make sure we don't search
                 # for virtualized hosts or hipervisors.
-                assert((not self.attributes.virtual['mode']) or self.attributes.virtual['mode'] == "none")
+                assert(
+                    (not self.attributes.virtual['mode'])
+                    or self.attributes.virtual['mode'] == "none")
                 assert(not self.attributes.virtual['hypervisor'])
             else:
                 # if a virtual element was found, make sure it matches our search
@@ -496,7 +579,9 @@ class Refhosts(object):
                 if self.attributes.virtual['mode']:
                     assert(self.attributes.virtual['mode'] == mode)
                 if self.attributes.virtual['hypervisor']:
-                    assert(self.attributes.virtual['hypervisor'] == node.firstChild.data)
+                    assert(
+                        self.attributes.virtual['hypervisor'] ==
+                        node.firstChild.data)
                 if not self.attributes.virtual['mode'] and not self.attributes.virtual['hypervisor']:
                     assert(node.getAttribute('property') == 'weak')
 
@@ -530,15 +615,15 @@ class Refhosts(object):
         attributes = Attributes()
 
         nodes = filter(
-          lambda e: operator.eq(e.getAttribute('name'), hostname)
-        , self._location_hosts(self.location)
-        )
+            lambda e: operator.eq(
+                e.getAttribute('name'), hostname), self._location_hosts(
+                self.location))
 
         if nodes == [] and self.location != self._default_location:
             nodes = filter(
-              lambda e: operator.eq(e.getAttribute('name'), hostname)
-            , self._location_hosts(self._default_location)
-            )
+                lambda e: operator.eq(
+                    e.getAttribute('name'), hostname), self._location_hosts(
+                    self._default_location))
 
         # technically this iterates over all found host elements.
         # but since we just return one attribute object, we choose the first
@@ -559,14 +644,18 @@ class Refhosts(object):
                 major = ''
                 minor = ''
                 try:
-                    major = addons.getElementsByTagName('major')[0].firstChild.data
+                    major = addons.getElementsByTagName(
+                        'major')[0].firstChild.data
                 except:
                     pass
                 try:
-                    minor = addons.getElementsByTagName('minor')[0].firstChild.data
+                    minor = addons.getElementsByTagName(
+                        'minor')[0].firstChild.data
                 except:
                     pass
-                attributes.addons.update({addons.getAttribute('name'):{'major':major, 'minor':minor}})
+                attributes.addons.update(
+                    {addons.getAttribute('name'):
+                     {'major': major, 'minor': minor}})
 
             for element in node.getElementsByTagName('kernel'):
                 if element.firstChild.data == 'true':
@@ -581,7 +670,9 @@ class Refhosts(object):
                     attributes.minimal = True
 
             for element in node.getElementsByTagName('virtual'):
-                attributes.virtual = {'mode':element.getAttribute('mode'), 'hypervisor':element.firstChild.data}
+                attributes.virtual = {
+                    'mode': element.getAttribute('mode'),
+                    'hypervisor': element.firstChild.data}
 
             return attributes
 
@@ -597,22 +688,31 @@ class Refhosts(object):
 
         # don't add addon names to the systemname for now since this would
         # be incompatible to our legacy systemnames
-        addons = "_".join(set(attributes.addons.keys()).difference(['sdk', 'hae']))
-        #if addons:
+        addons = "_".join(
+            set(attributes.addons.keys()).difference(['sdk', 'hae']))
+        # if addons:
         #    system = '%s%s%s_%s-%s' % (attributes.product, attributes.major, attributes.minor, addons, attributes.archs[0])
-        #else:
+        # else:
         #    system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
         if attributes and "manager-client" in addons:
-            system = '%s%s%s-manager-client-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+            system = '%s%s%s-manager-client-%s' % (attributes.product,
+                                                   attributes.major,
+                                                   attributes.minor,
+                                                   attributes.archs[0])
         elif attributes:
-            system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+            system = '%s%s%s-%s' % (attributes.product,
+                                    attributes.major,
+                                    attributes.minor,
+                                    attributes.archs[0])
         else:
             system = 'host_not_found'
 
         return system
 
+
 class RefhostsResolveFailed(RuntimeError):
     pass
+
 
 class _RefhostsFactory(object):
     # FIXME: split resolvers into separate classes
@@ -641,13 +741,11 @@ class _RefhostsFactory(object):
     """
 
     def __init__(
-      self
-    , time_now_getter  # +
-    , statter          # |
-    , urlopener        # |
-    , file_writer      # +- these are needed only for https resolver
-    , cache_path
-    , refhosts_factory=Refhosts
+        self, time_now_getter  # +
+        , statter          # |
+        , urlopener        # |
+        , file_writer      # +- these are needed only for https resolver
+        , cache_path, refhosts_factory=Refhosts
     ):
         self._time_now = time_now_getter
         self._stat = statter
@@ -659,7 +757,7 @@ class _RefhostsFactory(object):
 
     def __call__(self, config, log):
         for resolver in [x.strip()
-        for x in config.refhosts_resolvers.split(",")]:
+                         for x in config.refhosts_resolvers.split(",")]:
             try:
                 return self._resolve_one(resolver, config, log)
             except:
@@ -679,8 +777,7 @@ class _RefhostsFactory(object):
             return resolver(config, log)
 
     def refresh_https_cache_if_needed(self, path, config):
-        if self._is_https_cache_refresh_needed(path
-        , config.refhosts_https_expiration):
+        if self._is_https_cache_refresh_needed(path, config.refhosts_https_expiration):
             self.refresh_https_cache(path, config.refhosts_https_uri)
 
     def _is_https_cache_refresh_needed(self, path, expiration):
@@ -705,15 +802,12 @@ class _RefhostsFactory(object):
 
     def resolve_path(self, config, log):
         return self.refhosts_factory(
-              config.refhosts_path
-            , log
-            , config.location
+            config.refhosts_path, log, config.location
         )
 
 RefhostsFactory = _RefhostsFactory(
-  time.time
-, os.stat
-, urlopen
-, atomic_write_file
-, save_cache_path('refhosts.xml')
-)
+    time.time,
+    os.stat,
+    urlopen,
+    atomic_write_file,
+    save_cache_path('refhosts.xml'))

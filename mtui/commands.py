@@ -7,7 +7,6 @@ from subprocess import Popen
 from time import sleep
 
 from .argparse import ArgumentParser
-from mtui.target import TargetLockedError
 from mtui.utils import complete_choices
 from mtui.utils import blue, yellow, green, red
 from mtui import messages
@@ -16,6 +15,7 @@ from mtui.five import with_metaclass
 from mtui.rpmver import RPMVersion
 from mtui.messages import HostIsNotConnectedError
 from mtui.messages import ListPackagesAllHost
+
 
 class Command(with_metaclass(ABCMeta, object)):
     _check_subparser = None
@@ -76,7 +76,7 @@ class Command(with_metaclass(ABCMeta, object)):
         :returns: L{ArgumentParser}
         """
         p = ArgumentParser(sys_=sys, prog=cls.command,
-            description=cls.__doc__)
+                           description=cls.__doc__)
         cls._add_arguments(p)
 
         return p
@@ -93,7 +93,7 @@ class Command(with_metaclass(ABCMeta, object)):
     def run(self):
         raise RuntimeError()
 
-    def println(self, xs = ""):
+    def println(self, xs=""):
         """
         `print` replacement method for the outputs to be testable by
         injecting `StringIO`
@@ -103,18 +103,26 @@ class Command(with_metaclass(ABCMeta, object)):
 
     @classmethod
     def _add_hosts_arg(cls, parser):
-        parser.add_argument('hosts', metavar = 'host', type = str,
-            nargs = '*', help = 'hosts to act on. If no hosts are' +
+        parser.add_argument(
+            'hosts',
+            metavar='host',
+            type=str,
+            nargs='*',
+            help='hosts to act on. If no hosts are' +
             ' given all enabled hosts are used.')
+
 
 class HostsUnlock(Command):
     command = 'unlock'
 
     @classmethod
     def _add_arguments(cls, parser):
-        parser.add_argument('-f', '--force', action='store_true',
+        parser.add_argument(
+            '-f',
+            '--force',
+            action='store_true',
             help='force unlock - remove locks set by other users or'
-                ' sessions')
+            ' sessions')
 
         cls._add_hosts_arg(parser)
         return parser
@@ -128,7 +136,7 @@ class HostsUnlock(Command):
             self.logger.error(e)
             return
 
-        hosts.unlock(force = args.force)
+        hosts.unlock(force=args.force)
 
     @staticmethod
     def complete(hosts, text, line, begidx, endidx):
@@ -142,6 +150,7 @@ class HostsUnlock(Command):
             text,
             hosts.names()
         )
+
 
 class ListPackages(Command):
     command = 'list_packages'
@@ -163,17 +172,17 @@ class ListPackages(Command):
     def _add_arguments(cls, parser):
         parser.add_argument(
             "-p", "--packages",
-            type    = str,
-            action  = 'append',
-            default = [],
-            help    = 'Cumulative packages to list'
+            type=str,
+            action='append',
+            default=[],
+            help='Cumulative packages to list'
         )
 
         parser.add_argument(
             "-w", "--wanted",
-            action  = 'store_true',
-            default = False,
-            help    = "Print versions wanted by the testreport"
+            action='store_true',
+            default=False,
+            help="Print versions wanted by the testreport"
         )
 
         cls._add_hosts_arg(parser)
@@ -198,7 +207,8 @@ class ListPackages(Command):
             else:
                 raise
 
-        pkgs = list(self.metadata.packages.keys()) if self.metadata else self.args.packages
+        pkgs = list(
+            self.metadata.packages.keys()) if self.metadata else self.args.packages
         if not pkgs:
             raise messages.MissingPackagesError()
 
@@ -230,7 +240,9 @@ class ListPackages(Command):
             state
         ))
 
+
 class ReportBug(Command):
+
     """
     Open mtui bugzilla with fields common for all mtui bugs prefilled
     """
@@ -284,17 +296,19 @@ class ReportBug(Command):
     def _add_arguments(cls, parser):
         parser.add_argument(
             "-p", "--print-url",
-            help = 'just print url to the stdout',
-            action = 'store_true',
+            help='just print url to the stdout',
+            action='store_true',
         )
 
         return parser
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
-        return complete_choices([("-p", "--print-url"),], line, text)
+        return complete_choices([("-p", "--print-url"), ], line, text)
+
 
 class Whoami(Command):
+
     """
     Display current user name and session pid.
 
@@ -315,7 +329,9 @@ class Whoami(Command):
             str(self.get_pid()),
             ]))
 
+
 class Config(Command):
+
     """
     Display and manipulate (TODO) configuration in runtime.
     """
@@ -330,15 +346,15 @@ class Config(Command):
         if not attrs:
             attrs = [x[0] for x in self.config.data]
 
-        max_attr_len = len(max(attrs, key = len))
+        max_attr_len = len(max(attrs, key=len))
         for i in attrs:
-            fmt="{0:<" + str(max_attr_len) + "} = {1!r}"
+            fmt = "{0:<" + str(max_attr_len) + "} = {1!r}"
             self.println(fmt.format(i, getattr(self.config, i)))
 
     @classmethod
     def _add_arguments(cls, p):
         sp = p.add_subparsers()
         p_show = sp.add_parser("show", help="show config values",
-            sys_=p.sys)
+                               sys_=p.sys)
         p_show.add_argument("attributes", type=str, nargs="*")
         p_show.set_defaults(func="show")

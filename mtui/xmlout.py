@@ -3,7 +3,6 @@
 # xml log output
 #
 
-import re
 import xml.dom.minidom
 
 from mtui.utils import *
@@ -40,7 +39,10 @@ class XMLOutput(object):
     def add_package_state(self, parent, target, state):
         node = self.output.createElement(state)
         for package in target.packages:
-            self.add_package(node, package, str(getattr(target.packages[package], state)))
+            self.add_package(
+                node, package, str(
+                    getattr(
+                        target.packages[package], state)))
         parent.appendChild(node)
 
         return node
@@ -55,10 +57,24 @@ class XMLOutput(object):
         node = self.output.createElement('log')
 
         for (command, stdout, stderr, exitcode, runtime) in target.log:
-            command = command.decode('ascii', 'replace').encode('ascii', 'replace')
-            stdout = stdout.decode('ascii', 'replace').encode('ascii', 'replace')
-            stderr = stderr.decode('ascii', 'replace').encode('ascii', 'replace')
-            self.add_command(node, command, '%s\n%s' % (stdout, stderr), exitcode, runtime)
+            command = command.decode(
+                'ascii',
+                'replace').encode(
+                'ascii',
+                'replace')
+            stdout = stdout.decode(
+                'ascii',
+                'replace').encode(
+                'ascii',
+                'replace')
+            stderr = stderr.decode(
+                'ascii',
+                'replace').encode(
+                'ascii',
+                'replace')
+            self.add_command(
+                node, command, '%s\n%s' %
+                (stdout, stderr), exitcode, runtime)
 
         parent.appendChild(node)
 
@@ -72,5 +88,3 @@ class XMLOutput(object):
 
     def pretty(self):
         return filter_ansi(self.output.toprettyxml())
-
-

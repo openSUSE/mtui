@@ -14,119 +14,151 @@ from mtui.target.actions import spinner
 
 
 class Downgrade(object):
-  def __init__(self, logger, targets, packages, patches, testreport):
-    self.log = logger
-    self.targets = targets
-    self.packages = packages
-    self.patches = patches
-    self.testreport = testreport
 
-    self.commands = {}
-    self.install_command = None
-    self.list_command = None
-    self.pre_commands = []
-    self.post_commands = []
+    def __init__(self, logger, targets, packages, patches, testreport):
+        self.log = logger
+        self.targets = targets
+        self.packages = packages
+        self.patches = patches
+        self.testreport = testreport
 
-  def run(self):
-    skipped = False
-    versions = {}
+        self.commands = {}
+        self.install_command = None
+        self.list_command = None
+        self.pre_commands = []
+        self.post_commands = []
 
-    try:
-      for t in self.targets.values():
-        lock = t.locked()
-        if lock.locked and not lock.own():
-          skipped = True
-          self.log.warning('host %s is locked since %s by %s. skipping.' % (t.hostname, lock.time(), lock.user))
-          if lock.comment:
-            self.log.info("%s's comment: %s" % (lock.user, lock.comment))
-        else:
-          t.set_locked()
-          thread = ThreadedMethod(queue)
-          thread.setDaemon(True)
-          thread.start()
+    def run(self):
+        skipped = False
+        versions = {}
 
-      if skipped:
-        for t in self.targets.values():
-          try:
-            t.remove_lock()
-          except AssertionError:
-            pass
-        raise UpdateError('Hosts locked')
+        try:
+            for t in self.targets.values():
+                lock = t.locked()
+                if lock.locked and not lock.own():
+                    skipped = True
+                    self.log.warning(
+                        'host %s is locked since %s by %s. skipping.' %
+                        (t.hostname, lock.time(), lock.user))
+                    if lock.comment:
+                        self.log.info(
+                            "%s's comment: %s" %
+                            (lock.user, lock.comment))
+                else:
+                    t.set_locked()
+                    thread = ThreadedMethod(queue)
+                    thread.setDaemon(True)
+                    thread.start()
 
-      for t in self.targets.values():
-        queue.put([t.set_repo, ['UPDATE', self.testreport]])
+            if skipped:
+                for t in self.targets.values():
+                    try:
+                        t.remove_lock()
+                    except AssertionError:
+                        pass
+                raise UpdateError('Hosts locked')
 
-      while queue.unfinished_tasks:
-        spinner()
+            for t in self.targets.values():
+                queue.put([t.set_repo, ['UPDATE', self.testreport]])
 
-      queue.join()
+            while queue.unfinished_tasks:
+                spinner()
 
-      for t in self.targets.values():
-        if t.lasterr():
-          self.log.critical('failed to downgrade host %s. stopping.\n# %s\n%s' % (t.hostname, t.lastin(), t.lasterr()))
-          return
+            queue.join()
 
-      self.targets.run(self.list_command)
-      for hn, t in self.targets.items():
-        lines = t.lastout().split('\n')
-        release = {}
-        for line in lines:
-          match = re.search('(.*) = (.*)', line)
-          if match:
-            name = match.group(1)
-            version = match.group(2)
-            release.setdefault(name, []).append(version)
+            for t in self.targets.values():
+                if t.lasterr():
+                    self.log.critical(
+                        'failed to downgrade host %s. stopping.\n# %s\n%s' %
+                        (t.hostname, t.lastin(), t.lasterr()))
+                    return
 
-        for name in release:
-          version = sorted(release[name], key=RPMVersion, reverse=True)[0]
-          versions.setdefault(hn, dict()).update({name: version})
+            self.targets.run(self.list_command)
+            for hn, t in self.targets.items():
+                lines = t.lastout().split('\n')
+                release = {}
+                for line in lines:
+                    match = re.search('(.*) = (.*)', line)
+                    if match:
+                        name = match.group(1)
+                        version = match.group(2)
+                        release.setdefault(name, []).append(version)
 
-      for command in self.pre_commands:
-        self.targets.run(command)
+                for name in release:
+                    version = sorted(
+                        release[name],
+                        key=RPMVersion,
+                        reverse=True)[0]
+                    versions.setdefault(hn, dict()).update({name: version})
 
-      for package in self.packages:
-        temp = self.targets.copy()
-        for hn in self.targets:
-          try:
-            command = self.install_command % (package, package, versions[hn][package])
-            self.commands.update({hn:command})
-          except KeyError:
-            del temp[hn]
+            for command in self.pre_commands:
+                self.targets.run(command)
 
-        temp.run(self.commands)
+            for package in self.packages:
+                temp = self.targets.copy()
+                for hn in self.targets:
+                    try:
+                        command = self.install_command % (
+                            package, package, versions[hn][package])
+                        self.commands.update({hn: command})
+                    except KeyError:
+                        del temp[hn]
 
-        for t in self.targets.values():
-          self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
+                temp.run(self.commands)
 
-      for command in self.post_commands:
-        self.targets.run(command)
+                for t in self.targets.values():
+                    self._check(
+                        t,
+                        t.lastin(),
+                        t.lastout(),
+                        t.lasterr(),
+                        t.lastexit())
 
-    except:
-      raise
-    finally:
-      for t in self.targets.values():
-        if not lock.locked:  # wasn't locked earlier by set_host_lock
-          try:
-            t.remove_lock()
-          except AssertionError:
-            pass
+            for command in self.post_commands:
+                self.targets.run(command)
 
-  def _check(self, target, stdin, stdout, stderr, exitcode):
-    if 'A ZYpp transaction is already in progress.' in stderr:
-      self.log.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
-      raise UpdateError(target.hostname, 'update stack locked')
-    if 'System management is locked' in stderr:
-      self.log.critical('%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s', target.hostname, stdin, stdout, stderr)
-      raise UpdateError('update stack locked', target.hostname)
-    if '(c): c' in stdout:
-      self.log.critical('%s: unresolved dependency problem. please resolve manually:\n%s', target.hostname, stdout)
-      raise UpdateError('Dependency Error', target.hostname)
-    if exitcode == 104:
-      self.log.critical('%s: zypper returned with errorcode 104:\n%s', target.hostname, stderr)
-      raise UpdateError('Unspecified Error', target.hostname)
+        except:
+            raise
+        finally:
+            for t in self.targets.values():
+                if not lock.locked:  # wasn't locked earlier by set_host_lock
+                    try:
+                        t.remove_lock()
+                    except AssertionError:
+                        pass
 
-    return self.check(target, stdin, stdout, stderr, exitcode)
+    def _check(self, target, stdin, stdout, stderr, exitcode):
+        if 'A ZYpp transaction is already in progress.' in stderr:
+            self.log.critical(
+                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+                target.hostname,
+                stdin,
+                stdout,
+                stderr)
+            raise UpdateError(target.hostname, 'update stack locked')
+        if 'System management is locked' in stderr:
+            self.log.critical(
+                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+                target.hostname,
+                stdin,
+                stdout,
+                stderr)
+            raise UpdateError('update stack locked', target.hostname)
+        if '(c): c' in stdout:
+            self.log.critical(
+                '%s: unresolved dependency problem. please resolve manually:\n%s',
+                target.hostname,
+                stdout)
+            raise UpdateError('Dependency Error', target.hostname)
+        if exitcode == 104:
+            self.log.critical(
+                '%s: zypper returned with errorcode 104:\n%s',
+                target.hostname,
+                stderr)
+            raise UpdateError('Unspecified Error', target.hostname)
 
-  def check(self, target, stdin, stdout, stderr, exitcode):
-    """stub. needs to be overwritten by inherited classes"""
-    return
+        return self.check(target, stdin, stdout, stderr, exitcode)
+
+    def check(self, target, stdin, stdout, stderr, exitcode):
+        """stub. needs to be overwritten by inherited classes"""
+        return

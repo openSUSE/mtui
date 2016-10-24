@@ -70,7 +70,9 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             except ValueError:
                 # system line still not found (not with already set hostname, nor
                 # with not yet set hostname). create new one
-                out.debug('system section %s not found, creating new one' % systemtype)
+                out.debug(
+                    'system section %s not found, creating new one' %
+                    systemtype)
                 # starting point, just above the hosts section
                 line = 'Test results by product-arch:\n'
 
@@ -102,7 +104,9 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
                 #
                 t.insert(i, '\n')
                 i += 1
-                t.insert(i, '%s (reference host: %s)\n' % (systemtype, hostname))
+                t.insert(
+                    i, '%s (reference host: %s)\n' %
+                    (systemtype, hostname))
                 i += 1
                 t.insert(i, '--------------\n')
                 i += 1
@@ -156,7 +160,8 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
                         version = child.getAttribute('version')
                         versions[state].update({name: version})
 
-                        # if package version is None, update was probably not yet run, skip
+                        # if package version is None, update was probably not
+                        # yet run, skip
                         if 'None' in version:
                             break
 
@@ -173,7 +178,10 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
                             if version != '0':
                                 t.insert(i, '\t%s-%s\n' % (name, version))
                             else:
-                                t.insert(i, '\tpackage %s is not installed\n' % name)
+                                t.insert(
+                                    i,
+                                    '\tpackage %s is not installed\n' %
+                                    name)
                         i += 1
                     except Exception:
                         pass
@@ -195,12 +203,16 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             # check if the packages have a higher version after the update
             try:
                 if versions['after'][package] != '0':
-                    assert(RPMVersion(versions['before'][package]) < RPMVersion(versions['after'][package]))
+                    assert(
+                        RPMVersion(
+                            versions['before'][package]) < RPMVersion(
+                            versions['after'][package]))
             except Exception:
                 failed = 1
         if failed == 1:
-            out.warning('installation test result on %s set to FAILED as some packages were not updated. please override manually.'
-                        % hostname)
+            out.warning(
+                'installation test result on %s set to FAILED as some packages were not updated. please override manually.' %
+                hostname)
 
         for child in log.childNodes:
             # search for check scripts in the xml and inspect return code
@@ -256,7 +268,8 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
         out.error('install log section not found in template. skipping.')
     else:
         # if an updatehost was set, search for the update log of that specific host.
-        # if none was set, the first found update log is exported to the template.
+        # if none was set, the first found update log is exported to the
+        # template.
         if updatehost is not None:
             for host in x.getElementsByTagName('host'):
                 if host.getAttribute('hostname') == updatehost:
@@ -272,14 +285,14 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
         t.append("log from %s\n" % updatehost)
 
         for child in log.childNodes:
-            if not hasattr(child, 'getAttribute'): continue
+            if not hasattr(child, 'getAttribute'):
+                continue
             cmd = child.getAttribute('name')
-            if not cmd.startswith('zypper '): continue
+            if not cmd.startswith('zypper '):
+                continue
             t.append('# %s\n%s\n' % (
                 cmd,
                 str(child.childNodes[0].nodeValue),
             ))
 
     return t
-
-
