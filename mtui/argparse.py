@@ -3,12 +3,16 @@ from __future__ import absolute_import
 import argparse
 import sys
 
+
 class ArgsParseFailure(RuntimeError):
+
     def __init__(self, status=0):
         self.status = status
         super(ArgsParseFailure, self).__init__()
 
+
 class ArgumentParser(argparse.ArgumentParser):
+
     def __init__(self, *a, **kw):
         self.sys = kw.get('sys_', sys)
         if 'sys_' in kw:

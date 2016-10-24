@@ -11,7 +11,13 @@ import logging
 RESET_SEQ = "\033[0m"
 COLOR_SEQ = "\033[1;%dm"
 
-COLORS = {'WARNING': YELLOW, 'INFO': GREEN, 'DEBUG': BLUE, 'CRITICAL': RED, 'ERROR': RED}
+COLORS = {
+    'WARNING': YELLOW,
+    'INFO': GREEN,
+    'DEBUG': BLUE,
+    'CRITICAL': RED,
+    'ERROR': RED}
+
 
 class ColorFormatter(logging.Formatter):
 
@@ -21,7 +27,8 @@ class ColorFormatter(logging.Formatter):
     def formatColor(self, levelname):
         if levelname == 'DEBUG':
             caller = inspect.currentframe()
-            frame, filename, line, function, _, _ = inspect.getouterframes(caller)[9]
+            frame, filename, line, function, _, _ = inspect.getouterframes(
+                caller)[9]
             try:
                 module = inspect.getmodule(frame).__name__
             except Exception:
@@ -29,7 +36,8 @@ class ColorFormatter(logging.Formatter):
             return "\033[2K" + COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ + \
                 ' [%s:%s]' % (module, function)
         else:
-            return "\033[2K" + COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
+            return "\033[2K" + \
+                COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
 
     def format(self, record):
         record.message = record.getMessage()

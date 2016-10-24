@@ -28,7 +28,6 @@ from mtui.utils import ensure_dir_exists, chdir
 from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.five import with_metaclass
-from mtui.messages import QadbReportCommentLengthWarning
 from mtui.messages import FailedToExtractSrcRPM
 from mtui.messages import SrcRPMExtractedMessage
 from mtui.messages import SvnCheckoutInterruptedError
@@ -36,7 +35,9 @@ from mtui import updater
 from mtui.parsemeta import OBSMetadataParser, SWAMPMetadataParser
 from mtui.utils import nottest
 
+
 class _TemplateIOError(IOError):
+
     """
     New type to distinguish between IOErrors happening when reading the
     template file which are recoverable and IOErrors happening somewhere
@@ -44,11 +45,12 @@ class _TemplateIOError(IOError):
     """
     pass
 
+
 def testreport_svn_checkout(config, log, uri):
     ensure_dir_exists(
         config.template_dir,
-        on_create=lambda path: log.debug('created config.template_dir directory {0}'.format(path))
-    )
+        on_create=lambda path: log.debug(
+            'created config.template_dir directory {0}'.format(path)))
 
     with chdir(config.template_dir):
         # FIXME: use python module to perform svn checkout
@@ -59,12 +61,13 @@ def testreport_svn_checkout(config, log, uri):
 
 
 class UpdateID(object):
+
     def __init__(self, id_, testreport_factory, testreport_svn_checkout):
         self.id = id_
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def make_testreport(self, config, logger, autoconnect = True):
+    def make_testreport(self, config, logger, autoconnect=True):
         tr = self.testreport_factory(
             config,
             logger,
@@ -90,7 +93,9 @@ class UpdateID(object):
 
         return tr
 
+
 class SwampUpdateID(UpdateID):
+
     def __init__(self, md5):
         """
         :param md5: str
@@ -101,7 +106,9 @@ class SwampUpdateID(UpdateID):
             testreport_svn_checkout
         )
 
+
 class OBSUpdateID(UpdateID):
+
     def __init__(self, rrid, *args, **kw):
         super(OBSUpdateID, self).__init__(
             RequestReviewID(rrid),
@@ -109,8 +116,10 @@ class OBSUpdateID(UpdateID):
             testreport_svn_checkout
         )
 
+
 class TestReportAlreadyLoaded(RuntimeError):
     pass
+
 
 @nottest
 class TestReport(with_metaclass(ABCMeta, object)):
@@ -129,11 +138,13 @@ class TestReport(with_metaclass(ABCMeta, object)):
             type.
         """
 
-    def __init__(self, config, log, scripts_src_dir = None):
+    def __init__(self, config, log, scripts_src_dir=None):
         self.config = config
         self.log = log
 
-        self._scripts_src_dir = scripts_src_dir or join(config.datadir, 'scripts')
+        self._scripts_src_dir = scripts_src_dir or join(
+            config.datadir,
+            'scripts')
         self.directory = config.template_dir
 
         # Note: the default values here are unchanged from the previous
@@ -199,7 +210,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         except IOError as e:
             args = list(e.args) + [e.filename]
             e_new = _TemplateIOError(*args)
-            e_new.__cause__ = e # PEP 3134
+            e_new.__cause__ = e  # PEP 3134
             raise e_new
 
     def read(self, path):
@@ -292,7 +303,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         del updater
 
     def perform_get(self, targets, remote):
-        local = self.report_wd('downloads', basename(remote), filepath = True)
+        local = self.report_wd('downloads', basename(remote), filepath=True)
 
         targets.get(remote, local)
 
@@ -311,17 +322,29 @@ class TestReport(with_metaclass(ABCMeta, object)):
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         '''
-        targets.add_history(['update', str(self.id), ' '.join(self.get_package_list())])
+        targets.add_history(
+            ['update', str(self.id), ' '.join(self.get_package_list())])
 
         updater = self.get_updater()
         self.log.debug("chosen updater: %s" % repr(updater))
-        updater(self.log, targets, self.patches, self.get_package_list(), self).run(params)
+        updater(
+            self.log,
+            targets,
+            self.patches,
+            self.get_package_list(),
+            self).run(params)
 
     def perform_downgrade(self, targets):
-        targets.add_history(['downgrade', str(self.id), ' '.join(self.get_package_list())])
+        targets.add_history(
+            ['downgrade', str(self.id), ' '.join(self.get_package_list())])
 
         tool = self.get_downgrader()
-        tool(self.log, targets, self.get_package_list(), self.patches, self).run()
+        tool(
+            self.log,
+            targets,
+            self.get_package_list(),
+            self.patches,
+            self).run()
 
     def perform_install(self, targets, packages):
         targets.add_history(['install', packages])
@@ -379,17 +402,20 @@ class TestReport(with_metaclass(ABCMeta, object)):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
-    def connect_targets(self, make_target = Target):
+    def connect_targets(self, make_target=Target):
         targets = {}
 
         for (host, system) in self.systems.items():
             try:
-                targets[host] = make_target(self.config, host, system,
+                targets[host] = make_target(
+                    self.config,
+                    host,
+                    system,
                     self.get_package_list(),
-                    logger = self.log,
+                    logger=self.log,
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
-            except Exception as e:
+            except Exception:
                 self.log.debug(format_exc())
                 msg = 'failed to add host {0} to target list'
                 self.log.warning(msg.format(host))
@@ -420,7 +446,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
             hostname,
             system,
             self.get_package_list(),
-            logger = self.log,
+            logger=self.log,
         )
 
         if self:
@@ -431,8 +457,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         try:
             hostnames = refhosts.search(Attributes.from_testplatform(
-                  testplatform
-                , self.log
+                testplatform, self.log
             ))
         except (ValueError, KeyError):
             hostnames = []
@@ -493,17 +518,17 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
     def _show_yourself_data(self):
         return [
-            ('Category'  , self.category),
-            ('Hosts'     , ' '.join(sorted(self.systems.keys()))),
-            ('Reviewer'  , self.reviewer),
-            ('Packager'  , self.packager),
-            ('Bugs'      , ', '.join(sorted(self.bugs.keys()))),
-            ('Packages'  , ' '.join(sorted(self.get_package_list()))),
+            ('Category', self.category),
+            ('Hosts', ' '.join(sorted(self.systems.keys()))),
+            ('Reviewer', self.reviewer),
+            ('Packager', self.packager),
+            ('Bugs', ', '.join(sorted(self.bugs.keys()))),
+            ('Packages', ' '.join(sorted(self.get_package_list()))),
             ('Testreport', self._testreport_url()),
             ('Repository', self.repository),
-        ] + [(x.upper(), y) for x,y in self.patches.items()
-        ] + [('Testplatform', x) for x in self.testplatforms
-        ]
+        ] + [(x.upper(), y) for x, y in self.patches.items()
+             ] + [('Testplatform', x) for x in self.testplatforms
+                  ]
 
     def show_yourself(self, writer):
         self._aligned_write(writer, self._show_yourself_data())
@@ -587,16 +612,18 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
     def download_source_rpm(self):
         try:
-            with open(self.report_wd('packages-list.txt', filepath = True), 'r') as fd:
+            with open(self.report_wd('packages-list.txt', filepath=True), 'r') as fd:
                 paths = dict()
                 for line in fd:
                     tail = line.rstrip()
-                    if not tail.endswith('.src.rpm'): continue
+                    if not tail.endswith('.src.rpm'):
+                        continue
                     _, fname = split(tail)
-                    if fname in paths: continue
+                    if fname in paths:
+                        continue
                     url = '%s/%s' % (self.repository.rstrip('/'), tail)
                     path = '%s/%s' % (self.local_wd(), basename(tail))
-                    self.download_file(url, into = path)
+                    self.download_file(url, into=path)
                     paths[fname] = path
                 return paths
         except Exception as e:
@@ -616,7 +643,10 @@ class TestReport(with_metaclass(ABCMeta, object)):
                 rc = os.system(cmd)
                 if rc:
                     raise FailedToExtractSrcRPM(rc, cmd)
-                self.log.info(SrcRPMExtractedMessage(srpm, '%s/%s' % (self.local_wd(), name)))
+                self.log.info(
+                    SrcRPMExtractedMessage(
+                        srpm, '%s/%s' %
+                        (self.local_wd(), name)))
 
     def load_testopia(self, *packages):
         try:
@@ -663,7 +693,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
             by_host_pkg[hn] = dict()
             for line in t.lastout().split('\n'):
                 match = re.search('(\S+)\s+(\S+)', line)
-                if not match: continue
+                if not match:
+                    continue
                 pkg, ver = match.group(1), match.group(2)
                 by_host_pkg[hn].setdefault(pkg, []).append(ver)
 
@@ -671,7 +702,11 @@ class TestReport(with_metaclass(ABCMeta, object)):
         by_pkg_vers = dict()
         for hn, pvs in by_host_pkg.items():
             for pkg, vs in pvs.items():
-                by_pkg_vers.setdefault(pkg, dict()).setdefault(tuple(vs), []).append(hn)
+                by_pkg_vers.setdefault(
+                    pkg,
+                    dict()).setdefault(
+                    tuple(vs),
+                    []).append(hn)
 
         # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
         by_hosts_pkg = dict()
@@ -683,7 +718,11 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
     def generate_templatefile(self, hostname):
         from mtui.export import xml_to_template
-        return xml_to_template(self.log, self.path, self.generate_xmllog(), hostname)
+        return xml_to_template(
+            self.log,
+            self.path,
+            self.generate_xmllog(),
+            hostname)
 
     def generate_xmllog(self):
         from mtui.xmlout import XMLOutput
@@ -726,6 +765,7 @@ class NullTestReport(TestReport):
     def _parser(tr):
         return None
 
+
 class SwampTestReport(TestReport):
     _type = "SWAMP"
 
@@ -747,10 +787,9 @@ class SwampTestReport(TestReport):
 
     def _show_yourself_data(self):
         return [
-            ('MD5SUM'  , self.md5),
+            ('MD5SUM', self.md5),
             ('SWAMP ID', self.swampid),
         ] + super(SwampTestReport, self)._show_yourself_data()
-
 
     def _parser(self):
         return SWAMPMetadataParser()
@@ -760,6 +799,7 @@ class SwampTestReport(TestReport):
         if name == 'TESTING':
             argv = ('-t',)
         target.run_repclean(argv)
+
 
 class OBSTestReport(TestReport):
     _type = "OBS"
@@ -791,8 +831,8 @@ class OBSTestReport(TestReport):
 
     def _show_yourself_data(self):
         return [
-            ('ReviewRequestID'  , self.rrid),
-            ('Rating'           , self.rating),
+            ('ReviewRequestID', self.rrid),
+            ('Rating', self.rating),
         ] + super(OBSTestReport, self)._show_yourself_data()
 
     def set_repo(self, target, name):

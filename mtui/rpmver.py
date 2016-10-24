@@ -8,6 +8,7 @@ import rpm
 
 
 class RPMFile(object):
+
     """parse local rpm file
 
     queries some common rpm tags and stores them in the object.
@@ -29,6 +30,7 @@ class RPMFile(object):
 
 
 class RPMVersion(object):
+
     """RPMVersion holds an rpm version-release string
 
     this is userd for rpm version arithmetics, like comparing
@@ -58,22 +60,28 @@ class RPMVersion(object):
             self.rel = '0'
 
     def __lt__(self, other):
-        return rpm.labelCompare(('1', self.ver, self.rel), ('1', other.ver, other.rel)) < 0
+        return rpm.labelCompare(
+            ('1', self.ver, self.rel), ('1', other.ver, other.rel)) < 0
 
     def __gt__(self, other):
-        return rpm.labelCompare(('1', self.ver, self.rel), ('1', other.ver, other.rel)) > 0
+        return rpm.labelCompare(
+            ('1', self.ver, self.rel), ('1', other.ver, other.rel)) > 0
 
     def __eq__(self, other):
-        return rpm.labelCompare(('1', self.ver, self.rel), ('1', other.ver, other.rel)) == 0
+        return rpm.labelCompare(
+            ('1', self.ver, self.rel), ('1', other.ver, other.rel)) == 0
 
     def __le__(self, other):
-        return rpm.labelCompare(('1', self.ver, self.rel), ('1', other.ver, other.rel)) <= 0
+        return rpm.labelCompare(
+            ('1', self.ver, self.rel), ('1', other.ver, other.rel)) <= 0
 
     def __ge__(self, other):
-        return rpm.labelCompare(('1', self.ver, self.rel), ('1', other.ver, other.rel)) >= 0
+        return rpm.labelCompare(
+            ('1', self.ver, self.rel), ('1', other.ver, other.rel)) >= 0
 
     def __ne__(self, other):
-        return rpm.labelCompare(('1', self.ver, self.rel), ('1', other.ver, other.rel)) != 0
+        return rpm.labelCompare(
+            ('1', self.ver, self.rel), ('1', other.ver, other.rel)) != 0
 
     def __str__(self):
         s = str(self.ver)

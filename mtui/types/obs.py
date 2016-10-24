@@ -1,21 +1,29 @@
 import re
 from itertools import count
-from mtui.utils import zip_longest
 from mtui.utils import check_eq
 from mtui import messages
 from argparse import ArgumentTypeError
+
+try:
+    from itertools import zip_longest
+except ImportError:
+    from itertools import izip_longest as zip_longest
+
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):
     # Note: need to inherit ArgumentTypeError so the custom exception
     # messages get shown to the users properly
     # by L{argparse.ArgumentParser._get_value}
+
     def __init__(self, message):
         super(RequestReviewIDParseError, self).__init__(
             "OBS Request Review ID: " + message
         )
 
+
 class TooManyComponentsError(RequestReviewIDParseError):
     limit = 4
+
     def __init__(self):
         super(TooManyComponentsError, self).__init__(
             "Too many components (> {0})".format(self.limit)
@@ -26,45 +34,50 @@ class TooManyComponentsError(RequestReviewIDParseError):
         if len(xs) > cls.limit:
             raise cls()
 
+
 class InternalParseError(RequestReviewIDParseError):
+
     def __init__(self, f, cnt):
         super(InternalParseError, self).__init__(
             "Internal error: f: {0!r} cnt: {1!r}".format(f, cnt)
         )
 
+
 class MissingComponent(RequestReviewIDParseError):
+
     def __init__(self, index, expected):
         super(MissingComponent, self).__init__(
             "Missing {0}. component. Expected: {1!r}".format(
                 index, expected
-        ))
+                ))
+
 
 class ComponentParseError(RequestReviewIDParseError):
+
     def __init__(self, index, expected, got):
         super(ComponentParseError, self).__init__(
             "Failed to parse {0}. component. Expected {1!r}. Got: {2!r}"
-                .format(index, expected, got)
+            .format(index, expected, got)
         )
 
+
 class RequestReviewID(object):
+
     def __init__(self, rrid):
         """
         :type rrid: str
         :param rrid: fully qualified Request Review ID
         """
-        parsers =  [
-              check_eq("SUSE")
-            , check_eq("Maintenance")
-            , int
-            , int
+        parsers = [
+            check_eq("SUSE"), check_eq("Maintenance"), int, int
             ]
 
         # filter empty entries
-        xs  = [x for x in rrid.split(":") if x]
+        xs = [x for x in rrid.split(":") if x]
         TooManyComponentsError.raise_if(xs)
 
         # construct [(parser, input, index), ...]
-        xs = zip_longest(parsers, xs, range(1,5))
+        xs = zip_longest(parsers, xs, range(1, 5))
 
         # apply parsers to inputs, getting parsed values or raise
         xs = [_apply_parser(*ys) for ys in xs]
@@ -86,6 +99,7 @@ class RequestReviewID(object):
     def __ne__(lhs, rhs):
         return not lhs.__eq__(rhs)
 
+
 def _apply_parser(f, x, cnt):
     if not f or not cnt:
         raise InternalParseError(f, cnt)
@@ -99,6 +113,7 @@ def _apply_parser(f, x, cnt):
         new = ComponentParseError(cnt, f, x)
         new.__cause__ = e
         raise new
+
 
 class DistURL(object):
     _disturl_sre = re.compile('obs://[^/]+/([^/]+)/[^/]+/(\w+)-([^/]+)')
@@ -123,5 +138,5 @@ class DistURL(object):
 
         self.disturl = url
         self.project = m.group(1)
-        self.commit  = m.group(2)
+        self.commit = m.group(2)
         self.package = m.group(3)
