@@ -13,19 +13,17 @@ try:
     from configparser import ConfigParser
 except ImportError:
     from ConfigParser import ConfigParser
-from os.path import exists
+
 import os.path
 import string
-import random
 from posix import stat_result
 from tempfile import mktemp
 from time import sleep
 
-from mtui.template import OBSTestReport
-from mtui.template import SwampTestReport
 from mtui.refhost import Refhosts
 
 from pprint import pprint
+from random import randint,sample
 
 unused = None
 
@@ -209,17 +207,14 @@ def rand_maintenance_id():
     :return: int random id of maintenance id component in OBS review
         request id
     """
-    return random.randrange(1, 9999)
+    return randint(1, 9999)
 
 def rand_review_id():
     """
     :return: int random id of review id component in OBS review
         request id
     """
-    return random.randrange(1, 9999)
-
-def testreports():
-    return [OBSTestReport, SwampTestReport]
+    return randint(1, 9999)
 
 class _Hostnames:
     foo = "foo.example.org"
@@ -237,19 +232,16 @@ def TRF(tr, config = None, log = None, **kw):
 
     return tr(config, log, **kw)
 
-class MD5HexdigestFactory(object):
+
+class RRIDFactory(object):
     def __init__(self):
         self.base = 0
 
     def __call__(self):
-        """
-        :Returns: str that is valid md5 hexdigest and has not been returned
-             before
-        """
         self.base += 1
-        return "{0:0=32}".format(self.base -1)
+        return "SUSE:Maintenance:{0}:{1}".format(self.base+1, randint(1,10000))
 
-new_md5 = MD5HexdigestFactory()
+new_rrid = RRIDFactory()
 
 def wait_for_ctrlc():
     """
@@ -269,7 +261,7 @@ def merged_dict(x, y):
     return dict(x, **y)
 
 def random_alphanum(min_, max_):
-    return ''.join(random.sample(
+    return ''.join(sample(
         string.digits + string.ascii_uppercase + string.ascii_lowercase
-      , random.randint(min_, max_)
+      , randint(min_, max_)
     ))

@@ -1,6 +1,5 @@
 import re
 from mtui.types.obs import RequestReviewID
-from mtui.types import MD5Hash
 
 
 class MetadataParser(object):
@@ -55,45 +54,6 @@ class MetadataParser(object):
         m = re.match('Repository: (.+)', line)
         if m:
             results.repository = m.group(1)
-            return True
-
-        return False
-
-
-class SWAMPMetadataParser(MetadataParser):
-
-    def parse_line(self, results, line):
-        if super(SWAMPMetadataParser, self).parse_line(results, line):
-            return True
-
-        match = re.search('MD5 sum: (.+)', line)
-        if match:
-            results.md5 = MD5Hash(match.group(1))
-            return True
-
-        match = re.search('YOU Patch No: (\d+)', line)
-        if match:
-            results.patches['you'] = match.group(1)
-            return True
-
-        match = re.search('ZYPP Patch No: (\d+)', line)
-        if match:
-            results.patches['zypp'] = match.group(1)
-            return True
-
-        match = re.search('SAT Patch No: (\d+)', line)
-        if match:
-            results.patches['sat'] = match.group(1)
-            return True
-
-        match = re.search('RES Patch No: (\d+)', line)
-        if match:
-            results.patches['res'] = match.group(1)
-            return True
-
-        match = re.search('SUBSWAMPID: (\d+)', line)
-        if match:
-            results.swampid = match.group(1)
             return True
 
         return False

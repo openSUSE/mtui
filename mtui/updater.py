@@ -104,70 +104,6 @@ class openSuseUpdate(Update):
         ]
 
 
-class OldZypperUpdate(Update):
-
-    def __init__(self, *a, **kw):
-        super(OldZypperUpdate, self).__init__(*a, **kw)
-
-        if 'zypp' not in self.patches:
-            self.log.critical(
-                'required ZYPP patch number for zypper update not found')
-            return
-
-        patch = self.patches['zypp']
-        self.commands = [
-            r"""export LANG=""",
-            r"""zypper sl""",
-            r"""zypper refresh""",
-            r"""zypper patches | grep %s-0""" %
-            patch,
-            r"""zypper patches | awk -F "|" '/%s-0/ { print $2; }' | while read p; do zypper -n in -l -y -t patch $p; done""" %
-            patch,
-            ]
-
-
-class OnlineUpdate(Update):
-
-    def __init__(self, *a, **kw):
-        super(OnlineUpdate, self).__init__(*a, **kw)
-
-        if 'you' not in self.patches:
-            self.log.critical(
-                'required YOU patch number for online_update update not found')
-            return
-
-        patch = self.patches['you']
-        self.commands = [
-            'export LANG=',
-            'find /var/lib/YaST2/you/ -name patch-%s' %
-            patch,
-            'online_update -V --url http://you.suse.de/download -S patch-%s -f' %
-            patch,
-            'find /var/lib/YaST2/you/ -name patch-%s' %
-            patch,
-            ]
-
-
-class RugUpdate(Update):
-
-    def __init__(self, *a, **kw):
-        super(RugUpdate, self).__init__(*a, **kw)
-
-        if 'you' not in self.patches:
-            self.log.critical(
-                'required YOU patch number for rug update not found')
-            return
-
-        patch = self.patches['you']
-        self.commands = [
-            'export LANG=',
-            'rug sl',
-            'rug refresh',
-            'rug patch-info patch-%s' % patch,
-            'rug patch-install patch-%s' % patch,
-        ]
-
-
 class RedHatUpdate(Update):
 
     def __init__(self, *a, **kw):
@@ -183,9 +119,6 @@ Updater = DictWithInjections({
     '11': ZypperUpToSLE11Update,
     '12': ZypperSLE12Update,
     '114': openSuseUpdate,
-    '10': OldZypperUpdate,
-    '9': OnlineUpdate,
-    'OES': RugUpdate,
     'YUM': RedHatUpdate,
 }, key_error=MissingUpdaterError)
 
@@ -226,27 +159,6 @@ class ZypperPrepare(Prepare):
             raise UpdateError(target.hostname, 'RPM Error')
 
 
-class OldZypperPrepare(Prepare):
-
-    def __init__(self, *a, **kw):
-        super(OldZypperPrepare, self).__init__(*a, **kw)
-
-        commands = []
-
-        for package in self.packages:
-            # do not install upstream-branding packages
-            if 'branding-upstream' in package:
-                continue
-            if self.installed_only:
-                commands.append(
-                    'rpm -q %s &>/dev/null && zypper -n in -y -l %s' %
-                    (package, package))
-            else:
-                commands.append('zypper -n in -y -l %s' % package)
-
-        self.commands = commands
-
-
 class RedHatPrepare(Prepare):
 
     def __init__(self, *a, **kw):
@@ -273,7 +185,6 @@ Preparer = DictWithInjections({
     '11': ZypperPrepare,
     '12': ZypperPrepare,
     '114': ZypperPrepare,
-    '10': OldZypperPrepare,
     'YUM': RedHatPrepare,
 }, key_error=MissingPreparerError)
 
@@ -295,41 +206,6 @@ class ZypperDowngrade(Downgrade):
         self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
 
 
-class OldZypperDowngrade(Downgrade):
-
-    def __init__(self, *a, **kw):
-        super(OldZypperDowngrade, self).__init__(*a, **kw)
-
-        if not 'zypp' in self.patches:
-            self.log.critical(
-                'required ZYPP patch number for zypper downgrade not found')
-            return
-
-        patch = self.patches['zypp']
-        self.list_command = 'zypper se --match-exact -t package %s | grep -v "^[iv] |[[:space:]]\+|" | grep ^[iv] | sed "s, ,,g" | awk -F "|" \'{ print $4,"=",$5 }\'' % ' '.join(
-            self.packages)
-        self.install_command = 'rpm -q %s &>/dev/null && (line=$(zypper se --match-exact -t package %s | grep %s); repo=$(zypper sl | grep "$(echo $line | cut -d \| -f 2)" | cut -d \| -f 6); if expr match "$repo" ".*/DVD1.*" &>/dev/null; then subdir="suse"; else subdir="rpm"; fi; url=$(echo -n "$repo/$subdir" | sed -e "s, ,,g" ; echo $line | awk \'{ print "/"$11"/"$7"-"$9"."$11".rpm" }\'); package=$(basename $url); if [ ! -z "$repo" ]; then wget -q $url; rpm -Uhv --nodeps --oldpackage $package; rm $package; fi)'
-
-        commands = []
-
-        invalid_packages = ['glibc', 'rpm', 'zypper', 'readline']
-        invalid = set(self.packages).intersection(invalid_packages)
-        if invalid:
-            self.log.critical(
-                'crucial package found in package list: %s. please downgrade manually' %
-                list(invalid))
-            return
-
-        commands.append(
-            'for p in $(zypper patches | grep %s-0 | awk \'BEGIN { FS="|"; } { print $2; }\'); do zypper -n rm -y -t patch $p; done' %
-            patch)
-
-        for package in self.packages:
-            commands.append('zypper -n rm -y -t atom %s' % package)
-
-        self.post_commands = commands
-
-
 class RedHatDowngrade(Downgrade):
 
     def __init__(self, *a, **kw):
@@ -340,7 +216,6 @@ Downgrader = DictWithInjections({
     '11': ZypperDowngrade,
     '12': ZypperDowngrade,
     '114': ZypperDowngrade,
-    '10': OldZypperDowngrade,
     'YUM': RedHatDowngrade,
 }, key_error=MissingDowngraderError)
 
@@ -373,7 +248,6 @@ Installer = DictWithInjections({
     '11': ZypperInstall,
     '12': ZypperInstall,
     '114': ZypperInstall,
-    '10': ZypperInstall,
     'YUM': RedHatInstall,
 }, key_error=MissingInstallerError)
 
@@ -406,6 +280,5 @@ Uninstaller = DictWithInjections({
     '11': ZypperUninstall,
     '12': ZypperUninstall,
     '114': ZypperUninstall,
-    '10': ZypperUninstall,
     'YUM': RedHatUninstall,
 }, key_error=MissingUninstallerError)

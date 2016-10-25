@@ -25,14 +25,13 @@ from mtui.rpmver import RPMFile
 from mtui import utils
 
 from mtui.utils import ensure_dir_exists, chdir
-from mtui.types import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui.five import with_metaclass
 from mtui.messages import FailedToExtractSrcRPM
 from mtui.messages import SrcRPMExtractedMessage
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
-from mtui.parsemeta import OBSMetadataParser, SWAMPMetadataParser
+from mtui.parsemeta import OBSMetadataParser
 from mtui.utils import nottest
 
 
@@ -92,19 +91,6 @@ class UpdateID(object):
             tr.connect_targets()
 
         return tr
-
-
-class SwampUpdateID(UpdateID):
-
-    def __init__(self, md5):
-        """
-        :param md5: str
-        """
-        super(SwampUpdateID, self).__init__(
-            MD5Hash(md5),
-            SwampTestReport,
-            testreport_svn_checkout
-        )
 
 
 class OBSUpdateID(UpdateID):
@@ -172,13 +158,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
         self.bugs = {}
         self.testplatforms = []
         self.category = ""
-        self.swampid = ""
         self.packager = ""
         self.reviewer = ""
-        self.md5 = None
-        """
-        :type md5: MD5Hash instance or None
-        """
         self.repository = None
 
         self._attrs = [
@@ -764,41 +745,6 @@ class NullTestReport(TestReport):
 
     def _parser(tr):
         return None
-
-
-class SwampTestReport(TestReport):
-    _type = "SWAMP"
-
-    def __init__(self, *a, **kw):
-        super(SwampTestReport, self).__init__(*a, **kw)
-
-        self._attrs += [
-            'md5',
-            'swampid',
-            'patches',
-        ]
-
-    @property
-    def id(self):
-        return self.md5
-
-    def _get_updater_id(self):
-        return self.get_release()
-
-    def _show_yourself_data(self):
-        return [
-            ('MD5SUM', self.md5),
-            ('SWAMP ID', self.swampid),
-        ] + super(SwampTestReport, self)._show_yourself_data()
-
-    def _parser(self):
-        return SWAMPMetadataParser()
-
-    def set_repo(self, target, name):
-        argv = ('-n',)
-        if name == 'TESTING':
-            argv = ('-t',)
-        target.run_repclean(argv)
 
 
 class OBSTestReport(TestReport):

@@ -13,7 +13,7 @@ import os
 from mtui.hooks import PreScript
 from mtui.hooks import PostScript
 from mtui.hooks import CompareScript
-from mtui.template import SwampTestReport
+from mtui.template import OBSTestReport
 from mtui.target import HostsGroup
 from mtui.target import Target
 from mtui import messages
@@ -21,9 +21,9 @@ from mtui import messages
 from .utils import TRF
 from .utils import ConfigFake
 from .utils import LogFake
-from .utils import new_md5
 from .utils import hostnames
 from .utils import unused
+from .utils import new_rrid
 
 class TargetFake(object):
     def __init__(self, hostname, lastout, lasterr):
@@ -70,18 +70,18 @@ def check_run_remotes(s):
 
         c = ConfigFake(dict(template_dir = wdir))
         tr = TRF(
-            SwampTestReport,
+            OBSTestReport,
             config          = c,
             scripts_src_dir = scripts_src
         )
 
-        md5 = new_md5()
-        tpl = join(wdir, md5)
+        rrid = new_rrid()
+        tpl = join(wdir, rrid)
         os.makedirs(tpl)
         tpl = join(tpl, "log")
 
         with open(tpl, 'w') as f:
-            f.write("MD5SUM: {0}\n".format(md5))
+            f.write("ReviewRequestID:: {0}\n".format(rrid))
 
         tr.read(tpl)
 
