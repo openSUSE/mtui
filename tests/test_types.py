@@ -1,29 +1,11 @@
 from nose.tools import eq_, ok_, raises
 
-from mtui.types.md5 import MD5Hash
 from mtui.types import obs
 from mtui import messages
 
 from .utils import rand_maintenance_id
 from .utils import rand_review_id
 from .utils import merged_dict
-
-@raises(ValueError)
-def test_MD5Hash_invalid():
-    """Test MD5Hash() raises when given invalid hash"""
-    MD5Hash("foo")
-
-def test_MD5Hash_equal():
-    eq_(MD5Hash("472ababb814d21290b4bef7bc4c815d9"),
-        MD5Hash("472ababb814d21290b4bef7bc4c815d9"))
-
-def test_MD5Hash_not_equal():
-    ok_(not MD5Hash("472ababb814d21290b4bef7bc4c815d9") ==
-        MD5Hash("072ababb814d21290b4bef7bc4c815d9"))
-
-@raises(TypeError)
-def test_MD5Hash_TypeError():
-    MD5Hash("472ababb814d21290b4bef7bc4c815d9") == "foo"
 
 
 def helper_parse_reviewid(rrid):

@@ -14,7 +14,6 @@ from mtui.config import Config
 from mtui.prompt import CommandPrompt
 from mtui.display import CommandPromptDisplay
 from mtui.template import OBSUpdateID
-from mtui.template import SwampUpdateID
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import __version__
 
@@ -42,11 +41,6 @@ def get_parser(sys):
         help='override config mtui.template_dir'
     )
     g = p.add_mutually_exclusive_group()
-    g.add_argument(
-        '-m', '--md5',
-        type=SwampUpdateID,
-        help='md5 update identifier'
-    )
     g.add_argument(
         '-r', '--review-id',
         type=OBSUpdateID,
@@ -122,7 +116,7 @@ def run_mtui(
 
     config.merge_args(args)
 
-    update = args.md5 or args.review_id
+    update = args.review_id
 
     prompt = Prompt(config, log, sys, Display)
     if update:

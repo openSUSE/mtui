@@ -2,15 +2,14 @@
 
 from nose.tools import ok_
 from nose.tools import eq_
-from nose.tools import raises
 from nose.tools import nottest
 
 from mtui.prompt import CommandPrompt
 from mtui.prompt import CmdQueue
 from mtui.prompt import QuitLoop
 from mtui.commands import Command
-from mtui.types.md5 import MD5Hash
-from mtui.template import SwampTestReport
+from mtui.template import OBSTestReport
+from mtui.types.obs import RequestReviewID
 
 from tests.prompt import make_cp
 
@@ -211,12 +210,12 @@ def test_set_session_name():
 
 def test_set_session_name_auto_testreport():
     cp = TestableCommandPrompt(ConfigFake(), LogFake())
-    md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
-    cp.metadata = SwampTestReport(ConfigFake(), LogFake(), unused)
-    cp.metadata.md5 = md5
+    rrid = RequestReviewID('SUSE:Maintenance:1:1:')
+    cp.metadata = OBSTestReport(ConfigFake(), LogFake(), unused)
+    cp.metadata.rrid = rrid
     cp.do_set_session_name("")
-    eq_(cp.prompt, "mtui:{0}> ".format(md5))
-    eq_(cp.session, md5)
+    eq_(cp.prompt, "mtui:{0}> ".format(rrid))
+    eq_(cp.session, rrid)
 
 def test_set_session_name_auto_no_testreport():
     cp = TestableCommandPrompt(ConfigFake(), LogFake())
@@ -227,12 +226,12 @@ def test_set_session_name_auto_no_testreport():
 def test_load_update_doesnt_leave_previous_session():
     class FakeUpdate:
         def make_testreport(self, c, l, autoconnect):
-            md5 = MD5Hash('11111111111111111111111111111111')
-            return SwampTestReport(c, l, unused)
+#            rrid = RequestReviewID('SUSE:Maintenance:1:1')
+            return OBSTestReport(c, l, unused)
 
     cp = TestableCommandPrompt(ConfigFake(), LogFake())
-    cp.metadata = SwampTestReport(ConfigFake(), LogFake(), unused)
-    cp.metadata.md5 = MD5Hash('00000000000000000000000000000000')
+    cp.metadata = OBSTestReport(ConfigFake(), LogFake(), unused)
+    cp.metadata.rrid = RequestReviewID('SUSE:Maintenance:2:2')
     cp.load_update(FakeUpdate(), autoconnect=False)
     eq_(cp.prompt, "mtui> ")
     eq_(cp.session, None)

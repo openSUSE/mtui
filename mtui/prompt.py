@@ -25,7 +25,6 @@ from mtui.refhost import Attributes
 from mtui.types import obs
 from mtui.template import NullTestReport
 from mtui.template import OBSUpdateID
-from mtui.template import SwampUpdateID
 from mtui.utils import requires_update
 
 try:
@@ -1162,7 +1161,7 @@ class CommandPrompt(cmd.Cmd):
     @requires_update
     def do_testsuite_run(self, args):
         """
-        Runs ctcs2 testsuite and saves logs to /var/log/qa/$md5 on the
+        Runs ctcs2 testsuite and saves logs to /var/log/qa/RIDD on the
         target hosts. Results can be submitted with the testsuite_submit
         command.
 
@@ -1310,25 +1309,20 @@ class CommandPrompt(cmd.Cmd):
 
     def do_load_template(self, args):
         """
-        Load QA Maintenance template by md5 identifier. All changes and logs
+        Load QA Maintenance template by RRID identifier. All changes and logs
         from an already loaded template are lost if not saved previously.
         Already connected hosts are kept and extended by the reference hosts
         defined in the template file.
 
         load_template <update_id>
         Keyword arguments:
-        update_id      -- either md5sum for swamp update or
-                          obs request review id for obs update
-        """
+        update_id      -- obs request review id for obs update """
 
         id_ = args.strip()
-        update = None
-        u_types = [SwampUpdateID, OBSUpdateID]
-        for i in u_types:
-            try:
-                update = i(id_)
-            except ValueError as e:
-                pass
+        try:
+            update = OBSUpdateID(id_)
+        except ValueError:
+            pass
 
         if not update:
             raise ValueError("Couldn't match {0!r} to either of {1!r}".

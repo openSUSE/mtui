@@ -11,13 +11,10 @@ import shutil
 import os
 
 from mtui.template import NullTestReport
-from mtui.template import SwampTestReport
 from mtui.template import OBSTestReport
-from mtui.template import SwampUpdateID
 from mtui.template import _TemplateIOError
 from mtui.updater import UnknownSystemError
 from mtui.target import Target
-from mtui.types.md5 import MD5Hash
 from mtui.types.obs import RequestReviewID
 from mtui import messages
 from .utils import LogFake
@@ -27,13 +24,12 @@ from .utils import touch
 from .utils import ConfigFake
 from .utils import get_nonexistent_path
 from .utils import unused
-from .utils import testreports
 from .utils import TRF
 from .utils import refhosts_fixtures
 
 @raises(_TemplateIOError)
 def test_TestReport__open_and_parse_raises_templateioerror():
-    class TestableReport(SwampTestReport):
+    class TestableReport(OBSTestReport):
         def _parse(self, f):
             # NOTE: here we are abusing the fact that the try/except
             # wraps this function too, though it probably should not
@@ -45,7 +41,7 @@ def test_TestReport__open_and_parse_raises_templateioerror():
     tr._open_and_parse(path)
 
 def test_TestReport__copy_scripts_dst_exists():
-    class TestableReport(SwampTestReport):
+    class TestableReport(OBSTestReport):
         def _copytree(self, *args, **kw):
             raise OSError(EEXIST, 'strerr', args[1])
 
@@ -59,7 +55,7 @@ def test_TestReport__copy_scripts_dst_exists():
     ])
 
 def test_TestReport__copy_scripts_src_missing():
-    class TestableReport(SwampTestReport):
+    class TestableReport(OBSTestReport):
         def _copytree(self, *args, **kw):
             raise OSError(ENOENT, 'strerr', args[0])
 
@@ -76,7 +72,7 @@ def test_TestReport__copy_scripts_src_missing():
 
 @raises(OSError)
 def test_TestReport__copy_scripts_on_error():
-    class TestableReport(SwampTestReport):
+    class TestableReport(OBSTestReport):
         def _copytree(self, *args, **kw):
             raise OSError(1, 'strerr')
 
@@ -91,7 +87,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         return "{0}/{1}".format(self.tmp_dir, suffix)
 
     def test_copy_scripts(self):
-        class TestableReport(SwampTestReport):
+        class TestableReport(OBSTestReport):
             t_copytree = []
             t_ensure_executable = []
             def _copytree(self, *args, **kw):
@@ -118,7 +114,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(pattern, "{0}/*/compare_*".format(dst))
 
     def test_ensure_executable_no_match(self):
-        tr = TRF(SwampTestReport)
+        tr = TRF(OBSTestReport)
         pattern = self.in_temp('/*')
         tr._ensure_executable(pattern)
 
@@ -130,7 +126,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         eq_(head[2], [])
 
     def test_ensure_executable_makes_executable(self):
-        tr = TRF(SwampTestReport)
+        tr = TRF(OBSTestReport)
 
         fd, f_txt = mkstemp(suffix='.txt', dir=self.tmp_dir)
         os.close(fd)
@@ -165,7 +161,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
 
         dst = self.in_temp('dst')
 
-        tr = TRF(SwampTestReport)
+        tr = TRF(OBSTestReport)
         tr._copytree(src, dst)
 
         eq_(len(files), 2)
@@ -182,7 +178,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         dst = self.in_temp('dst')
         os.mkdir(dst)
 
-        tr = TRF(SwampTestReport)
+        tr = TRF(OBSTestReport)
         try:
             tr._copytree(src, dst)
         except OSError as e:
@@ -194,7 +190,7 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         src = self.in_temp('src')
         dst = self.in_temp('dst')
 
-        tr = TRF(SwampTestReport)
+        tr = TRF(OBSTestReport)
         try:
             tr._copytree(src, dst)
         except OSError as e:
@@ -216,7 +212,7 @@ def test_TestReport_connect_targets():
         def add_history(self, comment):
             self.t_history.append(comment)
 
-    tr = TRF(SwampTestReport)
+    tr = TRF(OBSTestReport)
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
     tr.connect_targets(make_target = TargetFake)
     ts = tr.targets
@@ -234,7 +230,7 @@ def test_TestReport_refhosts_from_tp():
     """
     def check(case):
         tr = TRF(
-              SwampTestReport
+              OBSTestReport
             , config = ConfigFake(
                 overrides = dict(
                       refhosts_path = refhosts_fixtures['basic']
@@ -287,25 +283,8 @@ def test_TestReport_refhosts_from_tp():
     for c in cases:
         yield check, c
 
-# {{{ template parser
-def test_TestReportParse_parsed_md5():
-    tr = TRF(SwampTestReport)
-
-    md5 = SwampUpdateID('8c60b7480fc521d7eeb322955b387165')
-
-    tpl_data = [
-        "SAT Patch No: 8655",
-        "MD5 sum: {0}".format(md5.id),
-        "SUBSWAMPID: 55446",
-    ]
-    tpl_data = "\n".join(tpl_data)
-    tpl = StringIO(tpl_data)
-
-    tr._parse(tpl)
-    eq_(tr.md5, md5.id)
-
 def test_TestReportParse_parsed_testplatform():
-    tr = TRF(SwampTestReport)
+    tr = TRF(OBSTestReport)
 
     tps = ['footp1', 'footp2']
 
@@ -315,15 +294,6 @@ def test_TestReportParse_parsed_testplatform():
 
     tr._parse(tpl)
     ok_(tr.testplatforms, tps)
-# }}}
-
-def test_swamp_get_testsuite_comment():
-    tr = TRF(SwampTestReport)
-    tr.md5 = MD5Hash('8c60b7480fc521d7eeb322955b387165')
-    comment = tr.get_testsuite_comment("tsuite", "a beach")
-    eq_(str(comment), "testing tsuite on SWAMP {0} on a beach".format(
-        tr.md5,
-    ))
 
 def test_obs_get_testsuite_comment():
     tr = TRF(OBSTestReport)
@@ -391,9 +361,8 @@ def test_get_release():
             ]
         ] + [({'foo': 'rhel'}, 'YUM')]
 
-    for r in testreports():
-        for system, result in cases:
-            yield check_release, r, system, result
+    for system, result in cases:
+        yield check_release, OBSTestReport, system, result
 
 def check_release(report, systems, result):
     tr = TRF(report)
@@ -401,8 +370,7 @@ def check_release(report, systems, result):
     eq_(tr.get_release(), result)
 
 def test_get_release_exc():
-    for r in testreports():
-        yield raises(UnknownSystemError)(check_release), r, {'foo': ''}, unused
+    yield raises(UnknownSystemError)(check_release), OBSTestReport, {'foo': ''}, unused
 
 def test_get_doers():
     t = TRF(OBSTestReport)

@@ -40,6 +40,7 @@ class Attributes(object):
             'rhel',
             'sle'],
         'archs': [
+            'aarch64',
             'i386',
             'x86_64',
             'ppc',

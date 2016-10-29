@@ -42,7 +42,8 @@ class RPMVersion(object):
         'noarch',
         'x86_64',
         's390x',
-        'ppc64le'
+        'ppc64le',
+        'aarch64'
     ]
     """
     :param _arch_suffixes: arch suffixes we get in addition to version on sle12

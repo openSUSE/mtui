@@ -73,20 +73,3 @@ class TestOBSMetadataParser(MetadataParserTest):
         ('ReviewRequestID: SUSE:Maintenance:42:69', 'rrid', RequestReviewID('SUSE:Maintenance:42:69')),
       ],
     )
-
-
-class TestSWAMPMetadataParser(MetadataParserTest):
-  def __init__(t):
-    from mtui.types import MD5Hash
-
-    super(TestSWAMPMetadataParser, t).__init__(
-      parsemeta.SWAMPMetadataParser,
-      [
-        ('MD5 sum: DEADBEEF', 'md5', MD5Hash('DEADBEEF')),
-        ('SUBSWAMPID: 9624', 'swampid', '9624'),
-        ('RES Patch No: 4269', 'patches', dict(res = '4269')),
-        ('SAT Patch No: 6942', 'patches', dict(sat = '6942')),
-        ('YOU Patch No: 6429', 'patches', dict(you = '6429')),
-        ('ZYPP Patch No: 4692', 'patches', dict(zypp = '4692')),
-      ],
-    )
