@@ -59,7 +59,7 @@ class Downgrade(object):
                 raise UpdateError('Hosts locked')
 
             for t in self.targets.values():
-                queue.put([t.set_repo, ['UPDATE', self.testreport]])
+                queue.put([t.set_repo, ['remove', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()

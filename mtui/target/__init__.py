@@ -61,7 +61,7 @@ class HostsGroup(object):
             return self
 
         for x in hosts:
-            if not x in self.hosts:
+            if x not in self.hosts:
                 raise HostIsNotConnectedError(x)
 
         return HostsGroup([
@@ -333,12 +333,12 @@ class Target(object):
         conffile = os.path.join(tempdir, 'rep-clean.conf')
         return (scriptfile, conffile)
 
-    def set_repo(self, name, testreport):
+    def set_repo(self, operation, testreport):
         self.logger.debug(
             '{0}: enabling {1} repos'.format(
                 self.hostname,
-                name))
-        testreport.set_repo(self, name)
+                operation))
+        testreport.set_repo(self, operation)
 
     def run_repose(self, cmd, arg):
         cmdline = [
