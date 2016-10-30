@@ -4,9 +4,9 @@ test:
   script:
     - cd /builds/qa-maintenance/mtui
     - zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/SLE_12_SP1/ QA:Maintenance
-    - zypper install --no-confirm python-paramiko python-setuptools python-xdg repose rpm-python python-nose python-temps
-    - touch ~/.mtui_history
-    - make check
+    - zypper install --no-confirm python-paramiko python-setuptools python-xdg repose rpm-python python-nose python-temps sudo
+    - sudo -u nobody touch /var/lib/nobody/.mtui_history
+    - sudo -u nobody make check
   tags:
     - qam
   only:
