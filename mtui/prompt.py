@@ -962,7 +962,7 @@ class CommandPrompt(cmd.Cmd):
     @requires_update
     def do_list_metadata(self, args):
         """
-        Lists patchinfo metadata like patch number, SWAMP ID or packager.
+        Lists patchinfo metadata like patch number, ReviewRequestID or packager.
 
         list_metadata
         Keyword arguments:
@@ -1210,7 +1210,7 @@ class CommandPrompt(cmd.Cmd):
     def do_testsuite_submit(self, args):
         """
         Submits the ctcs2 testsuite results to qadb.suse.de.
-        The comment field is populated with some attributes like SWAMPID or
+        The comment field is populated with some attributes like RRID or
         testsuite name, but can also be edited before the results get
         submitted.
 
