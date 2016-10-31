@@ -51,7 +51,6 @@ def test_config_show():
             , ("svn_path"                   , "'svn+ssh://svn@qam.suse.de/testreports'")
             , ("bugzilla_url"               , "'https://bugzilla.novell.com'")
             , ("reports_url"                , "'http://qam.suse.de/testreports'")
-            , ("repclean_path"              , "'/mounts/qam/rep-clean/rep-clean.sh'")
             , ("target_tempdir"             , "'/tmp'")
             , ("target_testsuitedir"        , "'/usr/share/qa/tools'")
             , ("testopia_interface"         , "'https://apibugzilla.novell.com/xmlrpc.cgi'")

@@ -119,9 +119,6 @@ class Config(object):
             ('reports_url', ('url', 'testreports'),
              'http://qam.suse.de/testreports'),
 
-            ('repclean_path', ('target', 'repclean'),
-             '/mounts/qam/rep-clean/rep-clean.sh'),
-
             ('target_tempdir', ('target', 'tempdir'),
              '/tmp'),
 
