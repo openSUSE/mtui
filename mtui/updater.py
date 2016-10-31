@@ -67,7 +67,7 @@ class ZypperSLE12Update(ZypperUpdate):
 
     def __init__(self, *a, **kw):
         super(ZypperSLE12Update, self).__init__(*a, **kw)
-        repat = ':p=%d' if self.testreport.config.use_repose else 'TESTING-%d'
+        repat = ':p=%d'
         repo = repat % (self.testreport.rrid.maintenance_id)
 
         self.commands = [

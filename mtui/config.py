@@ -104,9 +104,6 @@ class Config(object):
             ('session_user', ('mtui', 'user'),
              getpass.getuser),
 
-            ('use_repose', ('mtui', 'use_repose'),
-                True, bool, self.config.getboolean),
-
             # connection.timeout appears to be in units of seconds as
             # indicated by
             # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
