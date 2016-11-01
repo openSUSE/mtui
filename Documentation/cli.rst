@@ -43,16 +43,6 @@ and exit.
 
 Overrides the `mtui.location` configuration.
 
--m HASH, --md5=HASH
-~~~~~~~~~~~~~~~~~~~
-
-This parameter simply specifies the MD5 hash for the update which could
-be retrieved on the SWAMP QA view. The template path is then composed of
-the directory parameter and md5 update hash.
-($directory/$md5/log). If the template is not yet checked out
-from SVN, MTUI tries to fetch it. When starting MTUI without -m parameter,
-a template could be loaded with the load_template command afterwards.
-
 -n, --noninteractive
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -66,11 +56,11 @@ maintenance template before it quits. User input is not required.
 Runs MTUI commands prior to starting the interactive shell or the update
 process. User input is not required if in noninteractive mode (-n parameter).
 
--r MRID, --review-id=MRID
+-r RRID, --review-id=RRID
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Load testreport maintenance update `MRID`.  `MRID` is a string in the
-form `SUSE:Maintenance:X:Y` where `X` is so-called "maintenance id" and
+Load testreport maintenance update `RRID`.  `RRID` is a string in the
+form `SUSE:Maintenance:X:Y` where `X` is so-called "incident id" and
 `Y` is "request id".
 
 -s SPEC, --sut SPEC

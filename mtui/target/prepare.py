@@ -61,9 +61,9 @@ class Prepare(object):
 
             for t in self.targets.values():
                 if self.testing:
-                    queue.put([t.set_repo, ['TESTING', self.testreport]])
+                    queue.put([t.set_repo, ['add', self.testreport]])
                 else:
-                    queue.put([t.set_repo, ['UPDATE', self.testreport]])
+                    queue.put([t.set_repo, ['remove', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()

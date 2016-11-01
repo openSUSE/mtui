@@ -95,7 +95,7 @@ class Update(object):
                 raise UpdateError('Hosts locked')
 
             for t in self.targets.values():
-                queue.put([t.set_repo, ['TESTING', self.testreport]])
+                queue.put([t.set_repo, ['add', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()

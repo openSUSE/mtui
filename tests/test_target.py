@@ -147,15 +147,6 @@ def test_locked_target_is_locked():
     t.lock('fuu')
     eq_(t.test_mark, (('fuu',), {}))
 
-def test_put_repclean_fail():
-    t = TF(None, 'foo', connect = False, logger = LogFake())
-    t.logger = LogFake()
-    def put():
-        raise Exception()
-    t.put = put
-    t._upload_repclean()
-    exp_errors = ['rep-clean uploading failed please see BNC#860284']
-    eq_(t.logger.errors, exp_errors)
 
 class TestTargetConnect(object):
     def test_happy_path(self):

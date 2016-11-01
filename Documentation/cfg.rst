@@ -25,6 +25,8 @@ qualified names.
 mtui.chdir_to_template_dir
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+.. Note:: Decaprated
+
 type
   enum: `False`, `True`
 default
@@ -90,7 +92,7 @@ mtui.tempdir
 type
   pathname
 default
-  `/tmp`
+  `$TMPDIR` | `/tmp`
 
 Temporary local directory for package source checkouts.
 
@@ -190,19 +192,6 @@ default
 MTUI checks out the testreport from, and commits it to,
 `${svn.path}/${id}`.
 
-target.repclean
-~~~~~~~~~~~~~~~
-
-type
-  pathname
-default
-  `/mounts/qam/rep-clean/rep-clean.sh`
-
-MTUI uses `target.repclean` in refhosts to manipulate package
-repositories.  If a refhost does not have `target.repclean`,
-MTUI will upload `${mtui.datadir}/helper/rep-clean/rep-clean.{sh,conf}`
-to `target.tempdir` and use that copy.
-
 target.tempdir
 ~~~~~~~~~~~~~~
 
@@ -210,9 +199,6 @@ type
   pathname
 default
   `/tmp`
-
-MTUI uploads `rep-clean` files into this directory in refhosts
-if needed.
 
 target.testsuitedir
 ~~~~~~~~~~~~~~~~~~~

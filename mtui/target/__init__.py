@@ -61,7 +61,7 @@ class HostsGroup(object):
             return self
 
         for x in hosts:
-            if not x in self.hosts:
+            if x not in self.hosts:
                 raise HostIsNotConnectedError(x)
 
         return HostsGroup([
@@ -314,31 +314,12 @@ class Target(object):
     def get_timeout(self):
         return self.connection.timeout
 
-    def _upload_repclean(self):
-        """copy over local rep-clean script"""
-        datadir = self.config.datadir
-        tempdir = self.config.target_tempdir
-        try:
-            for item in ['rep-clean.sh', 'rep-clean.conf']:
-                filename = os.path.join(
-                    datadir, 'helper', 'rep-clean', item)
-                destination = os.path.join(tempdir, item)
-                self.put(filename, destination)
-        except Exception:
-            msg = "rep-clean uploading failed"
-            msg += " please see BNC#860284"
-            self.logger.error(msg)
-
-        scriptfile = os.path.join(tempdir, 'rep-clean.sh')
-        conffile = os.path.join(tempdir, 'rep-clean.conf')
-        return (scriptfile, conffile)
-
-    def set_repo(self, name, testreport):
+    def set_repo(self, operation, testreport):
         self.logger.debug(
             '{0}: enabling {1} repos'.format(
                 self.hostname,
-                name))
-        testreport.set_repo(self, name)
+                operation))
+        testreport.set_repo(self, operation)
 
     def run_repose(self, cmd, arg):
         cmdline = [
@@ -362,20 +343,6 @@ class Target(object):
         for label, data in (('stdout', cld.stdout), ('stderr', cld.stderr)):
             for l in data:
                 logger("local/%s %s: %s" % (self.hostname, label, l.rstrip()))
-
-    def run_repclean(self, args):
-        exe = self.config.repclean_path
-        argv = (exe,) + args
-
-        try:
-            fd = self.connection.open(exe, 'r')
-        except IOError:
-            exe, cfg = self._upload_repclean()
-            argv = (exe, '-F', cfg,) + args
-        else:
-            fd.close()
-
-        self.run(' '.join(map(str, argv)))
 
     def run(self, command, lock=None):
         if self.state == 'enabled':

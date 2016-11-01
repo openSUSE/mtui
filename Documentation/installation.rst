@@ -25,27 +25,13 @@ each distribution under the "Go to download repository" link.
 
 For example for openSUSE Tumbleweed the command would be:
 
-.. code-block:: text
+.. code-block:: sh 
 
     # zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Tumbleweed qa-maintenance
 
 Once you have the repository added, you can install the package normally
 and get mtui with the appropriate dependencies as well.
 
-.. code-block:: text
+.. code-block:: sh 
 
     # zypper in mtui
-
-Gentoo
-######
-
-Packages are available at internal `gentoo QAM overlay`_
-
-.. _gentoo QAM overlay: https://gitlab.suse.de/qa-maintenance/gentoo-overlay
-
-Source
-######
-
-Tarballs are available at `deathstar.suse.cz`_
-
-.. _deathstar.suse.cz: http://deathstar.suse.cz/distfiles/

@@ -105,9 +105,6 @@ class Config(object):
             ('session_user', ('mtui', 'user'),
              getpass.getuser),
 
-            ('use_repose', ('mtui', 'use_repose'),
-                True, bool, self.config.getboolean),
-
             # connection.timeout appears to be in units of seconds as
             # indicated by
             # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
@@ -122,9 +119,6 @@ class Config(object):
 
             ('reports_url', ('url', 'testreports'),
              'http://qam.suse.de/testreports'),
-
-            ('repclean_path', ('target', 'repclean'),
-             '/mounts/qam/rep-clean/rep-clean.sh'),
 
             ('target_tempdir', ('target', 'tempdir'),
              '/tmp'),

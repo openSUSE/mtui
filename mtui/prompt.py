@@ -962,7 +962,7 @@ class CommandPrompt(cmd.Cmd):
     @requires_update
     def do_list_metadata(self, args):
         """
-        Lists patchinfo metadata like patch number, SWAMP ID or packager.
+        Lists patchinfo metadata like patch number, ReviewRequestID or packager.
 
         list_metadata
         Keyword arguments:
@@ -1210,7 +1210,7 @@ class CommandPrompt(cmd.Cmd):
     def do_testsuite_submit(self, args):
         """
         Submits the ctcs2 testsuite results to qadb.suse.de.
-        The comment field is populated with some attributes like SWAMPID or
+        The comment field is populated with some attributes like RRID or
         testsuite name, but can also be edited before the results get
         submitted.
 
@@ -1569,37 +1569,32 @@ class CommandPrompt(cmd.Cmd):
 
     @requires_update
     def do_set_repo(self, args):
-        """
-        Sets the software repositories to UPDATE or TESTING. Multiple
-        hostnames can be given. On the target hosts, the rep-clean.sh script
-        is spawned to set the repositories accordingly.
+        """ Add or remove update repository from hosts
 
-        set_repo <hostname>[,hostname,...],<repository>
+        set_repo <hostname>[,hostname,...],<operation>
         Keyword arguments:
         hostname   -- hostname from the target list or "all"
-        repository -- repository, TESTING or UPDATE
+        operation  --  'add' or 'remove'
         """
 
-        targets, name = self._parse_args(args, str)
+        targets, operation = self._parse_args(args, str)
 
-        if name.upper() not in ["UPDATE", "TESTING"]:
-            raise ValueError("invalid name `%s`" % name)
+        if operation not in ["add", "remove"]:
+            raise ValueError("invalid operation `%s`" % operation)
 
-        name = name.upper()
-
-        if not (targets and name):
+        if not (targets and operation):
             self.parse_error(self.do_set_repo, args)
             return
 
         with LockedTargets([self.targets[x] for x in targets]):
             for t in [self.targets[x] for x in targets]:
-                t.set_repo(name, self.metadata)
+                t.set_repo(operation, self.metadata)
 
     def complete_set_repo(self, text, line, begidx, endidx):
         if line.count(','):
             return self.complete_enabled_hostlist_with_all(
                 text, line, begidx, endidx, [
-                    'testing', 'update'])
+                    'add', 'remove'])
         else:
             return self.complete_enabled_hostlist_with_all(
                 text,

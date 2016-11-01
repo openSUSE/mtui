@@ -319,13 +319,13 @@ set_repo
 
 ::
 
-    set_repo <hostname>[,...],<repository>
+    set_repo <hostname>[,...],<operation>
 
-Sets the software repositories to UPDATE or TESTING. `rep-clean.sh`
-script is used in the target hosts to set the repositories accordingly.
+Add or remove repository with update. It uses `repose issue-add` and
+`repose issue-rm` command.
 
-`<repository>`
-  `TESTING` or `UPDATE`
+`<operation>`
+  `add` or `remove`
 
 show_log
 ++++++++
