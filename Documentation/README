@@ -81,18 +81,18 @@ returned to indicate the script wasn't run.
 
 Proposed Testing Workflow
 -------------------------
-Invoke mtui.py with the update md5 as parameter in interactive mode and set the
+Invoke mtui.py with the update RRID as parameter in interactive mode and set the
 testreports directory if it's not already set by the TEMPLATE_DIR environment
 variable or the configuration file.
 The script connects then to the reference hosts mentioned in the template file.
 
-./mtui.py -t ~/testing/testreports/ -m 7cf90e0522b1b961e418455feb815531 -i
+mtui -r SUSE:Maintenance:1:2
 info: connecting to frisch.suse.de
 info: connecting to merope.suse.de
 info: connecting to libra.suse.de
 info: connecting to sunrise.suse.de
 
-QA > 
+mtui > 
 
 The interactive shell is now loaded and ready. First the tester could check if
 the correct package versions are installed. By running list_packages without
@@ -100,7 +100,7 @@ parameter, the package list with the required version numbers is shown. This
 versions should be higher than the versions currently installed
 (list_packages all).
 
-QA > list_packages
+mtui > list_packages
 libibumad1-x86                : 1.2.3_20090314-0.12.1
 libibumad1                    : 1.2.3_20090314-0.12.1
 libibmad1                     : 1.2.3_20090314-0.12.1
@@ -108,7 +108,7 @@ libibmad1-32bit               : 1.2.3_20090314-0.12.1
 libibumad1-32bit              : 1.2.3_20090314-0.12.1
 libibmad1-x86                 : 1.2.3_20090314-0.12.1
 
-QA > list_packages all
+mtui > list_packages all
 packages on libra.suse.de:
 libibumad1-x86                : 0
 libibumad1                    : 1.2.3_20090314-0.10.1
@@ -146,7 +146,7 @@ this case, the provides for the libraries are not correct. The output of the
 run command could later be added as reproducer to the bug section of the
 template.
 
-QA > run all,rpm -q --provides libibmad1
+mtui > run all,rpm -q --provides libibmad1
 libra.suse.de:~> rpm -q --provides libibmad1 [0]
 libibmad1 = 1.2.3_20090314
 libibmad.so.1  
@@ -184,7 +184,7 @@ In case of errors or warnings in the update process, the tester can stop the
 process if he's asked for the next step and resolve these issues first before
 running update again.
 
-QA > update all
+mtui > update all
 info: preparing
 info: done... [\]
 start pre update scripts? (y/N) y
@@ -206,14 +206,14 @@ info: done
 After the update, the package versions and the update log could be exported
 to the template file for further processing.
 
-QA > export
+mtui > export
 info: exporting XML to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log
 wrote template to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log
 
 To verify that the bugs are actually fixed, one can run the reproducers again.
 In this case, the provides are fixed.
 
-QA > run all,rpm -q --provides libibmad1
+mtui > run all,rpm -q --provides libibmad1
 libra.suse.de:~> rpm -q --provides libibmad1 [0]
 libibmad = 1.2.3_20090314
 libibmad.so.1  
@@ -251,13 +251,13 @@ output to the template file with the edit command and a little copy + paste.
 The tester just needs to set the update state to PASSED or FAILED before
 submitting the template to the SVN.
 
-QA > edit template
-QA > commit
+mtui > edit template
+mtui > commit
 Revision 6824.
 
 When the testing is finished, "quit" exits MTUI and disconnects from the
 remote hosts while saving the XML output.
-QA > quit
+mtui > quit
 save log? (y/N) y
 info: closing connection to libra.suse.de
 info: closing connection to merope.suse.de
