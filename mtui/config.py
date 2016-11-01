@@ -99,7 +99,8 @@ class Config(object):
              os.path.expanduser),
 
             ('local_tempdir', ('mtui', 'tempdir'),
-             '/tmp'),
+             lambda: os.path.expanduser(os.getenv('TMPDIR', '/tmp')),
+             os.path.expanduser),
 
             ('session_user', ('mtui', 'user'),
              getpass.getuser),
