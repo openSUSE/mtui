@@ -650,9 +650,9 @@ class Package(object):
         self.current = None
 
     def set_versions(self, before=None, after=None, required=None):
-        if before is not None:
+        if before:
             self.before = before
-        if after is not None:
+        if after:
             self.after = after
-        if required is not None:
+        if required:
             self.required = required
