@@ -31,7 +31,7 @@ class Attributes(object):
              'major':['9', '10', '11', '12', '5', '6'],
              'minor':['sp1', 'sp2', 'sp3', 'sp4', '1', '2', '3', '4'],
              'addons':['webyast', 'webyast11', 'webyast12', 'sdk', 'hae', 'studiorunner', 'smt', 'manager-client', 'rt', 'we'],
-             'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm', 'vmware'],
+             'virtual':['xen', 'xenu', 'xen0', 'host', 'guest', 'kvm', 'vmware','lpar'],
              'tags':['kernel', 'ltss', 'minimal']
             }
 
