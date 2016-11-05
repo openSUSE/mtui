@@ -84,7 +84,9 @@ class Attributes(object):
             'host',
             'guest',
             'kvm',
-            'vmware'],
+            'vmware',
+            'lpar'
+        ],
         'tags': [
             'kernel',
             'ltss',
