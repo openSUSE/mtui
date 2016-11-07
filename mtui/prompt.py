@@ -166,7 +166,8 @@ class CommandPrompt(cmd.Cmd):
     # {{{ overrides to support new style commands
     def get_names(self):
         names = cmd.Cmd.get_names(self)
-        names = names + ["do_" + x for x in self.commands.keys()]
+        names = names + \
+            ["do_" + x for x in self.commands.keys()] + ["help_" + x for x in self.commands.keys()]
         return names
 
     def __getattr__(self, x):
