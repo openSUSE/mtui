@@ -222,15 +222,15 @@ class check_eq(object):
 
     """
     Usage: check_eq(x)(y)
-    :return: y if (x == y) is True otherwise raises
+    :return: None for y if (x == y) is True otherwise raises
     :raises: ValueError
     """
 
-    def __init__(self, x):
+    def __init__(self, *x):
         self.x = x
 
     def __call__(self, x):
-        if not self.x == x:
+        if x not in self.x:
             raise ValueError("Expected: {0!r}, got: {1!r}".format(
                 self.x, x))
 
