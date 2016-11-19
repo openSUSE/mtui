@@ -69,7 +69,7 @@ class RequestReviewID(object):
         :param rrid: fully qualified Request Review ID
         """
         parsers = [
-            check_eq("SUSE"), check_eq("Maintenance"), int, int
+            check_eq("SUSE","openSUSE"), check_eq("Maintenance"), int, int
             ]
 
         # filter empty entries

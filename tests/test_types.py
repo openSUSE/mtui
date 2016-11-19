@@ -1,4 +1,4 @@
-from nose.tools import eq_, ok_, raises
+from nose.tools import eq_, raises
 
 from mtui.types import obs
 from mtui import messages
@@ -18,6 +18,18 @@ def test_RRID_ok():
     rid = rand_review_id()
     mid = rand_maintenance_id()
     rrid = helper_parse_reviewid("SUSE:Maintenance:{0}:{1}".format(
+        mid, rid))
+
+    eq_(rrid.review_id, rid)
+    eq_(rrid.maintenance_id, mid)
+
+def test_RRID_openSUSE_ok():
+    """
+    Test correct RRID is parsed successfully
+    """
+    rid = rand_review_id()
+    mid = rand_maintenance_id()
+    rrid = helper_parse_reviewid("openSUSE:Maintenance:{0}:{1}".format(
         mid, rid))
 
     eq_(rrid.review_id, rid)
