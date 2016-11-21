@@ -111,12 +111,12 @@ class HostsGroup(object):
 
     def report_history(self, sink, count, events):
         if events:
-            self._run('tac /var/log/mtui.log | grep -m %s %s | tac' % (
+            self._run('tac /var/log/mtui.log | grep -m {} {} | tac'.format(
                 count,
-                ' '.join([('-e ":%s"' % e) for e in events]),
+                ' '.join([('-e ":{}"'.format(e)) for e in events]),
             ))
         else:
-            self._run('tail -n %s /var/log/mtui.log' % count)
+            self._run('tail -n {} /var/log/mtui.log'.format(count))
 
         for hn in sorted(self.hosts.keys()):
             self.hosts[hn].report_history(sink)
@@ -224,7 +224,7 @@ class Target(object):
 
     def connect(self):
         try:
-            self.logger.info('connecting to %s' % self.hostname)
+            self.logger.info('connecting to {}'.format(self.hostname))
             self.connection = self.Connection(
                 self.logger,
                 self.host,
@@ -269,9 +269,9 @@ class Target(object):
         elif self.state == 'dryrun':
 
             self.logger.info(
-                'dryrun: %s running "rpm -q %s"' %
-                (self.hostname, packages))
-            self.log.append(['rpm -q %s' % packages, 'dryrun\n', '', 0, 0])
+                'dryrun: {} running "rpm -q {}"'.format(self.hostname, packages))
+            self.log.append(
+                ['rpm -q {}'.format(packages), 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
             self.log.append(['', '', '', 0, 0])
@@ -286,8 +286,8 @@ class Target(object):
               package = str
         """
         self.run(
-            'rpm -q --queryformat "%%{Name} %%{Version}-%%{Release}\n" %s' %
-            ' '.join(packages))
+            'rpm -q --queryformat "%%{Name} %%{Version}-%%{Release}\n" {}'.
+            format(' '.join(packages)))
 
         packages = {}
         for line in self.lastout().splitlines():
@@ -300,15 +300,18 @@ class Target(object):
         return packages
 
     def disable_repo(self, repo):
-        self.logger.debug('%s: disabling repo %s' % (self.hostname, repo))
-        self.run('zypper mr -d %s' % repo)
+        self.logger.debug('{}: disabling repo {}'.format(self.hostname, repo))
+        self.run('zypper mr -d {}'.format(repo))
 
     def enable_repo(self, repo):
-        self.logger.debug('%s: enabling repo %s' % (self.hostname, repo))
-        self.run('zypper mr -e %s' % repo)
+        self.logger.debug('{}: enabling repo {}'.format(self.hostname, repo))
+        self.run('zypper mr -e {}'.format(repo))
 
     def set_timeout(self, value):
-        self.logger.debug('%s: setting timeout to %s' % (self.hostname, value))
+        self.logger.debug(
+            '{}: setting timeout to {}'.format(
+                self.hostname,
+                value))
         self.connection.timeout = value
 
     def get_timeout(self):
@@ -325,11 +328,12 @@ class Target(object):
         cmdline = [
             'repose',
             cmd,
-            ('root@%s' % (str(self.hostname),)),
+            ('root@'.format(str(self.hostname),)),
             '--',
             arg,
         ]
-        self.logger.info("local/%s: %s" % (self.hostname, ' '.join(cmdline)))
+        self.logger.info(
+            "local/:{} {}".format(self.hostname, ' '.join(cmdline)))
         cld = subprocess.Popen(
             cmdline,
             close_fds=True,
@@ -342,18 +346,23 @@ class Target(object):
         logger = self.logger.info if ex == 0 else self.logger.error
         for label, data in (('stdout', cld.stdout), ('stderr', cld.stderr)):
             for l in data:
-                logger("local/%s %s: %s" % (self.hostname, label, l.rstrip()))
+                logger(
+                    "local/{} {}: {}".format(self.hostname, label, l.rstrip()))
 
     def run(self, command, lock=None):
         if self.state == 'enabled':
-            self.logger.debug('%s: running "%s"' % (self.hostname, command))
+            self.logger.debug(
+                '{}: running "{}"'.format(
+                    self.hostname,
+                    command))
             time_before = timestamp()
             try:
                 exitcode = self.connection.run(command, lock)
             except CommandTimeout:
                 self.logger.critical(
-                    '%s: command "%s" timed out' %
-                    (self.hostname, command))
+                    '{}: command "{}" timed out'.format(
+                        self.hostname,
+                        command))
                 exitcode = -1
             except AssertionError:
                 self.logger.debug('zombie command terminated')
@@ -362,8 +371,9 @@ class Target(object):
             except Exception:
                 # failed to run command
                 self.logger.error(
-                    '%s: failed to run command "%s"' %
-                    (self.hostname, command))
+                    '{}: failed to run command "{}"'.format(
+                        self.hostname,
+                        command))
                 exitcode = -1
 
             time_after = timestamp()
@@ -376,35 +386,37 @@ class Target(object):
         elif self.state == 'dryrun':
 
             self.logger.info(
-                'dryrun: %s running "%s"' %
-                (self.hostname, command))
+                'dryrun: {} running "{}"'.format(self.hostname, command))
             self.log.append([command, 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
             self.log.append(['', '', '', 0, 0])
 
     def shell(self):
-        self.logger.debug('%s: spawning shell' % self.hostname)
+        self.logger.debug('{}: spawning shell'.format(self.hostname))
 
         try:
             self.connection.shell()
         except Exception:
             # failed to spawn shell
-            self.logger.error('%s: failed to spawn shell')
+            self.logger.error(
+                '{}: failed to spawn shell'.format(
+                    self.hostname))
 
     def put(self, local, remote):
         if self.state == 'enabled':
-            self.logger.debug('%s: sending "%s"' % (self.hostname, local))
+            self.logger.debug('{}: sending "{}"'.format(self.hostname, local))
             try:
                 return self.connection.put(local, remote)
             except EnvironmentError as error:
                 self.logger.error(
-                    '%s: failed to send %s: %s' %
-                    (self.hostname, local, error.strerror))
+                    '{}: failed to send {}: {}'.format(
+                        self.hostname,
+                        local,
+                        error.strerror))
         elif self.state == 'dryrun':
             self.logger.info(
-                'dryrun: put %s %s:%s' %
-                (local, self.hostname, remote))
+                'dryrun: put {} {}:{}'.format(local, self.hostname, remote))
 
     def get(self, remote, local):
 
@@ -414,22 +426,31 @@ class Target(object):
         else:
             f = self.connection.get
             s = 'file'
-            local = '%s.%s' % (local, self.hostname)
+            local = '{}.{}'.format(local, self.hostname)
 
         if self.state == 'enabled':
             self.logger.debug(
-                '%s: receiving %s "%s" into "%s' %
-                (self.hostname, s, remote, local))
+                '{}: receiving {} "{}" into "{}'.format(
+                    self.hostname,
+                    s,
+                    remote,
+                    local))
             try:
                 return f(remote, local)
             except EnvironmentError as error:
                 self.logger.error(
-                    '%s: failed to get %s %s: %s' %
-                    (self.hostname, s, remote, error.strerror))
+                    '{}: failed to get {} {}: {}'.format(
+                        self.hostname,
+                        s,
+                        remote,
+                        error.strerror))
         elif self.state == 'dryrun':
             self.logger.info(
-                'dryrun: get %s %s:%s %s' %
-                (self.hostname, s, remote, local))
+                'dryrun: get {} {}:{} {}'.format(
+                    self.hostname,
+                    s,
+                    remote,
+                    local))
 
     def lastin(self):
         try:
@@ -521,27 +542,27 @@ class Target(object):
             self.unlock()
         except TargetLockedError:
             self.logger.debug(
-                'unable to remove lock from %s. lock is probably not held by this session' %
-                self.hostname)
+                'unable to remove lock from {}. lock is probably not held by this session'.
+                format(self.hostname))
         except:
             pass
 
     def add_history(self, comment):
         if self.state == 'enabled':
-            self.logger.debug('%s: adding history entry' % self.hostname)
+            self.logger.debug('{}: adding history entry'.format(self.hostname))
             try:
                 filename = os.path.join('/', 'var', 'log', 'mtui.log')
                 historyfile = self.connection.open(filename, 'a+')
             except Exception as error:
-                self.logger.error('failed to open history file: %s' % error)
+                self.logger.error(
+                    'failed to open history file: {}'.format(error))
                 return
 
             now = timestamp()
             user = self.config.session_user
             try:
                 historyfile.write(
-                    '%s:%s:%s\n' %
-                    (now, user, ':'.join(comment)))
+                    '{}:{}:{}\n'.format(now, user, ':'.join(comment)))
                 historyfile.close()
             except Exception:
                 pass
@@ -552,8 +573,9 @@ class Target(object):
         except IOError as error:
             if error.errno == errno.ENOENT:
                 self.logger.debug(
-                    '%s: directory %s does not exist' %
-                    (self.hostname, path))
+                    '{}: directory {} does not exist'.format(
+                        self.hostname,
+                        path))
             return []
 
     def remove(self, path):
@@ -562,20 +584,20 @@ class Target(object):
         except IOError as error:
             if error.errno == errno.ENOENT:
                 self.logger.debug(
-                    '%s: path %s does not exist' %
-                    (self.hostname, path))
+                    '{}: path {} does not exist'.format(self.hostname, path))
             else:
                 try:
                     # might be a directory
                     self.connection.rmdir(path)
                 except IOError:
                     self.logger.warning(
-                        'unable to remove %s on %s' %
-                        (path, self.hostname))
+                        'unable to remove {} on {}'.format(
+                            path,
+                            self.hostname))
 
     def close(self, action=None):
         def alarm_handler(signum, frame):
-            self.logger.warning('timeout reached on %s' % self.hostname)
+            self.logger.warning('timeout reached on {}'.format(self.hostname))
             raise CommandTimeout('close')
 
         handler = signal.signal(signal.SIGALRM, alarm_handler)
@@ -592,13 +614,15 @@ class Target(object):
             pass
         else:
             if action == 'reboot':
-                self.logger.info('rebooting %s' % self.hostname)
+                self.logger.info('rebooting {}'.format(self.hostname))
                 self.run('reboot')
             elif action == 'poweroff':
-                self.logger.info('powering off %s' % self.hostname)
+                self.logger.info('powering off {}'.format(self.hostname))
                 self.run('halt')
             else:
-                self.logger.info('closing connection to %s' % self.hostname)
+                self.logger.info(
+                    'closing connection to {}'.format(
+                        self.hostname))
 
         if self.connection:
             self.connection.close()
