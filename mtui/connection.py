@@ -188,9 +188,6 @@ class Connection(object):
         try:
             transport = self.client.get_transport()
 
-            # enable compression to reduce transmission size. could be
-            # helpful on bad lines/huge latencies.
-            transport.use_compression()
             transport.set_keepalive(30)
             try:
                 # add NullHandler to paramiko to get rid of
