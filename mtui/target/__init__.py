@@ -286,7 +286,7 @@ class Target(object):
               package = str
         """
         self.run(
-            'rpm -q --queryformat "%%{Name} %%{Version}-%%{Release}\n" {}'.
+            'rpm -q --queryformat "%{{Name}} %{{Version}}-%{{Release}}\n" {}'.
             format(' '.join(packages)))
 
         packages = {}
@@ -319,7 +319,7 @@ class Target(object):
 
     def set_repo(self, operation, testreport):
         self.logger.debug(
-            '{0}: enabling {1} repos'.format(
+            '{}: enabling {} repos'.format(
                 self.hostname,
                 operation))
         testreport.set_repo(self, operation)
@@ -328,7 +328,7 @@ class Target(object):
         cmdline = [
             'repose',
             cmd,
-            ('root@'.format(str(self.hostname),)),
+            ('root@{}'.format(str(self.hostname),)),
             '--',
             arg,
         ]
