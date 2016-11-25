@@ -287,7 +287,7 @@ class Target(object):
               package = str
         """
         self.run(
-            'rpm -q --queryformat "%{{(Name}} %{{Version}}-%{{Release}}\n" {}'.
+            'rpm -q --queryformat "%{{Name}} %{{Version}}-%{{Release}}\n" {}'.
             format(' '.join(packages)))
 
         packages = {}
@@ -348,7 +348,7 @@ class Target(object):
         cmdline = [
             'repose',
             cmd,
-            ('root@'.format(str(self.hostname),)),
+            ('root@{}'.format(str(self.hostname),)),
             '--',
             arg,
         ]
