@@ -40,68 +40,22 @@ class ZypperUpdate(Update):
             print(stdout[start:end])
 
 
-class ZypperUpToSLE11Update(ZypperUpdate):
+class ZypperOBSUpdate(ZypperUpdate):
 
     def __init__(self, *a, **kw):
-        super(ZypperUpToSLE11Update, self).__init__(*a, **kw)
-
-        if 'sat' not in self.patches:
-            self.log.critical(
-                'required SAT patch number for zypper update not found')
-            return
-
-        patch = self.patches['sat']
-        self.commands = [
-            r"""export LANG=""",
-            r"""zypper lr -puU""",
-            r"""zypper refresh""",
-            r"""zypper patches | grep ' %s '""" %
-            patch,
-            r"""zypper patches | awk -F '|' '/ %s / { print $2; }' | while read p; do zypper -n install -l -y -t patch $p=%s; done""" %
-            (patch,
-             patch),
-            ]
-
-
-class ZypperSLE12Update(ZypperUpdate):
-
-    def __init__(self, *a, **kw):
-        super(ZypperSLE12Update, self).__init__(*a, **kw)
-        repat = ':p=%d'
-        repo = repat % (self.testreport.rrid.maintenance_id)
+        super(ZypperOBSUpdate, self).__init__(*a, **kw)
+        repat = ':p={:d}'
+        repo = repat.format(self.testreport.rrid.maintenance_id)
 
         self.commands = [
             r"""export LANG=""",
             r"""zypper lr -puU""",
             r"""zypper refresh""",
-            r"""zypper patches | grep %s""" %
-            repo,
-            r"""zypper patches | awk -F "|" '/%s\>/ { print $2; }' | while read p; do zypper -n install -l -y -t patch $p; done""" %
-            repo,
-            r"""zypper patches | grep %s""" %
-            repo,
-            r"""zypper lr | awk -F "|" '/%s\>/ { print $2; }' | while read r; do zypper rr $r; done""" %
-            repo,
+            r"""zypper patches | grep {!s}""".format(repo),
+            r"""zypper patches | awk -F "|" '/{!s}\>/ {{ print $2; }}' | while read p; do zypper -n install -l -y -t patch $p; done""".format(repo),
+            r"""zypper patches | grep {!s}""".format(repo),
+            r"""zypper lr | awk -F "|" '/{!s}\>/ {{ print $2; }}' | while read r; do zypper rr $r; done""".format( repo),
             ]
-
-
-class openSuseUpdate(Update):
-
-    def __init__(self, *a, **kw):
-        super(openSuseUpdate, self).__init__(*a, **kw)
-
-        if 'sat' not in self.patches:
-            self.log.critical(
-                'required SAT patch number for zypper update not found')
-            return
-
-        patch = self.patches['sat']
-        self.commands = [
-            'export LANG=',
-            'zypper -v lr -puU',
-            'zypper pch | grep " %s "' % patch,
-            'zypper -v install -t patch softwaremgmt-201107=%s' % patch,
-        ]
 
 
 class RedHatUpdate(Update):
@@ -112,13 +66,11 @@ class RedHatUpdate(Update):
         self.commands = [
             'export LANG=',
             'yum repolist',
-            'yum -y update %s' % ' '.join(self.packages),
+            'yum -y update {!s}'.format(' '.join(self.packages)),
         ]
 
 Updater = DictWithInjections({
-    '11': ZypperUpToSLE11Update,
-    '12': ZypperSLE12Update,
-    '114': openSuseUpdate,
+    '12': ZypperOBSUpdate,
     'YUM': RedHatUpdate,
 }, key_error=MissingUpdaterError)
 
@@ -139,12 +91,11 @@ class ZypperPrepare(Prepare):
                 continue
             if self.installed_only:
                 commands.append(
-                    'rpm -q %s &>/dev/null && zypper -n in -y -l %s %s' %
-                    (package, parameter, package))
+                    'rpm -q {!s} &>/dev/null && zypper -n in -y -l {!s} {!s}'.format(
+                        package, parameter, package))
             else:
                 commands.append(
-                    'zypper -n in -y -l %s %s' %
-                    (parameter, package))
+                    'zypper -n in -y -l {!s} {!s}'.format(parameter, package))
 
         self.commands = commands
 
@@ -173,18 +124,16 @@ class RedHatPrepare(Prepare):
         for package in self.packages:
             if self.installed_only:
                 commands.append(
-                    'rpm -q %s &>/dev/null && yum -y %s install %s' %
-                    (package, parameter, package))
+                    'rpm -q {!s} &>/dev/null && yum -y {!s} install {!s}'.format(package, parameter, package))
             else:
-                commands.append('yum -y %s install %s' % (parameter, package))
+                commands.append(
+                    'yum -y {!s} install {!s}'.format(parameter, package))
 
         self.commands = commands
 
 
 Preparer = DictWithInjections({
-    '11': ZypperPrepare,
     '12': ZypperPrepare,
-    '114': ZypperPrepare,
     'YUM': RedHatPrepare,
 }, key_error=MissingPreparerError)
 
@@ -195,14 +144,14 @@ class ZypperDowngrade(Downgrade):
         super(ZypperDowngrade, self).__init__(*a, **kw)
 
         self.list_command = r'''
-            for p in %s; do \
+            for p in {!s}; do \
               zypper se -s --match-exact -t package $p; \
             done \
             | grep -v "(System" \
             | grep ^[iv] \
             | sed "s, ,,g" \
-            | awk -F "|" '{ print $2,"=",$4 }'
-        ''' % ' '.join(self.packages)
+            | awk -F "|" '{{ print $2,"=",$4 }}'
+        '''.format(' '.join(self.packages))
         self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
 
 
@@ -210,12 +159,11 @@ class RedHatDowngrade(Downgrade):
 
     def __init__(self, *a, **kw):
         super(RedHatDowngrade, self).__init__(*a, **kw)
-        self.commands = ['yum -y downgrade %s' % ' '.join(self.packages)]
+        self.commands = [
+            'yum -y downgrade {!s}'.format(' '.join(self.packages))]
 
 Downgrader = DictWithInjections({
-    '11': ZypperDowngrade,
     '12': ZypperDowngrade,
-    '114': ZypperDowngrade,
     'YUM': RedHatDowngrade,
 }, key_error=MissingDowngraderError)
 
@@ -227,7 +175,7 @@ class ZypperInstall(Install):
 
         commands = []
 
-        commands.append('zypper -n in -y -l %s' % ' '.join(packages))
+        commands.append('zypper -n in -y -l {!s}'.format(' '.join(packages)))
 
         self.commands = commands
 
@@ -239,15 +187,13 @@ class RedHatInstall(Install):
 
         commands = []
 
-        commands.append('yum -y install %s' % ' '.join(packages))
+        commands.append('yum -y install {!s}'.format(' '.join(packages)))
 
         self.commands = commands
 
 
 Installer = DictWithInjections({
-    '11': ZypperInstall,
     '12': ZypperInstall,
-    '114': ZypperInstall,
     'YUM': RedHatInstall,
 }, key_error=MissingInstallerError)
 
@@ -259,7 +205,7 @@ class ZypperUninstall(Install):
 
         commands = []
 
-        commands.append('zypper -n rm %s' % ' '.join(packages))
+        commands.append('zypper -n rm {!s}'.format(' '.join(packages)))
 
         self.commands = commands
 
@@ -271,14 +217,12 @@ class RedHatUninstall(Install):
 
         commands = []
 
-        commands.append('yum -y remove %s' % ' '.join(packages))
+        commands.append('yum -y remove {!s}'.format(' '.join(packages)))
 
         self.commands = commands
 
 
 Uninstaller = DictWithInjections({
-    '11': ZypperUninstall,
     '12': ZypperUninstall,
-    '114': ZypperUninstall,
     'YUM': RedHatUninstall,
 }, key_error=MissingUninstallerError)
