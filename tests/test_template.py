@@ -345,7 +345,7 @@ def test_get_release():
                 'sles12None-x86_64',
             ]
         ] + [
-            ({'foo': x}, '11') for x in
+            ({'foo': x}, '12') for x in
             [
                 'sled11sp3-i386',
                 'sled11sp3-x86_64',

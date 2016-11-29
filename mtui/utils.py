@@ -279,8 +279,7 @@ def get_release(systems):
         'rhel': 'YUM',
         'sle[sd]12': '12',
         'sap-aio12': '12',
-        '(manager|mgr|sles4vmware|cloud|studio|slms|sle.11)': '11',
-        'sl11': '114'
+        '(manager|mgr|sles4vmware|cloud|studio|slms|sle.11)': '12',
     }.items():
         if re.search(rexp, systems):
             return release
