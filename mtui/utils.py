@@ -278,10 +278,9 @@ def get_release(systems):
     for rexp, release in {
         'rhel': 'YUM',
         'sle[sd]12': '12',
+        'sap-aio12': '12',
         '(manager|mgr|sles4vmware|cloud|studio|slms|sle.11)': '11',
-        'sle.10': '10',
-        'sle.9': 9,
-        'sl11': '114',
+        'sl11': '114'
     }.items():
         if re.search(rexp, systems):
             return release
