@@ -70,7 +70,7 @@ class RedHatUpdate(Update):
         ]
 
 Updater = DictWithInjections({
-    '12': ZypperOBSUpdate,
+    'ZYPPER': ZypperOBSUpdate,
     'YUM': RedHatUpdate,
 }, key_error=MissingUpdaterError)
 
@@ -133,7 +133,7 @@ class RedHatPrepare(Prepare):
 
 
 Preparer = DictWithInjections({
-    '12': ZypperPrepare,
+    'ZYPPER': ZypperPrepare,
     'YUM': RedHatPrepare,
 }, key_error=MissingPreparerError)
 
@@ -163,7 +163,7 @@ class RedHatDowngrade(Downgrade):
             'yum -y downgrade {!s}'.format(' '.join(self.packages))]
 
 Downgrader = DictWithInjections({
-    '12': ZypperDowngrade,
+    'ZYPPER': ZypperDowngrade,
     'YUM': RedHatDowngrade,
 }, key_error=MissingDowngraderError)
 
@@ -193,7 +193,7 @@ class RedHatInstall(Install):
 
 
 Installer = DictWithInjections({
-    '12': ZypperInstall,
+    'ZYPPER': ZypperInstall,
     'YUM': RedHatInstall,
 }, key_error=MissingInstallerError)
 
@@ -223,6 +223,6 @@ class RedHatUninstall(Install):
 
 
 Uninstaller = DictWithInjections({
-    '12': ZypperUninstall,
+    'ZYPPER': ZypperUninstall,
     'YUM': RedHatUninstall,
 }, key_error=MissingUninstallerError)

@@ -338,15 +338,11 @@ def test_select():
 def test_get_release():
     cases = [
         ] + [
-            ({'foo': x}, '12') for x in
+            ({'foo': x}, 'ZYPPER') for x in
             [
                 'sled12None-x86_64',
                 'sles12None-x86_64',
                 'sles12None-x86_64',
-            ]
-        ] + [
-            ({'foo': x}, '12') for x in
-            [
                 'sled11sp3-i386',
                 'sled11sp3-x86_64',
                 'sles11sp3-i386',
