@@ -479,7 +479,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
             if match:
                 name = match.group(1)
 
-            for pn, fn in re.findall(r'^(Patch\d*):\s*(.*)', content, re.MULTILINE):
+            for pn, fn in re.findall(
+                    r'^(Patch\d*):\s*(.*)', content, re.MULTILINE):
                 fn = fn.replace('%{name}', name)
                 num = pn[5:]
                 applied = False
@@ -490,8 +491,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
                 patches.append([pn, fn, applied])
 
             if not patches:
-                self.log.warning('no patch entries found in specfile {0}'
-                    .format(specfile))
+                self.log.warning(
+                    'no patch entries found in specfile {0}'.format(specfile))
             else:
                 allpatches.append([specfile, patches])
 
@@ -643,21 +644,18 @@ class TestReport(with_metaclass(ABCMeta, object)):
         return self.testopia
 
     def list_versions(self, sink, targets, packages):
-        if int(self.get_release()) > 10:
-            query = r'''
-                for p in %s; do \
-                    zypper search -s --match-exact -t package $p; \
-                done \
-                | egrep ^[iv] \
-                | awk -F '|' '{ print $2 $4 }' \
-                | sort -u
-            '''
-        else:
-            query = "zypper se --match-exact -t package %s | egrep ^[iv] | awk -F '|' '{ print $4 $5 }' | sort -u"
+        query = r'''
+            for p in {!s}; do \
+                zypper search -s --match-exact -t package $p; \
+            done \
+            | grep -e ^[iv] \
+            | awk -F '|' '{{ print $2 $4 }}' \
+            | sort -u
+        '''
 
         packages = packages or self.get_package_list()
 
-        targets.run(query % ' '.join(packages))
+        targets.run(query.format(' '.join(packages)))
 
         # this is a bit convoluted because the data is aggregated
         # on display (see the example in CommandPrompt#do_list_versions)
@@ -766,11 +764,7 @@ class OBSTestReport(TestReport):
         return self.rrid
 
     def _get_updater_id(self):
-        rel = self.get_release()
-        if rel == '11':
-            return '12'
-
-        return rel
+        return self.get_release()
 
     def _parser(self):
         return OBSMetadataParser()
