@@ -1692,8 +1692,10 @@ class CommandPrompt(cmd.Cmd):
 
         checkout = self.metadata.report_wd()
         try:
-            subprocess.check_call('svn up'.split(), cwd = checkout)
-            subprocess.check_call('svn ci'.split() + msg, cwd = checkout)
+            subprocess.check_call('svn up'.split(), cwd=checkout)
+            subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
+            self.log.info(
+                "Testreport in: {}".format(self.metadata._testreport_url()))
         except Exception:
             self.log.error('committing template failed')
             self.log.debug(format_exc())
