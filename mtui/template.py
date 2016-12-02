@@ -778,5 +778,7 @@ class OBSTestReport(TestReport):
     def set_repo(self, target, operation):
         if operation == 'add':
             target.run_repose('issue-add', self.report_wd())
-        else:
+        elif operation == 'remove':
             target.run_repose('issue-rm', str(self.rrid))
+        else:
+            raise ValueError("Not supported repose operation {}".format(operation))

@@ -20,7 +20,7 @@ from .utils import unused
 
 def make(args, **kw):
     c = kw.pop('config', None) or ConfigFake()
-    l = kw.pop('logger', None) or LogFake()
+    l = kw.pop('log', None) or LogFake()
     s = kw.pop('sys', None) or SysFake()
     cp = make_cp(config = c, logger = l, sys = s)
     a = ReportBug.parse_args(args, s)
@@ -112,7 +112,7 @@ def test_xdg_open_returned_0():
     cmd = make("", popen = PopenFake)
 
     cmd.run()
-    eq_(cmd.logger.debugs, [UnexpectedlyFastCleanExitFromXdgOpen()])
+    eq_(cmd.log.debugs, [UnexpectedlyFastCleanExitFromXdgOpen()])
 
 def test_has_default_popen():
     cmd = make("")

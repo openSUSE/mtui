@@ -1,10 +1,15 @@
+# -*- coding: utf-8 -*-
+
 from __future__ import absolute_import
+
 from abc import ABCMeta, abstractmethod
 import os
 import errno
+import subprocess
 
-from subprocess import Popen
 from time import sleep
+from traceback import format_exc
+from argparse import REMAINDER
 
 from .argparse import ArgumentParser
 from mtui.utils import complete_choices
@@ -44,7 +49,7 @@ class Command(with_metaclass(ABCMeta, object)):
         self.hosts = hosts
         self.args = args
         self.sys = sys
-        self.logger = logger
+        self.log = logger
         self.config = config
         self.prompt = prompt
         self.metadata = prompt.metadata
@@ -133,7 +138,7 @@ class HostsUnlock(Command):
         try:
             hosts = self.hosts.select(args.hosts)
         except ValueError as e:
-            self.logger.error(e)
+            self.log.error(e)
             return
 
         hosts.unlock(force=args.force)
@@ -201,14 +206,15 @@ class ListPackages(Command):
             hosts = self.hosts.select(self.args.hosts)
         except HostIsNotConnectedError as e:
             if e.host == "all":
-                self.logger.error(e)
-                self.logger.info(ListPackagesAllHost())
+                self.log.error(e)
+                self.log.info(ListPackagesAllHost())
                 return
             else:
                 raise
 
-        pkgs = list(
-            self.metadata.packages.keys()) if self.metadata else self.args.packages
+        pkgs = list(self.metadata.packages.keys()
+                    ) if self.metadata else self.args.packages
+
         if not pkgs:
             raise messages.MissingPackagesError()
 
@@ -249,7 +255,7 @@ class ReportBug(Command):
     command = "report-bug"
 
     def __init__(self, *a, **kw):
-        self.popen = kw.pop('popen', Popen)
+        self.popen = kw.pop('popen', subprocess.Popen)
 
         super(ReportBug, self).__init__(*a, **kw)
 
@@ -290,7 +296,7 @@ class ReportBug(Command):
             # otherwise log a debug message as this state is expected
             # not to happen and we might be interested in knowing about
             # when it does.
-            self.logger.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
+            self.log.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -358,3 +364,45 @@ class Config(Command):
                                sys_=p.sys)
         p_show.add_argument("attributes", type=str, nargs="*")
         p_show.set_defaults(func="show")
+
+
+class Commit(Command):
+
+    """
+    Commits testing template to the SVN. This can be run after the
+    testing has finished an the template is in the final state.
+    """
+
+    command = "commit"
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            "-m",
+            "--msg",
+            action="append",
+            nargs=REMAINDER,
+            help='commit message')
+        return parser
+
+    @requires_update
+    def run(self):
+
+        checkout = self.metadata.report_wd()
+
+        if self.args.msg:
+            msg = ["-m"] + ['"' + " ".join([x for x in self.args.msg[0]]) + '"']
+        else:
+            msg = []
+
+        try:
+            subprocess.check_call('svn up'.split(), cwd=checkout)
+            subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
+
+            self.log.info(
+                "Testreport in: {}".format(self.metadata._testreport_url())
+                )
+
+        except Exception:
+            self.log.error('committing template.failed')
+            self.log.debug(format_exc())

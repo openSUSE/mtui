@@ -196,10 +196,10 @@ def test_commandFactory():
     cp.onecmd("fake")
     ok_(cp.t_cmd.prompt is cp)
     ok_(cp.t_cmd.sys is cp.sys)
-    ok_(cp.t_cmd.logger is cp.log)
+    ok_(cp.t_cmd.log is cp.log)
     ok_(cp.t_cmd.config is cp.config)
     # and some more for good measure
-    ok_(cp.t_cmd.logger is l)
+    ok_(cp.t_cmd.log is l)
     ok_(cp.t_cmd.config is c)
 
 def test_set_session_name():
