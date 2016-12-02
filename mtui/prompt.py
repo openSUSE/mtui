@@ -13,6 +13,8 @@ import subprocess
 import glob
 import re
 
+from traceback import format_exc
+
 from mtui import messages
 from mtui.rpmver import RPMFile
 from mtui.target import *
@@ -116,6 +118,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Config)
         self._add_subcommand(commands.ListPackages)
         self._add_subcommand(commands.ReportBug)
+        self._add_subcommand(commands.Commit)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -1846,27 +1849,6 @@ class CommandPrompt(cmd.Cmd):
                 cwd=self.metadata.report_wd())
         except Exception:
             self.log.error('updating template failed')
-            self.log.debug(format_exc())
-
-    @requires_update
-    def do_commit(self, args):
-        """
-        Commits the testing template to the SVN. This can be run after the
-        testing has finished an the template is in the final state.
-
-        commit [message]
-        Keyword arguments:
-        message  -- commit message
-        """
-
-        msg = ['-m', args] if args else []
-
-        checkout = self.metadata.report_wd()
-        try:
-            subprocess.check_call('svn up'.split(), cwd=checkout)
-            subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
-        except Exception:
-            self.log.error('committing template failed')
             self.log.debug(format_exc())
 
     def do_put(self, args):

@@ -1,10 +1,15 @@
+# -*- coding: utf-8 -*-
+
 from __future__ import absolute_import
+
 from abc import ABCMeta, abstractmethod
 import os
 import errno
+import subprocess
 
-from subprocess import Popen
 from time import sleep
+from traceback import format_exc
+from argparse import REMAINDER
 
 from .argparse import ArgumentParser
 from mtui.utils import complete_choices
@@ -207,8 +212,9 @@ class ListPackages(Command):
             else:
                 raise
 
-        pkgs = list(
-            self.metadata.packages.keys()) if self.metadata else self.args.packages
+        pkgs = list(self.metadata.packages.keys()
+                    ) if self.metadata else self.args.packages
+
         if not pkgs:
             raise messages.MissingPackagesError()
 
@@ -249,7 +255,7 @@ class ReportBug(Command):
     command = "report-bug"
 
     def __init__(self, *a, **kw):
-        self.popen = kw.pop('popen', Popen)
+        self.popen = kw.pop('popen', subprocess.Popen)
 
         super(ReportBug, self).__init__(*a, **kw)
 
@@ -358,3 +364,45 @@ class Config(Command):
                                sys_=p.sys)
         p_show.add_argument("attributes", type=str, nargs="*")
         p_show.set_defaults(func="show")
+
+
+class Commit(Command):
+
+    """
+    Commits testing template to the SVN. This can be run after the
+    testing has finished an the template is in the final state.
+    """
+
+    command = "commit"
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            "-m",
+            "--msg",
+            action="append",
+            nargs=REMAINDER,
+            help='commit message')
+        return parser
+
+    @requires_update
+    def run(self):
+
+        checkout = self.metadata.report_wd()
+
+        if self.args.msg:
+            msg = ["-m"] + ['"' + " ".join([x for x in self.args.msg[0]]) + '"']
+        else:
+            msg = []
+
+        try:
+            subprocess.check_call('svn up'.split(), cwd=checkout)
+            subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
+
+            self.log.info(
+                "Testreport in: {}".format(self.metadata._testreport_url())
+                )
+
+        except Exception:
+            self.log.error('committing template.failed')
+            self.log.debug(format_exc())
