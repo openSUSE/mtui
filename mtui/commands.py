@@ -44,7 +44,7 @@ class Command(with_metaclass(ABCMeta, object)):
         self.hosts = hosts
         self.args = args
         self.sys = sys
-        self.logger = logger
+        self.log = logger
         self.config = config
         self.prompt = prompt
         self.metadata = prompt.metadata
@@ -133,7 +133,7 @@ class HostsUnlock(Command):
         try:
             hosts = self.hosts.select(args.hosts)
         except ValueError as e:
-            self.logger.error(e)
+            self.log.error(e)
             return
 
         hosts.unlock(force=args.force)
@@ -201,8 +201,8 @@ class ListPackages(Command):
             hosts = self.hosts.select(self.args.hosts)
         except HostIsNotConnectedError as e:
             if e.host == "all":
-                self.logger.error(e)
-                self.logger.info(ListPackagesAllHost())
+                self.log.error(e)
+                self.log.info(ListPackagesAllHost())
                 return
             else:
                 raise
@@ -290,7 +290,7 @@ class ReportBug(Command):
             # otherwise log a debug message as this state is expected
             # not to happen and we might be interested in knowing about
             # when it does.
-            self.logger.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
+            self.log.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
 
     @classmethod
     def _add_arguments(cls, parser):
