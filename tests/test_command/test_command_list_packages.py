@@ -8,11 +8,11 @@ from mtui.prompt import CommandAlreadyBoundError
 from mtui.template import OBSTestReport
 from mtui.messages import HostIsNotConnectedError
 from mtui.messages import ListPackagesAllHost
-from .utils import ConfigFake
-from .utils import LogFake
-from .utils import SysFake
-from .utils import unused
-from .test_prompt import TestableCommandPrompt
+from ..utils import ConfigFake
+from ..utils import LogFake
+from ..utils import SysFake
+from ..utils import unused
+from ..test_prompt import TestableCommandPrompt
 
 def test_list_packages_all():
     """

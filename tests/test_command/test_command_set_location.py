@@ -7,7 +7,8 @@ from mtui.messages import LocationChangedMessage
 
 from tests.prompt import make_cp
 
-from .utils import ConfigFake
+from ..utils import ConfigFake
+
 
 def test_happy():
     """
@@ -18,11 +19,12 @@ def test_happy():
     new = "foolocation"
     ok_(old != new, "precondition check")
 
-    cp = make_cp(config = c)
+    cp = make_cp(config=c)
     cp.do_set_location(new)
 
     eq_(cp.log.infos, [LocationChangedMessage(old, new)])
     eq_(c.location, new)
+
 
 def test_message():
     """

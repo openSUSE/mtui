@@ -2,8 +2,8 @@
 
 from nose.tools import eq_
 
-from .utils import ConfigFake
-from .prompt import make_cp
+from ..utils import ConfigFake
+from ..prompt import make_cp
 
 try:
     from itertools import zip_longest

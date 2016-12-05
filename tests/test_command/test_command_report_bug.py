@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 from nose.tools import eq_
-from nose.tools import ok_
 
 from errno import ENOENT
 from subprocess import Popen
@@ -13,10 +12,10 @@ from mtui.messages import UnexpectedlyFastCleanExitFromXdgOpen
 
 from tests.prompt import make_cp
 
-from .utils import ConfigFake
-from .utils import LogFake
-from .utils import SysFake
-from .utils import unused
+from ..utils import ConfigFake
+from ..utils import LogFake
+from ..utils import SysFake
+from ..utils import unused
 
 def make(args, **kw):
     c = kw.pop('config', None) or ConfigFake()

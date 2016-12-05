@@ -16,8 +16,8 @@ from mtui.commands import Command
 
 from tests.prompt import make_cp
 
-from .utils import SysFake
-from .utils import unused
+from ..utils import SysFake
+from ..utils import unused
 
 OLD_STYLE_CMD='update'
 NEW_STYLE_CMD='unlock'
