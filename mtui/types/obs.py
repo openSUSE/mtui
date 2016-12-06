@@ -1,5 +1,4 @@
 import re
-from itertools import count
 from mtui.utils import check_eq
 from mtui import messages
 from argparse import ArgumentTypeError
@@ -126,7 +125,7 @@ class DistURL(object):
             to be rather "<package-name>.<repository>"
 
         This is usable with OBS commands that expect this kind of
-        format, like those in source_diff. However, if you need really
+        format. However, if you need really
         just the <package-name> you need to find another way or how to
         reliably parse this format into it's components.
     """

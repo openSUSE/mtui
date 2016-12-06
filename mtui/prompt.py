@@ -16,7 +16,6 @@ import re
 from traceback import format_exc
 
 from mtui import messages
-from mtui.rpmver import RPMFile
 from mtui.target import *
 from mtui.utils import *
 from mtui.refhost import *
@@ -24,7 +23,6 @@ import mtui.notification as notification
 from mtui import commands
 from .argparse import ArgsParseFailure
 from mtui.refhost import Attributes
-from mtui.types import obs
 from mtui.template import NullTestReport
 from mtui.template import OBSUpdateID
 from mtui.utils import requires_update
@@ -473,209 +471,6 @@ class CommandPrompt(cmd.Cmd):
 
         self.targets.report_timeout(self.display.list_timeout)
 
-    @requires_update
-    def do_source_extract(self, _):
-        """
-        Extracts current source RPMs to a local temporary directory.
-        """
-        self.metadata.extract_source_rpm()
-
-    @requires_update
-    def do_source_diff(self, args):
-        """
-        Creates a source diff between the updated package (read from
-        testreport) and the currently installed package on the SUT.
-
-        If the diff needs to be against the latest released package,
-        make sure to run "prepare" first.
-
-        Diff type "source" creates a diff of the specfile and new patchfiles.
-
-        Diff type "build" creates a diff between the patched build
-        directories which may be architecture dependent.
-
-        The osc command line client needs to be installed first.
-
-        source_diff <type>
-        Keyword arguments:
-        type     -- "build" or "source" diff
-        """
-
-        targets, mode = self._parse_args(args, str)
-
-        if mode not in ['source', 'build']:
-            self.parse_error(self.do_source_diff, args)
-            return
-
-        try:
-            import osc
-            from osc import commandline
-        except:
-            self.log.error(
-                'missing osc module. please install osc and setup an account.')
-            return
-
-        api_config_options = {
-            'https://api.suse.de':
-            {'http_headers': [], 'sslcertck': True, 'user': 'qa', 'pass':
-             'qa'}}
-        osc.conf.config['api_host_options'] = api_config_options
-        osc.conf.config['debug'] = 0
-        osc.conf.config['verbose'] = 0
-        osc.conf.config['http_debug'] = 0
-
-        updated = {}
-        installed = {}
-        tmpdir = self.metadata.local_wd()
-        dstdir = self.metadata.report_wd()
-
-        if not glob.glob(os.path.join(tmpdir, '*', '*.spec')):
-            self.metadata.extract_source_rpm()
-
-        for rpmfile in glob.glob(os.path.join(tmpdir, '*.src.rpm')):
-            try:
-                rpmf = RPMFile(rpmfile)
-            except Exception as error:
-                self.log.critical('failed to open %s: %s' % (rpmfile, error))
-                if unicode(error) == u'public key not available':
-                    self.log.critical('Public key is not available.')
-                    self.log.critical(
-                        'In order to import new keys, you should run the following command as root:')
-                    self.log.critical(
-                        'cd /tmp; wget -q -r -nd -l1 --no-parent -A "*.asc" http://download.suse.de/keys/; for i in *.asc; do rpm --import $i; done')
-                continue
-
-            try:
-                durl = obs.DistURL(rpmf.disturl)
-            except messages.ErrorMessage as e:
-                self.log.warning(e)
-            else:
-                # NOTE: it's important not to confuse rpmf.name and
-                # durl.package. See L{obs.DistURL}
-                self.log.debug("rpmf.name: %s" % rpmf.name)
-                self.log.debug("durl.package: %s" % durl.package)
-                updated[rpmf.name] = durl
-
-        # if there are src.rpm package names which are not reflected by
-        # binary rpms, check all binary rpms for this specific
-        # src.rpm/disturl name
-        if [x for x in updated.keys() if x not in self.metadata.get_package_list()]:
-            search_list = self.metadata.get_package_list()
-        else:
-            search_list = list(updated.keys())
-
-        self.log.debug("search_list: {}".format(search_list))
-
-        for package in search_list:
-            targets.run('rpm -q --qf "%%{DISTURL}" %s' % package)
-
-            for target in targets.values():
-                line = target.lastout().split('\n')[0]
-
-                try:
-                    durl = obs.DistURL(line)
-                except messages.ErrorMessage as e:
-                    self.log.warning(e)
-                else:
-                    installed[package] = durl
-
-        self.log.debug("updated: {}".format(updated.keys()))
-        self.log.debug("installed: {}".format(installed.keys()))
-
-        for name in updated.keys():
-            try:
-                di = installed[name]
-                du = updated[name]
-                assert(di and du)
-            except (AssertionError, KeyError):
-                self.log.warning(
-                    'osc disturl not found for package %s. skipping.' %
-                    name)
-                continue
-
-            if di.commit == du.commit:
-                self.log.warning(
-                    messages.PackageRevisionHasntChangedWarning(name))
-                continue
-
-            diff = os.path.join(dstdir, '%s-%s.diff' % (name, mode))
-
-            if mode == 'source':
-                with open(diff, 'w+') as f:
-                    try:
-                        f.write(
-                            osc.core.server_diff(
-                                'https://api.suse.de',
-                                di.project,
-                                di.package,
-                                di.commit,
-                                du.project,
-                                du.package,
-                                du.commit,
-                                unified=True))
-                    except Exception as error:
-                        self.log.error('failed to diff packages: %s', error)
-                        return
-
-                self.log.info('wrote diff locally to %s' % diff)
-
-            elif mode == 'build':
-                targets.run('which osc')
-                for target in targets:
-                    if targets[target].lastexit() != 0:
-                        self.log.error(
-                            'osc is missing on %s. skipping.' %
-                            target)
-
-                for state in ['new', 'old']:
-                    sourcedir = os.path.join(tmpdir, name, state)
-                    builddir = os.path.join(tmpdir, name, state, 'BUILD')
-                    disturl = du.disturl if state == 'new' else di.disturl
-
-                    targets.run(
-                        'echo "[general]\n[https://api.suse.de]\nuser = qa\npass = qa" >/tmp/osc.mtui')
-                    targets.run('mkdir -p %s' % builddir)
-                    targets.run(
-                        'cd %s; osc -c /tmp/osc.mtui -q -A "https://api.suse.de" co -c %s' %
-                        (sourcedir, disturl))
-                    targets.run(
-                        'rpmbuild --quiet --nodeps --define "_sourcedir %s/%s" --define "_builddir %s" -bp %s/%s/*.spec' %
-                        (sourcedir, name, builddir, sourcedir, name))
-
-                targets.run(
-                    'diff -x ".osc" -Naur %s/../old/BUILD %s/../new/BUILD > %s' %
-                    (sourcedir, sourcedir, diff))
-
-                self.log.info('wrote diff remotely to %s' % diff)
-
-    def complete_source_diff(self, text, line, begidx, endidx):
-        return [i for i in ['source', 'build'] if i.startswith(text)]
-
-    @requires_update
-    def do_source_verify(self, args):
-        """
-        Verifies SPECFILE content. Makes sure that every Patch entry
-        is applied.
-
-        source_verify
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            self.parse_error(self.do_source_verify, args)
-            return
-
-        self.metadata.list_patches(self.display.list_patches)
-
-    def complete_list_packages(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
     def do_list_update_commands(self, args):
         """
         List all commands which are invoked when applying updates on the
@@ -1953,13 +1748,9 @@ class CommandPrompt(cmd.Cmd):
 
         edit file,<filename>
         edit template
-        edit specfile
-        edit patch,<patchname>
         Keyword arguments:
         filename -- edit filename
         template -- edit template
-        specfile -- edit specfile
-        patch    -- edit patch
         """
 
         (command, _, filename) = args.partition(',')
@@ -1976,12 +1767,6 @@ class CommandPrompt(cmd.Cmd):
             path = filename
         elif command == 'template':
             path = self.metadata.path
-        elif command in ['specfile', 'patch']:
-            if command == 'specfile':
-                filename = '*.spec'
-            path = os.path.join(self.metadata.local_wd(), '*', filename)
-            if not glob.glob(path):
-                self.metadata.extract_source_rpm()
         else:
             self.parse_error(self.do_edit, args)
             return
@@ -2002,25 +1787,11 @@ class CommandPrompt(cmd.Cmd):
                 line,
                 begidx,
                 endidx)
-        if 'patch,' in line:
-            specfile = glob.glob(self.metadata.local_wd(), '*', '*.spec')
-            with open(specfile, 'r') as spec:
-                name = re.findall('Name:\W+(.*)', spec.read())[0]
-                spec.seek(0)
-                return [
-                    i for i in [
-                        s.replace(
-                            'name}',
-                            name) for s in re.findall(
-                            'Patch\d*:\W+(.*)',
-                            spec.read())] if i.startswith(text)]
         else:
             return [
                 i for i in [
                     'file,',
-                    'template',
-                    'specfile',
-                    'patch,'] if i.startswith(text)]
+                    'template'] if i.startswith(text)]
 
     @requires_update
     def do_export(self, args):

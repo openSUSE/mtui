@@ -189,20 +189,6 @@ class CompareScriptCrashed(CompareScriptError):
         )
 
 
-class FailedToExtractSrcRPM(SystemCommandError):
-    _message = "Failed to extract source rpm."
-
-
-class SrcRPMExtractedMessage(UserMessage):
-
-    def __init__(self, fname, dir):
-        self.fname = fname
-        self.dir = dir
-
-    def __str__(self):
-        return 'Extracted {0} into {1}'.format(self.fname, self.dir)
-
-
 class LocationChangedMessage(UserMessage):
 
     def __init__(self, old, new):
