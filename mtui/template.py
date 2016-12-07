@@ -27,8 +27,6 @@ from mtui import utils
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types.obs import RequestReviewID
 from mtui.five import with_metaclass
-from mtui.messages import FailedToExtractSrcRPM
-from mtui.messages import SrcRPMExtractedMessage
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
@@ -591,44 +589,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
         from contextlib import closing
         with open(into, 'wb') as dst, closing(urlopen(from_)) as src:
             dst.writelines(src)
-
-    def download_source_rpm(self):
-        try:
-            with open(self.report_wd('packages-list.txt', filepath=True), 'r') as fd:
-                paths = dict()
-                for line in fd:
-                    tail = line.rstrip()
-                    if not tail.endswith('.src.rpm'):
-                        continue
-                    _, fname = split(tail)
-                    if fname in paths:
-                        continue
-                    url = '%s/%s' % (self.repository.rstrip('/'), tail)
-                    path = '%s/%s' % (self.local_wd(), basename(tail))
-                    self.download_file(url, into=path)
-                    paths[fname] = path
-                return paths
-        except Exception as e:
-            self.log.error("Failed to download source rpm")
-            self.log.debug(format_exc(e))
-            return dict()
-
-    def extract_source_rpm(self):
-        rpms = self.download_source_rpm()
-        for srpm, path in rpms.items():
-            self.log.info("Extracting %s" % srpm)
-            name = RPMFile(path).name
-            dest = '%s/%s' % (self.local_wd(), name)
-            utils.mkdir_p(dest)
-            with chdir(dest):
-                cmd = 'rpm2cpio %s | cpio -idmu --no-absolute-filenames --quiet' % path
-                rc = os.system(cmd)
-                if rc:
-                    raise FailedToExtractSrcRPM(rc, cmd)
-                self.log.info(
-                    SrcRPMExtractedMessage(
-                        srpm, '%s/%s' %
-                        (self.local_wd(), name)))
 
     def load_testopia(self, *packages):
         try:
