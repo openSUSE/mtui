@@ -65,7 +65,8 @@ class ListPackages(Command):
                 raise
 
         pkgs = list(self.metadata.packages.keys()
-                    ) if self.metadata else self.args.packages
+                    ) if self.metadata else []
+        pkgs += self.args.packages
 
         if not pkgs:
             raise messages.MissingPackagesError()
