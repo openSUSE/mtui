@@ -117,6 +117,9 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListPackages)
         self._add_subcommand(commands.ReportBug)
         self._add_subcommand(commands.Commit)
+        self._add_subcommand(commands.ListBugs)
+        self._add_subcommand(commands.ListHosts)
+        self._add_subcommand(commands.ListLocks)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -387,21 +390,6 @@ class CommandPrompt(cmd.Cmd):
     def complete_remove_host(self, text, line, begidx, endidx):
         return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
-    def do_list_hosts(self, args):
-        """
-        Lists all connected hosts including the system types and their
-        current state. State could be "Enabled", "Disabled" or "Dryrun".
-
-        list_hosts
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            return self.parse_error(self.do_list_hosts, args)
-
-        self.targets.report_self(self.display.list_host)
-
     def do_list_history(self, args):
         """
         Lists a history of mtui events on the target hosts like installing
@@ -440,22 +428,6 @@ class CommandPrompt(cmd.Cmd):
         return self.complete_enabled_hostlist_with_all(
             text, line, begidx, endidx, [
                 'connect', 'disconnect', 'install', 'update', 'downgrade'])
-
-    def do_list_locks(self, args):
-        """
-        Lists lock state of all connected hosts
-
-        list_hosts
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            return self.parse_error(self.do_list_locks, args)
-
-        targets, _ = self._parse_args(args, None)
-
-        targets.report_locks(self.display.list_locks)
 
     def do_list_timeout(self, args):
         """
@@ -737,24 +709,6 @@ class CommandPrompt(cmd.Cmd):
                 line,
                 begidx,
                 endidx)
-
-    @requires_update
-    def do_list_bugs(self, args):
-        """
-        Lists related bugs and corresponding Bugzilla URLs.
-
-        list_bugs
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            self.parse_error(self.do_list_bugs, args)
-            return
-
-        self.metadata.list_bugs(
-            self.display.list_bugs,
-            self.config.bugzilla_url)
 
     @requires_update
     def do_list_metadata(self, args):

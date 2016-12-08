@@ -8,3 +8,4 @@ from mtui.commands.hostsunlock import HostsUnlock
 from mtui.commands.listpackages import ListPackages
 from mtui.commands.reportbug import ReportBug
 from mtui.commands.whoami import Whoami
+from mtui.commands.simplelists import ListBugs, ListHosts, ListLocks
