@@ -39,6 +39,8 @@ class Command(with_metaclass(ABCMeta, object)):
         self.config = config
         self.prompt = prompt
         self.metadata = prompt.metadata
+        self.display = prompt.display
+        self.targets = prompt.targets
 
     @classmethod
     def parse_args(cls, args, sys):

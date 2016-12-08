@@ -18,6 +18,8 @@ from tests.prompt import make_cp
 
 from ..utils import SysFake
 from ..utils import unused
+from ..utils import PromptFake
+
 
 OLD_STYLE_CMD='update'
 NEW_STYLE_CMD='unlock'
@@ -119,9 +121,6 @@ def test_command_println():
     class ComMock(Command):
         def run(self):
             pass
-
-    class PromptFake:
-        metadata = None
 
     c = ComMock(None, None, None, SysFake(unused), None, PromptFake())
     c.println("a")

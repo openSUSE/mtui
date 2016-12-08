@@ -1,13 +1,11 @@
-from nose.tools import ok_, eq_
+from nose.tools import eq_
 
 from mtui.commands import Whoami
 from ..utils import ConfigFake
 from ..utils import SysFake
-
+from ..utils import PromptFake
 
 def test_whoami():
-    class PromptFake:
-        metadata = None
 
     cg = ConfigFake(dict(session_user = 'foo'))
     c = Whoami([], [], cg, SysFake(), None, PromptFake())
