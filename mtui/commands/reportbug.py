@@ -72,5 +72,5 @@ class ReportBug(Command):
         return parser
 
     @staticmethod
-    def complete(_, text, line, begidx, endidx):
+    def complete(hosts, config, log, text, line, begidx, endidx):
         return complete_choices([("-p", "--print-url"), ], line, text)

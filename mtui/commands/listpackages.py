@@ -4,6 +4,7 @@
 from mtui.commands import Command
 from mtui.utils import blue, yellow, red, green
 from mtui.utils import requires_update
+from mtui.utils import complete_choices
 from mtui import messages
 from mtui.messages import HostIsNotConnectedError, ListPackagesAllHost
 from mtui.rpmver import RPMVersion
@@ -93,8 +94,8 @@ class ListPackages(Command):
             self.println()
 
     def printPVLN(self, package, version, state):
-        self.println('{0:30}: {1:15} {2}'.format(
-            package,
-            version,
-            state
-        ))
+        self.println('{0:30}: {1:15} {2}'.format(package, version, state ))
+
+    @staticmethod
+    def complete(hosts, config, log, text, line, begidx, endidx):
+        return complete_choices([("-p","--packages"),("-w","--wanted"), ], line, text)

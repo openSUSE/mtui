@@ -75,7 +75,7 @@ class Command(with_metaclass(ABCMeta, object)):
         return p
 
     @staticmethod
-    def complete(hosts, text, line, begidx, endidx):
+    def complete(hosts, config, log, text, line, begidx, endidx):
         """
         :type hosts: L{mtui.target.HostsGroup}
         :returns: callable suitable for tab completion

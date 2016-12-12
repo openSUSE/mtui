@@ -120,6 +120,8 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListBugs)
         self._add_subcommand(commands.ListHosts)
         self._add_subcommand(commands.ListLocks)
+        self._add_subcommand(commands.SessionName)
+        self._add_subcommand(commands.SetLocation)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -214,6 +216,8 @@ class CommandPrompt(cmd.Cmd):
                         return c.complete(
                             self.targets.select(
                                 enabled=True),
+                            self.config,
+                            self.log,
                             *args,
                             **kw)
                     except Exception as e:
@@ -1035,24 +1039,6 @@ class CommandPrompt(cmd.Cmd):
             begidx,
             endidx)
 
-    def do_set_session_name(self, args):
-        """
-        Set optional mtui session name as part of the prompt string.
-        This should help finding the corrent mtui session if multiple
-        sessions are active.
-
-        set_session_name [name]
-        Keyword arguments:
-        name     -- session name
-        """
-
-        session = args.strip()
-        if not session:
-            session = self.metadata.id
-
-        self.set_prompt(session)
-        self.session = session
-
     def set_prompt(self, session=None):
         self.session = session
         session = ":"+str(session) if session else ''
@@ -1112,29 +1098,6 @@ class CommandPrompt(cmd.Cmd):
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
-
-    def do_set_location(self, args):
-        """
-        Change current reference host location to another site.
-
-        set_location <site>
-        Keyword arguments:
-        site     -- location name
-        """
-
-        args = args.strip()
-        if not args:
-            self.parse_error(self.do_set_location, args)
-            return
-
-        old = self.config.location
-        self.config.location = args
-        self.log.info(messages.LocationChangedMessage(old, args))
-
-    def complete_set_location(self, text, line, begidx, endidx):
-        refhost = self._refhosts()
-        return [
-            i for i in refhost.get_locations() if i.startswith(text) and i not in line]
 
     def do_set_host_lock(self, args):
         """
