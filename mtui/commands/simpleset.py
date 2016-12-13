@@ -66,9 +66,9 @@ class SetLocation(Command):
         self.log.info(messages.LocationChangedMessage(old, new))
 
     @staticmethod
-    def complete(hosts, config, log, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx):
 
-        loc = RefhostsFactory(config, log).get_locations()
+        loc = RefhostsFactory(state['config'],state['log']).get_locations()
 
         locations = [[str(x) for x in loc]]
 
@@ -111,7 +111,7 @@ class SetLogLevel(Command):
         self.log.info('Log level is set to {}'.format(new))
 
     @staticmethod
-    def complete(hosts, config, log, text, line, begidx, endidx):
+    def complete(_, text, line, begidx, endidx):
         return complete_choices(
             [('warning',), ('info',), ('debug',)], line, text)
 
@@ -162,5 +162,5 @@ class SetTimeout(Command):
             self.log.info('Timeout on {} is set to {}'.format(target, value))
 
     @staticmethod
-    def complete(hosts, config, log, text, line, begidx, endidx):
-        return complete_choices([], line, text, hosts.names())
+    def complete(state, text, line, begidx, endidx):
+        return complete_choices([], line, text, state['hosts'].names())

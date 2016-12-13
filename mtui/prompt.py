@@ -202,7 +202,7 @@ class CommandPrompt(cmd.Cmd):
                     except ArgsParseFailure:
                         return
                     c(
-                        args, self.targets.select(enabled=True),
+                        args, self.targets.select(),
                         self.config, self.sys, self.log, self
                     ).run()
                 return do
@@ -214,11 +214,11 @@ class CommandPrompt(cmd.Cmd):
 
                 def complete(*args, **kw):
                     try:
-                        return c.complete(
-                            self.targets.select(
-                                enabled=True),
-                            self.config,
-                            self.log,
+                        return c.complete({
+                            'hosts': self.targets.select(),
+                            'metadata': self.metadata,
+                            'config': self.config,
+                            'log': self.log},
                             *args,
                             **kw)
                     except Exception as e:

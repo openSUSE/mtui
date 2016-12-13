@@ -48,5 +48,5 @@ class Commit(Command):
             self.log.debug(format_exc())
 
     @staticmethod
-    def complete(hosts, config, log, text, line, begidx, endidx):
+    def complete(_, text, line, begidx, endidx):
         return complete_choices([('-m', '--msg'), ], line, text)

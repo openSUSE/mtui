@@ -30,14 +30,12 @@ class HostsUnlock(Command):
         hosts.unlock(force=args.force)
 
     @staticmethod
-    def complete(hosts, conig, log, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx):
         return complete_choices(
             [
-                ("-h", "--help"),
-                ("-a",),
                 ("-f", "--force")
             ],
             line,
             text,
-            hosts.names()
+            state['hosts'].names()
         )

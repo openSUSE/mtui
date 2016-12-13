@@ -98,6 +98,6 @@ class ListPackages(Command):
         self.println('{0:30}: {1:15} {2}'.format(package, version, state))
 
     @staticmethod
-    def complete(hosts, config, log, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx):
         return complete_choices([("-p", "--package"), ("-w", "--wanted"), ],
-                                line, text, hosts.names())
+                                line, text, state['hosts'].names())
