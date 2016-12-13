@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 
+import logging
+
 from mtui.commands import Command
 from mtui.utils import complete_choices
 from mtui import messages
@@ -70,3 +72,44 @@ class SetLocation(Command):
         locations = [[str(x) for x in loc]]
 
         return complete_choices(locations, line, text)
+
+
+class SetLogLevel(Command):
+    """
+       Changes the current MTUI loglevel "info" or "warning"
+       or "debug". To enable debug messages, one can set the loglevel
+       to "debug". This could be handy for longer running commands as
+       the output is shown in realtime. The "warning" loglevel prints
+       just basic error or warning conditions. Therefore it's not
+       recommended to use the "warning" loglevel.
+    """
+    command = 'set_log_level'
+
+    @classmethod
+    def _add_arguments(cls, parser):
+
+        parser.add_argument(
+            "level",
+            action="store",
+            type=str,
+            nargs=1,
+            choices=['info', 'warning', 'debug'],
+            help="log level for mtui - info, warning or debug")
+
+        return parser
+
+    def run(self):
+        levels = {
+            'warning': logging.WARNING,
+            'info': logging.INFO,
+            'debug': logging.DEBUG}
+        new = self.args.level[0]
+
+        self.log.setLevel(level=levels[new])
+
+        self.log.info('Log level is set to {}'.format(new))
+
+    @staticmethod
+    def complete(hosts, config, log, text, line, begidx, endidx):
+        return complete_choices(
+            [('warning',),('info',),('debug',)], line, text)

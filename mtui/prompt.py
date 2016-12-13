@@ -7,7 +7,6 @@ from datetime import date
 
 import os
 import cmd
-import logging
 import readline
 import subprocess
 import glob
@@ -122,6 +121,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListLocks)
         self._add_subcommand(commands.SessionName)
         self._add_subcommand(commands.SetLocation)
+        self._add_subcommand(commands.SetLogLevel)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -1215,37 +1215,6 @@ class CommandPrompt(cmd.Cmd):
                     'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    def do_set_log_level(self, args):
-        """
-        Changes the current default MTUI loglevel "info" to "warning"
-        or "debug". To enable debug messages, one can set the loglevel
-        to "debug". This could be handy for longer running commands as
-        the output is shown in realtime. The "warning" loglevel prints
-        just basic error or warning conditions. Therefore it's not
-        recommended to use the "warning" loglevel.
-
-        set_log_level <loglevel>
-        Keyword arguments:
-        loglevel   -- warning, info or debug
-        """
-
-        levels = {
-            'warning': logging.WARNING,
-            'info': logging.INFO,
-            'debug': logging.DEBUG}
-
-        if args in levels.keys():
-            self.log.setLevel(level=levels[args])
-        else:
-            self.parse_error(self.do_set_log_level, args)
-
-    def complete_set_log_level(self, text, line, begidx, endidx):
-        return [
-            i for i in [
-                'warning',
-                'info',
-                'debug'] if i.startswith(text) and i not in line]
 
     def do_set_timeout(self, args):
         """
