@@ -29,7 +29,7 @@ class ListPackages(Command):
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            "-p", "--packages",
+            "-p", "--package",
             type=str,
             action='append',
             default=[],
@@ -58,6 +58,7 @@ class ListPackages(Command):
         try:
             hosts = self.hosts.select(self.args.hosts)
         except HostIsNotConnectedError as e:
+            # compact with old behaviour ..
             if e.host == "all":
                 self.log.error(e)
                 self.log.info(ListPackagesAllHost())
@@ -67,7 +68,7 @@ class ListPackages(Command):
 
         pkgs = list(self.metadata.packages.keys()
                     ) if self.metadata else []
-        pkgs += self.args.packages
+        pkgs += self.args.package
 
         if not pkgs:
             raise messages.MissingPackagesError()
@@ -94,8 +95,9 @@ class ListPackages(Command):
             self.println()
 
     def printPVLN(self, package, version, state):
-        self.println('{0:30}: {1:15} {2}'.format(package, version, state ))
+        self.println('{0:30}: {1:15} {2}'.format(package, version, state))
 
     @staticmethod
     def complete(hosts, config, log, text, line, begidx, endidx):
-        return complete_choices([("-p","--packages"),("-w","--wanted"), ], line, text)
+        return complete_choices([("-p", "--package"), ("-w", "--wanted"), ],
+                                line, text, hosts.names())

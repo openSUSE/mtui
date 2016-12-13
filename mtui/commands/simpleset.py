@@ -6,6 +6,7 @@ from mtui.commands import Command
 from mtui.utils import complete_choices
 from mtui import messages
 from mtui.refhost import RefhostsFactory
+from mtui.messages import HostIsNotConnectedError
 
 
 class SessionName(Command):
@@ -112,4 +113,54 @@ class SetLogLevel(Command):
     @staticmethod
     def complete(hosts, config, log, text, line, begidx, endidx):
         return complete_choices(
-            [('warning',),('info',),('debug',)], line, text)
+            [('warning',), ('info',), ('debug',)], line, text)
+
+
+class SetTimeout(Command):
+    """
+    Changes the current execution timeout for a target host.
+    When the timeout limit was hit the user is asked to wait
+    for the current command to return or to proceed with the
+    next one.
+    The timeout value is set in seconds. To disable the
+    timeout set it to "0".
+    """
+
+    command = 'set_timeout'
+
+    @classmethod
+    def _add_arguments(cls, parser):
+
+        parser.add_argument(
+            "timeout",
+            action='store',
+            type=int,
+            nargs=1,
+            help='Timeout in sec, "0" disables it')
+
+        cls._add_hosts_arg(parser)
+
+        return parser
+
+    def run(self):
+
+        value = self.args.timeout[0]
+
+        try:
+            targets = self.hosts.select(self.args.hosts)
+        except HostIsNotConnectedError as e:
+            if e.host == "all":
+                self.log.error(e)
+                self.log.info("Enabling all hosts, option 'all' is deprecated")
+
+                targets = self.hosts.select(enabled=True)
+            else:
+                raise
+
+        for target in targets:
+            targets[target].set_timeout(value)
+            self.log.info('Timeout on {} is set to {}'.format(target, value))
+
+    @staticmethod
+    def complete(hosts, config, log, text, line, begidx, endidx):
+        return complete_choices([], line, text, hosts.names())

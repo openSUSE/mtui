@@ -122,6 +122,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.SessionName)
         self._add_subcommand(commands.SetLocation)
         self._add_subcommand(commands.SetLogLevel)
+        self._add_subcommand(commands.SetTimeout)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -1215,40 +1216,6 @@ class CommandPrompt(cmd.Cmd):
                     'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    def do_set_timeout(self, args):
-        """
-        Changes the current execution timeout for a target host.
-        When the timeout limit was hit the user is asked to wait
-        for the current command to return or to proceed with the
-        next one.
-        The timeout value is set in seconds. To disable the
-        timeout set it to "0".
-
-        set_timeout <hostname,timeout>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        timeout  -- timeout value in seconds
-        """
-
-        targets, timeout = self._parse_args(args, str)
-
-        if targets and timeout:
-            try:
-                value = int(timeout)
-            except Exception:
-                self.log.error('wrong timeout value: %s' % timeout)
-                self.parse_error(self.do_set_timeout, args)
-                return
-
-            for target in targets:
-                targets[target].set_timeout(value)
-        else:
-
-            self.parse_error(self.do_set_timeout, args)
-
-    def complete_set_timeout(self, text, line, begidx, endidx):
-        return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
     @requires_update
     def do_set_repo(self, args):
