@@ -41,3 +41,25 @@ class ListHosts(Command):
     def run(self):
 
         self.targets.report_self(self.display.list_host)
+
+
+class ListTimeout(Command):
+    """
+    Prints the current timeout values per host in seconds.
+    """
+    command = 'list_timeout'
+
+    def run(self):
+
+        self.targets.report_timeout(self.display.list_timeout)
+
+
+class ListUpdateCommands(Command):
+    """
+    List all commands which are invoked when applying updates on the
+    target hosts.
+    """
+    command = 'list_update_commands'
+
+    def run(self):
+        self.metadata.list_update_commands(self.targets, self.println)

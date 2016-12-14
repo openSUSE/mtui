@@ -123,6 +123,8 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.SetLocation)
         self._add_subcommand(commands.SetLogLevel)
         self._add_subcommand(commands.SetTimeout)
+        self._add_subcommand(commands.ListTimeout)
+        self._add_subcommand(commands.ListUpdateCommands)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -433,35 +435,6 @@ class CommandPrompt(cmd.Cmd):
         return self.complete_enabled_hostlist_with_all(
             text, line, begidx, endidx, [
                 'connect', 'disconnect', 'install', 'update', 'downgrade'])
-
-    def do_list_timeout(self, args):
-        """
-        Prints the current timeout values per host in seconds.
-
-        list_timeout
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            return self.parse_error(self.do_list_timeout, args)
-
-        self.targets.report_timeout(self.display.list_timeout)
-
-    def do_list_update_commands(self, args):
-        """
-        List all commands which are invoked when applying updates on the
-        target hosts.
-
-        list_update_commands
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            self.parse_error(self.do_list_update_commands, args)
-        else:
-            self.metadata.list_update_commands(self.targets, self.println)
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
