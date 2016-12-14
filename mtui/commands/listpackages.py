@@ -6,7 +6,6 @@ from mtui.utils import blue, yellow, red, green
 from mtui.utils import requires_update
 from mtui.utils import complete_choices
 from mtui import messages
-from mtui.messages import HostIsNotConnectedError, ListPackagesAllHost
 from mtui.rpmver import RPMVersion
 
 
@@ -55,16 +54,7 @@ class ListPackages(Command):
             self._run_just_wanted()
             return
 
-        try:
-            hosts = self.hosts.select(self.args.hosts)
-        except HostIsNotConnectedError as e:
-            # compact with old behaviour ..
-            if e.host == "all":
-                self.log.error(e)
-                self.log.info(ListPackagesAllHost())
-                return
-            else:
-                raise
+        hosts = self.parse_hosts(self.args.hosts)
 
         pkgs = list(self.metadata.packages.keys()
                     ) if self.metadata else []
@@ -99,5 +89,8 @@ class ListPackages(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices([("-p", "--package"), ("-w", "--wanted"), ],
-                                line, text, state['hosts'].names())
+        return complete_choices(
+            [("-p", "--package"),
+             ('-t', '--target'),
+             ("-w", "--wanted"), ],
+            line, text, state['hosts'].names())

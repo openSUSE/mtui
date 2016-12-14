@@ -29,10 +29,10 @@ def test_list_packages_all():
 
     cp.metadata  = OBSTestReport(c, l, unused)
     cp.metadata.packages = dict(foo = '1.2')
-    cp.onecmd("list_packages all")
+    cp.onecmd("list_packages -t all")
 
     eq_(cp.log.errors, [HostIsNotConnectedError('all')])
-    eq_(cp.log.infos, [ListPackagesAllHost()])
+    eq_(cp.log.infos, ["Using all hosts. Warning option 'all' is decaprated"])
 
 def test_list_packages_unavailable_host():
     """
@@ -50,7 +50,7 @@ def test_list_packages_unavailable_host():
     cp.metadata  = OBSTestReport(c, l, unused)
     cp.metadata.packages = dict(foo = '1.2')
     try:
-        cp.onecmd("list_packages unavailable")
+        cp.onecmd("list_packages -t unavailable")
     except HostIsNotConnectedError as e:
         eq_(cp.log.infos, [])
         eq_(e.host, 'unavailable')

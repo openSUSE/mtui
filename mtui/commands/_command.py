@@ -6,6 +6,7 @@ from abc import ABCMeta, abstractmethod
 
 from ..argparse import ArgumentParser
 from mtui.five import with_metaclass
+from mtui.messages import HostIsNotConnectedError
 
 
 class Command(with_metaclass(ABCMeta, object)):
@@ -97,9 +98,38 @@ class Command(with_metaclass(ABCMeta, object)):
     @classmethod
     def _add_hosts_arg(cls, parser):
         parser.add_argument(
-            'hosts',
-            metavar='host',
+            '-t', '--target',
+            dest='hosts',
+            action='append',
             type=str,
-            nargs='*',
             help='hosts to act on. If no hosts are' +
             ' given all enabled hosts are used.')
+
+    def parse_hosts(self, arg, henabled=True):
+        """
+        parses self.args.hosts
+        returns [str] with hosts, or connection error.
+        Handles decaprated 'all' alias
+
+        By default all selects only enabled hosts
+
+        use in run(self) ... etc
+        """
+
+        try:
+            if arg:
+                targets = self.hosts.select(arg)
+            else:
+                targets = self.hosts.select(enabled=henabled)
+        except HostIsNotConnectedError as e:
+            if e.host == 'all':
+                self.log.error(e)
+                self.log.info(
+                    "Using all hosts. Warning option 'all' is decaprated")
+
+                targets = self.hosts.select(enabled=henabled)
+
+            else:
+                raise
+
+        return targets

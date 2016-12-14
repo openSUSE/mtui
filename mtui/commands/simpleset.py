@@ -6,7 +6,6 @@ from mtui.commands import Command
 from mtui.utils import complete_choices
 from mtui import messages
 from mtui.refhost import RefhostsFactory
-from mtui.messages import HostIsNotConnectedError
 
 
 class SessionName(Command):
@@ -94,13 +93,14 @@ class SetLogLevel(Command):
             action="store",
             type=str,
             nargs=1,
-            choices=['info', 'warning', 'debug'],
+            choices=['info', 'error', 'warning', 'debug'],
             help="log level for mtui - info, warning or debug")
 
         return parser
 
     def run(self):
         levels = {
+            'error': logging.ERROR,
             'warning': logging.WARNING,
             'info': logging.INFO,
             'debug': logging.DEBUG}
@@ -113,7 +113,7 @@ class SetLogLevel(Command):
     @staticmethod
     def complete(_, text, line, begidx, endidx):
         return complete_choices(
-            [('warning',), ('info',), ('debug',)], line, text)
+            [('warning',), ('info',), ('debug',), ('error', ), ], line, text)
 
 
 class SetTimeout(Command):
@@ -146,16 +146,7 @@ class SetTimeout(Command):
 
         value = self.args.timeout[0]
 
-        try:
-            targets = self.hosts.select(self.args.hosts)
-        except HostIsNotConnectedError as e:
-            if e.host == "all":
-                self.log.error(e)
-                self.log.info("Enabling all hosts, option 'all' is deprecated")
-
-                targets = self.hosts.select(enabled=True)
-            else:
-                raise
+        targets = self.parse_hosts(self.args.hosts)
 
         for target in targets:
             targets[target].set_timeout(value)
@@ -163,4 +154,4 @@ class SetTimeout(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices([], line, text, state['hosts'].names())
+        return complete_choices([('-t', '--target'), ], line, text, state['hosts'].names())
