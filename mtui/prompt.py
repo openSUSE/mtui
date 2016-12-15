@@ -125,6 +125,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.SetTimeout)
         self._add_subcommand(commands.ListTimeout)
         self._add_subcommand(commands.ListUpdateCommands)
+        self._add_subcommand(commands.SetRepo)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -1189,41 +1190,6 @@ class CommandPrompt(cmd.Cmd):
                     'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    @requires_update
-    def do_set_repo(self, args):
-        """ Add or remove update repository from hosts
-
-        set_repo <hostname>[,hostname,...],<operation>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        operation  --  'add' or 'remove'
-        """
-
-        targets, operation = self._parse_args(args, str)
-
-        if operation not in ["add", "remove"]:
-            raise ValueError("invalid operation `%s`" % operation)
-
-        if not (targets and operation):
-            self.parse_error(self.do_set_repo, args)
-            return
-
-        with LockedTargets([self.targets[x] for x in targets]):
-            for t in [self.targets[x] for x in targets]:
-                t.set_repo(operation, self.metadata)
-
-    def complete_set_repo(self, text, line, begidx, endidx):
-        if line.count(','):
-            return self.complete_enabled_hostlist_with_all(
-                text, line, begidx, endidx, [
-                    'add', 'remove'])
-        else:
-            return self.complete_enabled_hostlist_with_all(
-                text,
-                line,
-                begidx,
-                endidx)
 
     @requires_update
     def do_install(self, args):
