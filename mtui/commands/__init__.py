@@ -14,3 +14,4 @@ from mtui.commands.simpleset import SetLocation, SessionName, SetLogLevel, SetTi
 from mtui.commands.setrepo import SetRepo
 from mtui.commands.update import Update
 from mtui.commands.removehost import RemoveHost
+from mtui.commands.downgrade import Downgrade

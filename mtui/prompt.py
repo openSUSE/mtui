@@ -130,6 +130,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.RemoveHost)
         self._add_subcommand(commands.ListSessions)
         self._add_subcommand(commands.ListMetadata)
+        self._add_subcommand(commands.Downgrade)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -1228,43 +1229,6 @@ class CommandPrompt(cmd.Cmd):
             self.log.info('done')
 
     def complete_uninstall(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
-    def do_downgrade(self, args):
-        """
-        Downgrades all related packages to the last released version (using
-        the UPDATE channel). This does not work for SLES 9 hosts, though.
-
-        downgrade <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        targets, _ = self._parse_args(args, None)
-
-        if (not targets) or _:
-            self.parse_error(self.do_downgrade, args)
-            return
-
-        self.log.info('downgrading')
-        try:
-            self.metadata.perform_downgrade(targets)
-        except Exception as e:
-            self.log.critical('failed to downgrade target systems')
-            self.log.debug(format_exc(e))
-            return
-        except KeyboardInterrupt:
-            self.log.info('downgrade process canceled')
-            return
-        else:
-            self.log.info('done')
-
-    def complete_downgrade(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(
             text,
             line,
