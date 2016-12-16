@@ -119,7 +119,7 @@ def test_has_default_popen():
 
 def test_completer():
     def test(in_, out):
-        eq_(set(ReportBug.complete([], *in_)), set(out))
+        eq_(set(ReportBug.complete({}, *in_)), set(out))
 
     xs = [
         (['--', 'report-bug --', 11, 13], ["--print-url"]),

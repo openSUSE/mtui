@@ -27,6 +27,12 @@ from random import randint,sample
 
 unused = None
 
+class PromptFake(object):
+    def __init__(self):
+        self.metadata = None
+        self.display = None
+        self.targets = None
+
 class SysFake(object):
     def __init__(self, argv=unused):
         self.argv = argv

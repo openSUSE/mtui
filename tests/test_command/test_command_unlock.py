@@ -6,6 +6,7 @@ from ..utils import unused
 
 
 def test_unlock_parser():
-    hosts = ["foo.suse.de", "bar.suse.de"]
+    hosts = ["-t foo.suse.de", "-t bar.suse.de"]
+    cleanhosts = ["foo.suse.de", "bar.suse.de"]
     args = HostsUnlock.parse_args(" ".join(hosts), unused)
-    eq_(args.hosts, hosts)
+    eq_(args.hosts, cleanhosts)

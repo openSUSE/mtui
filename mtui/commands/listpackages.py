@@ -4,8 +4,8 @@
 from mtui.commands import Command
 from mtui.utils import blue, yellow, red, green
 from mtui.utils import requires_update
+from mtui.utils import complete_choices
 from mtui import messages
-from mtui.messages import HostIsNotConnectedError, ListPackagesAllHost
 from mtui.rpmver import RPMVersion
 
 
@@ -28,7 +28,7 @@ class ListPackages(Command):
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            "-p", "--packages",
+            "-p", "--package",
             type=str,
             action='append',
             default=[],
@@ -54,18 +54,11 @@ class ListPackages(Command):
             self._run_just_wanted()
             return
 
-        try:
-            hosts = self.hosts.select(self.args.hosts)
-        except HostIsNotConnectedError as e:
-            if e.host == "all":
-                self.log.error(e)
-                self.log.info(ListPackagesAllHost())
-                return
-            else:
-                raise
+        hosts = self.parse_hosts(self.args.hosts)
 
         pkgs = list(self.metadata.packages.keys()
-                    ) if self.metadata else self.args.packages
+                    ) if self.metadata else []
+        pkgs += self.args.package
 
         if not pkgs:
             raise messages.MissingPackagesError()
@@ -92,8 +85,12 @@ class ListPackages(Command):
             self.println()
 
     def printPVLN(self, package, version, state):
-        self.println('{0:30}: {1:15} {2}'.format(
-            package,
-            version,
-            state
-        ))
+        self.println('{0:30}: {1:15} {2}'.format(package, version, state))
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx):
+        return complete_choices(
+            [("-p", "--package"),
+             ('-t', '--target'),
+             ("-w", "--wanted"), ],
+            line, text, state['hosts'].names())

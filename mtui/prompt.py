@@ -7,7 +7,6 @@ from datetime import date
 
 import os
 import cmd
-import logging
 import readline
 import subprocess
 import glob
@@ -117,6 +116,22 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListPackages)
         self._add_subcommand(commands.ReportBug)
         self._add_subcommand(commands.Commit)
+        self._add_subcommand(commands.ListBugs)
+        self._add_subcommand(commands.ListHosts)
+        self._add_subcommand(commands.ListLocks)
+        self._add_subcommand(commands.SessionName)
+        self._add_subcommand(commands.SetLocation)
+        self._add_subcommand(commands.SetLogLevel)
+        self._add_subcommand(commands.SetTimeout)
+        self._add_subcommand(commands.ListTimeout)
+        self._add_subcommand(commands.ListUpdateCommands)
+        self._add_subcommand(commands.SetRepo)
+        self._add_subcommand(commands.Update)
+        self._add_subcommand(commands.RemoveHost)
+        self._add_subcommand(commands.ListSessions)
+        self._add_subcommand(commands.ListMetadata)
+        self._add_subcommand(commands.Downgrade)
+
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -196,7 +211,7 @@ class CommandPrompt(cmd.Cmd):
                     except ArgsParseFailure:
                         return
                     c(
-                        args, self.targets.select(enabled=True),
+                        args, self.targets.select(),
                         self.config, self.sys, self.log, self
                     ).run()
                 return do
@@ -208,9 +223,11 @@ class CommandPrompt(cmd.Cmd):
 
                 def complete(*args, **kw):
                     try:
-                        return c.complete(
-                            self.targets.select(
-                                enabled=True),
+                        return c.complete({
+                            'hosts': self.targets.select(),
+                            'metadata': self.metadata,
+                            'config': self.config,
+                            'log': self.log},
                             *args,
                             **kw)
                     except Exception as e:
@@ -363,45 +380,6 @@ class CommandPrompt(cmd.Cmd):
 
         self.metadata.add_target(hostname, system)
 
-    def do_remove_host(self, args):
-        """
-        Disconnects from host and remove host from list. Warning: The host
-        log is purged as well. If the tester wants to preserve the log, it's
-        better to use the "set_host_state" command instead and set
-        the host to "disabled". Multible hosts can be specified.
-
-        remove_host <hostname>[,hostname,...]
-        Keyword arguments:
-        hostname -- hostname from the target list
-        """
-
-        if not args:
-            self.parse_error(self.do_remove_host, args)
-            return
-
-        targets, _ = self._parse_args(args, None)
-        for tgt in targets:
-            self.targets[tgt].close()
-            self.targets.pop(tgt)
-
-    def complete_remove_host(self, text, line, begidx, endidx):
-        return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    def do_list_hosts(self, args):
-        """
-        Lists all connected hosts including the system types and their
-        current state. State could be "Enabled", "Disabled" or "Dryrun".
-
-        list_hosts
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            return self.parse_error(self.do_list_hosts, args)
-
-        self.targets.report_self(self.display.list_host)
-
     def do_list_history(self, args):
         """
         Lists a history of mtui events on the target hosts like installing
@@ -440,51 +418,6 @@ class CommandPrompt(cmd.Cmd):
         return self.complete_enabled_hostlist_with_all(
             text, line, begidx, endidx, [
                 'connect', 'disconnect', 'install', 'update', 'downgrade'])
-
-    def do_list_locks(self, args):
-        """
-        Lists lock state of all connected hosts
-
-        list_hosts
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            return self.parse_error(self.do_list_locks, args)
-
-        targets, _ = self._parse_args(args, None)
-
-        targets.report_locks(self.display.list_locks)
-
-    def do_list_timeout(self, args):
-        """
-        Prints the current timeout values per host in seconds.
-
-        list_timeout
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            return self.parse_error(self.do_list_timeout, args)
-
-        self.targets.report_timeout(self.display.list_timeout)
-
-    def do_list_update_commands(self, args):
-        """
-        List all commands which are invoked when applying updates on the
-        target hosts.
-
-        list_update_commands
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            self.parse_error(self.do_list_update_commands, args)
-        else:
-            self.metadata.list_update_commands(self.targets, self.println)
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
@@ -737,36 +670,6 @@ class CommandPrompt(cmd.Cmd):
                 line,
                 begidx,
                 endidx)
-
-    @requires_update
-    def do_list_bugs(self, args):
-        """
-        Lists related bugs and corresponding Bugzilla URLs.
-
-        list_bugs
-        Keyword arguments:
-        None
-        """
-
-        if args:
-            self.parse_error(self.do_list_bugs, args)
-            return
-
-        self.metadata.list_bugs(
-            self.display.list_bugs,
-            self.config.bugzilla_url)
-
-    @requires_update
-    def do_list_metadata(self, args):
-        """
-        Lists patchinfo metadata like patch number, ReviewRequestID or packager.
-
-        list_metadata
-        Keyword arguments:
-        None
-        """
-
-        self.metadata.show_yourself(self.sys.stdout)
 
     @requires_update
     def do_list_versions(self, args):
@@ -1081,24 +984,6 @@ class CommandPrompt(cmd.Cmd):
             begidx,
             endidx)
 
-    def do_set_session_name(self, args):
-        """
-        Set optional mtui session name as part of the prompt string.
-        This should help finding the corrent mtui session if multiple
-        sessions are active.
-
-        set_session_name [name]
-        Keyword arguments:
-        name     -- session name
-        """
-
-        session = args.strip()
-        if not session:
-            session = self.metadata.id
-
-        self.set_prompt(session)
-        self.session = session
-
     def set_prompt(self, session=None):
         self.session = session
         session = ":"+str(session) if session else ''
@@ -1158,29 +1043,6 @@ class CommandPrompt(cmd.Cmd):
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
-
-    def do_set_location(self, args):
-        """
-        Change current reference host location to another site.
-
-        set_location <site>
-        Keyword arguments:
-        site     -- location name
-        """
-
-        args = args.strip()
-        if not args:
-            self.parse_error(self.do_set_location, args)
-            return
-
-        old = self.config.location
-        self.config.location = args
-        self.log.info(messages.LocationChangedMessage(old, args))
-
-    def complete_set_location(self, text, line, begidx, endidx):
-        refhost = self._refhosts()
-        return [
-            i for i in refhost.get_locations() if i.startswith(text) and i not in line]
 
     def do_set_host_lock(self, args):
         """
@@ -1299,106 +1161,6 @@ class CommandPrompt(cmd.Cmd):
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
-    def do_set_log_level(self, args):
-        """
-        Changes the current default MTUI loglevel "info" to "warning"
-        or "debug". To enable debug messages, one can set the loglevel
-        to "debug". This could be handy for longer running commands as
-        the output is shown in realtime. The "warning" loglevel prints
-        just basic error or warning conditions. Therefore it's not
-        recommended to use the "warning" loglevel.
-
-        set_log_level <loglevel>
-        Keyword arguments:
-        loglevel   -- warning, info or debug
-        """
-
-        levels = {
-            'warning': logging.WARNING,
-            'info': logging.INFO,
-            'debug': logging.DEBUG}
-
-        if args in levels.keys():
-            self.log.setLevel(level=levels[args])
-        else:
-            self.parse_error(self.do_set_log_level, args)
-
-    def complete_set_log_level(self, text, line, begidx, endidx):
-        return [
-            i for i in [
-                'warning',
-                'info',
-                'debug'] if i.startswith(text) and i not in line]
-
-    def do_set_timeout(self, args):
-        """
-        Changes the current execution timeout for a target host.
-        When the timeout limit was hit the user is asked to wait
-        for the current command to return or to proceed with the
-        next one.
-        The timeout value is set in seconds. To disable the
-        timeout set it to "0".
-
-        set_timeout <hostname,timeout>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        timeout  -- timeout value in seconds
-        """
-
-        targets, timeout = self._parse_args(args, str)
-
-        if targets and timeout:
-            try:
-                value = int(timeout)
-            except Exception:
-                self.log.error('wrong timeout value: %s' % timeout)
-                self.parse_error(self.do_set_timeout, args)
-                return
-
-            for target in targets:
-                targets[target].set_timeout(value)
-        else:
-
-            self.parse_error(self.do_set_timeout, args)
-
-    def complete_set_timeout(self, text, line, begidx, endidx):
-        return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    @requires_update
-    def do_set_repo(self, args):
-        """ Add or remove update repository from hosts
-
-        set_repo <hostname>[,hostname,...],<operation>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        operation  --  'add' or 'remove'
-        """
-
-        targets, operation = self._parse_args(args, str)
-
-        if operation not in ["add", "remove"]:
-            raise ValueError("invalid operation `%s`" % operation)
-
-        if not (targets and operation):
-            self.parse_error(self.do_set_repo, args)
-            return
-
-        with LockedTargets([self.targets[x] for x in targets]):
-            for t in [self.targets[x] for x in targets]:
-                t.set_repo(operation, self.metadata)
-
-    def complete_set_repo(self, text, line, begidx, endidx):
-        if line.count(','):
-            return self.complete_enabled_hostlist_with_all(
-                text, line, begidx, endidx, [
-                    'add', 'remove'])
-        else:
-            return self.complete_enabled_hostlist_with_all(
-                text,
-                line,
-                begidx,
-                endidx)
-
     @requires_update
     def do_install(self, args):
         """
@@ -1474,43 +1236,6 @@ class CommandPrompt(cmd.Cmd):
             endidx)
 
     @requires_update
-    def do_downgrade(self, args):
-        """
-        Downgrades all related packages to the last released version (using
-        the UPDATE channel). This does not work for SLES 9 hosts, though.
-
-        downgrade <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        targets, _ = self._parse_args(args, None)
-
-        if (not targets) or _:
-            self.parse_error(self.do_downgrade, args)
-            return
-
-        self.log.info('downgrading')
-        try:
-            self.metadata.perform_downgrade(targets)
-        except Exception as e:
-            self.log.critical('failed to downgrade target systems')
-            self.log.debug(format_exc(e))
-            return
-        except KeyboardInterrupt:
-            self.log.info('downgrade process canceled')
-            return
-        else:
-            self.log.info('done')
-
-    def complete_downgrade(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
     def do_prepare(self, args):
         """
         Installs missing or outdated packages from the UPDATE repositories.
@@ -1554,79 +1279,6 @@ class CommandPrompt(cmd.Cmd):
         return self.complete_enabled_hostlist_with_all(
             text, line, begidx, endidx, [
                 'force', 'installed', 'testing'])
-
-    @requires_update
-    def do_update(self, args):
-        """
-        Applies the testing update to the target hosts. While updating the
-        machines, the pre-, post- and compare scripts are run before and
-        after the update process. If the update adds new packages to the
-        channel, the "newpackage" parameter triggers the package installation
-        right after the update. To skip the preparation procedure, append
-        "noprepare" to the argument list.
-
-        update <hostname>[,newpackage][,noprepare][,noscript]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        targets, params = self._parse_args(args, set)
-
-        if not targets:
-            self.parse_error(self.do_update, args)
-            return
-
-        self.log.info('updating')
-
-        try:
-            self.metadata.perform_update(targets, params)
-        except Exception:
-            self.log.critical('failed to update target systems')
-            self.log.debug(format_exc())
-            self.notify_user(
-                'updating %s failed' %
-                self.session,
-                'stock_dialog-error')
-            raise
-        except KeyboardInterrupt:
-            self.log.info('update process canceled')
-            return
-
-        self.notify_user('updating %s finished' % self.session)
-        self.log.info('done')
-
-    def complete_update(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text, line, begidx, endidx, [
-                'newpackage', 'noprepare', 'noscript'])
-
-    def do_list_sessions(self, args):
-        """
-        Lists current active ssh sessions on target hosts.
-
-        list_sessions <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        command = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
-
-        targets, _ = self._parse_args(args, None)
-
-        if targets:
-            try:
-                targets.run(command)
-            except KeyboardInterrupt:
-                return
-
-        targets.report_sessions(self.display.list_sessions)
-
-    def complete_list_sessions(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
 
     @requires_update
     def do_checkout(self, args):

@@ -19,25 +19,18 @@ class HostsUnlock(Command):
         return parser
 
     def run(self):
-        args = self.args
 
-        try:
-            hosts = self.hosts.select(args.hosts)
-        except ValueError as e:
-            self.log.error(e)
-            return
-
-        hosts.unlock(force=args.force)
+        hosts = self.parse_hosts(self.args.hosts)
+        hosts.unlock(force=self.args.force)
 
     @staticmethod
-    def complete(hosts, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx):
         return complete_choices(
             [
-                ("-h", "--help"),
-                ("-a",),
                 ("-f", "--force")
+                ("-t", "--target"),
             ],
             line,
             text,
-            hosts.names()
+            state['hosts'].names()
         )

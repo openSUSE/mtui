@@ -6,7 +6,7 @@ from argparse import REMAINDER
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import requires_update
+from mtui.utils import requires_update, complete_choices
 
 
 class Commit(Command):
@@ -46,3 +46,7 @@ class Commit(Command):
         except Exception:
             self.log.error('committing template.failed')
             self.log.debug(format_exc())
+
+    @staticmethod
+    def complete(_, text, line, begidx, endidx):
+        return complete_choices([('-m', '--msg'), ], line, text)
