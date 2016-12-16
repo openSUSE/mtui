@@ -126,6 +126,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListTimeout)
         self._add_subcommand(commands.ListUpdateCommands)
         self._add_subcommand(commands.SetRepo)
+        self._add_subcommand(commands.Update)
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -1346,51 +1347,6 @@ class CommandPrompt(cmd.Cmd):
         return self.complete_enabled_hostlist_with_all(
             text, line, begidx, endidx, [
                 'force', 'installed', 'testing'])
-
-    @requires_update
-    def do_update(self, args):
-        """
-        Applies the testing update to the target hosts. While updating the
-        machines, the pre-, post- and compare scripts are run before and
-        after the update process. If the update adds new packages to the
-        channel, the "newpackage" parameter triggers the package installation
-        right after the update. To skip the preparation procedure, append
-        "noprepare" to the argument list.
-
-        update <hostname>[,newpackage][,noprepare][,noscript]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        targets, params = self._parse_args(args, set)
-
-        if not targets:
-            self.parse_error(self.do_update, args)
-            return
-
-        self.log.info('updating')
-
-        try:
-            self.metadata.perform_update(targets, params)
-        except Exception:
-            self.log.critical('failed to update target systems')
-            self.log.debug(format_exc())
-            self.notify_user(
-                'updating %s failed' %
-                self.session,
-                'stock_dialog-error')
-            raise
-        except KeyboardInterrupt:
-            self.log.info('update process canceled')
-            return
-
-        self.notify_user('updating %s finished' % self.session)
-        self.log.info('done')
-
-    def complete_update(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text, line, begidx, endidx, [
-                'newpackage', 'noprepare', 'noscript'])
 
     def do_list_sessions(self, args):
         """
