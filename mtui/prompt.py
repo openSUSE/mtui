@@ -129,6 +129,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Update)
         self._add_subcommand(commands.RemoveHost)
         self._add_subcommand(commands.ListSessions)
+        self._add_subcommand(commands.ListMetadata)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -668,18 +669,6 @@ class CommandPrompt(cmd.Cmd):
                 line,
                 begidx,
                 endidx)
-
-    @requires_update
-    def do_list_metadata(self, args):
-        """
-        Lists patchinfo metadata like patch number, ReviewRequestID or packager.
-
-        list_metadata
-        Keyword arguments:
-        None
-        """
-
-        self.metadata.show_yourself(self.sys.stdout)
 
     @requires_update
     def do_list_versions(self, args):

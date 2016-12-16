@@ -65,6 +65,7 @@ class ListUpdateCommands(Command):
     def run(self):
         self.metadata.list_update_commands(self.targets, self.println)
 
+
 class ListSessions(Command):
     """
     Lists current active ssh sessions on target hosts.
@@ -93,6 +94,12 @@ class ListSessions(Command):
                                 line, text, state['hosts'].names())
 
 
+class ListMetadata(Command):
+    """
+    Lists patchinfo metadata like ReviewRequestID or packager.
+    """
+    command = 'list_metadata'
 
-
-
+    @requires_update
+    def run(self):
+        self.metadata.show_yourself(self.sys.stdout)
