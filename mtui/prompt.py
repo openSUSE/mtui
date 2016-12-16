@@ -127,6 +127,8 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListUpdateCommands)
         self._add_subcommand(commands.SetRepo)
         self._add_subcommand(commands.Update)
+        self._add_subcommand(commands.RemoveHost)
+
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
         self.identchars += '-'
@@ -374,30 +376,6 @@ class CommandPrompt(cmd.Cmd):
             return
 
         self.metadata.add_target(hostname, system)
-
-    def do_remove_host(self, args):
-        """
-        Disconnects from host and remove host from list. Warning: The host
-        log is purged as well. If the tester wants to preserve the log, it's
-        better to use the "set_host_state" command instead and set
-        the host to "disabled". Multible hosts can be specified.
-
-        remove_host <hostname>[,hostname,...]
-        Keyword arguments:
-        hostname -- hostname from the target list
-        """
-
-        if not args:
-            self.parse_error(self.do_remove_host, args)
-            return
-
-        targets, _ = self._parse_args(args, None)
-        for tgt in targets:
-            self.targets[tgt].close()
-            self.targets.pop(tgt)
-
-    def complete_remove_host(self, text, line, begidx, endidx):
-        return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
     def do_list_history(self, args):
         """

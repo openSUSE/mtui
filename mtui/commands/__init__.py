@@ -13,3 +13,4 @@ from mtui.commands.simplelists import ListTimeout, ListUpdateCommands
 from mtui.commands.simpleset import SetLocation, SessionName, SetLogLevel, SetTimeout
 from mtui.commands.setrepo import SetRepo
 from mtui.commands.update import Update
+from mtui.commands.removehost import RemoveHost
