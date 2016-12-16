@@ -128,6 +128,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.SetRepo)
         self._add_subcommand(commands.Update)
         self._add_subcommand(commands.RemoveHost)
+        self._add_subcommand(commands.ListSessions)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -1325,34 +1326,6 @@ class CommandPrompt(cmd.Cmd):
         return self.complete_enabled_hostlist_with_all(
             text, line, begidx, endidx, [
                 'force', 'installed', 'testing'])
-
-    def do_list_sessions(self, args):
-        """
-        Lists current active ssh sessions on target hosts.
-
-        list_sessions <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        command = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
-
-        targets, _ = self._parse_args(args, None)
-
-        if targets:
-            try:
-                targets.run(command)
-            except KeyboardInterrupt:
-                return
-
-        targets.report_sessions(self.display.list_sessions)
-
-    def complete_list_sessions(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
 
     @requires_update
     def do_checkout(self, args):

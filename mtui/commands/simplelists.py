@@ -2,6 +2,7 @@
 
 from mtui.commands import Command
 from mtui.utils import requires_update
+from mtui.utils import complete_choices
 
 
 class ListBugs(Command):
@@ -63,3 +64,35 @@ class ListUpdateCommands(Command):
 
     def run(self):
         self.metadata.list_update_commands(self.targets, self.println)
+
+class ListSessions(Command):
+    """
+    Lists current active ssh sessions on target hosts.
+    """
+    command = 'list_sessions'
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        cls._add_hosts_arg(parser)
+        return parser
+
+    def run(self):
+        targets = self.parse_hosts(self.args.hosts)
+        cmd = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
+
+        try:
+            targets.run(cmd)
+        except KeyboardInterrupt:
+            return
+
+        targets.report_sessions(self.display.list_sessions)
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx):
+        return complete_choices([('-t', '--target'), ],
+                                line, text, state['hosts'].names())
+
+
+
+
+
