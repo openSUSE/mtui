@@ -131,6 +131,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListSessions)
         self._add_subcommand(commands.ListMetadata)
         self._add_subcommand(commands.Downgrade)
+        self._add_subcommand(commands.AddHost)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -356,29 +357,6 @@ class CommandPrompt(cmd.Cmd):
         attributes = Attributes()
         return [item for sublist in attributes.tags.values(
             ) for item in sublist if item.startswith(text) and item not in line]
-
-    def do_add_host(self, args):
-        """
-        Adds another machine to the target host list. The system type needs
-        to be specified as well.
-
-        add_host <hostname,system>
-        Keyword arguments:
-        hostname -- address of the target host (should be the FQDN)
-        system   -- system type, ie. sles11sp1-i386
-        """
-
-        if not args:
-            self.parse_error(self.do_add_host, args)
-            return
-
-        try:
-            (hostname, system) = args.split(',')
-        except ValueError:
-            self.parse_error(self.do_add_host, args)
-            return
-
-        self.metadata.add_target(hostname, system)
 
     def do_list_history(self, args):
         """
