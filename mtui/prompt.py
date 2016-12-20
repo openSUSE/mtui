@@ -132,6 +132,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListMetadata)
         self._add_subcommand(commands.Downgrade)
         self._add_subcommand(commands.AddHost)
+        self._add_subcommand(commands.Install)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -1138,44 +1139,6 @@ class CommandPrompt(cmd.Cmd):
                     'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    @requires_update
-    def do_install(self, args):
-        """
-        Installs packages from the current active repository.
-        The repository should be set with the set_repo command beforehand.
-
-        install <hostname>[,hostname,...],<package>[ package ...]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        package  -- package name
-        """
-
-        targets, packages = self._parse_args(args, str)
-
-        if not (targets and packages):
-            self.parse_error(self.do_install, args)
-            return
-
-        if targets:
-            self.log.info('installing')
-            try:
-                self.metadata.perform_install(targets, packages.split())
-            except Exception:
-                self.log.critical('failed to install packages')
-                return
-            except KeyboardInterrupt:
-                self.log.info('installation process canceled')
-                return
-            else:
-                self.log.info('done')
-
-    def complete_install(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
 
     @requires_update
     def do_uninstall(self, args):

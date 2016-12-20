@@ -16,3 +16,4 @@ from mtui.commands.update import Update
 from mtui.commands.removehost import RemoveHost
 from mtui.commands.downgrade import Downgrade
 from mtui.commands.addhost import AddHost
+from mtui.commands.zypper import Install
