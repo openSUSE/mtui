@@ -133,6 +133,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Downgrade)
         self._add_subcommand(commands.AddHost)
         self._add_subcommand(commands.Install)
+        self._add_subcommand(commands.Uninstall)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -1139,42 +1140,6 @@ class CommandPrompt(cmd.Cmd):
                     'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    @requires_update
-    def do_uninstall(self, args):
-        """
-        Removes packages from the system.
-
-        uninstall <hostname>[,hostname,...],<package>[ package ...]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        package  -- package name
-        """
-
-        targets, packages = self._parse_args(args, str)
-
-        if not (targets and packages):
-            self.parse_error(self.do_uninstall, args)
-            return
-
-        self.log.info('removing')
-        try:
-            self.metadata.perform_uninstall(targets, packages.split())
-        except Exception:
-            self.log.critical('failed to remove packages')
-            return
-        except KeyboardInterrupt:
-            self.log.info('uninstallation process canceled')
-            return
-        else:
-            self.log.info('done')
-
-    def complete_uninstall(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
 
     @requires_update
     def do_prepare(self, args):
