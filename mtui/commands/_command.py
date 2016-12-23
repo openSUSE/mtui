@@ -98,14 +98,11 @@ class Command(with_metaclass(ABCMeta, object)):
     @classmethod
     def _add_hosts_arg(cls, parser):
         parser.add_argument(
-            '-t', '--target',
-            dest='hosts',
-            action='append',
-            type=str,
-            help='hosts to act on. If no hosts are' +
-            ' given all enabled hosts are used.')
+            '-t', '--target', dest='hosts', action='append', type=str,
+            help='Host to act on. Can be used multiple times.' +
+            'If is ommited all hosts are used')
 
-    def parse_hosts(self, arg, henabled=True):
+    def parse_hosts(self, henabled=True):
         """
         parses self.args.hosts
         returns [str] with hosts, or connection error.
@@ -117,8 +114,8 @@ class Command(with_metaclass(ABCMeta, object)):
         """
 
         try:
-            if arg:
-                targets = self.hosts.select(arg)
+            if self.args.hosts:
+                targets = self.hosts.select(self.args.hosts)
             else:
                 targets = self.hosts.select(enabled=henabled)
         except HostIsNotConnectedError as e:

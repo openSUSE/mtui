@@ -23,7 +23,7 @@ class Downgrade(Command):
     @requires_update
     def run(self):
 
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
 
         self.log.info('Downgrading')
 

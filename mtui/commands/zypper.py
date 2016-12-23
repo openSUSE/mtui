@@ -24,7 +24,7 @@ class Install(Command):
     def run(self):
         self.log.info('Installing')
         packages = self.args.package
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
 
         try:
             self.metadata.perform_install(targets, packages)
@@ -61,7 +61,7 @@ class Uninstall(Command):
     def run(self):
         self.log.info('Removing')
         packages = self.args.package
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
 
         try:
             self.metadata.perform_uninstall(targets, packages)

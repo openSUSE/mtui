@@ -78,7 +78,7 @@ class ListSessions(Command):
         return parser
 
     def run(self):
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
         cmd = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
 
         try:

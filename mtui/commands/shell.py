@@ -17,7 +17,7 @@ class Shell(Command):
         return parser
 
     def run(self):
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
 
         self.log.debug('Starting shell')
 
