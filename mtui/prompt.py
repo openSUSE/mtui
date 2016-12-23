@@ -134,6 +134,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.AddHost)
         self._add_subcommand(commands.Install)
         self._add_subcommand(commands.Uninstall)
+        self._add_subcommand(commands.Shell)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -737,29 +738,6 @@ class CommandPrompt(cmd.Cmd):
             line,
             begidx,
             endidx)
-
-    def do_shell(self, args):
-        """
-        Invokes a remote root shell on the target host.
-        The terminal size is set once, but isn't adapted on subsequent changes.
-
-        shell <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list
-        """
-
-        if args:
-            targets, _ = self._parse_args(args, None)
-
-            for target in targets.keys():
-                targets[target].shell()
-
-        else:
-            self.parse_error(self.do_shell, args)
-
-    def complete_shell(self, text, line, begidx, endidx):
-        if not line.count(','):
-            return self.complete_hostlist(text, line, begidx, endidx)
 
     def do_run(self, args):
         """
