@@ -135,6 +135,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Install)
         self._add_subcommand(commands.Uninstall)
         self._add_subcommand(commands.Shell)
+        self._add_subcommand(commands.Run)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -733,58 +734,6 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_show_log, args)
 
     def complete_show_log(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    def do_run(self, args):
-        """
-        Runs a command on a specified host or on all enabled targets if
-        'all' is given as hostname. The command timeout is set to 5 minutes
-        which means, if there's no output on stdout or stderr for 5 minutes,
-        a timeout exception is thrown. The commands are run in parallel on
-        every target or in serial mode when set with "set_host_state".
-        After the call returned, the output (including the return code)
-        of each host is shown on the console.
-        Please be aware that no interactive commands can be run with this
-        procedure.
-
-        run <hostname[,hostname,...],command>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        if not args:
-            self.parse_error(self.do_run, args)
-            return
-
-        targets, command = self._parse_args(args, str)
-
-        with LockedTargets(targets.values()):
-            try:
-                targets.run(command)
-            except KeyboardInterrupt:
-                return
-
-            output = []
-
-            for target in targets:
-                output.append(
-                    '%s:~> %s [%s]' %
-                    (target,
-                     targets[target].lastin(),
-                        targets[target].lastexit()))
-                map(output.append, targets[target].lastout().split('\n'))
-                if targets[target].lasterr():
-                    map(output.append, ['stderr:'] +
-                        targets[target].lasterr().split('\n'))
-
-            page(output, self.interactive)
-            self.log.info('done')
-
-    def complete_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(
             text,
             line,

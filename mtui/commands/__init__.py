@@ -18,3 +18,4 @@ from mtui.commands.downgrade import Downgrade
 from mtui.commands.addhost import AddHost
 from mtui.commands.zypper import Install, Uninstall
 from mtui.commands.shell import Shell
+from mtui.commands.run import Run
