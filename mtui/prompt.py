@@ -136,6 +136,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Uninstall)
         self._add_subcommand(commands.Shell)
         self._add_subcommand(commands.Run)
+        self._add_subcommand(commands.Prepare)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -1067,51 +1068,6 @@ class CommandPrompt(cmd.Cmd):
                     'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    @requires_update
-    def do_prepare(self, args):
-        """
-        Installs missing or outdated packages from the UPDATE repositories.
-        This is also run by the update procedure before applying the updates.
-        If "force" is set, packages are forced to be installed on package
-        conflicts. If "installed" is set, only installed packages are
-        prepared. If "testing" is set, packages are installed from the TESTING
-        repositories.
-
-        prepare <hostname>[,hostname,...][,force][,installed][,testing]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        targets, params = self._parse_args(args, set)
-
-        if not targets:
-            self.parse_error(self.do_prepare, args)
-            return
-
-        self.log.info('preparing')
-
-        try:
-            self.metadata.perform_prepare(
-                targets,
-                force='force' in params,
-                installed_only='installed' in params,
-                testing='testing' in params,
-            )
-        except Exception:
-            self.log.critical('failed to prepare target systems')
-            self.log.debug(format_exc())
-            return False
-        except KeyboardInterrupt:
-            self.log.info('preparation process canceled')
-            return False
-        else:
-            self.log.info('done')
-
-    def complete_prepare(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text, line, begidx, endidx, [
-                'force', 'installed', 'testing'])
 
     @requires_update
     def do_checkout(self, args):
