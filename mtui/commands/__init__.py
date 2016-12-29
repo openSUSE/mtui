@@ -20,3 +20,4 @@ from mtui.commands.zypper import Install, Uninstall
 from mtui.commands.shell import Shell
 from mtui.commands.run import Run
 from mtui.commands.prepare import Prepare
+from mtui.commands.oscqam import OSCAssign, OSCApprove, OSCReject

@@ -137,6 +137,9 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Shell)
         self._add_subcommand(commands.Run)
         self._add_subcommand(commands.Prepare)
+        self._add_subcommand(commands.OSCAssign)
+        self._add_subcommand(commands.OSCApprove)
+        self._add_subcommand(commands.OSCReject)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
