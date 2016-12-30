@@ -141,6 +141,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.OSCApprove)
         self._add_subcommand(commands.OSCReject)
         self._add_subcommand(commands.TestSuiteList)
+        self._add_subcommand(commands.TestSuiteRun)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -739,54 +740,6 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_show_log, args)
 
     def complete_show_log(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
-    def do_testsuite_run(self, args):
-        """
-        Runs ctcs2 testsuite and saves logs to /var/log/qa/RIDD on the
-        target hosts. Results can be submitted with the testsuite_submit
-        command.
-
-        testsuite_run <hostname>[,hostname,...],<testsuite>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        testsuite  -- testsuite-run command
-        """
-
-        targets, command = self._parse_args(args, str)
-
-        if not (targets and command):
-            self.parse_error(self.do_testsuite_run, args)
-            return
-
-        if not command.startswith('/'):
-            command = os.path.join(
-                self.config.target_testsuitedir,
-                command.strip())
-
-        command = 'export TESTS_LOGDIR=/var/log/qa/{0}; {1}'.format(
-            self.metadata.id,
-            command
-        )
-        name = os.path.basename(command).replace('-run', '')
-
-        try:
-            targets.run(command)
-        except KeyboardInterrupt:
-            self.log.info('testsuite run canceled')
-            return
-
-        for hn, t in targets.items():
-            t.report_testsuite_results(self.display.testsuite_run, name)
-
-        self.log.info('done')
-
-    def complete_testsuite_run(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(
             text,
             line,
