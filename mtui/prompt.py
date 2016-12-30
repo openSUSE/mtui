@@ -140,6 +140,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.OSCAssign)
         self._add_subcommand(commands.OSCApprove)
         self._add_subcommand(commands.OSCReject)
+        self._add_subcommand(commands.TestSuiteList)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -738,31 +739,6 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_show_log, args)
 
     def complete_show_log(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    def do_testsuite_list(self, args):
-        """
-        List available testsuites on the target hosts.
-
-        testsuite_list <hostname>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        """
-
-        if args:
-            targets, _ = self._parse_args(args, None)
-
-            targets.report_testsuites(
-                self.display.testsuite_list,
-                self.config.target_testsuitedir)
-        else:
-            self.parse_error(self.do_testsuite_list, args)
-
-    def complete_testsuite_list(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(
             text,
             line,

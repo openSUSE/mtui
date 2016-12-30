@@ -99,7 +99,7 @@ class Command(with_metaclass(ABCMeta, object)):
     def _add_hosts_arg(cls, parser):
         parser.add_argument(
             '-t', '--target', dest='hosts', action='append', type=str,
-            help='Host to act on. Can be used multiple times.' +
+            help='Host to act on. Can be used multiple times. ' +
             'If is ommited all hosts are used')
 
     def parse_hosts(self, henabled=True):
