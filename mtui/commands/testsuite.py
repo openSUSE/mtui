@@ -118,11 +118,14 @@ class TestSuiteSubmit(Command):
         if len(comment) > 99:
             self.log.warning(messages.QadbReportCommentLengthWarning())
 
-        cmd = "DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c '{2}'".format(
-            self.metadata.id, username, comment)
+        cmd = "DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl" + \
+            " -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c '{2}'".format(self.metadata.id, username, comment)
 
         try:
-            targets.run(cmd)
+            for hostname, target in targets.items():
+                self.log.info(
+                    'Submiting results of {}-run from {}'.format(name, hostname))
+                target.run(cmd)
         except KeyboardInterrupt:
             self.log.info('Testsuite results submission canceled')
             return
