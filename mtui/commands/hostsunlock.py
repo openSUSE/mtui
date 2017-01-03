@@ -27,7 +27,7 @@ class HostsUnlock(Command):
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
             [
-                ("-f", "--force")
+                ("-f", "--force"),
                 ("-t", "--target"),
             ],
             line,
