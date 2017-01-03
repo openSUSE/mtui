@@ -20,7 +20,7 @@ class HostsUnlock(Command):
 
     def run(self):
 
-        hosts = self.parse_hosts(self.args.hosts)
+        hosts = self.parse_hosts()
         hosts.unlock(force=self.args.force)
 
     @staticmethod

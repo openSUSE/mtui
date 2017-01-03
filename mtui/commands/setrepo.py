@@ -39,7 +39,7 @@ class SetRepo(Command):
     def run(self):
 
         operation = self.args.operation
-        hosts = self.parse_hosts(self.args.hosts)
+        hosts = self.parse_hosts()
 
         with LockedTargets([self.targets[x] for x in hosts]):
             for t in [self.targets[x] for x in hosts]:

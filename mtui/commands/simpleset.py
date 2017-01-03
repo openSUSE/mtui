@@ -146,7 +146,7 @@ class SetTimeout(Command):
 
         value = self.args.timeout[0]
 
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
 
         for target in targets:
             targets[target].set_timeout(value)

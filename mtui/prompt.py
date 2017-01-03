@@ -3,14 +3,11 @@
 # mtui command line prompt
 #
 
-from datetime import date
-
 import os
 import cmd
 import readline
 import subprocess
 import glob
-import re
 
 from traceback import format_exc
 
@@ -131,6 +128,19 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListSessions)
         self._add_subcommand(commands.ListMetadata)
         self._add_subcommand(commands.Downgrade)
+        self._add_subcommand(commands.AddHost)
+        self._add_subcommand(commands.Install)
+        self._add_subcommand(commands.Uninstall)
+        self._add_subcommand(commands.Shell)
+        self._add_subcommand(commands.Run)
+        self._add_subcommand(commands.Prepare)
+        self._add_subcommand(commands.OSCAssign)
+        self._add_subcommand(commands.OSCApprove)
+        self._add_subcommand(commands.OSCReject)
+        self._add_subcommand(commands.TestSuiteList)
+        self._add_subcommand(commands.TestSuiteRun)
+        self._add_subcommand(commands.TestSuiteSubmit)
+        self._add_subcommand(commands.ListLog)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -356,29 +366,6 @@ class CommandPrompt(cmd.Cmd):
         attributes = Attributes()
         return [item for sublist in attributes.tags.values(
             ) for item in sublist if item.startswith(text) and item not in line]
-
-    def do_add_host(self, args):
-        """
-        Adds another machine to the target host list. The system type needs
-        to be specified as well.
-
-        add_host <hostname,system>
-        Keyword arguments:
-        hostname -- address of the target host (should be the FQDN)
-        system   -- system type, ie. sles11sp1-i386
-        """
-
-        if not args:
-            self.parse_error(self.do_add_host, args)
-            return
-
-        try:
-            (hostname, system) = args.split(',')
-        except ValueError:
-            self.parse_error(self.do_add_host, args)
-            return
-
-        self.metadata.add_target(hostname, system)
 
     def do_list_history(self, args):
         """
@@ -727,263 +714,6 @@ class CommandPrompt(cmd.Cmd):
             targets,
             params)
 
-    def do_show_log(self, args):
-        """
-        Prints the command protocol from the specified hosts. This might be
-        handy for the tester, as one can simply dump the command history to
-        the reproducer section of the template.
-
-        show_log <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        if args:
-            targets, _ = self._parse_args(args, None)
-
-            output = []
-
-            targets.report_log(self.display.show_log, output.append)
-
-            page(output, self.interactive)
-
-        else:
-
-            self.parse_error(self.do_show_log, args)
-
-    def complete_show_log(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    def do_shell(self, args):
-        """
-        Invokes a remote root shell on the target host.
-        The terminal size is set once, but isn't adapted on subsequent changes.
-
-        shell <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list
-        """
-
-        if args:
-            targets, _ = self._parse_args(args, None)
-
-            for target in targets.keys():
-                targets[target].shell()
-
-        else:
-            self.parse_error(self.do_shell, args)
-
-    def complete_shell(self, text, line, begidx, endidx):
-        if not line.count(','):
-            return self.complete_hostlist(text, line, begidx, endidx)
-
-    def do_run(self, args):
-        """
-        Runs a command on a specified host or on all enabled targets if
-        'all' is given as hostname. The command timeout is set to 5 minutes
-        which means, if there's no output on stdout or stderr for 5 minutes,
-        a timeout exception is thrown. The commands are run in parallel on
-        every target or in serial mode when set with "set_host_state".
-        After the call returned, the output (including the return code)
-        of each host is shown on the console.
-        Please be aware that no interactive commands can be run with this
-        procedure.
-
-        run <hostname[,hostname,...],command>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        if not args:
-            self.parse_error(self.do_run, args)
-            return
-
-        targets, command = self._parse_args(args, str)
-
-        with LockedTargets(targets.values()):
-            try:
-                targets.run(command)
-            except KeyboardInterrupt:
-                return
-
-            output = []
-
-            for target in targets:
-                output.append(
-                    '%s:~> %s [%s]' %
-                    (target,
-                     targets[target].lastin(),
-                        targets[target].lastexit()))
-                map(output.append, targets[target].lastout().split('\n'))
-                if targets[target].lasterr():
-                    map(output.append, ['stderr:'] +
-                        targets[target].lasterr().split('\n'))
-
-            page(output, self.interactive)
-            self.log.info('done')
-
-    def complete_run(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    def do_testsuite_list(self, args):
-        """
-        List available testsuites on the target hosts.
-
-        testsuite_list <hostname>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        """
-
-        if args:
-            targets, _ = self._parse_args(args, None)
-
-            targets.report_testsuites(
-                self.display.testsuite_list,
-                self.config.target_testsuitedir)
-        else:
-            self.parse_error(self.do_testsuite_list, args)
-
-    def complete_testsuite_list(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
-    def do_testsuite_run(self, args):
-        """
-        Runs ctcs2 testsuite and saves logs to /var/log/qa/RIDD on the
-        target hosts. Results can be submitted with the testsuite_submit
-        command.
-
-        testsuite_run <hostname>[,hostname,...],<testsuite>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        testsuite  -- testsuite-run command
-        """
-
-        targets, command = self._parse_args(args, str)
-
-        if not (targets and command):
-            self.parse_error(self.do_testsuite_run, args)
-            return
-
-        if not command.startswith('/'):
-            command = os.path.join(
-                self.config.target_testsuitedir,
-                command.strip())
-
-        command = 'export TESTS_LOGDIR=/var/log/qa/{0}; {1}'.format(
-            self.metadata.id,
-            command
-        )
-        name = os.path.basename(command).replace('-run', '')
-
-        try:
-            targets.run(command)
-        except KeyboardInterrupt:
-            self.log.info('testsuite run canceled')
-            return
-
-        for hn, t in targets.items():
-            t.report_testsuite_results(self.display.testsuite_run, name)
-
-        self.log.info('done')
-
-    def complete_testsuite_run(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
-    def do_testsuite_submit(self, args):
-        """
-        Submits the ctcs2 testsuite results to qadb.suse.de.
-        The comment field is populated with some attributes like RRID or
-        testsuite name, but can also be edited before the results get
-        submitted.
-
-        testsuite_submit <hostname>,hostname,...,<testsuite>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        testsuite  -- testsuite-run command
-        """
-
-        targets, command = self._parse_args(args, str)
-
-        if not (targets and command):
-            self.parse_error(self.do_testsuite_submit, args)
-            return
-
-        name = os.path.basename(command).replace('-run', '')
-        username = self.config.session_user
-
-        comment = self.metadata.get_testsuite_comment(
-            name,
-            date.today().strftime('%d/%m/%y'))
-        try:
-            comment = edit_text(comment)
-        except subprocess.CalledProcessError as e:
-            self.log.error("editor failed: %s" % e)
-            self.log.debug(format_exc())
-            return
-
-        if len(comment) > 10:
-            self.log.warning(messages.QadbReportCommentLengthWarning())
-
-        command = 'DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c \'{2}\''.format(
-            self.metadata.id,
-            username,
-            comment
-        )
-
-        try:
-            targets.run(command)
-        except KeyboardInterrupt:
-            return
-
-        for hn, tgt in targets.items():
-            if tgt.lastexit() != 0:
-                self.log.critical(
-                    'submitting testsuite results failed on %s:' %
-                    hn)
-                self.println('{}:~> {} [{}]'.format(hn, name, tgt.lastexit()))
-                self.println(tgt.lastout())
-                if tgt.lasterr():
-                    self.println(tgt.lasterr())
-            else:
-                match = re.search(
-                    '(http://.*/submission.php.submission_id=\d+)',
-                    tgt.lasterr())
-                if match:
-                    self.log.info(
-                        'submission for %s (%s): %s' %
-                        (hn, tgt.system, match.group(1)))
-                else:
-                    self.log.critical(
-                        'no submission found for %s. please use "show_log %s" to see what went wrong' %
-                        (hn, hn))
-
-        self.log.info('done')
-
-    def complete_testsuite_submit(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
     def set_prompt(self, session=None):
         self.session = session
         session = ":"+str(session) if session else ''
@@ -1160,125 +890,6 @@ class CommandPrompt(cmd.Cmd):
                     'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
         else:
             return self.complete_hostlist_with_all(text, line, begidx, endidx)
-
-    @requires_update
-    def do_install(self, args):
-        """
-        Installs packages from the current active repository.
-        The repository should be set with the set_repo command beforehand.
-
-        install <hostname>[,hostname,...],<package>[ package ...]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        package  -- package name
-        """
-
-        targets, packages = self._parse_args(args, str)
-
-        if not (targets and packages):
-            self.parse_error(self.do_install, args)
-            return
-
-        if targets:
-            self.log.info('installing')
-            try:
-                self.metadata.perform_install(targets, packages.split())
-            except Exception:
-                self.log.critical('failed to install packages')
-                return
-            except KeyboardInterrupt:
-                self.log.info('installation process canceled')
-                return
-            else:
-                self.log.info('done')
-
-    def complete_install(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
-    def do_uninstall(self, args):
-        """
-        Removes packages from the system.
-
-        uninstall <hostname>[,hostname,...],<package>[ package ...]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        package  -- package name
-        """
-
-        targets, packages = self._parse_args(args, str)
-
-        if not (targets and packages):
-            self.parse_error(self.do_uninstall, args)
-            return
-
-        self.log.info('removing')
-        try:
-            self.metadata.perform_uninstall(targets, packages.split())
-        except Exception:
-            self.log.critical('failed to remove packages')
-            return
-        except KeyboardInterrupt:
-            self.log.info('uninstallation process canceled')
-            return
-        else:
-            self.log.info('done')
-
-    def complete_uninstall(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
-    def do_prepare(self, args):
-        """
-        Installs missing or outdated packages from the UPDATE repositories.
-        This is also run by the update procedure before applying the updates.
-        If "force" is set, packages are forced to be installed on package
-        conflicts. If "installed" is set, only installed packages are
-        prepared. If "testing" is set, packages are installed from the TESTING
-        repositories.
-
-        prepare <hostname>[,hostname,...][,force][,installed][,testing]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        targets, params = self._parse_args(args, set)
-
-        if not targets:
-            self.parse_error(self.do_prepare, args)
-            return
-
-        self.log.info('preparing')
-
-        try:
-            self.metadata.perform_prepare(
-                targets,
-                force='force' in params,
-                installed_only='installed' in params,
-                testing='testing' in params,
-            )
-        except Exception:
-            self.log.critical('failed to prepare target systems')
-            self.log.debug(format_exc())
-            return False
-        except KeyboardInterrupt:
-            self.log.info('preparation process canceled')
-            return False
-        else:
-            self.log.info('done')
-
-    def complete_prepare(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text, line, begidx, endidx, [
-                'force', 'installed', 'testing'])
 
     @requires_update
     def do_checkout(self, args):

@@ -3,6 +3,7 @@
 from mtui.commands import Command
 from mtui.utils import requires_update
 from mtui.utils import complete_choices
+from mtui.utils import page
 
 
 class ListBugs(Command):
@@ -78,7 +79,7 @@ class ListSessions(Command):
         return parser
 
     def run(self):
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
         cmd = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
 
         try:
@@ -103,3 +104,28 @@ class ListMetadata(Command):
     @requires_update
     def run(self):
         self.metadata.show_yourself(self.sys.stdout)
+
+
+class ListLog(Command):
+    """
+    Prints the command protocol from the specified hosts. This might be
+    handy for the tester, as one can simply dump the command history to
+    the reproducer section of the template.
+    """
+    command = 'show_log'
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        cls._add_hosts_arg(parser)
+        return parser
+
+    def run(self):
+        output = []
+        targets = self.parse_hosts()
+        targets.report_log(self.display.show_log, output.append)
+        page(output, self.prompt.interactive)
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx):
+        return complete_choices([('-t', '--target'), ],
+                                line, text, state['hosts'].names())

@@ -47,7 +47,7 @@ class Update(Command):
 
         self.log.info('Updating')
 
-        targets = self.parse_hosts(self.args.hosts)
+        targets = self.parse_hosts()
 
         params = []
         params.append(self.args.newpackage)

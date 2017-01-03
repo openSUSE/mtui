@@ -54,7 +54,7 @@ class ListPackages(Command):
             self._run_just_wanted()
             return
 
-        hosts = self.parse_hosts(self.args.hosts)
+        hosts = self.parse_hosts()
 
         pkgs = list(self.metadata.packages.keys()
                     ) if self.metadata else []
