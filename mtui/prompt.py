@@ -3,14 +3,11 @@
 # mtui command line prompt
 #
 
-from datetime import date
-
 import os
 import cmd
 import readline
 import subprocess
 import glob
-import re
 
 from traceback import format_exc
 
@@ -142,6 +139,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.OSCReject)
         self._add_subcommand(commands.TestSuiteList)
         self._add_subcommand(commands.TestSuiteRun)
+        self._add_subcommand(commands.TestSuiteSubmit)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -740,84 +738,6 @@ class CommandPrompt(cmd.Cmd):
             self.parse_error(self.do_show_log, args)
 
     def complete_show_log(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
-
-    @requires_update
-    def do_testsuite_submit(self, args):
-        """
-        Submits the ctcs2 testsuite results to qadb.suse.de.
-        The comment field is populated with some attributes like RRID or
-        testsuite name, but can also be edited before the results get
-        submitted.
-
-        testsuite_submit <hostname>,hostname,...,<testsuite>
-        Keyword arguments:
-        hostname   -- hostname from the target list or "all"
-        testsuite  -- testsuite-run command
-        """
-
-        targets, command = self._parse_args(args, str)
-
-        if not (targets and command):
-            self.parse_error(self.do_testsuite_submit, args)
-            return
-
-        name = os.path.basename(command).replace('-run', '')
-        username = self.config.session_user
-
-        comment = self.metadata.get_testsuite_comment(
-            name,
-            date.today().strftime('%d/%m/%y'))
-        try:
-            comment = edit_text(comment)
-        except subprocess.CalledProcessError as e:
-            self.log.error("editor failed: %s" % e)
-            self.log.debug(format_exc())
-            return
-
-        if len(comment) > 10:
-            self.log.warning(messages.QadbReportCommentLengthWarning())
-
-        command = 'DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c \'{2}\''.format(
-            self.metadata.id,
-            username,
-            comment
-        )
-
-        try:
-            targets.run(command)
-        except KeyboardInterrupt:
-            return
-
-        for hn, tgt in targets.items():
-            if tgt.lastexit() != 0:
-                self.log.critical(
-                    'submitting testsuite results failed on %s:' %
-                    hn)
-                self.println('{}:~> {} [{}]'.format(hn, name, tgt.lastexit()))
-                self.println(tgt.lastout())
-                if tgt.lasterr():
-                    self.println(tgt.lasterr())
-            else:
-                match = re.search(
-                    '(http://.*/submission.php.submission_id=\d+)',
-                    tgt.lasterr())
-                if match:
-                    self.log.info(
-                        'submission for %s (%s): %s' %
-                        (hn, tgt.system, match.group(1)))
-                else:
-                    self.log.critical(
-                        'no submission found for %s. please use "show_log %s" to see what went wrong' %
-                        (hn, hn))
-
-        self.log.info('done')
-
-    def complete_testsuite_submit(self, text, line, begidx, endidx):
         return self.complete_enabled_hostlist_with_all(
             text,
             line,
