@@ -140,6 +140,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.TestSuiteList)
         self._add_subcommand(commands.TestSuiteRun)
         self._add_subcommand(commands.TestSuiteSubmit)
+        self._add_subcommand(commands.ListLog)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -712,37 +713,6 @@ class CommandPrompt(cmd.Cmd):
             self.display.list_versions,
             targets,
             params)
-
-    def do_show_log(self, args):
-        """
-        Prints the command protocol from the specified hosts. This might be
-        handy for the tester, as one can simply dump the command history to
-        the reproducer section of the template.
-
-        show_log <hostname>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        """
-
-        if args:
-            targets, _ = self._parse_args(args, None)
-
-            output = []
-
-            targets.report_log(self.display.show_log, output.append)
-
-            page(output, self.interactive)
-
-        else:
-
-            self.parse_error(self.do_show_log, args)
-
-    def complete_show_log(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text,
-            line,
-            begidx,
-            endidx)
 
     def set_prompt(self, session=None):
         self.session = session
