@@ -248,9 +248,6 @@ class CommandPrompt(cmd.Cmd):
 
         raise AttributeError(str(x))
 
-    def emptyline(self):
-        return
-
     def _refhosts(self):
         try:
             return RefhostsFactory(self.config, self.log)
