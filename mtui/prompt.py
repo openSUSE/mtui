@@ -141,6 +141,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.TestSuiteRun)
         self._add_subcommand(commands.TestSuiteSubmit)
         self._add_subcommand(commands.ListLog)
+        self._add_subcommand(commands.Terms)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -954,51 +955,6 @@ class CommandPrompt(cmd.Cmd):
         self.metadata.perform_get(self.targets, args)
 
         self.log.info('downloaded {0}'.format(args))
-
-    def do_terms(self, args):
-        """
-        Spawn terminal screens to all connected hosts. This command does
-        actually just run the available helper scripts. If no termname is
-        given, all available terminal scripts are shown.
-
-        script name should be shell.<termname>.sh
-
-        terms [termname]
-        Keyword arguments:
-        termname -- terminal emulator to spawn consoles on
-        """
-
-        systems = {}
-        dirname = self.datadir
-        targets = self.targets
-
-        hosts = [host.hostname for host in sorted(targets.values())]
-
-        if args:
-            filename = 'term.' + args + '.sh'
-            path = os.path.join(dirname, filename)
-            if os.path.isfile(path):
-                try:
-                    subprocess.check_call([path] + hosts)
-                except Exception:
-                    self.log.error('running %s failed' % filename)
-                    self.log.debug(format_exc())
-            else:
-                self.log.error(
-                    '%s script not found, make sure term.%s.sh exists' %
-                    (args, args))
-                self.parse_error(self.do_terms, args)
-        else:
-
-            self.println('available terminals scripts:')
-            for filename in glob.glob(os.path.join(dirname, 'term.*.sh')):
-                self.println(os.path.basename(filename).split('.')[1])
-
-    def complete_terms(self, text, line, begidx, endidx):
-        dirname = self.datadir
-        terms = glob.glob(os.path.join(dirname, 'term.*.sh'))
-        terms = map(os.path.basename, terms)
-        return [i.split('.')[1] for i in terms if i.startswith('term.' + text)]
 
     def do_edit(self, args):
         """
