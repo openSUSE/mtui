@@ -10,6 +10,7 @@ try:
 except ImportError:
     import ConfigParser as configparser
 
+from fnmatch import fnmatch
 from traceback import format_exc
 from mtui.refhost import RefhostsFactory
 from mtui.messages import InvalidLocationError
@@ -49,6 +50,7 @@ class Config(object):
         self._define_config_options()
         self._parse_config()
         self._handle_testopia_cred()
+        self._list_terms()
 
     def read(self):
         self.config = configparser.SafeConfigParser()
@@ -220,6 +222,12 @@ class Config(object):
 
         self.log.debug('config.testopia_pass = {0!r}'.format(
             self.testopia_pass))
+
+    def _list_terms(self):
+        scripts = [
+            x[5: -3] for x in os.listdir(self.datadir)
+            if fnmatch(x, 'term.*.sh')]
+        self.termnames = scripts
 
     def _get_option(self, secopt, getter):
         """

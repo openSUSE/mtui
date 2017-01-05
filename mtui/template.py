@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-from os.path import abspath, join, split, basename, dirname
+from os.path import abspath, join, basename, dirname
 from errno import ENOENT
 from errno import EEXIST
 import shutil
@@ -20,7 +20,6 @@ from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
 from mtui.five import urlopen
-from mtui.rpmver import RPMFile
 
 from mtui import utils
 
@@ -454,48 +453,6 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def list_bugs(self, sink, arg):
         return sink(self.bugs, arg)
 
-    def list_patches(self, sink):
-        destination = self.local_wd()
-
-        specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
-
-        if not specfiles:
-            self.extract_source_rpm()
-            specfiles = glob.glob(os.path.join(destination, '*', '*.spec'))
-            if not specfiles:
-                self.log.error('failed to load specfile')
-                return
-
-        self.log.debug("Found specfiles: {0}".format(specfiles))
-        allpatches = []
-        for specfile in specfiles:
-            patches = []
-            with open(specfile, 'r') as spec:
-                content = spec.read()
-
-            match = re.search(r'^Name:\s*(.*)', content, re.MULTILINE)
-            if match:
-                name = match.group(1)
-
-            for pn, fn in re.findall(
-                    r'^(Patch\d*):\s*(.*)', content, re.MULTILINE):
-                fn = fn.replace('%{name}', name)
-                num = pn[5:]
-                applied = False
-                if re.findall(r'^%%patch%s\W+' % num, content, re.MULTILINE):
-                    applied = True
-                elif re.findall(r'patch.*%%{P:%s}' % num or 0, content, re.MULTILINE):
-                    applied = True
-                patches.append([pn, fn, applied])
-
-            if not patches:
-                self.log.warning(
-                    'no patch entries found in specfile {0}'.format(specfile))
-            else:
-                allpatches.append([specfile, patches])
-
-        return sink(allpatches)
-
     def _show_yourself_data(self):
         return [
             ('Category', self.category),
@@ -691,9 +648,6 @@ class NullTestReport(TestReport):
     def __nonzero__(tr):
         '''python-2.x compat, see __bool__()'''
         return tr.__bool__()
-
-    def download_source_rpm(self):
-        raise NotImplementedError()
 
     def target_wd(self, *paths):
         return join(self.config.target_tempdir, *paths)

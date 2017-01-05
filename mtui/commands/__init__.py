@@ -23,3 +23,4 @@ from mtui.commands.run import Run
 from mtui.commands.prepare import Prepare
 from mtui.commands.oscqam import OSCAssign, OSCApprove, OSCReject
 from mtui.commands.testsuite import TestSuiteList, TestSuiteRun, TestSuiteSubmit
+from mtui.commands.terms import Terms
