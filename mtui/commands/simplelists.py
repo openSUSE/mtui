@@ -129,3 +129,37 @@ class ListLog(Command):
     def complete(state, text, line, begidx, endidx):
         return complete_choices([('-t', '--target'), ],
                                 line, text, state['hosts'].names())
+
+
+class ListVersions(Command):
+    """
+    Prints available package versions in enabled repositories.
+    Uses `zypper search` command. And prints versions from oldest to newest.
+    """
+    command = 'list_versions'
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            '-p',
+            '--package',
+            default=[],
+            type=str,
+            action='append',
+            help='packagename to show versions')
+        cls._add_hosts_arg(parser)
+        return parser
+
+    @requires_update
+    def run(self):
+        targets = self.parse_hosts()
+        params = self.args.package
+
+        self.metadata.list_versions(self.display.list_versions, targets, params)
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx):
+        return complete_choices(
+            [('-t', '--target'),
+             ('-p', '--package'), ],
+            line, text, state['hosts'].names())

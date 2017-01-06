@@ -145,6 +145,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Quit)
         self._add_subcommand(commands.DEOF)
         self._add_subcommand(commands.QExit)
+        self._add_subcommand(commands.ListVersions)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -658,62 +659,6 @@ class CommandPrompt(cmd.Cmd):
                 line,
                 begidx,
                 endidx)
-
-    @requires_update
-    def do_list_versions(self, args):
-        """
-        Prints the package version history in chronological order.
-        The history of every test host is checked and consolidated.
-        If no packages are specified, the version history of the
-        update packages are shown.
-
-        list_versions [package,...,package]
-        Keyword arguments:
-        package  -- packagename to show version history
-        """
-
-        """
-        example output:
-
-        mtui> list_versions
-        version history from:
-          s390vsl048.suse.de (sles12None-s390x)
-
-        libzmq3:
-        -> 4.0.4-2.1
-
-        zeromq-devel:
-        -> 4.0.4-2.1
-
-        version history from:
-          edna.qam.suse.de (sles12None-x86_64)
-          bart.qam.suse.de (sled12None-x86_64)
-          moe.qam.suse.de (sles12None-x86_64)
-
-        libzmq3:
-        -> 4.0.4-4.1
-          -> 4.0.4-2.1
-
-        zeromq-devel:
-        -> 4.0.4-4.1
-          -> 4.0.4-2.1
-
-        --
-        FIXME: output of this command includes the wording "version history",
-          while it lists versions available from the host's repositories
-          (uses `zypper search`).
-
-        """
-
-        targets, params = self._parse_args(args, set)
-
-        if not targets:
-            return
-
-        self.metadata.list_versions(
-            self.display.list_versions,
-            targets,
-            params)
 
     def set_prompt(self, session=None):
         self.session = session
