@@ -142,6 +142,9 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.TestSuiteSubmit)
         self._add_subcommand(commands.ListLog)
         self._add_subcommand(commands.Terms)
+        self._add_subcommand(commands.Quit)
+        self._add_subcommand(commands.DEOF)
+        self._add_subcommand(commands.QExit)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -1105,39 +1108,6 @@ class CommandPrompt(cmd.Cmd):
 
         with open(path, 'w') as f:
             f.write(self.metadata.generate_xmllog())
-
-    def do_quit(self, args):
-        """
-        Disconnects from all hosts and exits the programm. If a bootarg
-        argument is set, the hosts are either rebooted or powered off.
-        The tester is asked to save the XML log when exiting MTUI.
-
-        quit [bootarg]
-        Keyword arguments:
-        bootarg  -- reboot or poweroff
-        """
-
-        if not prompt_user('save log? (Y/n) ', ['n', 'no'], self.interactive):
-            self._do_save_impl()
-
-        args_ = [args] if args in ('reboot', 'poweroff') else []
-
-        for x in set(self.targets):
-            self.targets[x].close(*args_)
-            self.targets.pop(x)
-
-        try:
-            readline.write_history_file('%s/.mtui_history' % self.homedir)
-        except:
-            pass
-
-        self.sys.exit(0)
-
-    def complete_quit(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in ["reboot", "poweroff"] if i.startswith(text)]
-
-    do_exit = do_quit
-    do_EOF = do_quit
 
     def complete_filelist(self, text, line, begidx, endidx):
         dirname = ''
