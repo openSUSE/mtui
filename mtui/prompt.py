@@ -408,7 +408,7 @@ class CommandPrompt(cmd.Cmd):
 
             filters = ['connect', 'disconnect', 'install', 'update', 'downgrade']
 
-            option = [('-e ":%s"' % x) for x in set(params) & set(filters)]
+            option = [('%s' % x) for x in set(params) & set(filters)]
 
             count = 50
             if len(targets) == len(self.targets):
