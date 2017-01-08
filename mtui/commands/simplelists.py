@@ -163,3 +163,53 @@ class ListVersions(Command):
             [('-t', '--target'),
              ('-p', '--package'), ],
             line, text, state['hosts'].names())
+
+
+class ListHistory(Command):
+    """
+    Lists a history of mtui events on the target hosts like installing
+    or updating packages. Date, username and event is shown.
+    Events could be filtered with the event parameter.
+    """
+    command = 'list_history'
+
+    filters = set(['connect',
+                   'disconnect',
+                   'install',
+                   'update',
+                   'downgrade'])
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            '-e',
+            '--event',
+            action='append',
+            default=[],
+            choices=cls.filters,
+            help='event to list')
+        cls._add_hosts_arg(parser)
+        return parser
+
+    def run(self):
+        targets = self.parse_hosts(henabled=False)
+        option = [("{!s}".format(x))
+                  for x in set(self.args.event) & self.filters]
+
+        count = 50
+        if len(targets) >= 3:
+            count = 10
+
+        targets.report_history(self.display.list_history, count, option)
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx):
+        cstring = [
+            ('-t', '--target'),
+            ('-e', '--event'),
+            ('connect',),
+            ('disconnect',),
+            ('update',),
+            ('downgrade',),
+            ('install',)]
+        return complete_choices(cstring, line, text, state['hosts'].names())

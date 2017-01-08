@@ -146,6 +146,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.DEOF)
         self._add_subcommand(commands.QExit)
         self._add_subcommand(commands.ListVersions)
+        self._add_subcommand(commands.ListHistory)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -368,45 +369,6 @@ class CommandPrompt(cmd.Cmd):
         attributes = Attributes()
         return [item for sublist in attributes.tags.values(
             ) for item in sublist if item.startswith(text) and item not in line]
-
-    def do_list_history(self, args):
-        """
-        Lists a history of mtui events on the target hosts like installing
-        or updating packages. Date, username and event is shown.
-        Events could be filtered with the event parameter.
-
-        list_history <hostname>[,...][,event]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        event    -- connect, disconnect, install, update, downgrade
-        None
-
-        """
-
-        if args:
-            targets, params = self._parse_args(args, set)
-
-            filters = [
-                'connect',
-                'disconnect',
-                'install',
-                'update',
-                'downgrade']
-
-            option = [('-e ":%s"' % x) for x in set(params) & set(filters)]
-
-            count = 50
-            if len(targets) == len(self.targets):
-                count = 10
-
-            targets.report_history(self.display.list_history, count, option)
-        else:
-            self.parse_error(self.do_list_history, args)
-
-    def complete_list_history(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text, line, begidx, endidx, [
-                'connect', 'disconnect', 'install', 'update', 'downgrade'])
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)

@@ -10,7 +10,7 @@ from mtui.commands.reportbug import ReportBug
 from mtui.commands.whoami import Whoami
 from mtui.commands.simplelists import ListBugs, ListHosts, ListLocks, ListSessions
 from mtui.commands.simplelists import ListTimeout, ListUpdateCommands, ListMetadata
-from mtui.commands.simplelists import ListLog, ListVersions
+from mtui.commands.simplelists import ListLog, ListVersions, ListHistory
 from mtui.commands.simpleset import SetLocation, SessionName, SetLogLevel, SetTimeout
 from mtui.commands.setrepo import SetRepo
 from mtui.commands.update import Update
