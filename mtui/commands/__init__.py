@@ -26,3 +26,4 @@ from mtui.commands.testsuite import TestSuiteList, TestSuiteRun, TestSuiteSubmit
 from mtui.commands.terms import Terms
 from mtui.commands.quit import DEOF, Quit, QExit
 from mtui.commands.save import DoSave
+from mtui.commands.loadtemplate import LoadTemplate

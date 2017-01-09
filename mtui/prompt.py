@@ -148,6 +148,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListVersions)
         self._add_subcommand(commands.ListHistory)
         self._add_subcommand(commands.DoSave)
+        self._add_subcommand(commands.LoadTemplate)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -544,50 +545,6 @@ class CommandPrompt(cmd.Cmd):
         self.session = session
         session = ":"+str(session) if session else ''
         self.prompt = 'mtui{0}> '.format(session)
-
-    def do_load_template(self, args):
-        """
-        Load QA Maintenance template by RRID identifier. All changes and logs
-        from an already loaded template are lost if not saved previously.
-        Already connected hosts are kept and extended by the reference hosts
-        defined in the template file.
-
-        load_template <update_id>
-        Keyword arguments:
-        update_id      -- obs request review id for obs update """
-
-        id_ = args.strip()
-        try:
-            update = OBSUpdateID(id_)
-        except ValueError:
-            pass
-
-        if not update:
-            raise ValueError("Couldn't match {0!r} to either of {1!r}".
-                             format(id_, u_types))
-
-        if self.metadata:
-            m = 'should i overwrite already loaded session {0}? (y/N) '
-            if not prompt_user(m.format(self.metadata.id), ['y', 'yes'], self.interactive):
-                return
-
-        # Reload hosts to which we already have a connection
-        # close hosts we are already connected to but add them to the
-        # testreport.systems so they get connected to again.
-        # This feature comes from pre-1.0 versions.
-        # NOTE: the only reason we need to reconnect seems to be that
-        # when the L{Target} object is created, it is passed a list of
-        # packages, which changes with the testreport change. So this
-        # may go away when refactored.
-        re_add = []
-        for hostname, target in self.targets.items():
-            target.close()
-            re_add.append((hostname, target.system))
-
-        self.load_update(update, autoconnect=True)
-
-        for hostname, system in re_add:
-            self.metadata.add_target(hostname, system)
 
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(
