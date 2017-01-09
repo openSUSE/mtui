@@ -147,6 +147,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.QExit)
         self._add_subcommand(commands.ListVersions)
         self._add_subcommand(commands.ListHistory)
+        self._add_subcommand(commands.DoSave)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -896,24 +897,6 @@ class CommandPrompt(cmd.Cmd):
 
     def complete_export(self, text, line, begidx, endidx):
         return self.complete_hostlist(text, line, begidx, endidx, ['force'])
-
-    def do_save(self, args):
-        """
-        Save the testing log to a XML file. All commands and package
-        versions are saved there. When no parameter is given, the XML is saved
-        to $TEMPLATE_DIR/output/log.xml. If that file already exists and the
-        tester doesn't want to overwrite it, a postfix (current timestamp)
-        is added to the filename. The log can be used to fill the required
-        sections of the testing template after the testing has finished.
-        This could be done with the convert.py script.
-
-        save [filename]
-        Keyword arguments:
-        filename -- save log as file filename
-        """
-
-        path = [args.strip()] if args else []
-        self._do_save_impl(*path)
 
     def _do_save_impl(self, path='log.xml'):
         if not path.startswith('/'):
