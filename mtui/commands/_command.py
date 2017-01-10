@@ -102,7 +102,7 @@ class Command(with_metaclass(ABCMeta, object)):
             help='Host to act on. Can be used multiple times. ' +
             'If is ommited all hosts are used')
 
-    def parse_hosts(self, henabled=True):
+    def parse_hosts(self, enabled=True):
         """
         parses self.args.hosts
         returns [str] with hosts, or connection error.
@@ -117,14 +117,14 @@ class Command(with_metaclass(ABCMeta, object)):
             if self.args.hosts:
                 targets = self.hosts.select(self.args.hosts)
             else:
-                targets = self.hosts.select(enabled=henabled)
+                targets = self.hosts.select(enabled=enabled)
         except HostIsNotConnectedError as e:
             if e.host == 'all':
                 self.log.error(e)
                 self.log.info(
                     "Using all hosts. Warning option 'all' is decaprated")
 
-                targets = self.hosts.select(enabled=henabled)
+                targets = self.hosts.select(enabled=enabled)
 
             else:
                 raise
