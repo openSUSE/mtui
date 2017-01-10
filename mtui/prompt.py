@@ -150,6 +150,8 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.ListHistory)
         self._add_subcommand(commands.DoSave)
         self._add_subcommand(commands.LoadTemplate)
+        self._add_subcommand(commands.HostState)
+
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -560,53 +562,6 @@ class CommandPrompt(cmd.Cmd):
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
-
-    def do_set_host_state(self, args):
-        """
-        Sets the host state to "Enabled", "Disabled" or "Dryrun". A host
-        set to "Enabled" runs all issued commands while a "Disabled" host
-        or a host set to "Dryrun" doesn't run any command on the host.
-        The difference between "Disabled" and "Dryrun" is that on "Dryrun"
-        hosts the issued commands are printed to the console while "Disabled"
-        doesn't print anything. Additionally, the execution mode of each host
-        could be set to "parallel" (default) or "serial". All commands which
-        are designed to run in parallel are influenced by this option (like
-        to run command)
-        The commands accepts multiple hostnames followed by the wanted state.
-
-        set_host_state <hostname>[,hostname,...],<state>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        state    -- enabled, disabled, dryrun, parallel, serial
-        """
-
-        targets, state = self._parse_args(args, str)
-
-        if targets and state:
-
-            if state in ['enabled', 'disabled', 'dryrun']:
-                for target in targets:
-                    targets[target].state = state
-            elif state in ['parallel', 'serial']:
-                for target in targets:
-                    if state == 'serial':
-                        targets[target].exclusive = True
-                    else:
-                        targets[target].exclusive = False
-            else:
-                self.parse_error(self.do_set_host_state, args)
-                return
-        else:
-
-            self.parse_error(self.do_set_host_state, args)
-
-    def complete_set_host_state(self, text, line, begidx, endidx):
-        if line.count(','):
-            return self.complete_hostlist(
-                text, line, begidx, endidx, [
-                    'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
-        else:
-            return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
     @requires_update
     def do_checkout(self, args):

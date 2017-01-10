@@ -4,6 +4,7 @@ from mtui.commands._command import Command
 
 from mtui.commands.commit import Commit
 from mtui.commands.config import Config
+from mtui.commands.hoststate import HostState
 from mtui.commands.hostslock import HostLock
 from mtui.commands.hostsunlock import HostsUnlock
 from mtui.commands.listpackages import ListPackages
