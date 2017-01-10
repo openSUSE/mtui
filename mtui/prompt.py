@@ -108,6 +108,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.commands = {}
         self._add_subcommand(commands.HostsUnlock)
+        self._add_subcommand(commands.HostLock)
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
         self._add_subcommand(commands.ListPackages)
@@ -559,76 +560,6 @@ class CommandPrompt(cmd.Cmd):
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
-
-    def do_set_host_lock(self, args):
-        """
-        Lock host for exclusive usage. This locks all repository transactions
-        like enabling or disabling the testing repository on the target hosts.
-        The Hosts are locked with a timestamp, the UID and PID of the session.
-        This influences the update process of concurrent instances, use with
-        care.
-        Enabled locks are automatically removed when exiting the session.
-        To lock the run command on other sessions as well, it's necessary to
-        set a comment.
-
-        set_host_lock <hostname>[,hostname,...],<state>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        state    -- enabled, disabled
-        """
-
-        targets, state = self._parse_args(args, str)
-
-        if targets and state:
-
-            if state == 'enabled':
-                comment = user_input('comment: ').strip()
-
-            for target in targets:
-                lock = targets[target].locked()
-
-                if state == 'enabled':
-                    if lock.locked:
-                        self.log.warning(
-                            'host %s is locked since %s by %s. skipping.' %
-                            (target, lock.time(), lock.user))
-                        if lock.comment:
-                            self.log.info(
-                                "%s's comment: %s" %
-                                (lock.user, lock.comment))
-
-                        continue
-                    else:
-                        targets[target].set_locked(comment)
-                elif state == 'disabled':
-                    msg = "set_host_lock <host>,disable has been"
-                    msg += " deprecated in favor of unlock command"
-                    user_deprecation(self.log, msg)
-
-                    try:
-                        targets[target].remove_lock()
-                    except AssertionError:
-                        self.log.warning(
-                            'host %s not locked by us. skipping.' %
-                            target)
-                else:
-                    self.parse_error(self.do_set_host_lock, args)
-        else:
-
-            self.parse_error(self.do_set_host_lock, args)
-            return
-
-    def complete_set_host_lock(self, text, line, begidx, endidx):
-        if line.count(','):
-            return self.complete_enabled_hostlist(
-                text, line, begidx, endidx, [
-                    'enabled', 'disabled'])
-        else:
-            return self.complete_enabled_hostlist_with_all(
-                text,
-                line,
-                begidx,
-                endidx)
 
     def do_set_host_state(self, args):
         """
