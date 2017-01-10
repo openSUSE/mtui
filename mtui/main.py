@@ -77,8 +77,8 @@ def get_parser(sys):
     )
     p.add_argument(
         '-V', '--version',
-        action='store_true',
-        default=False,
+        action='version',
+        version='{}'.format(__version__),
         help='print version and exit'
     )
 
@@ -106,10 +106,6 @@ def run_mtui(
         log.error("--noninteractive makes no sense without --prerun")
         p.print_help()
         return 1
-
-    if args.version:
-        sys.stdout.write(__version__ + "\n")
-        return 0
 
     if args.debug:
         log.setLevel(level=logging.DEBUG)
