@@ -108,6 +108,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.commands = {}
         self._add_subcommand(commands.HostsUnlock)
+        self._add_subcommand(commands.HostLock)
         self._add_subcommand(commands.Whoami)
         self._add_subcommand(commands.Config)
         self._add_subcommand(commands.ListPackages)
@@ -142,6 +143,15 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.TestSuiteSubmit)
         self._add_subcommand(commands.ListLog)
         self._add_subcommand(commands.Terms)
+        self._add_subcommand(commands.Quit)
+        self._add_subcommand(commands.DEOF)
+        self._add_subcommand(commands.QExit)
+        self._add_subcommand(commands.ListVersions)
+        self._add_subcommand(commands.ListHistory)
+        self._add_subcommand(commands.DoSave)
+        self._add_subcommand(commands.LoadTemplate)
+        self._add_subcommand(commands.HostState)
+
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -249,6 +259,9 @@ class CommandPrompt(cmd.Cmd):
 
         raise AttributeError(str(x))
 
+    def emptyline(self):
+        return
+
     def _refhosts(self):
         try:
             return RefhostsFactory(self.config, self.log)
@@ -281,128 +294,6 @@ class CommandPrompt(cmd.Cmd):
             targets = self.targets.select(tselected, enabled=True)
 
         return (targets, params)
-
-    def do_search_hosts(self, args):
-        """
-        Seach hosts by by the specified attributes. A attribute tag could also be a
-        system type name like sles11sp1-i386 or a hostname.
-
-        search_hosts <attribute> [attribute ...]
-        Keyword arguments:
-        attribute-- host attributes like architecture or product
-        """
-
-        # this is copied in /refsearch.py
-        # there is also improved version in
-        # qa-maintenance/various-tools.git/refhosts-search
-
-        if not args:
-            self.parse_error(self.do_search_hosts, args)
-            return
-
-        refhost = self._refhosts()
-
-        if 'Testplatform:' in args:
-            # USECASE: this branch is handling a case where user loads mtui
-            # without a testreport and copies the Testplatform: line
-            # from some testreport into search_hosts or autoadd or
-            # loading other set of hosts for running the current update
-            # on
-            try:
-                hosts = refhost.search(Attributes.from_testplatform(
-                    args.replace('Testplatform: ', ''), self.log
-                ))
-            except (ValueError, KeyError):
-                self.log.error('failed to parse Testplatform string')
-                return []
-        elif refhost.get_host_attributes(args):
-            hosts = [args]
-        else:
-            attributes = Attributes.from_search_hosts_query(args)
-            hosts = refhost.search(attributes)
-
-            # check if some tags were passed to the attributes object which has
-            # all archs set by default
-            if not set(str(attributes).split()) ^ set(attributes.tags["archs"]):
-                return []
-
-        for hostname in set(hosts):
-            hosttags = refhost.get_host_attributes(hostname)
-            self.display.search_hosts(hostname, hosttags)
-
-        return hosts
-
-    def complete_search_hosts(self, text, line, begidx, endidx):
-        attributes = Attributes()
-        return [item for sublist in attributes.tags.values(
-            ) for item in sublist if item.startswith(text) and item not in line]
-
-    def do_autoadd(self, args):
-        """
-        Adds hosts to the target host list. The host is mapped by the
-        specified attributes. A attribute tag could also be a system type name
-        like sles11sp1-i386 or a hostname.
-
-        autoadd <attribute> [attribute ...]
-        attribute-- host attributes like architecture or product
-        """
-
-        if not args:
-            self.parse_error(self.do_autoadd, args)
-            return
-
-        refhost = self._refhosts()
-        hosts = self.do_search_hosts(args)
-
-        for hostname in hosts:
-            self.metadata.add_target(
-                hostname,
-                refhost.get_host_systemname(hostname)
-            )
-
-    def complete_autoadd(self, text, line, begidx, endidx):
-        attributes = Attributes()
-        return [item for sublist in attributes.tags.values(
-            ) for item in sublist if item.startswith(text) and item not in line]
-
-    def do_list_history(self, args):
-        """
-        Lists a history of mtui events on the target hosts like installing
-        or updating packages. Date, username and event is shown.
-        Events could be filtered with the event parameter.
-
-        list_history <hostname>[,...][,event]
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        event    -- connect, disconnect, install, update, downgrade
-        None
-
-        """
-
-        if args:
-            targets, params = self._parse_args(args, set)
-
-            filters = [
-                'connect',
-                'disconnect',
-                'install',
-                'update',
-                'downgrade']
-
-            option = [('-e ":%s"' % x) for x in set(params) & set(filters)]
-
-            count = 50
-            if len(targets) == len(self.targets):
-                count = 10
-
-            targets.report_history(self.display.list_history, count, option)
-        else:
-            self.parse_error(self.do_list_history, args)
-
-    def complete_list_history(self, text, line, begidx, endidx):
-        return self.complete_enabled_hostlist_with_all(
-            text, line, begidx, endidx, [
-                'connect', 'disconnect', 'install', 'update', 'downgrade'])
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
@@ -656,110 +547,10 @@ class CommandPrompt(cmd.Cmd):
                 begidx,
                 endidx)
 
-    @requires_update
-    def do_list_versions(self, args):
-        """
-        Prints the package version history in chronological order.
-        The history of every test host is checked and consolidated.
-        If no packages are specified, the version history of the
-        update packages are shown.
-
-        list_versions [package,...,package]
-        Keyword arguments:
-        package  -- packagename to show version history
-        """
-
-        """
-        example output:
-
-        mtui> list_versions
-        version history from:
-          s390vsl048.suse.de (sles12None-s390x)
-
-        libzmq3:
-        -> 4.0.4-2.1
-
-        zeromq-devel:
-        -> 4.0.4-2.1
-
-        version history from:
-          edna.qam.suse.de (sles12None-x86_64)
-          bart.qam.suse.de (sled12None-x86_64)
-          moe.qam.suse.de (sles12None-x86_64)
-
-        libzmq3:
-        -> 4.0.4-4.1
-          -> 4.0.4-2.1
-
-        zeromq-devel:
-        -> 4.0.4-4.1
-          -> 4.0.4-2.1
-
-        --
-        FIXME: output of this command includes the wording "version history",
-          while it lists versions available from the host's repositories
-          (uses `zypper search`).
-
-        """
-
-        targets, params = self._parse_args(args, set)
-
-        if not targets:
-            return
-
-        self.metadata.list_versions(
-            self.display.list_versions,
-            targets,
-            params)
-
     def set_prompt(self, session=None):
         self.session = session
         session = ":"+str(session) if session else ''
         self.prompt = 'mtui{0}> '.format(session)
-
-    def do_load_template(self, args):
-        """
-        Load QA Maintenance template by RRID identifier. All changes and logs
-        from an already loaded template are lost if not saved previously.
-        Already connected hosts are kept and extended by the reference hosts
-        defined in the template file.
-
-        load_template <update_id>
-        Keyword arguments:
-        update_id      -- obs request review id for obs update """
-
-        id_ = args.strip()
-        try:
-            update = OBSUpdateID(id_)
-        except ValueError:
-            pass
-
-        if not update:
-            raise ValueError("Couldn't match {0!r} to either of {1!r}".
-                             format(id_, u_types))
-
-        if self.metadata:
-            m = 'should i overwrite already loaded session {0}? (y/N) '
-            if not prompt_user(m.format(self.metadata.id), ['y', 'yes'], self.interactive):
-                return
-
-        # Reload hosts to which we already have a connection
-        # close hosts we are already connected to but add them to the
-        # testreport.systems so they get connected to again.
-        # This feature comes from pre-1.0 versions.
-        # NOTE: the only reason we need to reconnect seems to be that
-        # when the L{Target} object is created, it is passed a list of
-        # packages, which changes with the testreport change. So this
-        # may go away when refactored.
-        re_add = []
-        for hostname, target in self.targets.items():
-            target.close()
-            re_add.append((hostname, target.system))
-
-        self.load_update(update, autoconnect=True)
-
-        for hostname, system in re_add:
-            self.metadata.add_target(hostname, system)
 
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(
@@ -771,123 +562,6 @@ class CommandPrompt(cmd.Cmd):
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
-
-    def do_set_host_lock(self, args):
-        """
-        Lock host for exclusive usage. This locks all repository transactions
-        like enabling or disabling the testing repository on the target hosts.
-        The Hosts are locked with a timestamp, the UID and PID of the session.
-        This influences the update process of concurrent instances, use with
-        care.
-        Enabled locks are automatically removed when exiting the session.
-        To lock the run command on other sessions as well, it's necessary to
-        set a comment.
-
-        set_host_lock <hostname>[,hostname,...],<state>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        state    -- enabled, disabled
-        """
-
-        targets, state = self._parse_args(args, str)
-
-        if targets and state:
-
-            if state == 'enabled':
-                comment = user_input('comment: ').strip()
-
-            for target in targets:
-                lock = targets[target].locked()
-
-                if state == 'enabled':
-                    if lock.locked:
-                        self.log.warning(
-                            'host %s is locked since %s by %s. skipping.' %
-                            (target, lock.time(), lock.user))
-                        if lock.comment:
-                            self.log.info(
-                                "%s's comment: %s" %
-                                (lock.user, lock.comment))
-
-                        continue
-                    else:
-                        targets[target].set_locked(comment)
-                elif state == 'disabled':
-                    msg = "set_host_lock <host>,disable has been"
-                    msg += " deprecated in favor of unlock command"
-                    user_deprecation(self.log, msg)
-
-                    try:
-                        targets[target].remove_lock()
-                    except AssertionError:
-                        self.log.warning(
-                            'host %s not locked by us. skipping.' %
-                            target)
-                else:
-                    self.parse_error(self.do_set_host_lock, args)
-        else:
-
-            self.parse_error(self.do_set_host_lock, args)
-            return
-
-    def complete_set_host_lock(self, text, line, begidx, endidx):
-        if line.count(','):
-            return self.complete_enabled_hostlist(
-                text, line, begidx, endidx, [
-                    'enabled', 'disabled'])
-        else:
-            return self.complete_enabled_hostlist_with_all(
-                text,
-                line,
-                begidx,
-                endidx)
-
-    def do_set_host_state(self, args):
-        """
-        Sets the host state to "Enabled", "Disabled" or "Dryrun". A host
-        set to "Enabled" runs all issued commands while a "Disabled" host
-        or a host set to "Dryrun" doesn't run any command on the host.
-        The difference between "Disabled" and "Dryrun" is that on "Dryrun"
-        hosts the issued commands are printed to the console while "Disabled"
-        doesn't print anything. Additionally, the execution mode of each host
-        could be set to "parallel" (default) or "serial". All commands which
-        are designed to run in parallel are influenced by this option (like
-        to run command)
-        The commands accepts multiple hostnames followed by the wanted state.
-
-        set_host_state <hostname>[,hostname,...],<state>
-        Keyword arguments:
-        hostname -- hostname from the target list or "all"
-        state    -- enabled, disabled, dryrun, parallel, serial
-        """
-
-        targets, state = self._parse_args(args, str)
-
-        if targets and state:
-
-            if state in ['enabled', 'disabled', 'dryrun']:
-                for target in targets:
-                    targets[target].state = state
-            elif state in ['parallel', 'serial']:
-                for target in targets:
-                    if state == 'serial':
-                        targets[target].exclusive = True
-                    else:
-                        targets[target].exclusive = False
-            else:
-                self.parse_error(self.do_set_host_state, args)
-                return
-        else:
-
-            self.parse_error(self.do_set_host_state, args)
-
-    def complete_set_host_state(self, text, line, begidx, endidx):
-        if line.count(','):
-            return self.complete_hostlist(
-                text, line, begidx, endidx, [
-                    'enabled', 'disabled', 'dryrun', 'serial', 'parallel'])
-        else:
-            return self.complete_hostlist_with_all(text, line, begidx, endidx)
 
     @requires_update
     def do_checkout(self, args):
@@ -1070,24 +744,6 @@ class CommandPrompt(cmd.Cmd):
     def complete_export(self, text, line, begidx, endidx):
         return self.complete_hostlist(text, line, begidx, endidx, ['force'])
 
-    def do_save(self, args):
-        """
-        Save the testing log to a XML file. All commands and package
-        versions are saved there. When no parameter is given, the XML is saved
-        to $TEMPLATE_DIR/output/log.xml. If that file already exists and the
-        tester doesn't want to overwrite it, a postfix (current timestamp)
-        is added to the filename. The log can be used to fill the required
-        sections of the testing template after the testing has finished.
-        This could be done with the convert.py script.
-
-        save [filename]
-        Keyword arguments:
-        filename -- save log as file filename
-        """
-
-        path = [args.strip()] if args else []
-        self._do_save_impl(*path)
-
     def _do_save_impl(self, path='log.xml'):
         if not path.startswith('/'):
             dir_ = self.metadata.report_wd()
@@ -1105,39 +761,6 @@ class CommandPrompt(cmd.Cmd):
 
         with open(path, 'w') as f:
             f.write(self.metadata.generate_xmllog())
-
-    def do_quit(self, args):
-        """
-        Disconnects from all hosts and exits the programm. If a bootarg
-        argument is set, the hosts are either rebooted or powered off.
-        The tester is asked to save the XML log when exiting MTUI.
-
-        quit [bootarg]
-        Keyword arguments:
-        bootarg  -- reboot or poweroff
-        """
-
-        if not prompt_user('save log? (Y/n) ', ['n', 'no'], self.interactive):
-            self._do_save_impl()
-
-        args_ = [args] if args in ('reboot', 'poweroff') else []
-
-        for x in set(self.targets):
-            self.targets[x].close(*args_)
-            self.targets.pop(x)
-
-        try:
-            readline.write_history_file('%s/.mtui_history' % self.homedir)
-        except:
-            pass
-
-        self.sys.exit(0)
-
-    def complete_quit(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in ["reboot", "poweroff"] if i.startswith(text)]
-
-    do_exit = do_quit
-    do_EOF = do_quit
 
     def complete_filelist(self, text, line, begidx, endidx):
         dirname = ''

@@ -76,6 +76,13 @@ class HostsGroup(object):
             except TargetLockedError:
                 pass  # logged in Target#unlock
 
+    def lock(self, *a, **kw):
+        for x in self.hosts.values():
+            try:
+                x.lock(*a, **kw)
+            except TargetLockedError:
+                pass
+
     def query_versions(self, packages):
         rs = []
         for x in self.hosts.values():
