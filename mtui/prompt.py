@@ -153,6 +153,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Export)
         self._add_subcommand(commands.SFTPPut)
         self._add_subcommand(commands.SFTPGet)
+        self._add_subcommand(commands.Checkout)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -563,24 +564,6 @@ class CommandPrompt(cmd.Cmd):
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
-
-    @requires_update
-    def do_checkout(self, args):
-        """
-        Update template files from the SVN.
-
-        checkout
-        Keyword arguments:
-        none
-        """
-
-        try:
-            subprocess.check_call(
-                'svn up'.split(),
-                cwd=self.metadata.report_wd())
-        except Exception:
-            self.log.error('updating template failed')
-            self.log.debug(format_exc())
 
     def do_edit(self, args):
         """
