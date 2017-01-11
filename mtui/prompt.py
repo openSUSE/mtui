@@ -151,6 +151,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.DoSave)
         self._add_subcommand(commands.LoadTemplate)
         self._add_subcommand(commands.HostState)
+        self._add_subcommand(commands.Export)
 
 
         self.stdout = self.sys.stdout
@@ -682,67 +683,6 @@ class CommandPrompt(cmd.Cmd):
                 i for i in [
                     'file,',
                     'template'] if i.startswith(text)]
-
-    @requires_update
-    def do_export(self, args):
-        """
-        Exports the gathered update data to template file. This includes
-        the pre/post package versions and the update log. An output file could
-        be specified, if none is specified, the output is written to the
-        current testing template.
-        To export a specific updatelog, provide the hostname as parameter.
-
-        export [filename][,hostname][,force]
-        Keyword arguments:
-        filename -- output template file name
-        hostname -- host update log to export
-        force    -- overwrite template if it exists
-        """
-
-        force = False
-        hostname = None
-        filename = self.metadata.path
-
-        parameters = filter(None, args.split(','))
-        for parameter in list(parameters):
-            if parameter in ['force']:
-                force = True
-                parameters.remove('force')
-            if parameter in self.targets:
-                hostname = parameter
-                parameters.remove(hostname)
-
-        if parameters:
-            filename = parameters[0]
-
-        try:
-            template = self.metadata.generate_templatefile(hostname)
-        except Exception as e:
-            self.log.error('failed to export XML')
-            self.log.error(e)
-            self.log.debug(format_exc(e))
-            return
-
-        if os.path.exists(filename) and not force:
-            self.log.warning('file %s exists.' % filename)
-            if not prompt_user('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
-                filename += '.' + timestamp()
-
-        self.log.info('exporting XML to %s' % filename)
-        try:
-            with open(filename, 'w') as f:
-                f.write('\n'.join(l.rstrip().encode('utf-8')
-                        for l in template))
-        except IOError as error:
-            self.println(
-                'failed to write {}: {}'.format(
-                    filename,
-                    error.strerror))
-        else:
-            self.println('wrote template to {}'.format(filename))
-
-    def complete_export(self, text, line, begidx, endidx):
-        return self.complete_hostlist(text, line, begidx, endidx, ['force'])
 
     def _do_save_impl(self, path='log.xml'):
         if not path.startswith('/'):
