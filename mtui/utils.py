@@ -38,7 +38,7 @@ try:
 except NameError:
     user_input = input
 
-flatten = lambda xs: [y for ys in xs for y in ys if not y is None]
+flatten = lambda xs: [y for ys in xs for y in ys if y is not None]
 
 
 def timestamp():
@@ -316,9 +316,6 @@ def complete_choices(synonyms, line, text, hostnames=None):
     :param line: line from L{cmd.Cmd} completion callback
     :param text: text from L{cmd.Cmd} completion callback
     """
-    # TODO: there is argcomplete package as bash completion for
-    # argparse that may simplify this, but it declares support for
-    # 2.7 and 3.3 only
 
     if not hostnames:
         hostnames = []
@@ -348,3 +345,23 @@ def complete_choices(synonyms, line, text, hostnames=None):
             endchoices.append(c)
 
     return endchoices
+
+def complete_choices_filelist(synonyms, line, text, hostnames=None):
+    dirname = ''
+    filename = ''
+
+    if text.startswith('~'):
+        text = text.replace('~', os.path.expanduser('~'), 1)
+        text += '/'
+
+    if '/' in text:
+        dirname = '/'.join(text.split('/')[:-1])
+        dirname += '/'
+
+    if not dirname:
+        dirname = './'
+
+    synonyms += [(dirname + i,)
+                 for i in os.listdir(dirname) if i.startswith(filename)]
+
+    return complete_choices(synonyms, line, text, hostnames)
