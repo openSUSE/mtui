@@ -30,3 +30,4 @@ from mtui.commands.quit import DEOF, Quit, QExit
 from mtui.commands.save import DoSave
 from mtui.commands.loadtemplate import LoadTemplate
 from mtui.commands.export import Export
+from mtui.commands.sftpcmd import SFTPPut, SFTPGet
