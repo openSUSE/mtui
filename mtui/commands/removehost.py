@@ -21,7 +21,7 @@ class RemoveHost(Command):
         return parser
 
     def run(self):
-        targets = self.parse_hosts(henabled=None).keys()
+        targets = self.parse_hosts(enabled=None).keys()
 
         for target in targets:
             self.targets[target].close()
