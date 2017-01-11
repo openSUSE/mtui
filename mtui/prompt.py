@@ -7,7 +7,6 @@ import os
 import cmd
 import readline
 import subprocess
-import glob
 
 from traceback import format_exc
 
@@ -152,7 +151,8 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.LoadTemplate)
         self._add_subcommand(commands.HostState)
         self._add_subcommand(commands.Export)
-
+        self._add_subcommand(commands.SFTPPut)
+        self._add_subcommand(commands.SFTPGet)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -581,55 +581,6 @@ class CommandPrompt(cmd.Cmd):
         except Exception:
             self.log.error('updating template failed')
             self.log.debug(format_exc())
-
-    def do_put(self, args):
-        """
-        Uploads files to all enabled hosts. Multiple files can be selected
-        with special patterns according to the rules used by the Unix shell
-        (i.e. *, ?, []). The complete filepath on the remote hosts is shown
-        after the upload. put has also directory completion.
-
-        put <local filename>
-        Keyword arguments:
-        filename -- file to upload to the target hosts
-        """
-
-        if not args:
-            self.parse_error(self.do_put, args)
-            return
-
-        for filename in glob.glob(args):
-            if not os.path.isfile(filename):
-                continue
-
-            remote = self.metadata.target_wd(os.path.basename(filename))
-
-            self.targets.put(filename, remote)
-            self.log.info('uploaded {0} to {1}'.format(filename, remote))
-
-    def complete_put(self, text, line, begidx, endidx):
-        return self.complete_filelist(text, line, begidx, endidx)
-
-    def do_get(self, args):
-        """
-        Downloads a file from all enabled hosts. Multiple files cannot be
-        selected. Files are saved in the $TEMPLATE_DIR/downloads/ subdirectory
-        with the hostname as file extension. If the argument ends with a
-        slash '/', it will be treated as a folder and all its contents will
-        be downloaded.
-
-        get <remote filename>
-        Keyword arguments:
-        filename -- file to download from the target hosts
-        """
-
-        if not args:
-            self.parse_error(self.do_get, args)
-            return
-
-        self.metadata.perform_get(self.targets, args)
-
-        self.log.info('downloaded {0}'.format(args))
 
     def do_edit(self, args):
         """
