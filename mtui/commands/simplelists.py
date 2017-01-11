@@ -192,7 +192,7 @@ class ListHistory(Command):
         return parser
 
     def run(self):
-        targets = self.parse_hosts(henabled=False)
+        targets = self.parse_hosts(enabled=False)
         option = [("{!s}".format(x))
                   for x in set(self.args.event) & self.filters]
 
