@@ -35,7 +35,7 @@ class LoadTemplate(Command):
             if not prompt_user(
                     msg.format(self.metadata.id),
                     ['y', 'Y', 'yes', 'YES', 'Yes'],
-                    self.interactive):
+                    self.prompt.interactive):
                 return
 
         re_add = []
