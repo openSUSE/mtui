@@ -32,7 +32,7 @@ class SessionName(Command):
 
     def run(self):
 
-        session = str(self.args.name[0])
+        session = self.args.name if self.args.name else self.metadata.id
 
         self.prompt.session = session
 
@@ -67,7 +67,7 @@ class SetLocation(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
 
-        loc = RefhostsFactory(state['config'],state['log']).get_locations()
+        loc = RefhostsFactory(state['config'], state['log']).get_locations()
 
         locations = [[str(x) for x in loc]]
 
@@ -154,4 +154,6 @@ class SetTimeout(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices([('-t', '--target'), ], line, text, state['hosts'].names())
+        return complete_choices(
+            [('-t', '--target'), ],
+            line, text, state['hosts'].names())
