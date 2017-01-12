@@ -7,7 +7,6 @@ import os
 import cmd
 import readline
 import subprocess
-import glob
 
 from traceback import format_exc
 
@@ -18,9 +17,7 @@ from mtui.refhost import *
 import mtui.notification as notification
 from mtui import commands
 from .argparse import ArgsParseFailure
-from mtui.refhost import Attributes
 from mtui.template import NullTestReport
-from mtui.template import OBSUpdateID
 from mtui.utils import requires_update
 
 try:
@@ -151,7 +148,11 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.DoSave)
         self._add_subcommand(commands.LoadTemplate)
         self._add_subcommand(commands.HostState)
-
+        self._add_subcommand(commands.Export)
+        self._add_subcommand(commands.SFTPPut)
+        self._add_subcommand(commands.SFTPGet)
+        self._add_subcommand(commands.Checkout)
+        self._add_subcommand(commands.Edit)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -286,7 +287,7 @@ class CommandPrompt(cmd.Cmd):
             params = cmdline.strip()
         elif params_type == set:
             params = set([arg.strip()
-                         for arg in cmdline.split(',') if arg.strip()])
+                          for arg in cmdline.split(',') if arg.strip()])
 
         if 'all' in tselected or tselected == set():
             targets = self.targets.select(enabled=True)
@@ -346,11 +347,8 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     cases.append(str(int(case)))
                 except ValueError:
-                    cases = [
-                        k for k,
-                        v in self.testopia.testcases.items() if v['summary'].replace(
-                            '_',
-                            ' ') in case]
+                    cases = [k for k, v in self.testopia.testcases.items()
+                             if v['summary'].replace('_', ' ') in case]
 
             for case_id in cases:
                 testcase = self.testopia.get_testcase(case_id)
@@ -489,10 +487,8 @@ class CommandPrompt(cmd.Cmd):
             except ValueError:
                 try:
                     case_id = [
-                        k for k,
-                        v in self.testopia.testcases.items() if v['summary'].replace(
-                            '_',
-                            ' ') in case][0]
+                        k for k, v in self.testopia.testcases.items()
+                        if v['summary'].replace('_', ' ') in case][0]
                 except IndexError:
                     self.log.critical(
                         'case_id for testcase %s not found' %
@@ -563,187 +559,6 @@ class CommandPrompt(cmd.Cmd):
         self.metadata = tr
         self.targets = tr.targets
 
-    @requires_update
-    def do_checkout(self, args):
-        """
-        Update template files from the SVN.
-
-        checkout
-        Keyword arguments:
-        none
-        """
-
-        try:
-            subprocess.check_call(
-                'svn up'.split(),
-                cwd=self.metadata.report_wd())
-        except Exception:
-            self.log.error('updating template failed')
-            self.log.debug(format_exc())
-
-    def do_put(self, args):
-        """
-        Uploads files to all enabled hosts. Multiple files can be selected
-        with special patterns according to the rules used by the Unix shell
-        (i.e. *, ?, []). The complete filepath on the remote hosts is shown
-        after the upload. put has also directory completion.
-
-        put <local filename>
-        Keyword arguments:
-        filename -- file to upload to the target hosts
-        """
-
-        if not args:
-            self.parse_error(self.do_put, args)
-            return
-
-        for filename in glob.glob(args):
-            if not os.path.isfile(filename):
-                continue
-
-            remote = self.metadata.target_wd(os.path.basename(filename))
-
-            self.targets.put(filename, remote)
-            self.log.info('uploaded {0} to {1}'.format(filename, remote))
-
-    def complete_put(self, text, line, begidx, endidx):
-        return self.complete_filelist(text, line, begidx, endidx)
-
-    def do_get(self, args):
-        """
-        Downloads a file from all enabled hosts. Multiple files cannot be
-        selected. Files are saved in the $TEMPLATE_DIR/downloads/ subdirectory
-        with the hostname as file extension. If the argument ends with a
-        slash '/', it will be treated as a folder and all its contents will
-        be downloaded.
-
-        get <remote filename>
-        Keyword arguments:
-        filename -- file to download from the target hosts
-        """
-
-        if not args:
-            self.parse_error(self.do_get, args)
-            return
-
-        self.metadata.perform_get(self.targets, args)
-
-        self.log.info('downloaded {0}'.format(args))
-
-    def do_edit(self, args):
-        """
-        Edit a local file, the testing template, the specfile or a patch.
-        The evironment variable EDITOR is processed to find the prefered
-        editor. If EDITOR is empty, "vi" is set as default.
-
-        edit file,<filename>
-        edit template
-        Keyword arguments:
-        filename -- edit filename
-        template -- edit template
-        """
-
-        (command, _, filename) = args.partition(',')
-
-        editor = os.environ.get('EDITOR', 'vi')
-
-        # all but the file command needs template data. skip if template
-        # isn't loaded
-        if not self.metadata and command != 'file':
-            self.log.error('no testing template loaded')
-            return
-
-        if command == 'file':
-            path = filename
-        elif command == 'template':
-            path = self.metadata.path
-        else:
-            self.parse_error(self.do_edit, args)
-            return
-
-        try:
-            subprocess.check_call([editor, path])
-        except Exception:
-            self.log.error("failed to run %s" % editor)
-            self.log.debug(format_exc())
-
-    def complete_edit(self, text, line, begidx, endidx):
-        if 'file,' in line:
-            return self.complete_filelist(
-                text.replace(
-                    'file,',
-                    '',
-                    1),
-                line,
-                begidx,
-                endidx)
-        else:
-            return [
-                i for i in [
-                    'file,',
-                    'template'] if i.startswith(text)]
-
-    @requires_update
-    def do_export(self, args):
-        """
-        Exports the gathered update data to template file. This includes
-        the pre/post package versions and the update log. An output file could
-        be specified, if none is specified, the output is written to the
-        current testing template.
-        To export a specific updatelog, provide the hostname as parameter.
-
-        export [filename][,hostname][,force]
-        Keyword arguments:
-        filename -- output template file name
-        hostname -- host update log to export
-        force    -- overwrite template if it exists
-        """
-
-        force = False
-        hostname = None
-        filename = self.metadata.path
-
-        parameters = filter(None, args.split(','))
-        for parameter in list(parameters):
-            if parameter in ['force']:
-                force = True
-                parameters.remove('force')
-            if parameter in self.targets:
-                hostname = parameter
-                parameters.remove(hostname)
-
-        if parameters:
-            filename = parameters[0]
-
-        try:
-            template = self.metadata.generate_templatefile(hostname)
-        except Exception as e:
-            self.log.error('failed to export XML')
-            self.log.error(e)
-            self.log.debug(format_exc(e))
-            return
-
-        if os.path.exists(filename) and not force:
-            self.log.warning('file %s exists.' % filename)
-            if not prompt_user('should i overwrite %s? (y/N) ' % filename, ['y', 'yes'], self.interactive):
-                filename += '.' + timestamp()
-
-        self.log.info('exporting XML to %s' % filename)
-        try:
-            with open(filename, 'w') as f:
-                f.write('\n'.join(l.rstrip().encode('utf-8')
-                        for l in template))
-        except IOError as error:
-            self.println(
-                'failed to write {}: {}'.format(
-                    filename,
-                    error.strerror))
-        else:
-            self.println('wrote template to {}'.format(filename))
-
-    def complete_export(self, text, line, begidx, endidx):
-        return self.complete_hostlist(text, line, begidx, endidx, ['force'])
-
     def _do_save_impl(self, path='log.xml'):
         if not path.startswith('/'):
             dir_ = self.metadata.report_wd()
@@ -761,73 +576,6 @@ class CommandPrompt(cmd.Cmd):
 
         with open(path, 'w') as f:
             f.write(self.metadata.generate_xmllog())
-
-    def complete_filelist(self, text, line, begidx, endidx):
-        dirname = ''
-        filename = ''
-
-        if text.startswith('~'):
-            text = text.replace('~', os.path.expanduser('~'), 1)
-            text += '/'
-
-        if '/' in text:
-            dirname = '/'.join(text.split('/')[:-1])
-            dirname += '/'
-
-        if not dirname:
-            dirname = './'
-
-        filename = text.split('/')[-1]
-
-        return [
-            dirname +
-            i for i in os.listdir(dirname) if i.startswith(filename)]
-
-    def complete_hostlist(self, text, line, begidx, endidx, appendix=[]):
-        return [
-            i for i in list(
-                self.targets) +
-            appendix if i.startswith(text) and i not in line]
-
-    def complete_hostlist_with_all(
-            self,
-            text,
-            line,
-            begidx,
-            endidx,
-            appendix=[]):
-        return [
-            i for i in list(
-                self.targets) +
-            ['all'] +
-            appendix if i.startswith(text) and i not in line]
-
-    def complete_enabled_hostlist(
-            self,
-            text,
-            line,
-            begidx,
-            endidx,
-            appendix=[]):
-        return [
-            i for i in list(
-                self.targets.select(
-                    enabled=True)) +
-            appendix if i.startswith(text) and i not in line]
-
-    def complete_enabled_hostlist_with_all(
-            self,
-            text,
-            line,
-            begidx,
-            endidx,
-            appendix=[]):
-        return [
-            i for i in list(
-                self.targets.select(
-                    enabled=True)) +
-            ['all'] +
-            appendix if i.startswith(text) and i not in line]
 
     def complete_packagelist(self, text, line, begidx, endidx, appendix=[]):
         return [i for i in self.metadata.get_package_list() if i.startswith(
@@ -856,7 +604,3 @@ class CommandPrompt(cmd.Cmd):
                     'do_',
                     ''),
                 method.__doc__))
-
-
-def user_deprecation(log, msg):
-    log.warning(msg)

@@ -30,18 +30,11 @@ def get_parser(sys):
         help='override config mtui.location'
     )
     p.add_argument(
-        '-a', '--autoadd',
-        type=str,
-        action='append',
-        help='autoconnect to hosts defined by cumulative attributes'
-    )
-    p.add_argument(
         '-t', '--template_dir',
         type=str,
         help='override config mtui.template_dir'
     )
-    g = p.add_mutually_exclusive_group()
-    g.add_argument(
+    p.add_argument(
         '-r', '--review-id',
         type=OBSUpdateID,
         help='OBS request review id\nexample: SUSE:Maintenance:1:1'
@@ -125,9 +118,6 @@ def run_mtui(
     if args.sut:
         for x in args.sut:
             prompt.do_add_host(x)
-
-    if args.autoadd:
-        prompt.do_autoadd(" ".join(args.autoadd))
 
     prompt.interactive = not args.noninteractive
 
