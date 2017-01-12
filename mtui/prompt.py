@@ -154,6 +154,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.SFTPPut)
         self._add_subcommand(commands.SFTPGet)
         self._add_subcommand(commands.Checkout)
+        self._add_subcommand(commands.Edit)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -564,59 +565,6 @@ class CommandPrompt(cmd.Cmd):
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
-
-    def do_edit(self, args):
-        """
-        Edit a local file, the testing template, the specfile or a patch.
-        The evironment variable EDITOR is processed to find the prefered
-        editor. If EDITOR is empty, "vi" is set as default.
-
-        edit file,<filename>
-        edit template
-        Keyword arguments:
-        filename -- edit filename
-        template -- edit template
-        """
-
-        (command, _, filename) = args.partition(',')
-
-        editor = os.environ.get('EDITOR', 'vi')
-
-        # all but the file command needs template data. skip if template
-        # isn't loaded
-        if not self.metadata and command != 'file':
-            self.log.error('no testing template loaded')
-            return
-
-        if command == 'file':
-            path = filename
-        elif command == 'template':
-            path = self.metadata.path
-        else:
-            self.parse_error(self.do_edit, args)
-            return
-
-        try:
-            subprocess.check_call([editor, path])
-        except Exception:
-            self.log.error("failed to run %s" % editor)
-            self.log.debug(format_exc())
-
-    def complete_edit(self, text, line, begidx, endidx):
-        if 'file,' in line:
-            return self.complete_filelist(
-                text.replace(
-                    'file,',
-                    '',
-                    1),
-                line,
-                begidx,
-                endidx)
-        else:
-            return [
-                i for i in [
-                    'file,',
-                    'template'] if i.startswith(text)]
 
     def _do_save_impl(self, path='log.xml'):
         if not path.startswith('/'):
