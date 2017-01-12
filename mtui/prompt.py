@@ -17,9 +17,7 @@ from mtui.refhost import *
 import mtui.notification as notification
 from mtui import commands
 from .argparse import ArgsParseFailure
-from mtui.refhost import Attributes
 from mtui.template import NullTestReport
-from mtui.template import OBSUpdateID
 from mtui.utils import requires_update
 
 try:
@@ -289,7 +287,7 @@ class CommandPrompt(cmd.Cmd):
             params = cmdline.strip()
         elif params_type == set:
             params = set([arg.strip()
-                         for arg in cmdline.split(',') if arg.strip()])
+                          for arg in cmdline.split(',') if arg.strip()])
 
         if 'all' in tselected or tselected == set():
             targets = self.targets.select(enabled=True)
@@ -349,11 +347,8 @@ class CommandPrompt(cmd.Cmd):
                 try:
                     cases.append(str(int(case)))
                 except ValueError:
-                    cases = [
-                        k for k,
-                        v in self.testopia.testcases.items() if v['summary'].replace(
-                            '_',
-                            ' ') in case]
+                    cases = [k for k, v in self.testopia.testcases.items()
+                             if v['summary'].replace('_', ' ') in case]
 
             for case_id in cases:
                 testcase = self.testopia.get_testcase(case_id)
@@ -492,10 +487,8 @@ class CommandPrompt(cmd.Cmd):
             except ValueError:
                 try:
                     case_id = [
-                        k for k,
-                        v in self.testopia.testcases.items() if v['summary'].replace(
-                            '_',
-                            ' ') in case][0]
+                        k for k, v in self.testopia.testcases.items()
+                        if v['summary'].replace('_', ' ') in case][0]
                 except IndexError:
                     self.log.critical(
                         'case_id for testcase %s not found' %
@@ -584,73 +577,6 @@ class CommandPrompt(cmd.Cmd):
         with open(path, 'w') as f:
             f.write(self.metadata.generate_xmllog())
 
-    def complete_filelist(self, text, line, begidx, endidx):
-        dirname = ''
-        filename = ''
-
-        if text.startswith('~'):
-            text = text.replace('~', os.path.expanduser('~'), 1)
-            text += '/'
-
-        if '/' in text:
-            dirname = '/'.join(text.split('/')[:-1])
-            dirname += '/'
-
-        if not dirname:
-            dirname = './'
-
-        filename = text.split('/')[-1]
-
-        return [
-            dirname +
-            i for i in os.listdir(dirname) if i.startswith(filename)]
-
-    def complete_hostlist(self, text, line, begidx, endidx, appendix=[]):
-        return [
-            i for i in list(
-                self.targets) +
-            appendix if i.startswith(text) and i not in line]
-
-    def complete_hostlist_with_all(
-            self,
-            text,
-            line,
-            begidx,
-            endidx,
-            appendix=[]):
-        return [
-            i for i in list(
-                self.targets) +
-            ['all'] +
-            appendix if i.startswith(text) and i not in line]
-
-    def complete_enabled_hostlist(
-            self,
-            text,
-            line,
-            begidx,
-            endidx,
-            appendix=[]):
-        return [
-            i for i in list(
-                self.targets.select(
-                    enabled=True)) +
-            appendix if i.startswith(text) and i not in line]
-
-    def complete_enabled_hostlist_with_all(
-            self,
-            text,
-            line,
-            begidx,
-            endidx,
-            appendix=[]):
-        return [
-            i for i in list(
-                self.targets.select(
-                    enabled=True)) +
-            ['all'] +
-            appendix if i.startswith(text) and i not in line]
-
     def complete_packagelist(self, text, line, begidx, endidx, appendix=[]):
         return [i for i in self.metadata.get_package_list() if i.startswith(
             text) and i not in line]
@@ -678,7 +604,3 @@ class CommandPrompt(cmd.Cmd):
                     'do_',
                     ''),
                 method.__doc__))
-
-
-def user_deprecation(log, msg):
-    log.warning(msg)

@@ -24,12 +24,6 @@ def test_argparser_sut():
     a = p.parse_args(["-s", "foo", "--sut", "bar"])
     eq_(a.sut, ["foo", "bar"])
 
-def test_argparser_autoadd():
-    # TODO: validate attributes
-    p = get_parser(SysFake())
-    a = p.parse_args(["-a", "foo", "--autoadd", "bar"])
-    eq_(a.autoadd, ["foo", "bar"])
-
 def helper_parse_reviewid(rrid):
     return get_parser(SysFake()).parse_args(
         [ "-r"
