@@ -24,16 +24,12 @@ class ZypperUpdate(Update):
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError('RPM Error', target.hostname)
         if 'The following package is not supported by its vendor' in stdout:
             self.log.critical(
-                '%s: package support is uncertain:',
-                target.hostname)
+                '{!s}: package support is uncertain:'.format(target.hostname))
             marker = 'The following package is not supported by its vendor:\n'
             start = stdout.find(marker)
             end = stdout.find('\n\n', start)
@@ -103,11 +99,8 @@ class ZypperPrepare(Prepare):
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError(target.hostname, 'RPM Error')
 
 
@@ -154,7 +147,7 @@ class ZypperDowngrade(Downgrade):
             | sed "s, ,,g" \
             | awk -F "|" '{{ print $2,"=",$4 }}'
         '''.format(' '.join(self.packages))
-        self.install_command = 'rpm -q %s &>/dev/null && zypper -n in -C --force-resolution -y -l %s=%s'
+        self.install_command = 'rpm -q {!s} &>/dev/null && zypper -n in -C --force-resolution -y -l {!s}={!s}'
 
 
 class RedHatDowngrade(Downgrade):

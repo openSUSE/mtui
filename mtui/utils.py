@@ -280,7 +280,7 @@ def get_release(systems):
         'sle[sd]12': '12',
         'sap-aio12': '12',
         'sle[sd]11': '11',
-        '(manager2|sle.11|sles4vmware)': '11',
+        '(manager2|sle.11|sles4vmware|studio)': '11',
         '(manager3|mgr|cloud|slms)': '12'
     }.items():
         if re.search(rexp, systems):

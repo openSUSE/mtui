@@ -98,7 +98,7 @@ class Downgrade(object):
                 temp = self.targets.copy()
                 for hn in self.targets:
                     try:
-                        command = self.install_command % (
+                        command = self.install_command.format(
                             package, package, versions[hn][package])
                         self.commands.update({hn: command})
                     except KeyError:
