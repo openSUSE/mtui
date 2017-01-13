@@ -5,7 +5,7 @@
 
 from __future__ import print_function
 
-from mtui.target import *
+from mtui.target import DictWithInjections
 from mtui.target.actions import UpdateError
 from mtui.target.downgrade import Downgrade
 from mtui.target.install import Install
@@ -70,7 +70,8 @@ class RedHatUpdate(Update):
         ]
 
 Updater = DictWithInjections({
-    'ZYPPER': ZypperOBSUpdate,
+    '12': ZypperOBSUpdate,
+    '11': ZypperOBSUpdate,
     'YUM': RedHatUpdate,
 }, key_error=MissingUpdaterError)
 
@@ -133,7 +134,8 @@ class RedHatPrepare(Prepare):
 
 
 Preparer = DictWithInjections({
-    'ZYPPER': ZypperPrepare,
+    '12': ZypperPrepare,
+    '11': ZypperPrepare,
     'YUM': RedHatPrepare,
 }, key_error=MissingPreparerError)
 
@@ -163,7 +165,8 @@ class RedHatDowngrade(Downgrade):
             'yum -y downgrade {!s}'.format(' '.join(self.packages))]
 
 Downgrader = DictWithInjections({
-    'ZYPPER': ZypperDowngrade,
+    '12': ZypperDowngrade,
+    '11': ZypperDowngrade,
     'YUM': RedHatDowngrade,
 }, key_error=MissingDowngraderError)
 
@@ -193,7 +196,8 @@ class RedHatInstall(Install):
 
 
 Installer = DictWithInjections({
-    'ZYPPER': ZypperInstall,
+    '12': ZypperInstall,
+    '11': ZypperInstall,
     'YUM': RedHatInstall,
 }, key_error=MissingInstallerError)
 
@@ -223,6 +227,7 @@ class RedHatUninstall(Install):
 
 
 Uninstaller = DictWithInjections({
-    'ZYPPER': ZypperUninstall,
+    '12': ZypperUninstall,
+    '11': ZypperUninstall,
     'YUM': RedHatUninstall,
 }, key_error=MissingUninstallerError)

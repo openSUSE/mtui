@@ -271,15 +271,17 @@ else:
 class UnknownSystemError(ValueError):
     pass
 
-
+# TODO: this is pretty stupid ..
 def get_release(systems):
     systems = ' '.join(systems)
 
     for rexp, release in {
         'rhel': 'YUM',
-        'sle[sd]12': 'ZYPPER',
-        'sap-aio12': 'ZYPPER',
-        '(manager|mgr|sles4vmware|cloud|studio|slms|sle.11)': 'ZYPPER',
+        'sle[sd]12': '12',
+        'sap-aio12': '12',
+        'sle[sd]11': '11',
+        '(manager2|sle.11|sles4vmware)': '11',
+        '(manager3|mgr|cloud|slms)': '12'
     }.items():
         if re.search(rexp, systems):
             return release

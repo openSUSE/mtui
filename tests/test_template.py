@@ -13,7 +13,7 @@ import os
 from mtui.template import NullTestReport
 from mtui.template import OBSTestReport
 from mtui.template import _TemplateIOError
-from mtui.updater import UnknownSystemError
+from mtui.utils import UnknownSystemError
 from mtui.target import Target
 from mtui.types.obs import RequestReviewID
 from mtui import messages
@@ -27,9 +27,11 @@ from .utils import unused
 from .utils import TRF
 from .utils import refhosts_fixtures
 
+
 @raises(_TemplateIOError)
 def test_TestReport__open_and_parse_raises_templateioerror():
     class TestableReport(OBSTestReport):
+
         def _parse(self, f):
             # NOTE: here we are abusing the fact that the try/except
             # wraps this function too, though it probably should not
@@ -40,8 +42,10 @@ def test_TestReport__open_and_parse_raises_templateioerror():
 
     tr._open_and_parse(path)
 
+
 def test_TestReport__copy_scripts_dst_exists():
     class TestableReport(OBSTestReport):
+
         def _copytree(self, *args, **kw):
             raise OSError(EEXIST, 'strerr', args[1])
 
@@ -54,8 +58,10 @@ def test_TestReport__copy_scripts_dst_exists():
         "[Errno 17] strerr: 'foo'",
     ])
 
+
 def test_TestReport__copy_scripts_src_missing():
     class TestableReport(OBSTestReport):
+
         def _copytree(self, *args, **kw):
             raise OSError(ENOENT, 'strerr', args[0])
 
@@ -73,13 +79,16 @@ def test_TestReport__copy_scripts_src_missing():
 @raises(OSError)
 def test_TestReport__copy_scripts_on_error():
     class TestableReport(OBSTestReport):
+
         def _copytree(self, *args, **kw):
             raise OSError(1, 'strerr')
 
     tr = TRF(TestableReport)
     tr._copy_scripts(None, None, None)
 
+
 class TestTestReport_FileSystem_Hitters(TestCase):
+
     def setUp(self):
         self.tmp_dir = mkdtemp()
 
@@ -90,14 +99,16 @@ class TestTestReport_FileSystem_Hitters(TestCase):
         class TestableReport(OBSTestReport):
             t_copytree = []
             t_ensure_executable = []
+
             def _copytree(self, *args, **kw):
                 self.t_copytree.append((args, kw))
+
             def _ensure_executable(self, pattern):
                 self.t_ensure_executable.append(pattern)
 
         tr = TRF(TestableReport,
-            config = ConfigFake(dict(datadir = 'foodata'))
-        )
+                 config=ConfigFake(dict(datadir='foodata'))
+                 )
         tr.path = join(self.tmp_dir, 'foopath')
         tr.copy_scripts()
 
@@ -201,8 +212,10 @@ class TestTestReport_FileSystem_Hitters(TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp_dir)
 
+
 def test_TestReport_connect_targets():
     class TargetFake(Target):
+
         def __init__(self, *args, **kw):
             ok_('connect' not in kw)
             kw['connect'] = False
@@ -214,7 +227,7 @@ def test_TestReport_connect_targets():
 
     tr = TRF(OBSTestReport)
     tr.systems = {'foo': 'bar', 'qux': 'quux'}
-    tr.connect_targets(make_target = TargetFake)
+    tr.connect_targets(make_target=TargetFake)
     ts = tr.targets
 
     eq_(len(ts), 2)
@@ -224,64 +237,52 @@ def test_TestReport_connect_targets():
         eq_(t.hostname, k)
         eq_(t.system, v)
 
+
 def test_TestReport_refhosts_from_tp():
     """
     Test L{TestReport._refhosts_from_tp}
     """
     def check(case):
         tr = TRF(
-              OBSTestReport
-            , config = ConfigFake(
-                overrides = dict(
-                      refhosts_path = refhosts_fixtures['basic']
-                    , refhosts_resolvers = 'path'
-                    , location = 'foolocation'
-                    , template_dir = 'footpldir'
-                )
-            )
-        )
+            OBSTestReport,
+            config=ConfigFake(
+                overrides=dict(
+                    refhosts_path=refhosts_fixtures['basic'],
+                    refhosts_resolvers='path',
+                    location='foolocation',
+                    template_dir='footpldir')))
 
         tr._refhosts_from_tp(case.testplatform)
         eq_(set(case.hosts.keys()), set(tr.systems.keys()))
         eq_(
-              LogTestingWrap(tr.log).all()
-            , dict([(k, [v.format(**case.__dict__) for v in vs])
-                for k,vs in case.logs.items()
-            ])
-        #    , case.name
+              LogTestingWrap(tr.log).all(), dict([(k, [v.format(**case.__dict__) for v in vs])
+                                                  for k, vs in case.logs.items()
+                                                  ])
+            #    , case.name
         )
 
     Case = namedtuple('Case', ['name', 'testplatform', 'hosts', 'logs'])
 
     cases = [
         Case(
-              'happy path'
-            , 'base=sles(major=11,minor=sp3);arch=[i386,x86_64]'
-            , {
-                  'fletcher.example.com': 'sles11sp3-x86_64'
-                , 'cunningham.example.com': 'sles11sp3-i386'
-            }
-            , LogTestingWrap().all()
-        ), Case(
-              'failure to parse testplatform'
-            , 'unparsable testplatform'
-            , {}
-            , LogTestingWrap().\
-                warning("failed to parse testplatform '{testplatform}'").\
-                error('error when parsing line "{testplatform}"').\
-                all()
-        ), Case(
-              'nothing found in refhosts'
-            , 'base=sles(major=11,minor=sp3);arch=[ppc64]'
-            , {}
-            , LogTestingWrap().\
-                warning("nothing found for testplatform '{testplatform}'").\
-                all()
-        )
-    ]
+            'happy path', 'base=sles(major=11,minor=sp3);arch=[i386,x86_64]',
+            {'fletcher.example.com': 'sles11sp3-x86_64',
+             'cunningham.example.com': 'sles11sp3-i386'},
+            LogTestingWrap().all()),
+        Case(
+            'failure to parse testplatform', 'unparsable testplatform', {},
+            LogTestingWrap().warning(
+                "failed to parse testplatform '{testplatform}'").error(
+                'error when parsing line "{testplatform}"').all()),
+        Case(
+            'nothing found in refhosts',
+            'base=sles(major=11,minor=sp3);arch=[ppc64]', {},
+            LogTestingWrap().warning(
+                "nothing found for testplatform '{testplatform}'").all())]
 
     for c in cases:
         yield check, c
+
 
 def test_TestReportParse_parsed_testplatform():
     tr = TRF(OBSTestReport)
@@ -295,6 +296,7 @@ def test_TestReportParse_parsed_testplatform():
     tr._parse(tpl)
     ok_(tr.testplatforms, tps)
 
+
 def test_obs_get_testsuite_comment():
     tr = TRF(OBSTestReport)
     tr.rrid = RequestReviewID("SUSE:Maintenance:1:1")
@@ -303,24 +305,28 @@ def test_obs_get_testsuite_comment():
         tr.rrid,
     ))
 
+
 def test_NullTestReport():
     tr = NullTestReport(ConfigFake(), LogFake())
     assert_false(tr)
     eq_(tr.id, None)
 
+
 def test_select():
     class TargetFake(Target):
+
         def __init__(self, *args, **kw):
-            super(TargetFake, self).__init__(*args, connect = False, **kw)
+            super(TargetFake, self).__init__(*args, connect=False, **kw)
+
         def add_history(self, comment):
             pass
     tr = NullTestReport(ConfigFake(), LogFake())
     tr.systems.update(
-      foo = 'fubar',
-      bar = 'snafu',
-      qux = 'snafubar',
+      foo='fubar',
+      bar='snafu',
+      qux='snafubar',
     )
-    tr.connect_targets(make_target = TargetFake)
+    tr.connect_targets(make_target=TargetFake)
     ts = tr.targets
     ts['qux'].state = 'disabled'
 
@@ -330,43 +336,40 @@ def test_select():
     eq_(selected, set('foo bar qux'.split()))
     selected = set(ts.select('bar qux'.split()).keys())
     eq_(selected, set('bar qux'.split()))
-    selected = set(ts.select(enabled = True).keys())
+    selected = set(ts.select(enabled=True).keys())
     eq_(selected, set('foo bar'.split()))
-    selected = set(ts.select(['qux'], enabled = True).keys())
+    selected = set(ts.select(['qux'], enabled=True).keys())
     eq_(selected, set())
 
+
 def test_get_release():
-    cases = [
-        ] + [
-            ({'foo': x}, 'ZYPPER') for x in
-            [
-                'sled12None-x86_64',
-                'sles12None-x86_64',
-                'sles12None-x86_64',
-                'sled11sp3-i386',
-                'sled11sp3-x86_64',
-                'sles11sp3-i386',
-                'sles11sp3-s390x',
-                'sles11sp3-x86_64',
-                'mgr',
-                'sles4vmware',
-                'cloud',
-                'studio',
-                'slms',
-                'manager',
-            ]
-        ] + [({'foo': 'rhel'}, 'YUM')]
+    cases = [] + [({'foo': x},
+                   '12')
+                  for x
+                  in
+                  ['sled12None-x86_64', 'sles12None-x86_64', 'sles12None-x86_64', 'cloud',
+                   'slms', 'manager3']] + [({'foo': 'rhel'},
+                                            'YUM')] + [({'foo': x},
+                                                        '11')
+                                                       for x
+                                                       in
+                                                       ['sled11sp3-i386', 'sled11sp3-x86_64', 'sles11sp3-i386',
+                                                        'sles11sp3-s390x', 'sles11sp3-x86_64', 'manager2', 'studio',
+                                                        'sles4vmware']]
 
     for system, result in cases:
         yield check_release, OBSTestReport, system, result
+
 
 def check_release(report, systems, result):
     tr = TRF(report)
     tr.systems = systems
     eq_(tr.get_release(), result)
 
+
 def test_get_release_exc():
     yield raises(UnknownSystemError)(check_release), OBSTestReport, {'foo': ''}, unused
+
 
 def test_get_doers():
     t = TRF(OBSTestReport)

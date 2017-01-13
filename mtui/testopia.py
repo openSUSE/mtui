@@ -8,7 +8,9 @@ import collections
 
 from xml.sax import saxutils
 
-from mtui.connector.bugzilla import *
+#from mtui.connector.bugzilla import *
+from mtui.connector.bugzilla import Bugzilla
+
 from mtui.utils import nottest
 
 
@@ -250,9 +252,8 @@ class Testopia(object):
         values  -- Testopia testcase values
 
         """
-        # TODO: dead code ?
         try:
-            plans = self.plans[self.product]
+            plan = self.plans[self.product]
         except KeyError:
             self.log.error('no testplan found for product %s' % self.product)
             raise
@@ -262,7 +263,7 @@ class Testopia(object):
         testcase = {'status': 2,
                     'category': 2919,
                     'priority': 6,
-                    'plans': self.plans[self.product]
+                    'plans': plan
                     }
 
         for k, v in values.items():
