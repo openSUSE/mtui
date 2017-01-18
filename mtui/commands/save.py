@@ -17,7 +17,7 @@ class DoSave(Command):
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            'filename', default=[],
+            'filename', default='log.xml', nargs='?',
             help='save log as file filename')
         return parser
 
