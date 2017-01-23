@@ -26,7 +26,7 @@ class SFTPPut(Command):
         return parser
 
     def run(self):
-        for filename in glob(self.args.filename):
+        for filename in glob(self.args.filename[0]):
             if not os.path.isfile(filename):
                 continue
 
