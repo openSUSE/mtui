@@ -15,6 +15,7 @@ from mtui.prompt import CommandPrompt
 from mtui.display import CommandPromptDisplay
 from mtui.template import OBSUpdateID
 from mtui.messages import SvnCheckoutInterruptedError
+from mtui.utils import SUTParse
 from mtui import __version__
 
 
@@ -41,7 +42,7 @@ def get_parser(sys):
     )
     p.add_argument(
         '-s', '--sut',
-        type=str,
+        type=SUTParse,
         action='append',
         help='cumulatively override default hosts from template \n'
         "format: hostname,system"
@@ -117,7 +118,7 @@ def run_mtui(
 
     if args.sut:
         for x in args.sut:
-            prompt.do_add_host(x)
+            prompt.do_add_host(x.print_args())
 
     prompt.interactive = not args.noninteractive
 
