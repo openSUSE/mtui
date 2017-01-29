@@ -6,7 +6,7 @@ from argparse import FileType
 
 from .argparse import ArgumentParser
 from mtui.template import OBSUpdateID
-
+from mtui.utils import SUTParse
 
 from mtui import __version__
 
@@ -34,7 +34,7 @@ def get_parser(sys):
     )
     parser.add_argument(
         '-s', '--sut',
-        type=str,
+        type=SUTParse,
         action='append',
         help='cumulatively override default hosts from template \n'
         "format: hostname,system"
