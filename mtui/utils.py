@@ -303,6 +303,19 @@ class DictWithInjections(dict):
             raise self.key_error(x)
 
 
+class SUTParse(object):
+
+    def __init__(self, args):
+        # TODO add try except blocks
+        suts = args.split(",")
+        system = '-s {!s}'.format(suts[-1])
+        targets = ['-t {!s}'.format(i) for i in suts[0:-1]]
+        self.args = system + ' ' + ' '.join(targets)
+
+    def print_args(self):
+        return self.args
+
+
 def complete_choices(synonyms, line, text, hostnames=None):
     """
     :returns: [str] completion choices appropriate for given line and
@@ -347,6 +360,7 @@ def complete_choices(synonyms, line, text, hostnames=None):
             endchoices.append(c)
 
     return endchoices
+
 
 def complete_choices_filelist(synonyms, line, text, hostnames=None):
     dirname = ''
