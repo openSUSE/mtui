@@ -22,7 +22,7 @@ class SFTPPut(Command):
         parser.add_argument(
             'filename',
             nargs=1,
-            help='file to upload to a hosts')
+            help='file to upload to all hosts')
         return parser
 
     def run(self):
