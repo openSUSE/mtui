@@ -154,6 +154,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Checkout)
         self._add_subcommand(commands.Edit)
         self._add_subcommand(commands.TestopiaList)
+        self._add_subcommand(commands.TestopiaShow)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -246,11 +247,15 @@ class CommandPrompt(cmd.Cmd):
 
                 def complete(*args, **kw):
                     try:
+                        if self.metadata:
+                            self.ensure_testopia_loaded()
                         return c.complete({
                             'hosts': self.targets.select(),
                             'metadata': self.metadata,
                             'config': self.config,
-                            'log': self.log},
+                            'log': self.log,
+                            'testopia': self.testopia,
+                            },
                             *args,
                             **kw)
                     except Exception as e:
@@ -299,59 +304,6 @@ class CommandPrompt(cmd.Cmd):
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
-
-    @requires_update
-    def do_testopia_show(self, args):
-        """
-        Show Testopia testcase
-
-        testopia_show <testcase>[,testcase,...,testcase]
-        Keyword arguments:
-        testcase -- testcase ID
-        """
-
-        if args:
-            cases = []
-            url = self.config.bugzilla_url
-
-            self.ensure_testopia_loaded()
-
-            for case in args.split(','):
-                case = case.replace('_', ' ')
-                try:
-                    cases.append(str(int(case)))
-                except ValueError:
-                    cases = [k for k, v in self.testopia.testcases.items()
-                             if v['summary'].replace('_', ' ') in case]
-
-            for case_id in cases:
-                testcase = self.testopia.get_testcase(case_id)
-
-                if not testcase:
-                    continue
-
-                if testcase:
-                    self.display.testopia_show(
-                        url, case_id,
-                        testcase['summary'],
-                        testcase['status'],
-                        testcase['automated'],
-                        testcase['requirement'],
-                        testcase['setup'],
-                        testcase['action'],
-                        testcase['breakdown'],
-                        testcase['effect'],
-                    )
-        else:
-            self.parse_error(self.do_testopia_show, args)
-
-    def complete_testopia_show(self, text, line, begidx, endidx):
-        if not line.count(','):
-            return self.complete_testopia_testcaselist(
-                text,
-                line,
-                begidx,
-                endidx)
 
     @requires_update
     def do_testopia_create(self, args):
