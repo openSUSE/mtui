@@ -153,6 +153,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.SFTPGet)
         self._add_subcommand(commands.Checkout)
         self._add_subcommand(commands.Edit)
+        self._add_subcommand(commands.TestopiaList)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -298,33 +299,6 @@ class CommandPrompt(cmd.Cmd):
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
-
-    @requires_update
-    def do_testopia_list(self, args):
-        """
-        List all Testopia package testcases for the current product.
-        If now packages are set, testcases are displayed for the
-        current update.
-
-        testopia_list [package,package,...]
-        Keyword arguments:
-        package  -- packag to display testcases for
-        """
-
-        self.ensure_testopia_loaded(*filter(None, args.split(',')))
-
-        url = self.config.bugzilla_url
-
-        if not self.testopia.testcases:
-            self.log.info('no testcases found')
-
-        for tcid, tc in self.testopia.testcases.items():
-            self.display.testopia_list(
-                url,
-                tcid,
-                tc['summary'],
-                tc['status'],
-                tc['automated'])
 
     @requires_update
     def do_testopia_show(self, args):
