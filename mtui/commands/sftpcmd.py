@@ -26,8 +26,14 @@ class SFTPPut(Command):
         return parser
 
     def run(self):
-        for filename in glob(self.args.filename[0]):
+        files = glob(self.args.filename[0])
+        if not files:
+            self.log.error("File {!s} not found".format(self.args.filename[0]))
+            return
+
+        for filename in files:
             if not os.path.isfile(filename):
+                self.log.warn("Filename {!s} isn't file".format(filename))
                 continue
 
             remote = self.metadata.target_wd(os.path.basename(filename))
