@@ -118,7 +118,10 @@ def run_mtui(
 
     if args.sut:
         for x in args.sut:
-            prompt.do_add_host(x.print_args())
+            try:
+                prompt.do_add_host(x.print_args())
+            except:
+                pass
 
     prompt.interactive = not args.noninteractive
 
