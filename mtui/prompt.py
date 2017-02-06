@@ -155,6 +155,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Edit)
         self._add_subcommand(commands.TestopiaList)
         self._add_subcommand(commands.TestopiaShow)
+        self._add_subcommand(commands.TestopiaCreate)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -304,82 +305,6 @@ class CommandPrompt(cmd.Cmd):
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
-
-    @requires_update
-    def do_testopia_create(self, args):
-        """
-        Create new Testopia package testcase.
-        An editor is spawned to process a testcase template file.
-
-        testopia_create <package>,<summary>
-        Keyword arguments:
-        package  -- package to create testcase for
-        summary  -- testcase summary
-        """
-
-        if args:
-            url = self.config.bugzilla_url
-            testcase = {}
-            fields = [
-                'requirement:',
-                'setup:',
-                'breakdown:',
-                'action:',
-                'effect:']
-            (package, _, summary) = args.partition(',')
-
-            self.ensure_testopia_loaded()
-
-            fields.insert(0, 'status: proposed')
-            fields.insert(0, 'automated: no')
-            fields.insert(0, 'package: %s' % package)
-            fields.insert(0, 'summary: %s' % summary)
-
-            try:
-                edited = edit_text('\n'.join(fields))
-            except subprocess.CalledProcessError as e:
-                self.log.error("editor failed: %s" % e)
-                self.log.debug(format_exc())
-                return
-
-            if edited == '\n'.join(fields):
-                self.log.warning('testcase was not modified. not uploading.')
-                return
-
-            template = edited.replace('\n', '|br|')
-
-            for field in fields:
-                template = template.replace(
-                    '|br|%s:' %
-                    field.partition(':')[0],
-                    '\n%s:' %
-                    field.partition(':')[0])
-
-            lines = template.split('\n')
-            for line in lines:
-                key, _, value = line.partition(':')
-                if key == 'package':
-                    key = 'tags'
-                    value = 'packagename_{name},testcase_{name}'.format(
-                        name=value.strip())
-
-                testcase[key] = value.strip()
-
-            try:
-                case_id = self.testopia.create_testcase(testcase)
-            except Exception:
-                self.log.error('failed to create testcase')
-            else:
-                self.log.info(
-                    'created testcase %s/tr_show_case.cgi?case_id=%s' %
-                    (url, case_id))
-
-        else:
-            self.parse_error(self.do_testopia_create, args)
-
-    def complete_testopia_create(self, text, line, begidx, endidx):
-        if not line.count(','):
-            return self.complete_packagelist(text, line, begidx, endidx)
 
     @requires_update
     def do_testopia_edit(self, args):

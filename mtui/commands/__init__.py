@@ -35,3 +35,4 @@ from mtui.commands.checkout import Checkout
 from mtui.commands.edit import Edit
 from mtui.commands.testopialist import TestopiaList
 from mtui.commands.testopiashow import TestopiaShow
+from mtui.commands.testopiacreate import TestopiaCreate
