@@ -156,6 +156,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.TestopiaList)
         self._add_subcommand(commands.TestopiaShow)
         self._add_subcommand(commands.TestopiaCreate)
+        self._add_subcommand(commands.TestopiaEdit)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
@@ -306,94 +307,6 @@ class CommandPrompt(cmd.Cmd):
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
 
-    @requires_update
-    def do_testopia_edit(self, args):
-        """
-        Edit already existing Testopia package testcase.
-        An editor is spawned to process a testcase template file.
-
-        testopia_edit <testcase>
-        Keyword arguments:
-        testcase -- testcase ID
-        """
-
-        if args:
-            template = []
-            url = self.config.bugzilla_url
-            fields = [
-                'summary',
-                'automated',
-                'status',
-                'requirement',
-                'setup',
-                'breakdown',
-                'action',
-                'effect']
-
-            self.ensure_testopia_loaded()
-
-            case = args.replace('_', ' ')
-            try:
-                case_id = str(int(case))
-            except ValueError:
-                try:
-                    case_id = [
-                        k for k, v in self.testopia.testcases.items()
-                        if v['summary'].replace('_', ' ') in case][0]
-                except IndexError:
-                    self.log.critical(
-                        'case_id for testcase %s not found' %
-                        case)
-                    return
-
-            testcase = self.testopia.get_testcase(case_id)
-
-            if not testcase:
-                return
-
-            for field in fields:
-                template.append('%s: %s' % (field, testcase[field]))
-
-            try:
-                edited = edit_text('\n'.join(template))
-            except subprocess.CalledProcessError as e:
-                self.log.error("editor failed: %s" % e)
-                self.log.debug(format_exc())
-                return
-
-            if edited == '\n'.join(template):
-                self.log.warning('testcase was not modified. not uploading.')
-                return
-
-            template = edited.replace('\n', '|br|')
-
-            for field in fields:
-                template = template.replace('|br|%s' % field, '\n%s' % field)
-
-            lines = template.split('\n')
-            for line in lines:
-                key, _, value = line.partition(':')
-                testcase[key] = value.strip()
-
-            try:
-                self.testopia.modify_testcase(case_id, testcase)
-            except Exception:
-                self.log.error('failed to modify testcase %s' % case_id)
-            else:
-                self.log.info(
-                    'testcase saved: %s/tr_show_case.cgi?case_id=%s' %
-                    (url, case_id))
-        else:
-            self.parse_error(self.do_testopia_edit, args)
-
-    def complete_testopia_edit(self, text, line, begidx, endidx):
-        if not line.count(','):
-            return self.complete_testopia_testcaselist(
-                text,
-                line,
-                begidx,
-                endidx)
-
     def set_prompt(self, session=None):
         self.session = session
         session = ":"+str(session) if session else ''
@@ -427,31 +340,3 @@ class CommandPrompt(cmd.Cmd):
 
         with open(path, 'w') as f:
             f.write(self.metadata.generate_xmllog())
-
-    def complete_packagelist(self, text, line, begidx, endidx, appendix=[]):
-        return [i for i in self.metadata.get_package_list() if i.startswith(
-            text) and i not in line]
-
-    def complete_testopia_testcaselist(self, text, line, begidx, endidx):
-        self.ensure_testopia_loaded()
-
-        testcases = [
-            i['summary'].replace(
-                ' ',
-                '_') for i in self.testopia.testcases.values()]
-        return [i for i in testcases if i.startswith(text) and i not in line]
-
-    def parse_error(self, method, args):
-        self.println()
-        self.log.error(
-            'failed to parse command: %s %s' %
-            (method.__name__.replace(
-                'do_',
-                ''),
-                args))
-        self.println(
-            '{}: {}'.format(
-                method.__name__.replace(
-                    'do_',
-                    ''),
-                method.__doc__))
