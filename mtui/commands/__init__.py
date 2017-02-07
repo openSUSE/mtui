@@ -33,3 +33,7 @@ from mtui.commands.export import Export
 from mtui.commands.sftpcmd import SFTPPut, SFTPGet
 from mtui.commands.checkout import Checkout
 from mtui.commands.edit import Edit
+from mtui.commands.testopialist import TestopiaList
+from mtui.commands.testopiashow import TestopiaShow
+from mtui.commands.testopiacreate import TestopiaCreate
+from mtui.commands.testopiaedit import TestopiaEdit
