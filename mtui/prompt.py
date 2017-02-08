@@ -157,6 +157,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.TestopiaShow)
         self._add_subcommand(commands.TestopiaCreate)
         self._add_subcommand(commands.TestopiaEdit)
+        self._add_subcommand(commands.LocalRun)
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
