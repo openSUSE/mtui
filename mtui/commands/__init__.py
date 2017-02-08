@@ -37,3 +37,4 @@ from mtui.commands.testopialist import TestopiaList
 from mtui.commands.testopiashow import TestopiaShow
 from mtui.commands.testopiacreate import TestopiaCreate
 from mtui.commands.testopiaedit import TestopiaEdit
+from mtui.commands.localrun import LocalRun
