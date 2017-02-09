@@ -27,4 +27,4 @@ class LocalRun(Command):
             self.log.error("Missing argument")
             return
 
-        check_call(self.args.command)
+        check_call(' '.join(self.args.command),shell=True)
