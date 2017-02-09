@@ -3,6 +3,7 @@
 from mtui.template import OBSUpdateID
 from mtui.commands import Command
 from mtui.utils import prompt_user
+from mtui.utils import complete_choices
 
 
 class LoadTemplate(Command):
@@ -57,3 +58,10 @@ class LoadTemplate(Command):
         if self.args.chosts:
             for hostname, system in re_add:
                 self.metadata.add_target(hostname, system)
+
+    @staticmethod
+    def complete(_, text, line, begidx, endix):
+        return complete_choices(
+            [('-c', '--clean-hosts'),
+             ("SUSE:Maintenance:", "openSUSE:Maintenance:")],
+            line, text)
