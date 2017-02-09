@@ -8,17 +8,19 @@ import cmd
 import readline
 import subprocess
 
+import mtui.notification as notification
+
 from traceback import format_exc
 
-from mtui import messages
-from mtui.target import *
-from mtui.utils import *
-from mtui.refhost import *
-import mtui.notification as notification
-from mtui import commands
 from .argparse import ArgsParseFailure
+
+from mtui import commands
+from mtui import messages
 from mtui.template import NullTestReport
-from mtui.utils import requires_update
+from mtui.refhost import RefhostsFactory
+from mtui.utils import ensure_dir_exists
+from mtui.utils import timestamp
+from mtui.utils import prompt_user
 
 try:
     unicode
@@ -278,32 +280,6 @@ class CommandPrompt(cmd.Cmd):
         except Exception:
             self.log.error('failed to load reference hosts data')
             raise
-
-    def _parse_args(self, cmdline, params_type):
-        tavailable = set(self.targets.keys()) | set(['all'])
-        tselected = set()
-        params = None
-
-        while True:
-            arg, _, rest = cmdline.strip().partition(',')
-            if arg.strip() in tavailable:
-                tselected.add(arg.strip())
-                cmdline = rest
-            else:
-                break
-
-        if params_type == str:
-            params = cmdline.strip()
-        elif params_type == set:
-            params = set([arg.strip()
-                          for arg in cmdline.split(',') if arg.strip()])
-
-        if 'all' in tselected or tselected == set():
-            targets = self.targets.select(enabled=True)
-        else:
-            targets = self.targets.select(tselected, enabled=True)
-
-        return (targets, params)
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
