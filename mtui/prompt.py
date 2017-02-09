@@ -253,7 +253,10 @@ class CommandPrompt(cmd.Cmd):
                 def complete(*args, **kw):
                     try:
                         if self.metadata:
-                            self.ensure_testopia_loaded()
+                            try:
+                                self.ensure_testopia_loaded()
+                            except Exception as e:
+                                self.log.debug(format_exc(e))
                         return c.complete({
                             'hosts': self.targets.select(),
                             'metadata': self.metadata,
