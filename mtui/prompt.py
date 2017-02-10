@@ -252,7 +252,7 @@ class CommandPrompt(cmd.Cmd):
 
                 def complete(*args, **kw):
                     try:
-                        if self.metadata:
+                        if self.metadata and 'testopia' in x:
                             try:
                                 self.ensure_testopia_loaded()
                             except Exception as e:
