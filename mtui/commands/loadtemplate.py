@@ -57,7 +57,7 @@ class LoadTemplate(Command):
 
         if self.args.chosts:
             for hostname, system in re_add:
-                self.metadata.add_target(hostname, system)
+                self.prompt.metadata.add_target(hostname, system)
 
     @staticmethod
     def complete(_, text, line, begidx, endix):
