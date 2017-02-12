@@ -51,12 +51,12 @@ class TestopiaEdit(Command):
 
         template = []
         for field in keywords:
-            template.append('%s: %s' % (field, testcase[field]))
+            template.append('{!s}: {!s}'.format(field, testcase[field]))
 
         try:
             edited_text = edit_text('\n'.join(template))
         except subprocess.CalledProcessError as e:
-            self.log.error("editor failed: %s" % e)
+            self.log.error("editor failed: {!s}".format(e))
             self.log.debug(format_exc())
             return
 
@@ -69,7 +69,7 @@ class TestopiaEdit(Command):
 
         for field in keywords:
             template_text = template_text.replace(
-                '|br|%s' % field, '\n%s' % field)
+                '|br|{!s}'.format(field), '\n{!s}'.format(field))
 
         lines = template_text.split('\n')
         for line in lines:
