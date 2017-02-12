@@ -4,6 +4,7 @@ from mtui.commands import Command
 from mtui.utils import complete_choices
 from mtui.utils import requires_update
 
+
 class TestopiaShow(Command):
     """
     Show Testopia testcase
@@ -29,17 +30,14 @@ class TestopiaShow(Command):
 
         url = self.config.bugzilla_url
         cases = []
-        print str(self.args.testcase)
         for case in self.args.testcase:
             case = case.replace('_', ' ')
             try:
-                print str(case)
                 cases.append(str(int(case)))
             except ValueError:
                 cases += [k for k, v in self.prompt.testopia.testcases.items()
-                         if v['summary'].replace('_', ' ') in case]
+                          if v['summary'].replace('_', ' ') in case]
 
-        print str(cases)
         for case_id in cases:
             testcase = self.prompt.testopia.get_testcase(case_id)
 
@@ -61,6 +59,7 @@ class TestopiaShow(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         testcases = [
-            (i['summary'].replace(' ', '_'),) for i in state['testopia'].testcases.values()]
+            (i['summary'].replace(' ', '_'),)
+            for i in state['testopia'].testcases.values()]
         testcases += [('-t', '--testcase')]
-        return complete_choices(testcases , line, text)
+        return complete_choices(testcases, line, text)
