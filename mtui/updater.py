@@ -5,7 +5,6 @@
 
 from __future__ import print_function
 
-from mtui.target import DictWithInjections
 from mtui.target.actions import UpdateError
 from mtui.target.downgrade import Downgrade
 from mtui.target.install import Install
@@ -17,6 +16,8 @@ from mtui.messages import MissingUpdaterError
 from mtui.messages import MissingInstallerError
 from mtui.messages import MissingUninstallerError
 from mtui.messages import MissingDowngraderError
+
+from mtui.utils import DictWithInjections
 
 
 class ZypperUpdate(Update):

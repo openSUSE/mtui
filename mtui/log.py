@@ -9,7 +9,7 @@ import logging
 (BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE) = range(8)
 
 RESET_SEQ = "\033[0m"
-COLOR_SEQ = "\033[1;%dm"
+COLOR_SEQ = "\033[1;{}m"
 
 COLORS = {
     'WARNING': YELLOW,
@@ -33,11 +33,11 @@ class ColorFormatter(logging.Formatter):
                 module = inspect.getmodule(frame).__name__
             except Exception:
                 module = 'unknown'
-            return "\033[2K" + COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ + \
-                ' [%s:%s]' % (module, function)
+            return "\033[2K" + COLOR_SEQ.format(30 + COLORS[levelname]) + levelname.lower(
+                ) + RESET_SEQ + ' [{!s}:{!s}]'.format(module, function)
         else:
-            return "\033[2K" + \
-                COLOR_SEQ % (30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
+            return "\033[2K" + COLOR_SEQ.format(
+                30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
 
     def format(self, record):
         record.message = record.getMessage()

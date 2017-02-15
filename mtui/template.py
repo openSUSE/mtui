@@ -304,7 +304,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
             ['update', str(self.id), ' '.join(self.get_package_list())])
 
         updater = self.get_updater()
-        self.log.debug("chosen updater: %s" % repr(updater))
+        self.log.debug("chosen updater: {!r}".format(updater))
         updater(
             self.log,
             targets,
@@ -515,9 +515,9 @@ class TestReport(with_metaclass(ABCMeta, object)):
         return join(self.report_wd(), *["scripts"] + list(paths))
 
     def get_testsuite_comment(self, testsuite, date):
-        return 'testing %s on %s on %s' % (
+        return 'testing {!s} on {!s} on {!s}'.format(
             testsuite,
-            "%s %s" % (self._type, self.id),
+            "{!s} {!s}".format(self._type, self.id),
             date,
         )
 
@@ -542,7 +542,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
                     x.run(targets)
 
     def download_file(self, from_, into):
-        self.log.info("Downloading %s" % from_)
+        self.log.info("Downloading {!s}".format(from_))
         from contextlib import closing
         with open(into, 'wb') as dst, closing(urlopen(from_)) as src:
             dst.writelines(src)

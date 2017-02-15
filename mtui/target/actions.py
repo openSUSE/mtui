@@ -27,7 +27,7 @@ class UpdateError(Exception):
         if self.host is None:
             string = self.reason
         else:
-            string = '%s: %s' % (self.host, self.reason)
+            string = '{!s}: {!s}'.format(self.host, self.reason)
         return repr(string)
 
 
@@ -151,9 +151,8 @@ class RunCommand(object):
 
             for target in serial:
                 prompt_user(
-                    'press Enter key to proceed with %s' %
-                    serial[target].hostname,
-                    '')
+                    'press Enter key to proceed with {!s}'.format(
+                        serial[target].hostname), '')
                 thread = ThreadedMethod(queue)
                 thread.setDaemon(True)
                 thread.start()
@@ -191,7 +190,7 @@ def spinner(lock=None):
             lock.acquire()
 
         try:
-            sys.stdout.write('processing... [%s]\r' % pos)
+            sys.stdout.write('processing... [{!s}]\r'.format(pos))
             sys.stdout.flush()
         finally:
             if lock is not None:

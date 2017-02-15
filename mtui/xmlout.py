@@ -5,7 +5,7 @@
 
 import xml.dom.minidom
 
-from mtui.utils import *
+from mtui.utils import filter_ansi
 
 
 class XMLOutput(object):
@@ -71,8 +71,8 @@ class XMLOutput(object):
                 'ascii',
                 'replace')
             self.add_command(
-                node, command, '%s\n%s' %
-                (stdout, stderr), exitcode, runtime)
+                node, command, '{!s}\n{!s}'.format(
+                    stdout, stderr), exitcode, runtime)
 
         parent.appendChild(node)
 

@@ -174,9 +174,9 @@ class CommandPrompt(cmd.Cmd):
 
     def _read_history(self):
         try:
-            readline.read_history_file('%s/.mtui_history' % self.homedir)
+            readline.read_history_file('{!s}/.mtui_history'.format(self.homedir))
         except IOError as e:
-            self.log.debug('failed to open history file: %s' % str(e))
+            self.log.debug('failed to open history file: {!s}'.format(e))
 
     def _add_subcommand(self, cmd):
         if cmd.command in self.commands:

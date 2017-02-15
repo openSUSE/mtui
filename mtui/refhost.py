@@ -125,7 +125,7 @@ class Attributes(object):
             # if major and minor versions are digits only, it's most likely
             # a dotted version (i.e. 11.1)
             if version.isdigit():
-                version = '%s.%s' % (self.major, self.minor)
+                version = '{!s}.{!s}'.format(self.major, self.minor)
         if self.release:
             version = version + self.release
         if self.kernel:
@@ -143,7 +143,7 @@ class Attributes(object):
             minor = self.addons[addon].get('minor', '')
 
             if major or minor:
-                addons = ' '.join([addons, '%s.%s' % (major, minor)])
+                addons = ' '.join([addons, '{!s}.{!s}'.format(major, minor)])
 
         archs = ' '.join(sorted(set(self.archs)))
 
@@ -238,7 +238,7 @@ class Attributes(object):
             try:
                 name, content = pattern.split('=', 1)
             except ValueError:
-                log.error('error when parsing line "%s"' % testplatform)
+                log.error('error when parsing line "{!s}"'.format(testplatform))
                 continue
 
             # add all required architectures to the dict
@@ -342,7 +342,7 @@ class Refhosts(object):
             self.data = minidom.parse(hostmap)
         except Exception as error:
             # nothing to do for us if we can't load the hosts
-            self.log.error('failed to parse refhosts.xml: %s' % error)
+            self.log.error('failed to parse refhosts.xml: {!s}'.format(error))
             raise
 
     def extract_name(self, element):
@@ -386,10 +386,8 @@ class Refhosts(object):
 
             if hosts == [] and self.location != self._default_location:
                 try:
-                    hosts = list(map(
-                        self.extract_name, filter(
-                            self.check_attributes, self._location_hosts(self._default_location)
-                            )))
+                    hosts = list(map(self.extract_name, filter(
+                        self.check_attributes, self._location_hosts(self._default_location))))
                 except messages.InvalidLocationError:
                     pass
 
@@ -525,9 +523,8 @@ class Refhosts(object):
                 if self.attributes.kernel:
                     assert(node.firstChild.data == 'true')
                 elif self.attributes.kernel is False:
-                    assert(
-                        node.getAttribute('property') == 'weak'
-                        or node.firstChild.data == 'false')
+                    assert(node.getAttribute('property') ==
+                           'weak' or node.firstChild.data == 'false')
             except IndexError:
                 # kernel element not found for the host. make sure we do not
                 # require the host to be a kernel host
@@ -537,13 +534,12 @@ class Refhosts(object):
                 # ltss element found on the host. make sure we are searching for
                 # a ltss host, or the ltss host must not be exclusive.
                 node = element.getElementsByTagName('ltss')[0]
-                prop = node.getAttribute('property')
+                # prop = node.getAttribute('property')
                 if self.attributes.ltss:
                     assert(node.firstChild.data == 'true')
                 elif self.attributes.ltss is False:
-                    assert(
-                        node.getAttribute('property') == 'weak'
-                        or node.firstChild.data == 'false')
+                    assert(node.getAttribute('property') ==
+                           'weak' or node.firstChild.data == 'false')
             except IndexError:
                 # ltss element not found for the host. make sure we do not
                 # require the host to be a ltss host
@@ -553,13 +549,12 @@ class Refhosts(object):
                 # minimal element found on the host. make sure we are searching for
                 # a minimal host, or the minimal host must not be exclusive.
                 node = element.getElementsByTagName('minimal')[0]
-                prop = node.getAttribute('property')
+                # prop = node.getAttribute('property')
                 if self.attributes.minimal:
                     assert(node.firstChild.data == 'true')
                 elif self.attributes.minimal is False:
-                    assert(
-                        node.getAttribute('property') == 'weak'
-                        or node.firstChild.data == 'false')
+                    assert(node.getAttribute('property') ==
+                           'weak' or node.firstChild.data == 'false')
             except IndexError:
                 # minimal element not found for the host. make sure we do not
                 # require the host to be a minimal host
@@ -577,7 +572,7 @@ class Refhosts(object):
             else:
                 # if a virtual element was found, make sure it matches our search
                 # criteria (mode/hypervisor) or is not exclusive
-                prop = node.getAttribute('property')
+                # prop = node.getAttribute('property')
                 mode = node.getAttribute('mode')
                 if self.attributes.virtual['mode']:
                     assert(self.attributes.virtual['mode'] == mode)
@@ -585,7 +580,8 @@ class Refhosts(object):
                     assert(
                         self.attributes.virtual['hypervisor'] ==
                         node.firstChild.data)
-                if not self.attributes.virtual['mode'] and not self.attributes.virtual['hypervisor']:
+                if not self.attributes.virtual[
+                        'mode'] and not self.attributes.virtual['hypervisor']:
                     assert(node.getAttribute('property') == 'weak')
 
         except AssertionError:
@@ -698,15 +694,13 @@ class Refhosts(object):
         # else:
         #    system = '%s%s%s-%s' % (attributes.product, attributes.major, attributes.minor, attributes.archs[0])
         if attributes and "manager-client" in addons:
-            system = '%s%s%s-manager-client-%s' % (attributes.product,
-                                                   attributes.major,
-                                                   attributes.minor,
-                                                   attributes.archs[0])
+            system = '{!s}{!s}{!s}-manager-client-{!s}'.format(
+                attributes.product, attributes.major, attributes.minor, attributes.archs[0])
         elif attributes:
-            system = '%s%s%s-%s' % (attributes.product,
-                                    attributes.major,
-                                    attributes.minor,
-                                    attributes.archs[0])
+            system = '{!s}{!s}{!s}-{!s}'.format(attributes.product,
+                                                attributes.major,
+                                                attributes.minor,
+                                                attributes.archs[0])
         else:
             system = 'host_not_found'
 
@@ -780,7 +774,8 @@ class _RefhostsFactory(object):
             return resolver(config, log)
 
     def refresh_https_cache_if_needed(self, path, config):
-        if self._is_https_cache_refresh_needed(path, config.refhosts_https_expiration):
+        if self._is_https_cache_refresh_needed(
+                path, config.refhosts_https_expiration):
             self.refresh_https_cache(path, config.refhosts_https_uri)
 
     def _is_https_cache_refresh_needed(self, path, expiration):

@@ -77,7 +77,7 @@ class PreScript(Script):
     subdir = "pre"
 
     def _run(self, targets):
-        rname = self.testreport.target_wd("%s.%s" % (self.subdir, self.bname))
+        rname = self.testreport.target_wd("{!s}.{!s}".format(self.subdir, self.bname))
         targets.put(
             self.path,
             rname,

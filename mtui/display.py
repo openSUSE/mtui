@@ -63,13 +63,13 @@ class CommandPromptDisplay(object):
 
         self.println('{0:20} {1:20}: {2} ({3})'.format(
             hostname,
-            '(%s)' % system,
+            '({!s})'.format(system),
             state,
             mode
         ))
 
     def list_locks(self, hostname, system, lock):
-        system = '(%s)' % system
+        system = '({!s})'.format(system)
         if lock.locked:
             if lock.own():
                 lockedby = 'me'
@@ -110,7 +110,7 @@ class CommandPromptDisplay(object):
     def list_timeout(self, hostname, system, timeout):
         self.println('{0:20} {1:20}: {2}s'.format(
             hostname,
-            '(%s)' % system,
+            '({!s})'.format(system),
             timeout,
         ))
 
@@ -134,9 +134,9 @@ class CommandPromptDisplay(object):
         self.println('{0:25}: {1}'.format(hostname, hosttags))
 
     def show_log(self, hostname, hostlog, sink):
-        sink('log from %s:' % hostname)
+        sink('log from {!s}:'.format(hostname))
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
-            sink('%s:~> %s [%s]' % (hostname, cmdline, exitcode))
+            sink('{!s}:~> {!s} [{!s}]'.format(hostname, cmdline, exitcode))
             sink('stdout:')
             map(sink, stdout.split('\n'))
             sink('stderr:')
@@ -169,12 +169,12 @@ class CommandPromptDisplay(object):
             action,
             breakdown,
             effect):
-        self.println('%s %s' % (blue('Testcase summary:'), summary))
-        self.println('%s %s' % (
+        self.println('{!s} {!s}'.format(blue('Testcase summary:'), summary))
+        self.println('{!s} {!s}'.format(
             blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
-        self.println('%s %s' % (blue('Testcase automated:'), automated))
-        self.println('%s %s' % (blue('Testcase status:'), status))
-        self.println('%s %s' % (blue('Testcase requirements:'), requirement))
+        self.println('{!s} {!s}'.format(blue('Testcase automated:'), automated))
+        self.println('{!s} {!s}'.format(blue('Testcase status:'), status))
+        self.println('{!s} {!s}'.format(blue('Testcase requirements:'), requirement))
         if setup:
             self.println(blue('Testcase setup:'))
             self.println(setup)
