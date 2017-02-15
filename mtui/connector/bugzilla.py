@@ -33,8 +33,9 @@ class Bugzilla(object):
         self.log = logger
 
         # just basic auth for the start
-        self.url = interface.replace('://', '://%s:%s@' % (username, password))
-        self.proxy = xmlrpclib.ServerProxy(self.url);
+        self.url = interface.replace(
+            '://', '://{!s}:{!s}@'.format(username, password))
+        self.proxy = xmlrpclib.ServerProxy(self.url)
 
     def query_interface(self, service, *query):
         """generic XMLRPC interface query
@@ -52,7 +53,7 @@ class Bugzilla(object):
             method = getattr(self.proxy, service)
             return method(*query)
         except AttributeError:
-            self.log.critical('service "%s" does not exist.' % service)
+            self.log.critical('service "{!s}" does not exist.'.format(service))
             raise
         except xmlrpclib.ProtocolError as error:
             if error.errcode == 401:
@@ -62,5 +63,3 @@ class Bugzilla(object):
             if error.faultCode == 32000:
                 self.log.critical('testcase does not exist')
             raise
-
-

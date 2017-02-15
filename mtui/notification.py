@@ -24,8 +24,8 @@ def display(log, summary=None, text=None, icon='stock_dialog-info'):
     if not __impl:
         return
 
-    log.debug('displaying notify message "%s"' % text)
+    log.debug('displaying notify message "{!s}"'.format(text))
     try:
         __impl.Notification(summary, text, icon).show()
-    except Exception as e:
+    except Exception:
         log.debug('failed to display notification')

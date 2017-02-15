@@ -53,7 +53,7 @@ class RemoteLock(object):
 
     def __str__(self):
         if self.comment:
-            comment = " (%s)" % self.comment
+            comment = " ({!s})".format(self.comment)
         else:
             comment = ""
 
@@ -137,8 +137,8 @@ class TargetLock(object):
         :returns None:
         """
         self.log.debug(
-            '%s: getting mtui lock state' %
-            self.connection.hostname)
+            '{!s}: getting mtui lock state'.format(
+                self.connection.hostname))
 
         self._lock = RemoteLock()  # make sure lock is reset.
 
@@ -182,7 +182,7 @@ class TargetLock(object):
                 # setting a different comment may be desired.
                 raise TargetLockedError(self.locked_by_msg())
 
-        self.log.debug('%s: setting lock' % self.connection.hostname)
+        self.log.debug('{!s}: setting lock'.format(self.connection.hostname))
 
         rl = RemoteLock()
         rl.user = self.i_am_user
@@ -193,7 +193,7 @@ class TargetLock(object):
         try:
             lockfile = self.connection.open(self.filename, 'w+')
         except Exception as e:
-            self.log.error('failed to open lockfile: %s' % e)
+            self.log.error('failed to open lockfile: {!s}'.format(e))
             raise
 
         lockfile.write(rl.to_lockfile())
@@ -232,7 +232,7 @@ class TargetLock(object):
             if e.errno == errno.ENOENT:
                 pass
         except Exception as e:
-            self.log.error('failed to remove lockfile: %s' % e)
+            self.log.error('failed to remove lockfile: {!s}'.format(e))
             raise
 
         self._lock = RemoteLock()
@@ -276,12 +276,12 @@ class Locked(object):
     def own(self):
         u = self.myself
         if not self.user == u:
-            self.log.debug("user: %s != %s" % (self.user, u))
+            self.log.debug("user: {!s} != {!s}".format(self.user, u))
             return False
 
         p = str(self._getpid())
         if not self.pid == p:
-            self.log.debug("pid: %s != %s" % (self.pid, p))
+            self.log.debug("pid: {!s} != {!s}".format(self.pid, p))
             return False
 
         return True

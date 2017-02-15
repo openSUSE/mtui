@@ -12,9 +12,10 @@ import signal
 import subprocess
 from traceback import format_exc
 
-from mtui.connection import *
+from mtui.connection import Connection
+from mtui.connection import errno
+from mtui.connection import CommandTimeout
 
-from mtui.utils import *
 from mtui.rpmver import RPMVersion
 from mtui import messages
 from mtui.messages import HostIsNotConnectedError
@@ -26,10 +27,14 @@ from mtui.target.actions import RunCommand
 
 from mtui.target.locks import Locked
 
-from mtui.target.locks import LockedTargets
-from mtui.target.locks import RemoteLock
 from mtui.target.locks import TargetLock
 from mtui.target.locks import TargetLockedError
+
+# Import for other modules -- not used directly here
+from mtui.target.locks import LockedTargets
+from mtui.target.locks import RemoteLock
+
+from mtui.utils import timestamp
 
 
 class HostsGroup(object):
@@ -262,7 +267,6 @@ class Target(object):
         return self.system != other.system
 
     def query_versions(self, packages=None):
-        versions = {}
         if packages is None:
             packages = list(self.packages.keys())
 
@@ -506,7 +510,7 @@ class Target(object):
         """
         :deprecated: by is_locked method
         """
-        self.logger.debug('%s: getting mtui lock state' % self.hostname)
+        self.logger.debug('{!s}: getting mtui lock state'.format(self.hostname))
         lock = Locked(self.logger, self.config.session_user, False)
 
         if self.state != 'enabled':
@@ -549,8 +553,8 @@ class Target(object):
             self.unlock()
         except TargetLockedError:
             self.logger.debug(
-                'unable to remove lock from {}. lock is probably not held by this session'.
-                format(self.hostname))
+                'unable to remove lock from {}. lock is probably not held by this session'. format(
+                    self.hostname))
         except:
             pass
 

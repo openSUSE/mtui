@@ -9,6 +9,7 @@ from mtui.utils import requires_update
 from mtui.utils import edit_text
 from argparse import REMAINDER
 
+
 class TestopiaCreate(Command):
     """
     Create new Testopia package testcase.
@@ -32,8 +33,17 @@ class TestopiaCreate(Command):
     @requires_update
     def run(self):
         self.prompt.ensure_testopia_loaded()
-        keywords = ['summary','package','automated', 'status','requirement', 'setup','breakdown','action','effect']
-        testcase = dict.fromkeys(keywords,'')
+        keywords = [
+            'summary',
+            'package',
+            'automated',
+            'status',
+            'requirement',
+            'setup',
+            'breakdown',
+            'action',
+            'effect']
+        testcase = dict.fromkeys(keywords, '')
 
         # Build the text to show to the user for presentation
         text = ''
@@ -54,7 +64,7 @@ class TestopiaCreate(Command):
         try:
             edited = edit_text(text)
         except subprocess.CalledProcessError as e:
-            self.log.error("editor failed: %s" % e)
+            self.log.error("editor failed: {!s}".format(e))
             self.log.debug(format_exc())
             return
 
@@ -63,34 +73,37 @@ class TestopiaCreate(Command):
             return
 
         # Parse what the user saved. We need to fill the testcase
-        keyword_regexp = re.compile('('+'|'.join(keywords)+'):', re.IGNORECASE);
+        keyword_regexp = re.compile('('+'|'.join(keywords)+'):', re.IGNORECASE)
 
         current_keyword = ''
         for line in edited.split('\n'):
             match = keyword_regexp.match(line)
             if match:
-                (header, _, content) = line.partition(':');
+                (header, _, content) = line.partition(':')
                 current_keyword = header
                 testcase[current_keyword] += content.strip()
             else:
                 testcase[current_keyword] += '|br|'+line
 
         # the testcase needs an extra 'tags' key
-        testcase['tags'] = 'packagename_{0},testcase_{0}'.format(testcase['package'])
+        testcase['tags'] = 'packagename_{0},testcase_{0}'.format(testcase[
+                                                                 'package'])
         del testcase['package']
 
-        #Upload the test case
+        # Upload the test case
         try:
             case_id = self.prompt.testopia.create_testcase(testcase)
         except Exception:
             self.log.error('failed to create testcase')
         else:
             self.log.info(
-                'created testcase %s/tr_show_case.cgi?case_id=%s' %
-                (self.config.bugzilla_url, case_id))
-
+                'created testcase {!s}/tr_show_case.cgi?case_id={!s}'.format(
+                    self.config.bugzilla_url, case_id))
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        packages = [tuple(package for package in state['metadata'].get_package_list())]
-        return complete_choices(packages,line,text)
+        packages = [
+                    tuple(
+                        package
+                        for package in state['metadata'].get_package_list())]
+        return complete_choices(packages, line, text)

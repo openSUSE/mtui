@@ -17,11 +17,12 @@ import warnings
 import logging
 from traceback import format_exc
 
+from mtui.utils import termsize
+from mtui.utils import user_input
+
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore', category=DeprecationWarning)
     import paramiko
-
-from mtui.utils import *
 
 
 class CommandTimeout(Exception):
@@ -105,7 +106,9 @@ class Connection(object):
         opts = cfg.lookup(self.hostname)
 
         try:
-            self.log.debug('connecting to %s:%s' % (self.hostname, self.port))
+            self.log.debug(
+                'connecting to {!s}:{!s}'.format(
+                    self.hostname, self.port))
             # if this fails, the user most likely has none or an outdated
             # hostkey for the specified host. checking back with a manual
             # "ssh root@..." invocation helps in most cases.
@@ -123,37 +126,37 @@ class Connection(object):
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.
             self.log.warning(
-                'Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly' %
-                self.hostname)
+                'Authentication failed on {!s}: AuthKey missing. Make sure your system is set up correctly'.format(
+                    self.hostname))
             self.log.warning('Trying manually, please enter the root password')
             password = getpass.getpass()
 
             try:
                 # try again with password auth instead of public/private key
                 self.client.connect(
-                    hostname=opts.get('hostname', self.hostname),
-                    port=int(opts.get('port', self.port)),
-                    username=opts.get('user', 'root'),
-                    password=password,
-                    sock=paramiko.ProxyCommand(opts['proxycommand']) if 'proxycommand' in opts else None, )
+                    hostname=opts.get(
+                        'hostname', self.hostname), port=int(
+                        opts.get(
+                            'port', self.port)), username=opts.get(
+                        'user', 'root'), password=password, sock=paramiko.ProxyCommand(
+                        opts['proxycommand']) if 'proxycommand' in opts else None, )
             except paramiko.AuthenticationException:
                 # if a wrong password was set, don't connect to the host and
                 # reraise the exception hoping it's catched somewhere in an
                 # upper layer.
                 self.log.error(
-                    'Authentication failed on %s: wrong password' %
-                    self.hostname)
+                    'Authentication failed on {!s}: wrong password'.format(
+                        self.hostname))
                 raise
         except paramiko.SSHException:
             # unspecified general SSHException. the host/sshd is probably not
             # available.
             self.log.error(
-                'SSHException while connecting to %s' %
-                self.hostname)
+                'SSHException while connecting to {!s}'.format(self.hostname))
             raise
         except Exception as error:
             # general Exception
-            self.log.error('%s: %s' % (self.hostname, error))
+            self.log.error('{!s}: {!s}'.format(self.hostname, error))
             raise
 
     def reconnect(self):
@@ -168,8 +171,8 @@ class Connection(object):
         #    return
 
         self.log.debug(
-            'lost connection to %s:%s, reconnecting' %
-            (self.hostname, self.port))
+            'lost connection to {!s}:{!s}, reconnecting'.format(
+                self.hostname, self.port))
 
         # wait 10s and try to reconnect
         select.select([], [], [], 10)
@@ -198,8 +201,8 @@ class Connection(object):
         """
 
         self.log.debug(
-            'creating new session at %s:%s' %
-            (self.hostname, self.port))
+            'creating new session at {!s}:{!s}'.format(
+                self.hostname, self.port))
         try:
             transport = self.client.get_transport()
 
@@ -224,8 +227,10 @@ class Connection(object):
 
     def close_session(self, session=None):
         """close the current session"""
-
-        self.log.debug('closing session at %s:%s' % (self.hostname, self.port))
+        # TODO: looks as wrong code , very wrong
+        self.log.debug(
+            'closing session at {!s}:{!s}'.format(
+                self.hostname, self.port))
         try:
             self.session.shutdown(2)
             self.session.close()
@@ -278,7 +283,10 @@ class Connection(object):
                     lock.acquire()
 
                 try:
-                    if user_input('command "%s" timed out on %s. wait? (y/N) ' % (command, self.hostname)).lower() in ['y', 'yes']:
+                    if user_input(
+                            'command "%s" timed out on %s. wait? (y/N) ' %
+                            (command, self.hostname)).lower() in [
+                            'y', 'yes']:
                         continue
                     else:
                         # if the user don't want to wait, raise CommandTimeout
@@ -406,9 +414,8 @@ class Connection(object):
             except Exception:
                 pass
 
-        self.log.debug(
-            'transmitting %s to %s:%s:%s' %
-            (local, self.hostname, self.port, remote))
+        self.log.debug('transmitting {!s} to {!s}:{!s}:{!s}'.format(
+                           local, self.hostname, self.port, remote))
         sftp.put(local, remote)
 
         # make file executable since it's probably a script which needs to be
@@ -430,9 +437,8 @@ class Connection(object):
 
         try:
             sftp = self.client.open_sftp()
-            self.log.debug(
-                'transmitting %s:%s:%s to %s' %
-                (self.hostname, self.port, remote, local))
+            self.log.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(
+                               self.hostname, self.port, remote, local))
             sftp.get(remote, local)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
             self.reconnect()
@@ -446,18 +452,12 @@ class Connection(object):
     def get_folder(self, remote_folder, local_folder):
 
         sftp = self.client.open_sftp()
-        self.log.debug(
-            'transmitting %s:%s:%s to %s' %
-            (self.hostname,
-             self.port,
-             remote_folder,
-             local_folder))
+        self.log.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(
+            self.hostname, self.port, remote_folder, local_folder))
         files = self.listdir(remote_folder)
         for f in files:
-            sftp.get(
-                "%s/%s" %
-                (remote_folder, f), "%s%s.%s" %
-                (local_folder, f, self.hostname))
+            sftp.get("{!s}/{!s}".format(remote_folder, f),
+                     "{!s}{!s}.{!s}".format(local_folder, f, self.hostname))
 
         sftp.close()
 
@@ -470,8 +470,8 @@ class Connection(object):
         """
 
         self.log.debug(
-            'getting %s:%s:%s listing' %
-            (self.hostname, self.port, path))
+            'getting {!s}:{!s}:{!s} listing'.format(
+                self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             return sftp.listdir(path)
@@ -509,8 +509,8 @@ class Connection(object):
         """delete remote file"""
 
         self.log.debug(
-            'deleting file %s:%s:%s' %
-            (self.hostname, self.port, path))
+            'deleting file {!s}:{!s}:{!s}'.format(
+                self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             return sftp.remove(path)
@@ -524,8 +524,8 @@ class Connection(object):
         """delete remote directory"""
 
         self.log.debug(
-            'deleting dir %s:%s:%s' %
-            (self.hostname, self.port, path))
+            'deleting dir {!s}:{!s}:{!s}'.format(
+                self.hostname, self.port, path))
         try:
             sftp = self.client.open_sftp()
             items = self.listdir(path)
@@ -567,6 +567,5 @@ class Connection(object):
         """
 
         self.log.debug(
-            'closing connection to %s:%s' %
-            (self.hostname, self.port))
+            'closing connection to {!s}:{!s}'.format(self.hostname, self.port))
         self.client.close()

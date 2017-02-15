@@ -63,10 +63,10 @@ def edit_text(text):
     return text
 
 if os.getenv('COLOR', 'always') == 'always':
-    green = lambda xs: "\033[1;32m%s\033[1;m" % xs
-    red = lambda xs: "\033[1;31m%s\033[1;m" % xs
-    yellow = lambda xs: "\033[1;33m%s\033[1;m" % xs
-    blue = lambda xs: "\033[1;34m%s\033[1;m" % xs
+    green = lambda xs: "\033[1;32m{!s}\033[1;m".format(xs)
+    red = lambda xs: "\033[1;31m{!s}\033[1;m".format(xs)
+    yellow = lambda xs: "\033[1;33m{!s}\033[1;m".format(xs)
+    blue = lambda xs: "\033[1;34m{!s}\033[1;m".format(xs)
 else:
     green = red = yellow = blue = lambda xs: str(xs)
 
@@ -272,6 +272,8 @@ class UnknownSystemError(ValueError):
     pass
 
 # TODO: this is pretty stupid ..
+
+
 def get_release(systems):
     systems = ' '.join(systems)
 

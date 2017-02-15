@@ -8,7 +8,6 @@ import collections
 
 from xml.sax import saxutils
 
-#from mtui.connector.bugzilla import *
 from mtui.connector.bugzilla import Bugzilla
 
 from mtui.utils import nottest
@@ -49,7 +48,7 @@ class Testopia(object):
         username = config.testopia_user
         password = config.testopia_pass
 
-        self.log.debug('creating Testopia Interface at %s' % interface)
+        self.log.debug('creating Testopia Interface at {!s}'.format(interface))
         self.bugzilla = Bugzilla(self.log, interface, username, password)
 
         # cache testcases since Testopia is slow
@@ -85,8 +84,7 @@ class Testopia(object):
                         datafield.pop('automated')]
                 except KeyError as error:
                     self.log.critical(
-                        'unknown value for automated: %s. using default.' %
-                        error)
+                        'unknown value for automated: {!s}. using default.'.format(error))
             elif key == 'status':
                 status = {}
                 for k, v in self.status.items():
@@ -96,8 +94,7 @@ class Testopia(object):
                         datafield.pop('status')]
                 except KeyError as error:
                     self.log.critical(
-                        'unknown value for status: %s. using default.' %
-                        error)
+                        'unknown value for status: {!s}. using default.'.format(error))
 
         return datafield
 
@@ -106,7 +103,7 @@ class Testopia(object):
         self.testcases = self.get_testcase_list()
 
     def append_testcase_cache(self, case_id, testcase):
-        self.log.debug('writing testcase %s to cache' % case_id)
+        self.log.debug('writing testcase {!s} to cache'.format(case_id))
         self.casebuffer.append({'case_id': case_id, 'testcase': testcase})
 
     def remove_testcase_cache(self, case_id):
@@ -117,8 +114,7 @@ class Testopia(object):
 
         if element:
             self.log.debug(
-                'removing testcase %s from cache' %
-                element['case_id'])
+                'removing testcase {!s} from cache'.format(element['case_id']))
             self.casebuffer.remove(element)
 
     def get_testcase_list(self):
@@ -140,10 +136,9 @@ class Testopia(object):
             return {}
 
         self.log.debug(
-            'getting testcase list for packages %s in testplan %s' %
-            (self.packages,
-             self.plans[
-                 self.product]))
+            'getting testcase list for packages {!s} in testplan {!s}'.format(
+                self.packages, self.plans[
+                    self.product]))
         tags = ','.join(
             ['packagename_{name},testcase_{name}'.format
              (name=i) for i in self.packages])
@@ -165,11 +160,11 @@ class Testopia(object):
                     'tags': tags, 'tags_type': 'anyexact', 'plan_id': self.plans['10']})
             if response:
                 self.log.warning(
-                    'found testcases for product 10 while %s was empty' %
-                    self.product)
+                    'found testcases for product 10 while {!s} was empty'.format(
+                        self.product))
                 self.log.warning(
-                    'please consider migrating the testcases to product %s' %
-                    self.product)
+                    'please consider migrating the testcases to product {!s}'.format(
+                        self.product))
 
         for case in response:
             cases[
@@ -197,7 +192,7 @@ class Testopia(object):
 
         for case in self.casebuffer:
             if case['case_id'] == case_id:
-                self.log.debug('found testcase %s in cache' % case_id)
+                self.log.debug('found testcase {!s} in cache'.format(case_id))
                 return case['testcase']
 
         try:
@@ -215,7 +210,7 @@ class Testopia(object):
                     response['case_status_id']], 'automated': self.automated[
                     response['isautomated']]}
         except KeyError:
-            self.log.error('testcase %s not found' % case_id)
+            self.log.error('testcase {!s} not found'.format(case_id))
             return {}
 
         # import optional fields
@@ -255,10 +250,14 @@ class Testopia(object):
         try:
             plan = self.plans[self.product]
         except KeyError:
-            self.log.error('no testplan found for product %s' % self.product)
+            self.log.error(
+                'no testplan found for product {!s}'.format(
+                    self.product))
             raise
 
-        self.log.debug('creating testcase for product %s' % self.product)
+        self.log.debug(
+            'creating testcase for product {!s}'.format(
+                self.product))
 
         testcase = {'status': 2,
                     'category': 2919,
@@ -355,7 +354,7 @@ class Testopia(object):
                 self.log.critical('failed to query TestCase.add_tag')
                 raise
 
-        self.log.debug('values for testcase %s stored' % case_id)
+        self.log.debug('values for testcase {!s} stored'.format(case_id))
         # remove testcase from cache to get the updated version on
         # the next query
         self.remove_testcase_cache(case_id)

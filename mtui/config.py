@@ -86,7 +86,7 @@ class Config(object):
                     val = default
 
             setattr(self, attr, fixup(val))
-            self.log.debug('config.%s set to "%s"' % (attr, val))
+            self.log.debug('config.{!s} set to "{!s}"'.format(attr, val))
 
     def _define_config_options(self):
         normalizer = lambda x: x

@@ -7,7 +7,7 @@ import os
 import codecs
 import xml.dom.minidom
 
-from mtui.rpmver import *
+from mtui.rpmver import RPMVersion
 
 
 def xml_to_template(logger, template, xmldata, updatehost=None):
@@ -23,7 +23,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
 
     """
 
-    out = logger
+    log = logger
 
     with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
         t = f.readlines()
@@ -34,7 +34,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
         else:
             x = xml.dom.minidom.parseString(xmldata.encode('utf-8'))
     except Exception as error:
-        out.error('failed to parse XML data: %s' % str(error))
+        log.error('failed to parse XML data: {!s}'.format(error))
         raise AttributeError('XML')
 
     # since the maintenance template is more of a human readable file then
@@ -53,26 +53,28 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
 
         # systemname/reference host string in the maintenance template
         # in case the hostname is already set
-        line = '%s (reference host: %s)\n' % (systemtype, hostname)
+        line = '{!s} (reference host: {!s})\n'.format(systemtype, hostname)
         try:
             # position of the system line
             i = t.index(line)
         except ValueError:
             # system line not found
-            out.debug('host section %s not found, searching system' % hostname)
+            log.debug(
+                'host section %s not found, searching system'.format(hostname))
             # systemname/reference host string in the maintenance template
             # in case the hostname is not yet set
-            line = '%s (reference host: ?)\n' % systemtype
+            line = '{!s} (reference host: ?)\n'.format(systemtype)
             try:
                 # trying again with a not yet set hostname
                 i = t.index(line)
-                t[i] = '%s (reference host: %s)\n' % (systemtype, hostname)
+                t[i] = '{!s} (reference host: {!s})\n'.format(
+                    systemtype, hostname)
             except ValueError:
                 # system line still not found (not with already set hostname, nor
                 # with not yet set hostname). create new one
-                out.debug(
-                    'system section %s not found, creating new one' %
-                    systemtype)
+                log.debug(
+                    'system section {!s} not found, creating new one'.format(
+                        systemtype))
                 # starting point, just above the hosts section
                 line = 'Test results by product-arch:\n'
 
@@ -87,7 +89,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
                     except ValueError:
                         # no hostsection found and no starting point for insertion,
                         # bail out and try the next host
-                        out.error('update results section not found')
+                        log.error('update results section not found')
                         break
 
                 # insert new package version log at position i.
@@ -105,8 +107,8 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
                 t.insert(i, '\n')
                 i += 1
                 t.insert(
-                    i, '%s (reference host: %s)\n' %
-                    (systemtype, hostname))
+                    i, '{!s} (reference host: {!s})\n'.format(
+                        systemtype, hostname))
                 i += 1
                 t.insert(i, '--------------\n')
                 i += 1
@@ -134,23 +136,23 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
 
         # search for system position which is already existing in the template
         # or was created in the previous step.
-        line = '%s (reference host: %s)\n' % (systemtype, hostname)
+        line = '{!s} (reference host: {!s})\n'.format(systemtype, hostname)
         try:
             i = t.index(line)
         except ValueError:
             # host section not found (this should really not happen)
             # proceed with the next one.
-            out.warning('host section %s not found' % hostname)
+            log.warning('host section {!s} not found'.format(hostname))
             continue
         for state in ['before', 'after']:
             versions[state] = {}
             try:
-                i = t.index('      %s:\n' % state, i) + 1
+                i = t.index('      {!s}:\n'.format(state), i) + 1
             except ValueError:
                 try:
-                    i = t.index('%s:\n' % state, i) + 1
+                    i = t.index('{!s}:\n'.format(state), i) + 1
                 except ValueError:
-                    out.error('%s packages section not found' % state)
+                    log.error('{!s} packages section not found'.format(state))
                     continue
 
             for package in host.getElementsByTagName(state):
@@ -171,17 +173,17 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
                         if name in t[i]:
                             # if package version is 0, package isn't installed
                             if version != '0':
-                                t[i] = '\t%s-%s\n' % (name, version)
+                                t[i] = '\t{!s}-{!s}\n'.format(name, version)
                             else:
-                                t[i] = '\tpackage %s is not installed\n' % name
+                                t[i] = '\tpackage {!s} is not installed\n'.format(
+                                    name)
                         else:
                             if version != '0':
-                                t.insert(i, '\t%s-%s\n' % (name, version))
+                                t.insert(
+                                    i, '\t{!s}-{!s}\n'.format(name, version))
                             else:
                                 t.insert(
-                                    i,
-                                    '\tpackage %s is not installed\n' %
-                                    name)
+                                    i, '\tpackage {!s} is not installed\n'.format(name))
                         i += 1
                     except Exception:
                         pass
@@ -190,7 +192,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             i = t.index('scripts:\n', i-1) + 1
         except ValueError:
             # if no scripts section is found, add a new one
-            out.debug('scripts section not found, adding one')
+            log.debug('scripts section not found, adding one')
             t.insert(i, '      scripts:\n')
             i += 1
 
@@ -210,9 +212,8 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             except Exception:
                 failed = 1
         if failed == 1:
-            out.warning(
-                'installation test result on %s set to FAILED as some packages were not updated. please override manually.' %
-                hostname)
+            log.warning(
+                'installation test result on {!s} set to FAILED as some packages were not updated. please override manually.'.format(hostname))
 
         for child in log.childNodes:
             # search for check scripts in the xml and inspect return code
@@ -265,7 +266,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
         # search starting point for update logs
         i = t.index('put here the output of the following commands:\n', 0) + 1
     except ValueError:
-        out.error('install log section not found in template. skipping.')
+        log.error('install log section not found in template. skipping.')
     else:
         # if an updatehost was set, search for the update log of that specific host.
         # if none was set, the first found update log is exported to the
@@ -282,7 +283,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
 
         t = t[0:i]
 
-        t.append("log from %s\n" % updatehost)
+        t.append("log from {!s}\n".format(updatehost))
 
         for child in log.childNodes:
             if not hasattr(child, 'getAttribute'):
@@ -290,9 +291,8 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             cmd = child.getAttribute('name')
             if not cmd.startswith('zypper '):
                 continue
-            t.append('# %s\n%s\n' % (
-                cmd,
-                str(child.childNodes[0].nodeValue),
-            ))
+            t.append(
+                '# {!s}\n{!s}\n'.format(
+                    cmd, child.childNodes[0].nodeValue))
 
     return t
