@@ -2,7 +2,7 @@ image: ibs:latest
 
 test:
   script:
-    - cd /builds/qa-maintenance/mtui
+    - cd $CI_PROJECT_DIR
     - zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/SLE_12_SP1/ QA:Maintenance
     - zypper install --no-confirm python-paramiko python-setuptools python-xdg repose rpm-python python-nose python-temps sudo
     - sudo -u nobody touch /var/lib/nobody/.mtui_history
