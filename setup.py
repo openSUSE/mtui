@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from setuptools import setup
 from mtui import __version__
@@ -49,6 +49,6 @@ setup(
         'console_scripts': ['mtui = mtui.main:main']},
 
     classifiers=[
-        'Programming Language :: Python :: 2', 'Operating System :: POSIX :: Linux', 'Environment :: Console'
+        'Programming Language :: Python :: 3', 'Operating System :: POSIX :: Linux', 'Environment :: Console'
     ]
 )
