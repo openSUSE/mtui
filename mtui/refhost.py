@@ -169,49 +169,6 @@ class Attributes(object):
         return self.__bool__()
 
     @classmethod
-    def from_search_hosts_query(cls, q):
-        attrs = Attributes()
-
-        for _tag in q.split(' '):
-            tag = _tag.lower()
-            match = re.search('(\d+)\.(\d+)', tag)
-            if match:
-                attrs.major = match.group(1)
-                attrs.minor = match.group(2)
-            if tag in attrs.tags['major']:
-                attrs.major = tag
-            if tag in attrs.tags['minor']:
-                attrs.minor = tag
-
-            if tag in attrs.tags['products']:
-                attrs.product = tag
-            if tag in attrs.tags['archs']:
-                attrs.archs.append(tag)
-            if tag in attrs.tags['addons']:
-                attrs.addons.update({tag: dict()})
-
-            if tag in ('kernel', 'ltss', 'minimal'):
-                setattr(attrs, tag, True)
-
-            if tag in ('!kernel', '!ltss', '!minimal'):
-                setattr(attrs, tag[1:], False)
-
-            if tag in ('xen', 'kvm', 'vmware'):
-                attrs.virtual.update(hypervisor=tag)
-
-            if tag == 'xenu':
-                attrs.virtual.update(mode='guest', hypervisor='xen')
-            if tag == 'xen0':
-                attrs.virtual.update(mode='host', hypervisor='xen')
-
-            if tag == 'host':
-                attrs.virtual.update(mode='host')
-            if tag == 'guest':
-                attrs.virtual.update(mode='guest')
-
-        return attrs
-
-    @classmethod
     def from_testplatform(cls, testplatform, log):
         """
         Create a attribute object based on a testplatform string
