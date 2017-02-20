@@ -77,7 +77,16 @@ class Attributes(object):
             'manager-client',
             'rt',
             'we',
-            'Web-Scripting'],
+            'Web-Scripting',
+            'Adv-Systems-Management',
+            'Certifications',
+            'Certifications-2017',
+            'Containers',
+            'HPC',
+            'Legacy',
+            'Public-Cloud',
+            'Toolchain',
+            'Live-Patching'],
         'virtual': [
             'xen',
             'xenu',
@@ -86,8 +95,7 @@ class Attributes(object):
             'guest',
             'kvm',
             'vmware',
-            'lpar'
-        ],
+            'lpar'],
         'tags': [
             'kernel',
             'ltss',
@@ -650,7 +658,7 @@ class Refhosts(object):
                 attributes.product,
                 attributes.major,
                 attributes.minor,
-                addons,
+                "module",            # Unfortuanetly names of moudules are often too long
                 attributes.archs[0])
         else:
             system = '{!s}{!s}{!s}-{!s}'.format(
