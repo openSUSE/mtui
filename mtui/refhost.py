@@ -401,7 +401,7 @@ class Refhosts(object):
         element -- host xml element
 
         """
-        hostname = element.getAttribute('name')
+        # hostname = element.getAttribute('name')
         try:
             if self.attributes.archs:
                 # current host arch is in the searched arch list
@@ -543,10 +543,10 @@ class Refhosts(object):
         except AssertionError:
             # catch all failed assertions and discard this host for
             # the search
-            self.log.debug("host: {!s} ins't valid".format(hostname))
+            # self.log.debug("host: {!s} ins't valid".format(hostname))
             return False
 
-        self.log.debug("host: {!s} found".format(hostname))
+        # self.log.debug("host: {!s} found".format(hostname))
         return True
 
     def get_locations(self):
