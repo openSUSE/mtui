@@ -77,7 +77,16 @@ class Attributes(object):
             'manager-client',
             'rt',
             'we',
-            'Web-Scripting'],
+            'Web-Scripting',
+            'Adv-Systems-Management',
+            'Certifications',
+            'Certifications-2017',
+            'Containers',
+            'HPC',
+            'Legacy',
+            'Public-Cloud',
+            'Toolchain',
+            'Live-Patching'],
         'virtual': [
             'xen',
             'xenu',
@@ -86,8 +95,7 @@ class Attributes(object):
             'guest',
             'kvm',
             'vmware',
-            'lpar'
-        ],
+            'lpar'],
         'tags': [
             'kernel',
             'ltss',
@@ -401,7 +409,7 @@ class Refhosts(object):
         element -- host xml element
 
         """
-        hostname = element.getAttribute('name')
+        # hostname = element.getAttribute('name')
         try:
             if self.attributes.archs:
                 # current host arch is in the searched arch list
@@ -543,10 +551,10 @@ class Refhosts(object):
         except AssertionError:
             # catch all failed assertions and discard this host for
             # the search
-            self.log.debug("host: {!s} ins't valid".format(hostname))
+            # self.log.debug("host: {!s} ins't valid".format(hostname))
             return False
 
-        self.log.debug("host: {!s} found".format(hostname))
+        # self.log.debug("host: {!s} found".format(hostname))
         return True
 
     def get_locations(self):
@@ -650,7 +658,7 @@ class Refhosts(object):
                 attributes.product,
                 attributes.major,
                 attributes.minor,
-                addons,
+                "module",            # Unfortuanetly names of moudules are often too long
                 attributes.archs[0])
         else:
             system = '{!s}{!s}{!s}-{!s}'.format(
