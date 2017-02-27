@@ -422,45 +422,6 @@ class Refhosts(object):
                 if self.attributes.product == "sle":
                     product = product[0:-1]
                 assert(product == self.attributes.product)
-            for addon in self.attributes.addons.keys():
-                    # each addon in the search attributes is available on this
-                    # host
-                assert(
-                    addon in map(
-                        self.extract_name,
-                        element.getElementsByTagName('addon')))
-            for node in element.getElementsByTagName('addon'):
-                name = self.extract_name(node)
-                if node.getAttribute('property') != 'weak':
-                    # make sure that if an exclusive addon is installed on the host,
-                    # it's as well in the searched attributes list.
-                    assert(name in self.attributes.addons.keys())
-                if name in ['sdk', 'hae']:
-                    # skip 'sdk' and 'hae' tags since they probably are installed
-                    # on each host
-                    continue
-                try:
-                    major = node.getElementsByTagName(
-                        'major')[0].firstChild.data
-                except:
-                    major = ''
-                try:
-                    minor = node.getElementsByTagName(
-                        'minor')[0].firstChild.data
-                except:
-                    minor = ''
-                # check if the searched version numbers match the installed
-                # addon versions. in case they do not match, an AssertionError
-                # is thrown. in case they are irrelevant (not in the search
-                # attributes), a KeyError is catched an ignored.
-                try:
-                    assert(self.attributes.addons[name]['major'] == major)
-                except KeyError:
-                    pass
-                try:
-                    assert(self.attributes.addons[name]['minor'] == minor)
-                except KeyError:
-                    pass
 
             node = element.getElementsByTagName('product')[0]
             major = node.getElementsByTagName('major')[0].firstChild.data
@@ -480,6 +441,47 @@ class Refhosts(object):
             if self.attributes.release:
                 assert(self.attributes.release == release)
 
+
+            if major > 11:
+                for addon in self.attributes.addons.keys():
+                        # each addon in the search attributes is available on this
+                        # host
+                    assert(
+                        addon in map(
+                            self.extract_name,
+                            element.getElementsByTagName('addon')))
+                for node in element.getElementsByTagName('addon'):
+                    name = self.extract_name(node)
+                    if node.getAttribute('property') != 'weak':
+                        # make sure that if an exclusive addon is installed on the host,
+                        # it's as well in the searched attributes list.
+                        assert(name in self.attributes.addons.keys())
+                    if name in ['sdk', 'hae']:
+                        # skip 'sdk' and 'hae' tags since they probably are installed
+                        # on each host
+                        continue
+                    try:
+                        major = node.getElementsByTagName(
+                            'major')[0].firstChild.data
+                    except:
+                        major = ''
+                    try:
+                        minor = node.getElementsByTagName(
+                            'minor')[0].firstChild.data
+                    except:
+                        minor = ''
+                    # check if the searched version numbers match the installed
+                    # addon versions. in case they do not match, an AssertionError
+                    # is thrown. in case they are irrelevant (not in the search
+                    # attributes), a KeyError is catched an ignored.
+                    try:
+                        assert(self.attributes.addons[name]['major'] == major)
+                    except KeyError:
+                        pass
+                    try:
+                        assert(self.attributes.addons[name]['minor'] == minor)
+                    except KeyError:
+                        pass
             try:
                 # kernel element found on the host. make sure we are searching for
                 # a kernel host, or the kernel host must not be exclusive.
