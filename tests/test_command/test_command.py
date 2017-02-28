@@ -19,6 +19,7 @@ from tests.prompt import make_cp
 from ..utils import SysFake
 from ..utils import unused
 from ..utils import PromptFake
+import collections
 
 
 OLD_STYLE_CMD='update'
@@ -61,7 +62,7 @@ def test_getattr():
 
     for p in 'complete_', 'do_', 'help_':
         attr = p + cmd
-        ok_(callable(getattr(cp, attr)), attr)
+        ok_(isinstance(getattr(cp, attr), collections.Callable), attr)
 
 def test_getnames():
     """
@@ -81,9 +82,9 @@ def test_add_subcommand():
     Test L{CommandPrompt._add_subcommand} adds class-defined commands
     """
     cp = make_cp()
-    ok_(ComMock2_0 not in cp.commands.values())
+    ok_(ComMock2_0 not in list(cp.commands.values()))
     cp._add_subcommand(ComMock2_0)
-    ok_(ComMock2_0 in cp.commands.values())
+    ok_(ComMock2_0 in list(cp.commands.values()))
 
 def test_command_argparse_fail():
     """

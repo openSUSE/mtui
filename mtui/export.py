@@ -201,7 +201,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
         # if the package versions were not updated or one of the testscripts
         # failed, set the result to FAILED, otherwise to PASSED
         failed = 0
-        for package in versions['before'].keys():
+        for package in list(versions['before'].keys()):
             # check if the packages have a higher version after the update
             try:
                 if versions['after'][package] != '0':

@@ -1,4 +1,4 @@
-from __future__ import absolute_import
+
 
 from mtui.target import HostsGroup, Target
 from nose.tools import ok_, eq_
@@ -21,8 +21,8 @@ def test_select_hosts():
     hg2 = hg.select(['a', 'c'])
     ok_(isinstance(hg2, HostsGroup))
     eq_(len(hg2.hosts), 2)
-    ok_(a in hg2.hosts.values())
-    ok_(c in hg2.hosts.values())
+    ok_(a in list(hg2.hosts.values()))
+    ok_(c in list(hg2.hosts.values()))
 
 def test_select_nohosts():
     a = make_target('a')

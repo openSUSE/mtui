@@ -23,9 +23,9 @@ from mtui.utils import timestamp
 from mtui.utils import prompt_user
 
 try:
-    unicode
+    str
 except NameError:
-    unicode = str
+    str = str
 
 
 class QuitLoop(RuntimeError):
@@ -215,8 +215,8 @@ class CommandPrompt(cmd.Cmd):
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
-        names += ["do_" + x for x in self.commands.keys()]
-        names += ["help_" + x for x in self.commands.keys()]
+        names += ["do_" + x for x in list(self.commands.keys())]
+        names += ["help_" + x for x in list(self.commands.keys())]
         return names
 
     def __getattr__(self, x):

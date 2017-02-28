@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: et sw=2 sts=2
 
-from __future__ import print_function
+
 
 import errno
 import os

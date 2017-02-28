@@ -46,7 +46,7 @@ class ListPackages(Command):
 
     @requires_update
     def _run_just_wanted(self):
-        for xs in self.metadata.packages.items():
+        for xs in list(self.metadata.packages.items()):
             self.printPVLN(*(xs + ("",)))
 
     def run(self):
@@ -69,7 +69,7 @@ class ListPackages(Command):
                 target.system,
             ))
 
-            for p, v in pvs.items():
+            for p, v in list(pvs.items()):
                 if self.metadata:
                     try:
                         wanted = self.metadata.packages[p]

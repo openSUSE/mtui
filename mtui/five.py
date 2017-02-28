@@ -21,4 +21,4 @@ def with_metaclass(meta, *bases):
 try:
     from urllib.request import urlopen
 except ImportError:
-    from urllib import urlopen
+    from urllib.request import urlopen

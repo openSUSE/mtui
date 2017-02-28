@@ -74,10 +74,10 @@ class Testopia(object):
             return text
 
     def convert_datafield(self, datafield):
-        for key in datafield.keys():
+        for key in list(datafield.keys()):
             if key == 'automated':
                 automated = {}
-                for k, v in self.automated.items():
+                for k, v in list(self.automated.items()):
                     automated[v] = k
                 try:
                     datafield['isautomated'] = automated[
@@ -87,7 +87,7 @@ class Testopia(object):
                         'unknown value for automated: {!s}. using default.'.format(error))
             elif key == 'status':
                 status = {}
-                for k, v in self.status.items():
+                for k, v in list(self.status.items()):
                     status[v] = k
                 try:
                     datafield['case_status_id'] = status[
@@ -265,7 +265,7 @@ class Testopia(object):
                     'plans': plan
                     }
 
-        for k, v in values.items():
+        for k, v in list(values.items()):
             values[k] = self._escape_html(v)
 
         testcase.update(values)
@@ -298,7 +298,7 @@ class Testopia(object):
         values  -- Testopia testcase values
         """
 
-        for k, v in values.items():
+        for k, v in list(values.items()):
             values[k] = self._escape_html(v)
 
         summary = values['summary']

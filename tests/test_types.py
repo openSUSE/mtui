@@ -82,7 +82,7 @@ def test_parse_disturl():
     def check(attrs, url_fmt):
         url = obs.DistURL(url_fmt.format(**attrs))
 
-        for attr, val in attrs.items():
+        for attr, val in list(attrs.items()):
             eq_(getattr(url, attr), val)
 
     attrs = [
@@ -140,7 +140,7 @@ def test_parse_disturl_failure():
         :returns: list of dicts made from `valid` where each item is
             empty in one of the list elements
         """
-        return [{x: ""} for x, _ in valid.items()]
+        return [{x: ""} for x, _ in list(valid.items())]
 
     def breakers_trailing_slash(valid):
         """
@@ -149,7 +149,7 @@ def test_parse_disturl_failure():
         :returns: list of dicts made from `valid` where each item is
             appended trailing slash in one of the list elements
         """
-        return  [{x: y+'/'} for x, y in valid.items()
+        return  [{x: y+'/'} for x, y in list(valid.items())
                             if not x is "package"]
 
     breakers = breakers_empty(valid) + breakers_trailing_slash(valid)

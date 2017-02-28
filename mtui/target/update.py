@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: et sw=2 sts=2
 
-from __future__ import print_function
+
 
 from mtui.target.actions import UpdateError
 from mtui.target.actions import ThreadedMethod
@@ -30,19 +30,19 @@ class Update(object):
         self.commands = []
 
     def run(self, params):
-        with LockedTargets(self.targets.values()):
+        with LockedTargets(list(self.targets.values())):
             self._run(params)
 
     def _run(self, params):
         if 'noprepare' not in params:
             self.testreport.perform_prepare(self.targets)
 
-        for hn, t in self.targets.items():
+        for hn, t in list(self.targets.items()):
             not_installed = []
 
             t.query_versions()
 
-            for pkgname, pkg in t.packages.items():
+            for pkgname, pkg in list(t.packages.items()):
                 required = self.testreport.packages[pkgname]
                 before = pkg.current
 
@@ -69,7 +69,7 @@ class Update(object):
         skipped = False
 
         try:
-            for t in self.targets.values():
+            for t in list(self.targets.values()):
                 lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
@@ -87,14 +87,14 @@ class Update(object):
                     thread.start()
 
             if skipped:
-                for t in self.targets.values():
+                for t in list(self.targets.values()):
                     try:
                         t.remove_lock()
                     except AssertionError:
                         pass
                 raise UpdateError('Hosts locked')
 
-            for t in self.targets.values():
+            for t in list(self.targets.values()):
                 queue.put([t.set_repo, ['add', self.testreport]])
 
             while queue.unfinished_tasks:
@@ -105,7 +105,7 @@ class Update(object):
             for command in self.commands:
                 self.targets.run(command)
 
-                for t in self.targets.values():
+                for t in list(self.targets.values()):
                     self._check(
                         t,
                         t.lastin(),
@@ -115,7 +115,7 @@ class Update(object):
         except:
             raise
         finally:
-            for t in self.targets.values():
+            for t in list(self.targets.values()):
                 if not lock.locked:  # wasn't locked earlier by set_host_lock
                     try:
                         t.remove_lock()
@@ -125,10 +125,10 @@ class Update(object):
         if 'newpackage' in params:
             self.testreport.perform_prepare(self.targets, testing=True)
 
-        for hn, t in self.targets.items():
+        for hn, t in list(self.targets.items()):
             t.query_versions()
 
-            for pkgname, pkg in t.packages.items():
+            for pkgname, pkg in list(t.packages.items()):
                 before = pkg.before
                 required = pkg.required
                 after = pkg.current

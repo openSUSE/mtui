@@ -10,7 +10,7 @@ from errno import EPERM
 try:
     from urllib.error import URLError
 except ImportError:
-    from urllib2 import URLError
+    from urllib.error import URLError
 
 from mtui import messages
 from mtui.refhost import Attributes

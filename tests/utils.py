@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
 try:
-    from cStringIO import StringIO
+    from io import StringIO
 except ImportError:
     try:
-        from StringIO import StringIO
+        from io import StringIO
     except ImportError:
         from io import StringIO
 
@@ -12,7 +12,7 @@ from mtui.config import Config
 try:
     from configparser import ConfigParser
 except ImportError:
-    from ConfigParser import ConfigParser
+    from configparser import ConfigParser
 
 import os.path
 import string
@@ -142,7 +142,7 @@ class ConfigFake(Config):
     def __init__(self, overrides = None, refhosts = RefhostsFake, logger = None):
         super(ConfigFake, self).__init__(logger or LogFake(), refhosts = refhosts)
         if overrides:
-            for k, v in overrides.items():
+            for k, v in list(overrides.items()):
                 self.set_option(k, v)
 
     def read(self):

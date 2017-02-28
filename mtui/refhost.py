@@ -173,10 +173,6 @@ class Attributes(object):
         """
         return bool(str(self))
 
-    def __nonzero__(self):
-        """python-2.x compat"""
-        return self.__bool__()
-
     @classmethod
     def from_testplatform(cls, testplatform, log):
         """
@@ -257,7 +253,7 @@ class Attributes(object):
 
         # add adons to the attributes
         addons = requests.get('addon', dict())
-        for addon, aversion in addons.items():
+        for addon, aversion in list(addons.items()):
             # if no version is required, leave them empty
             major = aversion.get('major', '')
             minor = aversion.get('minor', '')
@@ -346,13 +342,13 @@ class Refhosts(object):
 
             hosts = list(
                 map(self.extract_name,
-                    filter(self.check_attributes, self._location_hosts(
-                        self.location))))
+                    list(filter(self.check_attributes, self._location_hosts(
+                        self.location)))))
 
             if hosts == [] and self.location != self._default_location:
                 try:
-                    hosts = list(map(self.extract_name, filter(
-                        self.check_attributes, self._location_hosts(self._default_location))))
+                    hosts = list(map(self.extract_name, list(filter(
+                        self.check_attributes, self._location_hosts(self._default_location)))))
                 except messages.InvalidLocationError:
                     pass
 
@@ -379,12 +375,8 @@ class Refhosts(object):
 
         :type  location: string
         """
-        xs = list(
-            filter(
-                lambda e: operator.eq(
-                    e.getAttribute('name'),
-                    location),
-                self.data.getElementsByTagName('location')))
+        xs = list([e for e in self.data.getElementsByTagName(
+            'location') if operator.eq(e.getAttribute('name'), location)])
 
         if xs == []:
             raise messages.InvalidLocationError(
@@ -446,9 +438,9 @@ class Refhosts(object):
                         # each addon in the search attributes is available on this
                         # host
                     assert(
-                        addon in map(
+                        addon in list(map(
                             self.extract_name,
-                            element.getElementsByTagName('addon')))
+                            element.getElementsByTagName('addon'))))
                 for node in element.getElementsByTagName('addon'):
                     name = self.extract_name(node)
                     if node.getAttribute('property') != 'weak':
@@ -580,16 +572,14 @@ class Refhosts(object):
 
         attributes = Attributes()
 
-        nodes = filter(
-            lambda e: operator.eq(
-                e.getAttribute('name'), hostname), self._location_hosts(
-                self.location))
+        nodes = [e for e in self._location_hosts(
+                self.location) if operator.eq(
+                e.getAttribute('name'), hostname)]
 
         if nodes == [] and self.location != self._default_location:
-            nodes = filter(
-                lambda e: operator.eq(
-                    e.getAttribute('name'), hostname), self._location_hosts(
-                    self._default_location))
+            nodes = [e for e in self._location_hosts(
+                    self._default_location) if operator.eq(
+                    e.getAttribute('name'), hostname)]
 
         # technically this iterates over all found host elements.
         # but since we just return one attribute object, we choose the first
