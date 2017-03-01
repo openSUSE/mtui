@@ -441,8 +441,7 @@ class Refhosts(object):
             if self.attributes.release:
                 assert(self.attributes.release == release)
 
-
-            if major > 11:
+            if int(major) > 11:
                 for addon in self.attributes.addons.keys():
                         # each addon in the search attributes is available on this
                         # host
