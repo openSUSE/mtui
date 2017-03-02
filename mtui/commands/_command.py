@@ -45,7 +45,7 @@ class Command(with_metaclass(ABCMeta, object)):
 
     @classmethod
     def parse_args(cls, args, sys):
-        args = [] if args is '' else args.split(" ")
+        args = [] if args is '' else args.split()
         p = cls.argparser(sys)
         pa = p.parse_args(args)
 
