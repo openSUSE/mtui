@@ -196,7 +196,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             t.insert(i, '      scripts:\n')
             i += 1
 
-        log = host.getElementsByTagName('log')[0]
+        template_log = host.getElementsByTagName('log')[0]
 
         # if the package versions were not updated or one of the testscripts
         # failed, set the result to FAILED, otherwise to PASSED
@@ -215,7 +215,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             log.warning(
                 'installation test result on {!s} set to FAILED as some packages were not updated. please override manually.'.format(hostname))
 
-        for child in log.childNodes:
+        for child in template_log.childNodes:
             # search for check scripts in the xml and inspect return code
             # return code values:   0 SUCCEEDED
             #                       1 FAILED
@@ -274,18 +274,18 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
         if updatehost is not None:
             for host in x.getElementsByTagName('host'):
                 if host.getAttribute('hostname') == updatehost:
-                    log = host.getElementsByTagName('log')[0]
+                    template_log = host.getElementsByTagName('log')[0]
         else:
-            log = x.getElementsByTagName('log')[0]
+            template_log = x.getElementsByTagName('log')[0]
 
         # add hostname to indicate from which host the log was exported
-        updatehost = log.parentNode.getAttribute('hostname')
+        updatehost = template_log.parentNode.getAttribute('hostname')
 
         t = t[0:i]
 
         t.append("log from {!s}\n".format(updatehost))
 
-        for child in log.childNodes:
+        for child in template_log.childNodes:
             if not hasattr(child, 'getAttribute'):
                 continue
             cmd = child.getAttribute('name')
