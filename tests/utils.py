@@ -1,18 +1,8 @@
 # -*- coding: utf-8 -*-
 
-try:
-    from io import StringIO
-except ImportError:
-    try:
-        from io import StringIO
-    except ImportError:
-        from io import StringIO
-
+from io import StringIO
 from mtui.config import Config
-try:
-    from configparser import ConfigParser
-except ImportError:
-    from configparser import ConfigParser
+from configparser import ConfigParser
 
 import os.path
 import string
