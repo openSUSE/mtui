@@ -255,7 +255,7 @@ def test_TestReport_refhosts_from_tp():
         tr._refhosts_from_tp(case.testplatform)
         eq_(set(case.hosts.keys()), set(tr.systems.keys()))
         eq_(
-              LogTestingWrap(tr.log).all(), dict([(k, [v.format(**case.__dict__) for v in vs])
+              LogTestingWrap(tr.log).all(), dict([(k, [v.format(**case._asdict()) for v in vs])
                                                   for k, vs in list(case.logs.items())
                                                   ])
             #    , case.name
