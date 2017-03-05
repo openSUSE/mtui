@@ -23,7 +23,7 @@ class ListPackages(Command):
         if not current:
             return self.state_map[None]
 
-        return self.state_map[cmp(current, wanted)]
+        return self.state_map[(current > wanted) - (current < wanted)]
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -85,7 +85,7 @@ class ListPackages(Command):
             self.println()
 
     def printPVLN(self, package, version, state):
-        self.println('{0:30}: {1:15} {2}'.format(package, version, state))
+        self.println('{0:30}: {1!s:20} {2}'.format(package, version, state))
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
