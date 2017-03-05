@@ -257,7 +257,8 @@ class Connection(object):
         self.stdin = command
         self.stdout = ''
         self.stderr = ''
-
+        stdout = b''
+        stderr = b''
         session = self.new_session()
 
         try:
@@ -270,7 +271,7 @@ class Connection(object):
             return self.run(command, lock)
 
         while True:
-            buffer = ''
+            buffer = b''
 
             # wait for data to be transmitted. if the timeout is hit,
             # ask the user on how to procceed
@@ -303,17 +304,17 @@ class Connection(object):
                 # print the received data
                 if session.recv_ready():
                     buffer = session.recv(1024)
-                    self.stdout += buffer
+                    stdout += buffer
 
-                    for line in buffer.split('\n'):
+                    for line in buffer.decode('utf-8').split('\n'):
                         if line:
                             self.log.debug(line)
 
                 if session.recv_stderr_ready():
                     buffer = session.recv_stderr(1024)
-                    self.stderr += buffer
+                    stderr += buffer
 
-                    for line in buffer.split('\n'):
+                    for line in buffer.decode('utf-8').split('\n'):
                         if line:
                             self.log.debug(line)
 
@@ -326,7 +327,8 @@ class Connection(object):
         exitcode = session.recv_exit_status()
 
         self.close_session(session)
-
+        self.stdout = stdout.decode('utf-8')
+        self.stderr = stderr.decode('utf-8')
         return exitcode
 
     def shell(self):
