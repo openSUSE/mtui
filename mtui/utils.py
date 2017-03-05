@@ -4,7 +4,6 @@
 #
 
 
-
 import os
 import os.path as opa
 import time
@@ -212,6 +211,8 @@ class chdir:
 
 
 def atomic_write_file(data, path):
+    if isinstance(data, bytes):
+        data = data.decode('utf-8')
     fd, fname = mkstemp(dir=dirname(path))
     with os.fdopen(fd, "w") as f:
         f.write(data)
