@@ -356,7 +356,7 @@ class Target(object):
         for label, data in (('stdout', cld.stdout), ('stderr', cld.stderr)):
             for l in data:
                 logger(
-                    "local/{} {}: {}".format(self.hostname, label, l.rstrip()))
+                    "local/{} {}: {}".format(self.hostname, label, l.decode('utf-8').rstrip()))
 
     def run(self, command, lock=None):
         if self.state == 'enabled':
