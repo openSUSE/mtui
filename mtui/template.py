@@ -10,6 +10,7 @@ import stat
 from traceback import format_exc
 from abc import ABCMeta
 from abc import abstractmethod
+from urllib.request import urlopen
 import re
 import subprocess
 
@@ -19,13 +20,11 @@ from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
-from mtui.five import urlopen
 
 from mtui import utils
 
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types.obs import RequestReviewID
-from mtui.five import with_metaclass
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
@@ -105,7 +104,7 @@ class TestReportAlreadyLoaded(RuntimeError):
 
 
 @nottest
-class TestReport(with_metaclass(ABCMeta, object)):
+class TestReport(object, metaclass=ABCMeta):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read

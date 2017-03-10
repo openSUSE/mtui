@@ -8,7 +8,7 @@ import operator
 import os
 import time
 import errno
-from mtui.five import urlopen
+from urllib.request import urlopen
 
 from xml.dom import minidom
 from mtui.xdg import save_cache_path

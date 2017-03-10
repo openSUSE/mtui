@@ -5,11 +5,10 @@
 from abc import ABCMeta, abstractmethod
 
 from ..argparse import ArgumentParser
-from mtui.five import with_metaclass
 from mtui.messages import HostIsNotConnectedError
 
 
-class Command(with_metaclass(ABCMeta, object)):
+class Command(object, metaclass=ABCMeta):
     _check_subparser = None
     """
     :type _check_subparser: str
