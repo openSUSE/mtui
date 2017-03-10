@@ -2,8 +2,6 @@
 
 from mtui.commands import Command
 from mtui.utils import complete_choices
-from mtui.utils import user_input
-
 
 class HostLock(Command):
     """
@@ -25,7 +23,7 @@ class HostLock(Command):
 
     def run(self):
         targets = self.parse_hosts()
-        comment = user_input('comment: ').strip()
+        comment = input('comment: ').strip()
 
         targets.lock(comment)
 

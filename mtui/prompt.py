@@ -22,11 +22,6 @@ from mtui.utils import ensure_dir_exists
 from mtui.utils import timestamp
 from mtui.utils import prompt_user
 
-try:
-    str
-except NameError:
-    str = str
-
 
 class QuitLoop(RuntimeError):
     pass

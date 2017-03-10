@@ -1,15 +1,10 @@
 # -*- coding: utf-8 -*-
 # vim: et sw=2 sts=2
 
-
-
-import threading
-try:
-    from queue import Queue
-except ImportError:
-    from queue import Queue
 import sys
+import threading
 import time
+from queue import Queue
 
 from mtui.utils import prompt_user
 

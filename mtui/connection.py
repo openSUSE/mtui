@@ -18,7 +18,6 @@ import logging
 from traceback import format_exc
 
 from mtui.utils import termsize
-from mtui.utils import user_input
 
 with warnings.catch_warnings():
     warnings.filterwarnings('ignore', category=DeprecationWarning)
@@ -284,7 +283,7 @@ class Connection(object):
                     lock.acquire()
 
                 try:
-                    if user_input(
+                    if input(
                             'command "%s" timed out on %s. wait? (y/N) ' %
                             (command, self.hostname)).lower() in [
                             'y', 'yes']:

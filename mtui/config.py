@@ -6,10 +6,7 @@
 import os
 import getpass
 import collections
-try:
-    import configparser
-except ImportError:
-    import configparser as configparser
+import configparser
 
 from fnmatch import fnmatch
 from traceback import format_exc

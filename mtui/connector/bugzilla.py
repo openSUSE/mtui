@@ -2,11 +2,7 @@
 #
 # manage connection to Bugzilla
 #
-
-try:
-    import xmlrpc.client as xmlrpclib
-except ImportError:
-    import xmlrpc.client
+import xmlrpc.client
 
 
 class Bugzilla(object):

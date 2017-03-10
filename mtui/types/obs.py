@@ -1,12 +1,11 @@
+# -*- coding: utf-8 -*-
+
 import re
 from mtui.utils import check_eq
 from mtui import messages
 from argparse import ArgumentTypeError
 
-try:
-    from itertools import zip_longest
-except ImportError:
-    from itertools import zip_longest as zip_longest
+from itertools import zip_longest
 
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):

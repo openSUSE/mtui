@@ -28,15 +28,6 @@ try:
 except ImportError:
     nottest = lambda x: x
 
-try:
-    xrange
-except NameError:
-    xrange = range
-
-try:
-    user_input = raw_input
-except NameError:
-    user_input = input
 
 flatten = lambda xs: [y for ys in xs for y in ys if y is not None]
 
@@ -80,7 +71,7 @@ def prompt_user(text, options, interactive=True):
         return False
 
     try:
-        response = user_input(text).lower()
+        response = input(text).lower()
         if response and response in options:
             result = True
     except KeyboardInterrupt:
@@ -145,7 +136,7 @@ def page(text, interactive=True):
                 linelist = ['']
             lines2print = min(len(linelist), linesleft)
             for i in range(lines2print):
-                print((linelist[i]))
+                print(linelist[i])
             linesleft -= lines2print
             linelist = linelist[lines2print:]
 

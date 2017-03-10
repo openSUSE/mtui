@@ -5,8 +5,11 @@
 #
 # this cannot be in mtui/utils.py because of a cyclic dependency
 # between that file and mtui/messages.py
+from urllib.request import urlopen
 
 
+# TODO: can be removed is for compactibility between py2 and py3 -- investigate
+# and fix all occurencies ( should remove this file in future)
 def with_metaclass(meta, *bases):
     """Create a base class with a metaclass."""
     # This requires a bit of explanation: the basic idea is to make a dummy
@@ -17,8 +20,3 @@ def with_metaclass(meta, *bases):
         def __new__(cls, name, this_bases, d):
             return meta(name, bases, d)
     return type.__new__(metaclass, 'temporary_class', (), {})
-
-try:
-    from urllib.request import urlopen
-except ImportError:
-    from urllib.request import urlopen
