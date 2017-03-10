@@ -143,7 +143,8 @@ class CompareScript(Script):
 
         (stdout, stderr) = p.communicate()
         rc = p.wait()
-
+        stdout = stdout.decode('utf-8')
+        stderr = stderr.decode('utf-8')
         t.log.append([' '.join(argv), str(stdout), str(stderr), rc, 0])
 
         if rc == 0:
