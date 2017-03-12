@@ -371,7 +371,8 @@ class TestReport(object, metaclass=ABCMeta):
             else:
                 raise
 
-    def _ensure_executable(self, pattern):
+    @staticmethod
+    def _ensure_executable(pattern):
         for i in glob.glob(pattern):
             # make sure the compare scripts (which run localy) are
             # executable
@@ -469,7 +470,8 @@ class TestReport(object, metaclass=ABCMeta):
     def show_yourself(self, writer):
         self._aligned_write(writer, self._show_yourself_data())
 
-    def _aligned_write(self, writer, data):
+    @staticmethod
+    def _aligned_write(writer, data):
         """
         :type data:  [(str, str)]
         :param data: (key, value)
@@ -495,7 +497,8 @@ class TestReport(object, metaclass=ABCMeta):
 
         return self._wd(dirname(self.path), *paths, **kw)
 
-    def _wd(self, *paths, **kwargs):
+    @staticmethod
+    def _wd(*paths, **kwargs):
         return ensure_dir_exists(*paths, **kwargs)
 
     def target_wd(self, *paths):
