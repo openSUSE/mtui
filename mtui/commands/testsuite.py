@@ -150,7 +150,7 @@ class TestSuiteSubmit(Command):
                             hostname, target.system, match.group(1)))
                 else:
                     self.log.critical(
-                        'no submission found for {0!s}. please use "show_log {0!s}" to see what went wrong'.format(hostname))
+                        'no submission found for {0!s}. please use "show_log -t {0!s}" to see what went wrong'.format(hostname))
 
         self.log.info('done')
 
