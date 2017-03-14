@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 
-
 import sys
 import logging
 from subprocess import CalledProcessError
@@ -13,6 +12,7 @@ from mtui.prompt import CommandPrompt
 from mtui.display import CommandPromptDisplay
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui.args import get_parser
+from mtui.systemcheck import detect_system
 
 
 def main():
@@ -43,6 +43,7 @@ def run_mtui(
     config.merge_args(args)
 
     update = args.review_id
+    config.distro, config.distro_ver = detect_system()
 
     prompt = Prompt(config, log, sys, Display)
     if update:

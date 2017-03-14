@@ -620,6 +620,7 @@ class TestReport(object, metaclass=ABCMeta):
             self.log,
             self.path,
             self.generate_xmllog(),
+            self.config,
             hostname)
 
     def generate_xmllog(self):
