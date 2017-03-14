@@ -4,7 +4,6 @@ from mtui.commands import Command
 from mtui.utils import complete_choices
 from mtui.utils import requires_update
 
-
 class Install(Command):
     """
     Installs packages from the current active repository.
@@ -16,7 +15,8 @@ class Install(Command):
         parser.add_argument(
             'package',
             nargs='+',
-            help="package to install")
+            help='package to install')
+
         cls._add_hosts_arg(parser)
         return parser
 
@@ -40,9 +40,13 @@ class Install(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+        parameters = [('-t', '--target')]
+        packages = [(package,)
+                    for package in state['metadata'].get_package_list()]
+
+        parameters += packages
+
+        return complete_choices(parameters, line, text, state['hosts'].names())
 
 
 class Uninstall(Command):
@@ -53,7 +57,11 @@ class Uninstall(Command):
 
     @classmethod
     def _add_arguments(cls, parser):
-        parser.add_argument('package', nargs='+', help="package to uninstall")
+        parser.add_argument(
+            'package',
+            nargs='+',
+            help='package to install')
+
         cls._add_hosts_arg(parser)
         return parser
 
@@ -77,6 +85,10 @@ class Uninstall(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+        parameters = [('-t', '--target')]
+        packages = [(package,)
+                    for package in state['metadata'].get_package_list()]
+
+        parameters += packages
+
+        return complete_choices(parameters, line, text, state['hosts'].names())
