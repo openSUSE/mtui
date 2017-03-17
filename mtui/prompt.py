@@ -250,8 +250,8 @@ class CommandPrompt(cmd.Cmd):
                         if self.metadata and 'testopia' in x:
                             try:
                                 self.ensure_testopia_loaded()
-                            except Exception as e:
-                                self.log.debug(format_exc(e))
+                            except Exception:
+                                self.log.debug(format_exc())
                         return c.complete({
                             'hosts': self.targets.select(),
                             'metadata': self.metadata,
@@ -263,7 +263,7 @@ class CommandPrompt(cmd.Cmd):
                             **kw)
                     except Exception as e:
                         self.log.error(e)
-                        self.log.debug(format_exc(e))
+                        self.log.debug(format_exc())
                         raise e
                 return complete
 
