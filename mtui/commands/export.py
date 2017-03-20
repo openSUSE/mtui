@@ -60,9 +60,8 @@ class Export(Command):
         self.log.info('exporting XML to {!s}'.format(filename))
 
         try:
-            with open(filename, 'w') as f:
-                f.write('\n'.join(line.rstrip().encode('utf-8')
-                                  for line in template))
+            with open(filename, 'w',encoding='utf-8') as f:
+                f.write('\n'.join(line.rstrip() for line in template))
         except IOError as e:
             self.println('Failed to write {}: {}'.format(filename, e.strerror))
             return

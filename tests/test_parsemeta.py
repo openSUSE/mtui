@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # vim: et sw=2 sts=2
 
-from __future__ import print_function
-from __future__ import absolute_import
+
+
 
 from nose.tools import eq_, ok_
 

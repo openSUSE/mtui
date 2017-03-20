@@ -115,7 +115,7 @@ class CommandPromptDisplay(object):
         ))
 
     def list_versions(self, targets, hosts_pvs):
-        for hs, pvs in hosts_pvs.items():
+        for hs, pvs in list(hosts_pvs.items()):
             if len(hosts_pvs) > 1:
                 self.println('version history from:')
                 for hn in hs:
@@ -138,9 +138,9 @@ class CommandPromptDisplay(object):
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
             sink('{!s}:~> {!s} [{!s}]'.format(hostname, cmdline, exitcode))
             sink('stdout:')
-            map(sink, stdout.split('\n'))
+            list(map(sink, stdout.split('\n')))
             sink('stderr:')
-            map(sink, stderr.split('\n'))
+            list(map(sink, stderr.split('\n')))
 
     def testopia_list(self, url, tcid, summary, status, automated):
         if status == 'disabled':

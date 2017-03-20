@@ -10,6 +10,7 @@ import stat
 from traceback import format_exc
 from abc import ABCMeta
 from abc import abstractmethod
+from urllib.request import urlopen
 import re
 import subprocess
 
@@ -19,13 +20,11 @@ from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
-from mtui.five import urlopen
 
 from mtui import utils
 
 from mtui.utils import ensure_dir_exists, chdir
 from mtui.types.obs import RequestReviewID
-from mtui.five import with_metaclass
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
@@ -105,7 +104,7 @@ class TestReportAlreadyLoaded(RuntimeError):
 
 
 @nottest
-class TestReport(with_metaclass(ABCMeta, object)):
+class TestReport(object, metaclass=ABCMeta):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read
@@ -372,7 +371,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
             else:
                 raise
 
-    def _ensure_executable(self, pattern):
+    @staticmethod
+    def _ensure_executable(pattern):
         for i in glob.glob(pattern):
             # make sure the compare scripts (which run localy) are
             # executable
@@ -383,7 +383,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
     def connect_targets(self, make_target=Target):
         targets = {}
 
-        for (host, system) in self.systems.items():
+        for (host, system) in list(self.systems.items()):
             try:
                 targets[host] = make_target(
                     self.config,
@@ -463,14 +463,15 @@ class TestReport(with_metaclass(ABCMeta, object)):
             ('Packages', ' '.join(sorted(self.get_package_list()))),
             ('Testreport', self._testreport_url()),
             ('Repository', self.repository),
-        ] + [(x.upper(), y) for x, y in self.patches.items()
+        ] + [(x.upper(), y) for x, y in list(self.patches.items())
              ] + [('Testplatform', x) for x in self.testplatforms
                   ]
 
     def show_yourself(self, writer):
         self._aligned_write(writer, self._show_yourself_data())
 
-    def _aligned_write(self, writer, data):
+    @staticmethod
+    def _aligned_write(writer, data):
         """
         :type data:  [(str, str)]
         :param data: (key, value)
@@ -496,7 +497,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         return self._wd(dirname(self.path), *paths, **kw)
 
-    def _wd(self, *paths, **kwargs):
+    @staticmethod
+    def _wd(*paths, **kwargs):
         return ensure_dir_exists(*paths, **kwargs)
 
     def target_wd(self, *paths):
@@ -585,7 +587,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         # by_host_pkg[hostname][package] = [version, ...]
         by_host_pkg = dict()
-        for hn, t in targets.items():
+        for hn, t in list(targets.items()):
             by_host_pkg[hn] = dict()
             for line in t.lastout().split('\n'):
                 match = re.search('(\S+)\s+(\S+)', line)
@@ -596,8 +598,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         # by_pkg_vers[package][(version, ...)] = [hostname, ...]
         by_pkg_vers = dict()
-        for hn, pvs in by_host_pkg.items():
-            for pkg, vs in pvs.items():
+        for hn, pvs in list(by_host_pkg.items()):
+            for pkg, vs in list(pvs.items()):
                 by_pkg_vers.setdefault(
                     pkg,
                     dict()).setdefault(
@@ -606,8 +608,8 @@ class TestReport(with_metaclass(ABCMeta, object)):
 
         # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
         by_hosts_pkg = dict()
-        for pkg, vshs in by_pkg_vers.items():
-            for vs, hs in vshs.items():
+        for pkg, vshs in list(by_pkg_vers.items()):
+            for vs, hs in list(vshs.items()):
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
         return sink(targets, by_hosts_pkg)
@@ -618,6 +620,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
             self.log,
             self.path,
             self.generate_xmllog(),
+            self.config,
             hostname)
 
     def generate_xmllog(self):
@@ -628,7 +631,7 @@ class TestReport(with_metaclass(ABCMeta, object)):
         if self:
             output.add_header(self)
 
-        for t in self.targets.values():
+        for t in list(self.targets.values()):
             output.add_target(t)
 
         return output.pretty()
@@ -644,10 +647,6 @@ class NullTestReport(TestReport):
 
     def __bool__(tr):
         return False
-
-    def __nonzero__(tr):
-        '''python-2.x compat, see __bool__()'''
-        return tr.__bool__()
 
     def target_wd(self, *paths):
         return join(self.config.target_tempdir, *paths)

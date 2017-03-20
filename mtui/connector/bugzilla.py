@@ -2,11 +2,7 @@
 #
 # manage connection to Bugzilla
 #
-
-try:
-    import xmlrpc.client as xmlrpclib
-except ImportError:
-    import xmlrpclib
+import xmlrpc.client
 
 
 class Bugzilla(object):
@@ -35,7 +31,7 @@ class Bugzilla(object):
         # just basic auth for the start
         self.url = interface.replace(
             '://', '://{!s}:{!s}@'.format(username, password))
-        self.proxy = xmlrpclib.ServerProxy(self.url)
+        self.proxy = xmlrpc.client.ServerProxy(self.url)
 
     def query_interface(self, service, *query):
         """generic XMLRPC interface query
@@ -55,11 +51,11 @@ class Bugzilla(object):
         except AttributeError:
             self.log.critical('service "{!s}" does not exist.'.format(service))
             raise
-        except xmlrpclib.ProtocolError as error:
+        except xmlrpc.client.ProtocolError as error:
             if error.errcode == 401:
                 self.log.critical('failed to authorize with Bugzilla')
             raise
-        except xmlrpclib.Fault as error:
+        except xmlrpc.client.Fault as error:
             if error.faultCode == 32000:
                 self.log.critical('testcase does not exist')
             raise

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # vim: et sw=2 sts=2
 
-from __future__ import print_function
+
 
 import re
 
@@ -33,7 +33,7 @@ class Downgrade(object):
         versions = {}
 
         try:
-            for t in self.targets.values():
+            for t in list(self.targets.values()):
                 lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
@@ -51,14 +51,14 @@ class Downgrade(object):
                     thread.start()
 
             if skipped:
-                for t in self.targets.values():
+                for t in list(self.targets.values()):
                     try:
                         t.remove_lock()
                     except AssertionError:
                         pass
                 raise UpdateError('Hosts locked')
 
-            for t in self.targets.values():
+            for t in list(self.targets.values()):
                 queue.put([t.set_repo, ['remove', self.testreport]])
 
             while queue.unfinished_tasks:
@@ -66,7 +66,7 @@ class Downgrade(object):
 
             queue.join()
 
-            for t in self.targets.values():
+            for t in list(self.targets.values()):
                 if t.lasterr():
                     self.log.critical(
                         'failed to downgrade host %s. stopping.\n# %s\n%s' %
@@ -74,7 +74,7 @@ class Downgrade(object):
                     return
 
             self.targets.run(self.list_command)
-            for hn, t in self.targets.items():
+            for hn, t in list(self.targets.items()):
                 lines = t.lastout().split('\n')
                 release = {}
                 for line in lines:
@@ -106,7 +106,7 @@ class Downgrade(object):
 
                 temp.run(self.commands)
 
-                for t in self.targets.values():
+                for t in list(self.targets.values()):
                     self._check(
                         t,
                         t.lastin(),
@@ -120,7 +120,7 @@ class Downgrade(object):
         except:
             raise
         finally:
-            for t in self.targets.values():
+            for t in list(self.targets.values()):
                 if not lock.locked:  # wasn't locked earlier by set_host_lock
                     try:
                         t.remove_lock()

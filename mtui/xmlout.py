@@ -17,7 +17,7 @@ class XMLOutput(object):
         self.update = self.output.documentElement
 
     def add_header(self, metadata):
-        for (type, id) in metadata.patches.items():
+        for (type, id) in list(metadata.patches.items()):
             self.update.setAttribute(type, id)
 
         self.update.setAttribute('packager', metadata.packager)
@@ -55,21 +55,9 @@ class XMLOutput(object):
         node = self.output.createElement('log')
 
         for (command, stdout, stderr, exitcode, runtime) in target.log:
-            command = command.decode(
-                'ascii',
-                'replace').encode(
-                'ascii',
-                'replace')
-            stdout = stdout.decode(
-                'ascii',
-                'replace').encode(
-                'ascii',
-                'replace')
-            stderr = stderr.decode(
-                'ascii',
-                'replace').encode(
-                'ascii',
-                'replace')
+            command = command.encode('ascii','replace').decode('ascii','replace')
+            stdout = stdout.encode('ascii','replace').decode('ascii','replace')
+            stderr = stderr.encode('ascii','replace').decode('ascii','replace')
             self.add_command(
                 node, command, '{!s}\n{!s}'.format(
                     stdout, stderr), exitcode, runtime)

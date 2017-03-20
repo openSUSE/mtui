@@ -1,12 +1,11 @@
+# -*- coding: utf-8 -*-
+
 import re
 from mtui.utils import check_eq
 from mtui import messages
 from argparse import ArgumentTypeError
 
-try:
-    from itertools import zip_longest
-except ImportError:
-    from itertools import izip_longest as zip_longest
+from itertools import zip_longest
 
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):
@@ -76,7 +75,7 @@ class RequestReviewID(object):
         TooManyComponentsError.raise_if(xs)
 
         # construct [(parser, input, index), ...]
-        xs = zip_longest(parsers, xs, range(1, 5))
+        xs = zip_longest(parsers, xs, list(range(1, 5)))
 
         # apply parsers to inputs, getting parsed values or raise
         xs = [_apply_parser(*ys) for ys in xs]

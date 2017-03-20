@@ -22,11 +22,6 @@ from mtui.utils import ensure_dir_exists
 from mtui.utils import timestamp
 from mtui.utils import prompt_user
 
-try:
-    unicode
-except NameError:
-    unicode = str
-
 
 class QuitLoop(RuntimeError):
     pass
@@ -215,8 +210,8 @@ class CommandPrompt(cmd.Cmd):
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
-        names += ["do_" + x for x in self.commands.keys()]
-        names += ["help_" + x for x in self.commands.keys()]
+        names += ["do_" + x for x in list(self.commands.keys())]
+        names += ["help_" + x for x in list(self.commands.keys())]
         return names
 
     def __getattr__(self, x):
@@ -255,8 +250,8 @@ class CommandPrompt(cmd.Cmd):
                         if self.metadata and 'testopia' in x:
                             try:
                                 self.ensure_testopia_loaded()
-                            except Exception as e:
-                                self.log.debug(format_exc(e))
+                            except Exception:
+                                self.log.debug(format_exc())
                         return c.complete({
                             'hosts': self.targets.select(),
                             'metadata': self.metadata,
@@ -268,7 +263,7 @@ class CommandPrompt(cmd.Cmd):
                             **kw)
                     except Exception as e:
                         self.log.error(e)
-                        self.log.debug(format_exc(e))
+                        self.log.debug(format_exc())
                         raise e
                 return complete
 

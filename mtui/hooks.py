@@ -9,6 +9,7 @@ from traceback import format_exc
 import subprocess
 
 from mtui import messages
+import collections
 
 
 class Script(object):
@@ -97,7 +98,7 @@ class PreScript(Script):
                 )
         )
 
-        for t in targets.values():
+        for t in list(targets.values()):
             fname = self._result(type(self), self.bname, t)
             try:
                 with open(fname, 'w') as f:
@@ -115,7 +116,7 @@ class CompareScript(Script):
     subdir = "compare"
 
     def _run(self, targets):
-        for t in targets.values():
+        for t in list(targets.values()):
             self._run_single_target(t)
 
     def _run_single_target(self, t):
@@ -142,7 +143,8 @@ class CompareScript(Script):
 
         (stdout, stderr) = p.communicate()
         rc = p.wait()
-
+        stdout = stdout.decode('utf-8')
+        stderr = stderr.decode('utf-8')
         t.log.append([' '.join(argv), str(stdout), str(stderr), rc, 0])
 
         if rc == 0:
@@ -153,6 +155,6 @@ class CompareScript(Script):
         else:
             logger, msg = self.log.warning, messages.CompareScriptFailed
 
-        assert callable(logger), "{0!r} not callable".format(logger)
+        assert isinstance(logger, collections.Callable), "{0!r} not callable".format(logger)
 
         logger(msg(argv, stdout, stderr, rc))

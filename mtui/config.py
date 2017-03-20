@@ -5,10 +5,8 @@
 
 import os
 import getpass
-try:
-    import configparser
-except ImportError:
-    import ConfigParser as configparser
+import collections
+import configparser
 
 from fnmatch import fnmatch
 from traceback import format_exc
@@ -80,7 +78,7 @@ class Config(object):
             try:
                 val = self._get_option(inipath, getter)
             except:
-                if callable(default):
+                if isinstance(default, collections.Callable):
                     val = default()
                 else:
                     val = default

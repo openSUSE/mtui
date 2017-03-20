@@ -33,7 +33,7 @@ class TestopiaEdit(Command):
             candidates = [str(int(self.args.testcase_id))]
         except ValueError:
             candidates = [
-                k for k, v in self.prompt.testopia.testcases.items()
+                k for k, v in list(self.prompt.testopia.testcases.items())
                 if v['summary'].replace('_', ' ') in self.args.testcase_id.replace('_', ' ')]
 
         if not candidates:
@@ -88,6 +88,6 @@ class TestopiaEdit(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         testcases = [
-            (i['summary'].replace(' ', '_'),) for i in state['testopia'].testcases.values()]
+            (i['summary'].replace(' ', '_'),) for i in list(state['testopia'].testcases.values())]
 
         return complete_choices(testcases, line, text)

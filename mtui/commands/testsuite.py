@@ -71,7 +71,7 @@ class TestSuiteRun(Command):
             self.log.info('testsuite run canceled')
             return
 
-        for hn, t in targets.items():
+        for hn, t in list(targets.items()):
             t.report_testsuite_results(self.display.testsuite_run, name)
 
         self.log.info('done')
@@ -122,7 +122,7 @@ class TestSuiteSubmit(Command):
             " -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c '{2}'".format(self.metadata.id, username, comment)
 
         try:
-            for hostname, target in targets.items():
+            for hostname, target in list(targets.items()):
                 self.log.info(
                     'Submiting results of {}-run from {}'.format(name, hostname))
                 target.run(cmd)
@@ -130,7 +130,7 @@ class TestSuiteSubmit(Command):
             self.log.info('Testsuite results submission canceled')
             return
 
-        for hostname, target in targets.items():
+        for hostname, target in list(targets.items()):
             if target.lastexit() != 0:
                 self.log.critical(
                     'submitting testsuite results failed on {!s}'.format(hostname))

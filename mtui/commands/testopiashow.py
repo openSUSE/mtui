@@ -35,7 +35,7 @@ class TestopiaShow(Command):
             try:
                 cases.append(str(int(case)))
             except ValueError:
-                cases += [k for k, v in self.prompt.testopia.testcases.items()
+                cases += [k for k, v in list(self.prompt.testopia.testcases.items())
                           if v['summary'].replace('_', ' ') in case]
 
         for case_id in cases:
@@ -60,6 +60,6 @@ class TestopiaShow(Command):
     def complete(state, text, line, begidx, endidx):
         testcases = [
             (i['summary'].replace(' ', '_'),)
-            for i in state['testopia'].testcases.values()]
+            for i in list(state['testopia'].testcases.values())]
         testcases += [('-t', '--testcase')]
         return complete_choices(testcases, line, text)

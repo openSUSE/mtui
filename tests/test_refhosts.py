@@ -7,10 +7,7 @@ import os
 from tempfile import NamedTemporaryFile
 from posix import stat_result
 from errno import EPERM
-try:
-    from urllib.error import URLError
-except ImportError:
-    from urllib2 import URLError
+from urllib.error import URLError
 
 from mtui import messages
 from mtui.refhost import Attributes
@@ -170,8 +167,8 @@ def test_rf_rh():
     """
     tmp = NamedTemporaryFile()
     tmp.write(
-        '<?xml version="1.0" encoding="utf-8"?>' \
-        + '<definitions></definitions>'
+        b'<?xml version="1.0" encoding="utf-8"?>' \
+        + b'<definitions></definitions>'
     )
     tmp.flush()
 
@@ -330,12 +327,13 @@ def test_check_location_sanity():
             break
 
     tmp = NamedTemporaryFile()
-    tmp.write(
+    tmp.write( bytes(
         '<?xml version="1.0" encoding="utf-8"?><definitions>'
       + ''.join(['<location name="{}"></location>'.format(x)
             for x in locs])
-      + '</definitions>'
-    )
+      + '</definitions>',
+        'utf-8'
+    ))
     tmp.flush()
 
     l = LogTestingWrap()

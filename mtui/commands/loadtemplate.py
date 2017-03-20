@@ -40,7 +40,7 @@ class LoadTemplate(Command):
                 return
 
         re_add = []
-        for hostname, target in self.prompt.targets.items():
+        for hostname, target in list(self.prompt.targets.items()):
             re_add.append((hostname, target.system))
             target.close()
 

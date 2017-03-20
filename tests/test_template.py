@@ -232,7 +232,7 @@ def test_TestReport_connect_targets():
 
     eq_(len(ts), 2)
 
-    for (k, v), (h, t) in zip(tr.systems.items(), ts.items()):
+    for (k, v), (h, t) in zip(list(tr.systems.items()), list(ts.items())):
         eq_(k, h)
         eq_(t.hostname, k)
         eq_(t.system, v)
@@ -255,8 +255,8 @@ def test_TestReport_refhosts_from_tp():
         tr._refhosts_from_tp(case.testplatform)
         eq_(set(case.hosts.keys()), set(tr.systems.keys()))
         eq_(
-              LogTestingWrap(tr.log).all(), dict([(k, [v.format(**case.__dict__) for v in vs])
-                                                  for k, vs in case.logs.items()
+              LogTestingWrap(tr.log).all(), dict([(k, [v.format(**case._asdict()) for v in vs])
+                                                  for k, vs in list(case.logs.items())
                                                   ])
             #    , case.name
         )

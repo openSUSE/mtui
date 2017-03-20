@@ -3,7 +3,7 @@
 # update and software stack management
 #
 
-from __future__ import print_function
+
 
 from mtui.target.actions import UpdateError
 from mtui.target.downgrade import Downgrade

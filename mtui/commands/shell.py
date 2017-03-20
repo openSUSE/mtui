@@ -21,7 +21,7 @@ class Shell(Command):
 
         self.log.debug('Starting shell')
 
-        for target in targets.keys():
+        for target in list(targets.keys()):
             targets[target].shell()
 
     @staticmethod

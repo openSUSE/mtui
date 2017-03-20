@@ -38,7 +38,7 @@ class Run(Command):
 
         command = command.rstrip(' ')
 
-        with LockedTargets(targets.values()):
+        with LockedTargets(list(targets.values())):
             try:
                 targets.run(command)
             except KeyboardInterrupt:
@@ -52,10 +52,10 @@ class Run(Command):
                         target,
                         targets[target].lastin(),
                         targets[target].lastexit()))
-                map(output.append, targets[target].lastout().split('\n'))
+                list(map(output.append, targets[target].lastout().split('\n')))
                 if targets[target].lasterr():
-                    map(output.append, ['stderr:'] +
-                        targets[target].lasterr().split('\n'))
+                    list(map(output.append, ['stderr:'] +
+                        targets[target].lasterr().split('\n')))
 
         page(output, self.prompt.interactive)
         self.log.info('done')

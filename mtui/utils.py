@@ -3,7 +3,6 @@
 # occasionally used functions which don't match anywhere else
 #
 
-from __future__ import print_function
 
 import os
 import os.path as opa
@@ -22,21 +21,13 @@ from shutil import move
 from os.path import dirname
 from os.path import join
 from mtui.messages import TestReportNotLoadedError
+import collections
 
 try:
     from nose.tools import nottest
 except ImportError:
     nottest = lambda x: x
 
-try:
-    xrange
-except NameError:
-    xrange = range
-
-try:
-    user_input = raw_input
-except NameError:
-    user_input = input
 
 flatten = lambda xs: [y for ys in xs for y in ys if y is not None]
 
@@ -80,7 +71,7 @@ def prompt_user(text, options, interactive=True):
         return False
 
     try:
-        response = user_input(text).lower()
+        response = input(text).lower()
         if response and response in options:
             result = True
     except KeyboardInterrupt:
@@ -140,7 +131,7 @@ def page(text, interactive=True):
     while True:
         linesleft = height - 1
         while linesleft:
-            linelist = [line[i:i+width] for i in xrange(0, len(line), width)]
+            linelist = [line[i:i+width] for i in range(0, len(line), width)]
             if not linelist:
                 linelist = ['']
             lines2print = min(len(linelist), linesleft)
@@ -189,7 +180,7 @@ def ensure_dir_exists(*path, **kwargs):
 
     mkdir_p(dirn)
 
-    if callable(on_create):
+    if isinstance(on_create, collections.Callable):
         on_create(path=dirn)
 
     return path
@@ -211,6 +202,8 @@ class chdir:
 
 
 def atomic_write_file(data, path):
+    if isinstance(data, bytes):
+        data = data.decode('utf-8')
     fd, fname = mkstemp(dir=dirname(path))
     with os.fdopen(fd, "w") as f:
         f.write(data)
@@ -277,14 +270,14 @@ class UnknownSystemError(ValueError):
 def get_release(systems):
     systems = ' '.join(systems)
 
-    for rexp, release in {
+    for rexp, release in list({
         'rhel': 'YUM',
         'sle[sd]12': '12',
         'sap-aio12': '12',
         'sle[sd]11': '11',
         '(manager2|sle.11|sles4vmware|studio)': '11',
         '(manager3|mgr|cloud|slms)': '12'
-    }.items():
+    }.items()):
         if re.search(rexp, systems):
             return release
 

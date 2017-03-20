@@ -26,14 +26,14 @@ class TestopiaList(Command):
 
     @requires_update
     def run(self):
-        self.prompt.ensure_testopia_loaded(*filter(None, self.args.package))
+        self.prompt.ensure_testopia_loaded(*[_f for _f in self.args.package if _f])
 
         url = self.config.bugzilla_url
 
         if not self.prompt.testopia.testcases:
             self.log.info('no testcases found')
 
-        for tcid, tc in self.prompt.testopia.testcases.items():
+        for tcid, tc in list(self.prompt.testopia.testcases.items()):
             self.display.testopia_list(
                 url,
                 tcid,

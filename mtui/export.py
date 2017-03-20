@@ -8,9 +8,10 @@ import codecs
 import xml.dom.minidom
 
 from mtui.rpmver import RPMVersion
+from mtui.systemcheck import system_info
 
 
-def xml_to_template(logger, template, xmldata, updatehost=None):
+def xml_to_template(logger, template, xmldata, config, updatehost=None):
     """ export mtui xml data to an existing maintenance template
 
     simple method to export package versions and
@@ -201,7 +202,7 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
         # if the package versions were not updated or one of the testscripts
         # failed, set the result to FAILED, otherwise to PASSED
         failed = 0
-        for package in versions['before'].keys():
+        for package in list(versions['before'].keys()):
             # check if the packages have a higher version after the update
             try:
                 if versions['after'][package] != '0':
@@ -294,5 +295,5 @@ def xml_to_template(logger, template, xmldata, updatehost=None):
             t.append(
                 '# {!s}\n{!s}\n'.format(
                     cmd, child.childNodes[0].nodeValue))
-
+    t.append(system_info(config.distro, config.distro_ver, config.session_user))
     return t

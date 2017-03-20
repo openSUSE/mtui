@@ -1,3 +1,7 @@
+# -*- coding: utf-8 -*-
+#
+# common Metadata parser + OBS extension
+
 import re
 from mtui.types.obs import RequestReviewID
 
