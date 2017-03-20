@@ -17,17 +17,14 @@ def make_logger():
 
 def test_construction():
   a = Attributes()
-  eq_(a.product, '')
-  eq_(a.major, None)
-  eq_(a.minor, None)
-  eq_(a.release, None)
-  eq_(a.kernel, None)
-  eq_(a.ltss, None)
+  eq_(a.product, {})
+  eq_(a.kernel, {})
+  eq_(a.ltss, {})
   eq_(a.minimal, None)
 
-  eq_(a.archs, list())
-  eq_(a.addons, dict())
-  eq_(a.virtual, dict(mode = '', hypervisor = ''))
+  eq_(a.arch, '')
+  eq_(a.addons, [])
+  eq_(a.virtual, {})
 
   eq_(str(a), '')
 
@@ -36,44 +33,40 @@ def test_construction():
 
 class Test_stringification(object):
   def make_attrs(t):
-    return Attributes()
+        return Attributes()
 
   def testcase_1(ctx):
     a = ctx.make_attrs()
+    a.product['name'] = 'sturd'
+    a.product['version'] = {'major':42, 'minor':69}
 
-    a.product = 'sturd'
-    a.major = '42'
-    a.minor = '69'
-    a.release = 'fefe'
-    a.archs = 'Bfoo Abar Cqux'.split()
-    eq_(str(a), 'sturd 42.69fefe Abar Bfoo Cqux')
+    eq_(str(a), 'sturd 42.69')
 
-    a.kernel = True
-    a.ltss = True
+    a.kernel = {'enabled': True}
+    a.ltss = {'enabled': True}
     a.minimal = True
-    eq_(str(a), 'sturd 42.69fefe Abar Bfoo Cqux kernel ltss minimal')
+    eq_(str(a), 'sturd 42.69 kernel ltss minimal')
 
     a.virtual['mode'] = 'guest'
-    eq_(str(a), 'sturd 42.69fefe Abar Bfoo Cqux kernel ltss minimal guest')
+    eq_(str(a), 'sturd 42.69 kernel ltss minimal guest')
 
     a.virtual['hypervisor'] = 'rofl.pam.suici.de'
-    eq_(str(a), 'sturd 42.69fefe Abar Bfoo Cqux kernel ltss minimal guest rofl.pam.suici.de')
+    eq_(str(a), 'sturd 42.69 kernel ltss minimal guest rofl.pam.suici.de')
 
-    a.kernel = False
-    eq_(str(a), 'sturd 42.69fefe Abar Bfoo Cqux ltss minimal guest rofl.pam.suici.de')
+    a.kernel = {'enabled': False}
+    eq_(str(a), 'sturd 42.69 ltss minimal guest rofl.pam.suici.de')
 
-    a.ltss = False
-    eq_(str(a), 'sturd 42.69fefe Abar Bfoo Cqux minimal guest rofl.pam.suici.de')
+    a.ltss = {'enabled': False}
+    eq_(str(a), 'sturd 42.69 minimal guest rofl.pam.suici.de')
 
   def testcase_2(ctx):
     a = ctx.make_attrs()
+    a.addons = [{'name':'foo', 'version':{'major':12, 'minor':34}},
+      {'name':'qux', 'version':{'major':21}},
+      {'name':'bar', 'version':{'major':45, 'minor':67}},
+      {'name':'zal', 'version':{'major':43}}]
 
-    a.addons['foo'] = dict(major = '12', minor = '34')
-    a.addons['qux'] = dict(major = '21')
-    a.addons['bar'] = dict(major = '45', minor = '67')
-    a.addons['zal'] = dict(minor = '43')
-
-    eq_(str(a), 'bar 45.67 foo 12.34 qux 21. zal .43')
+    eq_(str(a), 'bar 45.67 foo 12.34 qux 21. zal 43.')
 
 
 class Test_from_testplatform(object):
@@ -82,165 +75,285 @@ class Test_from_testplatform(object):
 
   def testcase_2(ctx):
     tp = 'base=sap-aio(major=12,minor=);arch=[x86_64]'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sap-aio')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
+    la = ctx.make_attrs(tp)
+
+    a = la[0]
+    eq_(len(la), 1)
+    eq_(a.product['name'], 'sap-aio')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, {})
     eq_(str(a), 'sap-aio 12 x86_64')
 
   def testcase_3(ctx):
     tp = 'base=sled(major=11,minor=sp3);arch=[i386,x86_64]'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sled')
-    eq_(a.major, '11')
-    eq_(a.minor, 'sp3')
-    eq_(a.archs, ['i386', 'x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
-    eq_(str(a), 'sled 11sp3 i386 x86_64')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 2)
+
+    a = la[0]
+    eq_(a.product['name'], 'sled')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'i386')
+    eq_(a.addons, list())
+    eq_(a.virtual, {})
+    eq_(str(a), 'sled 11sp3 i386')
+
+    a = la[1]
+    eq_(a.product['name'], 'sled')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, {})
+    eq_(str(a), 'sled 11sp3 x86_64')
+
+
 
   def testcase_3(ctx):
     tp = 'base=sled(major=12,minor=);arch=[x86_64]'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sled')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
+    la = ctx.make_attrs(tp)
+    a = la[0]
+    eq_(len(la), 1)
+    eq_(a.product['name'], 'sled')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, {})
     eq_(str(a), 'sled 12 x86_64')
 
   def testcase_4(ctx):
     tp = 'base=sled(major=12,minor=);arch=[x86_64];virtual=(hypervisor=kvm)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sled')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = 'kvm', mode = ''))
+    la = ctx.make_attrs(tp)
+    a = la[0]
+    eq_(len(la), 1)
+    eq_(a.product['name'], 'sled')
+    eq_(a.product['version'], {'major':12 })
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, {'hypervisor':'kvm'})
     eq_(str(a), 'sled 12 x86_64 kvm')
 
   def testcase_5(ctx):
     tp = 'base=sles(major=11,minor=sp3);arch=[i386,s390x,x86_64]'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '11')
-    eq_(a.minor, 'sp3')
-    eq_(a.archs, ['i386', 's390x', 'x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
-    eq_(str(a), 'sles 11sp3 i386 s390x x86_64')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 3)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'i386')
+    eq_(a.addons, list())
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 i386')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, list())
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 s390x')
+
+    a = la[2]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 x86_64')
+
 
   def testcase_6(ctx):
     tp = 'base=sles(major=11,minor=sp3);arch=[i386,s390x,x86_64];addon=sdk(major=11,minor=sp3)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '11')
-    eq_(a.minor, 'sp3')
-    eq_(a.archs, ['i386', 's390x', 'x86_64'])
-    eq_(a.addons, dict(sdk = dict(major = '11', minor = 'sp3')))
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
-    eq_(str(a), 'sles 11sp3 i386 s390x x86_64 sdk 11.sp3')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 3)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'i386')
+    eq_(a.addons, [{'name': 'sdk', 'version':{'major': 11, 'minor': 'sp3'}}])
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 i386 sdk 11.sp3')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, [{'name': 'sdk', 'version':{'major': 11, 'minor': 'sp3'}}])
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 s390x sdk 11.sp3')
+
+    a = la[2]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, [{'name': 'sdk', 'version':{'major': 11, 'minor': 'sp3'}}])
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 x86_64 sdk 11.sp3')
+
 
   def testcase_7(ctx):
     tp = 'base=sles(major=11,minor=sp3);arch=[x86_64,s390x];addon=sdk(major=11,minor=sp3)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '11')
-    eq_(a.minor, 'sp3')
-    eq_(a.archs, ['s390x', 'x86_64'])
-    eq_(a.addons, dict(sdk = dict(major = '11', minor = 'sp3')))
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
-    eq_(str(a), 'sles 11sp3 s390x x86_64 sdk 11.sp3')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 2)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, [{'name':'sdk', 'version':{'major':11, 'minor':'sp3'}}])
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 x86_64 sdk 11.sp3')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, [{'name':'sdk', 'version':{'major':11, 'minor':'sp3'}}])
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp3 s390x sdk 11.sp3')
+
+
 
   def testcase_8(ctx):
     tp = 'base=sles(major=11,minor=sp3);arch=[x86_64];addon=cloud(major=3,minor=0)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '11')
-    eq_(a.minor, 'sp3')
-    eq_(a.archs, ['x86_64'])
-    eq_(a.addons, dict(cloud = dict(major = '3', minor = '0')))
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
+    la = ctx.make_attrs(tp)
+    a = la[0]
+    eq_(len(la), 1)
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp3'})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, [{'name': 'cloud', 'version': {'major':3, 'minor':0} }])
+    eq_(a.virtual, {})
     eq_(str(a), 'sles 11sp3 x86_64 cloud 3.0')
 
   def testcase_9(ctx):
     tp = 'base=sles(major=11,minor=sp4);arch=[x86_64,s390x];addon=sdk(major=11,minor=sp4)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '11')
-    eq_(a.minor, 'sp4')
-    eq_(a.archs, ['s390x', 'x86_64'])
-    eq_(a.addons, dict(sdk = dict(major = '11', minor = 'sp4')))
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
-    eq_(str(a), 'sles 11sp4 s390x x86_64 sdk 11.sp4')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 2)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp4'})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, [{'name':'sdk', 'version': {'major':11, 'minor': 'sp4'}}])
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp4 x86_64 sdk 11.sp4')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp4'})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, [{'name':'sdk', 'version': {'major':11, 'minor': 'sp4'}}])
+    eq_(a.virtual, {})
+    eq_(str(a), 'sles 11sp4 s390x sdk 11.sp4')
 
   def testcase_10(ctx):
     tp = 'base=sles(major=11,minor=sp4);arch=[x86_64]'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '11')
-    eq_(a.minor, 'sp4')
-    eq_(a.archs, ['x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
+    la = ctx.make_attrs(tp)
+    a = la[0]
+    eq_(len(la), 1)
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':11, 'minor':'sp4'})
+
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, dict())
     eq_(str(a), 'sles 11sp4 x86_64')
 
   def testcase_11(ctx):
     tp = 'base=sles(major=12,minor=);arch=[x86_64,s390x]'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['s390x', 'x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
-    eq_(str(a), 'sles 12 s390x x86_64')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 2)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, dict())
+    eq_(str(a), 'sles 12 x86_64')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, list())
+    eq_(a.virtual, dict())
+    eq_(str(a), 'sles 12 s390x')
 
   def testcase_12(ctx):
     tp = 'base=sles(major=12,minor=);arch=[x86_64,s390x];addon=bsk(major=12,minor=)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['s390x', 'x86_64'])
-    eq_(a.addons, dict(bsk = dict(major = '12', minor = '')))
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
-    eq_(str(a), 'sles 12 s390x x86_64 bsk 12.')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 2)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, [{'name':'bsk', 'version':{'major':12}}])
+    eq_(a.virtual, dict())
+    eq_(str(a), 'sles 12 x86_64 bsk 12.')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, [{'name':'bsk', 'version':{'major':12}}])
+    eq_(a.virtual, dict())
+    eq_(str(a), 'sles 12 s390x bsk 12.')
 
   def testcase_13(ctx):
     tp = 'base=sles(major=12,minor=);arch=[x86_64,s390x];virtual=(mode=guest,hypervisor=kvm)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['s390x', 'x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = 'kvm', mode = 'guest'))
-    eq_(str(a), 'sles 12 s390x x86_64 guest kvm')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 2)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, {'hypervisor': 'kvm', 'mode': 'guest'})
+    eq_(str(a), 'sles 12 x86_64 guest kvm')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, list())
+    eq_(a.virtual, {'hypervisor': 'kvm', 'mode': 'guest'})
+    eq_(str(a), 'sles 12 s390x guest kvm')
 
   def testcase_14(ctx):
     tp = 'base=sles(major=12,minor=);arch=[x86_64,s390x];virtual=(mode=host,hypervisor=kvm)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['s390x', 'x86_64'])
-    eq_(a.addons, dict())
-    eq_(a.virtual, dict(hypervisor = 'kvm', mode = 'host'))
-    eq_(str(a), 'sles 12 s390x x86_64 host kvm')
+    la = ctx.make_attrs(tp)
+    eq_(len(la), 2)
+
+    a = la[0]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, list())
+    eq_(a.virtual, {'hypervisor': 'kvm', 'mode': 'host'})
+    eq_(str(a), 'sles 12 x86_64 host kvm')
+
+    a = la[1]
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 's390x')
+    eq_(a.addons, list())
+    eq_(a.virtual, {'hypervisor': 'kvm', 'mode': 'host'})
+    eq_(str(a), 'sles 12 s390x host kvm')
 
   def testcase_15(ctx):
     tp = 'base=sles(major=12,minor=);arch=[x86_64];addon=we(major=12,minor=)'
-    a = ctx.make_attrs(tp)
-    eq_(a.product, 'sles')
-    eq_(a.major, '12')
-    eq_(a.minor, '')
-    eq_(a.archs, ['x86_64'])
-    eq_(a.addons, dict(we = dict(major = '12', minor = '')))
-    eq_(a.virtual, dict(hypervisor = '', mode = ''))
+    la = ctx.make_attrs(tp)
+    a = la[0]
+    eq_(len(la), 1)
+    eq_(a.product['name'], 'sles')
+    eq_(a.product['version'], {'major':12})
+    eq_(a.arch, 'x86_64')
+    eq_(a.addons, [{'name': 'we', 'version':{'major':12}}])
+    eq_(a.virtual, {})
     eq_(str(a), 'sles 12 x86_64 we 12.')

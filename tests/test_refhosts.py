@@ -48,7 +48,6 @@ def test_rf_call_https():
     f.resolve_path = CallLogger()
     c = ConfigFake(overrides = dict(refhosts_resolvers = 'https'))
     r = f(c, LogFake())
-
     eq_(len(f.resolve_path.calls), 0)
     ok_(isinstance(r, f.refhosts_factory))
 
@@ -289,9 +288,8 @@ def check_search(loc, fixture, expect):
       , loc
     )
     a = Attributes()
-    a.major = '11'
-    a.minor = 'sp3'
-    eq_(r.search(a), expect)
+    a.product={'version':{'minor':'sp3', 'major':11}}
+    eq_(sorted(r.search([a])), sorted(expect))
     eq_(l.all(), LogTestingWrap().all())
 
 def test_search_with_mutliple_locations():
@@ -320,33 +318,27 @@ def test_check_location_sanity():
     Test Refhosts.check_location_sanity returns for valid locations
     and raises for invalid ones
     """
-    locs = [random_alphanum(1, 10) for _ in range(0, 5)]
+    invalid_locs = [random_alphanum(1, 10) for _ in range(0, 5)]
     while True:
         invalid = random_alphanum(1, 10)
-        if invalid not in locs:
+        if invalid not in invalid_locs:
             break
 
-    tmp = NamedTemporaryFile()
-    tmp.write( bytes(
-        '<?xml version="1.0" encoding="utf-8"?><definitions>'
-      + ''.join(['<location name="{}"></location>'.format(x)
-            for x in locs])
-      + '</definitions>',
-        'utf-8'
-    ))
-    tmp.flush()
+    valid_locs=['default','foolocation']
 
     l = LogTestingWrap()
-    r = Refhosts(tmp.name, l.log)
-    for loc in locs:
-        r.check_location_sanity(loc)
+    r = Refhosts(refhosts_fixtures['basic'], l.log)
+    for valid in valid_locs:
+        # It will raise an exception. The test will be logged as error
+        r.check_location_sanity(valid)
 
-    try:
-        r.check_location_sanity(invalid)
-    except messages.InvalidLocationError:
-        pass
-    else:
-        ok_(False, "Expected messages.InvalidLocationError")
+    for invalid in invalid_locs:
+        try:
+            r.check_location_sanity(invalid)
+        except messages.InvalidLocationError:
+            pass
+        else:
+            ok_(False, "Expected messages.InvalidLocationError")
 
 # {{{ dependency checks
 def test_rf_stat():
