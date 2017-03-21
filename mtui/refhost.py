@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 #
-# managing and parsing of the refhosts.xml file
+# managing and parsing of the refhosts.yml file
 #
-
 import re
 import operator
 import os
@@ -10,163 +9,95 @@ import time
 import errno
 from urllib.request import urlopen
 
-from xml.dom import minidom
 from mtui.xdg import save_cache_path
 from mtui.utils import atomic_write_file
-from mtui.utils import flatten
 from mtui import messages
 
 from traceback import format_exc
 
+import yaml
+import io
+import copy
 
 class Attributes(object):
-
-    """Host attributes which get loaded from the xml or serve as search criteria
-
-    any tag specified here gets loaded as valid search tag in prompt.py
-    adding tags needs only to be done here
-
+    """
+    Host attributes.
+    This class has two purposes: to set the the attributes of a refhost and to be used as object for searching refhosts
     """
 
-    tags = {
-        'products': [
-            'sled',
-            'sles',
-            'opensuse',
-            'studio',
-            'slms',
-            'sles4vmware',
-            'manager',
-            'rhel',
-            'sle'],
-        'archs': [
-            'aarch64',
-            'i386',
-            'x86_64',
-            'ppc',
-            'ppc64',
-            'ppc64le',
-            's390',
-            's390x',
-            'ia64',
-            'iseries'],
-        'major': [
-            '9',
-            '10',
-            '11',
-            '12',
-            '5',
-            '6'],
-        'minor': [
-            'sp1',
-            'sp2',
-            'sp3',
-            'sp4',
-            '1',
-            '2',
-            '3',
-            '4'],
-        'addons': [
-            'webyast',
-            'webyast11',
-            'webyast12',
-            'sdk',
-            'hae',
-            'studiorunner',
-            'smt',
-            'manager-client',
-            'rt',
-            'we',
-            'Web-Scripting',
-            'Adv-Systems-Management',
-            'Certifications',
-            'Certifications-2017',
-            'Containers',
-            'HPC',
-            'Legacy',
-            'Public-Cloud',
-            'Toolchain',
-            'Live-Patching'],
-        'virtual': [
-            'xen',
-            'xenu',
-            'xen0',
-            'host',
-            'guest',
-            'kvm',
-            'vmware',
-            'lpar'],
-        'tags': [
-            'kernel',
-            'ltss',
-            'minimal']}
-
     def __init__(self):
-        self.product = ""
-        self.archs = []
-        self.addons = {}
-        self.major = None
-        self.minor = None
-        self.release = None
-        # kernel, ltss and minimal can have 3 states: True (is kernel host)
-        #                                    False (is not kernel host)
-        #                                    None (not searched for)
-        self.kernel = None
-        self.ltss = None
+        # scalar attributes
         self.minimal = None
-        # mode should have "host", "guest" or an empty value
-        # hypervisor is arbitrary, but most likely xen or kvm
-        self.virtual = {'mode': '', 'hypervisor': ''}
+        self.arch = ''
+
+        # list attributes
+        self.addons = []
+
+        # table attributes
+        self.product = {}
+        self.kernel = {}
+        self.ltss = {}
+        self.virtual = {}
 
     def __str__(self):
-        """humand readable output of the current attributes"""
+        """
+        Human readable output of the current attributes
+        """
 
-        version = ''
+        product = ''
+        if 'name' in self.product:
+            product = self.product['name']
+            if 'version' in self.product:
+                product += ' '+str(self.product['version']['major'])
+                if 'minor' in self.product['version']:
+                    # If it's numbers, then a.b, if it's strings then ab
+                    if(isinstance(self.product['version']['minor'], int)):
+                        product += '.'
+
+                    product += str(self.product['version']['minor'])
+
         kernel = ''
-        ltss = ''
-        minimal = ''
-        addons = ''
-
-        if self.major:
-            version = self.major
-        if self.minor:
-            version = version + self.minor
-            # if major and minor versions are digits only, it's most likely
-            # a dotted version (i.e. 11.1)
-            if version.isdigit():
-                version = '{!s}.{!s}'.format(self.major, self.minor)
-        if self.release:
-            version = version + self.release
-        if self.kernel:
+        if 'enabled' in self.kernel and self.kernel['enabled']:
             kernel = 'kernel'
-        if self.ltss:
+
+        ltss = ''
+        if 'enabled' in self.ltss and self.ltss['enabled']:
             ltss = 'ltss'
+
+        minimal = ''
         if self.minimal:
             minimal = 'minimal'
+        addons = []
+        for addon in sorted(self.addons, key=lambda addon: addon['name']):
+            serialization = addon['name']
+            if 'version' in addon and 'major' in addon['version']:
+                serialization += ' '+str(addon['version']['major'])+'.'
+                if 'minor' in addon['version']:
+                    serialization += str(addon['version']['minor'])
 
-        for addon in sorted(self.addons.keys()):
-            # add addon name followed by addon version to the string
-            addons = ' '.join([addons, addon])
+            addons.append(serialization)
 
-            major = self.addons[addon].get('major', '')
-            minor = self.addons[addon].get('minor', '')
+        virtual = ' '
+        if 'mode' in self.virtual:
+            virtual = self.virtual['mode']
+        if 'hypervisor' in self.virtual:
+            virtual += ' '+self.virtual['hypervisor']
 
-            if major or minor:
-                addons = ' '.join([addons, '{!s}.{!s}'.format(major, minor)])
-
-        archs = ' '.join(sorted(set(self.archs)))
-
-        rep = ' '.join([self.product,
-                        version,
-                        archs,
-                        kernel,
-                        ltss,
-                        minimal,
-                        self.virtual['mode'],
-                        self.virtual['hypervisor'],
-                        addons])
-        return ' '.join(rep.split())
-
+        representation = ' '.join([
+            product,
+            self.arch,
+            kernel,
+            ltss,
+            minimal,
+            virtual,
+            ' '.join(addons)
+        ])
+        #remove the double spaces
+        representation = re.sub(r"\s+", " ", representation.strip())
+        # make ' ' to be ''. Just to pass the tests :-)
+        return re.sub(r"^\s+$", "", representation)
+    
+    # Used in the tests
     def __bool__(self):
         """
         :returns: True if attributes have been set on this object
@@ -176,109 +107,77 @@ class Attributes(object):
     @classmethod
     def from_testplatform(cls, testplatform, log):
         """
-        Create a attribute object based on a testplatform string
+        Create a list of Attribute objects based on a testplaform string
 
-        Keyword arguments:
-        testplatform -- testplatform string to return the attributes for
-
+        :returns: list of Attributes
         """
-
-        # testreport string example:
-        # base=sled(major=10,minor=sp4);arch=[i386,x86_64]
-
-        requests = {}
-        attributes = Attributes()
-        attributes.kernel = False
-        attributes.ltss = False
-        attributes.minimal = False
-
-        # split patterns to base, arch, addon, tags
-        patterns = testplatform.split(';')
-        for pattern in patterns:
-            # get assignements for each pattern, like name = 'base',
-            # content = sled(major=10,minor=sp4)
+        attributes_list = []
+        # typical string:
+        # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11,minor=sp4)
+        attribute = Attributes()
+        arch_list = []
+        for pattern in testplatform.split(';'):
             try:
-                name, content = pattern.split('=', 1)
+                property_name, content = pattern.split('=', 1)
             except ValueError:
                 log.error('error when parsing line "{!s}"'.format(testplatform))
                 continue
+            # special cases: arch, virtual
+            # *- arch because is a list so it will create a list of several attributes
+            # *- virtual because it contains specific data
+            # --
+            # The rest of elements contains a version
+            if property_name == "arch":
+                capture = re.match(r"\[(.*)\]", content)
+                code_evaluation = "','".join(capture.group(1).split(','))
+                arch_list = eval("['{0}']".format(code_evaluation))
+            elif property_name == "virtual":
+                capture = re.match(r"\((.*)\)", content)
+                virtual_property = {}
+                for element in capture.group(1).split(','):
+                    [key, value] = element.split('=')
+                    virtual_property[key] = value
+                setattr(attribute, property_name, virtual_property)
+            elif property_name == "tags":
+                capture = re.match(r"\((.*)\)", content)
+                setattr(attribute, capture.group(1), {'enabled': True})
+            else:
+                complex_property = {'version':{}}
+                capture = re.match(r"(.*)\((.*)\)", content)
+                complex_property['name'] = capture.group(1)
 
-            # add all required architectures to the dict
-            if name == 'arch':
-                match = re.search('\[(.*)\]', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-                continue
+                for element in capture.group(2).split(','):
+                    [key, value] = element.split('=')
+                    if value != '':
+                        # We want number as numbers not as strings
+                        try:
+                            complex_property['version'][key] = int(value)
+                        except Exception:
+                            complex_property['version'][key] = value
 
-            # add all required tags to the dict (like kernel or ltss)
-            # add all required virtual descriptors to the dict (like "mode" or
-            # "hypervisor")
-            if name in ('tags', 'virtual'):
-                match = re.search('\((.*)\)', content)
-                if match:
-                    requests[name] = match.group(1).split(',')
-                continue
+                if property_name == "base":
+                    attribute.product = complex_property
+                elif property_name == "addon":
+                    attribute.addons.append(complex_property)
+                else:
+                    setattr(attribute, property_name, complex_property)
 
-            scope = requests.setdefault(name, dict())
-            # get all subpatterns and parameters, like subpattern = 'sled'
-            # parameters = major=10,minor=sp4
-            matches = re.findall('([\w_-]+)\(([^\)]+)\)', content)
-            for match in matches:
-                subpattern = match[0]
-                parameters = match[1]
-                # split parameter assignments in key and value, like
-                # key = major, value = 10
-                scope.setdefault(subpattern, dict()) \
-                    .update([p.split('=', 1) for p in parameters.split(',')])
+        for arch in arch_list:
+            attribute_copy = copy.copy(attribute) # no need for deepcopy
+            attribute_copy.arch = arch
+            attributes_list.append(attribute_copy)
 
-        # assign the findings to the attributes object
-        attributes.archs = sorted(requests['arch'])
-        # currently, just one base product is supported
-        attributes.product = list(requests['base'].keys())[0]
-        base = requests['base'][attributes.product]
-        if 'major' in base:
-            attributes.major = base['major']
-        if 'minor' in base:
-            attributes.minor = base['minor']
-
-        tags = requests.get('tags', [])
-
-        # if we found tags in the testplatform string, add them to the
-        # attributes
-        for tag in tags:
-            if tag in ('vmware', 'xen'):
-                attributes.virtual.update(hypervisor=tag)
-            if tag in ('kernel', 'ltss', 'minimal'):
-                setattr(attributes, tag, True)
-
-        # add adons to the attributes
-        addons = requests.get('addon', dict())
-        for addon, aversion in list(addons.items()):
-            # if no version is required, leave them empty
-            major = aversion.get('major', '')
-            minor = aversion.get('minor', '')
-            attributes.addons.setdefault(
-                addon,
-                dict()).update(
-                major=major,
-                minor=minor)
-
-        # add virtual descriptors to the attributes (may overwrite xen tag)
-        for descriptor in requests.get('virtual', []):
-            for parameter in descriptor.split(','):
-                key, value = parameter.split('=', 1)
-                attributes.virtual[key] = value
-        return attributes
-
+        return attributes_list
 
 class Refhosts(object):
     _default_location = 'default'
 
     def __init__(self, hostmap, log, location=None, attributes=Attributes()):
-        """load refhosts.xml file and pass it to the xml parser
+        """
+        load refhosts.yml file and pass it to the xml parser
 
         Keyword arguments:
-        hostmap   -- path to the refhosts.xml file
+        hostmap   -- path to the refhosts.yml file
         location  -- location to load hosts from (nuremberg, beijing...)
         attributes-- predefined search attributes
 
@@ -292,70 +191,104 @@ class Refhosts(object):
         else:
             self.location = location
 
-        # attributes of the last host searched for
-        # at the end of the day, this may not really be useful and may
-        # be removed somewhere in the future
         self.attributes = attributes
         self._parse_refhosts(hostmap)
 
     def _parse_refhosts(self, hostmap):
         try:
-            self.data = minidom.parse(hostmap)
+            self.data = yaml.safe_load(io.open(hostmap, 'r'))
         except Exception as error:
             # nothing to do for us if we can't load the hosts
-            self.log.error('failed to parse refhosts.xml: {!s}'.format(error))
+            self.log.error('failed to parse refhosts.yml: {!s}'.format(error))
             raise
-
-    def extract_name(self, element):
-        """extract value of the 'name' tag of the xml element
-
-        Keyword arguments:
-        element  -- XML Element
-
-        """
-
-        return element.getAttribute('name')
 
     def search(self, attributes=None):
         """
         Return hosts matching `attributes`
 
-        :return: [str]
+        :return: [str] - Every element is the name of a host
+        """
+        results = []
+        for attribute in attributes:
+            for candidate in self.data[self.location]:
+                if self.is_candidate_match(candidate, attribute):
+                    results.append(candidate['name'])
+
+        if results == []:
+            for attribute in attributes:
+                for candidate in self.data[self._default_location]:
+                    if self.is_candidate_match(candidate, attribute):
+                        results.append(candidate['name'])
+
+        return results
+
+    def is_candidate_match(self, candidate, attribute):
+        """
+        Checks if the attributes contains all the info requested in
+        candidate The candidate is a dictionary that represents a host in the
+        refhosts
+
+        :returns: True if the attributes contains the same candidate data.
+        False otherwise
+        """
+        for key in vars(attribute):
+            if getattr(attribute,key):
+                if key not in candidate:
+                    return False
+                elif key == 'addons':
+                    if not self._includes_addons_list(candidate[key], getattr(attribute, key)): 
+                        return False
+                elif (isinstance(candidate[key], str) or
+                    isinstance(candidate[key], int) or
+                    isinstance(candidate[key], bool)): #scalar options. Options that are non iterable 
+                    if getattr(attribute, key) != candidate[key]:
+                        return False
+                else:
+                    if not self._includes_simple_attributes(candidate[key], getattr(attribute, key)): 
+                        return False
+
+        return True
+
+    def _includes_simple_attributes(self, candidate, attribute):
+        """
+        Helper function for is_candidate_match
+        Checks if all candidate data is present in the element.
+
+        :returns: True candidate data is present in the element. Returns
+        False otherwise 
+        """
+        
+        for k in attribute:
+            if k not in candidate:
+                return False
+            elif k == 'version':
+                if not self._includes_simple_attributes(candidate['version'], attribute['version']): 
+                    return False
+            elif attribute[k] != candidate[k]:
+                return False
+
+        return True
+
+    def _includes_addons_list(self, candidate_addons, element_addons):
+        """
+        Helper function for is_candidate_match. 
+        Checks if all the addons are present in the element addons
+
+
+        :returns: True when all addons data is present in the elements.
+        False otherwise 
         """
 
-        # if no attributes were set, search by the default attributes
-        if attributes is not None:
-            self.attributes = attributes
+        addons_map = {addon['name']: addon for addon in element_addons}
+        for candidate in candidate_addons:
+            if candidate['name'] not in addons_map.keys():
+                return False
+            else:
+                element = addons_map[candidate['name']]
+                if not self._includes_simple_attributes(element, candidate):
+                    return False
+        return True
 
-        archs = self.attributes.archs
-        if not archs:
-            archs = attributes.tags['archs']
-
-        results = []
-        # workaround for multiple-arch-searches since the default location
-        # isn't used if the overlay location returns at least one host.
-        # example: searching for i386 and s390x doesn't search for s390x
-        # in the default location if a host is returned for i386 from the
-        # overlay location.
-        for arch in archs:
-            self.attributes.archs = [arch]
-
-            hosts = list(
-                map(self.extract_name,
-                    list(filter(self.check_attributes, self._location_hosts(
-                        self.location)))))
-
-            if hosts == [] and self.location != self._default_location:
-                try:
-                    hosts = list(map(self.extract_name, list(filter(
-                        self.check_attributes, self._location_hosts(self._default_location)))))
-                except messages.InvalidLocationError:
-                    pass
-
-            results += hosts
-
-        self.attributes.archs = archs
-        return results
 
     def _location_hosts(self, location):
         """
@@ -363,192 +296,14 @@ class Refhosts(object):
 
         :type  location: string
         """
-        return flatten([
-            x.getElementsByTagName('host')
-            for x in self._locations(location)
-        ])
-
-    def _locations(self, location):
-        """
-        :returns: <location> elements for `location`
-        :raises: L{messages.InvalidLocationError}
-
-        :type  location: string
-        """
-        xs = list([e for e in self.data.getElementsByTagName(
-            'location') if operator.eq(e.getAttribute('name'), location)])
-
-        if xs == []:
-            raise messages.InvalidLocationError(
-                location, self.get_locations()
-            )
-
-        return xs
+        return self.data[location]
 
     def check_location_sanity(self, location):
         """
         :raises: L{messages.InvalidLocationError}
         """
-        self._locations(location)
-
-    def check_attributes(self, element):
-        """check attributes of a specific host xml element
-
-        assert each attribute match to be true,
-        if an assertion is not met, return False
-
-        Keyword arguments:
-        element -- host xml element
-
-        """
-        # hostname = element.getAttribute('name')
-        try:
-            if self.attributes.archs:
-                # current host arch is in the searched arch list
-                assert(element.getAttribute('arch') in self.attributes.archs)
-
-            if self.attributes.product:
-                # current host product is the searched product
-                product = element.getElementsByTagName(
-                    'product')[0].getAttribute('name')
-                if self.attributes.product == "sle":
-                    product = product[0:-1]
-                assert(product == self.attributes.product)
-
-            node = element.getElementsByTagName('product')[0]
-            major = node.getElementsByTagName('major')[0].firstChild.data
-            try:
-                minor = node.getElementsByTagName('minor')[0].firstChild.data
-            except:
-                minor = None
-            try:
-                release = node.getElementsByTagName(
-                    'release')[0].firstChild.data
-            except:
-                release = None
-
-            # product versions need to match
-            assert(self.attributes.major == ('' if major is None else major))
-            assert(self.attributes.minor == ('' if minor is None else minor))
-            if self.attributes.release:
-                assert(self.attributes.release == release)
-
-            if int(major) > 11:
-                for addon in self.attributes.addons.keys():
-                        # each addon in the search attributes is available on this
-                        # host
-                    assert(
-                        addon in list(map(
-                            self.extract_name,
-                            element.getElementsByTagName('addon'))))
-                for node in element.getElementsByTagName('addon'):
-                    name = self.extract_name(node)
-                    if node.getAttribute('property') != 'weak':
-                        # make sure that if an exclusive addon is installed on the host,
-                        # it's as well in the searched attributes list.
-                        assert(name in self.attributes.addons.keys())
-                    if name in ['sdk', 'hae']:
-                        # skip 'sdk' and 'hae' tags since they probably are installed
-                        # on each host
-                        continue
-                    try:
-                        major = node.getElementsByTagName(
-                            'major')[0].firstChild.data
-                    except:
-                        major = ''
-                    try:
-                        minor = node.getElementsByTagName(
-                            'minor')[0].firstChild.data
-                    except:
-                        minor = ''
-                    # check if the searched version numbers match the installed
-                    # addon versions. in case they do not match, an AssertionError
-                    # is thrown. in case they are irrelevant (not in the search
-                    # attributes), a KeyError is catched an ignored.
-                    try:
-                        assert(self.attributes.addons[name]['major'] == major)
-                    except KeyError:
-                        pass
-                    try:
-                        assert(self.attributes.addons[name]['minor'] == minor)
-                    except KeyError:
-                        pass
-            try:
-                # kernel element found on the host. make sure we are searching for
-                # a kernel host, or the kernel host must not be exclusive.
-                node = element.getElementsByTagName('kernel')[0]
-                if self.attributes.kernel:
-                    assert(node.firstChild.data == 'true')
-                elif self.attributes.kernel is False:
-                    assert(node.getAttribute('property') ==
-                           'weak' or node.firstChild.data == 'false')
-            except IndexError:
-                # kernel element not found for the host. make sure we do not
-                # require the host to be a kernel host
-                assert(not self.attributes.kernel)
-
-            try:
-                # ltss element found on the host. make sure we are searching for
-                # a ltss host, or the ltss host must not be exclusive.
-                node = element.getElementsByTagName('ltss')[0]
-                # prop = node.getAttribute('property')
-                if self.attributes.ltss:
-                    assert(node.firstChild.data == 'true')
-                elif self.attributes.ltss is False:
-                    assert(node.getAttribute('property') ==
-                           'weak' or node.firstChild.data == 'false')
-            except IndexError:
-                # ltss element not found for the host. make sure we do not
-                # require the host to be a ltss host
-                assert(not self.attributes.ltss)
-
-            try:
-                # minimal element found on the host. make sure we are searching for
-                # a minimal host, or the minimal host must not be exclusive.
-                node = element.getElementsByTagName('minimal')[0]
-                # prop = node.getAttribute('property')
-                if self.attributes.minimal:
-                    assert(node.firstChild.data == 'true')
-                elif self.attributes.minimal is False:
-                    assert(node.getAttribute('property') ==
-                           'weak' or node.firstChild.data == 'false')
-            except IndexError:
-                # minimal element not found for the host. make sure we do not
-                # require the host to be a minimal host
-                assert(not self.attributes.minimal)
-
-            try:
-                node = element.getElementsByTagName('virtual')[0]
-            except IndexError:
-                # no virtual element found for the host. make sure we don't search
-                # for virtualized hosts or hipervisors.
-                assert(
-                    (not self.attributes.virtual['mode']) or
-                    self.attributes.virtual['mode'] == "none")
-                assert(not self.attributes.virtual['hypervisor'])
-            else:
-                # if a virtual element was found, make sure it matches our search
-                # criteria (mode/hypervisor) or is not exclusive
-                # prop = node.getAttribute('property')
-                mode = node.getAttribute('mode')
-                if self.attributes.virtual['mode']:
-                    assert(self.attributes.virtual['mode'] == mode)
-                if self.attributes.virtual['hypervisor']:
-                    assert(
-                        self.attributes.virtual['hypervisor'] ==
-                        node.firstChild.data)
-                if not self.attributes.virtual[
-                        'mode'] and not self.attributes.virtual['hypervisor']:
-                    assert(node.getAttribute('property') == 'weak')
-
-        except AssertionError:
-            # catch all failed assertions and discard this host for
-            # the search
-            # self.log.debug("host: {!s} ins't valid".format(hostname))
-            return False
-
-        # self.log.debug("host: {!s} found".format(hostname))
-        return True
+        if location not in self.data:
+            raise messages.InvalidLocationError(location,self.get_locations())
 
     def get_locations(self):
         """
@@ -557,106 +312,85 @@ class Refhosts(object):
         :returns: set of strings
         """
 
-        return set([
-            e.getAttribute('name')
-            for e in self.data.getElementsByTagName('location')
-        ])
+        return set(self.data.keys())
 
     def get_host_attributes(self, hostname):
-        """return attributes object for the hostname
+        """
+        return attributes object for the hostname
 
         Keyword arguments:
         hostname -- host to return attributes for
-
         """
 
         attributes = Attributes()
-
+        
         nodes = [e for e in self._location_hosts(
-                self.location) if operator.eq(
-                e.getAttribute('name'), hostname)]
+                self.location) if e['name'] == hostname]
 
         if nodes == [] and self.location != self._default_location:
             nodes = [e for e in self._location_hosts(
-                    self._default_location) if operator.eq(
-                    e.getAttribute('name'), hostname)]
+                    self._default_location) if e['name'] == hostname]
 
         # technically this iterates over all found host elements.
         # but since we just return one attribute object, we choose the first
         # one for now and return
         for node in nodes:
-            for element in node.getElementsByTagName('product'):
-                attributes.product = element.getAttribute('name')
-                for major in element.getElementsByTagName('major'):
-                    attributes.major = major.firstChild.data
-                for minor in element.getElementsByTagName('minor'):
-                    attributes.minor = minor.firstChild.data
-                for release in element.getElementsByTagName('release'):
-                    attributes.release = release.firstChild.data
-
-            attributes.archs.append(node.getAttribute('arch'))
-
-            for addons in node.getElementsByTagName('addon'):
-                major = ''
-                minor = ''
-                try:
-                    major = addons.getElementsByTagName(
-                        'major')[0].firstChild.data
-                except:
-                    pass
-                try:
-                    minor = addons.getElementsByTagName(
-                        'minor')[0].firstChild.data
-                except:
-                    pass
-                attributes.addons.update(
-                    {addons.getAttribute('name'):
-                     {'major': major, 'minor': minor}})
-
-            for element in node.getElementsByTagName('kernel'):
-                if element.firstChild.data == 'true':
-                    attributes.kernel = True
-
-            for element in node.getElementsByTagName('ltss'):
-                if element.firstChild.data == 'true':
-                    attributes.ltss = True
-
-            for element in node.getElementsByTagName('minimal'):
-                if element.firstChild.data == 'true':
-                    attributes.minimal = True
-
-            for element in node.getElementsByTagName('virtual'):
-                attributes.virtual = {
-                    'mode': element.getAttribute('mode'),
-                    'hypervisor': element.firstChild.data}
+            if 'addons' in node:
+                attributes.addons = node['addons']
+            if 'product' in node:
+                attributes.product = node['product']
+            if 'arch' in node:
+                attributes.arch = node['arch']
+            if 'kernel' in node:
+                attributes.kernel = node['kernel']
+            if 'ltss' in node:
+                attributes.ltss = node['ltss']
+            if 'minimal' in node:
+                attributes.minimal = node['minimal']
+            if 'virtual' in node:
+                attributes.virtual = node['virtual']
+            
             return attributes
 
     def get_host_systemname(self, hostname):
-        """assemble a host systemname from a given hostname
+        """
+        assemble a host systemname from a given hostname
 
         Keyword arguments:
         hostname -- host to return the systemname for
 
         """
         attributes = self.get_host_attributes(hostname)
+            
+        addons = "_".join([ad['name'] for ad in attributes.addons])
 
-        addons = "_".join(attributes.addons.keys())
         if attributes and "manager-client" in addons:
-            system = '{!s}{!s}{!s}-manager-client-{!s}'.format(
-                attributes.product, attributes.major, attributes.minor, attributes.archs[0])
+            system = "{0}{1}".format(attributes.product['name'], attributes.product['version']['major'])
+            if 'minor' in attributes.product['version']:
+                system += "{0}".format(attributes.product['version'])
+            system += "-manager-client-{0}".format(attributes.arch)
         elif addons:
-            system = '{!s}{!s}{!s}_{!s}-{!s}'.format(
-                attributes.product,
-                attributes.major,
-                attributes.minor,
-                "module",            # Unfortuanetly names of moudules are often too long
-                attributes.archs[0])
+
+            system = '{!s}{!s}'.format(
+                attributes.product['name'],
+                attributes.product['version']['major'])
+
+            if 'minor' in attributes.product['version']:
+                system += '{!s}'.format(attributes.product['version']['minor'])
+            
+            # Unfortuanetly names of moudules are often too long
+            system += "_{!s}-{!s}".format("module", attributes.arch)
         else:
-            system = '{!s}{!s}{!s}-{!s}'.format(
-                attributes.product,
-                attributes.major,
-                attributes.minor,
-                attributes.archs[0])
+            
+            system = '{!s}{!s}'.format(
+                attributes.product['name'],
+                attributes.product['version']['major'])
+            
+            if 'minor' in attributes.product['version']:
+                system += "{!s}".format(attributes.product['version']['minor'])
+            
+            system += "-{!s}".format(attributes.arch)
+
         return system
 
 
@@ -763,4 +497,4 @@ RefhostsFactory = _RefhostsFactory(
     os.stat,
     urlopen,
     atomic_write_file,
-    save_cache_path('refhosts.xml'))
+    save_cache_path('refhosts.yml'))

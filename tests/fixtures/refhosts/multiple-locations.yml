@@ -1,0 +1,36 @@
+---
+foolocation:
+  - name: cunningham.example.com
+    arch: i386
+    product:
+      name: sles
+      version:
+        major: 11
+        minor: sp3
+    addons:
+      - name: sdk
+        property: weak
+      - name: hae
+        property: weak
+    virtual:
+      host: enterprise-nx01.example.com
+      hypervisor: kvm
+      mode: guest
+      property: weak
+  - name: fletcher.example.com
+    arch: x86_64
+    product:
+      name: sles
+      version:
+        major: 11
+        minor: sp3
+    addons:
+      - name: sdk
+        property: weak
+      - name: hae
+        property: weak
+    virtual:
+      host: enterprise-nx01.example.com
+      hypervisor: kvm
+      mode: guest
+      property: weak

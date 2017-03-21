@@ -271,9 +271,9 @@ def test_TestReport_refhosts_from_tp():
             LogTestingWrap().all()),
         Case(
             'failure to parse testplatform', 'unparsable testplatform', {},
-            LogTestingWrap().warning(
-                "failed to parse testplatform '{testplatform}'").error(
+            LogTestingWrap().warning("nothing found for testplatform '{testplatform}'").error(
                 'error when parsing line "{testplatform}"').all()),
+
         Case(
             'nothing found in refhosts',
             'base=sles(major=11,minor=sp3);arch=[ppc64]', {},

@@ -16,6 +16,7 @@ setup(
     install_requires=[
         "paramiko",
         'pyxdg',
+        'PyYAML'
     ],
 
     # dependencies not on cheeseshop:
@@ -29,7 +30,6 @@ setup(
     # notify (http://www.galago-project.org/specs/notification)
 
     tests_require=[
-        'temps',
         'nose'
     ],
 
