@@ -15,8 +15,7 @@ from mtui import messages
 
 from traceback import format_exc
 
-import yaml
-import io
+import ruamel.yaml as yaml
 import copy
 
 class Attributes(object):
@@ -196,7 +195,9 @@ class Refhosts(object):
 
     def _parse_refhosts(self, hostmap):
         try:
-            self.data = yaml.safe_load(io.open(hostmap, 'r'))
+            with open(hostmap) as file:
+                self.data = yaml.safe_load(file)
+
         except Exception as error:
             # nothing to do for us if we can't load the hosts
             self.log.error('failed to parse refhosts.yml: {!s}'.format(error))

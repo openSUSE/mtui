@@ -16,7 +16,7 @@ setup(
     install_requires=[
         "paramiko",
         'pyxdg',
-        'PyYAML'
+        'ruamel.yaml'
     ],
 
     # dependencies not on cheeseshop:
