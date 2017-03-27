@@ -130,10 +130,8 @@ class CommandPromptDisplay(object):
                     indent = indent + 1
                 self.println()
 
-    def search_hosts(self, hostname, hosttags):
-        self.println('{0:25}: {1}'.format(hostname, hosttags))
-
-    def show_log(self, hostname, hostlog, sink):
+    @staticmethod
+    def show_log(hostname, hostlog, sink):
         sink('log from {!s}:'.format(hostname))
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
             sink('{!s}:~> {!s} [{!s}]'.format(hostname, cmdline, exitcode))
