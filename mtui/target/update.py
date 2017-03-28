@@ -2,7 +2,6 @@
 # vim: et sw=2 sts=2
 
 
-
 from mtui.target.actions import UpdateError
 from mtui.target.actions import ThreadedMethod
 
@@ -53,13 +52,13 @@ class Update(object):
                 else:
                     if RPMVersion(before) >= RPMVersion(required):
                         self.log.warning(
-                            '%s: package is too recent: %s (%s, target version is %s)' %
-                            (hn, pkgname, before, required))
+                            '{!s}: package is too recent: {!s} ({!s}, target version is {!s})'.format(
+                                hn, pkgname, before, required))
 
             if not_installed:
                 self.log.warning(
-                    '%s: these packages are missing: %s' %
-                    (hn, not_installed))
+                    '{!s}: these packages are missing: {!s}'.format(
+                        hn, not_installed))
 
         if 'noscript' not in params:
             self.testreport.run_scripts(PreScript, self.targets)
@@ -74,12 +73,12 @@ class Update(object):
                 if lock.locked and not lock.own():
                     skipped = True
                     self.log.warning(
-                        'host %s is locked since %s by %s. skipping.' %
-                        (t.hostname, lock.time(), lock.user))
+                        'host {!s} is locked since {!s} by {!s}. skipping.'.format(
+                            t.hostname, lock.time(), lock.user))
                     if lock.comment:
                         self.log.info(
-                            "%s's comment: %s" %
-                            (lock.user, lock.comment))
+                            "{!s}'s comment: {!s}".format(
+                                lock.user, lock.comment))
                 else:
                     t.set_locked()
                     thread = ThreadedMethod(queue)
@@ -123,6 +122,7 @@ class Update(object):
                         pass
 
         if 'newpackage' in params:
+            # TODO: testing=True for newpackage ? oh
             self.testreport.perform_prepare(self.targets, testing=True)
 
         for hn, t in list(self.targets.items()):
@@ -138,57 +138,48 @@ class Update(object):
                 if after is not None and after != '0':
                     if RPMVersion(before) == RPMVersion(after):
                         self.log.warning(
-                            '%s: package was not updated: %s (%s)' %
-                            (hn, pkgname, after))
+                            '{!s}: package was not updated: {!s} ({!s})'.format(
+                                hn, pkgname, after))
 
                     if RPMVersion(after) < RPMVersion(required):
                         self.log.warning(
-                            '%s: package does not match required version: %s (%s, required %s)' %
-                            (hn, pkgname, after, required))
+                            '{!s}: package does not match required version: {!s} ({!s}, required {!s})'.format(
+                                hn, pkgname, after, required))
 
         if 'noscript' not in params:
             self.testreport.run_scripts(PostScript, self.targets)
             self.testreport.run_scripts(CompareScript, self.targets)
             self.targets.remove(self.testreport.target_wd('output'))
 
+    # TODO: check funcionality
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'zypper' in stdin and exitcode == 104:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if 'Additional rpm output' in stdout:
             self.log.warning(
-                'There was additional rpm output on %s:',
-                target.hostname)
+                'There was additional rpm output on {!s}:'.format(
+                    target.hostname))
             marker = 'Additional rpm output:'
             start = stdout.find(marker) + len(marker)
             end = stdout.find('Retrieving', start)
             print(stdout[start:end].replace('warning', yellow('warning')))
         if 'A ZYpp transaction is already in progress.' in stderr:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if 'System management is locked' in stderr:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if '(c): c' in stdout:
             self.log.critical(
-                '%s: unresolved dependency problem. please resolve manually:\n%s',
-                target.hostname,
-                stdout)
+                '{!s}: unresolved dependency problem. please resolve manually:\n{!s}'.format(
+                    target.hostname, stdout))
             raise UpdateError('Dependency Error', target.hostname)
 
         return self.check(target, stdin, stdout, stderr, exitcode)

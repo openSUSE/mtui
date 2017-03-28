@@ -177,7 +177,8 @@ class TestReport(object, metaclass=ABCMeta):
         :type testopia: L{Testopia}
         """
 
-    def _copytree(_, *args, **kw):
+    @staticmethod
+    def _copytree(*args, **kw):
         return shutil.copytree(*args, **kw)
 
     def _open_and_parse(self, path):
