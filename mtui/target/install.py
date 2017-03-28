@@ -2,7 +2,6 @@
 # vim: et sw=2 sts=2
 
 
-
 from mtui.target.actions import UpdateError
 from mtui.target.actions import ThreadedMethod
 
@@ -25,12 +24,12 @@ class Install(object):
                 if lock.locked and not lock.own():
                     skipped = True
                     self.log.warning(
-                        'host %s is locked since %s by %s. skipping.' %
-                        (t.hostname, lock.time(), lock.user))
+                        'host {!s} is locked since {!s} by {!s}. skipping.'.format(
+                            t.hostname, lock.time(), lock.user))
                     if lock.comment:
                         self.log.info(
-                            "%s's comment: %s" %
-                            (lock.user, lock.comment))
+                            "{!s}'s comment: {!s}".format(
+                                lock.user, lock.comment))
                 else:
                     t.set_locked()
                     thread = ThreadedMethod(queue)
@@ -68,41 +67,28 @@ class Install(object):
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'zypper' in stdin and exitcode == 104:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError(target.hostname, 'package not found')
         if 'A ZYpp transaction is already in progress.' in stderr:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError(target.hostname, 'update stack locked')
         if 'System management is locked' in stderr:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if 'Error:' in stderr:
             self.log.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr)
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
             raise UpdateError(target.hostname, 'RPM Error')
         if '(c): c' in stdout:
             self.log.critical(
-                '%s: unresolved dependency problem. please resolve manually:\n%s',
-                target.hostname,
-                stdout)
+                '{!s}: unresolved dependency problem. please resolve manually:\n{s}'.format(
+                    target.hostname, stdout))
             raise UpdateError('Dependency Error', target.hostname)
 
         return self.check(target, stdin, stdout, stderr, exitcode)
