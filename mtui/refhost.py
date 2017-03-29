@@ -172,7 +172,7 @@ class Attributes(object):
 class Refhosts(object):
     _default_location = 'default'
 
-    def __init__(self, hostmap, log, location=None, attributes=Attributes()):
+    def __init__(self, hostmap, log, location=None):
         """
         load refhosts.yml file and pass it to the xml parser
 
@@ -184,14 +184,12 @@ class Refhosts(object):
         """
         self.log = log
 
-        # default refhosts location is 'default' which is basically
-        # nuremberg office
+        # default refhosts location is 'default' which is basically fallback
         if location is None:
             self.location = self._default_location
         else:
             self.location = location
 
-        self.attributes = attributes
         self._parse_refhosts(hostmap)
 
     def _parse_refhosts(self, hostmap):
@@ -210,17 +208,23 @@ class Refhosts(object):
 
         :return: [str] - Every element is the name of a host
         """
-        results = []
-        for attribute in attributes:
-            for candidate in self.data[self.location]:
-                if self.is_candidate_match(candidate, attribute):
-                    results.append(candidate['name'])
 
-        if results == []:
-            for attribute in attributes:
-                for candidate in self.data[self._default_location]:
-                    if self.is_candidate_match(candidate, attribute):
-                        results.append(candidate['name'])
+        results = []
+
+        for attribute in attributes:
+            host = []
+            host = [
+                candidate['name'] for candidate in self.data[
+                    self.location] if self.is_candidate_match(
+                    candidate, attribute)]
+
+            if host == [] and self.location != self._default_location:
+                host = [
+                    candidate['name']
+                    for candidate in self.data[self._default_location]
+                    if self.is_candidate_match(candidate, attribute)]
+
+            results += host
 
         return results
 
