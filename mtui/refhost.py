@@ -237,11 +237,11 @@ class Refhosts(object):
                 if key not in candidate:
                     return False
                 elif key == 'addons':
-                    if not self._includes_addons_list(candidate[key], getattr(attribute, key)): 
+                    if not self._includes_addons_list(candidate[key], getattr(attribute, key)):
                         return False
                 elif (isinstance(candidate[key], str) or
                     isinstance(candidate[key], int) or
-                    isinstance(candidate[key], bool)): #scalar options. Options that are non iterable 
+                    isinstance(candidate[key], bool)):#scalar options. Options that are non iterable
                     if getattr(attribute, key) != candidate[key]:
                         return False
                 else:
@@ -256,14 +256,14 @@ class Refhosts(object):
         Checks if all candidate data is present in the element.
 
         :returns: True candidate data is present in the element. Returns
-        False otherwise 
+        False otherwise
         """
-        
+
         for k in attribute:
             if k not in candidate:
                 return False
             elif k == 'version':
-                if not self._includes_simple_attributes(candidate['version'], attribute['version']): 
+                if not self._includes_simple_attributes(candidate['version'], attribute['version']):
                     return False
             elif attribute[k] != candidate[k]:
                 return False
@@ -280,13 +280,14 @@ class Refhosts(object):
         False otherwise 
         """
 
-        addons_map = {addon['name']: addon for addon in element_addons}
-        for candidate in candidate_addons:
-            if candidate['name'] not in addons_map.keys():
+        element_addons_map = {addon['name']: addon for addon in element_addons}
+        candidate_addons_map = {addon['name']: addon for addon in candidate_addons}
+
+        for addon in element_addons_map:
+            if addon not in candidate_addons_map:
                 return False
             else:
-                element = addons_map[candidate['name']]
-                if not self._includes_simple_attributes(element, candidate):
+                if not self._includes_simple_attributes(candidate_addons_map[addon], element_addons_map[addon]):
                     return False
         return True
 
