@@ -3,7 +3,6 @@
 # managing and parsing of the refhosts.yml file
 #
 import re
-import operator
 import os
 import time
 import errno
@@ -17,6 +16,7 @@ from traceback import format_exc
 
 import ruamel.yaml as yaml
 import copy
+
 
 class Attributes(object):
     """
@@ -91,11 +91,11 @@ class Attributes(object):
             virtual,
             ' '.join(addons)
         ])
-        #remove the double spaces
+        # remove the double spaces
         representation = re.sub(r"\s+", " ", representation.strip())
         # make ' ' to be ''. Just to pass the tests :-)
         return re.sub(r"^\s+$", "", representation)
-    
+
     # Used in the tests
     def __bool__(self):
         """
@@ -103,8 +103,8 @@ class Attributes(object):
         """
         return bool(str(self))
 
-    @classmethod
-    def from_testplatform(cls, testplatform, log):
+    @staticmethod
+    def from_testplatform(testplatform, log):
         """
         Create a list of Attribute objects based on a testplaform string
 
@@ -141,7 +141,7 @@ class Attributes(object):
                 capture = re.match(r"\((.*)\)", content)
                 setattr(attribute, capture.group(1), {'enabled': True})
             else:
-                complex_property = {'version':{}}
+                complex_property = {'version': {}}
                 capture = re.match(r"(.*)\((.*)\)", content)
                 complex_property['name'] = capture.group(1)
 
@@ -162,16 +162,17 @@ class Attributes(object):
                     setattr(attribute, property_name, complex_property)
 
         for arch in arch_list:
-            attribute_copy = copy.copy(attribute) # no need for deepcopy
+            attribute_copy = copy.copy(attribute)  # no need for deepcopy
             attribute_copy.arch = arch
             attributes_list.append(attribute_copy)
 
         return attributes_list
 
+
 class Refhosts(object):
     _default_location = 'default'
 
-    def __init__(self, hostmap, log, location=None, attributes=Attributes()):
+    def __init__(self, hostmap, log, location=None):
         """
         load refhosts.yml file and pass it to the xml parser
 
@@ -183,14 +184,12 @@ class Refhosts(object):
         """
         self.log = log
 
-        # default refhosts location is 'default' which is basically
-        # nuremberg office
+        # default refhosts location is 'default' which is basically fallback
         if location is None:
             self.location = self._default_location
         else:
             self.location = location
 
-        self.attributes = attributes
         self._parse_refhosts(hostmap)
 
     def _parse_refhosts(self, hostmap):
@@ -209,17 +208,23 @@ class Refhosts(object):
 
         :return: [str] - Every element is the name of a host
         """
-        results = []
-        for attribute in attributes:
-            for candidate in self.data[self.location]:
-                if self.is_candidate_match(candidate, attribute):
-                    results.append(candidate['name'])
 
-        if results == []:
-            for attribute in attributes:
-                for candidate in self.data[self._default_location]:
-                    if self.is_candidate_match(candidate, attribute):
-                        results.append(candidate['name'])
+        results = []
+
+        for attribute in attributes:
+            host = []
+            host = [
+                candidate['name'] for candidate in self.data[
+                    self.location] if self.is_candidate_match(
+                    candidate, attribute)]
+
+            if host == [] and self.location != self._default_location:
+                host = [
+                    candidate['name']
+                    for candidate in self.data[self._default_location]
+                    if self.is_candidate_match(candidate, attribute)]
+
+            results += host
 
         return results
 
@@ -233,19 +238,19 @@ class Refhosts(object):
         False otherwise
         """
         for key in vars(attribute):
-            if getattr(attribute,key):
+            if getattr(attribute, key):
                 if key not in candidate:
                     return False
                 elif key == 'addons':
                     if not self._includes_addons_list(candidate[key], getattr(attribute, key)):
                         return False
                 elif (isinstance(candidate[key], str) or
-                    isinstance(candidate[key], int) or
-                    isinstance(candidate[key], bool)):#scalar options. Options that are non iterable
+                      isinstance(candidate[key], int) or
+                      isinstance(candidate[key], bool)):  # scalar options. Options that are non iterable
                     if getattr(attribute, key) != candidate[key]:
                         return False
                 else:
-                    if not self._includes_simple_attributes(candidate[key], getattr(attribute, key)): 
+                    if not self._includes_simple_attributes(candidate[key], getattr(attribute, key)):
                         return False
 
         return True
@@ -263,7 +268,9 @@ class Refhosts(object):
             if k not in candidate:
                 return False
             elif k == 'version':
-                if not self._includes_simple_attributes(candidate['version'], attribute['version']):
+                if not self._includes_simple_attributes(
+                        candidate['version'],
+                        attribute['version']):
                     return False
             elif attribute[k] != candidate[k]:
                 return False
@@ -272,25 +279,27 @@ class Refhosts(object):
 
     def _includes_addons_list(self, candidate_addons, element_addons):
         """
-        Helper function for is_candidate_match. 
+        Helper function for is_candidate_match.
         Checks if all the addons are present in the element addons
 
 
         :returns: True when all addons data is present in the elements.
-        False otherwise 
+        False otherwise
         """
 
         element_addons_map = {addon['name']: addon for addon in element_addons}
-        candidate_addons_map = {addon['name']: addon for addon in candidate_addons}
+        candidate_addons_map = {addon['name']: addon
+                                for addon in candidate_addons}
 
         for addon in element_addons_map:
             if addon not in candidate_addons_map:
                 return False
             else:
-                if not self._includes_simple_attributes(candidate_addons_map[addon], element_addons_map[addon]):
+                if not self._includes_simple_attributes(
+                        candidate_addons_map[addon],
+                        element_addons_map[addon]):
                     return False
         return True
-
 
     def _location_hosts(self, location):
         """
@@ -305,7 +314,7 @@ class Refhosts(object):
         :raises: L{messages.InvalidLocationError}
         """
         if location not in self.data:
-            raise messages.InvalidLocationError(location,self.get_locations())
+            raise messages.InvalidLocationError(location, self.get_locations())
 
     def get_locations(self):
         """
@@ -325,7 +334,7 @@ class Refhosts(object):
         """
 
         attributes = Attributes()
-        
+
         nodes = [e for e in self._location_hosts(
                 self.location) if e['name'] == hostname]
 
@@ -351,7 +360,7 @@ class Refhosts(object):
                 attributes.minimal = node['minimal']
             if 'virtual' in node:
                 attributes.virtual = node['virtual']
-            
+
             return attributes
 
     def get_host_systemname(self, hostname):
@@ -363,11 +372,13 @@ class Refhosts(object):
 
         """
         attributes = self.get_host_attributes(hostname)
-            
+
         addons = "_".join([ad['name'] for ad in attributes.addons])
 
         if attributes and "manager-client" in addons:
-            system = "{0}{1}".format(attributes.product['name'], attributes.product['version']['major'])
+            system = "{0}{1}".format(
+                attributes.product['name'],
+                attributes.product['version']['major'])
             if 'minor' in attributes.product['version']:
                 system += "{0}".format(attributes.product['version'])
             system += "-manager-client-{0}".format(attributes.arch)
@@ -379,18 +390,18 @@ class Refhosts(object):
 
             if 'minor' in attributes.product['version']:
                 system += '{!s}'.format(attributes.product['version']['minor'])
-            
+
             # Unfortuanetly names of moudules are often too long
             system += "_{!s}-{!s}".format("module", attributes.arch)
         else:
-            
+
             system = '{!s}{!s}'.format(
                 attributes.product['name'],
                 attributes.product['version']['major'])
-            
+
             if 'minor' in attributes.product['version']:
                 system += "{!s}".format(attributes.product['version']['minor'])
-            
+
             system += "-{!s}".format(attributes.arch)
 
         return system
