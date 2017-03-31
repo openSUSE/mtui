@@ -32,9 +32,9 @@ class Downgrade(Command):
         except KeyboardInterrupt:
             self.log.info('downgrade process canceled')
             return
-        except Exception as e:
+        except Exception:
             self.log.critical('failed to downgrade target systems')
-            self.log.debug(format_exc(e))
+            self.log.debug(format_exc())
             return
 
         self.log.info('done')
