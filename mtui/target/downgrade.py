@@ -73,6 +73,7 @@ class Downgrade(object):
                     return
 
             self.targets.run(self.list_command)
+
             for hn, t in list(self.targets.items()):
                 lines = t.lastout().split('\n')
                 release = {}
@@ -102,7 +103,6 @@ class Downgrade(object):
                         self.commands.update({hn: command})
                     except KeyError:
                         del temp[hn]
-
                 temp.run(self.commands)
 
                 for t in list(self.targets.values()):
@@ -148,6 +148,10 @@ class Downgrade(object):
                 '{!s}: zypper returned with errorcode 104:\n{!s}'.format(
                     target.hostname, stderr))
             raise UpdateError('Unspecified Error', target.hostname)
+        if exitcode == 106:
+            self.log.warning(
+                "{!s}: zypper returned with errocode 106:\n{!s}".format(
+                    target.hostname, stderr))
 
         return self.check(target, stdin, stdout, stderr, exitcode)
 
