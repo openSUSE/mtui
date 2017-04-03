@@ -158,6 +158,10 @@ class Update(object):
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
+        if 'zypper' in stdin and exitcode == 106:
+            self.log.warning(
+                "{!s}: zypper returns exitcode 106:\n{!s}".format(
+                    target.hostname, stderr))
         if 'Additional rpm output' in stdout:
             self.log.warning(
                 'There was additional rpm output on {!s}:'.format(

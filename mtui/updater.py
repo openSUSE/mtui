@@ -46,12 +46,12 @@ class ZypperOBSUpdate(ZypperUpdate):
 
         self.commands = [
             r"""export LANG=""",
-            r"""zypper lr -puU""",
-            r"""zypper refresh""",
-            r"""zypper patches | grep {!s}""".format(repo),
-            r"""zypper patches | awk -F "|" '/{!s}\>/ {{ print $2; }}' | while read p; do zypper -n install -l -y -t patch $p; done""".format(repo),
-            r"""zypper patches | grep {!s}""".format(repo),
-            r"""zypper lr | awk -F "|" '/{!s}\>/ {{ print $2; }}' | while read r; do zypper rr $r; done""".format( repo),
+            r"""zypper -n lr -puU""",
+            r"""zypper -n refresh""",
+            r"""zypper -n patches | grep {!s}""".format(repo),
+            r"""zypper -n patches | awk -F "|" '/{!s}\>/ {{ print $2; }}' | while read p; do zypper -n install -l -y -t patch $p; done""".format(repo),
+            r"""zypper -n patches | grep {!s}""".format(repo),
+            r"""zypper -n lr | awk -F "|" '/{!s}\>/ {{ print $2; }}' | while read r; do zypper rr $r; done""".format(repo),
             ]
 
 
@@ -141,7 +141,7 @@ class ZypperDowngrade(Downgrade):
 
         self.list_command = r'''
             for p in {!s}; do \
-              zypper se -s --match-exact -t package $p; \
+              zypper -n se -s --match-exact -t package $p; \
             done \
             | grep -v "(System" \
             | grep ^[iv] \

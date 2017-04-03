@@ -566,7 +566,7 @@ class TestReport(object, metaclass=ABCMeta):
     def list_versions(self, sink, targets, packages):
         query = r'''
             for p in {!s}; do \
-                zypper search -s --match-exact -t package $p; \
+                zypper -n search -s --match-exact -t package $p; \
             done \
             | grep -e ^[iv] \
             | awk -F '|' '{{ print $2 $4 }}' \
