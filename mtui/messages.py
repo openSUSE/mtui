@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from abc import ABCMeta
 
 
@@ -12,6 +13,10 @@ class UserMessage(BaseException, metaclass=ABCMeta):
 
     def __eq__(self, x):
         return str(self) == str(x)
+
+    @classmethod
+    def __hash__(cls):
+        return hash(cls)
 
 
 class ErrorMessage(UserMessage, RuntimeError):
