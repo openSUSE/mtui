@@ -38,11 +38,6 @@ class DeprecationMessage(UserMessage):
     pass
 
 
-class ListPackagesAllHost(DeprecationMessage):
-    message = "Perhaps you meant to run just `list_packages`." \
-        + " Argument `all` is no longer accepted."
-
-
 class HostIsNotConnectedError(UserError, ValueError):
 
     """
