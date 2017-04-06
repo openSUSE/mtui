@@ -12,6 +12,24 @@ default:
     addons:
       - name: sdk
         property: weak
+  - name: shazzam.example.com
+    arch: x86_64
+    product:
+      name: sles
+      version:
+        major: 11
+    kernel:
+      enabled: true
+    addons:
+      - name: sdk
+        property: weak
+        version:
+          major: 11
+      - name: web-scripting
+        property: weak
+        version:
+          major: 11
+          minor: sp2
 foolocation:
   - name: fletcher.example.com
     arch: x86_64
@@ -23,8 +41,15 @@ foolocation:
     addons:
       - name: sdk
         property: weak
+        version:
+          major: 11
+          minor: sp3
       - name: hae
         property: weak
+        version:
+          major: 11
+          minor: sp3
+
     virtual:
       host: enterprise-nx01.example.com
       hypervisor: kvm
