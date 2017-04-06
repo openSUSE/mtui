@@ -299,6 +299,50 @@ def test_search_with_mutliple_locations():
       , ["cunningham.example.com", "fletcher.example.com"]
     )
 
+def test_search_addon_version():
+    """
+    Test if it's returning a host from the default location if none is found in the foolocation
+    """
+    l = LogTestingWrap()
+    r = Refhosts(
+        refhosts_fixtures['basic']
+      , l.log
+      , 'foolocation'
+    )
+    a = Attributes()
+    a.addons= [{'name':'sdk', 'version':{'major':11, 'minor':'sp4'} }, {'name':'hae', 'version':{'major':11, 'minor':'sp3'} }]
+    eq_(r.search([a]), [])
+    eq_(l.all(), LogTestingWrap().all())
+
+    a.addons= [{'name':'sdk', 'version':{'major':11, 'minor':'sp3'} }, {'name':'hae', 'version':{'major':11, 'minor':'sp3'} }]
+    eq_(r.search([a]), ['fletcher.example.com'])
+    eq_(l.all(), LogTestingWrap().all())
+
+
+    a.addons= [{'name':'sdk', 'version':{'major':11, 'minor':''} }, {'name':'hae', 'version':{'major':11, 'minor':'sp3'} }]
+    eq_(r.search([a]), [])
+    eq_(l.all(), LogTestingWrap().all())
+
+    a.addons= [{'name':'sdk', 'version':{'major':11} }, {'name':'hae', 'version':{'major':11, 'minor':'sp3'} }]
+    eq_(r.search([a]), ['fletcher.example.com'])
+    eq_(l.all(), LogTestingWrap().all())
+
+def test_search_default_location():
+    """
+    Test if it's returning a host from the default location if none is found in the foolocation
+    """
+    l = LogTestingWrap()
+    r = Refhosts(
+        refhosts_fixtures['basic']
+      , l.log
+      , 'foolocation'
+    )
+    a = Attributes()
+    a.kernel={'enabled': True}
+    eq_(r.search([a]), ['shran.example.com', 'shazzam.example.com'])
+    eq_(l.all(), LogTestingWrap().all())
+
+
 def test_search_no_fallback():
     """
     Test fallback hosts are not returned when all needed hosts were

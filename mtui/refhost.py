@@ -19,9 +19,11 @@ import copy
 
 
 class Attributes(object):
+
     """
     Host attributes.
-    This class has two purposes: to set the the attributes of a refhost and to be used as object for searching refhosts
+    This class has two purposes: to set the the attributes of a refhost and
+    to be used as object for searching refhosts
     """
 
     def __init__(self):
@@ -47,7 +49,7 @@ class Attributes(object):
         if 'name' in self.product:
             product = self.product['name']
             if 'version' in self.product:
-                product += ' '+str(self.product['version']['major'])
+                product += ' ' + str(self.product['version']['major'])
                 if 'minor' in self.product['version']:
                     # If it's numbers, then a.b, if it's strings then ab
                     if(isinstance(self.product['version']['minor'], int)):
@@ -70,7 +72,7 @@ class Attributes(object):
         for addon in sorted(self.addons, key=lambda addon: addon['name']):
             serialization = addon['name']
             if 'version' in addon and 'major' in addon['version']:
-                serialization += ' '+str(addon['version']['major'])+'.'
+                serialization += ' ' + str(addon['version']['major']) + '.'
                 if 'minor' in addon['version']:
                     serialization += str(addon['version']['minor'])
 
@@ -80,7 +82,7 @@ class Attributes(object):
         if 'mode' in self.virtual:
             virtual = self.virtual['mode']
         if 'hypervisor' in self.virtual:
-            virtual += ' '+self.virtual['hypervisor']
+            virtual += ' ' + self.virtual['hypervisor']
 
         representation = ' '.join([
             product,
@@ -113,13 +115,16 @@ class Attributes(object):
         attributes_list = []
         # typical string:
         # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11,minor=sp4)
+        # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11,minor=)
+        # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11)
         attribute = Attributes()
         arch_list = []
         for pattern in testplatform.split(';'):
             try:
                 property_name, content = pattern.split('=', 1)
             except ValueError:
-                log.error('error when parsing line "{!s}"'.format(testplatform))
+                log.error(
+                    'error when parsing line "{!s}"'.format(testplatform))
                 continue
             # special cases: arch, virtual
             # *- arch because is a list so it will create a list of several attributes
@@ -147,12 +152,12 @@ class Attributes(object):
 
                 for element in capture.group(2).split(','):
                     [key, value] = element.split('=')
-                    if value != '':
-                        # We want number as numbers not as strings
-                        try:
-                            complex_property['version'][key] = int(value)
-                        except Exception:
-                            complex_property['version'][key] = value
+                    # Note: When the minor is '' then it's used to search for unset values
+                    # We want number as numbers not as strings
+                    try:
+                        complex_property['version'][key] = int(value)
+                    except ValueError:
+                        complex_property['version'][key] = value
 
                 if property_name == "base":
                     attribute.product = complex_property
@@ -242,7 +247,8 @@ class Refhosts(object):
                 if key not in candidate:
                     return False
                 elif key == 'addons':
-                    if not self._includes_addons_list(candidate[key], getattr(attribute, key)):
+                    if not self._includes_addons_list(
+                            candidate[key], getattr(attribute, key)):
                         return False
                 elif (isinstance(candidate[key], str) or
                       isinstance(candidate[key], int) or
@@ -250,7 +256,8 @@ class Refhosts(object):
                     if getattr(attribute, key) != candidate[key]:
                         return False
                 else:
-                    if not self._includes_simple_attributes(candidate[key], getattr(attribute, key)):
+                    if not self._includes_simple_attributes(
+                            candidate[key], getattr(attribute, key)):
                         return False
 
         return True
@@ -260,6 +267,18 @@ class Refhosts(object):
         Helper function for is_candidate_match
         Checks if all candidate data is present in the element.
 
+        Example:
+        base=sles(major=12,minor=sp1);arch=[s390x,x86_64];addon=Web-Scripting(major=12,minor=)
+        this should search for any entries with web-scripting that has an unset minor version
+
+        base=sles(major=12,minor=sp3);arch=[s390x,x86_64];addon=Web-Scripting(major=12,minor=foo)
+        this should search for any entries with web-scripting minor=foo
+
+        base=sles(major=12,minor=sp3);arch=[s390x,x86_64];addon=Web-Scripting(major=12)
+        this should search for any entries with web-scripting major=12 no matter which minor
+
+        Important: It's always one line per version.
+
         :returns: True candidate data is present in the element. Returns
         False otherwise
         """
@@ -268,12 +287,29 @@ class Refhosts(object):
             if k not in candidate:
                 return False
             elif k == 'version':
-                if not self._includes_simple_attributes(
-                        candidate['version'],
-                        attribute['version']):
+                if not self._includes_version(
+                        candidate['version'], attribute['version']):
                     return False
             elif attribute[k] != candidate[k]:
                 return False
+
+        return True
+
+    def _includes_version(self, candidate, element):
+        """
+        Helper function for _is_candidate_match.
+        """
+        if 'minor' in element and element['minor'] != '':
+            if 'minor' not in candidate or element[
+                    'minor'] != candidate['minor']:
+                return False
+        elif 'minor' in element and element['minor'] == '':
+            if 'minor' in candidate:
+                return False
+
+        #major is mandatory
+        if element['major'] != candidate['major']:
+            return False
 
         return True
 
@@ -282,22 +318,20 @@ class Refhosts(object):
         Helper function for is_candidate_match.
         Checks if all the addons are present in the element addons
 
-
         :returns: True when all addons data is present in the elements.
         False otherwise
         """
 
         element_addons_map = {addon['name']: addon for addon in element_addons}
-        candidate_addons_map = {addon['name']: addon
-                                for addon in candidate_addons}
+        candidate_addons_map = {
+            addon['name']: addon for addon in candidate_addons}
 
         for addon in element_addons_map:
             if addon not in candidate_addons_map:
                 return False
             else:
                 if not self._includes_simple_attributes(
-                        candidate_addons_map[addon],
-                        element_addons_map[addon]):
+                        candidate_addons_map[addon], element_addons_map[addon]):
                     return False
         return True
 
@@ -336,11 +370,11 @@ class Refhosts(object):
         attributes = Attributes()
 
         nodes = [e for e in self._location_hosts(
-                self.location) if e['name'] == hostname]
+            self.location) if e['name'] == hostname]
 
         if nodes == [] and self.location != self._default_location:
             nodes = [e for e in self._location_hosts(
-                    self._default_location) if e['name'] == hostname]
+                self._default_location) if e['name'] == hostname]
 
         # technically this iterates over all found host elements.
         # but since we just return one attribute object, we choose the first
@@ -377,8 +411,7 @@ class Refhosts(object):
 
         if attributes and "manager-client" in addons:
             system = "{0}{1}".format(
-                attributes.product['name'],
-                attributes.product['version']['major'])
+                attributes.product['name'], attributes.product['version']['major'])
             if 'minor' in attributes.product['version']:
                 system += "{0}".format(attributes.product['version'])
             system += "-manager-client-{0}".format(attributes.arch)
