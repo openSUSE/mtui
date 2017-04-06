@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from abc import ABCMeta
 
 
@@ -12,6 +13,10 @@ class UserMessage(BaseException, metaclass=ABCMeta):
 
     def __eq__(self, x):
         return str(self) == str(x)
+
+    @classmethod
+    def __hash__(cls):
+        return hash(cls)
 
 
 class ErrorMessage(UserMessage, RuntimeError):
@@ -31,11 +36,6 @@ class UserError(UserMessage, RuntimeError):
 
 class DeprecationMessage(UserMessage):
     pass
-
-
-class ListPackagesAllHost(DeprecationMessage):
-    message = "Perhaps you meant to run just `list_packages`." \
-        + " Argument `all` is no longer accepted."
 
 
 class HostIsNotConnectedError(UserError, ValueError):
