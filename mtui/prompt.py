@@ -130,6 +130,7 @@ class CommandPrompt(cmd.Cmd):
         self._add_subcommand(commands.Run)
         self._add_subcommand(commands.Prepare)
         self._add_subcommand(commands.OSCAssign)
+        self._add_subcommand(commands.OSCUnassign)
         self._add_subcommand(commands.OSCApprove)
         self._add_subcommand(commands.OSCReject)
         self._add_subcommand(commands.TestSuiteList)

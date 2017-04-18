@@ -53,6 +53,47 @@ class OSCAssign(Command):
     def complete(_, text, line, begidx, endidx):
         return complete_choices([('-g', '--group'), ], line, text)
 
+class OSCUnassign(Command):
+    """
+    Wrapper on 'osc qam unassign' command, assings you current update.
+    Can be specified groups for unassigment
+    """
+    command = 'unassign'
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            '-g',
+            '--group',
+            nargs='?',
+            action='append',
+            help="Group wanted to unassign")
+        return parser
+
+    @requires_update
+    def run(self):
+        apiid, _, _, reviewid = str(self.metadata.id).split(':')
+        self.log.info("Unassign request: {}".format(reviewid))
+        cmd = 'osc -A {} qam unassign'.format(osc_api[apiid])
+        group = ' '
+
+        if self.args.group:
+            for i in self.args.group:
+                group += ''.join('-G ' + i)
+
+        cmd += group + ' ' + reviewid
+        self.log.debug(cmd)
+
+        try:
+            check_call(cmd.split())
+        except Exception as e:
+            self.log.info('Unassign failed: {!s}'.format(e))
+            self.log.debug(format_exc())
+
+    @staticmethod
+    def complete(_, text, line, begidx, endidx):
+        return complete_choices([('-g', '--group'), ], line, text)
+
 
 class OSCApprove(Command):
     """
