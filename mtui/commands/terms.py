@@ -38,7 +38,7 @@ class Terms(Command):
                     check_call([path] + hosts)
                 except Exception:
                     self.log.error('running {!s} failed'.format(filename))
-                self.log.debug(format_exc())
+                    self.log.debug(format_exc())
             else:
                 self.log.error('Term script not found')
                 self.log.info(
