@@ -150,7 +150,7 @@ class OSCReject(Command):
             '--group',
             nargs='?',
             action='append',
-            help="Group wanted by user to approve")
+            help="Group wanted by user to reject")
         parser.add_argument(
             '-r',
             '--reason',
