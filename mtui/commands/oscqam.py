@@ -46,12 +46,13 @@ class OSCAssign(Command):
         try:
             check_call(cmd.split())
         except Exception as e:
-            self.log.info('Assign failed: {!s}'.format(e))
+            self.log.error('Assign failed: {!s}'.format(e))
             self.log.debug(format_exc())
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
         return complete_choices([('-g', '--group'), ], line, text)
+
 
 class OSCUnassign(Command):
     """
@@ -87,7 +88,7 @@ class OSCUnassign(Command):
         try:
             check_call(cmd.split())
         except Exception as e:
-            self.log.info('Unassign failed: {!s}'.format(e))
+            self.log.error('Unassign failed: {!s}'.format(e))
             self.log.debug(format_exc())
 
     @staticmethod
@@ -129,7 +130,7 @@ class OSCApprove(Command):
         try:
             check_call(cmd.split())
         except Exception as e:
-            self.log.info('Approve failed: {!s}'.format(e))
+            self.log.error('Approve failed: {!s}'.format(e))
             self.log.debug(format_exc())
 
     @staticmethod
@@ -163,7 +164,7 @@ class OSCReject(Command):
                 'regression',
                 'false_reject',
                 'tracking_issue'],
-         help='Reason to reject update, required')
+            help='Reason to reject update, required')
         parser.add_argument(
             '-m', '--msg', nargs=REMAINDER,
             help="Message to use for rejection-comment." +
@@ -194,7 +195,7 @@ class OSCReject(Command):
         try:
             check_call(cmd.split())
         except Exception as e:
-            self.log.info('Reject failed: {!s}'.format(e))
+            self.log.error('Reject failed: {!s}'.format(e))
             self.log.debug(format_exc())
 
     @staticmethod
