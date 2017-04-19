@@ -340,7 +340,6 @@ class Connection(object):
         None
 
         """
-
         oldtty = termios.tcgetattr(sys.stdin)
 
         session = self.new_session()
@@ -367,7 +366,7 @@ class Connection(object):
                         x = session.recv(1024)
                         if len(x) == 0:
                             break
-                        sys.stdout.write(x)
+                        sys.stdout.write(x.decode())
                         sys.stdout.flush()
                     except socket.timeout:
                         pass
