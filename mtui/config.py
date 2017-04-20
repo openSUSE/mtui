@@ -51,7 +51,7 @@ class Config(object):
         self._list_terms()
 
     def read(self):
-        self.config = configparser.SafeConfigParser()
+        self.config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
         try:
             self.config.read(self.configfiles)
         except configparser.Error as e:
