@@ -209,7 +209,7 @@ class Target(object):
         self.hostname = hostname
         self.system = system
         self.packages = {}
-        self.log = []
+        self.out = []
         self.TargetLock = lock
         self.Connection = connection
 
@@ -277,11 +277,11 @@ class Target(object):
 
             self.logger.info(
                 'dryrun: {} running "rpm -q {}"'.format(self.hostname, packages))
-            self.log.append(
+            self.out.append(
                 ['rpm -q {}'.format(packages), 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
-            self.log.append(['', '', '', 0, 0])
+            self.out.append(['', '', '', 0, 0])
 
     def query_package_versions(self, packages):
         """
@@ -385,7 +385,8 @@ class Target(object):
 
             time_after = timestamp()
             runtime = int(time_after) - int(time_before)
-            self.log.append([command,
+            # this is wrong
+            self.out.append([command,
                              self.connection.stdout,
                              self.connection.stderr,
                              exitcode,
@@ -394,10 +395,10 @@ class Target(object):
 
             self.logger.info(
                 'dryrun: {} running "{}"'.format(self.hostname, command))
-            self.log.append([command, 'dryrun\n', '', 0, 0])
+            self.out.append([command, 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
-            self.log.append(['', '', '', 0, 0])
+            self.out.append(['', '', '', 0, 0])
 
     def shell(self):
         self.logger.debug('{}: spawning shell'.format(self.hostname))
@@ -461,25 +462,25 @@ class Target(object):
 
     def lastin(self):
         try:
-            return self.log[-1][0]
+            return self.out[-1][0]
         except:
             return ''
 
     def lastout(self):
         try:
-            return self.log[-1][1]
+            return self.out[-1][1]
         except:
             return ''
 
     def lasterr(self):
         try:
-            return self.log[-1][2]
+            return self.out[-1][2]
         except:
             return ''
 
     def lastexit(self):
         try:
-            return self.log[-1][3]
+            return self.out[-1][3]
         except:
             return ''
 

@@ -54,10 +54,10 @@ class XMLOutput(object):
     def add_log(self, parent, target):
         node = self.output.createElement('log')
 
-        for (command, stdout, stderr, exitcode, runtime) in target.log:
-            command = command.encode('ascii','replace').decode('ascii','replace')
-            stdout = stdout.encode('ascii','replace').decode('ascii','replace')
-            stderr = stderr.encode('ascii','replace').decode('ascii','replace')
+        for (command, stdout, stderr, exitcode, runtime) in target.out:
+            command = command.encode('ascii', 'replace').decode('ascii', 'replace')
+            stdout = stdout.encode('ascii', 'replace').decode('ascii', 'replace')
+            stderr = stderr.encode('ascii', 'replace').decode('ascii', 'replace')
             self.add_command(
                 node, command, '{!s}\n{!s}'.format(
                     stdout, stderr), exitcode, runtime)

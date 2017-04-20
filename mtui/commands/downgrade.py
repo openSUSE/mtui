@@ -9,8 +9,7 @@ from mtui.utils import requires_update
 
 class Downgrade(Command):
     """
-    Downgrades all related packages to the last released version (using
-    the UPDATE channel).
+    Downgrades all related packages to the last released version
     """
 
     command = 'downgrade'
