@@ -58,7 +58,9 @@ class HostsGroup(object):
     def select(self, hosts=[], enabled=None):
         if hosts == []:
             if enabled:
-                return HostsGroup([h for h in list(self.hosts.values()) if h.state != 'disabled'])
+                return HostsGroup(
+                    [h for h in list(self.hosts.values())
+                     if h.state != 'disabled'])
             return self
 
         for x in hosts:
@@ -341,6 +343,9 @@ class Target(object):
         ]
         self.logger.info(
             "local/:{} {}".format(self.hostname, ' '.join(cmdline)))
+
+        time_before = timestamp()
+
         cld = subprocess.Popen(
             cmdline,
             close_fds=True,
@@ -348,13 +353,22 @@ class Target(object):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        cld.stdin.close()
-        ex = cld.wait()
+        stdout, stderr = cld.communicate()
+        ex = cld.returncode
         logger = self.logger.info if ex == 0 else self.logger.error
-        for label, data in (('stdout', cld.stdout), ('stderr', cld.stderr)):
-            for l in data:
-                logger(
-                    "local/{} {}: {}".format(self.hostname, label, l.decode('utf-8').rstrip()))
+
+        time_after = timestamp()
+        runtime = int(time_after) - int(time_before)
+
+        self.out.append(
+            [' '.join(cmdline),
+             stdout.decode(),
+             stderr.decode(),
+             ex, runtime])
+
+        for label, data in (('stdout', stdout), ('stderr', stderr)):
+            for l in data.decode().rstrip().splitlines():
+                logger("local/{} {}: {}".format(self.hostname, label, l))
 
     def run(self, command, lock=None):
         if self.state == 'enabled':
