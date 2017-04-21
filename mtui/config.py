@@ -115,7 +115,7 @@ class Config(object):
              'svn+ssh://svn@qam.suse.de/testreports'),
 
             ('bugzilla_url', ('url', 'bugzilla'),
-             'https://bugzilla.novell.com'),
+             'https://bugzilla.suse.com'),
 
             ('reports_url', ('url', 'testreports'),
              'http://qam.suse.de/testreports'),
@@ -138,12 +138,12 @@ class Config(object):
             ('refhosts_resolvers', ('refhosts', 'resolvers'), 'https'),
 
             ('refhosts_https_uri', ('refhosts', 'https_uri'),
-                'https://qam.suse.de/metadata/refhosts.xml'),
+                'https://qam.suse.de/metadata/refhosts.yml'),
             ('refhosts_https_expiration', ('refhosts',
                                            'https_expiration'), 3600*12, int, self.config.getint),
 
             ('refhosts_path', ('refhosts', 'path'),
-                '/usr/share/suse-qam-metadata/refhosts.xml'),
+                '/usr/share/suse-qam-metadata/refhosts.yml'),
             # }}}
 
             ('use_keyring', ('mtui', 'use_keyring'),
