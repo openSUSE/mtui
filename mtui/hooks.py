@@ -136,7 +136,7 @@ class CompareScript(Script):
                 stderr=subprocess.PIPE,
             )
         except EnvironmentError as e:
-            t.log.append([' '.join(argv), '', '', 0x100, 0])
+            t.out.append([' '.join(argv), '', '', 0x100, 0])
             self.log.critical(messages.StartingCompareScriptError(e, argv))
             self.log.debug(format_exc())
             return
@@ -145,7 +145,7 @@ class CompareScript(Script):
         rc = p.wait()
         stdout = stdout.decode('utf-8')
         stderr = stderr.decode('utf-8')
-        t.log.append([' '.join(argv), str(stdout), str(stderr), rc, 0])
+        t.out.append([' '.join(argv), str(stdout), str(stderr), rc, 0])
 
         if rc == 0:
             return

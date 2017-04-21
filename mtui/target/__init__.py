@@ -58,7 +58,9 @@ class HostsGroup(object):
     def select(self, hosts=[], enabled=None):
         if hosts == []:
             if enabled:
-                return HostsGroup([h for h in list(self.hosts.values()) if h.state != 'disabled'])
+                return HostsGroup(
+                    [h for h in list(self.hosts.values())
+                     if h.state != 'disabled'])
             return self
 
         for x in hosts:
@@ -209,7 +211,7 @@ class Target(object):
         self.hostname = hostname
         self.system = system
         self.packages = {}
-        self.log = []
+        self.out = []
         self.TargetLock = lock
         self.Connection = connection
 
@@ -277,11 +279,11 @@ class Target(object):
 
             self.logger.info(
                 'dryrun: {} running "rpm -q {}"'.format(self.hostname, packages))
-            self.log.append(
+            self.out.append(
                 ['rpm -q {}'.format(packages), 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
-            self.log.append(['', '', '', 0, 0])
+            self.out.append(['', '', '', 0, 0])
 
     def query_package_versions(self, packages):
         """
@@ -341,6 +343,9 @@ class Target(object):
         ]
         self.logger.info(
             "local/:{} {}".format(self.hostname, ' '.join(cmdline)))
+
+        time_before = timestamp()
+
         cld = subprocess.Popen(
             cmdline,
             close_fds=True,
@@ -348,13 +353,22 @@ class Target(object):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        cld.stdin.close()
-        ex = cld.wait()
+        stdout, stderr = cld.communicate()
+        ex = cld.returncode
         logger = self.logger.info if ex == 0 else self.logger.error
-        for label, data in (('stdout', cld.stdout), ('stderr', cld.stderr)):
-            for l in data:
-                logger(
-                    "local/{} {}: {}".format(self.hostname, label, l.decode('utf-8').rstrip()))
+
+        time_after = timestamp()
+        runtime = int(time_after) - int(time_before)
+
+        self.out.append(
+            [' '.join(cmdline),
+             stdout.decode(),
+             stderr.decode(),
+             ex, runtime])
+
+        for label, data in (('stdout', stdout), ('stderr', stderr)):
+            for l in data.decode().rstrip().splitlines():
+                logger("local/{} {}: {}".format(self.hostname, label, l))
 
     def run(self, command, lock=None):
         if self.state == 'enabled':
@@ -385,7 +399,8 @@ class Target(object):
 
             time_after = timestamp()
             runtime = int(time_after) - int(time_before)
-            self.log.append([command,
+            # this is wrong
+            self.out.append([command,
                              self.connection.stdout,
                              self.connection.stderr,
                              exitcode,
@@ -394,10 +409,10 @@ class Target(object):
 
             self.logger.info(
                 'dryrun: {} running "{}"'.format(self.hostname, command))
-            self.log.append([command, 'dryrun\n', '', 0, 0])
+            self.out.append([command, 'dryrun\n', '', 0, 0])
         elif self.state == 'disabled':
 
-            self.log.append(['', '', '', 0, 0])
+            self.out.append(['', '', '', 0, 0])
 
     def shell(self):
         self.logger.debug('{}: spawning shell'.format(self.hostname))
@@ -461,25 +476,25 @@ class Target(object):
 
     def lastin(self):
         try:
-            return self.log[-1][0]
+            return self.out[-1][0]
         except:
             return ''
 
     def lastout(self):
         try:
-            return self.log[-1][1]
+            return self.out[-1][1]
         except:
             return ''
 
     def lasterr(self):
         try:
-            return self.log[-1][2]
+            return self.out[-1][2]
         except:
             return ''
 
     def lastexit(self):
         try:
-            return self.log[-1][3]
+            return self.out[-1][3]
         except:
             return ''
 
