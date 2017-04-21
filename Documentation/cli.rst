@@ -9,72 +9,72 @@
 Options
 =======
 
--a ATTR, --autoadd=ATTR
-~~~~~~~~~~~~~~~~~~~~~~~
+``-d, --debug``
+~~~~~~~~~~~~~~~
 
-autoadd SUT based on attributes
+Enables debugging output.
 
-Cumulatively adds refhosts to the target list based on given attributes.
+One of the possible use cases for the debug output could be when testing a command
+which runs for a long time, as the command output is then printed in real time
+instead of after the command has finished.
 
-Example::
+However, in that case it is more reasonable to use the ``set_log_level`` command
+from the interactive user interface (see below).
 
-   mtui -a sles -a 11sp1
+The default log level is ``info``, while ``-d`` sets it to ``debug``.
 
--d, --debug
-~~~~~~~~~~~
 
-enable debugging output
+``-h, --help``
+~~~~~~~~~~~~~~
 
-There might be a use case for debug output when testing a command which
-runs for a longer time as the command output is then printed in realtime
-instead of after the command has finished. However, it's more reasonable
-to use the `set_log_level` command then (see below).
-
-The default loglevel is `INFO` while `-d` sets it to `DEBUG`.
-
--h, --help
-~~~~~~~~~~
-
-MTUI will display short usage description of its options and operands,
+MTUI will display a short description of its options, operands and their usage,
 and exit.
 
--l SITE, --location=SITE
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``-l SITE, --location SITE``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Overrides the `mtui.location` configuration.
+Overrides the ``mtui.location`` configuration.
 
--n, --noninteractive
-~~~~~~~~~~~~~~~~~~~~
+``-n, --noninteractive``
+~~~~~~~~~~~~~~~~~~~~~~~~
 
-When set, MTUI is run in an noninteractive mode without a command shell.
+When set, MTUI is run in a noninteractive mode without a command shell.
 MTUI automatically applies the update and exports the results to the
 maintenance template before it quits. User input is not required.
 
--p FILE, --prerun=FILE
-~~~~~~~~~~~~~~~~~~~~~~
-
-Runs MTUI commands prior to starting the interactive shell or the update
-process. User input is not required if in noninteractive mode (-n parameter).
-
--r RRID, --review-id=RRID
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Load testreport maintenance update `RRID`.  `RRID` is a string in the
-form `SUSE:Maintenance:X:Y` where `X` is so-called "incident id" and
-`Y` is "request id".
-
--s SPEC, --sut SPEC
-~~~~~~~~~~~~~~~~~~~
-
-Override refhosts given in the testreport.
-`SPEC` is a string in the form `hostname,product`.
-
--t DIR, --template_dir=DIR
+``-p FILE, --prerun FILE``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Overrides the `mtui.template_dir` configuration.
+Runs a script with a set of MTUI commands prior to starting the interactive shell
+or the update process. User input is not required if in noninteractive mode
+(``-n`` parameter).
 
--w SECONDS, --connection_timeout=SECONDS
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``-r RRID, --review-id RRID``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Overrides the `mtui.connection_timeout` configuration.
+Loads the test report for the maintenance update Review Request ID (RRID).
+
+``RRID`` is a string in the form ``SUSE:Maintenance:XXXX:YYYYYY``, where ``XXXX``
+is the Incident ID and ``YYYYYY`` is the Request ID.
+
+``-s SPEC, --sut SPEC``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Cumulatively overrides default refhosts given in the test report.
+
+``SPEC`` is a string in the form ``hostname,system``.
+
+``-t DIR, --template_dir DIR``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Overrides the ``mtui.template_dir`` configuration.
+
+``-V, --version``
+~~~~~~~~~~~~~~~~~
+
+Prints MTUI version and exits.
+
+``-w SECONDS, --connection_timeout SECONDS``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Overrides the ``mtui.connection_timeout`` configuration.
