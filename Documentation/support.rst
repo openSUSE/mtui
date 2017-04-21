@@ -2,27 +2,24 @@
 Support
 #######
 
-Bug reports
-###########
+Bugzilla
+########
 
-Can be filed and searched at `bugzilla.suse.com`_.
+Bug reports and feature requests are welcome. You can file them at
+`bugzilla.suse.com`_.
 
-Hint: mtui provides convenience commands `report-bug` to point your
-browser to the appropriate location.
+.. hint:: MTUI conveniently provides the ``report-bug`` command to point your
+  browser to the appropriate location.
 
 .. _bugzilla.suse.com: https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI
 
-Feature requests
-################
-
-See `Bug reports`_.
 
 IRC
 ###
 
-.. _Internal SUSE IRC server: https://wiki.innerweb.novell.com/index.php/IRC
+.. _Internal SUSE IRC server: https://wiki.microfocus.net/index.php?title=SUSE-Development/OPS/Services/IRC_and_ssl
 
-Connect to `Internal SUSE IRC server`_ and
+Connect to the `Internal SUSE IRC server`_ and
 
 .. code-block:: text
 
