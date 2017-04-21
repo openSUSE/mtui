@@ -10,268 +10,313 @@ Files
 =====
 
 MTUI reads `INI-formatted`_ configuration from two optional files,
-`/etc/mtui.cfg` and `~/.mtuirc`, with the values found in the latter
-overriding those from the former.  Values found in configuration files
-can be overridden using commandline options.
+``/etc/mtui.cfg`` and ``~/.mtuirc``, with the values found in the latter
+overriding those from the former.
 
-.. _`INI-formatted`: https://docs.python.org/2/library/configparser.html
+Values found in configuration files can be overridden using command line options.
+
+.. _`INI-formatted`: https://docs.python.org/3/library/configparser.html
 
 Directives
 ==========
 
-This text refers to configuration properties using their section-
-qualified names.
+This text refers to configuration properties using their section-qualified names.
 
-mtui.chdir_to_template_dir
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+``mtui.chdir_to_template_dir``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. Note:: Decaprated
+  | **type**
+  |     enum: ``False``, ``True``
+  | **default**
+  |     ``False``
 
-type
-  enum: `False`, `True`
-default
-  `False`
+If set to ``True``, MTUI will ``chdir(2)`` into the test report checkout directory.
 
-If `True`, MTUI will `chdir(2)` into the testreport
-checkout directory.
+.. note::
 
-mtui.connection_timeout
-~~~~~~~~~~~~~~~~~~~~~~~
+  **Deprecated**
 
-type
-  seconds
-default
-  300
+  Use of the ``mtui.chdir_to_template_dir`` directive is discouraged.
+
+
+``mtui.connection_timeout``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     seconds
+  | **default**
+  |     300
 
 Sets the execution timeout to the specified value.
-When the timeout limit was hit the user is asked to wait for the current
+
+When the timeout limit was hit, the user is asked to wait for the current
 command to return or to proceed with the next one.
-To disable the timeout set it to "0".
 
-mtui.datadir
-~~~~~~~~~~~~
+To disable the timeout set it to ``0``.
 
-type
-  pathname
-default
-  the mtui sourcecode directory
 
-MTUI expects testing scripts in this directory.
+``mtui.datadir``
+~~~~~~~~~~~~~~~~
 
-mtui.location
-~~~~~~~~~~~~~
+  | **type**
+  |     pathname
+  | **default**
+  |     the MTUI source code directory
 
-type
-  enum: locations defined in `refhosts.xml`_.
-default
-  `default`
+MTUI expects testing scripts to be found in this directory.
 
-.. _refhosts.xml: https://gitlab.suse.de/qa-maintenance/metadata/blob/master/refhosts.xml
 
-.. tip:: View valid locations using `refdb`_: `refdb -p location | sort | uniq`
+``mtui.location``
+~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     enum: locations defined in `refhosts.yml`_
+  | **default**
+  |     ``default``
+
+.. _refhosts.yml: https://gitlab.suse.de/qa-maintenance/metadata/blob/master/refhosts.yml
+
+.. tip:: View valid locations using `refdb`_:
+
+    ::
+
+        refdb -p location | sort | uniq
+
 
 .. _refdb: https://gitlab.suse.de/rneuhauser/refdb/blob/master/README.rest
 
-MTUI will limit reference hosts to those in `mtui.location`.
-If a required system cannot be found in `mtui.location`
-it will be loaded from `default`.
+MTUI will limit reference hosts to those found in ``mtui.location``.
+If a required system cannot be found in ``mtui.location``, it will be loaded
+from ``default``.
 
-mtui.report_bug_url
-~~~~~~~~~~~~~~~~~~~
 
-type
-  URL
-default
-  https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&component=MTUI&submit=Use+This+Product
+``mtui.report_bug_url``
+~~~~~~~~~~~~~~~~~~~~~~~
 
-Report MTUI bugs at this URL.  Used by the `report-bug` MTUI command.
+  | **type**
+  |     URL
+  | **default**
+  |     https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&component=MTUI&submit=Use+This+Product
 
-mtui.tempdir
-~~~~~~~~~~~~
+MTUI bugs are reported via this URL. Used by the `report-bug`_ MTUI command.
 
-type
-  pathname
-default
-  `$TMPDIR` | `/tmp`
+.. _report-bug: http://qam.suse.de/projects/mtui/latest/iui.html#report-bug
+
+
+``mtui.tempdir``
+~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     pathname
+  | **default**
+  |     ``$TMPDIR`` | ``/tmp``
 
 Temporary local directory for package source checkouts.
 
-mtui.template_dir
-~~~~~~~~~~~~~~~~~
 
-type
-  pathname
-default
-  `$TEMPLATE_DIR`, current working directory
+``mtui.template_dir``
+~~~~~~~~~~~~~~~~~~~~~
 
-All testreports are checked out and stored in this directory.
-Specifying the template directory in which the testing directories
+  | **type**
+  |     pathname
+  | **default**
+  |     ``$TEMPLATE_DIR``, current working directory
+
+Specifies the template directory in which the testing directories
 are checked out from SVN. If none is given, the current directory
-is used. However, this is typically set to another directory
-like --template=~/testing/templates. For an improved usability,
-the environment variable TEMPLATE_DIR is also processed. Instead of
-specifying the directory each time on the commandline, one could set
-template_dir="~/testing/templates" in ~/.mtuirc. The commandline
-parameter takes precedence over the environment variable if both are given.
+is used. However, this is typically set to another directory such as
+``--template=~/testing/templates``.
 
-mtui.use_keyring
-~~~~~~~~~~~~~~~~
+For an improved usability, the environment variable ``TEMPLATE_DIR`` is also
+processed. Instead of specifying the directory each time on the command line,
+one could set ``template_dir=~/testing/templates`` in ``~/.mtuirc``.
 
-type
-  enum: `False`, `True`
-default
-  `False`
+The command line parameter takes precedence over the environment variable if
+both are given.
 
-If `True`: when `testopia.pass` is non-empty, MTUI will store
-its value in the user's keyring; when `testopia.pass` is empty,
+
+``mtui.use_keyring``
+~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     enum: ``False``, ``True``
+  | **default**
+  |     ``False``
+
+If set to ``True``: when ``testopia.pass`` is non-empty, MTUI will store
+its value in the user's keyring; when ``testopia.pass`` is empty,
 MTUI will retrieve it from the user's keyring.
 
-mtui.user
-~~~~~~~~~
 
-type
-  string
-default
-  `getpass.getuser()`__
+``mtui.user``
+~~~~~~~~~~~~~
 
-Used in eg. lock files.
+  | **type**
+  |     string
+  | **default**
+  |     `getpass.getuser()`__
+
+Used e.g. in lock files.
 
 .. __: https://docs.python.org/2/library/getpass.html#getpass.getuser
 
 
-refhosts.https_expiration
-~~~~~~~~~~~~~~~~~~~~~~~~~
+``refhosts.https_expiration``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-type
-  seconds
-default
-  43200
+  | **type**
+  |     seconds
+  | **default**
+  |     43200
 
 Maximum age of the refhost database cache before MTUI will
-update it from `refhosts.https_uri` if the `https` resolver is used.
+update it from ``refhosts.https_uri`` if the ``https`` resolver is used.
 
-refhosts.https_uri
-~~~~~~~~~~~~~~~~~~
 
-type
-  URL
-default
-  https://qam.suse.de/metadata/refhosts.xml
+``refhosts.https_uri``
+~~~~~~~~~~~~~~~~~~~~~~
 
-The `https` resolver fetches the refhost database from this URL.
+  | **type**
+  |     URL
+  | **default**
+  |     https://qam.suse.de/metadata/refhosts.yml
 
-refhosts.path
-~~~~~~~~~~~~~
+The ``https`` resolver fetches the refhost database from this URL.
 
-type
-  pathname
-default
-  `/usr/share/suse-qam-metadata/refhosts.xml`
 
-The `path` resolver uses the refhost database at this location.
+``refhosts.path``
+~~~~~~~~~~~~~~~~~
 
-refhosts.resolvers
-~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     pathname
+  | **default**
+  |     ``/usr/share/suse-qam-metadata/refhosts.yml``
 
-type
-  list: {https|path}[,...]
-default
-  https
+The ``path`` resolver uses the refhost database at this location.
+
+
+``refhosts.resolvers``
+~~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     list: {https|path}[,...]
+  | **default**
+  |     https
 
 This property takes a comma-separated list of resolver types.
 Resolvers are tried left-to-right.
 
-svn.path
-~~~~~~~~
 
-type
-  URL
-default
-  svn+ssh://svn@qam.suse.de/testreports
+``svn.path``
+~~~~~~~~~~~~
+
+  | **type**
+  |      URL
+  | **default**
+  |      svn+ssh://svn@qam.suse.de/testreports
 
 MTUI checks out the testreport from, and commits it to,
-`${svn.path}/${id}`.
+``${svn.path}/${id}``.
 
-target.tempdir
-~~~~~~~~~~~~~~
 
-type
-  pathname
-default
-  `/tmp`
+``target.tempdir``
+~~~~~~~~~~~~~~~~~~
 
-target.testsuitedir
-~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     pathname
+  | **default**
+  |     ``/tmp``
 
-type
-  pathname
-default
-  `/usr/share/qa/tools`
+
+``target.testsuitedir``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     pathname
+  | **default**
+  |     ``/usr/share/qa/tools``
 
 MTUI uses testsuites in this directory in refhosts.
 
-testopia.interface
-~~~~~~~~~~~~~~~~~~
 
-type
-  URL
-default
-  https://apibugzilla.novell.com/tr_xmlrpc.cgi
+``testopia.interface``
+~~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     URL
+  | **default**
+  |     https://apibugzilla.novell.com/tr_xmlrpc.cgi
 
 MTUI accesses Testopia through this URL.
 
-testopia.pass
-~~~~~~~~~~~~~
 
-type
-  string
-default
-  <EMPTY>
+``testopia.pass``
+~~~~~~~~~~~~~~~~~
 
-Password used to log into `testopia.interface`.
+  | **type**
+  |     string
+  | **default**
+  |     <EMPTY>
+
+Password used to log into ``testopia.interface``.
 Testopia is integrated with Bugzilla and uses the same credentials.
 
-testopia.user
-~~~~~~~~~~~~~
+``testopia.user``
+~~~~~~~~~~~~~~~~~
 
-type
-  string
-default
-  <EMPTY>
+  | **type**
+  |     string
+  | **default**
+  |     <EMPTY>
 
-Username used to log into `testopia.interface`.
+Username used to log into ``testopia.interface``.
 Testopia is integrated with Bugzilla and uses the same credentials.
 
-url.bugzilla
-~~~~~~~~~~~~
 
-type
-  URL
-default
-  https://bugzilla.novell.com
+``url.bugzilla``
+~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     URL
+  | **default**
+  |     https://bugzilla.suse.com
 
 Used to construct URLs in Bugzilla- and Testopia-related commands.
 
-url.testreports
-~~~~~~~~~~~~~~~
 
-type
-  URL
-default
-  http://qam.suse.de/testreports
+``url.testreports``
+~~~~~~~~~~~~~~~~~~~
 
-Prefix to the `Testreport` field value in `list_metadata`
+  | **type**
+  |     URL
+  | **default**
+  |     http://qam.suse.de/testreports
+
+Prefix to the ``Testreport`` field value in ``list_metadata``
 command output.
+
 
 Example
 =======
 
 ::
 
-   [mtui]
-   template_dir = <where you want to store testreport checkouts>
-   location = <your location>
+  [mtui]
+  user = <your username>
+  location = <your location>
+  template_dir = /path/to/where/you/want/to/store/test-reports
+  chdir_to_templatedir = yes
+  datadir = /usr/share/mtui
 
-   [testopia]
-   user = <your Bugzilla ID>
-   pass = <your Bugzilla passwd>
+  [testopia]
+  interface = https://apibugzilla.novell.com/xmlrpc.cgi
+  user = <your Bugzilla ID>
+  pass = <your Bugzilla password>
+
+  [refhosts]
+  resolvers = https
+  https_uri = https://qam.suse.de/metadata/refhosts.yml
+  path = /usr/share/suse-qam-metadata/refhosts.yml
+
+  [url]
+  bugzilla = https://bugzilla.suse.com
