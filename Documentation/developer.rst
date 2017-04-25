@@ -29,82 +29,28 @@ Commit keywords
 Bug ID references
 =================
 
-Referencing bugzilla.suse.com bugs:
+Please refer to relevant bugzilla.suse.com bugs, whenever applicable:
 
 .. code-block:: text
 
     bsc#<ID>
 
-Referencing bugzilla.novell.com (old) bugs:
-
-.. code-block:: text
-
-    bnc#<ID>
-
 
 Documentation
 #############
 
-Uses `Sphinx`_.
-
-Build with:
-
-.. code-block:: text
-
-    $ cd mtui.git/Documentation
-    $ make html
+The documentation is generated using `Sphinx`_.
 
 .. _Sphinx: http://sphinx-doc.org/
 
+* Build HTML docs::
 
-Release Engineering
-###################
-
-Versioning scheme
-=================
-
-Versioning scheme is based on `SemVer 2.0`_
-
-.. _SemVer 2.0: http://semver.org/spec/v2.0.0.html
-
-Release Process
-===============
-
-.. note::
-
-  Command ``isc`` refers to ``osc`` with -A pointing to IBS,
-  and ``$nv`` is the new version.
-
-* Branch the official package::
-
-    isc branch QA:Maintenance mtui
-
-  We'll refer to the destination project with ``$bp``.
-
-* Update the changelog, ``mtui.__version__`` in ``mtui/__init__.py``,
-  and build HTML docs::
-
-    sed -i "/^\(__version__\)\s*=.*/s//\1 = '$nv'/" mtui/__init__.py
     cd Documentation && make html
 
-* If all went well, then commit, tag, and upload the new version
-  to IBS::
-
-    git commit mtui/__init__.py -m "Release $nv"
-    git tag -a -m "Release $nv" v$nv
-    bs-update -P $bp -d . v$nv
-
-* Check the build results of the branched package; if there are no
-  failures, publish the tag and the package::
-
-    git push origin master v$nv
-    isc submitpac $bp mtui QA:Maintenance
-    isc request accept ...
-
-* Bump non-ibs packages manually (see installation) and test them.
-
-* Publish the source tarball and html docs::
+* Publish the source tarball and HTML docs::
 
     scp ... root@qam.suse.de:/srv/www/qam.suse.de/media/distfiles
     scp -r ... root@qam.suse.de:/srv/www/qam.suse.de/projects/mtui/$nv
     ssh root@qam.suse.de "cd /srv/www/qam.suse.de/projects/mtui && ln -sf $nv latest"
+
+``$nv`` refers to new version.

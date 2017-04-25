@@ -846,8 +846,8 @@ Options:
   Name of the file to save log as.
 
 
-exit, quit
-++++++++++
+exit, quit, EOF
++++++++++++++++
 
 ::
 
@@ -856,6 +856,8 @@ exit, quit
 
 Disconnects from all hosts and exits the program.
 The tester is asked to save the XML log when exiting MTUI.
+
+.. tip:: Ctrl+D works too.
 
 Options:
 ~~~~~~~~
