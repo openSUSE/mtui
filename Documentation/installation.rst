@@ -2,14 +2,6 @@
 Installation
 ############
 
-.. note::
-
-  After installation, you'll need to configure at least your `location`_
-  and you will likely want to customize `template_dir`_ as well.
-
-.. _location: ./cfg.html#mtui-location
-.. _template_dir: ./cfg.html#mtui-template-dir
-
 openSUSE and SUSE
 #################
 
@@ -25,13 +17,22 @@ each distribution under the "Go to download repository" link.
 
 For example for openSUSE Tumbleweed the command would be:
 
-.. code-block:: sh 
+.. code-block:: sh
 
     # zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Tumbleweed qa-maintenance
 
 Once you have the repository added, you can install the package normally
-and get mtui with the appropriate dependencies as well.
+and get MTUI with the appropriate dependencies as well.
 
-.. code-block:: sh 
+.. code-block:: sh
 
     # zypper in mtui
+
+
+.. note::
+
+  After installation, you'll need to configure at least your `location`_
+  and you will likely want to customize `template_dir`_ as well.
+
+.. _location: ./cfg.html#mtui-location
+.. _template_dir: ./cfg.html#mtui-template-dir

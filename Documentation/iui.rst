@@ -12,12 +12,15 @@ Introduction
 
 The MTUI shell is comparable to a bash shell as both use the readline
 backend for command processing.
+
 For all shell commands, autocompletion and line editing features are
-enabled.
-Even a command history and history searching are available.
-For a short overview of procedures and help texts, the "help" command is
-also available (i.e. help add_host prints a short description of the
-`add_host`_ command).
+enabled, as well as command history and history searching.
+
+For a short overview of procedures and help texts, the ``help`` command is
+also available (i.e. ``help add_host`` prints a short description of the
+`add_host`_ command). Alternatively, you may use the ``--help`` argument (e.g.
+``add_host -h`` or ``add_host --help``).
+
 Running processes can be interrupted by pressing CTRL-C.
 However, it blocks until all currently running commands have finished.
 
@@ -25,14 +28,17 @@ However, it blocks until all currently running commands have finished.
 Common Argument Types
 =====================
 
-`attribute`
-  refhost attribute like architecture, product, `system-type`
-  or `hostname`
-`hostname`
-  one of the hostnames in the target host list; where it makes sense,
-  "all" can be used as a proxy for the full target host list
-`system-type`
-  sles11sp1-i386
+.. option:: -s SYSTEM, --system SYSTEM
+
+  System type, e.g. sles12sp1-i386.
+
+.. option:: -t HOST, --target HOST
+
+  Address of the target host (should be the FQDN).
+
+  In most cases ``-t`` is an optional argument; can be used multiple times, and
+  if omitted, all hosts are used.
+
 
 Commands
 ========
@@ -45,44 +51,30 @@ add_host
 
 ::
 
-  add_host <hostname>,<system-type>
+  add_host -s SYSTEM -t HOST
 
-Register the (`<hostname>`, `<system-type>`) tuple
-in the target host list.
+Adds another machine to the target host list.
+
+Both target host and system type need to be specified when adding a host.
+
 
 remove_host
 +++++++++++
 
 ::
 
-  remove_host <hostname>[,...]
+  remove_host [-t HOST]
 
-Disconnect from given refhost(s) and remove it/them from target host
-list.
+Disconnects from given refhost(s) and removes them from the target host list.
 
 .. warning::
+  When used without parameters, the command removes all hosts.
+
   The host log is purged as well.
 
-If the tester wants to preserve the log, it's better to use
-the `set_host_state`_ command instead and set the host to "disabled".
+If the tester wants to preserve the log, the `set_host_state`_ command should be
+considered instead, to set the host to ``disabled``.
 
-autoadd
-+++++++
-
-::
-
-  autoadd <attribute> [...]
-
-Add a refhost matching all given `<attribute>`\s to the target host list.
-
-search_hosts
-++++++++++++
-
-::
-
-  search_hosts <attribute> [<attribute>] ...
-
-Search hosts by by the specified attributes.
 
 list_hosts
 ++++++++++
@@ -91,80 +83,106 @@ list_hosts
 
   list_hosts
 
-Lists all connected hosts including the system types and their current
-state.  State could be "Enabled", "Disabled" or "Dryrun".
+Lists all connected hosts, including the system types and their current
+state: ``enabled``, ``disabled`` or ``dryrun``.
+
 
 list_history
 ++++++++++++
 
 ::
 
-  list_history [<hostname>,...][,<event>]
+  list_history [-e EVENT] [-t HOST]
 
-Lists a history of mtui events on the target hosts like installing or
-updating packages. Date, username and event is shown.  Events can be
-filtered with the `<event>` parameter.
+Lists a history of MTUI events on the target hosts, such as installing or
+updating packages. Date, username and event is shown. Events can be
+filtered with the ``EVENT`` parameter.
 
-`<event>`
-  `connect`, `disconnect`, `install`, `update`, `downgrade`
+Options:
+~~~~~~~~
+
+.. option:: -e EVENT, --event EVENT
+
+  Event to list: ``connect``, ``disconnect``, ``update``, ``downgrade``, ``install``.
+
 
 list_locks
 ++++++++++
 
 ::
 
-  list_hosts
+  list_locks
 
-Lists lock state of all connected hosts
+Lists lock state of all connected hosts.
+
 
 set_host_state
 ++++++++++++++
 
 ::
 
-  set_host_state <hostname>[,...],<state>
+  set_host_state [-t HOST] state
 
-Sets the host state to "Enabled", "Disabled" or "Dryrun". A host set to
-"Enabled" runs all issued commands while a "Disabled" host or a host set
-to "Dryrun" doesn't run any command on the host. The difference between
-"Disabled" and "Dryrun" is that on "Dryrun" hosts the issued commands
-are printed to the console while "Disabled" doesn't print anything.
-Additionally, the execution mode of each host could be set to "parallel"
-(default) or "serial". All commands which are designed to run in
-parallel are influenced by this option (like to run command)
+Sets the host state to ``enabled``, ``disabled`` or ``dryrun``.
 
-`<state>`
-  `enabled`, `disabled`, `dryrun`, `parallel`, `serial`
+A host set to ``enabled`` runs all issued commands, while a ``disabled`` host or
+a host set to ``dryrun`` doesn't run any command. The difference between
+them is that on ``dryrun`` hosts, the issued commands are printed to the console,
+while ``disabled`` doesn't print anything.
 
-set_host_lock
-+++++++++++++
+Additionally, the execution mode of each host can be set to ``parallel``
+(default) or ``serial``. All commands which are designed to run in
+parallel (such as the ``run`` command) are influenced by this option.
+
+Options:
+~~~~~~~~
+
+.. option:: state
+
+  The desired host state: ``enabled``, ``disabled``, ``dryrun``, ``parallel``,
+  ``serial``
+
+
+lock
+++++
 
 ::
 
-    set_host_lock <hostname>[,...],<state>
+    lock [-t HOST]
 
-Lock host for exclusive usage. This locks all repository transactions
-like enabling or disabling the testing repository on the target hosts.
-The Hosts are locked with a timestamp, the UID and PID of the session.
-This influences the update process of concurrent instances, use with
-care.  Enabled locks are automatically removed when exiting the session.
+Locks host for exclusive usage. This locks all repository transactions, such as
+enabling or disabling the testing repository on the target hosts.
+
+.. caution::
+  The hosts are locked with a timestamp, the UID and PID of the session.
+  This influences the update process of concurrent instances.
+
+  Use with care.
+
+Enabled locks are automatically removed when exiting the session.
 To lock the `run`_ command on other sessions as well, it's necessary to
 set a comment.
 
-`<state>`
-  `enabled`, `disabled`
 
 set_timeout
 +++++++++++
 
 ::
 
-    set_timeout <hostname>,<seconds>
+    set_timeout [-t HOST] timeout
 
 Changes the current execution timeout for a target host. When the
-timeout limit was hit the user is asked to wait for the current command
-to return or to proceed with the next one.
-To disable the timeout set it to "0".
+timeout limit is hit, the user is asked to wait for the current command
+to return, or to proceed with the next one. The timeout value is set in seconds.
+To disable the timeout, set it to "0".
+
+Options:
+~~~~~~~~
+
+.. option:: timeout
+
+  Timeout in sec; ``0`` disables it.
+
 
 list_timeout
 ++++++++++++
@@ -175,17 +193,43 @@ list_timeout
 
 Prints the current timeout values per host in seconds.
 
+
 unlock
 ++++++
 
 ::
 
-  unlock [-f|--force] [<hostname>...]
+    unlock [-f] [-t HOST]
 
-Unlock given (or all) targets.
+Unlocks given targets. Unlocks all if used without arguments.
 
-`-f`, `--force`
-  Remove locks set by other users or sessions.
+Options:
+~~~~~~~~
+
+.. option:: -f, --force
+
+  Force unlock - removes locks set by other users or sessions.
+
+
+EOF
++++
+
+::
+
+    EOF [reboot | poweroff]
+
+Reboots or shuts down the refhosts.
+
+Options:
+~~~~~~~~
+
+.. option:: reboot
+
+  Reboots the refhosts.
+
+.. option:: poweroff
+
+  Shuts down the refhosts.
 
 
 Update Management
@@ -196,75 +240,136 @@ install
 
 ::
 
-    install <hostname>[,...],<package>[ <package>]...
+    install [-t HOST] package [package ...]
 
 Installs packages from the current active repository.
 The repository should be set with the `set_repo`_ command beforehand.
+
+Options:
+~~~~~~~~
+
+.. option:: package
+
+  Package to install.
+
 
 uninstall
 +++++++++
 
 ::
 
-    uninstall <hostname>[,...],<package>[ <package>]...
+    uninstall [-t HOST] package [package ...]
 
 Removes packages from the system.
+
+Options:
+~~~~~~~~
+
+.. option:: package
+
+  Package to uninstall.
+
 
 prepare
 +++++++
 
 ::
 
-    prepare <hostname>[,...][,force][,installed][,testing]
+    prepare [-f] [-i] [-u] [-t HOST]
 
-Installs missing or outdated packages from the UPDATE repositories.
-This is also run by the update procedure before applying the updates.
-If "force" is set, packages are forced to be installed on package
-conflicts. If "installed" is set, only installed packages are
-prepared. If "testing" is set, packages are installed from the TESTING
-repositories.
+
+Installs missing or outdated packages from the regular UPDATE repositories.
+
+This command is also run by the update procedure before applying the updates.
+
+Options:
+~~~~~~~~
+
+.. option:: -f, --force
+
+  Forces package installation even on package conflicts.
+
+.. option:: -i, --installed
+
+  Prepares only installed packages.
+
+.. option:: -u, --update
+
+  Enables test update repositories and installs from there.
+
 
 downgrade
 +++++++++
 
 ::
 
-    downgrade <hostname>
+    downgrade [-t HOST]
 
-Downgrades all related packages to the last released version (uses
-the UPDATE channel). This does not work for SLES 9 hosts, though.
+Downgrades all related packages to the last released version (using
+the UPDATE channel).
 
 update
 ++++++
 
 ::
 
-    update <hostname>[,newpackage][,noprepare]
+    update [--newpackage] [--noprepare] [--noscript] [-t HOST]
 
-Applies the testing update to the target hosts. While updating the
-machines, the pre-, post- and compare scripts are run before and after
-the update process. If the update adds new packages to the channel, the
-"newpackage" parameter triggers the package installation right after the
-update.  To skip the preparation procedure, append "noprepare" to the
-argument list.
+
+Runs the `prepare`_ command and applies the testing update to the target hosts.
+(To skip the preparation procedure, use ``--noprepare``.)
+
+While updating the machines, the pre-, post- and compare scripts are run before
+and after the update process.
+
+If the update adds new packages to the channel, the "newpackage" parameter
+triggers the package installation right after the update.
+
+Options:
+~~~~~~~~
+
+.. option:: --newpackage
+
+  Installs new packages after update.
+
+.. option:: --noprepare
+
+  Skips the prepare procedure.
+
+.. option:: --noscript
+
+  Skips the pre- and post- scripts.
+
 
 export
 ++++++
 
 ::
 
-    export [<filename>][,<hostname>][,force]
+    export [-f] [-n HOSTNAME] [filename]
 
 Exports the gathered update data to template file. This includes the
-pre/post package versions and the update log. An output file could be
-specified, if none is specified, the output is written to the current
+pre/post package versions and the update log. An output file can be
+specified; if none is specified, the output is written to the current
 testing template.
-To export a specific updatelog, provide the hostname as parameter.
 
-`<filename>`
-  output template file name
-`force`
-  overwrite template if it exists
+To export a specific update log, provide the hostname as a parameter.
+
+Options:
+~~~~~~~~
+
+.. option:: -f, --force
+
+  Force-overwrites the existing template.
+
+.. option:: -n HOSTNAME, --hostname HOSTNAME
+
+  Exports the update log for the specified host.
+
+.. option:: filename
+
+  Output template file name.
+
 
 Testing Commands
 ****************
@@ -274,68 +379,128 @@ run
 
 ::
 
-    run <hostname>[,...],<command>
+    run [-t HOST] command
 
-Runs a command on specified host(s).  After the call returned, the
-output (including the return code) of each host is shown on the console.
-Please be aware that no interactive commands can be run with this
-procedure.
+Runs a command on a specified host or on all enabled targets.
+
+The command timeout is set to 5 minutes, after which, if there is no output on
+stdout or stderr, a timeout exception is thrown. The commands are run in parallel
+on every target, or in serial mode when set with ``set_host_state``.
+
+After the call is returned, the output (including the return code) of each host
+is shown on the console. Please be aware that no interactive commands can be
+run with this procedure.
+
+Options:
+~~~~~~~~
+
+.. option:: command
+
+  Command to run on refhost.
+
+
+lrun
+++++
+
+::
+
+    lrun command
+
+Runs a command in local shell.
+
+The command runs in the current working directory (where MTUI was started), unless
+chroot to the template dir is enabled.
+
+Options:
+~~~~~~~~
+
+.. option:: command
+
+  Command to run in a local shell.
+
 
 shell
 +++++
 
 ::
 
-    shell <hostname>
+    shell [-t HOST]
 
 Invokes a remote root shell on the target host.
 The terminal size is set once, but isn't adapted on subsequent changes.
+
 
 put
 +++
 
 ::
 
-    put <filename>
+    put filename
 
 Uploads files to all enabled hosts. Multiple files can be selected with
 special patterns according to the rules used by the Unix shell (i.e.
 ``*`` ``?``, ``[]``). The complete filepath on the remote hosts is shown
 after the upload.
 
+Options:
+~~~~~~~~
+
+.. option:: filename
+
+  File to upload to all hosts.
+
+
 get
 +++
 
 ::
 
-    get <filename>
+    get filename
 
-Downloads a file from all enabled hosts. Multiple files can not be
-selected.  Files are saved in the `$TEMPLATE_DIR/downloads/`
+Downloads a file from all enabled hosts. Multiple files cannot be
+selected. Files are saved in the ``$TEMPLATE_DIR/downloads/``
 subdirectory with the hostname as file extension.
+If the argument ends with a slash '/', it will be treated
+as a folder and all its contents will be downloaded.
+
+Options:
+~~~~~~~~
+
+.. option:: filename
+
+  File to download from target hosts.
 
 set_repo
 ++++++++
 
 ::
 
-    set_repo <hostname>[,...],<operation>
+    set_repo (-A | -R) [-t HOST]
 
-Add or remove repository with update. It uses `repose issue-add` and
-`repose issue-rm` command.
+Adds or removes issue repository to/from hosts. It uses ``repose issue-add`` and
+``repose issue-rm`` command.
 
-`<operation>`
-  `add` or `remove`
+Options:
+~~~~~~~~
+
+.. option:: -A, --add
+
+  Adds issue repos to refhosts.
+
+.. option:: -R, --remove
+
+  Removes issue repos from refhosts.
+
 
 show_log
 ++++++++
 
 ::
 
-    show_log [<hostname>]
+    show_log [-t HOST]
 
 Prints the command protocol from the specified hosts. This might be
-handy for the tester as well, as one can simply dump the command history
+handy for the tester, as one can simply dump the command history
 to the reproducer section of the template.
 
 testsuite_run
@@ -343,90 +508,123 @@ testsuite_run
 
 ::
 
-    testsuite_run <hostname>[,...],<testsuite>
+    testsuite_run [-t HOST] testsuite
 
-Runs ctcs2 testsuite and saves logs to `/var/log/qa/$id` on the target
-hosts.  Results can be submitted with the `testsuite_submit`_ command.
+Runs a ctcs2 testsuite and saves logs to ``/var/log/qa/RRID`` on the target
+hosts. Results can be submitted with the `testsuite_submit`_ command.
 
-`<testsuite>`
-  testsuite-run command
+Options:
+~~~~~~~~
+
+.. option:: testsuite
+
+  Command to execute.
+
 
 testsuite_submit
 ++++++++++++++++
 
 ::
 
-    testsuite_submit <hostname>[,...],<testsuite>
+    testsuite_submit [-t HOST] testsuite
 
 Submits the ctcs2 testsuite results to http://qadb.suse.de.
-The comment field is populated with some attributes like SWAMPID or
+The comment field is populated with some attributes like RRID or
 testsuite name, but can also be edited before the results get submitted.
 Submitting results to qadb requires the rd-qa NIS password.
 
-`<testsuite>`
-  testsuite-run command
+Options:
+~~~~~~~~
+
+.. option:: testsuite
+
+  Command executed by `testsuite-run`_.
+
 
 testsuite_list
 ++++++++++++++
 
 ::
 
-    testsuite_list <hostname>
+    testsuite_list [-t HOST]
 
-List available testsuites on the target hosts.
+Lists available testsuites on the target hosts.
+
 
 testopia_list
 +++++++++++++
 
 ::
 
-    testopia_list [<package>[,...]]
+    testopia_list [-p [PACKAGE]]
 
-List all Testopia package testcases for the current product.
-If given no packages, display testcases for the current update.
+Lists all Testopia package testcases for the current product.
+If no packages are given, testcases for the current update are displayed.
 
-`<package>`
-  package to display testcases for
+Options:
+~~~~~~~~
+
+.. option:: -p [PACKAGE], --package [PACKAGE]
+
+  Package to display testcases for.
+
 
 testopia_show
 +++++++++++++
 
 ::
 
-    testopia_show <testcase>[,...]
+    testopia_show -t TESTCASE
 
-Show Testopia testcase
+Shows a specified Testopia testcase.
 
-`<testcase>`
-  testcase ID
+Options:
+~~~~~~~~
+
+.. option:: -t TESTCASE, --testcase TESTCASE
+
+  Testcase to show.
+
 
 testopia_create
 +++++++++++++++
 
 ::
 
-    testopia_create <package>,<summary>
+    testopia_create package summary
 
-Create new Testopia package testcase. An editor is spawned to process a
+Creates a new Testopia package testcase. An editor is spawned to process a
 testcase template file.
 
-`<package>`
-  package to create testcase for
-`<summary>`
-  testcase summary
+Options:
+~~~~~~~~
+
+.. option:: package
+
+  Package to create a testcase for.
+
+.. option:: summary
+
+  Summary of the testcase.
+
 
 testopia_edit
 +++++++++++++
 
 ::
 
-    testopia_edit <testcase>
+    testopia_edit testcase_id
 
-Edit already existing Testopia package testcase. An editor is spawned
+Edits an already existing Testopia package testcase. An editor is spawned
 to process a testcase template file.
 
-`<testcase>`
-  testcase ID
+Options:
+~~~~~~~~
+
+.. option:: testcase_id
+
+  Testcase ID of the testcase to edit.
+
 
 Metadata Commands
 *****************
@@ -436,16 +634,24 @@ load_template
 
 ::
 
-    load_template <id>
+    load_template [-c] update_id
 
-Load QA Maintenance template by an update identifier.
-All changes and logs from an already loaded template are lost if not
-saved previously.  Already connected hosts are kept and extended by the
-reference hosts defined in the template file.
+Loads a QA Maintenance template by its RRID identifier. All changes and logs
+from an already loaded template are lost if not saved previously. Already
+connected hosts are kept and extended by the reference hosts defined in the
+template file.
 
-`<id>`
-  either an MD5 hash (SWAMP-using updates), or a SUSE:Maintenance:X:Y
-  slug (IBS/SMASH-using updates)
+Options:
+~~~~~~~~
+
+.. option:: -c, --clean-hosts
+
+  Cleans up old hosts.
+
+.. option:: update_id
+
+  OBS request ID for the update.
+
 
 list_metadata
 +++++++++++++
@@ -454,7 +660,8 @@ list_metadata
 
     list_metadata
 
-Lists patchinfo metadata like patch number, SWAMP ID or packager.
+Lists patchinfo metadata such as patch number, Review Request ID or packager.
+
 
 list_bugs
 +++++++++
@@ -465,12 +672,13 @@ list_bugs
 
 Lists related bugs and corresponding Bugzilla URLs.
 
+
 list_packages
 +++++++++++++
 
 ::
 
-    list_packages [-w | <hostname>]
+    list_packages [-p PACKAGE] [-w] [-t HOST]
 
 Lists current installed package versions from given (or all) targets.
 
@@ -478,20 +686,37 @@ If -w is specified, all required package versions which should be
 installed after the update are listed. If version "None" is shown for
 a package, the package is not installed.
 
+Options:
+~~~~~~~~
+
+.. option:: -p PACKAGE, --package PACKAGE
+
+  Package to list. Can be used multiple times to query more packages at once.
+
+.. option:: -w, --wanted
+
+  Prints versions required after the update.
+
+
 list_versions
 +++++++++++++
 
 ::
 
-    list_versions [<package>[,...]]
+    list_versions [-p PACKAGE] [-t HOST]
 
 Prints the package version history in chronological order.
 The history of every test host is checked and consolidated.
 If no packages are specified, the version history of the
 update packages are shown.
 
-`<package>`
-  package name to show version history for
+Options:
+~~~~~~~~
+
+.. option::  -p PACKAGE, --package PACKAGE
+
+  Package name to show the version history for.
+
 
 list_update_commands
 ++++++++++++++++++++
@@ -503,53 +728,13 @@ list_update_commands
 List all commands which are invoked when applying updates on the target
 hosts.
 
-list_downgrade_commands
-+++++++++++++++++++++++
-
-::
-
-    list_downgrade_commands
-
-List all commands which are invoked when downgrading packages on the target
-hosts.
-
-list_scripts
-++++++++++++
-
-::
-
-    list_scripts
-
-List available scripts from the scripts subdirectory. This scripts are
-run in a pre updated state and in the post updated state. Afterwards the
-corresponding compare scripts are run. The subdirectory
-(pre/post/compare) shows in which state the script is run. For more
-information, see the User Scripts section in Documentation/README.
-
-add_scripts
-+++++++++++
-
-::
-
-        add_scripts <script>[,...]
-
-Add check script from the pre/post testruns.
-
-remove_scripts
-++++++++++++++
-
-::
-
-        remove_scripts <script>[,...]
-
-Remove check script from the pre/post testruns.
 
 list_sessions
 +++++++++++++
 
 ::
 
-    list_sessions <hostname>
+    list_sessions [-t HOST]
 
 Lists current active ssh sessions on target hosts.
 
@@ -562,58 +747,107 @@ set_session_name
 
 ::
 
-    set_session_name [<name>]
+    set_session_name [name]
 
-Set optional mtui session name as part of the prompt string.
+Set optional mtui session name as part of the prompt string. This can help
+finding the correct mtui session if multiple sessions are active.
 
-`<name>`
-  session name
+When no specific name is given, the name is set to the RRID slug
+(SUSE:Maintenance:XXXX:YYYYYY).
+
+Options:
+~~~~~~~~
+
+.. option:: name
+
+  Name of the session.
+
 
 set_log_level
 ++++++++++++++
 
 ::
 
-    set_log_level <loglevel>
+    set_log_level loglevel
 
-Changes the current default MTUI loglevel to `<loglevel>`.
-The "debug" level can be useful for longer running commands as the
-output is shown in realtime.
+Changes the current MTUI log level to ``info``, ``error``, ``warning`` or
+``debug``.
+The ``debug`` level enables debug messages with the output being shown in realtime,
+and thus can be especially useful for longer running commands.
 
-`<loglevel>`
-  `warning`, `info` or `debug`
+.. caution::
+  The ``warning`` level only prints basic error or warning conditions,
+  therefore is not recommended.
+
+Options:
+~~~~~~~~
+
+.. option:: loglevel
+
+  Log level of MTUI: ``warning``, ``info`` or ``debug``
 
 set_location
 ++++++++++++
 
 ::
 
-    set_location <site>
+    set_location site
 
-Change current refhost location to another site.
+Changes current refhost location to another site.
 
-`<site>`
-  location name
+Options:
+~~~~~~~~
+
+.. option:: site
+
+  Location name.
+
+
+config
+++++++
+
+::
+
+    config show
+
+Displays MTUI configuration values.
+
+In future versions of MTUI, the ``config`` command will also allow the user to
+manipulate config values in runtime.
+
+Options:
+~~~~~~~~
+
+.. option:: show
+
+  Shows config values.
+
 
 save
 ++++
 
 ::
 
-    save [<filename>]
+    save [filename]
 
-Save the session log to a XML file. All commands and package versions
-are saved there. When no parameter is given, the XML is saved to
-`$TEMPLATE_DIR/output/log.xml`. If that file already exists and the
-tester doesn't want to overwrite it, a postfix (current timestamp) is
-added to the filename.  The log can be used to fill the required
-sections of the testing template after the testing has finished.
+Saves the session log (all commands and package versions) to an XML file.
+When no parameter is given, the XML is saved to ``$TEMPLATE_DIR/output/log.xml``.
+If that file already exists and the tester doesn't want to overwrite it, a
+postfix (current timestamp) is added to the filename.
 
-`<filename>`
-  save log as file filename
+The log can be used to facilitate filling the required sections of the testing
+template after the testing has finished.
 
-exit, quit
-++++++++++
+Options:
+~~~~~~~~
+
+.. option:: filename
+
+  Name of the file to save log as.
+
+
+exit, quit, EOF
++++++++++++++++
 
 ::
 
@@ -623,35 +857,157 @@ exit, quit
 Disconnects from all hosts and exits the program.
 The tester is asked to save the XML log when exiting MTUI.
 
-`reboot`
-  reboot all target hosts
-`poweroff`
-  shutdown all target hosts
+.. tip:: Ctrl+D works too.
+
+Options:
+~~~~~~~~
+
+.. option:: reboot
+
+  Reboots all target hosts.
+
+.. option:: poweroff
+
+  Shuts down all target hosts.
+
 
 help
 ++++
 
 ::
 
-    help [<command>]
+    help [command]
 
 Prints a short help text for the requested procedure or a list of all
-available function if no parameter is given.
+available commands if no parameter is given.
 
-`<command>`
-  print help text for this MTUI command
+Options:
+~~~~~~~~
+
+.. option:: command
+
+  The MTUI command to print help for.
+
 
 report-bug
 ++++++++++
 
 ::
 
-  report-bug [-p|--print-url]
+  report-bug [-p]
 
-Open mtui bugzilla with fields common for all mtui bugs prefilled
+Opens bugzilla with pre-populated fields relevant for all MTUI bugs.
 
-`-p`, `--print-url`
-  just print url to the stdout
+Options:
+~~~~~~~
+
+.. option:: -p, --print-url
+
+  Just prints the bugzilla url to the stdout, without opening the bug editor.
+
+
+whoami
+++++++
+
+::
+
+    whoami
+
+Displays current user name and session PID.
+
+
+OSC-wrapper Commands
+*********************
+
+assign
+++++++
+
+::
+
+    assign [-h] [-g [GROUP]]
+
+Wrapper around the `osc qam assign`_ command; assigns current update.
+QA groups for assignment can be specified.
+
+.. _osc qam assign: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#assigning-updates
+
+Options:
+~~~~~~~~
+
+.. option:: -g [GROUP], --group [GROUP]
+
+  QA group to assign under.
+
+
+unassign
+++++++++
+
+::
+
+    unassign [-h] [-g [GROUP]]
+
+Wrapper around the `osc qam unassign`_ command; unassigns current update.
+QA groups for unassignment can be specified.
+
+.. _osc qam unassign: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#unassigning-updates
+
+Options:
+~~~~~~~~
+
+.. option:: -g [GROUP], --group [GROUP]
+
+  QA group to unassign under.
+
+
+approve
++++++++
+
+::
+
+    approve [-h] [-g [GROUP]]
+
+Wrapper around the `osc qam approve`_ command; approves current update. It is
+possible to specify more QA groups for approval.
+
+.. _osc qam approve: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#approve
+
+Options:
+~~~~~~~~
+
+.. option:: -g [GROUP], --group [GROUP]
+
+  QA group to approve under.
+
+
+reject
+++++++
+
+::
+
+    reject [-h] [-g [GROUP]] -r REASON [-m ...]
+
+Wrapper around the `osc qam reject`_ command; rejects current update. The ``-r``
+option is required.
+
+.. _osc qam reject: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#reject
+
+Options:
+~~~~~~~~
+
+.. option:: -g [GROUP], --group [GROUP]
+
+  QA group to approve under.
+
+.. option:: -r REASON, --reason REASON
+
+  Reason for rejection: ``admin``, ``retracted``, ``build_problem``,
+  ``not_fixed``, ``regression``, ``false_reject``, ``tracking_issue``.
+
+.. option:: -m MESSAGE, --msg MESSAGE
+
+  Message/comment to use for the rejection. Should be always given as the last
+  part of the command.
+
 
 Other Commands
 **************
@@ -663,109 +1019,66 @@ checkout
 
     checkout
 
-Update template files from the SVN.
+Updates template files from the SVN.
+
 
 commit
 ++++++
 
 ::
 
-    commit [<message>]
+    commit [-m MESSAGE]
 
 Commits the testing template to the SVN. This can be run after the
-testing has finished an the template is in the final state.
+testing has finished and the template is in the final state.
 
-source_extract
-++++++++++++++
+Options:
+~~~~~~~
 
-::
+.. option:: -m MESSAGE, --msg MESSAGE
 
-    source_extract [<filename>]
+  Commit message.
 
-Extracts source RPM to `/tmp`. If no filename is given, the whole
-package content is extracted.
-
-`<filename>`
-  filename to extract
-
-source_diff
-+++++++++++
-
-::
-
-    source_diff <type>
-
-Creates a source diff between the update package and the currently
-installed package. If the diff needs to be against the latest
-released package, make sure to run "prepare" first.
-
-If `<type>` is "source", a package source diff is created.
-This creates usually a diff of the specfile and new patchfiles.
-
-If `<type>` is "build", a build diff is created.
-This creates a diff between the patched build directories and
-is usually architecture dependend.
-
-The `osc`_ command line client needs to be installed first:
-on the MTUI-running host for `source`, on the targets for `build`.
-
-`<type>`
-  `build`, `source`
-
-.. _osc: https://build.suse.de/search?search_text=osc
-
-source_verify
-+++++++++++++
-
-::
-
-    source_verify
-
-Verifies SPECFILE content. Makes sure that every Patch entry is applied.
-
-source_install
-++++++++++++++
-
-::
-
-    source_install <hostname>
-
-Installs current source RPMs to the target hosts.
 
 terms
 +++++
 
 ::
 
-    terms [<termname>]
+    terms [-t HOST] [termname]
 
-Spawn terminal screens to all connected hosts. This command does actually
-just run the available helper scripts. If no termname is given, all
-available terminal scripts are shown.
+Spawns terminal screens to specified hosts (or to all connected hosts, if no
+HOST parameter is given). This command actually just runs the available helper
+scripts. If no termname is given, all available terminal scripts are shown.
+
 Script name should be shell.<termname>.sh
-Currently, helper scripts are available for KDE[34], GNOME and xterm.
+Currently, helper scripts are available for gnome-terminal (``gnome``), konsole
+(``kde``), xterm, tmux, and urxvtc.
 
-`<termname>`
-  terminal emulator to spawn consoles on
+Options:
+~~~~~~~~
+
+.. option:: termname
+
+  Terminal emulator to spawn consoles on.
+
 
 edit
 ++++
 
 ::
 
-    edit file,<filename>
-    edit template
+    edit [filename]
 
-Edit a local file, the testing template, the specfile or a patch.
-The evironment variable EDITOR is processed to find the prefered
-editor. If EDITOR is empty, "vi" is set as default.
+Edits the testing template or a local file. To edit template call ``edit``
+without parameters.
 
-`<filename>`
-  edit filename
-`template`
-  edit template
-`specfile`
-  edit specfile
-`patch`
-  edit patch
+The evironment variable ``EDITOR`` is processed to find the preferred
+editor. If ``EDITOR`` is empty, ``vi`` is set as default.
 
+Options:
+~~~~~~~~
+
+.. option:: filename
+
+  File to edit.
