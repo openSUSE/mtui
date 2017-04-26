@@ -98,8 +98,7 @@ Lists a history of MTUI events on the target hosts, such as installing or
 updating packages. Date, username and event is shown. Events can be
 filtered with the ``EVENT`` parameter.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -e EVENT, --event EVENT
 
@@ -134,8 +133,7 @@ Additionally, the execution mode of each host can be set to ``parallel``
 (default) or ``serial``. All commands which are designed to run in
 parallel (such as the ``run`` command) are influenced by this option.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: state
 
@@ -155,9 +153,7 @@ enabling or disabling the testing repository on the target hosts.
 
 .. caution::
   The hosts are locked with a timestamp, the UID and PID of the session.
-  This influences the update process of concurrent instances.
-
-  Use with care.
+  This influences the update process of concurrent instances. Use with care.
 
 Enabled locks are automatically removed when exiting the session.
 To lock the `run`_ command on other sessions as well, it's necessary to
@@ -176,8 +172,7 @@ timeout limit is hit, the user is asked to wait for the current command
 to return, or to proceed with the next one. The timeout value is set in seconds.
 To disable the timeout, set it to "0".
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: timeout
 
@@ -203,8 +198,8 @@ unlock
 
 Unlocks given targets. Unlocks all if used without arguments.
 
-Options:
-~~~~~~~~
+**Options:**
+
 
 .. option:: -f, --force
 
@@ -220,8 +215,7 @@ EOF
 
 Reboots or shuts down the refhosts.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: reboot
 
@@ -245,8 +239,7 @@ install
 Installs packages from the current active repository.
 The repository should be set with the `set_repo`_ command beforehand.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: package
 
@@ -262,8 +255,7 @@ uninstall
 
 Removes packages from the system.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: package
 
@@ -282,8 +274,7 @@ Installs missing or outdated packages from the regular UPDATE repositories.
 
 This command is also run by the update procedure before applying the updates.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -f, --force
 
@@ -325,8 +316,7 @@ and after the update process.
 If the update adds new packages to the channel, the "newpackage" parameter
 triggers the package installation right after the update.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: --newpackage
 
@@ -355,8 +345,7 @@ testing template.
 
 To export a specific update log, provide the hostname as a parameter.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -f, --force
 
@@ -391,8 +380,7 @@ After the call is returned, the output (including the return code) of each host
 is shown on the console. Please be aware that no interactive commands can be
 run with this procedure.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: command
 
@@ -411,8 +399,7 @@ Runs a command in local shell.
 The command runs in the current working directory (where MTUI was started), unless
 chroot to the template dir is enabled.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: command
 
@@ -442,8 +429,7 @@ special patterns according to the rules used by the Unix shell (i.e.
 ``*`` ``?``, ``[]``). The complete filepath on the remote hosts is shown
 after the upload.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: filename
 
@@ -463,8 +449,7 @@ subdirectory with the hostname as file extension.
 If the argument ends with a slash '/', it will be treated
 as a folder and all its contents will be downloaded.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: filename
 
@@ -480,8 +465,7 @@ set_repo
 Adds or removes issue repository to/from hosts. It uses ``repose issue-add`` and
 ``repose issue-rm`` command.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -A, --add
 
@@ -513,8 +497,7 @@ testsuite_run
 Runs a ctcs2 testsuite and saves logs to ``/var/log/qa/RRID`` on the target
 hosts. Results can be submitted with the `testsuite_submit`_ command.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: testsuite
 
@@ -533,12 +516,11 @@ The comment field is populated with some attributes like RRID or
 testsuite name, but can also be edited before the results get submitted.
 Submitting results to qadb requires the rd-qa NIS password.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: testsuite
 
-  Command executed by `testsuite-run`_.
+  Command executed by `testsuite_run`_.
 
 
 testsuite_list
@@ -561,8 +543,7 @@ testopia_list
 Lists all Testopia package testcases for the current product.
 If no packages are given, testcases for the current update are displayed.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -p [PACKAGE], --package [PACKAGE]
 
@@ -578,8 +559,7 @@ testopia_show
 
 Shows a specified Testopia testcase.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -t TESTCASE, --testcase TESTCASE
 
@@ -596,8 +576,7 @@ testopia_create
 Creates a new Testopia package testcase. An editor is spawned to process a
 testcase template file.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: package
 
@@ -618,8 +597,7 @@ testopia_edit
 Edits an already existing Testopia package testcase. An editor is spawned
 to process a testcase template file.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: testcase_id
 
@@ -641,8 +619,7 @@ from an already loaded template are lost if not saved previously. Already
 connected hosts are kept and extended by the reference hosts defined in the
 template file.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -c, --clean-hosts
 
@@ -686,8 +663,7 @@ If -w is specified, all required package versions which should be
 installed after the update are listed. If version "None" is shown for
 a package, the package is not installed.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -p PACKAGE, --package PACKAGE
 
@@ -710,8 +686,7 @@ The history of every test host is checked and consolidated.
 If no packages are specified, the version history of the
 update packages are shown.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option::  -p PACKAGE, --package PACKAGE
 
@@ -755,8 +730,7 @@ finding the correct mtui session if multiple sessions are active.
 When no specific name is given, the name is set to the RRID slug
 (SUSE:Maintenance:XXXX:YYYYYY).
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: name
 
@@ -779,8 +753,7 @@ and thus can be especially useful for longer running commands.
   The ``warning`` level only prints basic error or warning conditions,
   therefore is not recommended.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: loglevel
 
@@ -795,8 +768,7 @@ set_location
 
 Changes current refhost location to another site.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: site
 
@@ -815,8 +787,7 @@ Displays MTUI configuration values.
 In future versions of MTUI, the ``config`` command will also allow the user to
 manipulate config values in runtime.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: show
 
@@ -838,8 +809,7 @@ postfix (current timestamp) is added to the filename.
 The log can be used to facilitate filling the required sections of the testing
 template after the testing has finished.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: filename
 
@@ -859,8 +829,7 @@ The tester is asked to save the XML log when exiting MTUI.
 
 .. tip:: Ctrl+D works too.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: reboot
 
@@ -881,8 +850,7 @@ help
 Prints a short help text for the requested procedure or a list of all
 available commands if no parameter is given.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: command
 
@@ -898,8 +866,7 @@ report-bug
 
 Opens bugzilla with pre-populated fields relevant for all MTUI bugs.
 
-Options:
-~~~~~~~
+**Options:**
 
 .. option:: -p, --print-url
 
@@ -931,8 +898,7 @@ QA groups for assignment can be specified.
 
 .. _osc qam assign: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#assigning-updates
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -g [GROUP], --group [GROUP]
 
@@ -951,8 +917,7 @@ QA groups for unassignment can be specified.
 
 .. _osc qam unassign: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#unassigning-updates
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -g [GROUP], --group [GROUP]
 
@@ -971,8 +936,7 @@ possible to specify more QA groups for approval.
 
 .. _osc qam approve: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#approve
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -g [GROUP], --group [GROUP]
 
@@ -991,8 +955,7 @@ option is required.
 
 .. _osc qam reject: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#reject
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: -g [GROUP], --group [GROUP]
 
@@ -1032,8 +995,7 @@ commit
 Commits the testing template to the SVN. This can be run after the
 testing has finished and the template is in the final state.
 
-Options:
-~~~~~~~
+**Options:**
 
 .. option:: -m MESSAGE, --msg MESSAGE
 
@@ -1055,8 +1017,7 @@ Script name should be shell.<termname>.sh
 Currently, helper scripts are available for gnome-terminal (``gnome``), konsole
 (``kde``), xterm, tmux, and urxvtc.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: termname
 
@@ -1076,8 +1037,7 @@ without parameters.
 The evironment variable ``EDITOR`` is processed to find the preferred
 editor. If ``EDITOR`` is empty, ``vi`` is set as default.
 
-Options:
-~~~~~~~~
+**Options:**
 
 .. option:: filename
 
