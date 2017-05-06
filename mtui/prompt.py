@@ -96,7 +96,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.testopia = None
 
-        readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;:",<>? ')
+        readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;",<>? ')
 
         self._read_history()
 
