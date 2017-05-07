@@ -92,17 +92,6 @@ class CommandPromptDisplay(object):
                 green('not locked')
             ))
 
-    def list_patches(self, allpatches):
-        for specfile, patches in allpatches:
-            self.println()
-            self.println('Patches in {}:'.format(specfile))
-
-            for pn, fn, applied in patches:
-                self.println('{0:45}: {1}'.format(
-                    fn,
-                    green('applied') if applied else red('not applied'),
-                ))
-
     def list_sessions(self, hostname, system, stdout):
         self.println('sessions on {} ({}):'.format(hostname, system))
         self.println(stdout)
