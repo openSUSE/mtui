@@ -14,11 +14,10 @@ from mtui.target.actions import spinner
 
 class Downgrade(object):
 
-    def __init__(self, logger, targets, packages, patches, testreport):
+    def __init__(self, logger, targets, packages, testreport):
         self.log = logger
         self.targets = targets
         self.packages = packages
-        self.patches = patches
         self.testreport = testreport
 
         self.commands = {}
