@@ -20,10 +20,9 @@ from mtui.utils import yellow
 
 class Update(object):
 
-    def __init__(self, logger, targets, patches, packages, testreport):
+    def __init__(self, logger, targets, packages, testreport):
         self.log = logger
         self.targets = targets
-        self.patches = patches
         self.packages = packages
         self.testreport = testreport
         self.commands = []
