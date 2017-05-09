@@ -2,7 +2,7 @@ from distutils.version import StrictVersion
 
 __all__ = ['main', 'log', 'export']
 
-__version__ = '8.0.1'
+__version__ = '8.0.2'
 # PEP396
 
 strict_version = StrictVersion(__version__)
