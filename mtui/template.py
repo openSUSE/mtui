@@ -139,7 +139,6 @@ class TestReport(object, metaclass=ABCMeta):
         :param path: path to the testreport file if loaded, otherwise None
         """
 
-        self.patches = {}
         self.packages = {}
         self.systems = {}
         """
@@ -274,7 +273,6 @@ class TestReport(object, metaclass=ABCMeta):
         display('\n'.join(updater(
             self.log,
             targets,
-            self.patches,
             self.get_package_list(),
             self).commands
         ))
@@ -308,7 +306,6 @@ class TestReport(object, metaclass=ABCMeta):
         updater(
             self.log,
             targets,
-            self.patches,
             self.get_package_list(),
             self).run(params)
 
@@ -316,12 +313,11 @@ class TestReport(object, metaclass=ABCMeta):
         targets.add_history(
             ['downgrade', str(self.id), ' '.join(self.get_package_list())])
 
-        tool = self.get_downgrader()
-        tool(
+        downgrader = self.get_downgrader()
+        downgrader(
             self.log,
             targets,
             self.get_package_list(),
-            self.patches,
             self).run()
 
     def perform_install(self, targets, packages):
@@ -463,10 +459,7 @@ class TestReport(object, metaclass=ABCMeta):
             ('Bugs', ', '.join(sorted(self.bugs.keys()))),
             ('Packages', ' '.join(sorted(self.get_package_list()))),
             ('Testreport', self._testreport_url()),
-            ('Repository', self.repository),
-        ] + [(x.upper(), y) for x, y in list(self.patches.items())
-             ] + [('Testplatform', x) for x in self.testplatforms
-                  ]
+            ('Repository', self.repository), ] + [('Testplatform', x) for x in self.testplatforms]
 
     def show_yourself(self, writer):
         self._aligned_write(writer, self._show_yourself_data())
@@ -695,4 +688,5 @@ class OBSTestReport(TestReport):
         elif operation == 'remove':
             target.run_repose('issue-rm', str(self.rrid))
         else:
-            raise ValueError("Not supported repose operation {}".format(operation))
+            raise ValueError(
+                "Not supported repose operation {}".format(operation))
