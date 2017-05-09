@@ -4,7 +4,7 @@ from traceback import format_exc
 
 from mtui.commands import Command
 from mtui.utils import requires_update, complete_choices
-
+from mtui.messages import NoRefhostsDefinedError
 
 class Prepare(Command):
     """
@@ -40,6 +40,9 @@ class Prepare(Command):
     def run(self):
 
         targets = self.parse_hosts()
+        if not targets:
+            raise NoRefhostsDefinedError
+
         params = []
         params.append(self.args.force)
         params.append(self.args.installed)

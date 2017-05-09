@@ -38,6 +38,15 @@ class DeprecationMessage(UserMessage):
     pass
 
 
+class NoRefhostsDefinedError(UserError, ValueError):
+    
+    """
+    Thrown when user requests an operation without defined refhosts
+    """
+
+    def __init__(self):
+        self.message = "No refhosts defined";
+
 class HostIsNotConnectedError(UserError, ValueError):
 
     """
