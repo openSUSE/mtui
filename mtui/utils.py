@@ -5,7 +5,6 @@
 
 
 import os
-import os.path as opa
 import time
 import fcntl
 import struct
@@ -14,7 +13,6 @@ import tempfile
 import readline
 import subprocess
 import re
-from errno import EEXIST
 
 from tempfile import mkstemp
 from shutil import move
@@ -153,15 +151,6 @@ def page(text, interactive=True):
             return
 
 
-def mkdir_p(path):
-    try:
-        os.makedirs(path)
-    except EnvironmentError as e:
-        if e.errno == EEXIST and opa.isdir(path):
-            return
-        raise e
-
-
 def ensure_dir_exists(*path, **kwargs):
     """
     :returns: str joined path with dirs created as needed.
@@ -178,7 +167,7 @@ def ensure_dir_exists(*path, **kwargs):
     path = join(*path)
     dirn = dirname(path) if filepath else path
 
-    mkdir_p(dirn)
+    os.makedirs(dirn, exist_ok=True)
 
     if isinstance(on_create, collections.Callable):
         on_create(path=dirn)
