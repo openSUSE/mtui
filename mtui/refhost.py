@@ -93,6 +93,7 @@ class Attributes(object):
             virtual,
             ' '.join(addons)
         ])
+
         # remove the double spaces
         representation = re.sub(r"\s+", " ", representation.strip())
         # make ' ' to be ''. Just to pass the tests :-)
@@ -408,12 +409,11 @@ class Refhosts(object):
         attributes = self.get_host_attributes(hostname)
 
         addons = "_".join([ad['name'] for ad in attributes.addons])
-
         if attributes and "manager-client" in addons:
             system = "{0}{1}".format(
                 attributes.product['name'], attributes.product['version']['major'])
             if 'minor' in attributes.product['version']:
-                system += "{0}".format(attributes.product['version'])
+                system += "{0}".format(attributes.product['version']['minor'])
             system += "-manager-client-{0}".format(attributes.arch)
         elif addons:
 
@@ -436,7 +436,6 @@ class Refhosts(object):
                 system += "{!s}".format(attributes.product['version']['minor'])
 
             system += "-{!s}".format(attributes.arch)
-
         return system
 
 
