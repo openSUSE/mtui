@@ -13,15 +13,12 @@ import socket
 import termios
 import tty
 import getpass
-import warnings
 import logging
 from traceback import format_exc
 
 from mtui.utils import termsize
 
-with warnings.catch_warnings():
-    warnings.filterwarnings('ignore', category=DeprecationWarning)
-    import paramiko
+import paramiko
 
 
 class CommandTimeout(Exception):
