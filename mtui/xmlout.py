@@ -17,9 +17,6 @@ class XMLOutput(object):
         self.update = self.output.documentElement
 
     def add_header(self, metadata):
-        for (type, id) in list(metadata.patches.items()):
-            self.update.setAttribute(type, id)
-
         self.update.setAttribute('packager', metadata.packager)
         self.update.setAttribute('category', metadata.category)
 
