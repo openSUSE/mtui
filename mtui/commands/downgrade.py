@@ -5,7 +5,7 @@ from traceback import format_exc
 from mtui.commands import Command
 from mtui.utils import complete_choices
 from mtui.utils import requires_update
-
+from mtui.messages import NoRefhostsDefinedError
 
 class Downgrade(Command):
     """
@@ -23,6 +23,8 @@ class Downgrade(Command):
     def run(self):
 
         targets = self.parse_hosts()
+        if not targets:
+            raise NoRefhostsDefinedError
 
         self.log.info('Downgrading')
 
