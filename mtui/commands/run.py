@@ -5,7 +5,7 @@ from argparse import REMAINDER
 from mtui.commands import Command
 from mtui.utils import complete_choices, page
 from mtui.target.locks import LockedTargets
-
+from mtui.messages import NoRefhostsDefinedError
 
 class Run(Command):
     """
@@ -31,6 +31,9 @@ class Run(Command):
     def run(self):
 
         targets = self.parse_hosts()
+        if not targets:
+            raise NoRefhostsDefinedError
+
         command = ''
 
         for i in self.args.command:
