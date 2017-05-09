@@ -672,7 +672,7 @@ class Target(object):
         return sink(self.hostname, self.system, self.lastout())
 
     def report_log(self, sink, arg):
-        return sink(self.hostname, self.log, arg)
+        return sink(self.hostname, self.out, arg)
 
     def report_testsuites(self, sink, suitedir):
         return sink(self.hostname, self.system, self.listdir(suitedir))
