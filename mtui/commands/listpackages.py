@@ -63,12 +63,14 @@ class ListPackages(Command):
         if not pkgs:
             raise messages.MissingPackagesError()
 
+
         for target, pvs in hosts.query_versions(pkgs):
             self.println("packages on {0} ({1}):".format(
                 target.hostname,
                 target.system,
             ))
-
+            column_size = [30,20]
+            host_output = []
             for p, v in list(pvs.items()):
                 if self.metadata:
                     try:
@@ -80,12 +82,21 @@ class ListPackages(Command):
                 else:
                     state = "" if v else self.state_map[None]
 
-                self.printPVLN(p, v, state)
+                if (len(p) > column_size[0]):
+                    column_size[0] = len(p)+1
+                if (len(str(v)) > column_size[1]):
+                    column_size[1] = len(str(v))+1
+
+                host_output.append([p,v,state])
+
+            format_output = '{{0:{0}}}: {{1!s:{1}}} {{2}}'.format(column_size[0],column_size[1]);
+            for line in host_output:
+                self.printPVLN(line[0], line[1], line[2], format_output);
 
             self.println()
 
-    def printPVLN(self, package, version, state):
-        self.println('{0:30}: {1!s:20} {2}'.format(package, version, state))
+    def printPVLN(self, package, version, state, format_output='{0:30}: {1!s:20} {2}'):
+        self.println(format_output.format(package, version, state))
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
