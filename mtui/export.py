@@ -295,5 +295,5 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
             t.append(
                 '# {!s}\n{!s}\n'.format(
                     cmd, child.childNodes[0].nodeValue))
-    t.append(system_info(config.distro, config.distro_ver, config.session_user))
+    t.append(system_info(config.distro, config.distro_ver, config.distro_kernel, config.session_user))
     return t

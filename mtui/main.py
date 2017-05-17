@@ -43,7 +43,7 @@ def run_mtui(
     config.merge_args(args)
 
     update = args.review_id
-    config.distro, config.distro_ver = detect_system()
+    config.distro, config.distro_ver, config.distro_kernel = detect_system()
 
     prompt = Prompt(config, log, sys, Display)
     if update:

@@ -22,10 +22,16 @@ def detect_system():
         verid = "None"
         distro = "Unknown"
 
-    return distro, verid
+    try:
+        with open('/proc/version', mode='r', encoding='utf-8') as f:
+            kernel=f.readline().split(' ')[2]
+    except:
+        kernel = "Unknown"
+
+    return distro, verid, kernel
 
 
-def system_info(distro, verid, user):
-    string = "## export MTUI:{}, paramiko {} on {}-{} by {}".format(
-        mtui_version, paramiko_version, distro, verid, user)
+def system_info(distro, verid, kernel, user):
+    string = "## export MTUI:{}, paramiko {} on {}-{} (kernel: {}) by {}".format(
+        mtui_version, paramiko_version, distro, verid, kernel, user)
     return string
