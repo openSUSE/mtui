@@ -46,7 +46,7 @@ def test_config_parse():
     eq_(cfg.testopia_user, 'test_user')
     eq_(cfg.testopia_pass, 'test_password')
 
-    eq_(cfg.refhosts_resolvers, 'https')
+    eq_(cfg.refhosts_resolvers, 'https,path')
     eq_(cfg.refhosts_https_uri, 'https://test_remote/refhosts.yml')
     eq_(cfg.refhosts_path, '/path/to/refhosts/file')
 
