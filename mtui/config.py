@@ -135,7 +135,7 @@ class Config(object):
                 False, normalizer, self.config.getboolean),
 
             # {{{ refhosts
-            ('refhosts_resolvers', ('refhosts', 'resolvers'), 'https'),
+            ('refhosts_resolvers', ('refhosts', 'resolvers'), 'https,path'),
 
             ('refhosts_https_uri', ('refhosts', 'https_uri'),
                 'https://qam.suse.de/metadata/refhosts.yml'),
@@ -143,7 +143,7 @@ class Config(object):
                                            'https_expiration'), 3600*12, int, self.config.getint),
 
             ('refhosts_path', ('refhosts', 'path'),
-                '/usr/share/suse-qam-metadata/refhosts.yml'),
+                '/usr/share/qam-metadata/refhosts.yml'),
             # }}}
 
             ('use_keyring', ('mtui', 'use_keyring'),
