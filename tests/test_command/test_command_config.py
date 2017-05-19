@@ -62,7 +62,7 @@ def test_config_show():
           ("testopia_user", "''"),
           ("testopia_pass", "''"),
           ("chdir_to_template_dir", "False"),
-          ("refhosts_resolvers", "'https'"),
+          ("refhosts_resolvers", "'https,path'"),
           ("refhosts_https_uri", "'https://qam.suse.de/metadata/refhosts.yml'"),
           ("refhosts_https_expiration", "43200"),
           ("refhosts_path", "'foo-refhosts'"),
