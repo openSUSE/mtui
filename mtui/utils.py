@@ -292,6 +292,8 @@ class SUTParse(object):
     def __init__(self, args):
         # TODO add try except blocks
         suts = args.split(",")
+        if len(suts) <= 1:
+            raise UnknownSystemError
         system = '-s {!s}'.format(suts[-1])
         targets = ['-t {!s}'.format(i) for i in suts[0:-1]]
         self.args = system + ' ' + ' '.join(targets)

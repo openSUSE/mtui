@@ -20,12 +20,32 @@ import  unittest
 # TODO: check the args get passed correctly into the application once
 # the main() was refactored enough
 
-@unittest.skip("temporary skipped")
-def test_argparser_sut():
-    # FIXME: parse SUTs as part of the parser
+def test_argparser_sut1():
     p = get_parser(SysFake())
-    a = p.parse_args(["-s", "foo", "--sut", "bar"])
-    eq_(a.sut, ["foo", "bar"])
+    a = p.parse_args(["-s", "foo,bar"])
+    eq_(a.sut[0].print_args(), '-s bar -t foo')
+
+
+def test_argparser_sut2():
+    p = get_parser(SysFake())
+    a = p.parse_args(["--sut", "bar,foo"])
+    eq_(a.sut[0].print_args(),'-s foo -t bar')
+
+def test_argparser_sut_multi():
+    p = get_parser(SysFake())
+    a = p.parse_args(["--sut", "bar,foo,doo"])
+    eq_(a.sut[0].print_args(),'-s doo -t bar -t foo')
+
+def test_argparser_sut_multi_split():
+    p = get_parser(SysFake())
+    a = p.parse_args(["--sut", "bar,doo","-s","foo,doo"])
+    eq_(a.sut[0].print_args(), "-s doo -t bar")
+    eq_(a.sut[1].print_args(), "-s doo -t foo")
+
+@raises(ArgsParseFailure)
+def test_argparser_sut_fail():
+    p = get_parser(SysFake())
+    p.parse_args(["--sut", "doo"])
 
 def helper_parse_reviewid(rrid):
     return get_parser(SysFake()).parse_args(
@@ -67,18 +87,6 @@ def test_parse_rrid_w2():
     Test parse failure: md5 sum instead
     """
     helper_parse_reviewid("a93bcc098674a50ea93791fc528bdd9f")
-
-@raises(ArgsParseFailure)
-def test_argparser_md5_and_reviewid_exclusive():
-    """
-    Test mutual exclusivity of --md5 and --review-id is enforced
-    """
-    get_parser(SysFake()).parse_args(
-        [ "-m"
-        , "a93bcc098674a50ea93791fc528bdd9f"
-        , "-r"
-        , "SUSE:Maintenance:1:1"
-        ])
 
 class PromptFake(object):
     def __init__(self, *args, **kw):
