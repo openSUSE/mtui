@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from argparse import REMAINDER
+from shlex import quote
 from subprocess import check_call
 from traceback import format_exc
 
@@ -193,7 +194,7 @@ class OSCReject(Command):
         self.log.debug(cmd)
 
         try:
-            check_call(cmd.split())
+            check_call(quote(cmd), shell=True)
         except Exception as e:
             self.log.error('Reject failed: {!s}'.format(e))
             self.log.debug(format_exc())
