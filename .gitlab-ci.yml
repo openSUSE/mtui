@@ -4,7 +4,7 @@ test:
   script:
     - cd $CI_PROJECT_DIR
     - zypper ar -f http://download.suse.de/ibs/QA:/Maintenance/SLE_12_SP1/ QA:Maintenance
-    - zypper -n install --no-confirm python3-paramiko python3-setuptools python3-xdg repose python3-rpm python3-nose python3-ruamel.yaml sudo
+    - zypper -n install --no-confirm python3-paramiko python3-setuptools python3-pyxdg repose python3-rpm python3-nose python3-ruamel.yaml sudo
     - sudo -u nobody touch /var/lib/nobody/.mtui_history
     - sudo -u nobody make check
   tags:
