@@ -52,6 +52,7 @@ def test_config_show():
           ("template_dir", "'foo-template'"),
           ("local_tempdir", "'/tmp/mtui-unittests'"),
           ("session_user", "'foo-user'"),
+          ("install_logs", "'install_logs'"),
           ("connection_timeout", "300"),
           ("svn_path", "'svn+ssh://svn@qam.suse.de/testreports'"),
           ("bugzilla_url", "'https://bugzilla.suse.com'"),

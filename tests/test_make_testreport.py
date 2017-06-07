@@ -110,7 +110,7 @@ def test_UID_mtr_with_checkout():
     eq_(l, tr.init_args[1])
     eq_(tr.read_calls, 2)
     eq_(co.calls, 1)
-    eq_(co.args, [(c, l, '%s/%s' % (c.svn_path, '82407e2d7113cfde72f65d81e4ffee61'))])
+    eq_(co.args, [(c, l, '{!s}'.format(c.svn_path),'{!s}'.format('82407e2d7113cfde72f65d81e4ffee61'))])
   finally:
     shutil.rmtree(d)
 
@@ -172,7 +172,7 @@ def test_UID_mtr_failing_after_checkout():
   except _TemplateIOError as e:
     eq_(e.errno, errno.ENOENT)
     eq_(co.calls, 1)
-    eq_(co.args[0], (c, l, 'svnpath/82407e2d7113cfde72f65d81e4ffee61'))
+    eq_(co.args[0], (c, l, 'svnpath', '82407e2d7113cfde72f65d81e4ffee61'))
     eq_(tr.init_calls, 1)
     eq_(tr.init_args, [(c, l)])
     eq_(tr.read_calls, 2)
