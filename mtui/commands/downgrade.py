@@ -38,7 +38,20 @@ class Downgrade(Command):
             self.log.debug(format_exc())
             return
 
-        self.log.info('done')
+        message = 'done'
+        for target in targets.values():
+            if message == 'done':
+                for package in target.packages.values():
+                    if package.before == package.after:
+                        message = 'downgrade not completed'
+                        break
+            else:
+                break
+
+        if message == 'done':
+            self.log.info(message)
+        else:
+            self.log.warn(message)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
