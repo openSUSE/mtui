@@ -38,10 +38,15 @@ class Commit(Command):
             msg = ["-m"] + ['"' + " ".join([x for x in self.args.msg[0]]) + '"']
 
         try:
+            subprocess.check_call(
+                'svn add --force {!s}'.format(self.config.install_logs).split(),
+                cwd=checkout)
             subprocess.check_call('svn up'.split(), cwd=checkout)
             subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
 
-            self.log.info("Testreport in: {}".format(self.metadata._testreport_url()))
+            self.log.info(
+                "Testreport in: {}".format(
+                    self.metadata._testreport_url()))
 
         except Exception:
             self.log.error('committing template.failed')

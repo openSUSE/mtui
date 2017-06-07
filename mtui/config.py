@@ -51,7 +51,8 @@ class Config(object):
         self._list_terms()
 
     def read(self):
-        self.config = configparser.ConfigParser(inline_comment_prefixes=('#', ';'))
+        self.config = configparser.ConfigParser(
+            inline_comment_prefixes=('#', ';'))
         try:
             self.config.read(self.configfiles)
         except configparser.Error as e:
@@ -104,6 +105,8 @@ class Config(object):
 
             ('session_user', ('mtui', 'user'),
              getpass.getuser),
+
+            ('install_logs', ('mtui', 'install_logs'), 'install_logs'),
 
             # connection.timeout appears to be in units of seconds as
             # indicated by

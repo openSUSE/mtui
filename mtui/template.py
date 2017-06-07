@@ -41,14 +41,14 @@ class _TemplateIOError(IOError):
     pass
 
 
-def testreport_svn_checkout(config, log, uri):
+def testreport_svn_checkout(config, log, path, id):
     ensure_dir_exists(
         config.template_dir,
         on_create=lambda path: log.debug(
             'created config.template_dir directory {0}'.format(path)))
 
+    uri = join(path, id)
     with chdir(config.template_dir):
-        # FIXME: use python module to perform svn checkout
         try:
             subprocess.check_call(['svn', 'co', uri])
         except KeyboardInterrupt:
@@ -78,8 +78,8 @@ class UpdateID(object):
             self._vcs_checkout(
                 config,
                 logger,
-                join(config.svn_path, str(self.id))
-            )
+                config.svn_path,
+                str(self.id))
 
             tr.read(trpath)
 
@@ -198,6 +198,7 @@ class TestReport(object, metaclass=ABCMeta):
             os.chdir(dirname(path))
 
         self.copy_scripts()
+        self.create_installogs_dir()
 
         for tp in self.testplatforms:
             self._refhosts_from_tp(tp)
@@ -367,6 +368,22 @@ class TestReport(object, metaclass=ABCMeta):
                 self.log.debug(format_exc())
             else:
                 raise
+
+    def  create_installogs_dir(self):
+        if not self.path:
+            raise RuntimeError("Called while missing path")
+
+        self._create_installogs_dir()
+
+
+    def _create_installogs_dir(self):
+        os.makedirs(
+            join(
+                self.config.template_dir,
+                str(self.id),
+                self.config.install_logs),
+         exist_ok=True)
+
 
     @staticmethod
     def _ensure_executable(pattern):
@@ -608,14 +625,22 @@ class TestReport(object, metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
-    def generate_templatefile(self, hostname):
+    def generate_templatefile(self, xmllog):
         from mtui.export import xml_to_template
         return xml_to_template(
             self.log,
             self.path,
-            self.generate_xmllog(),
+            xmllog,
+            self.config
+        )
+
+    def generate_install_logs(self, xmllog, host):
+        from mtui.export import xml_installog_to_template
+        return xml_installog_to_template(
+            self.log,
+            xmllog,
             self.config,
-            hostname)
+            host)
 
     def generate_xmllog(self):
         from mtui.xmlout import XMLOutput
