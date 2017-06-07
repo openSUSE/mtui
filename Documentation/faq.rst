@@ -589,3 +589,68 @@ Submit the testsuite results to QADB::
   info: Submiting results of test_bzip2-run from moe.qam.suse.cz
   info: submission for moe.qam.suse.cz (sles12_module-x86_64): http://qadb2.suse.de/qadb/submission.php?submission_id=494079
   info: done
+
+
+Where are stored installation logs from refhosts?
+=================================================
+
+Now are stored in template dir / RRID / install_logs
+
+Example::
+
+  tester@khorne ~/qam/SUSE:Maintenance:4769:132999  $ tree
+  .
+  ├── install_logs
+  │   ├── dsdd
+  │   ├── hayley.qam.suse.cz.log
+  │   ├── s390ctc045.suse.de.log
+  │   └── steve.qam.suse.cz.log
+  ├── log
+  ├── output
+  │   └── scripts
+  │       ├── post.check_from_same_srcrpm.hayley.qam.suse.cz
+  │       ├── post.check_from_same_srcrpm.s390ctc045.suse.de
+  │       ├── post.check_from_same_srcrpm.steve.qam.suse.cz
+  │       ├── post.check_initrd_state.hayley.qam.suse.cz
+  │       ├── post.check_initrd_state.s390ctc045.suse.de
+  │       ├── post.check_initrd_state.steve.qam.suse.cz
+  │       ├── post.check_new_dependencies.hayley.qam.suse.cz
+  │       ├── post.check_new_dependencies.s390ctc045.suse.de
+  │       ├── post.check_new_dependencies.steve.qam.suse.cz
+  │       ├── post.check_vendor_and_disturl.hayley.qam.suse.cz
+  │       ├── post.check_vendor_and_disturl.s390ctc045.suse.de
+  │       ├── post.check_vendor_and_disturl.steve.qam.suse.cz
+  │       ├── pre.check_from_same_srcrpm.hayley.qam.suse.cz
+  │       ├── pre.check_from_same_srcrpm.s390ctc045.suse.de
+  │       ├── pre.check_from_same_srcrpm.steve.qam.suse.cz
+  │       ├── pre.check_initrd_state.hayley.qam.suse.cz
+  │       ├── pre.check_initrd_state.s390ctc045.suse.de
+  │       ├── pre.check_initrd_state.steve.qam.suse.cz
+  │       ├── pre.check_new_dependencies.hayley.qam.suse.cz
+  │       ├── pre.check_new_dependencies.s390ctc045.suse.de
+  │       ├── pre.check_new_dependencies.steve.qam.suse.cz
+  │       ├── pre.check_vendor_and_disturl.hayley.qam.suse.cz
+  │       ├── pre.check_vendor_and_disturl.s390ctc045.suse.de
+  │       └── pre.check_vendor_and_disturl.steve.qam.suse.cz
+  ├── packages-list.txt
+  ├── packages.xml
+  ├── patchinfo.xml
+  ├── project.xml
+  ├── repositories.xml
+  ├── scripts
+  │   ├── compare
+  │   │   ├── compare_from_same_srcrpm.sh
+  │   │   ├── compare_initrd_state.sh
+  │   │   ├── compare_new_dependencies.sh
+  │   │   └── compare_vendor_and_disturl.sh
+  │   ├── post
+  │   │   ├── check_from_same_srcrpm.pl
+  │   │   ├── check_initrd_state.sh
+  │   │   ├── check_new_dependencies.sh
+  │   │   └── check_vendor_and_disturl.pl
+  │   └── pre
+  │       ├── check_from_same_srcrpm.pl
+  │       ├── check_initrd_state.sh
+  │       ├── check_new_dependencies.sh
+  │       └── check_vendor_and_disturl.pl
+  └── source.diff
