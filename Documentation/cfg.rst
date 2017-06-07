@@ -160,6 +160,16 @@ Used e.g. in lock files.
 
 .. __: https://docs.python.org/2/library/getpass.html#getpass.getuser
 
+``mtui.install_logs``
+~~~~~~~~~~~~~~~~~~~~~
+
+ | **type**
+ |     string
+ | **default**
+ |     install_logs
+
+Name of directory for storing install logs
+Please don't change it
 
 ``refhosts.https_expiration``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

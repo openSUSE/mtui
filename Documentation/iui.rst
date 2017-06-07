@@ -336,24 +336,20 @@ export
 
 ::
 
-    export [-f] [-n HOSTNAME] [filename]
+    export [-f] [-t HOST] [filename]
 
 Exports the gathered update data to template file. This includes the
 pre/post package versions and the update log. An output file can be
 specified; if none is specified, the output is written to the current
 testing template.
 
-To export a specific update log, provide the hostname as a parameter.
+Refhost zypper installation logs are exported to subdir per refhost.
 
 **Options:**
 
 .. option:: -f, --force
 
   Force-overwrites the existing template.
-
-.. option:: -n HOSTNAME, --hostname HOSTNAME
-
-  Exports the update log for the specified host.
 
 .. option:: filename
 

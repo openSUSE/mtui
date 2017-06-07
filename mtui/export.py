@@ -11,7 +11,43 @@ from mtui.rpmver import RPMVersion
 from mtui.systemcheck import system_info
 
 
-def xml_to_template(logger, template, xmldata, config, updatehost=None):
+def _read_xmldata(logger, xmldata):
+    try:
+        if os.path.isfile(xmldata):
+            x = xml.dom.minidom.parse(xmldata)
+        else:
+            x = xml.dom.minidom.parseString(xmldata.encode('utf-8'))
+    except Exception as error:
+        logger.error('failed to parse XML data: {!s}'.format(error))
+        raise AttributeError('XML')
+
+    return x
+
+
+def xml_installog_to_template(logger, xmldata, config, target):
+    x = _read_xmldata(logger, xmldata)
+    t = []
+    for host in x.getElementsByTagName('host'):
+        if host.getAttribute('hostname') == target:
+            template_log = host.getElementsByTagName('log')[0]
+
+    # add hostname to indicate from which host the log was exported
+    updatehost = template_log.parentNode.getAttribute('hostname')
+
+    t.append("log from {!s}\n".format(updatehost))
+
+    for child in template_log.childNodes:
+        if not hasattr(child, 'getAttribute'):
+            continue
+        cmd = child.getAttribute('name')
+        if not cmd.startswith('zypper '):
+            continue
+        t.append(
+            '# {!s}\n{!s}\n'.format(cmd, child.childNodes[0].nodeValue))
+    return t
+
+
+def xml_to_template(logger, template, xmldata, config):
     """ export mtui xml data to an existing maintenance template
 
     simple method to export package versions and
@@ -20,23 +56,12 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
     Keyword arguments:
     template  -- maintenance template path (needs to exist)
     xmldata   -- mtui xml log
-    updatehost-- forced hostname for the update log
-
     """
-
-    log = logger
 
     with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
         t = f.readlines()
 
-    try:
-        if os.path.isfile(xmldata):
-            x = xml.dom.minidom.parse(xmldata)
-        else:
-            x = xml.dom.minidom.parseString(xmldata.encode('utf-8'))
-    except Exception as error:
-        log.error('failed to parse XML data: {!s}'.format(error))
-        raise AttributeError('XML')
+    x = _read_xmldata(logger, xmldata)
 
     # since the maintenance template is more of a human readable file then
     # a pretty parsable log, we need to build on specific strings to know
@@ -60,7 +85,7 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
             i = t.index(line)
         except ValueError:
             # system line not found
-            log.debug(
+            logger.debug(
                 'host section %s not found, searching system'.format(hostname))
             # systemname/reference host string in the maintenance template
             # in case the hostname is not yet set
@@ -73,7 +98,7 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
             except ValueError:
                 # system line still not found (not with already set hostname, nor
                 # with not yet set hostname). create new one
-                log.debug(
+                logger.debug(
                     'system section {!s} not found, creating new one'.format(
                         systemtype))
                 # starting point, just above the hosts section
@@ -90,7 +115,7 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
                     except ValueError:
                         # no hostsection found and no starting point for insertion,
                         # bail out and try the next host
-                        log.error('update results section not found')
+                        logger.error('update results section not found')
                         break
 
                 # insert new package version log at position i.
@@ -143,7 +168,7 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
         except ValueError:
             # host section not found (this should really not happen)
             # proceed with the next one.
-            log.warning('host section {!s} not found'.format(hostname))
+            logger.warning('host section {!s} not found'.format(hostname))
             continue
         for state in ['before', 'after']:
             versions[state] = {}
@@ -153,7 +178,8 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
                 try:
                     i = t.index('{!s}:\n'.format(state), i) + 1
                 except ValueError:
-                    log.error('{!s} packages section not found'.format(state))
+                    logger.error(
+                        '{!s} packages section not found'.format(state))
                     continue
 
             for package in host.getElementsByTagName(state):
@@ -193,7 +219,7 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
             i = t.index('scripts:\n', i-1) + 1
         except ValueError:
             # if no scripts section is found, add a new one
-            log.debug('scripts section not found, adding one')
+            logger.debug('scripts section not found, adding one')
             t.insert(i, '      scripts:\n')
             i += 1
 
@@ -213,7 +239,7 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
             except Exception:
                 failed = 1
         if failed == 1:
-            log.warning(
+            logger.warning(
                 'installation test result on {!s} set to FAILED as some packages were not updated. please override manually.'.format(hostname))
 
         for child in template_log.childNodes:
@@ -267,33 +293,15 @@ def xml_to_template(logger, template, xmldata, config, updatehost=None):
         # search starting point for update logs
         i = t.index('put here the output of the following commands:\n', 0) + 1
     except ValueError:
-        log.error('install log section not found in template. skipping.')
+        loggger.error('install log section not found in template. skipping.')
     else:
-        # if an updatehost was set, search for the update log of that specific host.
-        # if none was set, the first found update log is exported to the
-        # template.
-        if updatehost is not None:
-            for host in x.getElementsByTagName('host'):
-                if host.getAttribute('hostname') == updatehost:
-                    template_log = host.getElementsByTagName('log')[0]
-        else:
-            template_log = x.getElementsByTagName('log')[0]
+        t.append("zypper logs are exported to ./install_logs directory\n")
 
-        # add hostname to indicate from which host the log was exported
-        updatehost = template_log.parentNode.getAttribute('hostname')
+    t.append(
+        system_info(
+            config.distro,
+            config.distro_ver,
+            config.distro_kernel,
+         config.session_user))
 
-        t = t[0:i]
-
-        t.append("log from {!s}\n".format(updatehost))
-
-        for child in template_log.childNodes:
-            if not hasattr(child, 'getAttribute'):
-                continue
-            cmd = child.getAttribute('name')
-            if not cmd.startswith('zypper '):
-                continue
-            t.append(
-                '# {!s}\n{!s}\n'.format(
-                    cmd, child.childNodes[0].nodeValue))
-    t.append(system_info(config.distro, config.distro_ver, config.distro_kernel, config.session_user))
     return t
