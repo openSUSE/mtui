@@ -304,21 +304,20 @@ class Connection(object):
                 if session.recv_ready():
                     buffer = session.recv(1024)
                     stdout += buffer
-
-                    for line in buffer.decode('utf-8').split('\n'):
+                    for line in buffer.decode('utf-8', 'ignore').split('\n'):
                         if line:
                             self.log.debug(line)
 
                 if session.recv_stderr_ready():
                     buffer = session.recv_stderr(1024)
                     stderr += buffer
-
-                    for line in buffer.decode('utf-8').split('\n'):
+                    for line in buffer.decode('utf-8', 'ignore').split('\n'):
                         if line:
                             self.log.debug(line)
 
                 if not buffer:
                     break
+
             except socket.timeout:
                 select.select([], [], [], 1)
 
