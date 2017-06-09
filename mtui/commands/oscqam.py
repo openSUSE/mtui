@@ -190,11 +190,11 @@ class OSCReject(Command):
             message = '-M '
             message += ' '.join(self.args.msg)
 
-        cmd += group + ' ' + reason + ' ' + reviewid + ' ' + message
+        cmd += group + ' ' + reason + ' ' + reviewid + ' ' + quote(message)
         self.log.debug(cmd)
 
         try:
-            check_call(quote(cmd), shell=True)
+            check_call(cmd, shell=True)
         except Exception as e:
             self.log.error('Reject failed: {!s}'.format(e))
             self.log.debug(format_exc())
