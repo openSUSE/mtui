@@ -29,7 +29,7 @@ from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
 from mtui.utils import nottest
-
+from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
 
 class _TemplateIOError(IOError):
 
@@ -432,17 +432,20 @@ class TestReport(object, metaclass=ABCMeta):
                 self.targets[hostname].hostname
             ))
             return
+        try:
+            self.targets[hostname] = Target(
+                self.config,
+                hostname,
+                system,
+                self.get_package_list(),
+                logger=self.log,
+            )
 
-        self.targets[hostname] = Target(
-            self.config,
-            hostname,
-            system,
-            self.get_package_list(),
-            logger=self.log,
-        )
-
-        if self:
-            self.systems[hostname] = system
+            if self:
+                self.systems[hostname] = system
+        except (SSHException, NoValidConnectionsError, ChannelException):
+            self.log.warning('failed to add host {0} to target list'.format(hostname));
+            self.log.debug(format_exc())
 
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config, self.log)
