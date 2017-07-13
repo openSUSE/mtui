@@ -100,7 +100,7 @@ class Export(Command):
     @requires_update
     def run(self):
         targets = self.parse_hosts().keys()
-        xmllog = self.metadata.generate_xmllog()
+        xmllog = self.metadata.generate_xmllog(self.targets.select(targets).values())
 
         self._template_fill(xmllog)
         self._installlogs_fill(xmllog, targets)

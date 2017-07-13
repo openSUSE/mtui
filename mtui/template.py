@@ -645,7 +645,7 @@ class TestReport(object, metaclass=ABCMeta):
             self.config,
             host)
 
-    def generate_xmllog(self):
+    def generate_xmllog(self, targetHosts=None):
         from mtui.xmlout import XMLOutput
 
         output = XMLOutput()
@@ -653,10 +653,15 @@ class TestReport(object, metaclass=ABCMeta):
         if self:
             output.add_header(self)
 
-        for t in list(self.targets.values()):
+        targets = list(self.targets.values())
+        if targetHosts is not None:
+            targets = list(targetHosts)
+
+        for t in targets:
             output.add_target(t)
 
         return output.pretty()
+
 
 
 class NullTestReport(TestReport):
