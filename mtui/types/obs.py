@@ -67,13 +67,13 @@ class RequestReviewID(object):
         :param rrid: fully qualified Request Review ID
         """
         parsers = [
-            check_eq("SUSE","openSUSE"), check_eq("Maintenance"), int, int
+            check_eq("SUSE", "openSUSE"), check_eq("Maintenance"), int, int
             ]
 
         # filter empty entries
         xs = [x for x in rrid.split(":") if x]
+        self.project = xs[0]
         TooManyComponentsError.raise_if(xs)
-
         # construct [(parser, input, index), ...]
         xs = zip_longest(parsers, xs, list(range(1, 5)))
 
@@ -83,7 +83,8 @@ class RequestReviewID(object):
         self.maintenance_id, self.review_id = xs[-2:]
 
     def __str__(self):
-        return "SUSE:Maintenance:{0}:{1}".format(
+        return "{}:Maintenance:{}:{}".format(
+            self.project,
             self.maintenance_id,
             self.review_id
         )
