@@ -14,6 +14,7 @@ import readline
 import subprocess
 import re
 
+from functools import wraps
 from contextlib import contextmanager
 from tempfile import mkstemp
 from shutil import move
@@ -224,14 +225,12 @@ class check_eq(object):
 
 
 def requires_update(fn):
+    @wraps(fn)
     def wrap(self, *a, **kw):
         if not self.metadata:
             raise TestReportNotLoadedError()
-
         return fn(self, *a, **kw)
 
-    wrap.__name__ = fn.__name__
-    wrap.__doc__ = fn.__doc__
     return wrap
 
 
