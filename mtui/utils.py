@@ -14,6 +14,7 @@ import readline
 import subprocess
 import re
 
+from contextlib import contextmanager
 from tempfile import mkstemp
 from shutil import move
 from os.path import dirname
@@ -24,10 +25,10 @@ import collections
 try:
     from nose.tools import nottest
 except ImportError:
-    nottest = lambda x: x
+    def nottest(x): return x
 
 
-flatten = lambda xs: [y for ys in xs for y in ys if y is not None]
+def flatten(xs): return [y for ys in xs for y in ys if y is not None]
 
 
 def timestamp():
@@ -51,11 +52,15 @@ def edit_text(text):
 
     return text
 
+
 if os.getenv('COLOR', 'always') == 'always':
-    green = lambda xs: "\033[1;32m{!s}\033[1;m".format(xs)
-    red = lambda xs: "\033[1;31m{!s}\033[1;m".format(xs)
-    yellow = lambda xs: "\033[1;33m{!s}\033[1;m".format(xs)
-    blue = lambda xs: "\033[1;34m{!s}\033[1;m".format(xs)
+    def green(xs): return "\033[1;32m{!s}\033[1;m".format(xs)
+
+    def red(xs): return "\033[1;31m{!s}\033[1;m".format(xs)
+
+    def yellow(xs): return "\033[1;33m{!s}\033[1;m".format(xs)
+
+    def blue(xs): return "\033[1;34m{!s}\033[1;m".format(xs)
 else:
     green = red = yellow = blue = lambda xs: str(xs)
 
@@ -175,19 +180,13 @@ def ensure_dir_exists(*path, **kwargs):
     return path
 
 
-class chdir:
-
+@contextmanager
+def chdir(newpath):
     """Context manager for changing the current working directory"""
-
-    def __init__(self, newPath):
-        self.newPath = newPath
-
-    def __enter__(self):
-        self.savedPath = os.getcwd()
-        os.chdir(self.newPath)
-
-    def __exit__(self, etype, value, traceback):
-        os.chdir(self.savedPath)
+    storedpath = os.getcwd()
+    os.chdir(newpath)
+    yield
+    os.chdir(storedpath)
 
 
 def atomic_write_file(data, path):
@@ -240,6 +239,7 @@ def ass_is(x, class_, maybe_none=False):
     if maybe_none and x is None:
         return
     assert isinstance(x, class_), "got {0!r}".format(x)
+
 
 if __debug__:
     def ass_isL(xs, class_):
