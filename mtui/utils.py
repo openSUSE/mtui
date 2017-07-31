@@ -14,6 +14,8 @@ import readline
 import subprocess
 import re
 
+from functools import wraps
+from contextlib import contextmanager
 from tempfile import mkstemp
 from shutil import move
 from os.path import dirname
@@ -24,10 +26,10 @@ import collections
 try:
     from nose.tools import nottest
 except ImportError:
-    nottest = lambda x: x
+    def nottest(x): return x
 
 
-flatten = lambda xs: [y for ys in xs for y in ys if y is not None]
+def flatten(xs): return [y for ys in xs for y in ys if y is not None]
 
 
 def timestamp():
@@ -51,11 +53,15 @@ def edit_text(text):
 
     return text
 
+
 if os.getenv('COLOR', 'always') == 'always':
-    green = lambda xs: "\033[1;32m{!s}\033[1;m".format(xs)
-    red = lambda xs: "\033[1;31m{!s}\033[1;m".format(xs)
-    yellow = lambda xs: "\033[1;33m{!s}\033[1;m".format(xs)
-    blue = lambda xs: "\033[1;34m{!s}\033[1;m".format(xs)
+    def green(xs): return "\033[1;32m{!s}\033[1;m".format(xs)
+
+    def red(xs): return "\033[1;31m{!s}\033[1;m".format(xs)
+
+    def yellow(xs): return "\033[1;33m{!s}\033[1;m".format(xs)
+
+    def blue(xs): return "\033[1;34m{!s}\033[1;m".format(xs)
 else:
     green = red = yellow = blue = lambda xs: str(xs)
 
@@ -175,19 +181,13 @@ def ensure_dir_exists(*path, **kwargs):
     return path
 
 
-class chdir:
-
+@contextmanager
+def chdir(newpath):
     """Context manager for changing the current working directory"""
-
-    def __init__(self, newPath):
-        self.newPath = newPath
-
-    def __enter__(self):
-        self.savedPath = os.getcwd()
-        os.chdir(self.newPath)
-
-    def __exit__(self, etype, value, traceback):
-        os.chdir(self.savedPath)
+    storedpath = os.getcwd()
+    os.chdir(newpath)
+    yield
+    os.chdir(storedpath)
 
 
 def atomic_write_file(data, path):
@@ -204,17 +204,18 @@ class check_eq(object):
 
     """
     Usage: check_eq(x)(y)
-    :return: None for y if (x == y) is True otherwise raises
+    :return: y for y if (x == y) is True otherwise raises
     :raises: ValueError
     """
 
     def __init__(self, *x):
         self.x = x
 
-    def __call__(self, x):
-        if x not in self.x:
+    def __call__(self, y):
+        if y not in self.x:
             raise ValueError("Expected: {0!r}, got: {1!r}".format(
-                self.x, x))
+                self.x, y))
+        return y
 
     def __repr__(self):
         return "<{0}.{1} {2!r}>".format(
@@ -225,14 +226,12 @@ class check_eq(object):
 
 
 def requires_update(fn):
+    @wraps(fn)
     def wrap(self, *a, **kw):
         if not self.metadata:
             raise TestReportNotLoadedError()
-
         return fn(self, *a, **kw)
 
-    wrap.__name__ = fn.__name__
-    wrap.__doc__ = fn.__doc__
     return wrap
 
 
@@ -240,6 +239,7 @@ def ass_is(x, class_, maybe_none=False):
     if maybe_none and x is None:
         return
     assert isinstance(x, class_), "got {0!r}".format(x)
+
 
 if __debug__:
     def ass_isL(xs, class_):

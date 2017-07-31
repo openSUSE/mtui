@@ -72,7 +72,6 @@ class RequestReviewID(object):
 
         # filter empty entries
         xs = [x for x in rrid.split(":") if x]
-        self.project = xs[0]
         TooManyComponentsError.raise_if(xs)
         # construct [(parser, input, index), ...]
         xs = zip_longest(parsers, xs, list(range(1, 5)))
@@ -80,11 +79,12 @@ class RequestReviewID(object):
         # apply parsers to inputs, getting parsed values or raise
         xs = [_apply_parser(*ys) for ys in xs]
 
-        self.maintenance_id, self.review_id = xs[-2:]
+        self.project, self.kind, self.maintenance_id, self.review_id = xs
 
     def __str__(self):
-        return "{}:Maintenance:{}:{}".format(
+        return "{}:{}:{}:{}".format(
             self.project,
+            self.kind,
             self.maintenance_id,
             self.review_id
         )
