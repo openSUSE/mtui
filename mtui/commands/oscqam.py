@@ -185,12 +185,12 @@ class OSCReject(Command):
 
         reason = '-R ' + self.args.reason
 
-        message = ' '
+        cmd += group + ' ' + reason + ' ' + reviewid + ' '
         if self.args.msg:
-            message = '-M '
+            message = ''
             message += ' '.join(self.args.msg)
+            cmd += '-M '+quote(message)
 
-        cmd += group + ' ' + reason + ' ' + reviewid + ' ' + quote(message)
         self.log.debug(cmd)
 
         try:
