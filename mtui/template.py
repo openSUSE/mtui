@@ -30,6 +30,7 @@ from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
 from mtui.utils import nottest
 from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
+from mtui.target.actions import UpdateError;
 
 class _TemplateIOError(IOError):
 
@@ -304,11 +305,16 @@ class TestReport(object, metaclass=ABCMeta):
 
         updater = self.get_updater()
         self.log.debug("chosen updater: {!r}".format(updater))
-        updater(
-            self.log,
-            targets,
-            self.get_package_list(),
-            self).run(params)
+        try:
+            updater(
+                self.log,
+                targets,
+                self.get_package_list(),
+                self).run(params)
+        except UpdateError as e:
+            self.log.error('Update failed: {!s}'.format(e));
+            self.log.warning('Error while updating. Rolling back changes')
+            self.perform_downgrade(targets)
 
     def perform_downgrade(self, targets):
         targets.add_history(
