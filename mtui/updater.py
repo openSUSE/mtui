@@ -102,7 +102,7 @@ class ZypperPrepare(Prepare):
             self.log.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
-            raise UpdateError(target.hostname, 'RPM Error')
+            raise UpdateError('RPM Error', target.hostname)
 
 
 class RedHatPrepare(Prepare):
