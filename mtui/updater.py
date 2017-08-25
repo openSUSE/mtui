@@ -66,10 +66,32 @@ class RedHatUpdate(Update):
             'yum -y update {!s}'.format(' '.join(self.packages)),
         ]
 
+class CaaSPUpdate(Update):
+
+    def __init__(self, logger, targets, packages, testreport):
+        self.log = logger
+        self.targets = targets
+        self.packages = packages
+        self.testreport = testreport
+        self.type = 'transactional'
+        self.commands = [
+            'export LANG=',
+            'transactional-update cleanup dup'
+        ]
+
+    def check(self, target, stdin, stdout, stderr, exitcode):
+        if 'Error:' in stderr:
+            self.log.critical(
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
+            raise UpdateError('Transactional Update Error', target.hostname)
+
+
 Updater = DictWithInjections({
     '12': ZypperOBSUpdate,
     '11': ZypperOBSUpdate,
     'YUM': RedHatUpdate,
+    'CAASP': CaaSPUpdate
 }, key_error=MissingUpdaterError)
 
 
@@ -126,12 +148,17 @@ class RedHatPrepare(Prepare):
 
         self.commands = commands
 
+class CaaSPPrepare(Prepare):
+    def run(self):
+        pass
 
 Preparer = DictWithInjections({
     '12': ZypperPrepare,
     '11': ZypperPrepare,
     'YUM': RedHatPrepare,
+    'CAASP': CaaSPPrepare
 }, key_error=MissingPreparerError)
+
 
 
 class ZypperDowngrade(Downgrade):
@@ -158,10 +185,18 @@ class RedHatDowngrade(Downgrade):
         self.commands = [
             'yum -y downgrade {!s}'.format(' '.join(self.packages))]
 
+class CaaSPDowngrade(Downgrade):
+    def __init__(self, *a, **kw):
+        super(CaaSPDowngrade, self).__init__(*a, **kw)
+        self.type = 'transactional'
+        self.commands = ['transactional-update rollback $(transactional-update rollback | cut -d" " -f 4)'];
+
+
 Downgrader = DictWithInjections({
     '12': ZypperDowngrade,
     '11': ZypperDowngrade,
     'YUM': RedHatDowngrade,
+    'CAASP': CaaSPDowngrade
 }, key_error=MissingDowngraderError)
 
 
@@ -188,11 +223,11 @@ class RedHatInstall(Install):
 
         self.commands = commands
 
-
 Installer = DictWithInjections({
     '12': ZypperInstall,
     '11': ZypperInstall,
     'YUM': RedHatInstall,
+    'CAASP': ZypperInstall
 }, key_error=MissingInstallerError)
 
 
@@ -219,9 +254,9 @@ class RedHatUninstall(Install):
 
         self.commands = commands
 
-
 Uninstaller = DictWithInjections({
     '12': ZypperUninstall,
     '11': ZypperUninstall,
     'YUM': RedHatUninstall,
+    'CAASP': ZypperUninstall
 }, key_error=MissingUninstallerError)

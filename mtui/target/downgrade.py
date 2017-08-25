@@ -27,35 +27,32 @@ class Downgrade(object):
         self.post_commands = []
 
     def run(self):
-        skipped = False
-        versions = {}
+        if hasattr(self, 'type') and self.type == 'transactional':
+            self._run_transactional()
+        else:
+            self._run()
 
+    def _run_transactional(self):
+        self.lock_hosts()
         try:
+            for command in self.commands:
+                self.targets.run(command)
+
             for t in list(self.targets.values()):
-                lock = t.locked()
-                if lock.locked and not lock.own():
-                    skipped = True
-                    self.log.warning(
-                        'host {!s} is locked since {!s} by {!s}. skipping.'.format(
-                            t.hostname, lock.time(), lock.user))
-                    if lock.comment:
-                        self.log.info(
-                            "{!s}'s comment: {!s}".format(
-                                lock.user, lock.comment))
-                else:
-                    t.set_locked()
-                    thread = ThreadedMethod(queue)
-                    thread.setDaemon(True)
-                    thread.start()
+                if 'Error' in t.lasterr():
+                    self.log.critical('{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(t.hostname, t.lastin(), t.lastout(), t.lasterr()))
+                if 'reboot to finish rollback' in t.lastout():
+                    self.log.warning('Please reboot the host {!s} to finish rollback'.format(t.hostname))
+        except:
+            raise
+        finally:
+            self.unlock_hosts()
 
-            if skipped:
-                for t in list(self.targets.values()):
-                    try:
-                        t.remove_lock()
-                    except AssertionError:
-                        pass
-                raise UpdateError('Hosts locked')
 
+    def _run(self, type=None):
+        versions = {}
+        lock = self.lock_hosts()
+        try:
             for t in list(self.targets.values()):
                 queue.put([t.set_repo, ['remove', self.testreport]])
 
@@ -118,12 +115,7 @@ class Downgrade(object):
         except:
             raise
         finally:
-            for t in list(self.targets.values()):
-                if not lock.locked:  # wasn't locked earlier by set_host_lock
-                    try:
-                        t.remove_lock()
-                    except AssertionError:
-                        pass
+            self.unlock_hosts()
 
     # TODO: check if this work correctly -> maybe use re
     def _check(self, target, stdin, stdout, stderr, exitcode):
@@ -157,3 +149,45 @@ class Downgrade(object):
     def check(self, target, stdin, stdout, stderr, exitcode):
         """stub. needs to be overwritten by inherited classes"""
         return
+
+    def lock_hosts(self):
+        try:
+            skipped = False
+            for t in list(self.targets.values()):
+                lock = t.locked()
+                if lock.locked and not lock.own():
+                    skipped = True
+                    self.log.warning(
+                        'host {!s} is locked since {!s} by {!s}. skipping.'.format(
+                            t.hostname, lock.time(), lock.user))
+                    if lock.comment:
+                        self.log.info(
+                            "{!s}'s comment: {!s}".format(
+                                lock.user, lock.comment))
+                else:
+                    t.set_locked()
+                    thread = ThreadedMethod(queue)
+                    thread.setDaemon(True)
+                    thread.start()
+
+            if skipped:
+                for t in list(self.targets.values()):
+                    try:
+                        t.remove_lock()
+                    except AssertionError:
+                        pass
+                raise UpdateError('Hosts locked')
+        except:
+            raise
+        finally:
+            self.unlock_hosts()
+
+
+    def unlock_hosts(self):
+        for t in list(self.targets.values()):
+            lock = t.locked()
+            if lock.locked:  # wasn't locked earlier by set_host_lock
+                try:
+                    t.remove_lock()
+                except AssertionError:
+                    pass
