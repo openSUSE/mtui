@@ -41,7 +41,7 @@ class Downgrade(Command):
         message = 'done'
         for target in targets.values():
             if message == 'done':
-                for package in target.packages.values():
+                for package in list(target.packages.values()):
                     if package.before == package.after and package.before is not None:
                         message = 'downgrade not completed'
                         break
