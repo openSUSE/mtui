@@ -46,7 +46,7 @@ class Update(object):
 
                 pkg.set_versions(before=before, required=required)
 
-                if before is None or before == '0':
+                if before is None:
                     not_installed.append(pkgname)
                 else:
                     if RPMVersion(before) >= RPMVersion(required):
@@ -134,7 +134,7 @@ class Update(object):
 
                 pkg.set_versions(after=after)
 
-                if after is not None and after != '0':
+                if after is not None:
                     if RPMVersion(before) == RPMVersion(after):
                         self.log.warning(
                             '{!s}: package was not updated: {!s} ({!s})'.format(
