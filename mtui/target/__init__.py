@@ -274,7 +274,7 @@ class Target(object):
                 if v:
                     self.packages[p].current = str(v)
                 else:
-                    self.packages[p].current = '0'
+                    self.packages[p].current = None
         elif self.state == 'dryrun':
 
             self.logger.info(
