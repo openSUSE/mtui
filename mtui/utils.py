@@ -257,6 +257,8 @@ class UnknownSystemError(ValueError):
 
 
 def get_release(systems):
+    # TODO: This is problematic. If we have multiple hosts with different systems which require 
+    # different ways of updating the system this won't work.
     systems = ' '.join(systems)
 
     for rexp, release in list({
