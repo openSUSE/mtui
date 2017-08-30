@@ -6,6 +6,7 @@ from mtui.commands import Command
 from mtui.utils import complete_choices
 from mtui.utils import requires_update
 from mtui.messages import NoRefhostsDefinedError
+from mtui.target.locks import TargetLockedError 
 
 class Update(Command):
     """
@@ -59,7 +60,12 @@ class Update(Command):
         try:
             self.metadata.perform_update(targets, params)
 
-        except Exception:
+        except TargetLockedError as e:
+            self.log.warning(e)
+            self.log.critical('failed to update target systems')
+            self.log.debug(format_exc())
+            return
+        except Exception as e:
             self.log.critical('failed to update target systems')
             self.log.debug(format_exc())
             self.prompt.notify_user(
