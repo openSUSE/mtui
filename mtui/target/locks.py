@@ -293,7 +293,7 @@ class Locked(object):
         from datetime import datetime
 
         if style is None:
-            style = '%A, %d.%m.%Y %H:%M'
+            style = '%A, %d.%m.%Y %H:%M UTC'
 
         time = datetime.fromtimestamp(float(self.timestamp))
 
