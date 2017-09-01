@@ -26,6 +26,7 @@ class RemoveHost(Command):
         for target in targets:
             self.targets[target].close()
             self.targets.pop(target)
+            del self.metadata.systems[target]
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

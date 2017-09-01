@@ -402,7 +402,7 @@ class TestReport(object, metaclass=ABCMeta):
 
     def connect_targets(self, make_target=Target):
         targets = {}
-
+        new_systems = {}
         for (host, system) in list(self.systems.items()):
             try:
                 targets[host] = make_target(
@@ -413,6 +413,7 @@ class TestReport(object, metaclass=ABCMeta):
                     logger=self.log,
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
+                new_systems[host]=system
             except Exception:
                 self.log.debug(format_exc())
                 msg = 'failed to add host {0} to target list'
@@ -428,6 +429,8 @@ class TestReport(object, metaclass=ABCMeta):
                 # the network/ssh code really can't KeyboardInterrupt
                 self.log.warning('skipping host {0}'.format(host))
 
+        # We need to be sure that only the system property only have the  connected hosts
+        self.systems = new_systems
         for t in self.targets:
             del self.targets[t]
         self.targets.update(targets)
@@ -452,7 +455,7 @@ class TestReport(object, metaclass=ABCMeta):
         except (SSHException, NoValidConnectionsError, ChannelException):
             self.log.warning('failed to add host {0} to target list'.format(hostname));
             self.log.debug(format_exc())
-
+        
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config, self.log)
 
