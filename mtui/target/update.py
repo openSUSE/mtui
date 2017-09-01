@@ -29,7 +29,18 @@ class Update(object):
 
     def run(self, params):
         with LockedTargets(list(self.targets.values())):
-            self._run(params)
+            if hasattr(self, 'type') and self.type == 'transactional':
+                self._run_transactional(params)
+            else:
+                self._run(params)
+
+    def _run_transactional(self, params):
+        if any(param is not None for param in params):
+            self.log.warning('The options --noprepare, --newpackage and --noscript are not valid for transactional updates')
+
+        self.lock_and_run()
+        self.log.warning('Please reboot the host to activate the changes and avoid data loss')
+
 
     def _run(self, params):
         if 'noprepare' not in params:
@@ -62,64 +73,7 @@ class Update(object):
         if 'noscript' not in params:
             self.testreport.run_scripts(PreScript, self.targets)
 
-        self.log.info('updating')
-
-        skipped = False
-
-        try:
-            for t in list(self.targets.values()):
-                lock = t.locked()
-                if lock.locked and not lock.own():
-                    skipped = True
-                    self.log.warning(
-                        'host {!s} is locked since {!s} by {!s}. skipping.'.format(
-                            t.hostname, lock.time(), lock.user))
-                    if lock.comment:
-                        self.log.info(
-                            "{!s}'s comment: {!s}".format(
-                                lock.user, lock.comment))
-                else:
-                    t.set_locked()
-                    thread = ThreadedMethod(queue)
-                    thread.setDaemon(True)
-                    thread.start()
-
-            if skipped:
-                for t in list(self.targets.values()):
-                    try:
-                        t.remove_lock()
-                    except AssertionError:
-                        pass
-                raise UpdateError('Hosts locked')
-
-            for t in list(self.targets.values()):
-                queue.put([t.set_repo, ['add', self.testreport]])
-
-            while queue.unfinished_tasks:
-                spinner()
-
-            queue.join()
-
-            for command in self.commands:
-                self.targets.run(command)
-
-                for t in list(self.targets.values()):
-                    self._check(
-                        t,
-                        t.lastin(),
-                        t.lastout(),
-                        t.lasterr(),
-                        t.lastexit())
-        except:
-            raise
-        finally:
-            for t in list(self.targets.values()):
-                if not lock.locked:  # wasn't locked earlier by set_host_lock
-                    try:
-                        t.remove_lock()
-                    except AssertionError:
-                        pass
-
+        self.lock_and_run();
         if 'newpackage' in params:
             # TODO: testing=True for newpackage ? oh
             self.testreport.perform_prepare(self.targets, testing=True)
@@ -190,3 +144,63 @@ class Update(object):
     def check(self, target, stdin, stdout, stderr, exitcode):
         """stub. needs to be overwritten by inherited classes"""
         return
+
+    def lock_and_run(self):
+        """
+        Locks the targets and run the commands
+        """
+        skipped = False
+
+        try:
+            for t in list(self.targets.values()):
+                lock = t.locked()
+                if lock.locked and not lock.own():
+                    skipped = True
+                    self.log.warning(
+                        'host {!s} is locked since {!s} by {!s}. skipping.'.format(
+                            t.hostname, lock.time(), lock.user))
+                    if lock.comment:
+                        self.log.info(
+                            "{!s}'s comment: {!s}".format(
+                                lock.user, lock.comment))
+                else:
+                    t.set_locked()
+                    thread = ThreadedMethod(queue)
+                    thread.setDaemon(True)
+                    thread.start()
+            if skipped:
+                for t in list(self.targets.values()):
+                    try:
+                        t.remove_lock()
+                    except AssertionError:
+                        pass
+                raise UpdateError('Hosts locked')
+
+            for t in list(self.targets.values()):
+                queue.put([t.set_repo, ['add', self.testreport]])
+
+            while queue.unfinished_tasks:
+                spinner()
+
+            queue.join()
+
+            for command in self.commands:
+                self.targets.run(command)
+
+                for t in list(self.targets.values()):
+                    self._check(
+                        t,
+                        t.lastin(),
+                        t.lastout(),
+                        t.lasterr(),
+                        t.lastexit())
+        except:
+            raise
+        finally:
+            for t in list(self.targets.values()):
+                lock = t.locked()
+                if not lock.locked:  # wasn't locked earlier by set_host_lock
+                    try:
+                        t.remove_lock()
+                    except AssertionError:
+                        pass

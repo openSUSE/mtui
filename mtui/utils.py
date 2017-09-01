@@ -264,6 +264,7 @@ def get_release(systems):
         'sle[sd]12': '12',
         'sap-aio12': '12',
         'sle[sd]11': '11',
+        'caasp': 'CAASP',
         '(manager2|sle.11|sles4vmware|studio)': '11',
         '(manager3|mgr|cloud|slms)': '12'
     }.items()):
