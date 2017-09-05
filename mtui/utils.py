@@ -257,7 +257,7 @@ class UnknownSystemError(ValueError):
 
 
 def get_release(systems):
-    # TODO: This is problematic. If we have multiple hosts with different systems which require 
+    # TODO: This is problematic. If we have multiple hosts with different systems which require
     # different ways of updating the system this won't work.
     systems = ' '.join(systems)
 
@@ -268,7 +268,8 @@ def get_release(systems):
         'sle[sd]11': '11',
         'caasp': 'CAASP',
         '(manager2|sle.11|sles4vmware|studio)': '11',
-        '(manager3|mgr|cloud|slms)': '12'
+        '(manager3|mgr|cloud|slms)': '12',
+        'teradata': '11'
     }.items()):
         if re.search(rexp, systems):
             return release
