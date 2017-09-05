@@ -177,7 +177,8 @@ class Update(object):
                 raise UpdateError('Hosts locked')
 
             for t in list(self.targets.values()):
-                queue.put([t.set_repo, ['add', self.testreport]])
+                if (hasattr(self, 'type') and self.type != 'transactional') or not hasattr(self, 'type'):
+                    queue.put([t.set_repo, ['add', self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()
