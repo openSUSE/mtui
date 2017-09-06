@@ -40,7 +40,7 @@ def xml_installog_to_template(logger, xmldata, config, target):
         if not hasattr(child, 'getAttribute'):
             continue
         cmd = child.getAttribute('name')
-        if not cmd.startswith('zypper '):
+        if not cmd.startswith('zypper ') and not cmd.startswith('transactional-update'):
             continue
         t.append(
             '# {!s}\n{!s}\n'.format(cmd, child.childNodes[0].nodeValue))
@@ -57,7 +57,6 @@ def xml_to_template(logger, template, xmldata, config):
     template  -- maintenance template path (needs to exist)
     xmldata   -- mtui xml log
     """
-
     with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
         t = f.readlines()
 
@@ -76,7 +75,6 @@ def xml_to_template(logger, template, xmldata, config):
     for host in x.getElementsByTagName('host'):
         hostname = host.getAttribute('hostname')
         systemtype = host.getAttribute('system')
-
         # systemname/reference host string in the maintenance template
         # in case the hostname is already set
         line = '{!s} (reference host: {!s})\n'.format(systemtype, hostname)
@@ -138,6 +136,10 @@ def xml_to_template(logger, template, xmldata, config):
                 i += 1
                 t.insert(i, '--------------\n')
                 i += 1
+                if systemtype.startswith('caasp'):
+                    t.insert(i, 'Please check the install logs for the transactional update on host {!s}\n\n'.format(hostname))
+                    continue
+
                 t.insert(i, 'before:\n')
                 i += 1
                 t.insert(i, 'after:\n')
@@ -159,6 +161,10 @@ def xml_to_template(logger, template, xmldata, config):
         versions = {}
         hostname = host.getAttribute('hostname')
         systemtype = host.getAttribute('system')
+
+        # Skip the caasp hosts
+        if systemtype.startswith('caasp'):
+            continue
 
         # search for system position which is already existing in the template
         # or was created in the previous step.
