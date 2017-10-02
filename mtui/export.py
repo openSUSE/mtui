@@ -299,7 +299,7 @@ def xml_to_template(logger, template, xmldata, config):
         # search starting point for update logs
         i = t.index('put here the output of the following commands:\n', 0) + 1
     except ValueError:
-        loggger.error('install log section not found in template. skipping.')
+        logger.error('install log section not found in template. skipping.')
     else:
         t.append("zypper logs are exported to ./install_logs directory\n")
 
