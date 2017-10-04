@@ -47,7 +47,24 @@ def xml_installog_to_template(logger, xmldata, config, target):
     return t
 
 
-def xml_to_template(logger, template, xmldata, config):
+def fill_template(logger, template, xmldata, config, smelt):
+    if not smelt:
+        logger.warning("No data from SMELT api")
+        return _xml_to_template(logger, template, xmldata, config, smelt_output=None, openqa_links=None)
+
+    logger.debug("parse smelt data and prepare pretty report")
+    openqa_links = smelt.openqa_links()
+    if openqa_links:
+        openqa_links = ["openQA tests:\n", "=============\n", "\n"] + [a + '\n' for a in openqa_links] + ['\n']
+
+    smelt_output = smelt.pretty_output()
+    if smelt_output:
+        smelt_output = ["SMELT Checkers:\n", "===============\n"] + smelt_output
+
+    return _xml_to_template(logger, template, xmldata, config, smelt_output, openqa_links)
+
+
+def _xml_to_template(logger, template, xmldata, config, smelt_output, openqa_links):
     """ export mtui xml data to an existing maintenance template
 
     simple method to export package versions and
@@ -137,7 +154,8 @@ def xml_to_template(logger, template, xmldata, config):
                 t.insert(i, '--------------\n')
                 i += 1
                 if systemtype.startswith('caasp'):
-                    t.insert(i, 'Please check the install logs for the transactional update on host {!s}\n\n'.format(hostname))
+                    t.insert(
+                        i, 'Please check the install logs for the transactional update on host {!s}\n\n'.format(hostname))
                     continue
 
                 t.insert(i, 'before:\n')
@@ -295,6 +313,17 @@ def xml_to_template(logger, template, xmldata, config):
             elif failed == 1:
                 t[i + 1] = '=> FAILED\n'
 
+    # Add output of checkers and link to openQA
+    i = t.index('REGRESSION TEST SUMMARY\n', 0)
+    if openqa_links and "openQA tests:\n" not in t:
+        for line in reversed(openqa_links):
+            t.insert(i, line)
+
+    if smelt_output and "SMELT Checkers:\n" not in t:
+        t.insert(i, '\n')
+        for line in reversed(smelt_output):
+            t.insert(i, line)
+
     try:
         # search starting point for update logs
         i = t.index('put here the output of the following commands:\n', 0) + 1
@@ -308,6 +337,6 @@ def xml_to_template(logger, template, xmldata, config):
             config.distro,
             config.distro_ver,
             config.distro_kernel,
-         config.session_user))
+            config.session_user))
 
     return t

@@ -30,7 +30,9 @@ from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
 from mtui.utils import nottest
 from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
-from mtui.target.actions import UpdateError;
+from mtui.target.actions import UpdateError
+from mtui.connector.smelt_obs import SMELT
+
 
 class _TemplateIOError(IOError):
 
@@ -60,6 +62,7 @@ class UpdateID(object):
 
     def __init__(self, id_, testreport_factory, testreport_svn_checkout):
         self.id = id_
+        self.smelt = None
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
@@ -87,6 +90,10 @@ class UpdateID(object):
         if autoconnect:
             tr.connect_targets()
 
+        tr.smelt = self.smelt
+        if self.smelt:
+            tr.smelt.logger = logger
+
         return tr
 
 
@@ -98,6 +105,8 @@ class OBSUpdateID(UpdateID):
             OBSTestReport,
             testreport_svn_checkout
         )
+
+        self.smelt = SMELT(self.id.maintenance_id)
 
 
 class TestReportAlreadyLoaded(RuntimeError):
@@ -312,7 +321,7 @@ class TestReport(object, metaclass=ABCMeta):
                 self.get_package_list(),
                 self).run(params)
         except UpdateError as e:
-            self.log.error('Update failed: {!s}'.format(e));
+            self.log.error('Update failed: {!s}'.format(e))
             self.log.warning('Error while updating. Rolling back changes')
             self.perform_downgrade(targets)
 
@@ -375,12 +384,11 @@ class TestReport(object, metaclass=ABCMeta):
             else:
                 raise
 
-    def  create_installogs_dir(self):
+    def create_installogs_dir(self):
         if not self.path:
             raise RuntimeError("Called while missing path")
 
         self._create_installogs_dir()
-
 
     def _create_installogs_dir(self):
         os.makedirs(
@@ -388,8 +396,7 @@ class TestReport(object, metaclass=ABCMeta):
                 self.config.template_dir,
                 str(self.id),
                 self.config.install_logs),
-         exist_ok=True)
-
+            exist_ok=True)
 
     @staticmethod
     def _ensure_executable(pattern):
@@ -413,7 +420,7 @@ class TestReport(object, metaclass=ABCMeta):
                     logger=self.log,
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
-                new_systems[host]=system
+                new_systems[host] = system
             except Exception:
                 self.log.debug(format_exc())
                 msg = 'failed to add host {0} to target list'
@@ -453,9 +460,9 @@ class TestReport(object, metaclass=ABCMeta):
             if self:
                 self.systems[hostname] = system
         except (SSHException, NoValidConnectionsError, ChannelException):
-            self.log.warning('failed to add host {0} to target list'.format(hostname));
+            self.log.warning('failed to add host {0} to target list'.format(hostname))
             self.log.debug(format_exc())
-        
+
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config, self.log)
 
@@ -638,12 +645,13 @@ class TestReport(object, metaclass=ABCMeta):
         return sink(targets, by_hosts_pkg)
 
     def generate_templatefile(self, xmllog):
-        from mtui.export import xml_to_template
-        return xml_to_template(
+        from mtui.export import fill_template
+        return fill_template(
             self.log,
             self.path,
             xmllog,
-            self.config
+            self.config,
+            self.smelt
         )
 
     def generate_install_logs(self, xmllog, host):
@@ -672,14 +680,13 @@ class TestReport(object, metaclass=ABCMeta):
         return output.pretty()
 
 
-
 class NullTestReport(TestReport):
     _type = "No"
 
-    def __init__(tr, config, log, *a, **kw):
-        super(NullTestReport, tr).__init__(config, log, *a, **kw)
-        tr.id = None
-        tr.path = join(os.getcwd(), "None")
+    def __init__(self, config, log, *a, **kw):
+        super(NullTestReport, self).__init__(config, log, *a, **kw)
+        self.id = None
+        self.path = join(os.getcwd(), "None")
 
     def __bool__(tr):
         return False
