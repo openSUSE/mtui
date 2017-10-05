@@ -314,7 +314,7 @@ def _xml_to_template(logger, template, xmldata, config, smelt_output, openqa_lin
                 t[i + 1] = '=> FAILED\n'
 
     # Add output of checkers and link to openQA
-    i = t.index('REGRESSION TEST SUMMARY\n', 0)
+    i = t.index('REGRESSION TEST SUMMARY:\n', 0)
     if openqa_links and "openQA tests:\n" not in t:
         for line in reversed(openqa_links):
             t.insert(i, line)
