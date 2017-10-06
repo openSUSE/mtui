@@ -26,6 +26,9 @@ class RPMVersion(object):
     """
 
     def __init__(self, ver, *args):
+        if not ver:
+            raise ValueError
+
         for x in self._arch_suffixes:
             ver = ver.replace('.' + x, '')
 
