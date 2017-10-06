@@ -36,11 +36,11 @@ class Update(object):
 
     def _run_transactional(self, params):
         if any(param is not None for param in params):
-            self.log.warning('The options --noprepare, --newpackage and --noscript are not valid for transactional updates')
+            self.log.warning(
+                'The options --noprepare, --newpackage and --noscript are not valid for transactional updates')
 
         self.lock_and_run()
         self.log.warning('Please reboot the host to activate the changes and avoid data loss')
-
 
     def _run(self, params):
         if 'noprepare' not in params:
@@ -57,7 +57,7 @@ class Update(object):
 
                 pkg.set_versions(before=before, required=required)
 
-                if before is None:
+                if not before:
                     not_installed.append(pkgname)
                 else:
                     if RPMVersion(before) >= RPMVersion(required):
@@ -73,7 +73,7 @@ class Update(object):
         if 'noscript' not in params:
             self.testreport.run_scripts(PreScript, self.targets)
 
-        self.lock_and_run();
+        self.lock_and_run()
         if 'newpackage' in params:
             # TODO: testing=True for newpackage ? oh
             self.testreport.perform_prepare(self.targets, testing=True)
@@ -88,12 +88,12 @@ class Update(object):
 
                 pkg.set_versions(after=after)
 
-                if after is not None:
+                if after and before:
                     if RPMVersion(before) == RPMVersion(after):
                         self.log.warning(
                             '{!s}: package was not updated: {!s} ({!s})'.format(
                                 hn, pkgname, after))
-
+                if after:
                     if RPMVersion(after) < RPMVersion(required):
                         self.log.warning(
                             '{!s}: package does not match required version: {!s} ({!s}, required {!s})'.format(
@@ -195,7 +195,7 @@ class Update(object):
                         t.lastout(),
                         t.lasterr(),
                         t.lastexit())
-        except:
+        except BaseException:
             raise
         finally:
             for t in list(self.targets.values()):
