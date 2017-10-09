@@ -76,10 +76,9 @@ class Export(Command):
 
         for i, y in ilogs:
             filename = i + '.log'
-            fn = join(filepath, filename)
 
-            if os.path.exists(fn) and not self.args.force:
-                self.log.warning('file {!s} exists.'.format(fn))
+            if os.path.exists(join(filepath, filename)) and not self.args.force:
+                self.log.warning('file {!s} exists.'.format(filename))
                 if not prompt_user(
                         'Should I overwrite {!s} (y/N) '.format(filename),
                         ['y', 'Y', 'yes', 'Yes', 'YES'],
@@ -87,13 +86,13 @@ class Export(Command):
                     filename += '.' + timestamp()
             self.log.info(
                 'exporting zypper log from {!s} to {!s}'.format(
-                    i, fn))
+                    i, filename))
 
             try:
-                with open(fn, 'w', encoding='utf-8') as f:
+                with open(join(filepath,filename), 'w', encoding='utf-8') as f:
                     f.write('\n'.join(line.rstrip() for line in y))
             except IOError as e:
-                self.println('Failed to write {}: {}'.format(fn, e.strerror))
+                self.println('Failed to write {}: {}'.format(filename, e.strerror))
 
             self.println('wrote zypper log to {}'.format(filename))
 
