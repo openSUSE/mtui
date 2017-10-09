@@ -17,7 +17,8 @@ setup(
         "paramiko",
         'pyxdg',
         'ruamel.yaml',
-        'requests'
+        'requests',
+        'simplejson'
     ],
 
     # dependencies not on cheeseshop:
