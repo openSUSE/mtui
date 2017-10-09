@@ -1,7 +1,11 @@
 
 import requests
 from itertools import chain
-from  json.decoder import JSONDecodeError
+try:
+    from json.decoder import JSONDecodeError
+except ImportError:
+    from simplejson.decoder import JSONDecodeError
+
 
 class SMELT(object):
     """ Fetch and parse data from smelt """
