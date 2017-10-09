@@ -1,8 +1,7 @@
 
-
 import requests
 from itertools import chain
-
+from  json.decoder import JSONDecodeError
 
 class SMELT(object):
     """ Fetch and parse data from smelt """
@@ -14,7 +13,16 @@ class SMELT(object):
         self.job = self._get_incident_data()
 
     def _get_incident_data(self):
-        return requests.get(self.api_url+str(self.incident)).json()
+        try:
+            smelt = requests.get(self.api_url+str(self.incident))
+        except requests.exceptions.ConnectionError:
+            smelt = None
+        else:
+            try:
+                smelt = smelt.json()
+            except JSONDecodeError:
+                smelt = None
+        return smelt
 
     def openqa_links(self):
         comments = self.job['comments']
@@ -46,3 +54,6 @@ class SMELT(object):
                     out += ["  product: {}_{} arch: {}\n".format(i['name'], i['version'], i['architecture'])]
                 out += ["    " + a + '\n' for a in i['output'].split('\n') if a]
         return out
+
+    def __bool__(self):
+        return True if self.job else False
