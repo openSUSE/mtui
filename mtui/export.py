@@ -47,10 +47,10 @@ def xml_installog_to_template(logger, xmldata, config, target):
     return t
 
 
-def fill_template(logger, template, xmldata, config, smelt):
+def fill_template(review_id, logger, template, xmldata, config, smelt):
     if not smelt:
         logger.warning("No data from SMELT api")
-        return _xml_to_template(logger, template, xmldata, config, smelt_output=None, openqa_links=None)
+        return _xml_to_template(review_id, logger, template, xmldata, config, smelt_output=None, openqa_links=None)
 
     logger.debug("parse smelt data and prepare pretty report")
     openqa_links = smelt.openqa_links()
@@ -61,16 +61,17 @@ def fill_template(logger, template, xmldata, config, smelt):
     if smelt_output:
         smelt_output = ["SMELT Checkers:\n", "===============\n"] + smelt_output
 
-    return _xml_to_template(logger, template, xmldata, config, smelt_output, openqa_links)
+    return _xml_to_template(review_id, logger, template, xmldata, config, smelt_output, openqa_links)
 
 
-def _xml_to_template(logger, template, xmldata, config, smelt_output, openqa_links):
+def _xml_to_template(review_id, logger, template, xmldata, config, smelt_output, openqa_links):
     """ export mtui xml data to an existing maintenance template
 
     simple method to export package versions and
     update log from the log to the template file
 
     Keyword arguments:
+    review_id -- mtui.types.obs.RequestReviewID
     template  -- maintenance template path (needs to exist)
     xmldata   -- mtui xml log
     """
@@ -324,19 +325,21 @@ def _xml_to_template(logger, template, xmldata, config, smelt_output, openqa_lin
         for line in reversed(smelt_output):
             t.insert(i, line)
 
-    try:
-        # search starting point for update logs
-        i = t.index('put here the output of the following commands:\n', 0) + 1
-    except ValueError:
-        logger.error('install log section not found in template. skipping.')
-    else:
-        t.append("zypper logs are exported to ./install_logs directory\n")
+    i = t.index('zypper update log:\n',0) + 1
+    add_empty_line = 0
+    for host in x.getElementsByTagName('host'):
+        hostname = host.getAttribute('hostname')
+        install_log = '{0}/{1}/{2}/{3}.log\n'.format(config.reports_url, review_id, config.install_logs, hostname)
+        if install_log not in t[i:]:
+            i += 1
+            t.insert(i,install_log)
+            add_empty_line = 1
+    if add_empty_line:
+        t.insert(i+1,'\n')
 
-    t.append(
-        system_info(
-            config.distro,
-            config.distro_ver,
-            config.distro_kernel,
-            config.session_user))
+    system_information = system_info(config.distro, config.distro_ver, config.distro_kernel, config.session_user)
+    # Avoid adding the same info everytime we export
+    if system_information != t[-1]:
+        t.append(system_information)
 
     return t
