@@ -69,12 +69,12 @@ class Install(object):
             self.log.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
-            raise UpdateError(target.hostname, 'package not found')
+            raise UpdateError('package not found', target.hostname)
         if 'A ZYpp transaction is already in progress.' in stderr:
             self.log.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
-            raise UpdateError(target.hostname, 'update stack locked')
+            raise UpdateError('update stack locked', target.hostname)
         if 'System management is locked' in stderr:
             self.log.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
@@ -84,10 +84,10 @@ class Install(object):
             self.log.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
-            raise UpdateError(target.hostname, 'RPM Error')
+            raise UpdateError('RPM Error', target.hostname)
         if '(c): c' in stdout:
             self.log.critical(
-                '{!s}: unresolved dependency problem. please resolve manually:\n{s}'.format(
+                '{!s}: unresolved dependency problem. please resolve manually:\n{!s}'.format(
                     target.hostname, stdout))
             raise UpdateError('Dependency Error', target.hostname)
 
