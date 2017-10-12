@@ -41,7 +41,7 @@ class SMELT(object):
     def _parse_checkers(self):
         checks = self.job['checkers']['checks']
         # return only checks resuls with data in 'output' key
-        valid_checks = {i: j for i, j in {x: [a for a in checks[x] if a['output']] for x in checks}.items() if j}
+        valid_checks = {i: j for i, j in ((x, [a for a in checks[x] if a['output']]) for x in checks) if j}
         return valid_checks
 
     def pretty_output(self):
