@@ -200,7 +200,7 @@ The ``https`` resolver fetches the refhost database from this URL.
   | **type**
   |     pathname
   | **default**
-  |     ``/usr/share/suse-qam-metadata/refhosts.yml``
+  |     ``/usr/share/qam-metadata/refhosts.yml``
 
 The ``path`` resolver uses the refhost database at this location.
 
