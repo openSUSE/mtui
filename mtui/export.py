@@ -189,23 +189,18 @@ def xml_to_template(logger, template, xmldata, config):
                         version = child.getAttribute('version')
                         versions[state].update({name: version})
 
-                        # if package version is None, update was probably not
-                        # yet run, skip
-                        if 'None' in version:
-                            break
-
                         # if the package version was already exported, overwrite it with
                         # the new version. if the package version was not yet exported,
                         # add a new line
                         if name in t[i]:
                             # if package version is 0, package isn't installed
-                            if version != '0':
+                            if version != 'None':
                                 t[i] = '\t{!s}-{!s}\n'.format(name, version)
                             else:
                                 t[i] = '\tpackage {!s} is not installed\n'.format(
                                     name)
                         else:
-                            if version != '0':
+                            if version != 'None':
                                 t.insert(
                                     i, '\t{!s}-{!s}\n'.format(name, version))
                             else:
@@ -231,7 +226,7 @@ def xml_to_template(logger, template, xmldata, config):
         for package in list(versions['before'].keys()):
             # check if the packages have a higher version after the update
             try:
-                if versions['after'][package] != '0':
+                if versions['after'][package] != 'None' and versions['before'][package] != 'None':
                     assert(
                         RPMVersion(
                             versions['before'][package]) < RPMVersion(
