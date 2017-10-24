@@ -326,7 +326,7 @@ Example
   [refhosts]
   resolvers = https
   https_uri = https://qam.suse.de/metadata/refhosts.yml
-  path = /usr/share/suse-qam-metadata/refhosts.yml
+  path = /usr/share/qam-metadata/refhosts.yml
 
   [url]
   bugzilla = https://bugzilla.suse.com
