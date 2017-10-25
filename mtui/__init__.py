@@ -1,8 +1,8 @@
-from distutils.version import StrictVersion
+from distutils.version import LooseVersion
 
 __all__ = ['main', 'log', 'export']
 
-__version__ = '8.2.0'
+__version__ = '9.0.0alfa'
 # PEP396
 
-strict_version = StrictVersion(__version__)
+loose_version = LooseVersion(__version__)
