@@ -39,7 +39,7 @@ class DeprecationMessage(UserMessage):
 
 
 class NoRefhostsDefinedError(UserError, ValueError):
-    
+
     """
     Thrown when user requests an operation without defined refhosts
     """
@@ -256,9 +256,3 @@ class InvalidLocationError(UserError):
         self.available = available
 
         self.message = self._msg.format(requested, ", ".join(available))
-
-
-class InvalidOBSDistURL(ErrorMessage):
-
-    def __init__(self, url):
-        self.message = "Invalid OBS DistURL: {0!r}".format(url)
