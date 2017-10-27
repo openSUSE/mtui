@@ -1,40 +1,34 @@
 # -*- coding: utf-8 -*-
 
+
+import importlib
+import os
+import os.path
 from mtui.commands._command import Command
 
-from mtui.commands.commit import Commit
-from mtui.commands.config import Config
-from mtui.commands.hoststate import HostState
-from mtui.commands.hostslock import HostLock
-from mtui.commands.hostsunlock import HostsUnlock
-from mtui.commands.listpackages import ListPackages
-from mtui.commands.reportbug import ReportBug
-from mtui.commands.whoami import Whoami
-from mtui.commands.simplelists import ListBugs, ListHosts, ListLocks, ListSessions
-from mtui.commands.simplelists import ListTimeout, ListUpdateCommands, ListMetadata
-from mtui.commands.simplelists import ListLog, ListVersions, ListHistory
-from mtui.commands.simpleset import SetLocation, SessionName, SetLogLevel, SetTimeout
-from mtui.commands.setrepo import SetRepo
-from mtui.commands.update import Update
-from mtui.commands.removehost import RemoveHost
-from mtui.commands.downgrade import Downgrade
-from mtui.commands.addhost import AddHost
-from mtui.commands.zypper import Install, Uninstall
-from mtui.commands.shell import Shell
-from mtui.commands.run import Run
-from mtui.commands.prepare import Prepare
-from mtui.commands.oscqam import OSCAssign, OSCUnassign, OSCApprove, OSCReject
-from mtui.commands.testsuite import TestSuiteList, TestSuiteRun, TestSuiteSubmit
-from mtui.commands.terms import Terms
-from mtui.commands.quit import DEOF, Quit, QExit
-from mtui.commands.save import DoSave
-from mtui.commands.loadtemplate import LoadTemplate
-from mtui.commands.export import Export
-from mtui.commands.sftpcmd import SFTPPut, SFTPGet
-from mtui.commands.checkout import Checkout
-from mtui.commands.edit import Edit
-from mtui.commands.testopialist import TestopiaList
-from mtui.commands.testopiashow import TestopiaShow
-from mtui.commands.testopiacreate import TestopiaCreate
-from mtui.commands.testopiaedit import TestopiaEdit
-from mtui.commands.localrun import LocalRun
+_rootdir = os.path.dirname(os.path.realpath(__file__))
+
+cmd_list = []
+
+for name in os.listdir(_rootdir):
+    # list all ".py"
+    path = os.path.join(_rootdir, name)
+    if os.path.isfile(path) and name.endswith(".py"):
+        modname = name[:-3]
+    else:
+        continue
+
+    # skip things like __init__, __pycache__, __main__ , _commad ...
+    if modname.startswith("_"):
+        continue
+    try:
+        module = importlib.import_module("." + modname, 'mtui.commands')
+    except BaseException:
+        continue
+
+    # register classes
+    klzs = [x for x in dir(module) if hasattr(getattr(module, x), "command")]
+    cmd_list += klzs
+
+    for x in klzs:
+        globals()[x] = getattr(module, x)
