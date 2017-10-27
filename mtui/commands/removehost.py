@@ -22,11 +22,11 @@ class RemoveHost(Command):
 
     def run(self):
         targets = list(self.parse_hosts(enabled=None).keys())
-
         for target in targets:
             self.targets[target].close()
             self.targets.pop(target)
-            del self.metadata.systems[target]
+            if target in self.metadata.systems:
+                del self.metadata.systems[target]
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
