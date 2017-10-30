@@ -15,7 +15,7 @@ from mtui.template import OBSTestReport
 from mtui.template import _TemplateIOError
 from mtui.utils import UnknownSystemError
 from mtui.target import Target
-from mtui.types.obs import RequestReviewID
+from qamlib.types.obs import RequestReviewID
 from mtui import messages
 from .utils import LogFake
 from .utils import LogTestingWrap

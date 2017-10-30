@@ -11,7 +11,9 @@ from mtui.commands import Command
 from mtui.utils import complete_choices_filelist
 from mtui.utils import requires_update
 from mtui.utils import prompt_user
-from mtui.utils import timestamp
+
+
+from qamlib.utils import timestamp
 
 
 class Export(Command):
@@ -89,7 +91,7 @@ class Export(Command):
                     i, filename))
 
             try:
-                with open(join(filepath,filename), 'w', encoding='utf-8') as f:
+                with open(join(filepath, filename), 'w', encoding='utf-8') as f:
                     f.write('\n'.join(line.rstrip() for line in y))
             except IOError as e:
                 self.println('Failed to write {}: {}'.format(filename, e.strerror))

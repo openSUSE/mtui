@@ -21,14 +21,12 @@ from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
 
-from mtui import utils
-
-from mtui.utils import ensure_dir_exists, chdir
-from mtui.types.obs import RequestReviewID
+from qamlib.utils import ensure_dir_exists, chdir
+from qamlib.types.obs import RequestReviewID
+from mtui.utils import nottest, get_release
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
-from mtui.utils import nottest
 from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
 from mtui.target.actions import UpdateError
 from mtui.connector.smelt_obs import SMELT
@@ -247,7 +245,7 @@ class TestReport(object, metaclass=ABCMeta):
         return list(self.packages.keys())
 
     def get_release(self):
-        return utils.get_release(list(self.systems.values()))
+        return get_release(list(self.systems.values()))
 
     def _get_doer(self, registry):
         return registry[self._get_updater_id()]
@@ -647,12 +645,12 @@ class TestReport(object, metaclass=ABCMeta):
     def generate_templatefile(self, xmllog):
         from mtui.export import fill_template
         return fill_template(self.id,
-            self.log,
-            self.path,
-            xmllog,
-            self.config,
-            self.smelt
-        )
+                             self.log,
+                             self.path,
+                             xmllog,
+                             self.config,
+                             self.smelt
+                             )
 
     def generate_install_logs(self, xmllog, host):
         from mtui.export import xml_installog_to_template

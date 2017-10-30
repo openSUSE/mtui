@@ -18,8 +18,8 @@ from mtui import commands
 from mtui import messages
 from mtui.template import NullTestReport
 from mtui.refhost import RefhostsFactory
-from mtui.utils import ensure_dir_exists
-from mtui.utils import timestamp
+from qamlib.utils import ensure_dir_exists
+from qamlib.utils import timestamp
 from mtui.utils import prompt_user
 
 
