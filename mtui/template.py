@@ -24,7 +24,7 @@ from mtui.testopia import Testopia
 from mtui import utils
 
 from mtui.utils import ensure_dir_exists, chdir
-from mtui.types.obs import RequestReviewID
+from qamlib.types.obs import RequestReviewID
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
@@ -647,12 +647,12 @@ class TestReport(object, metaclass=ABCMeta):
     def generate_templatefile(self, xmllog):
         from mtui.export import fill_template
         return fill_template(self.id,
-            self.log,
-            self.path,
-            xmllog,
-            self.config,
-            self.smelt
-        )
+                             self.log,
+                             self.path,
+                             xmllog,
+                             self.config,
+                             self.smelt
+                             )
 
     def generate_install_logs(self, xmllog, host):
         from mtui.export import xml_installog_to_template

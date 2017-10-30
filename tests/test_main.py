@@ -13,7 +13,7 @@ from .utils import LogFake
 from .utils import rand_maintenance_id
 from .utils import rand_review_id
 from mtui.argparse import ArgsParseFailure
-from mtui.types.obs import RequestReviewID
+from qamlib.types.obs import RequestReviewID
 
 import  unittest
 

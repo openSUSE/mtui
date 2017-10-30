@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 # vim: et sw=2 sts=2
 
-
-
-
 from nose.tools import eq_, ok_
 
 class Results(object):
@@ -64,7 +61,7 @@ class MetadataParserTest(object):
 
 class TestOBSMetadataParser(MetadataParserTest):
   def __init__(t):
-    from mtui.types.obs import RequestReviewID
+    from qamlib.types.obs import RequestReviewID
 
     super(TestOBSMetadataParser, t).__init__(
       parsemeta.OBSMetadataParser,

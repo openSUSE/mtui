@@ -10,7 +10,7 @@ from mtui.prompt import CmdQueue
 from mtui.prompt import QuitLoop
 from mtui.commands import Command
 from mtui.template import OBSTestReport
-from mtui.types.obs import RequestReviewID
+from qamlib.types.obs import RequestReviewID
 
 from tests.prompt import make_cp
 

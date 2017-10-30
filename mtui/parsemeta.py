@@ -3,7 +3,7 @@
 # common Metadata parser + OBS extension
 
 import re
-from mtui.types.obs import RequestReviewID
+from qamlib.types.obs import RequestReviewID
 
 
 class MetadataParser(object):
