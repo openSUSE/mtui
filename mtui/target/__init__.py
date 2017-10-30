@@ -32,7 +32,7 @@ from mtui.target.locks import TargetLockedError
 from mtui.target.locks import LockedTargets
 from mtui.target.locks import RemoteLock
 
-from mtui.utils import timestamp
+from qamlib.utils import timestamp
 
 
 class HostsGroup(object):

@@ -9,8 +9,9 @@ import errno
 from urllib.request import urlopen
 
 from mtui.xdg import save_cache_path
-from mtui.utils import atomic_write_file
 from mtui import messages
+
+from qamlib.utils import atomic_write_file
 
 from traceback import format_exc
 

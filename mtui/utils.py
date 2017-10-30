@@ -5,7 +5,6 @@
 
 
 import os
-import time
 import fcntl
 import struct
 import termios
@@ -16,13 +15,7 @@ import re
 
 from itertools import chain
 from functools import wraps
-from contextlib import contextmanager
-from tempfile import mkstemp
-from shutil import move
-from os.path import dirname
-from os.path import join
 from mtui.messages import TestReportNotLoadedError
-import collections
 
 try:
     from nose.tools import nottest
@@ -31,10 +24,6 @@ except ImportError:
 
 
 def flatten(xs): return list(chain.from_iterable(xs))
-
-
-def timestamp():
-    return str(int(time.time()))
 
 
 def edit_text(text):
@@ -156,75 +145,6 @@ def page(text, interactive=True):
 
         if prompt_user(prompt, "q"):
             return
-
-
-def ensure_dir_exists(*path, **kwargs):
-    """
-    :returns: str joined path with dirs created as needed.
-    :type path: [str] to join
-
-    :type filepath: bool
-    :param filepath: path is treated as directory if False, otherwise as
-        file and last component is not created as directory.
-    """
-
-    on_create = kwargs.get('on_create', None)
-    filepath = kwargs.get('filepath', False)
-
-    path = join(*path)
-    dirn = dirname(path) if filepath else path
-
-    os.makedirs(dirn, exist_ok=True)
-
-    if isinstance(on_create, collections.Callable):
-        on_create(path=dirn)
-
-    return path
-
-
-@contextmanager
-def chdir(newpath):
-    """Context manager for changing the current working directory"""
-    storedpath = os.getcwd()
-    os.chdir(newpath)
-    yield
-    os.chdir(storedpath)
-
-
-def atomic_write_file(data, path):
-    if isinstance(data, bytes):
-        data = data.decode('utf-8')
-    fd, fname = mkstemp(dir=dirname(path))
-    with os.fdopen(fd, "w") as f:
-        f.write(data)
-
-    move(fname, path)
-
-
-class check_eq(object):
-
-    """
-    Usage: check_eq(x)(y)
-    :return: y for y if (x == y) is True otherwise raises
-    :raises: ValueError
-    """
-
-    def __init__(self, *x):
-        self.x = x
-
-    def __call__(self, y):
-        if y not in self.x:
-            raise ValueError("Expected: {0!r}, got: {1!r}".format(
-                self.x, y))
-        return y
-
-    def __repr__(self):
-        return "<{0}.{1} {2!r}>".format(
-            self.__class__.__module__,
-            self.__class__.__name__,
-            self.x
-        )
-
 
 def requires_update(fn):
     @wraps(fn)

@@ -2,11 +2,10 @@
 # vim: et sw=2 sts=2
 
 
-
 import errno
 import os
 
-from mtui.utils import timestamp
+from qamlib.utils import timestamp
 
 
 class TargetLockedError(Exception):
