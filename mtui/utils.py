@@ -14,6 +14,7 @@ import readline
 import subprocess
 import re
 
+from itertools import chain
 from functools import wraps
 from contextlib import contextmanager
 from tempfile import mkstemp
@@ -29,7 +30,7 @@ except ImportError:
     def nottest(x): return x
 
 
-def flatten(xs): return [y for ys in xs for y in ys if y is not None]
+def flatten(xs): return list(chain.from_iterable(xs))
 
 
 def timestamp():
