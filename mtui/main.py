@@ -17,15 +17,7 @@ from mtui.systemcheck import detect_system
 
 def main():
     logger = create_logger()
-    cfg = Config(logger)
-    sys.exit(run_mtui(
-        sys, cfg, logger, CommandPrompt, CommandPromptDisplay
-    ))
 
-
-def run_mtui(
-    sys, config, log, Prompt, Display
-):
     p = get_parser(sys)
     try:
         args = p.parse_args(sys.argv[1:])
@@ -33,9 +25,15 @@ def run_mtui(
         return e.status
 
     if args.noninteractive and not args.prerun:
-        log.error("--noninteractive makes no sense without --prerun")
+        logger.error("--noninteractive makes no sense without --prerun")
         p.print_help()
         return 1
+
+    cfg = Config(logger)
+    sys.exit(run_mtui(sys, cfg, logger, CommandPrompt, CommandPromptDisplay, args))
+
+
+def run_mtui(sys, config, log, Prompt, Display, args):
 
     if args.debug:
         log.setLevel(level=logging.DEBUG)
@@ -57,7 +55,7 @@ def run_mtui(
         for x in args.sut:
             try:
                 prompt.do_add_host(x.print_args())
-            except:
+            except BaseException:
                 pass
 
     prompt.interactive = not args.noninteractive
