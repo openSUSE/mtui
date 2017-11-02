@@ -5,8 +5,9 @@ import sys
 import logging
 from subprocess import CalledProcessError
 
+from qamlib.colorlog import create_logger
+
 from .argparse import ArgsParseFailure
-from mtui.log import create_logger
 from mtui.config import Config
 from mtui.prompt import CommandPrompt
 from mtui.display import CommandPromptDisplay
@@ -16,7 +17,7 @@ from mtui.systemcheck import detect_system
 
 
 def main():
-    logger = create_logger()
+    logger = create_logger(sys.argv[0])
 
     p = get_parser(sys)
     try:
