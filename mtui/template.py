@@ -14,22 +14,22 @@ from urllib.request import urlopen
 import re
 import subprocess
 
+from qamlib.utils import ensure_dir_exists, chdir
+from qamlib.types.obs import RequestReviewID
+from qamlib.smelt import SMELT
+
 from mtui.target import HostsGroup
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
-
-from qamlib.utils import ensure_dir_exists, chdir
-from qamlib.types.obs import RequestReviewID
 from mtui.utils import nottest, get_release
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
 from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
 from mtui.target.actions import UpdateError
-from mtui.connector.smelt_obs import SMELT
 
 
 class _TemplateIOError(IOError):
