@@ -108,7 +108,8 @@ def test_main():
     Test main happy path without args gets to running the prompt cmdloop
     """
     pf = OneShotFactory(PromptFake)
-    ok_(run_mtui(SysFake(["mtui"]), ConfigFake(), LogFake(), pf, None) is 0)
+    a = get_parser(SysFake()).parse_args([])
+    ok_(run_mtui(SysFake(["mtui"]), ConfigFake(), LogFake(), pf, None, a) is 0)
 
     eq_(pf.product.t_cmdloops, 1)
 
@@ -137,8 +138,9 @@ def test_main_config_overrides():
     , "-t", template_dir
     , "-w", timeout
     ])
+    a = get_parser(sysf).parse_args(["-l", location, "-t", template_dir, "-w", timeout])
 
-    ok_(run_mtui(sysf, c, LogFake(), PromptFake, None) is 0)
+    ok_(run_mtui(sysf, c, LogFake(), PromptFake, None, a) is 0)
 
     for x, y in overrides:
         eq_(x, y(), "override didn't take effect: {0} != {1}".format(x, y()))
