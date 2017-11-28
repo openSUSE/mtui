@@ -13,12 +13,6 @@ from traceback import format_exc
 from mtui.refhost import RefhostsFactory
 from mtui.messages import InvalidLocationError
 
-try:
-    import keyring
-except ImportError:
-    # disable keyring support since python-keyring is missing
-    keyring = None
-
 
 class InvalidOptionNameError(RuntimeError):
     pass
@@ -198,7 +192,9 @@ class Config(object):
             self.log.debug("keyring disabled by configuration")
             return
 
-        if not keyring:
+        try:
+            import keyring
+        except ImportError:
             self.log.warning("keyring library not available")
             return
 
