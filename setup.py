@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 from setuptools import setup
+from setuptools import find_packages
 from mtui import loose_version
+
 
 setup(
     name='mtui',
@@ -18,6 +20,7 @@ setup(
         'pyxdg',
         'ruamel.yaml'
     ],
+    include_package_data=True,
 
     # dependencies not on cheeseshop:
     # rpm (http://www.rpm.org) with python enabled
@@ -42,11 +45,8 @@ setup(
     license='License :: Other/Proprietary License',
     platforms=['Linux', 'Mac OSX'],
     keywords=['SUSE', 'Maintenance', 'update', 'testing'],
-
-    packages=['mtui', 'mtui.connector', 'mtui.target', 'mtui.commands'],
-
-    entry_points={
-        'console_scripts': ['mtui = mtui.main:main']},
+    packages=find_packages(exclude=["*.tests", "*.tests.*", "tests.*", "tests"]),
+    entry_points={'console_scripts': ['mtui = mtui.main:main']},
 
     classifiers=[
         'Programming Language :: Python :: 3', 'Operating System :: POSIX :: Linux', 'Environment :: Console'
