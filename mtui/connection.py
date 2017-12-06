@@ -163,16 +163,14 @@ class Connection(object):
 
         """
 
-        # if self.is_active():
-        #    return
+        if not self.is_active():
+            self.log.debug(
+                'lost connection to {!s}:{!s}, reconnecting'.format(
+                    self.hostname, self.port))
 
-        self.log.debug(
-            'lost connection to {!s}:{!s}, reconnecting'.format(
-                self.hostname, self.port))
-
-        # wait 10s and try to reconnect
-        select.select([], [], [], 10)
-        self.connect()
+            # wait 10s and try to reconnect
+            select.select([], [], [], 10)
+            self.connect()
 
         assert self.is_active()
 
@@ -208,7 +206,7 @@ class Connection(object):
                 # "paramiko: logging handler not found" messages
                 sshlog = logging.getLogger(transport.get_log_channel())
                 sshlog.addHandler(logging.NullHandler())
-            except:
+            except BaseException:
                 pass
             session = transport.open_session()
 
@@ -232,7 +230,7 @@ class Connection(object):
             self.session.close()
             self.session = None
             session = None
-        except:
+        except BaseException:
             # pass all exceptions since the session is already closed or broken
             pass
 
@@ -493,7 +491,7 @@ class Connection(object):
             # currently opening a file after reconnection is implemented
             # as recursion. this is a really bad idea and needs fixing.
             return self.open(filename, mode, bufsize)
-        except:
+        except BaseException:
             # It often happens to me lately that mtui seems to freeze at
             # doing sftp.open() so let's log any other exception here,
             # just in case it gets eaten by some caller in mtui
@@ -536,23 +534,7 @@ class Connection(object):
             return self.rmdir(path)
 
     def is_active(self):
-        """check if connection to host is still active
-
-        Keyword arguments:
-        None
-
-        """
-
-        try:
-            # if the channel is active, we should get a new session.
-            # if not, the channel is probable not active.
-            session = self.new_session()
-            assert(session)
-            self.close_session(session)
-        except Exception:
-            return False
-
-        return True
+        return self.client._transport.is_active()
 
     def close(self):
         """closes SSH channel to host and disconnects
