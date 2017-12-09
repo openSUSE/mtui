@@ -158,6 +158,7 @@ class TestReport(object, metaclass=ABCMeta):
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         """
+        self.hostnames = []
         self.bugs = {}
         self.testplatforms = []
         self.category = ""
@@ -408,17 +409,16 @@ class TestReport(object, metaclass=ABCMeta):
     def connect_targets(self, make_target=Target):
         targets = {}
         new_systems = {}
-        for (host, system) in list(self.systems.items()):
+        for host in self.hostnames:
             try:
                 targets[host] = make_target(
                     self.config,
                     host,
-                    system,
                     self.get_package_list(),
                     logger=self.log,
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
-                new_systems[host] = system
+                new_systems[host] = targets[host].get_system()
             except Exception:
                 self.log.debug(format_exc())
                 msg = 'failed to add host {0} to target list'
@@ -440,7 +440,7 @@ class TestReport(object, metaclass=ABCMeta):
             del self.targets[t]
         self.targets.update(targets)
 
-    def add_target(self, hostname, system):
+    def add_target(self, hostname):
         if hostname in self.targets:
             self.log.warning('already connected to {0}. skipping.'.format(
                 self.targets[hostname].hostname
@@ -450,13 +450,13 @@ class TestReport(object, metaclass=ABCMeta):
             self.targets[hostname] = Target(
                 self.config,
                 hostname,
-                system,
                 self.get_package_list(),
                 logger=self.log,
             )
 
             if self:
-                self.systems[hostname] = system
+                self.systems[hostname] = self.targets[hostname].get_system()
+
         except (SSHException, NoValidConnectionsError, ChannelException):
             self.log.warning('failed to add host {0} to target list'.format(hostname))
             self.log.debug(format_exc())
@@ -477,9 +477,7 @@ class TestReport(object, metaclass=ABCMeta):
                 msg = 'nothing found for testplatform {0!r}'
                 self.log.warning(msg.format(testplatform))
 
-        self.systems.update(dict(
-            [(hn, refhosts.get_host_systemname(hn)) for hn in hostnames]
-        ))
+        self.hostnames += hostnames
 
     def list_bugs(self, sink, arg):
         return sink(self.bugs, arg)

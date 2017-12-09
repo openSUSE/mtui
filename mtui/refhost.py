@@ -309,7 +309,7 @@ class Refhosts(object):
             if 'minor' in candidate:
                 return False
 
-        #major is mandatory
+        # major is mandatory
         if element['major'] != candidate['major']:
             return False
 
@@ -399,46 +399,6 @@ class Refhosts(object):
 
             return attributes
 
-    def get_host_systemname(self, hostname):
-        """
-        assemble a host systemname from a given hostname
-
-        Keyword arguments:
-        hostname -- host to return the systemname for
-
-        """
-        attributes = self.get_host_attributes(hostname)
-
-        addons = "_".join([ad['name'] for ad in attributes.addons])
-        if attributes and "manager-client" in addons:
-            system = "{0}{1}".format(
-                attributes.product['name'], attributes.product['version']['major'])
-            if 'minor' in attributes.product['version']:
-                system += "{0}".format(attributes.product['version']['minor'])
-            system += "-manager-client-{0}".format(attributes.arch)
-        elif addons:
-
-            system = '{!s}{!s}'.format(
-                attributes.product['name'],
-                attributes.product['version']['major'])
-
-            if 'minor' in attributes.product['version']:
-                system += '{!s}'.format(attributes.product['version']['minor'])
-
-            # Unfortuanetly names of moudules are often too long
-            system += "_{!s}-{!s}".format("module", attributes.arch)
-        else:
-
-            system = '{!s}{!s}'.format(
-                attributes.product['name'],
-                attributes.product['version']['major'])
-
-            if 'minor' in attributes.product['version']:
-                system += "{!s}".format(attributes.product['version']['minor'])
-
-            system += "-{!s}".format(attributes.arch)
-        return system
-
 
 class RefhostsResolveFailed(RuntimeError):
     pass
@@ -492,7 +452,7 @@ class _RefhostsFactory(object):
                          for x in config.refhosts_resolvers.split(",")]:
             try:
                 return self._resolve_one(resolver, config, log)
-            except:
+            except BaseException:
                 log.warning('Refhosts: resolver {0} failed'.format(
                     resolver))
                 log.debug(format_exc())
@@ -537,6 +497,7 @@ class _RefhostsFactory(object):
         return self.refhosts_factory(
             config.refhosts_path, log, config.location
         )
+
 
 RefhostsFactory = _RefhostsFactory(
     time.time,

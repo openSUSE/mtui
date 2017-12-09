@@ -146,6 +146,7 @@ def page(text, interactive=True):
         if prompt_user(prompt, "q"):
             return
 
+
 def requires_update(fn):
     @wraps(fn)
     def wrap(self, *a, **kw):
@@ -215,13 +216,9 @@ class DictWithInjections(dict):
 class SUTParse(object):
 
     def __init__(self, args):
-        # TODO add try except blocks
         suts = args.split(",")
-        if len(suts) <= 1:
-            raise UnknownSystemError
-        system = '-s {!s}'.format(suts[-1])
-        targets = ['-t {!s}'.format(i) for i in suts[0:-1]]
-        self.args = system + ' ' + ' '.join(targets)
+        targets = ['-t {!s}'.format(i) for i in suts]
+        self.args = ' '.join(targets)
 
     def print_args(self):
         return self.args

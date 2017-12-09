@@ -14,12 +14,6 @@ class AddHost(Command):
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            "-s",
-            "--system",
-            nargs=1,
-            required=True,
-            help="system type, ie. sles11sp1-i386")
-        parser.add_argument(
             "-t",
             "--target",
             required=True,
@@ -30,11 +24,8 @@ class AddHost(Command):
     def run(self):
 
         for hostname in self.args.target:
-            self.metadata.add_target(hostname, self.args.system[0])
+            self.metadata.add_target(hostname)
 
     @staticmethod
     def complete(_, text, line, begidx, endix):
-        return complete_choices(
-            [('-t', '--target'),
-             ('-s', '--system')],
-            line, text)
+        return complete_choices([('-t', '--target')], line, text)

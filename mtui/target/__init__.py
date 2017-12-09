@@ -34,6 +34,8 @@ from mtui.target.locks import RemoteLock
 
 from qamlib.utils import timestamp
 
+from mtui.target.parsers import get_system
+
 
 class HostsGroup(object):
 
@@ -196,7 +198,7 @@ class HostsGroup(object):
 
 class Target(object):
 
-    def __init__(self, config, hostname, system, packages=[], state='enabled',
+    def __init__(self, config, hostname, packages=[], state='enabled',
                  timeout=300, exclusive=False, connect=True, logger=None,
                  lock=TargetLock, connection=Connection):
         """
@@ -209,7 +211,7 @@ class Target(object):
         self.config = config
         self.host, _, self.port = hostname.partition(':')
         self.hostname = hostname
-        self.system = system
+        self.system = None
         self.packages = {}
         self.out = []
         self.TargetLock = lock
@@ -251,6 +253,9 @@ class Target(object):
             # NOTE: the condition was originally locked and lock.comment
             # idk why.
             self.logger.warning(self._lock.locked_by_msg())
+
+        # get system
+        self.system = get_system(self.logger, self.connection)
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
@@ -325,6 +330,9 @@ class Target(object):
 
     def get_timeout(self):
         return self.connection.timeout
+
+    def get_system(self):
+        return str(self.system)
 
     def set_repo(self, operation, testreport):
         self.logger.debug(
@@ -477,25 +485,25 @@ class Target(object):
     def lastin(self):
         try:
             return self.out[-1][0]
-        except:
+        except BaseException:
             return ''
 
     def lastout(self):
         try:
             return self.out[-1][1]
-        except:
+        except BaseException:
             return ''
 
     def lasterr(self):
         try:
             return self.out[-1][2]
-        except:
+        except BaseException:
             return ''
 
     def lastexit(self):
         try:
             return self.out[-1][3]
-        except:
+        except BaseException:
             return ''
 
     def is_locked(self):
@@ -550,7 +558,7 @@ class Target(object):
         if self.state == 'enabled':
             try:
                 self._lock.lock(comment)
-            except:
+            except BaseException:
                 return
 
     def remove_lock(self):
@@ -566,7 +574,7 @@ class Target(object):
             self.logger.debug(
                 'unable to remove lock from {}. lock is probably not held by this session'. format(
                     self.hostname))
-        except:
+        except BaseException:
             pass
 
     def add_history(self, comment):
