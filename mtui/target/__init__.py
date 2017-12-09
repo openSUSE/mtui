@@ -60,9 +60,7 @@ class HostsGroup(object):
     def select(self, hosts=[], enabled=None):
         if hosts == []:
             if enabled:
-                return HostsGroup(
-                    [h for h in list(self.hosts.values())
-                     if h.state != 'disabled'])
+                return HostsGroup((h for h in self.hosts.values() if h.state != 'disabled'))
             return self
 
         for x in hosts:
@@ -70,19 +68,19 @@ class HostsGroup(object):
                 raise HostIsNotConnectedError(x)
 
         return HostsGroup([
-            h for hn, h in list(self.hosts.items())
+            h for hn, h in self.hosts.items()
             if hn in hosts and ((not enabled) or h.state != 'disabled')
         ])
 
     def unlock(self, *a, **kw):
-        for x in list(self.hosts.values()):
+        for x in self.hosts.values():
             try:
                 x.unlock(*a, **kw)
             except TargetLockedError:
                 pass  # logged in Target#unlock
 
     def lock(self, *a, **kw):
-        for x in list(self.hosts.values()):
+        for x in self.hosts.values():
             try:
                 x.lock(*a, **kw)
             except TargetLockedError:
@@ -90,26 +88,26 @@ class HostsGroup(object):
 
     def query_versions(self, packages):
         rs = []
-        for x in list(self.hosts.values()):
+        for x in self.hosts.values():
             rs.append((x, x.query_package_versions(packages)))
 
         return rs
 
     def add_history(self, data):
-        for tgt in list(self.hosts.values()):
+        for tgt in self.hosts.values():
             tgt.add_history(data)
 
     def names(self):
         return list(self.hosts.keys())
 
     def get(self, remote, local):
-        return FileDownload(list(self.hosts.values()), remote, local).run()
+        return FileDownload(self.hosts.values(), remote, local).run()
 
     def put(self, local, remote):
-        return FileUpload(list(self.hosts.values()), local, remote).run()
+        return FileUpload(self.hosts.values(), local, remote).run()
 
     def remove(self, path):
-        return FileDelete(list(self.hosts.values()), path).run()
+        return FileDelete(self.hosts.values(), path).run()
 
     def run(self, cmd):
         return self._run(cmd)
@@ -178,13 +176,13 @@ class HostsGroup(object):
         return len(self.hosts)
 
     def copy(self):
-        return HostsGroup(list(self.hosts.values()))
+        return HostsGroup(self.hosts.values())
 
     def items(self):
-        return list(self.hosts.items())
+        return self.hosts.items()
 
     def keys(self):
-        return list(self.hosts.keys())
+        return self.hosts.keys()
 
     def pop(self, *a, **kw):
         return self.hosts.pop(*a, **kw)
@@ -193,7 +191,7 @@ class HostsGroup(object):
         return self.hosts.update(*a, **kw)
 
     def values(self):
-        return list(self.hosts.values())
+        return self.hosts.values()
 
 
 class Target(object):
