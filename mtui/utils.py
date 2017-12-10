@@ -172,33 +172,6 @@ else:
         pass
 
 
-class UnknownSystemError(ValueError):
-    pass
-
-# TODO: this is pretty stupid ..
-
-
-def get_release(systems):
-    # TODO: This is problematic. If we have multiple hosts with different systems which require
-    # different ways of updating the system this won't work.
-    systems = ' '.join(systems)
-
-    for rexp, release in list({
-        'rhel': 'YUM',
-        'sle[sd]12': '12',
-        'sap-aio12': '12',
-        'sle[sd]11': '11',
-        'caasp': 'CAASP',
-        '(manager2|sle.11|sles4vmware|studio)': '11',
-        '(manager3|mgr|cloud|slms)': '12',
-        'teradata': '11'
-    }.items()):
-        if re.search(rexp, systems):
-            return release
-
-    raise UnknownSystemError(systems)
-
-
 class DictWithInjections(dict):
 
     def __init__(self, *args, **kw):

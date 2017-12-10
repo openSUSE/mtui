@@ -24,7 +24,7 @@ from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
 from mtui.testopia import Testopia
 
-from mtui.utils import nottest, get_release
+from mtui.utils import nottest
 from mtui.messages import SvnCheckoutInterruptedError
 from mtui import updater
 from mtui.parsemeta import OBSMetadataParser
@@ -246,7 +246,8 @@ class TestReport(object, metaclass=ABCMeta):
         return list(self.packages.keys())
 
     def get_release(self):
-        return get_release(list(self.systems.values()))
+        # TODO ...Fix usability with multiple systems types
+        return [x for x in self.targets.values()][0].system.get_release()
 
     def _get_doer(self, registry):
         return registry[self._get_updater_id()]

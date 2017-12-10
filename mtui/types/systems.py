@@ -1,5 +1,9 @@
 
 
+class UnknownSystemError(ValueError):
+    pass
+
+
 class System(object):
     """
     Store product information from refhost
@@ -14,12 +18,19 @@ class System(object):
         """
         # TODO: check for correctness of base and addons types
         self._data = {"base": base, 'addons': addons}
+        self._sdadata = addons.add(base)
 
     def get_release(self):
-        # TODO: handle all shitty products
-        # problem - manager , cloud , storage , etc
-
-        return int(self._data['base'].version[:2])
+        if self._data['base'].name == 'CAASP':
+            return "CAASP"
+        elif self._data['base'].name == 'rhel':
+            return "YUM"
+        elif self._data['base'].name in ('SLES', 'SLED'):
+            return self._data['base'].version[:2]
+        elif self._data['base'].name == 'openSUSE':
+            return "12"
+        else:
+            raise UnknownSystemError(self._data['base'].name)
 
     def __str__(self):
         addons = "-modules" if self._data['addons'] else ''
