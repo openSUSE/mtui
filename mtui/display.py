@@ -119,6 +119,12 @@ class CommandPromptDisplay(object):
                     indent = indent + 1
                 self.println()
 
+    def list_products(self, hostname, system):
+        self.println("{}: {}".format(green("Referenece host"), yellow(hostname)))
+        for x in system.pretty():
+            self.println(x)
+        self.println()
+
     @staticmethod
     def show_log(hostname, hostlog, sink):
         sink('log from {!s}:'.format(hostname))

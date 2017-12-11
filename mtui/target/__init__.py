@@ -155,6 +155,10 @@ class HostsGroup(object):
         for hn in sorted(self.hosts.keys()):
             self.hosts[hn].report_testsuite_results(sink, arg)
 
+    def report_products(self, sink):
+        for hn in sorted(self.hosts.keys()):
+            self.hosts[hn].report_products(sink)
+
     # dict interface
 
     def __contains__(self, k):
@@ -690,6 +694,9 @@ class Target(object):
             self.lastout(),
             self.lasterr(),
             suitename)
+
+    def report_products(self, sink):
+        return sink(self.hostname, self.system)
 
 
 class Package(object):

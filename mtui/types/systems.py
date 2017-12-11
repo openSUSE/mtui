@@ -18,7 +18,6 @@ class System(object):
         """
         # TODO: check for correctness of base and addons types
         self._data = {"base": base, 'addons': addons}
-        self._sdadata = addons.add(base)
 
     def get_release(self):
         if self._data['base'].name == 'CAASP':
@@ -41,11 +40,11 @@ class System(object):
         return msg
 
     def pretty(self):
-        msg = "Base product: {}-{}-{}\n".format(self._data['base'].name,
-                                                self._data['base'].version, self._data['base'].arch)
+        msg = ["  Base product: {}-{}-{}".format(self._data['base'].name,
+                                                self._data['base'].version, self._data['base'].arch)]
         if self._data['addons']:
-            msg += 'Installed Extensions and Modules:\n'
-            msg += '\n'.join(('  Addon: {:<53} - version: {}'.format(x.name, x.version) for x in self._data['addons']))
+            msg += ['  Installed Extensions and Modules:']
+            msg += ['      Addon: {:<53} - version: {}'.format(x.name, x.version) for x in self._data['addons']]
         return msg
 
     def __eq__(self, other):
