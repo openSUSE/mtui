@@ -37,7 +37,7 @@ def get_parser(sys):
         type=SUTParse,
         action='append',
         help='cumulatively override default hosts from template \n'
-        "format: hostname,system"
+        "format: hostname,hostname2"
     )
     parser.add_argument(
         '-p', '--prerun',

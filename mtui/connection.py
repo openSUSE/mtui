@@ -533,6 +533,17 @@ class Connection(object):
             # as recursion. this is a really bad idea and needs fixing.
             return self.rmdir(path)
 
+    def readlink(self, path):
+        """ Return the target of a symbolic link (shortcut)."""
+        self.log.debug("read link {}:{}:{}".format(self.hostname, self.port, path))
+        if not self.is_active():
+            self.reconnect()
+
+        sftp = self.client.open_sftp()
+        link = sftp.readlink(path)
+        sftp.close()
+        return link
+
     def is_active(self):
         return self.client._transport.is_active()
 

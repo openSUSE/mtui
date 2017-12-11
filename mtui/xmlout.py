@@ -23,7 +23,7 @@ class XMLOutput(object):
     def add_target(self, target):
         node = self.output.createElement('host')
         node.setAttribute('hostname', target.hostname)
-        node.setAttribute('system', target.system)
+        node.setAttribute('system', str(target.system))
         self.update.appendChild(node)
 
         self.add_package_state(node, target, 'before')
