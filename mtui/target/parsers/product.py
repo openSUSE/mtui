@@ -7,12 +7,12 @@ def parse_product(prod):
     name = root.find('./name').text
     arch = root.find('./arch').text
 
-    version = root.find('./baseversion').text
-    if version:
+    try:
+        version = root.find('./baseversion').text
         sp = root.find('./patchlevel').text if root.find('./patchlevel').text != '0' else ""
         version += "SP{}".format(sp) if sp else ""
-    else:
-        version = root.find('/version').text
+    except AttributeError:
+        version = root.find('./version').text
 
     return (name, version, arch)
 
