@@ -17,7 +17,7 @@ def get_system(logger, connection):
             files.remove('baseproduct')
         except ValueError:
             logger.debug("BaseProduct missing -> non SUSE sytem or wrongly installed")
-            suse = false
+            suse = False
 
     if not suse:
         with connection.open('/etc/os-release') as f:
@@ -26,7 +26,6 @@ def get_system(logger, connection):
 
     basefile = connection.readlink('/etc/products.d/baseproduct')
     files.remove(basefile)
-
     with connection.open('/etc/products.d/{}'.format(basefile)) as f:
         name, version, arch = product.parse_product(f)
         base = Product(name, version, arch)
@@ -36,5 +35,4 @@ def get_system(logger, connection):
         with connection.open('/etc/products.d/{}'.format(x)) as f:
             name, version, arch = product.parse_product(f)
             addons.add(Product(name, version, arch))
-
     return System(base, addons)
