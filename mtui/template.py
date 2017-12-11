@@ -158,7 +158,7 @@ class TestReport(object, metaclass=ABCMeta):
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         """
-        self.hostnames = []
+        self.hostnames = set()
         self.bugs = {}
         self.testplatforms = []
         self.category = ""
@@ -477,8 +477,7 @@ class TestReport(object, metaclass=ABCMeta):
             if not hostnames:
                 msg = 'nothing found for testplatform {0!r}'
                 self.log.warning(msg.format(testplatform))
-
-        self.hostnames += hostnames
+        self.hostnames.update(set(hostnames))
 
     def list_bugs(self, sink, arg):
         return sink(self.bugs, arg)
