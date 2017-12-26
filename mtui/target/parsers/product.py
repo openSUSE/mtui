@@ -10,7 +10,7 @@ def parse_product(prod):
     try:
         version = root.find('./baseversion').text
         sp = root.find('./patchlevel').text if root.find('./patchlevel').text != '0' else ""
-        version += "SP{}".format(sp) if sp else ""
+        version += "-SP{}".format(sp) if sp else ""
     except AttributeError:
         version = root.find('./version').text
 
