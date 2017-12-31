@@ -72,7 +72,7 @@ class Config(object):
 
             try:
                 val = self._get_option(inipath, getter)
-            except:
+            except BaseException:
                 if isinstance(default, collections.Callable):
                     val = default()
                 else:
@@ -82,7 +82,7 @@ class Config(object):
             self.log.debug('config.{!s} set to "{!s}"'.format(attr, val))
 
     def _define_config_options(self):
-        normalizer = lambda x: x
+        def normalizer(x): return x
 
         data = [
             ('datadir', ('mtui', 'datadir'),
@@ -156,12 +156,15 @@ class Config(object):
             # RefhostsFactory which need access to parts of config.
         ]
 
-        add_normalizer = lambda x: x if len(x) > 3 \
-            else x + (normalizer,)
+        def add_normalizer(x):
+            return x if len(x) > 3 else x + (normalizer,)
+
         data = (add_normalizer(x) for x in data)
 
         getter = self.config.get
-        add_getter = lambda x: x if len(x) > 4 else x + (getter,)
+
+        def add_getter(x):
+            return x if len(x) > 4 else x + (getter,)
         data = [add_getter(x) for x in data]
         self.data = data
 
