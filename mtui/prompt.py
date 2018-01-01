@@ -16,7 +16,7 @@ from .argparse import ArgsParseFailure
 
 from mtui import commands
 from mtui import messages
-from mtui.template import NullTestReport
+from mtui.template.nulltestreport import NullTestReport
 from mtui.refhost import RefhostsFactory
 from qamlib.utils import ensure_dir_exists
 from qamlib.utils import timestamp

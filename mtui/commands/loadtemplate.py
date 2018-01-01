@@ -1,6 +1,6 @@
-# -*- coding: utf-8 -*-
 
-from mtui.template import OBSUpdateID
+
+from mtui.template.updateid import OBSUpdateID
 from mtui.commands import Command
 from mtui.utils import prompt_user
 from mtui.utils import complete_choices

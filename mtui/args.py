@@ -1,11 +1,8 @@
-# -*- coding: utf-8 -*-
-
-
 
 from argparse import FileType
 
 from .argparse import ArgumentParser
-from mtui.template import OBSUpdateID
+from mtui.template.updateid import OBSUpdateID
 from mtui.utils import SUTParse
 
 from mtui import __version__
