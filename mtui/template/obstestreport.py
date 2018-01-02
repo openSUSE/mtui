@@ -26,6 +26,9 @@ class OBSTestReport(TestReport):
     def _parser(self):
         return OBSMetadataParser()
 
+    def _update_repos_parser(self):
+        return {}
+
     def _show_yourself_data(self):
         return [
             ('ReviewRequestID', self.rrid),

@@ -81,6 +81,12 @@ class TestReport(object, metaclass=ABCMeta):
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         """
+        self.update_repos = {}
+        """
+        :type update_repos dict(Product = repository)
+           where Product = namedtuple
+                 repository = str
+        """
         self.hostnames = set()
         self.bugs = {}
         self.testplatforms = []
@@ -125,7 +131,7 @@ class TestReport(object, metaclass=ABCMeta):
     def read(self, path):
         self._open_and_parse(path)
         self.path = abspath(path)
-
+        self._update_repos_parse()
         if self.config.chdir_to_template_dir:
             os.chdir(dirname(path))
 
@@ -597,3 +603,11 @@ class TestReport(object, metaclass=ABCMeta):
             output.add_target(t)
 
         return output.pretty()
+
+    @abstractmethod
+    def _update_repos_parser(self):
+        """Parse and store update repositories per product and arch"""
+        pass
+
+    def _update_repos_parse(self):
+        self.update_repos = self._update_repos_parser()

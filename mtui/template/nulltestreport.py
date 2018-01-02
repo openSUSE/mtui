@@ -24,3 +24,6 @@ class NullTestReport(TestReport):
 
     def _parser(tr):
         return None
+
+    def _update_repos_parser(tr):
+        return {}
