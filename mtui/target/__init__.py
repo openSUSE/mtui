@@ -312,7 +312,12 @@ class Target(object):
                 packages[match.group(1)] = None
                 continue
             p, v = line.split()
-            packages[p] = RPMVersion(v)
+            # Make sure that it shows to the user the highest version
+            if p in packages:
+                if RPMVersion(v) > packages[p]:
+                    packages[p] = RPMVersion(v)
+            else:
+                packages[p] = RPMVersion(v)
         return packages
 
     def disable_repo(self, repo):
