@@ -85,6 +85,16 @@ def _normalize_rt(x):
     return x
 
 
+def _normalize_cloud(x):
+    if x[0][0] == 'OpenStack-Cloud':
+        x[0][0] = 'suse-openstack-cloud'
+        return x
+    if x[0][0] == 'OpenStack-Cloud-Magnum-Orchestration':
+        x[0][0] = 'openstack-cloud-magnum-orchestration'
+        return x
+    return x
+
+
 def _normalize(x):
     if x[0][1].startswith('11'):
         return _normalize_sle11(x)
@@ -96,6 +106,8 @@ def _normalize(x):
         return _normalize_ses(x)
     if x[0][0] == 'SLE-RT':
         return _normalize_rt(x)
+    if 'OpenStack-Cloud' in x[0][0]:
+        return _normalize_cloud(x)
     return x
 
 
