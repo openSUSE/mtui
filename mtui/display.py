@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-# vim: et sw=2 sts=2
-
 from datetime import datetime
 
 from mtui.rpmver import RPMVersion
@@ -124,6 +121,14 @@ class CommandPromptDisplay(object):
         for x in system.pretty():
             self.println(x)
         self.println()
+
+    def list_update_repos(self, repos, update_id):
+        server_update = "http://download.suse.de/ibs/" + ":/".join(str(update_id).split(":")[0:-1])
+
+        for p, r in repos.items():
+            self.println("{}: {} - {}: {} - {}: {}".format(green("Product"), yellow(p.name),
+                                                           green("version"), yellow(p.version), green("arch"), yellow(p.arch)))
+            self.println("    {}".format(server_update + "/" + r))
 
     @staticmethod
     def show_log(hostname, hostlog, sink):
