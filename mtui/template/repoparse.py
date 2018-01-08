@@ -23,6 +23,9 @@ def _normalize_sle11(x):
     if x[0][0] == 'SLE-SDK':
         x[0][0] = 'sle-sdk'
         return x
+    if x[0][0] == 'SLE-SAP-AIO':
+        x[0][0] = 'SUSE_SLES_SAP'
+        return x
     if x[0][0] == 'SLE-SERVER' and (x[0][1].split('-')[-1] not in ('TERADATA', 'SECURITY')):
         x[0][0] = 'SUSE_SLES'
         x[0][1] = x[0][1].replace('-LTSS', '')
@@ -54,6 +57,9 @@ def _normalize_sle12(x):
         return x
     if x[0][0] == "SLE-RPI":
         x[0][0] = "SLES_RPI"
+        return x
+    if x[0][0] == 'SLE-SAP':
+        x[0][0] == 'SLES_SAP'
         return x
     # All other SLE12 modules/extensions in lowercase
     x[0][0] = x[0][0].lower()
