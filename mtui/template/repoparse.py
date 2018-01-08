@@ -73,6 +73,12 @@ def _normalize_caasp(x):
     return x
 
 
+def _normalize_ses(x):
+    """Normalize SES"""
+    x[0][0] = 'ses'
+    return x
+
+
 def _normalize(x):
     if x[0][1].startswith('11'):
         return _normalize_sle11(x)
@@ -80,6 +86,8 @@ def _normalize(x):
         return _normalize_sle12(x)
     if x[0][0] == 'SUSE-CAASP':
         return _normalize_caasp(x)
+    if x[0][0] == 'Storage':
+        return _normalize_ses(x)
     return x
 
 
