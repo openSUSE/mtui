@@ -79,6 +79,12 @@ def _normalize_ses(x):
     return x
 
 
+def _normalize_rt(x):
+    """Normalize SLES-RT"""
+    x[0][0] = 'SUSE-Linux-Enteprise-RT'
+    return x
+
+
 def _normalize(x):
     if x[0][1].startswith('11'):
         return _normalize_sle11(x)
@@ -88,6 +94,8 @@ def _normalize(x):
         return _normalize_caasp(x)
     if x[0][0] == 'Storage':
         return _normalize_ses(x)
+    if x[0][0] == 'SLE-RT':
+        return _normalize_rt(x)
     return x
 
 
