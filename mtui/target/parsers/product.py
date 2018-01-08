@@ -14,6 +14,9 @@ def parse_product(prod):
     except AttributeError:
         version = root.find('./version').text
 
+   # CAASP uses ALL for update repos and there is only one supported version at time
+    if name == "CAASP":
+        version = ""
     return (name, version, arch)
 
 
