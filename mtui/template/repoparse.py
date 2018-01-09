@@ -29,6 +29,7 @@ def _normalize_sle11(x):
     if x[0][0] == 'SLE-SERVER' and (x[0][1].split('-')[-1] not in ('TERADATA', 'SECURITY')):
         x[0][0] = 'SUSE_SLES'
         x[0][1] = x[0][1].replace('-LTSS', '')
+        x[0][1] = x[0][1].replace('-CLIENT-TOOLS', '')
         return x
     if x[0][1].endswith('TERADATA'):
         x[0][0] = "teradata"
@@ -95,6 +96,13 @@ def _normalize_cloud(x):
     return x
 
 
+def _normalize_manager(x):
+    if x[0][0] == 'SLE-Manager-Tools':
+        x[0][0] = 'sle-manager-tools'
+        return x
+    return x
+
+
 def _normalize(x):
     if x[0][1].startswith('11'):
         return _normalize_sle11(x)
@@ -108,6 +116,9 @@ def _normalize(x):
         return _normalize_rt(x)
     if 'OpenStack-Cloud' in x[0][0]:
         return _normalize_cloud(x)
+    if 'SUSE-Manager' in x[0][0] or 'SLE-Manager-Tools' in x[0][0]:
+        return _normalize_manager(x)
+    # Cornercases ..
     return x
 
 
