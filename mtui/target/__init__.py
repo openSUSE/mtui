@@ -7,7 +7,6 @@
 import os
 import re
 import signal
-import subprocess
 from traceback import format_exc
 
 from mtui.connection import Connection
@@ -348,42 +347,32 @@ class Target(object):
                 operation))
         testreport.set_repo(self, operation)
 
-    def run_repose(self, cmd, arg):
-        cmdline = [
-            'repose',
-            cmd,
-            ('root@{}'.format(str(self.hostname),)),
-            '--',
-            arg,
-        ]
-        self.logger.info(
-            "local/:{} {}".format(self.hostname, ' '.join(cmdline)))
+    def run_zypper(self, cmd, repos, rrid):
+        # ur - generator returning tuple with product, repopart
+        ur = ((x, y) for x, y in repos.items() if x in self.system.flatten())
 
-        time_before = timestamp()
+        def name(product, rrid):
+            return "issue-{}:{}:p={}".format(product.name, product.version, rrid.maintenance_id)
 
-        cld = subprocess.Popen(
-            cmdline,
-            close_fds=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        stdout, stderr = cld.communicate()
-        ex = cld.returncode
-        logger = self.logger.info if ex == 0 else self.logger.error
+        def fullpath(path, rrid):
+            # TODO: confiruable download path?
+            dl_path = "http://download.suse.de/ibs/"
+            return dl_path + "/" + ":/".join(str(rrid).split(":")[:-1]) + "/" + path
 
-        time_after = timestamp()
-        runtime = int(time_after) - int(time_before)
+        self.lock()
+        for x, y in ur:
+            if 'ar' in cmd:
+                self.logger.info("Adding repo {} on {}".format(y, self.hostname))
+                self.run("zypper {0} {1} {2} {1}".format(cmd, name(x, rrid), fullpath(y, rrid)))
+            elif "rr" in cmd:
+                self.logger.info("Removing repo {} on {}".format(y, self.hostname))
+                self.run("zypper {0} {1}".format(cmd, fullpath(y, rrid)))
+            else:
+                self.unlock(force=True)
+                raise ValueError
 
-        self.out.append(
-            [' '.join(cmdline),
-             stdout.decode(),
-             stderr.decode(),
-             ex, runtime])
-
-        for label, data in (('stdout', stdout), ('stderr', stderr)):
-            for l in data.decode().rstrip().splitlines():
-                logger("local/{} {}: {}".format(self.hostname, label, l))
+        self.run("zypper -n ref")
+        self.unlock(force=True)
 
     def run(self, command, lock=None):
         if self.state == 'enabled':

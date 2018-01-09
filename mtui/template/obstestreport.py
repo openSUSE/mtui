@@ -2,6 +2,7 @@ from mtui.template.testreport import TestReport
 from mtui.parsemeta import OBSMetadataParser
 from mtui.template.repoparse import repoparse
 
+
 class OBSTestReport(TestReport):
     _type = "OBS"
 
@@ -38,9 +39,11 @@ class OBSTestReport(TestReport):
 
     def set_repo(self, target, operation):
         if operation == 'add':
-            target.run_repose('issue-add', self.report_wd())
+            target.run_zypper('-n ar -gckn', self.update_repos, self.rrid)
+            #target.run_repose('issue-add', self.report_wd())
         elif operation == 'remove':
-            target.run_repose('issue-rm', str(self.rrid))
+            target.run_zypper('-n rr', self.update_repos, self.rrid)
+            #target.run_repose('issue-rm', str(self.rrid))
         else:
             raise ValueError(
                 "Not supported repose operation {}".format(operation))

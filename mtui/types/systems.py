@@ -41,7 +41,7 @@ class System(object):
 
     def pretty(self):
         msg = ["  Base product: {}-{}-{}".format(self._data['base'].name,
-                                                self._data['base'].version, self._data['base'].arch)]
+                                                 self._data['base'].version, self._data['base'].arch)]
         if self._data['addons']:
             msg += ['  Installed Extensions and Modules:']
             msg += ['      Addon: {:<53} - version: {}'.format(x.name, x.version) for x in self._data['addons']]
@@ -55,3 +55,8 @@ class System(object):
 
     def get_base(self):
         return(self._data['base'])
+
+    def flatten(self):
+        flat = {self._data['base']}
+        flat.update(self._data['addons'])
+        return flat
