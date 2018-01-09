@@ -1,4 +1,3 @@
-from os.path import join
 from mtui.template.testreport import TestReport
 from mtui.parsemeta import OBSMetadataParser
 from mtui.template.repoparse import repoparse
@@ -29,7 +28,7 @@ class OBSTestReport(TestReport):
 
     def _update_repos_parser(self):
         # TODO: exceptions handling
-        return repoparse(self.config.template_dir, str(self.id))
+        return repoparse(self.report_wd())
 
     def _show_yourself_data(self):
         return [

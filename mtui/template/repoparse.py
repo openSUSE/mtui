@@ -1,12 +1,12 @@
 
-
 from os.path import join
+
 import xml.etree.ElementTree as ET
 from mtui.types import Product
 
 
-def _read_project(p, *path):
-    with open(join(p, *path, 'project.xml'), mode='r') as f:
+def _read_project(path):
+    with open(join(path, 'project.xml'), mode='r') as f:
         return ET.fromstringlist(f)
 
 
@@ -122,6 +122,6 @@ def _normalize(x):
     return x
 
 
-def repoparse(p, *path):
-    project = _xmlparse(_read_project(p, *path))
+def repoparse(path):
+    project = _xmlparse(_read_project(path))
     return {Product(x[0], x[1], x[2]): y for x, y in map(_normalize, project)}
