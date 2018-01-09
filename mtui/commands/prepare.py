@@ -20,7 +20,7 @@ class Prepare(Command):
             '--force',
             action='store_const',
             const='force',
-            help="force package instllation")
+            help="force package installation")
         parser.add_argument(
             '-i',
             '--installed',
