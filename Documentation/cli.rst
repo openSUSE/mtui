@@ -62,7 +62,7 @@ is the Incident ID and ``YYYYYY`` is the Request ID.
 
 Cumulatively overrides default refhosts given in the test report.
 
-``SPEC`` is a string in the form ``hostname,system``.
+``SPEC`` is a string in the form ``hostname,hostname2..``.
 
 ``-t DIR, --template_dir DIR``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

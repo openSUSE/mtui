@@ -28,10 +28,6 @@ However, it blocks until all currently running commands have finished.
 Common Argument Types
 =====================
 
-.. option:: -s SYSTEM, --system SYSTEM
-
-  System type, e.g. sles12sp1-i386.
-
 .. option:: -t HOST, --target HOST
 
   Address of the target host (should be the FQDN).
@@ -51,11 +47,11 @@ add_host
 
 ::
 
-  add_host -s SYSTEM -t HOST
+  add_host -t HOST
 
 Adds another machine to the target host list.
 
-Both target host and system type need to be specified when adding a host.
+Target host need to be specified when adding a host.
 
 
 remove_host
@@ -113,6 +109,16 @@ list_locks
   list_locks
 
 Lists lock state of all connected hosts.
+
+
+list_products
++++++++++++++
+
+::
+
+  list_products [-t HOSTS]
+
+Lists installed poducts on selected or all hosts.
 
 
 set_host_state
@@ -670,6 +676,17 @@ a package, the package is not installed.
   Prints versions required after the update.
 
 
+show_update_repos
++++++++++++++++++
+
+::
+  
+    show_update_repos
+
+List all update repositories by Product, version and architecture
+
+
+
 list_versions
 +++++++++++++
 
@@ -1030,7 +1047,7 @@ edit
 Edits the testing template or a local file. To edit template call ``edit``
 without parameters.
 
-The evironment variable ``EDITOR`` is processed to find the preferred
+The environment variable ``EDITOR`` is processed to find the preferred
 editor. If ``EDITOR`` is empty, ``vi`` is set as default.
 
 **Options:**

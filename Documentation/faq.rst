@@ -207,7 +207,7 @@ MTUI offers an interface for the tester to add his own script to spawn
 a terminal emulator on the refhosts. MTUI passes the hostnames to the
 script and the script should connect a shell to t hosts.
 Currently, scripts for gnome-terminal (``gnome``), konsole (``kde``), ``xterm``,
-``tmux`` and ``urxvtc`` are available.
+``tmux``,  ``urxvtc``, ``sakura`` and ``screen`` are available.
 
 Example::
 
@@ -254,12 +254,12 @@ Can I export the update log from a specific refhost?
 
 MTUI exports the update log from the first refhost into the test report
 by default. In case you want to export the log from a specific refhost, you can
-do so by using the ``-n`` parameter and adding the hostname to the ``export``
+do so by using the ``-it`` parameter and adding the hostname to the ``export``
 command.
 
 Example::
 
-  mtui> export -n edna.qam.suse.de
+  mtui> export -t edna.qam.suse.de
   warning: file /suse/testing/testreports//SUSE:Maintenance:3601:126030/log exists.
   should i overwrite /suse/testing/testreports//SUSE:Maintenance:3601:126030/log? (y/N) y
   info: exporting XML to /suse/testing/testreports//SUSE:Maintenance:3601:126030/log
@@ -380,7 +380,7 @@ system type must be provided.
 
 Example::
 
-  mtui> add_host -t craig.qam.suse.cz -s sles12sp2-x86_64
+  mtui> add_host -t craig.qam.suse.cz
   info: connecting to craig.qam.suse.cz
 
 
@@ -406,7 +406,7 @@ machines, the host list could be overwritten with the ``-s`` option.
 
 Example::
 
-  # mtui -s edna.qam.suse.cz,sle12None -s moe.qam.suse.cz,sle12None -r SUSE:Maintenance:3601:126030
+  # mtui -s edna.qam.suse.cz -s moe.qam.suse.cz -r SUSE:Maintenance:3601:126030
   info: connecting to edna.qam.suse.cz
   info: connecting to moe.qam.suse.cz
   mtui> list_hosts
