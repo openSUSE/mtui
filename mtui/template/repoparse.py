@@ -17,8 +17,6 @@ def _xmlparse(xml):
 
 def _normalize_sle11(x):
     """ Normalize SLE 11 Products """
-    # TODO: SLE11 Public Cloud module ?
-    # TODO: SLE11 SECURITY and PubCloud fake products without SP versioning
 
     if x[0][0] == 'SLE-SDK':
         x[0][0] = 'sle-sdk'
@@ -26,7 +24,7 @@ def _normalize_sle11(x):
     if x[0][0] == 'SLE-SAP-AIO':
         x[0][0] = 'SUSE_SLES_SAP'
         return x
-    if x[0][0] == 'SLE-SERVER' and (x[0][1].split('-')[-1] not in ('TERADATA', 'SECURITY')):
+    if x[0][0] == 'SLE-SERVER' and (x[0][1].split('-')[-1] not in ('TERADATA', 'SECURITY', 'PUBCLOUD')):
         x[0][0] = 'SUSE_SLES'
         x[0][1] = x[0][1].replace('-LTSS', '')
         x[0][1] = x[0][1].replace('-CLIENT-TOOLS', '')
@@ -39,8 +37,11 @@ def _normalize_sle11(x):
         x[0][0] = 'security'
         x[0][1] = '11'
         return x
+    if x[0][1].endswith('PUBCLOUD'):
+        x[0][0] = 'sle-module-pubcloud'
+        x[0][1] = '11'
 
-    # TODO: pubcloud and other corner cases
+    # TODO: corner cases
     return x
 
 
