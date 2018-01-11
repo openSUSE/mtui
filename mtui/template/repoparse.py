@@ -40,7 +40,10 @@ def _normalize_sle11(x):
     if x[0][1].endswith('PUBCLOUD'):
         x[0][0] = 'sle-module-pubcloud'
         x[0][1] = '11'
-
+        return x
+    if x[0][0] == 'SLE-SMT':
+        x[0][0] = 'sle-smt'
+        return x
     # TODO: corner cases
     return x
 
