@@ -86,7 +86,7 @@ def _normalize_ses(x):
 
 def _normalize_rt(x):
     """Normalize SLES-RT"""
-    x[0][0] = 'SUSE-Linux-Enteprise-RT'
+    x[0][0] = 'SUSE-Linux-Enterprise-RT'
     return x
 
 
@@ -108,6 +108,9 @@ def _normalize_manager(x):
 
 
 def _normalize(x):
+    # SLERT must be before version based comparsion
+    if x[0][0] == 'SLE-RT':
+        return _normalize_rt(x)
     if x[0][1].startswith('11'):
         return _normalize_sle11(x)
     if x[0][1].startswith('12'):
@@ -116,8 +119,6 @@ def _normalize(x):
         return _normalize_caasp(x)
     if x[0][0] == 'Storage':
         return _normalize_ses(x)
-    if x[0][0] == 'SLE-RT':
-        return _normalize_rt(x)
     if 'OpenStack-Cloud' in x[0][0]:
         return _normalize_cloud(x)
     if 'SUSE-Manager' in x[0][0] or 'SLE-Manager-Tools' in x[0][0]:
