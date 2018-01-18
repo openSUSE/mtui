@@ -44,7 +44,6 @@ def _normalize_sle11(x):
     if x[0][0] == 'SLE-SMT':
         x[0][0] = 'sle-smt'
         return x
-    # TODO: corner cases
     return x
 
 
@@ -123,6 +122,8 @@ def _normalize(x):
         return _normalize_cloud(x)
     if 'SUSE-Manager' in x[0][0] or 'SLE-Manager-Tools' in x[0][0]:
         return _normalize_manager(x)
+    if 'SLE-STUDIOONSITE' in x[0][0]:
+        x[0][0] = x[0][0].lower()
     # Cornercases ..
     return x
 
