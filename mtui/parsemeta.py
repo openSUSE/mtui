@@ -43,11 +43,11 @@ class MetadataParser(object):
             results.testplatforms.append(match.group(1))
             return True
 
-        match = re.search('(.*-.*) \(reference host: (\S+).*\)', line)
+        match = re.search('.* \(reference host: (\S+).*\)', line)
         if match:
-            if '?' not in match.group(2):
-                results.systems[match.group(2)] = match.group(1)
-            return True
+            if '?' not in match.group(1):
+                results.hostnames.add(match.group(1))
+                return True
 
         match = re.search('Bugs: (.*)', line)
         if match:
