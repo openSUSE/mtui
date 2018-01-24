@@ -24,7 +24,11 @@ class AddHost(Command):
     def run(self):
 
         for hostname in self.args.target:
-            self.metadata.add_target(hostname)
+            try:
+                self.metadata.add_target(hostname)
+            except Exception:
+                # this is handled in target code
+                pass
 
     @staticmethod
     def complete(_, text, line, begidx, endix):
