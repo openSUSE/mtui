@@ -152,7 +152,7 @@ class Connection(object):
             raise
         except Exception as error:
             # general Exception
-            self.log.error('{!s}: {!s}'.format(self.hostname, error))
+            self.log.debug('{!s}: {!s}'.format(self.hostname, error))
             raise
 
     def reconnect(self):
