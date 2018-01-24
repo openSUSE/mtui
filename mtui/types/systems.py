@@ -28,6 +28,8 @@ class System(object):
             return self._data['base'].version[:2]
         elif self._data['base'].name == 'openSUSE':
             return "12"
+        elif self._data['base'].name == 'sle-studioonsite':
+            return "11"
         else:
             raise UnknownSystemError(self._data['base'].name)
 
