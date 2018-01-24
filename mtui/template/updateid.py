@@ -58,4 +58,4 @@ class OBSUpdateID(UpdateID):
             testreport_svn_checkout
         )
 
-        self.smelt = SMELT(self.id.maintenance_id)
+        self.smelt = SMELT(self.id)

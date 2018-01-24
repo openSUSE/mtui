@@ -53,7 +53,7 @@ def fill_template(review_id, logger, template, xmldata, config, smelt):
         return _xml_to_template(review_id, logger, template, xmldata, config, smelt_output=None, openqa_links=None)
 
     logger.debug("parse smelt data and prepare pretty report")
-    openqa_links = smelt.openqa_links()
+    openqa_links = smelt.openqa_links_verbose()
     if openqa_links:
         openqa_links = ["openQA tests:\n", "=============\n",
                         "\n"] + [a + '\n' for a in openqa_links] + ['\n']
