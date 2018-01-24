@@ -359,7 +359,6 @@ class Target(object):
             dl_path = "http://download.suse.de/ibs/"
             return dl_path + "/" + ":/".join(str(rrid).split(":")[:-1]) + "/" + path
 
-        self.lock()
         for x, y in ur:
             if 'ar' in cmd:
                 self.logger.info("Adding repo {} on {}".format(y, self.hostname))
@@ -372,7 +371,6 @@ class Target(object):
                 raise ValueError
 
         self.run("zypper -n ref")
-        self.unlock(force=True)
 
     def run(self, command, lock=None):
         if self.state == 'enabled':
