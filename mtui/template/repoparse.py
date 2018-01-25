@@ -124,6 +124,8 @@ def _normalize(x):
         return _normalize_manager(x)
     if 'SLE-STUDIOONSITE' in x[0][0]:
         x[0][0] = x[0][0].lower()
+    if 'SLE-WEBYAST' in x[0][0]:
+        x[0][0] = 'sle-11-WebYaST'
     # Cornercases ..
     return x
 
