@@ -14,7 +14,7 @@ from mtui.hooks import PreScript
 from mtui.hooks import PostScript
 from mtui.hooks import CompareScript
 
-from mtui.rpmver import RPMVersion
+from qamlib.types.rpmver import RPMVersion
 from mtui.utils import yellow
 
 

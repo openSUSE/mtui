@@ -4,7 +4,7 @@
 
 import re
 
-from mtui.rpmver import RPMVersion
+from qamlib.types.rpmver import RPMVersion
 from mtui.target.actions import UpdateError
 from mtui.target.actions import ThreadedMethod
 

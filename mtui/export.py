@@ -7,7 +7,7 @@ import os
 import codecs
 import xml.dom.minidom
 
-from mtui.rpmver import RPMVersion
+from qamlib.types.rpmver import RPMVersion
 from mtui.systemcheck import system_info
 
 

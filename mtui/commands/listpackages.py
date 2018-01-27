@@ -6,7 +6,7 @@ from mtui.utils import blue, yellow, red, green
 from mtui.utils import requires_update
 from mtui.utils import complete_choices
 from mtui import messages
-from mtui.rpmver import RPMVersion
+from qamlib.types.rpmver import RPMVersion
 
 
 class ListPackages(Command):
@@ -63,13 +63,12 @@ class ListPackages(Command):
         if not pkgs:
             raise messages.MissingPackagesError()
 
-
         for target, pvs in hosts.query_versions(pkgs):
             self.println("packages on {0} ({1}):".format(
                 target.hostname,
                 target.system,
             ))
-            column_size = [30,20]
+            column_size = [30, 20]
             host_output = []
             for p, v in list(pvs.items()):
                 if self.metadata:
@@ -87,11 +86,11 @@ class ListPackages(Command):
                 if (len(str(v)) > column_size[1]):
                     column_size[1] = len(str(v))+1
 
-                host_output.append([p,v,state])
+                host_output.append([p, v, state])
 
-            format_output = '{{0:{0}}}: {{1!s:{1}}} {{2}}'.format(column_size[0],column_size[1]);
+            format_output = '{{0:{0}}}: {{1!s:{1}}} {{2}}'.format(column_size[0], column_size[1]);
             for line in host_output:
-                self.printPVLN(line[0], line[1], line[2], format_output);
+                self.printPVLN(line[0], line[1], line[2], format_output)
 
             self.println()
 
