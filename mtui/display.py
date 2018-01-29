@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from mtui.rpmver import RPMVersion
+from qamlib.types.rpmver import RPMVersion
 
 from mtui.utils import blue, green, red, yellow
 

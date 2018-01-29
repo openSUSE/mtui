@@ -13,7 +13,7 @@ from mtui.connection import Connection
 from mtui.connection import errno
 from mtui.connection import CommandTimeout
 
-from mtui.rpmver import RPMVersion
+from qamlib.types.rpmver import RPMVersion
 from mtui import messages
 from mtui.messages import HostIsNotConnectedError
 
