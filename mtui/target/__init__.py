@@ -33,7 +33,7 @@ from mtui.target.locks import RemoteLock
 
 from qamlib.utils import timestamp
 
-from mtui.target.parsers import get_system
+from mtui.target.parsers import parse_system
 
 
 class HostsGroup(object):
@@ -256,7 +256,7 @@ class Target(object):
             self.logger.warning(self._lock.locked_by_msg())
 
         # get system
-        self.system = get_system(self.logger, self.connection)
+        self.system = parse_system(self.logger, self.connection)
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
