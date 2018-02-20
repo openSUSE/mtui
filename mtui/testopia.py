@@ -54,7 +54,8 @@ class Testopia(object):
         # cache testcases since Testopia is slow
         self.update_testcase_list()
 
-    def _unescape_html(self, text):
+    @staticmethod
+    def _unescape_html(text):
         text = re.sub('<br>', '\n', text)
         text = re.sub('</span>', '\n', text)
         text = re.sub('</div>', '\n', text)
@@ -66,7 +67,8 @@ class Testopia(object):
         except Exception:
             return text
 
-    def _escape_html(self, text):
+    @staticmethod
+    def _escape_html(text):
         entities = {'|br|': '<br>'}
         try:
             return saxutils.escape(text, entities)
@@ -124,15 +126,13 @@ class Testopia(object):
 
         Keyword arguments:
         packages -- list of package names to search for
-        product  -- SUSE product to query for (9, 10, 11)
+        product  -- SUSE product to query for (11, 12, 15)
 
         """
 
         cases = {}
 
-        try:
-            assert(self.product and self.packages)
-        except AssertionError:
+        if not self.product and not self.packages:
             return {}
 
         self.log.debug(
@@ -157,10 +157,10 @@ class Testopia(object):
         if not response:
             response = self.bugzilla.query_interface(
                 'TestCase.list', {
-                    'tags': tags, 'tags_type': 'anyexact', 'plan_id': self.plans['10']})
+                    'tags': tags, 'tags_type': 'anyexact', 'plan_id': self.plans['11']})
             if response:
                 self.log.warning(
-                    'found testcases for product 10 while {!s} was empty'.format(
+                    'found testcases for product 11 while {!s} was empty'.format(
                         self.product))
                 self.log.warning(
                     'please consider migrating the testcases to product {!s}'.format(
@@ -168,10 +168,9 @@ class Testopia(object):
 
         for case in response:
             cases[
-                case['case_id']] = {
-                'summary': case['summary'], 'status': self.status[
-                    case['case_status_id']], 'automated': self.automated[
-                    case['isautomated']]}
+                case['case_id']] = {'summary': case['summary'],
+                                    'status': self.status[case['case_status_id']],
+                                    'automated': self.automated[case['isautomated']]}
 
         return cases
 
@@ -185,9 +184,7 @@ class Testopia(object):
 
         """
 
-        try:
-            assert(case_id)
-        except AssertionError:
+        if not case_id:
             return {}
 
         for case in self.casebuffer:
@@ -251,8 +248,7 @@ class Testopia(object):
             plan = self.plans[self.product]
         except KeyError:
             self.log.error(
-                'no testplan found for product {!s}'.format(
-                    self.product))
+                'no testplan found for product {!s}'.format(self.product))
             raise
 
         self.log.debug(
@@ -359,5 +355,3 @@ class Testopia(object):
         # the next query
         self.remove_testcase_cache(case_id)
         self.update_testcase_list()
-
-        return
