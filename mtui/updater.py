@@ -2,9 +2,6 @@
 #
 # update and software stack management
 #
-
-
-
 from mtui.target.actions import UpdateError
 from mtui.target.downgrade import Downgrade
 from mtui.target.install import Install
@@ -66,6 +63,7 @@ class RedHatUpdate(Update):
             'yum -y update {!s}'.format(' '.join(self.packages)),
         ]
 
+
 class CaaSPUpdate(Update):
 
     def __init__(self, logger, targets, packages, testreport):
@@ -88,6 +86,7 @@ class CaaSPUpdate(Update):
 
 
 Updater = DictWithInjections({
+    '15': ZypperOBSUpdate,
     '12': ZypperOBSUpdate,
     '11': ZypperOBSUpdate,
     'YUM': RedHatUpdate,
@@ -148,17 +147,19 @@ class RedHatPrepare(Prepare):
 
         self.commands = commands
 
+
 class CaaSPPrepare(Prepare):
     def run(self):
         pass
 
+
 Preparer = DictWithInjections({
+    '15': ZypperPrepare,
     '12': ZypperPrepare,
     '11': ZypperPrepare,
     'YUM': RedHatPrepare,
     'CAASP': CaaSPPrepare
 }, key_error=MissingPreparerError)
-
 
 
 class ZypperDowngrade(Downgrade):
@@ -185,14 +186,16 @@ class RedHatDowngrade(Downgrade):
         self.commands = [
             'yum -y downgrade {!s}'.format(' '.join(self.packages))]
 
+
 class CaaSPDowngrade(Downgrade):
     def __init__(self, *a, **kw):
         super(CaaSPDowngrade, self).__init__(*a, **kw)
         self.type = 'transactional'
-        self.commands = ['transactional-update rollback $(transactional-update rollback | cut -d" " -f 4)'];
+        self.commands = ['transactional-update rollback $(transactional-update rollback | cut -d" " -f 4)']
 
 
 Downgrader = DictWithInjections({
+    '15': ZypperDowngrade,
     '12': ZypperDowngrade,
     '11': ZypperDowngrade,
     'YUM': RedHatDowngrade,
@@ -223,7 +226,9 @@ class RedHatInstall(Install):
 
         self.commands = commands
 
+
 Installer = DictWithInjections({
+    '15': ZypperInstall,
     '12': ZypperInstall,
     '11': ZypperInstall,
     'YUM': RedHatInstall,
@@ -254,7 +259,9 @@ class RedHatUninstall(Install):
 
         self.commands = commands
 
+
 Uninstaller = DictWithInjections({
+    '15': ZypperUninstall,
     '12': ZypperUninstall,
     '11': ZypperUninstall,
     'YUM': RedHatUninstall,
