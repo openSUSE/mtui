@@ -15,8 +15,12 @@ def parse_system(logger, connection):
         suse = True
 
     if not suse:
-        with connection.open('/etc/os-release') as f:
-            name, version, arch = product.parse_os_release(f)
+        try:
+            with connection.open('/etc/os-release') as f:
+                name, version, arch = product.parse_os_release(f)
+        except FileNotFoundError:
+            # TODO: old RH systems have only /etc/redhat-release
+            return System(Product("rhel", "6", "x86_64"))
         return System(Product(name, version, arch))
 
     basefile = connection.readlink('/etc/products.d/baseproduct')
