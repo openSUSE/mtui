@@ -224,7 +224,6 @@ class Connection(object):
             # pass all exceptions since the session is already closed or broken
             pass
 
-
     def __run_command(self, command):
         """ open new session and run command in it
 
@@ -241,7 +240,6 @@ class Connection(object):
                 self.close_session(session)
             return False
         return session
-
 
     def run(self, command, lock=None):
         """run command over SSH channel
@@ -329,7 +327,6 @@ class Connection(object):
         self.stderr = stderr.decode('utf-8')
         return exitcode
 
-
     def __invoke_shell(self, width, height):
         """
         params: widh
@@ -347,7 +344,6 @@ class Connection(object):
             return False
 
         return session
-
 
     def shell(self):
         """invoke remote shell
@@ -445,7 +441,7 @@ class Connection(object):
 
         # make file executable since it's probably a script which needs to be
         # run
-        sftp.chmod(remote, stat.S_IEXEC)
+        sftp.chmod(remote, stat.S_IRWXG|stat.S_IRWXU)
 
         sftp.close()
 
