@@ -329,6 +329,26 @@ class Connection(object):
         self.stderr = stderr.decode('utf-8')
         return exitcode
 
+
+    def __invoke_shell(self, width, height):
+        """
+        params: widh
+        params: height
+        returns: session with open shell on pass else False
+        """
+
+        try:
+            session = self.new_session()
+            session.get_pty('xterm', width, height)
+            session.invoke_shell()
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            if session:
+                self.close_session(session)
+            return False
+
+        return session
+
+
     def shell(self):
         """invoke remote shell
 
@@ -344,15 +364,10 @@ class Connection(object):
         session = self.new_session()
         width, height = termsize()
 
-        try:
-            session.get_pty('xterm', width, height)
-            session.invoke_shell()
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            # reconnect if the channel is lost
+        session = self.__invoke_shell(width, height)
+        while not session:
             self.reconnect()
-            # currently rerunning a command after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.shell()
+            session = self.__invoke_shell(width, height)
 
         try:
             tty.setraw(sys.stdin.fileno())
