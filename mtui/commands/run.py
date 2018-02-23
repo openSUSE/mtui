@@ -5,7 +5,9 @@ from argparse import REMAINDER
 from mtui.commands import Command
 from mtui.utils import complete_choices, page
 from mtui.target.locks import LockedTargets
+from mtui.target.locks import TargetLockedError
 from mtui.messages import NoRefhostsDefinedError
+
 
 class Run(Command):
     """
@@ -40,25 +42,29 @@ class Run(Command):
             command += i + ' '
 
         command = command.rstrip(' ')
+        try:
+            with LockedTargets(list(targets.values())):
+                try:
+                    targets.run(command)
+                except KeyboardInterrupt:
+                    return
 
-        with LockedTargets(list(targets.values())):
-            try:
-                targets.run(command)
-            except KeyboardInterrupt:
-                return
+                output = []
 
-            output = []
+                for target in targets:
+                    output.append(
+                        '{!s}:-> {!s} [{!s}]'.format(
+                            target,
+                            targets[target].lastin(),
+                            targets[target].lastexit()))
+                    list(map(output.append, targets[target].lastout().split('\n')))
+                    if targets[target].lasterr():
+                        list(map(output.append, ['stderr:'] +
+                                 targets[target].lasterr().split('\n')))
 
-            for target in targets:
-                output.append(
-                    '{!s}:-> {!s} [{!s}]'.format(
-                        target,
-                        targets[target].lastin(),
-                        targets[target].lastexit()))
-                list(map(output.append, targets[target].lastout().split('\n')))
-                if targets[target].lasterr():
-                    list(map(output.append, ['stderr:'] +
-                        targets[target].lasterr().split('\n')))
+        except TargetLockedError as e:
+            self.log.error("Target {}".format(e))
+            return
 
         page(output, self.prompt.interactive)
         self.log.info('done')
