@@ -69,7 +69,6 @@ class Connection(object):
 
         self.timeout = timeout
 
-        self.session = None
         self.client = paramiko.SSHClient()
 
         self.load_keys()
@@ -181,17 +180,10 @@ class Connection(object):
         that leftovers/session errors from the previous command do not
         interfere with the current command.
 
-        the current session is saved as "session" attribute of the object
 
         session = self.new_session()
         session.exec_command(command)
         self.close_session(session)
-
-        or
-
-        self.new_session()
-        self.session.exec_command(command)
-        self.close_session()
         """
 
         self.log.debug(
@@ -213,11 +205,10 @@ class Connection(object):
             # disable blocking and timeout to use the session in async mode
             session.setblocking(0)
             session.settimeout(0)
-            self.session = session
         except Exception:
-            self.session = None
+            session = None
 
-        return self.session
+        return session
 
     def close_session(self, session=None):
         """close the current session"""
@@ -226,9 +217,8 @@ class Connection(object):
             'closing session at {!s}:{!s}'.format(
                 self.hostname, self.port))
         try:
-            self.session.shutdown(2)
-            self.session.close()
-            self.session = None
+            session.shutdown(2)
+            session.close()
             session = None
         except BaseException:
             # pass all exceptions since the session is already closed or broken
@@ -270,7 +260,7 @@ class Connection(object):
             # wait for data to be transmitted. if the timeout is hit,
             # ask the user on how to procceed
             if select.select([session], [], [], self.timeout) == ([], [], []):
-                assert self.session
+                assert session
 
                 # writing on stdout needs locking as all run threads could
                 # write at the same time to stdout
