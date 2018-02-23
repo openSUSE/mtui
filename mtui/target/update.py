@@ -35,7 +35,7 @@ class Update(object):
                 self._run(params)
 
     def _run_transactional(self, params):
-        if any(param is not None for param in params):
+        if any(param for param in params):
             self.log.warning(
                 'The options --noprepare, --newpackage and --noscript are not valid for transactional updates')
 
@@ -102,9 +102,7 @@ class Update(object):
         if 'noscript' not in params:
             self.testreport.run_scripts(PostScript, self.targets)
             self.testreport.run_scripts(CompareScript, self.targets)
-            self.targets.remove(self.testreport.target_wd('output'))
 
-    # TODO: check funcionality
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'zypper' in stdin and exitcode == 104:
             self.log.critical(
