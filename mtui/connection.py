@@ -224,6 +224,25 @@ class Connection(object):
             # pass all exceptions since the session is already closed or broken
             pass
 
+
+    def __run_command(self, command):
+        """ open new session and run command in it
+
+        parameter: command -> str
+        result: Succes - session instance with running command
+                Fail - False
+        """
+
+        try:
+            session = self.new_session()
+            session.exec_command(command)
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            if session:
+                self.close_session(session)
+            return False
+        return session
+
+
     def run(self, command, lock=None):
         """run command over SSH channel
 
@@ -243,16 +262,12 @@ class Connection(object):
         self.stderr = ''
         stdout = b''
         stderr = b''
-        session = self.new_session()
 
-        try:
-            session.exec_command(command)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            # reconnect if the channel is lost
+        session = self.__run_command(command)
+
+        while not session:
             self.reconnect()
-            # currently rerunning a command after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.run(command, lock)
+            session = self.__run_command(command)
 
         while True:
             buffer = b''
