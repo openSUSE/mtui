@@ -69,7 +69,6 @@ class Connection(object):
 
         self.timeout = timeout
 
-        self.session = None
         self.client = paramiko.SSHClient()
 
         self.load_keys()
@@ -181,17 +180,10 @@ class Connection(object):
         that leftovers/session errors from the previous command do not
         interfere with the current command.
 
-        the current session is saved as "session" attribute of the object
 
         session = self.new_session()
         session.exec_command(command)
         self.close_session(session)
-
-        or
-
-        self.new_session()
-        self.session.exec_command(command)
-        self.close_session()
         """
 
         self.log.debug(
@@ -213,11 +205,10 @@ class Connection(object):
             # disable blocking and timeout to use the session in async mode
             session.setblocking(0)
             session.settimeout(0)
-            self.session = session
         except Exception:
-            self.session = None
+            session = None
 
-        return self.session
+        return session
 
     def close_session(self, session=None):
         """close the current session"""
@@ -226,13 +217,29 @@ class Connection(object):
             'closing session at {!s}:{!s}'.format(
                 self.hostname, self.port))
         try:
-            self.session.shutdown(2)
-            self.session.close()
-            self.session = None
+            session.shutdown(2)
+            session.close()
             session = None
         except BaseException:
             # pass all exceptions since the session is already closed or broken
             pass
+
+    def __run_command(self, command):
+        """ open new session and run command in it
+
+        parameter: command -> str
+        result: Succes - session instance with running command
+                Fail - False
+        """
+
+        try:
+            session = self.new_session()
+            session.exec_command(command)
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            if session:
+                self.close_session(session)
+            return False
+        return session
 
     def run(self, command, lock=None):
         """run command over SSH channel
@@ -253,16 +260,12 @@ class Connection(object):
         self.stderr = ''
         stdout = b''
         stderr = b''
-        session = self.new_session()
 
-        try:
-            session.exec_command(command)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            # reconnect if the channel is lost
+        session = self.__run_command(command)
+
+        while not session:
             self.reconnect()
-            # currently rerunning a command after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.run(command, lock)
+            session = self.__run_command(command)
 
         while True:
             buffer = b''
@@ -270,7 +273,7 @@ class Connection(object):
             # wait for data to be transmitted. if the timeout is hit,
             # ask the user on how to procceed
             if select.select([session], [], [], self.timeout) == ([], [], []):
-                assert self.session
+                assert session
 
                 # writing on stdout needs locking as all run threads could
                 # write at the same time to stdout
@@ -324,6 +327,24 @@ class Connection(object):
         self.stderr = stderr.decode('utf-8')
         return exitcode
 
+    def __invoke_shell(self, width, height):
+        """
+        params: widh
+        params: height
+        returns: session with open shell on pass else False
+        """
+
+        try:
+            session = self.new_session()
+            session.get_pty('xterm', width, height)
+            session.invoke_shell()
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            if session:
+                self.close_session(session)
+            return False
+
+        return session
+
     def shell(self):
         """invoke remote shell
 
@@ -339,15 +360,10 @@ class Connection(object):
         session = self.new_session()
         width, height = termsize()
 
-        try:
-            session.get_pty('xterm', width, height)
-            session.invoke_shell()
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            # reconnect if the channel is lost
+        session = self.__invoke_shell(width, height)
+        while not session:
             self.reconnect()
-            # currently rerunning a command after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.shell()
+            session = self.__invoke_shell(width, height)
 
         try:
             tty.setraw(sys.stdin.fileno())
@@ -375,6 +391,22 @@ class Connection(object):
 
         self.close_session(session)
 
+    def __sftp_open(self):
+        try:
+            sftp = self.client.open_sftp()
+        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+            if sftp:
+                sftp.close()
+            return False
+        return sftp
+
+    def __sftp_reconnect(self):
+        sftp = self.__sftp_open()
+        while not sftp:
+            self.reconnect()
+            sftp = self.__sftp_open()
+        return sftp
+
     def put(self, local, remote):
         """transfers a file to the remote host over SFTP
 
@@ -387,26 +419,21 @@ class Connection(object):
         """
 
         path = ''
-        try:
-            sftp = self.client.open_sftp()
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            self.reconnect()
-            # currently resending a file after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.put(local, remote)
+        sftp = self.__sftp_reconnect()
 
         # create remote base directory and copy the file to that directory
         for subdir in remote.split('/')[:-1]:
             path += subdir + '/'
-            try:
-                sftp.mkdir(path)
-            except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-                self.reconnect()
-                # currently resending a file after reconnection is implemented
-                # as recursion. this is a really bad idea and needs fixing.
-                return self.put(local, remote)
-            except Exception:
-                pass
+            created = False
+            while not created:
+                try:
+                    sftp.mkdir(path)
+                    created = True
+                except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
+                    created = False
+                    sftp = self.__sftp_reconnect()
+                except Exception:
+                    created = True
 
         self.log.debug('transmitting {!s} to {!s}:{!s}:{!s}'.format(
                            local, self.hostname, self.port, remote))
@@ -414,7 +441,7 @@ class Connection(object):
 
         # make file executable since it's probably a script which needs to be
         # run
-        sftp.chmod(remote, stat.S_IEXEC)
+        sftp.chmod(remote, stat.S_IRWXG|stat.S_IRWXU)
 
         sftp.close()
 
@@ -428,24 +455,17 @@ class Connection(object):
         local  -- local file name
 
         """
+        sftp = self.__sftp_reconnect()
 
-        try:
-            sftp = self.client.open_sftp()
-            self.log.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(
-                               self.hostname, self.port, remote, local))
-            sftp.get(remote, local)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            self.reconnect()
-            # currently resending a file after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.get(remote, local)
+        self.log.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(self.hostname, self.port, remote, local))
+        sftp.get(remote, local)
 
         sftp.close()
 
     # Similar to 'get' but handles folders.
     def get_folder(self, remote_folder, local_folder):
 
-        sftp = self.client.open_sftp()
+        sftp = self.__sftp_reconnect()
         self.log.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(
             self.hostname, self.port, remote_folder, local_folder))
         files = self.listdir(remote_folder)
@@ -463,41 +483,35 @@ class Connection(object):
 
         """
 
-        self.log.debug(
-            'getting {!s}:{!s}:{!s} listing'.format(
-                self.hostname, self.port, path))
-        try:
-            sftp = self.client.open_sftp()
-            return sftp.listdir(path)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            self.reconnect()
-            # currently resending a file after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.listdir(path)
+        self.log.debug('getting {!s}:{!s}:{!s} listing'.format(self.hostname, self.port, path))
+        sftp = self.__sftp_reconnect()
 
+        listdir = sftp.listdir(path)
+        sftp.close()
+        return listdir
+
+    # TODO: context manager
     def open(self, filename, mode='r', bufsize=-1):
         """open remote file for reading"""
 
         self.log.debug('{0} open({1}, {2})'.format(
             repr(self), filename, mode
         ))
+        self.log.debug("  -> self.client.open_sftp")
+        sftp = self.__sftp_reconnect()
+        self.log.debug("  -> sftp.open")
         try:
-            self.log.debug("  -> self.client.open_sftp")
-            sftp = self.client.open_sftp()
-            self.log.debug("  -> sftp.open")
-            return sftp.open(filename, mode, bufsize)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            self.reconnect()
-            # currently opening a file after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.open(filename, mode, bufsize)
+            ofile = sftp.open(filename, mode, bufsize)
         except BaseException:
             # It often happens to me lately that mtui seems to freeze at
             # doing sftp.open() so let's log any other exception here,
             # just in case it gets eaten by some caller in mtui
             # bnc#880934
             self.log.debug(format_exc())
+            if sftp:
+                sftp.close()
             raise
+        return ofile
 
     def remove(self, path):
         """delete remote file"""
@@ -505,41 +519,32 @@ class Connection(object):
         self.log.debug(
             'deleting file {!s}:{!s}:{!s}'.format(
                 self.hostname, self.port, path))
+        sftp = self.__sftp_reconnect()
+
         try:
-            sftp = self.client.open_sftp()
-            return sftp.remove(path)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            self.reconnect()
-            # currently removing a file after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.remove(path)
+            sftp.remove(path)
+        except IOError:
+            self.log.error("Can't remove {} from {}".format(path, self.hostname))
+
+        sftp.close()
 
     def rmdir(self, path):
         """delete remote directory"""
 
-        self.log.debug(
-            'deleting dir {!s}:{!s}:{!s}'.format(
-                self.hostname, self.port, path))
-        try:
-            sftp = self.client.open_sftp()
-            items = self.listdir(path)
-            for item in items:
-                filename = os.path.join(path, item)
-                self.remove(filename)
-            return sftp.rmdir(path)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            self.reconnect()
-            # currently removing a directory after reconnection is implemented
-            # as recursion. this is a really bad idea and needs fixing.
-            return self.rmdir(path)
+        self.log.debug('deleting dir {!s}:{!s}:{!s}'.format(self.hostname, self.port, path))
+        sftp = self.__sftp_reconnect()
+        items = self.listdir(path)
+        for item in items:
+            filename = os.path.join(path, item)
+            self.remove(filename)
+        sftp.rmdir(path)
+        sftp.close()
 
     def readlink(self, path):
         """ Return the target of a symbolic link (shortcut)."""
         self.log.debug("read link {}:{}:{}".format(self.hostname, self.port, path))
-        if not self.is_active():
-            self.reconnect()
 
-        sftp = self.client.open_sftp()
+        sftp = self.__sftp_reconnect()
         link = sftp.readlink(path)
         sftp.close()
         return link
