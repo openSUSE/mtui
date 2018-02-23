@@ -50,17 +50,17 @@ class Script(object):
             self.name,
         )
 
-    def _result(self, T, bname, t):
+    def _result(self, cls, bname, t):
         return self.testreport.report_wd(
             *
-            T.result_parts(
+            cls.result_parts(
                 bname,
                 t.hostname),
             filepath=True)
 
     @classmethod
-    def result_parts(T, *basename):
-        return ('output/scripts', '.'.join((T.subdir,) + basename))
+    def result_parts(cls, *basename):
+        return ('output/scripts', '.'.join((cls.subdir,) + basename))
 
     def run(self, targets):
         """
