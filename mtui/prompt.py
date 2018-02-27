@@ -96,7 +96,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.testopia = None
 
-        readline.set_completer_delims('`!@#$%^&*()=+[{]}\|;",<>? ')
+        readline.set_completer_delims(r'`!@#$%^&*()=+[{]}\|;",<>? ')
 
         self._read_history()
 
@@ -155,13 +155,13 @@ class CommandPrompt(cmd.Cmd):
             except (messages.UserMessage, subprocess.CalledProcessError) as e:
                 self.log.error(e)
                 self.log.debug(format_exc())
-            except Exception as e:
+            except Exception:
                 self.log.error(format_exc())
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
-        names += ["do_" + x for x in list(self.commands.keys())]
-        names += ["help_" + x for x in list(self.commands.keys())]
+        names += ["do_" + x for x in self.commands.keys()]
+        names += ["help_" + x for x in self.commands.keys()]
         return names
 
     def __getattr__(self, x):
@@ -220,7 +220,7 @@ class CommandPrompt(cmd.Cmd):
         raise AttributeError(str(x))
 
     def emptyline(self):
-        return
+        pass
 
     def _refhosts(self):
         try:
