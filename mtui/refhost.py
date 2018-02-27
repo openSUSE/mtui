@@ -15,7 +15,8 @@ from qamlib.utils import atomic_write_file
 
 from traceback import format_exc
 
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
+
 import copy
 
 
@@ -201,8 +202,8 @@ class Refhosts(object):
 
     def _parse_refhosts(self, hostmap):
         try:
-            with open(hostmap) as file:
-                self.data = yaml.safe_load(file)
+            with open(hostmap) as f:
+                self.data = YAML(typ='safe').load(f)
 
         except Exception as error:
             # nothing to do for us if we can't load the hosts
