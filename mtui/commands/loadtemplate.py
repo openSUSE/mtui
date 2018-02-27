@@ -33,16 +33,14 @@ class LoadTemplate(Command):
     def run(self):
         if self.metadata:
             msg = 'Should i owerwrite already loaded session {}? (y/N) '
-            if not prompt_user(
-                    msg.format(self.metadata.id),
-                    ['y', 'Y', 'yes', 'YES', 'Yes'],
-                    self.prompt.interactive):
+            if not prompt_user(msg.format(self.metadata.id),
+                               ['y', 'Y', 'yes', 'YES', 'Yes'],
+                               self.prompt.interactive):
                 return
 
-        re_add = []
-        for hostname, target in list(self.prompt.targets.items()):
-            re_add.append((hostname, target.system))
-            target.close()
+        re_add = list(self.targets.keys())
+        for target in re_add:
+            self.targets[target].close()
 
         self.prompt.load_update(self.args.update_id[0], autoconnect=True)
 
@@ -56,8 +54,8 @@ class LoadTemplate(Command):
         # may go away when refactored.
 
         if self.args.chosts:
-            for hostname, system in re_add:
-                self.prompt.metadata.add_target(hostname, system)
+            for target in re_add:
+                self.metadata.add_target(target)
 
     @staticmethod
     def complete(_, text, line, begidx, endix):
