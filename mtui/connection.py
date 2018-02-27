@@ -210,19 +210,16 @@ class Connection(object):
 
         return session
 
-    def close_session(self, session=None):
+    @staticmethod
+    def close_session(session=None):
         """close the current session"""
-        # TODO: looks as wrong code , very wrong
-        self.log.debug(
-            'closing session at {!s}:{!s}'.format(
-                self.hostname, self.port))
-        try:
-            session.shutdown(2)
-            session.close()
-            session = None
-        except BaseException:
-            # pass all exceptions since the session is already closed or broken
-            pass
+        if session:
+            try:
+                session.shutdown(2)
+                session.close()
+            except BaseException:
+                # pass all exceptions since the session is already closed or broken
+                pass
 
     def __run_command(self, command):
         """ open new session and run command in it
@@ -277,7 +274,7 @@ class Connection(object):
 
                 # writing on stdout needs locking as all run threads could
                 # write at the same time to stdout
-                if lock is not None:
+                if lock:
                     lock.acquire()
 
                 try:
@@ -293,7 +290,7 @@ class Connection(object):
                 finally:
                     # release lock to allow other command threads to write to
                     # stdout
-                    if lock is not None:
+                    if lock:
                         lock.release()
 
             try:
@@ -318,7 +315,6 @@ class Connection(object):
 
             except socket.timeout:
                 select.select([], [], [], 1)
-
         # save the exitcode of the last command and return it
         exitcode = session.recv_exit_status()
 
