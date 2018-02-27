@@ -121,6 +121,16 @@ list_products
 Lists installed poducts on selected or all hosts.
 
 
+reload_products
++++++++++++++++
+
+::
+
+  reload_products [-t HOSTS]
+
+Refresh informations about installed products on selected or all host.
+
+
 set_host_state
 ++++++++++++++
 
@@ -318,9 +328,13 @@ Runs the `prepare`_ command and applies the testing update to the target hosts.
 
 While updating the machines, the pre-, post- and compare scripts are run before
 and after the update process.
+(To skip run of scripts use ``--noscript`` parameter.)
 
 If the update adds new packages to the channel, the "newpackage" parameter
 triggers the package installation right after the update.
+
+Update uses internally the products structure from refhost. If this structure was
+changed before an `update`_ please use `reload_products`_ command.
 
 **Options:**
 
