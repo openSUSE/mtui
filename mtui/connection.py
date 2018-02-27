@@ -391,8 +391,9 @@ class Connection(object):
         try:
             sftp = self.client.open_sftp()
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            if sftp:
-                sftp.close()
+            if 'sftp' in locals():
+                if isinstance(sftp, paramiko.sftp_client.SFTPClient):
+                    sftp.close()
             return False
         return sftp
 
@@ -437,7 +438,7 @@ class Connection(object):
 
         # make file executable since it's probably a script which needs to be
         # run
-        sftp.chmod(remote, stat.S_IRWXG|stat.S_IRWXU)
+        sftp.chmod(remote, stat.S_IRWXG | stat.S_IRWXU)
 
         sftp.close()
 
@@ -504,8 +505,9 @@ class Connection(object):
             # just in case it gets eaten by some caller in mtui
             # bnc#880934
             self.log.debug(format_exc())
-            if sftp:
-                sftp.close()
+            if 'sftp' in locals():
+                if isinstance(sftp, paramiko.sftp_client.SFTPClient):
+                    sftp.close()
             raise
         return ofile
 
