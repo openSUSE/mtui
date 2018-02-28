@@ -233,8 +233,9 @@ class Connection(object):
             session = self.new_session()
             session.exec_command(command)
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            if session:
-                self.close_session(session)
+            if 'session' in locals():
+                if isinstance(session, paramiko.channel.Channel):
+                    self.close_session(session)
             return False
         return session
 
@@ -335,8 +336,9 @@ class Connection(object):
             session.get_pty('xterm', width, height)
             session.invoke_shell()
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            if session:
-                self.close_session(session)
+            if 'session' in locals():
+                if isinstance(session, paramiko.channel.Channel):
+                    self.close_session(session)
             return False
 
         return session
