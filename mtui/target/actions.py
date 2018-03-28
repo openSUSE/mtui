@@ -36,12 +36,12 @@ class ThreadedMethod(threading.Thread):
         while True:
             try:
                 (method, parameter) = self.queue.get(timeout=10)
-            except:
+            except BaseException:
                 return
 
             try:
                 method(*parameter)
-            except:
+            except BaseException:
                 raise
             finally:
                 try:
@@ -57,7 +57,7 @@ class ThreadedTargetGroup(object):
 
     def mk_thread(self):
         thread = ThreadedMethod(queue)
-        thread.setDaemon(True)
+        thread.daemon = True
         thread.start()
 
     def mk_threads(self):
@@ -131,7 +131,7 @@ class RunCommand(object):
         try:
             for target in parallel:
                 thread = ThreadedMethod(queue)
-                thread.setDaemon(True)
+                thread.daemon = True
                 thread.start()
                 if isinstance(self.command, dict):
                     queue.put(
@@ -149,7 +149,7 @@ class RunCommand(object):
                     'press Enter key to proceed with {!s}'.format(
                         serial[target].hostname), '')
                 thread = ThreadedMethod(queue)
-                thread.setDaemon(True)
+                thread.daemon = True
                 thread.start()
                 queue.put([serial[target].run, [self.command, lock]])
                 while queue.unfinished_tasks:
