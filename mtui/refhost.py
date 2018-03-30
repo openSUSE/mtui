@@ -14,10 +14,13 @@ from mtui import messages
 from qamlib.utils import atomic_write_file
 
 from traceback import format_exc
+from logging import getLogger
 
 from ruamel.yaml import YAML
 
 import copy
+
+logger = getLogger('mtui.refhost')
 
 
 class Attributes(object):
@@ -109,7 +112,7 @@ class Attributes(object):
         return bool(str(self))
 
     @staticmethod
-    def from_testplatform(testplatform, log):
+    def from_testplatform(testplatform):
         """
         Create a list of Attribute objects based on a testplaform string
 
@@ -126,7 +129,7 @@ class Attributes(object):
             try:
                 property_name, content = pattern.split('=', 1)
             except ValueError:
-                log.error(
+                logger.error(
                     'error when parsing line "{!s}"'.format(testplatform))
                 continue
             # special cases: arch, virtual
@@ -180,7 +183,7 @@ class Attributes(object):
 class Refhosts(object):
     _default_location = 'default'
 
-    def __init__(self, hostmap, log, location=None):
+    def __init__(self, hostmap, location=None):
         """
         load refhosts.yml file and pass it to the xml parser
 
@@ -190,7 +193,6 @@ class Refhosts(object):
         attributes-- predefined search attributes
 
         """
-        self.log = log
 
         # default refhosts location is 'default' which is basically fallback
         if location is None:
@@ -207,7 +209,7 @@ class Refhosts(object):
 
         except Exception as error:
             # nothing to do for us if we can't load the hosts
-            self.log.error('failed to parse refhosts.yml: {!s}'.format(error))
+            logger.error('failed to parse refhosts.yml: {!s}'.format(error))
             raise
 
     def search(self, attributes=None):
@@ -448,26 +450,26 @@ class _RefhostsFactory(object):
         self.refhosts_cache_path = cache_path
         self.refhosts_factory = refhosts_factory
 
-    def __call__(self, config, log):
+    def __call__(self, config):
         for resolver in [x.strip()
                          for x in config.refhosts_resolvers.split(",")]:
             try:
-                return self._resolve_one(resolver, config, log)
+                return self._resolve_one(resolver, config)
             except BaseException:
-                log.warning('Refhosts: resolver {0} failed'.format(
+                logger.warning('Refhosts: resolver {0} failed'.format(
                     resolver))
-                log.debug(format_exc())
+                logger.debug(format_exc())
 
         raise RefhostsResolveFailed()
 
-    def _resolve_one(self, name, config, log):
+    def _resolve_one(self, name, config):
         try:
             resolver = getattr(self, 'resolve_{0}'.format(name))
         except AttributeError:
-            log.warning("Refhosts: invalid resolver: {0}".format(name))
+            logger.warning("Refhosts: invalid resolver: {0}".format(name))
             raise
         else:
-            return resolver(config, log)
+            return resolver(config)
 
     def refresh_https_cache_if_needed(self, path, config):
         if self._is_https_cache_refresh_needed(
@@ -488,15 +490,15 @@ class _RefhostsFactory(object):
     def refresh_https_cache(self, path, uri):
         self._write_file(self._urlopen(uri).read(), path)
 
-    def resolve_https(self, config, log):
+    def resolve_https(self, config):
         f = self.refhosts_cache_path
         self.refresh_https_cache_if_needed(f, config)
 
-        return self.refhosts_factory(f, log, config.location)
+        return self.refhosts_factory(f, config.location)
 
-    def resolve_path(self, config, log):
+    def resolve_path(self, config):
         return self.refhosts_factory(
-            config.refhosts_path, log, config.location
+            config.refhosts_path, config.location
         )
 
 

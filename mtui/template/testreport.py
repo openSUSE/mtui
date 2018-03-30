@@ -392,12 +392,10 @@ class TestReport(object, metaclass=ABCMeta):
             self.log.debug(format_exc())
 
     def _refhosts_from_tp(self, testplatform):
-        refhosts = self.refhostsFactory(self.config, self.log)
+        refhosts = self.refhostsFactory(self.config)
 
         try:
-            hostnames = refhosts.search(Attributes.from_testplatform(
-                testplatform, self.log
-            ))
+            hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
         except (ValueError, KeyError):
             hostnames = []
             msg = 'failed to parse testplatform {0!r}'
@@ -545,7 +543,7 @@ class TestReport(object, metaclass=ABCMeta):
         for hn, t in list(targets.items()):
             by_host_pkg[hn] = dict()
             for line in t.lastout().split('\n'):
-                match = re.search('(\S+)\s+(\S+)', line)
+                match = re.search(r'(\S+)\s+(\S+)', line)
                 if not match:
                     continue
                 pkg, ver = match.group(1), match.group(2)
