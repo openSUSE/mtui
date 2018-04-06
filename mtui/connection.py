@@ -279,10 +279,8 @@ class Connection(object):
                     lock.acquire()
 
                 try:
-                    if input(
-                            'command "%s" timed out on %s. wait? (y/N) ' %
-                            (command, self.hostname)).lower() in [
-                            'y', 'yes']:
+                    if input('command "{}" timed out on {}. wait? (Y/n) '.format(command,
+                                                                                 self.hostname)).lower() in ['n', 'No', 'no']:
                         continue
                     else:
                         # if the user don't want to wait, raise CommandTimeout
