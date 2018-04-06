@@ -8,6 +8,7 @@ import os
 import re
 import signal
 from traceback import format_exc
+from collections import UserDict
 
 from mtui.connection import Connection
 from mtui.connection import errno
@@ -36,7 +37,7 @@ from qamlib.utils import timestamp
 from mtui.target.parsers import parse_system
 
 
-class HostsGroup(object):
+class HostsGroup(UserDict):
 
     """
     Composite pattern for L{Target}
@@ -54,32 +55,32 @@ class HostsGroup(object):
         """
         :param targets: list of L{Target}
         """
-        self.hosts = dict([(h.host, h) for h in hosts])
+        self.data = dict([(h.host, h) for h in hosts])
 
     def select(self, hosts=[], enabled=None):
         if hosts == []:
             if enabled:
-                return HostsGroup((h for h in self.hosts.values() if h.state != 'disabled'))
+                return HostsGroup((h for h in self.data.values() if h.state != 'disabled'))
             return self
 
         for x in hosts:
-            if x not in self.hosts:
+            if x not in self.data:
                 raise HostIsNotConnectedError(x)
 
         return HostsGroup([
-            h for hn, h in self.hosts.items()
+            h for hn, h in self.data.items()
             if hn in hosts and ((not enabled) or h.state != 'disabled')
         ])
 
     def unlock(self, *a, **kw):
-        for x in self.hosts.values():
+        for x in self.data.values():
             try:
                 x.unlock(*a, **kw)
             except TargetLockedError:
                 pass  # logged in Target#unlock
 
     def lock(self, *a, **kw):
-        for x in self.hosts.values():
+        for x in self.data.values():
             try:
                 x.lock(*a, **kw)
             except TargetLockedError:
@@ -87,36 +88,36 @@ class HostsGroup(object):
 
     def query_versions(self, packages):
         rs = []
-        for x in self.hosts.values():
+        for x in self.data.values():
             rs.append((x, x.query_package_versions(packages)))
 
         return rs
 
     def add_history(self, data):
-        for tgt in self.hosts.values():
+        for tgt in self.data.values():
             tgt.add_history(data)
 
     def names(self):
-        return list(self.hosts.keys())
+        return list(self.data.keys())
 
     def get(self, remote, local):
-        return FileDownload(self.hosts.values(), remote, local).run()
+        return FileDownload(self.data.values(), remote, local).run()
 
     def put(self, local, remote):
-        return FileUpload(self.hosts.values(), local, remote).run()
+        return FileUpload(self.data.values(), local, remote).run()
 
     def remove(self, path):
-        return FileDelete(self.hosts.values(), path).run()
+        return FileDelete(self.data.values(), path).run()
 
     def run(self, cmd):
         return self._run(cmd)
 
     def _run(self, cmd):
-        return RunCommand(self.hosts, cmd).run()
+        return RunCommand(self.data, cmd).run()
 
     def report_self(self, sink):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_self(sink)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_self(sink)
 
     def report_history(self, sink, count, events):
         if events:
@@ -127,74 +128,36 @@ class HostsGroup(object):
         else:
             self._run('tail -n {} /var/log/mtui.log'.format(count))
 
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_history(sink)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_history(sink)
 
     def report_locks(self, sink):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_locks(sink)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_locks(sink)
 
     def report_timeout(self, sink):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_timeout(sink)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_timeout(sink)
 
     def report_sessions(self, sink):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_sessions(sink)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_sessions(sink)
 
     def report_log(self, sink, arg):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_log(sink, arg)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_log(sink, arg)
 
     def report_testsuites(self, sink, arg):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_testsuites(sink, arg)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_testsuites(sink, arg)
 
     def report_testsuite_results(self, sink, arg):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_testsuite_results(sink, arg)
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_testsuite_results(sink, arg)
 
     def report_products(self, sink):
-        for hn in sorted(self.hosts.keys()):
-            self.hosts[hn].report_products(sink)
-
-    # dict interface
-
-    def __contains__(self, k):
-        return k in self.hosts
-
-    def __delitem__(self, x):
-        del self.hosts[x]
-
-    def __getitem__(self, x):
-        return self.hosts[x]
-
-    def __setitem__(self, k, v):
-        self.hosts[k] = v
-
-    def __iter__(self):
-        return self.hosts.__iter__()
-
-    def __len__(self):
-        return len(self.hosts)
-
-    def copy(self):
-        return HostsGroup(self.hosts.values())
-
-    def items(self):
-        return self.hosts.items()
-
-    def keys(self):
-        return self.hosts.keys()
-
-    def pop(self, *a, **kw):
-        return self.hosts.pop(*a, **kw)
-
-    def update(self, *a, **kw):
-        return self.hosts.update(*a, **kw)
-
-    def values(self):
-        return self.hosts.values()
+        for hn in sorted(self.data.keys()):
+            self.data[hn].report_products(sink)
 
 
 class Target(object):
