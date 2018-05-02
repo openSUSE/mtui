@@ -63,7 +63,7 @@ def _normalize_sle12(x):
         x[0][0] = "SLES_RPI"
         return x
     if x[0][0] == 'SLE-SAP':
-        x[0][0] == 'SLES_SAP'
+        x[0][0] = 'SLES_SAP'
         return x
     # All other SLE12 modules/extensions in lowercase
     x[0][0] = x[0][0].lower()

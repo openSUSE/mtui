@@ -2,7 +2,7 @@ from distutils.version import LooseVersion
 
 __all__ = ['main']
 
-__version__ = '9.1.3'
+__version__ = '9.1.4'
 # PEP396
 
 loose_version = LooseVersion(__version__)
