@@ -24,7 +24,7 @@ class System(object):
             return "CAASP"
         elif self._data['base'].name == 'rhel':
             return "YUM"
-        elif self._data['base'].name in ('SLES', 'SLED', 'SUSE_SLES'):
+        elif self._data['base'].name in ('SLES', 'SLED', 'SUSE_SLES', 'SLES_SAP', 'SUSE_SLES_SAP'):
             return self._data['base'].version[:2]
         elif self._data['base'].name == 'openSUSE':
             return "12"
