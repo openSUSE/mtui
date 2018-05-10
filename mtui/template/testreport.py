@@ -570,7 +570,6 @@ class TestReport(object, metaclass=ABCMeta):
     def generate_templatefile(self, xmllog):
         from mtui.export import fill_template
         return fill_template(self.id,
-                             self.log,
                              self.path,
                              xmllog,
                              self.config,
@@ -580,7 +579,6 @@ class TestReport(object, metaclass=ABCMeta):
     def generate_install_logs(self, xmllog, host):
         from mtui.export import xml_installog_to_template
         return xml_installog_to_template(
-            self.log,
             xmllog,
             self.config,
             host)

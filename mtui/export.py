@@ -6,12 +6,15 @@
 import os
 import codecs
 import xml.dom.minidom
+from logging import getLogger
 
 from qamlib.types.rpmver import RPMVersion
 from mtui.systemcheck import system_info
 
+logger = getLogger("mtui.export")
 
-def _read_xmldata(logger, xmldata):
+
+def _read_xmldata(xmldata):
     try:
         if os.path.isfile(xmldata):
             x = xml.dom.minidom.parse(xmldata)
@@ -24,8 +27,8 @@ def _read_xmldata(logger, xmldata):
     return x
 
 
-def xml_installog_to_template(logger, xmldata, config, target):
-    x = _read_xmldata(logger, xmldata)
+def xml_installog_to_template(xmldata, config, target):
+    x = _read_xmldata(xmldata)
     t = []
     for host in x.getElementsByTagName('host'):
         if host.getAttribute('hostname') == target:
@@ -47,10 +50,10 @@ def xml_installog_to_template(logger, xmldata, config, target):
     return t
 
 
-def fill_template(review_id, logger, template, xmldata, config, smelt):
+def fill_template(review_id, template, xmldata, config, smelt):
     if not smelt:
         logger.warning("No data from SMELT api")
-        return _xml_to_template(review_id, logger, template, xmldata, config, smelt_output=None, openqa_links=None)
+        return _xml_to_template(review_id, template, xmldata, config, smelt_output=None, openqa_links=None)
 
     logger.debug("parse smelt data and prepare pretty report")
     openqa_links = smelt.openqa_links_verbose()
@@ -63,10 +66,10 @@ def fill_template(review_id, logger, template, xmldata, config, smelt):
         smelt_output = [
             "SMELT Checkers:\n", "===============\n"] + smelt_output
 
-    return _xml_to_template(review_id, logger, template, xmldata, config, smelt_output, openqa_links)
+    return _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_links)
 
 
-def _xml_to_template(review_id, logger, template, xmldata, config, smelt_output, openqa_links):
+def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_links):
     """ export mtui xml data to an existing maintenance template
 
     simple method to export package versions and
@@ -80,7 +83,7 @@ def _xml_to_template(review_id, logger, template, xmldata, config, smelt_output,
     with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
         t = f.readlines()
 
-    x = _read_xmldata(logger, xmldata)
+    x = _read_xmldata(xmldata)
 
     # since the maintenance template is more of a human readable file then
     # a pretty parsable log, we need to build on specific strings to know
