@@ -3,6 +3,7 @@
 
 from os.path import basename
 from os.path import splitext
+from logging import getLogger
 
 from traceback import format_exc
 
@@ -10,6 +11,8 @@ import subprocess
 
 from mtui import messages
 import collections
+
+log = getLogger("mtui.script")
 
 
 class Script(object):
@@ -25,7 +28,7 @@ class Script(object):
     FIXME: should be an abstract attribute
     """
 
-    def __init__(self, tr, path, log):
+    def __init__(self, tr, path):
         """
         :type path: str
         :param path: absolute path to the script
@@ -34,7 +37,6 @@ class Script(object):
         self.name = basename(path)
         self.bname = splitext(self.name)[0]
         self.testreport = tr
-        self.log = log
 
     def __repr__(self):
         return "<{0}.{1} {2} for {3}>".format(
@@ -67,10 +69,10 @@ class Script(object):
         :type targets: [{HostsGroup}]
         """
         try:
-            self.log.info('running {0}'.format(self))
+            log.info('running {0}'.format(self))
             self._run(targets)
         except KeyboardInterrupt:
-            self.log.warning('skipping {0}'.format(self))
+            log.warning('skipping {0}'.format(self))
             return
 
 
@@ -105,7 +107,7 @@ class PreScript(Script):
                     f.write(t.lastout())
                     f.write(t.lasterr())
             except IOError as e:
-                self.log.error(messages.FailedToWriteScriptResult(fname, e))
+                log.error(messages.FailedToWriteScriptResult(fname, e))
 
 
 class PostScript(PreScript):
@@ -127,7 +129,7 @@ class CompareScript(Script):
             self._result(PostScript, bcheck, t),
         ]
 
-        self.log.debug("running {0}".format(argv))
+        log.debug("running {0}".format(argv))
         stdout = stderr = None
         try:
             p = subprocess.Popen(
@@ -137,8 +139,8 @@ class CompareScript(Script):
             )
         except EnvironmentError as e:
             t.out.append([' '.join(argv), '', '', 0x100, 0])
-            self.log.critical(messages.StartingCompareScriptError(e, argv))
-            self.log.debug(format_exc())
+            log.critical(messages.StartingCompareScriptError(e, argv))
+            log.debug(format_exc())
             return
 
         (stdout, stderr) = p.communicate()
@@ -151,9 +153,9 @@ class CompareScript(Script):
             return
 
         if rc == 2:
-            logger, msg = self.log.critical, messages.CompareScriptCrashed
+            logger, msg = log.critical, messages.CompareScriptCrashed
         else:
-            logger, msg = self.log.warning, messages.CompareScriptFailed
+            logger, msg = log.warning, messages.CompareScriptFailed
 
         assert isinstance(logger, collections.Callable), "{0!r} not callable".format(logger)
 

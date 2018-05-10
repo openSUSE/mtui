@@ -493,7 +493,7 @@ class TestReport(object, metaclass=ABCMeta):
         for r, _, fs in os.walk(d):
             if r == d:
                 for f in fs:
-                    x = s(self, join(d, f), self.log)
+                    x = s(self, join(d, f))
                     x.run(targets)
 
     def download_file(self, from_, into):
