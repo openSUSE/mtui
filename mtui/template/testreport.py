@@ -508,7 +508,6 @@ class TestReport(object, metaclass=ABCMeta):
         except (AttributeError, AssertionError):
             self.testopia = Testopia(
                 self.config,
-                self.log,
                 self.get_release(),
                 packages or self.get_package_list(),
             )
