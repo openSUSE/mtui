@@ -207,7 +207,6 @@ class Target(object):
         try:
             self.logger.info('connecting to {}'.format(self.hostname))
             self.connection = self.Connection(
-                self.logger,
                 self.host,
                 self.port,
                 self.timeout)
