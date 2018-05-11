@@ -1,6 +1,8 @@
 
 from .sle11 import normalize_sle11
 from .sle12 import normalize_sle12
+from .sle15 import normalize_sle15
+
 from .misc import normalize_rt, normalize_ses, normalize_caasp, normalize_manager, normalize_cloud
 
 
@@ -14,6 +16,9 @@ def normalize(x):
     # SLE 12 Products
     if x[0][1].startswith('12'):
         return normalize_sle12(x)
+
+    if x[0][1].startswith('15'):
+        return normalize_sle15(x)
 
     if x[0][0] == 'SUSE-CAASP':
         return normalize_caasp(x)
