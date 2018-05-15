@@ -187,10 +187,7 @@ class CommandPrompt(cmd.Cmd):
                         args = c.parse_args(arg, self.sys)
                     except ArgsParseFailure:
                         return
-                    c(
-                        args, self.targets.select(),
-                        self.config, self.sys, self.log, self
-                    ).run()
+                    c(args, self.targets.select(), self.config, self.sys,  self).run()
                 return do
 
         if x.startswith('complete_'):
@@ -209,7 +206,6 @@ class CommandPrompt(cmd.Cmd):
                             'hosts': self.targets.select(),
                             'metadata': self.metadata,
                             'config': self.config,
-                            'log': self.log,
                             'testopia': self.testopia,
                             },
                             *args,

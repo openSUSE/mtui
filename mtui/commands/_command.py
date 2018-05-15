@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 
 from abc import ABCMeta, abstractmethod
+from logging import getLogger
 
 from ..argparse import ArgumentParser
 from mtui.messages import HostIsNotConnectedError
+
+logger = getLogger('mtui.commands.command')
 
 
 class Command(object, metaclass=ABCMeta):
@@ -22,7 +25,7 @@ class Command(object, metaclass=ABCMeta):
         returns an empty Namespace instance instead.
     """
 
-    def __init__(self, args, hosts, config, sys, logger, prompt):
+    def __init__(self, args, hosts, config, sys, prompt):
         """
         :type args: str
         :param args: arguments remaidner for the command
