@@ -1,8 +1,11 @@
 
 import subprocess
 from os.path import join
+from logging import getLogger
 from qamlib.utils import ensure_dir_exists, chdir
 from mtui.messages import SvnCheckoutInterruptedError
+
+logger = getLogger('mtui.template')
 
 
 class _TemplateIOError(IOError):
@@ -18,10 +21,10 @@ class TestReportAlreadyLoaded(RuntimeError):
     pass
 
 
-def testreport_svn_checkout(config, log, path, id):
+def testreport_svn_checkout(config, path, id):
     ensure_dir_exists(
         config.template_dir,
-        on_create=lambda path: log.debug(
+        on_create=lambda path: logger.debug(
             'created config.template_dir directory {0}'.format(path)))
 
     uri = join(path, id)

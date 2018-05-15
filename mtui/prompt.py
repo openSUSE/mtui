@@ -86,7 +86,7 @@ class CommandPrompt(cmd.Cmd):
         cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
         self.display = display_factory(self.sys.stdout)
-        self.metadata = NullTestReport(config, log)
+        self.metadata = NullTestReport(config)
         self.targets = self.metadata.targets
         """
         alias to ease refactoring
@@ -232,7 +232,6 @@ class CommandPrompt(cmd.Cmd):
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(
             self.config,
-            self.log,
             autoconnect=autoconnect)
 
         if self.metadata and self.metadata.id is self.session:

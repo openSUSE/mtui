@@ -1,6 +1,7 @@
 
 from os.path import join
 from errno import ENOENT
+from logging import getLogger
 
 from mtui.template import _TemplateIOError
 from mtui.template import testreport_svn_checkout
@@ -8,6 +9,8 @@ from mtui.template.obstestreport import OBSTestReport
 
 from qamlib.types.obs import RequestReviewID
 from qamlib.smelt import SMELT
+
+logger = getLogger('mtui.template.updateid')
 
 
 class UpdateID(object):
@@ -18,10 +21,9 @@ class UpdateID(object):
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def make_testreport(self, config, logger, autoconnect=True):
+    def make_testreport(self, config, autoconnect=True):
         tr = self.testreport_factory(
             config,
-            logger,
         )
         trpath = join(config.template_dir, str(self.id), 'log')
 
@@ -33,7 +35,6 @@ class UpdateID(object):
 
             self._vcs_checkout(
                 config,
-                logger,
                 config.svn_path,
                 str(self.id))
 
@@ -43,6 +44,7 @@ class UpdateID(object):
             tr.connect_targets()
 
         tr.smelt = self.smelt
+        # TODO: qamlib fix for logger
         if self.smelt:
             tr.smelt.logger = logger
 

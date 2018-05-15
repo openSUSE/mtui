@@ -5,11 +5,12 @@ from os.path import join
 
 from mtui.template.testreport import TestReport
 
+
 class NullTestReport(TestReport):
     _type = "No"
 
-    def __init__(self, config, log, *a, **kw):
-        super(NullTestReport, self).__init__(config, log, *a, **kw)
+    def __init__(self, *a, **kw):
+        super(NullTestReport, self).__init__(*a, **kw)
         self.id = None
         self.path = join(os.getcwd(), "None")
 

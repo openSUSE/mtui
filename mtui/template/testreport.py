@@ -15,6 +15,9 @@ from abc import ABCMeta
 from abc import abstractmethod
 
 import shutil
+
+from logging import getLogger
+
 from mtui.utils import nottest
 
 from mtui.target import HostsGroup
@@ -32,6 +35,9 @@ from mtui.template import TestReportAlreadyLoaded
 from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
 
 from qamlib.utils import ensure_dir_exists
+
+logger = getLogger('mtui.template.testreport')
+
 
 
 @nottest
@@ -51,9 +57,8 @@ class TestReport(object, metaclass=ABCMeta):
             type.
         """
 
-    def __init__(self, config, log, scripts_src_dir=None):
+    def __init__(self, config, scripts_src_dir=None):
         self.config = config
-        self.log = log
 
         self._scripts_src_dir = scripts_src_dir or join(
             config.datadir,
@@ -169,7 +174,7 @@ class TestReport(object, metaclass=ABCMeta):
         missing = [x for x in self._attrs if not getattr(self, x)]
         if missing:
             msg = "TestReport: missing fields: {0}"
-            self.log.warning(msg.format(missing))
+            logger.warning(msg.format(missing))
 
     def get_package_list(self):
         return list(self.packages.keys())
@@ -240,15 +245,15 @@ class TestReport(object, metaclass=ABCMeta):
             ['update', str(self.id), ' '.join(self.get_package_list())])
 
         updater = self.get_updater()
-        self.log.debug("chosen updater: {!r}".format(updater))
+        logger.debug("chosen updater: {!r}".format(updater))
         try:
             updater(
                 targets,
                 self.get_package_list(),
                 self).run(params)
         except UpdateError as e:
-            self.log.error('Update failed: {!s}'.format(e))
-            self.log.warning('Error while updating. Rolling back changes')
+            logger.error('Update failed: {!s}'.format(e))
+            logger.warning('Error while updating. Rolling back changes')
             self.perform_downgrade(targets)
 
     def perform_downgrade(self, targets):
@@ -287,7 +292,7 @@ class TestReport(object, metaclass=ABCMeta):
 
     def _copy_scripts(self, src, dst, ignore):
         try:
-            self.log.debug("Copying scripts: {0} -> {1}".format(
+            logger.debug("Copying scripts: {0} -> {1}".format(
                 src, dst
             ))
             self._copytree(src, dst, ignore=ignore)
@@ -298,14 +303,14 @@ class TestReport(object, metaclass=ABCMeta):
             msg = "Copy scripts {0} -> {1} failed. reason:"
             msg = msg.format(src, dst)
             if e.errno == ENOENT:
-                self.log.error(msg)
-                self.log.error(str(e))
-                self.log.error("copy scripts manually")
-                self.log.debug(format_exc())
+                logger.error(msg)
+                logger.error(str(e))
+                logger.error("copy scripts manually")
+                logger.debug(format_exc())
             elif e.errno == EEXIST:
-                self.log.warning(msg)
-                self.log.warning(str(e))
-                self.log.debug(format_exc())
+                logger.warning(msg)
+                logger.warning(str(e))
+                logger.debug(format_exc())
             else:
                 raise
 
@@ -345,9 +350,9 @@ class TestReport(object, metaclass=ABCMeta):
                 targets[host].add_history(['connect'])
                 new_systems[host] = targets[host].get_system()
             except Exception:
-                self.log.debug(format_exc())
+                logger.debug(format_exc())
                 msg = 'failed to add host {0} to target list'
-                self.log.warning(msg.format(host))
+                logger.warning(msg.format(host))
             except KeyboardInterrupt:
                 # skip adding the reference host if CTRL-C was pressed.
                 # FIXME: this might not work if we are somewhere deep in
@@ -357,7 +362,7 @@ class TestReport(object, metaclass=ABCMeta):
                 # default.
                 # With paramiko we'd have to run it in threads, assuming
                 # the network/ssh code really can't KeyboardInterrupt
-                self.log.warning('skipping host {0}'.format(host))
+                logger.warning('skipping host {0}'.format(host))
 
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = new_systems
@@ -367,7 +372,7 @@ class TestReport(object, metaclass=ABCMeta):
 
     def add_target(self, hostname):
         if hostname in self.targets:
-            self.log.warning('already connected to {0}. skipping.'.format(
+            logger.warning('already connected to {0}. skipping.'.format(
                 self.targets[hostname].hostname
             ))
             return
@@ -382,8 +387,8 @@ class TestReport(object, metaclass=ABCMeta):
                 self.systems[hostname] = self.targets[hostname].get_system()
 
         except (SSHException, NoValidConnectionsError, ChannelException):
-            self.log.warning('failed to add host {0} to target list'.format(hostname))
-            self.log.debug(format_exc())
+            logger.warning('failed to add host {0} to target list'.format(hostname))
+            logger.debug(format_exc())
 
     def _refhosts_from_tp(self, testplatform):
         refhosts = self.refhostsFactory(self.config)
@@ -393,11 +398,11 @@ class TestReport(object, metaclass=ABCMeta):
         except (ValueError, KeyError):
             hostnames = []
             msg = 'failed to parse testplatform {0!r}'
-            self.log.warning(msg.format(testplatform))
+            logger.warning(msg.format(testplatform))
         else:
             if not hostnames:
                 msg = 'nothing found for testplatform {0!r}'
-                self.log.warning(msg.format(testplatform))
+                logger.warning(msg.format(testplatform))
         self.hostnames.update(set(hostnames))
 
     def list_bugs(self, sink, arg):
@@ -491,7 +496,7 @@ class TestReport(object, metaclass=ABCMeta):
                     x.run(targets)
 
     def download_file(self, from_, into):
-        self.log.info("Downloading {!s}".format(from_))
+        logger.info("Downloading {!s}".format(from_))
         from contextlib import closing
         with open(into, 'wb') as dst, closing(urlopen(from_)) as src:
             dst.writelines(src)
