@@ -112,7 +112,7 @@ class CommandPrompt(cmd.Cmd):
         # support commands with dashes in them
 
     def notify_user(self, msg, class_=None):
-        notification.display(self.log, 'MTUI', msg, class_)
+        notification.display('MTUI', msg, class_)
 
     def println(self, msg='', eol='\n'):
         return self.stdout.write(msg + eol)

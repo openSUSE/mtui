@@ -3,29 +3,31 @@
 #
 # mtui notifications, currently supporting python-notify only
 #
+from logging import getLogger
 
+logger = getLogger('mtui.notifications')
 
 __impl = None
 
 
-def display(log, summary=None, text=None, icon='stock_dialog-info'):
+def display(summary=None, text=None, icon='stock_dialog-info'):
     global __impl
     if __impl is None:
         try:
             import pynotify as __impl
         except ImportError:
             __impl = False
-            log.debug('pynotify not installed. notification disabled.')
+            logger.debug('pynotify not installed. notification disabled.')
         else:
             if not __impl.init('mtui'):
                 __impl = False
-                log.debug('failed to initialize pynotify')
+                logger.debug('failed to initialize pynotify')
 
     if not __impl:
         return
 
-    log.debug('displaying notify message "{!s}"'.format(text))
+    logger.debug('displaying notify message "{!s}"'.format(text))
     try:
         __impl.Notification(summary, text, icon).show()
     except Exception:
-        log.debug('failed to display notification')
+        logger.debug('failed to display notification')
