@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
 #
 # update and software stack management
 #
+
+from logging import getLogger
+
 from mtui.target.actions import UpdateError
 from mtui.target.downgrade import Downgrade
 from mtui.target.install import Install
@@ -16,17 +18,19 @@ from mtui.messages import MissingDowngraderError
 
 from mtui.utils import DictWithInjections
 
+logger = getLogger('mtui.updater')
+
 
 class ZypperUpdate(Update):
 
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('RPM Error', target.hostname)
         if 'The following package is not supported by its vendor' in stdout:
-            self.log.critical(
+            logger.critical(
                 '{!s}: package support is uncertain:'.format(target.hostname))
             marker = 'The following package is not supported by its vendor:\n'
             start = stdout.find(marker)
@@ -66,11 +70,8 @@ class RedHatUpdate(Update):
 
 class CaaSPUpdate(Update):
 
-    def __init__(self, logger, targets, packages, testreport):
-        self.log = logger
-        self.targets = targets
-        self.packages = packages
-        self.testreport = testreport
+    def __init__(self, *a, **kw):
+        super(CaaSPUpdate, self).__init__(*a, **kw)
         self.type = 'transactional'
         self.commands = [
             'export LANG=',
@@ -79,7 +80,7 @@ class CaaSPUpdate(Update):
 
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('Transactional Update Error', target.hostname)
@@ -120,7 +121,7 @@ class ZypperPrepare(Prepare):
 
     def check(self, target, stdin, stdout, stderr, exitcode):
         if 'Error:' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('RPM Error', target.hostname)
@@ -205,24 +206,24 @@ Downgrader = DictWithInjections({
 
 class ZypperInstall(Install):
 
-    def __init__(self, logger, targets, packages):
-        Install.__init__(self, logger, targets, packages)
+    def __init__(self, *a, **kw):
+        super(ZypperInstall, self).__init__(*a, **kw)
 
         commands = []
 
-        commands.append('zypper -n in -y -l {!s}'.format(' '.join(packages)))
+        commands.append('zypper -n in -y -l {!s}'.format(' '.join(self.packages)))
 
         self.commands = commands
 
 
 class RedHatInstall(Install):
 
-    def __init__(self, logger, targets, packages):
-        Install.__init__(self, logger, targets, packages)
+    def __init__(self, *a, **kw):
+        super(RedHatInstall, self).__init__(*a, **kw)
 
         commands = []
 
-        commands.append('yum -y install {!s}'.format(' '.join(packages)))
+        commands.append('yum -y install {!s}'.format(' '.join(self.packages)))
 
         self.commands = commands
 
@@ -238,24 +239,24 @@ Installer = DictWithInjections({
 
 class ZypperUninstall(Install):
 
-    def __init__(self, logger, targets, packages):
-        Install.__init__(self, logger, targets, packages)
+    def __init__(self, *a, **kw):
+        super(ZypperUninstall, self).__init__(*a, **kw)
 
         commands = []
 
-        commands.append('zypper -n rm {!s}'.format(' '.join(packages)))
+        commands.append('zypper -n rm {!s}'.format(' '.join(self.packages)))
 
         self.commands = commands
 
 
 class RedHatUninstall(Install):
 
-    def __init__(self, logger, targets, packages):
-        Install.__init__(self, logger, targets, packages)
+    def __init__(self, *a, **kw):
+        super(RedHatUninstall, self).__init__(*a, **kw)
 
         commands = []
 
-        commands.append('yum -y remove {!s}'.format(' '.join(packages)))
+        commands.append('yum -y remove {!s}'.format(' '.join(self.packages)))
 
         self.commands = commands
 
