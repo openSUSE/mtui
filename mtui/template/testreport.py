@@ -211,7 +211,6 @@ class TestReport(object, metaclass=ABCMeta):
         updater = self.get_updater()
 
         display('\n'.join(updater(
-            self.log,
             targets,
             self.get_package_list(),
             self).commands
@@ -226,7 +225,6 @@ class TestReport(object, metaclass=ABCMeta):
     def perform_prepare(self, targets, **kw):
         preparer = self.get_preparer()
         preparer(
-            self.log,
             targets,
             self.get_package_list(),
             self,
@@ -245,7 +243,6 @@ class TestReport(object, metaclass=ABCMeta):
         self.log.debug("chosen updater: {!r}".format(updater))
         try:
             updater(
-                self.log,
                 targets,
                 self.get_package_list(),
                 self).run(params)
@@ -260,7 +257,6 @@ class TestReport(object, metaclass=ABCMeta):
 
         downgrader = self.get_downgrader()
         downgrader(
-            self.log,
             targets,
             self.get_package_list(),
             self).run()
@@ -268,12 +264,12 @@ class TestReport(object, metaclass=ABCMeta):
     def perform_install(self, targets, packages):
         targets.add_history(['install', packages])
 
-        tool = self.get_installer()
-        tool(self.log, targets, packages).run()
+        installer = self.get_installer()
+        installer(targets, packages).run()
 
     def perform_uninstall(self, targets, packages):
-        tool = self.get_uninstaller()
-        tool(self.log, targets, packages).run()
+        uninstaller = self.get_uninstaller()
+        uninstaller(targets, packages).run()
 
     def copy_scripts(self):
         if not self.path:
