@@ -216,7 +216,7 @@ class Target(object):
             ))
             raise
 
-        self._lock = self.TargetLock(self.connection, self.config, self.logger)
+        self._lock = self.TargetLock(self.connection, self.config)
         if self.is_locked():
             # NOTE: the condition was originally locked and lock.comment
             # idk why.
@@ -491,7 +491,7 @@ class Target(object):
         :deprecated: by is_locked method
         """
         self.logger.debug('{!s}: getting mtui lock state'.format(self.hostname))
-        lock = Locked(self.logger, self.config.session_user, False)
+        lock = Locked(self.config.session_user, False)
 
         if self.state != 'enabled':
             return lock
