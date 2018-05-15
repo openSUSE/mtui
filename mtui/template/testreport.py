@@ -341,7 +341,6 @@ class TestReport(object, metaclass=ABCMeta):
                     self.config,
                     host,
                     self.get_package_list(),
-                    logger=self.log,
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
                 new_systems[host] = targets[host].get_system()
@@ -377,7 +376,6 @@ class TestReport(object, metaclass=ABCMeta):
                 self.config,
                 hostname,
                 self.get_package_list(),
-                logger=self.log,
             )
 
             if self:
