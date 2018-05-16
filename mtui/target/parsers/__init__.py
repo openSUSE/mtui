@@ -1,11 +1,14 @@
 
+from logging import getLogger
 
 from mtui.types import Product
 from mtui.types.systems import System
 from mtui.target.parsers import product
 
+logger = getLogger('mtui.target.parsers')
 
-def parse_system(logger, connection):
+
+def parse_system(connection):
     try:
         files = [x for x in connection.listdir('/etc/products.d') if x != 'qa.prod' and x.endswith(".prod")]
     except IOError:

@@ -8,6 +8,8 @@ import cmd
 import readline
 import subprocess
 
+from logging import getLogger
+
 import mtui.notification as notification
 
 from traceback import format_exc
@@ -17,10 +19,11 @@ from .argparse import ArgsParseFailure
 from mtui import commands
 from mtui import messages
 from mtui.template.nulltestreport import NullTestReport
-from mtui.refhost import RefhostsFactory
 from qamlib.utils import ensure_dir_exists
 from qamlib.utils import timestamp
 from mtui.utils import prompt_user
+
+logger = getLogger('mtui.prompt')
 
 
 class QuitLoop(RuntimeError):
@@ -83,7 +86,7 @@ class CommandPrompt(cmd.Cmd):
         cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
         self.display = display_factory(self.sys.stdout)
-        self.metadata = NullTestReport(config, log)
+        self.metadata = NullTestReport(config)
         self.targets = self.metadata.targets
         """
         alias to ease refactoring
@@ -112,7 +115,7 @@ class CommandPrompt(cmd.Cmd):
         # support commands with dashes in them
 
     def notify_user(self, msg, class_=None):
-        notification.display(self.log, 'MTUI', msg, class_)
+        notification.display('MTUI', msg, class_)
 
     def println(self, msg='', eol='\n'):
         return self.stdout.write(msg + eol)
@@ -121,7 +124,7 @@ class CommandPrompt(cmd.Cmd):
         try:
             readline.read_history_file('{!s}/.mtui_history'.format(self.homedir))
         except IOError as e:
-            self.log.debug('failed to open history file: {!s}'.format(e))
+            logger.debug('failed to open history file: {!s}'.format(e))
 
     def _add_subcommand(self, cmd):
         if cmd.command in self.commands:
@@ -153,10 +156,10 @@ class CommandPrompt(cmd.Cmd):
             except QuitLoop:
                 return
             except (messages.UserMessage, subprocess.CalledProcessError) as e:
-                self.log.error(e)
-                self.log.debug(format_exc())
+                logger.error(e)
+                logger.debug(format_exc())
             except Exception:
-                self.log.error(format_exc())
+                logger.error(format_exc())
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
@@ -184,10 +187,7 @@ class CommandPrompt(cmd.Cmd):
                         args = c.parse_args(arg, self.sys)
                     except ArgsParseFailure:
                         return
-                    c(
-                        args, self.targets.select(),
-                        self.config, self.sys, self.log, self
-                    ).run()
+                    c(args, self.targets.select(), self.config, self.sys,  self).run()
                 return do
 
         if x.startswith('complete_'):
@@ -201,19 +201,18 @@ class CommandPrompt(cmd.Cmd):
                             try:
                                 self.ensure_testopia_loaded()
                             except Exception:
-                                self.log.debug(format_exc())
+                                logger.debug(format_exc())
                         return c.complete({
                             'hosts': self.targets.select(),
                             'metadata': self.metadata,
                             'config': self.config,
-                            'log': self.log,
                             'testopia': self.testopia,
                             },
                             *args,
                             **kw)
                     except Exception as e:
-                        self.log.error(e)
-                        self.log.debug(format_exc())
+                        logger.error(e)
+                        logger.debug(format_exc())
                         raise e
                 return complete
 
@@ -221,13 +220,6 @@ class CommandPrompt(cmd.Cmd):
 
     def emptyline(self):
         pass
-
-    def _refhosts(self):
-        try:
-            return RefhostsFactory(self.config, self.log)
-        except Exception:
-            self.log.error('failed to load reference hosts data')
-            raise
 
     def ensure_testopia_loaded(self, *packages):
         self.testopia = self.metadata.load_testopia(*packages)
@@ -240,7 +232,6 @@ class CommandPrompt(cmd.Cmd):
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(
             self.config,
-            self.log,
             autoconnect=autoconnect)
 
         if self.metadata and self.metadata.id is self.session:
@@ -256,12 +247,12 @@ class CommandPrompt(cmd.Cmd):
         ensure_dir_exists(os.path.dirname(path))
 
         if os.path.exists(path):
-            self.log.warning('file {0} exists.'.format(path))
+            logger.warning('file {0} exists.'.format(path))
             m = 'should i overwrite {0}? (y/N) '.format(path)
             if not prompt_user(m, ['y', 'yes'], self.interactive):
                 path += '.' + timestamp()
 
-        self.log.info('saving output to {0}'.format(path))
+        logger.info('saving output to {0}'.format(path))
 
         with open(path, 'w') as f:
             f.write(self.metadata.generate_xmllog())

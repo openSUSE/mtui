@@ -1,8 +1,6 @@
-# -*- coding: utf-8 -*-
-# vim: et sw=2 sts=2
-
 
 import re
+from logging import getLogger
 
 from qamlib.types.rpmver import RPMVersion
 from mtui.target.actions import UpdateError
@@ -12,10 +10,12 @@ from mtui.target.actions import queue
 from mtui.target.actions import spinner
 
 
+logger = getLogger('mtui.target.downgrade')
+
+
 class Downgrade(object):
 
-    def __init__(self, logger, targets, packages, testreport):
-        self.log = logger
+    def __init__(self, targets, packages, testreport):
         self.targets = targets
         self.packages = packages
         self.testreport = testreport
@@ -40,18 +40,19 @@ class Downgrade(object):
 
             for t in list(self.targets.values()):
                 if 'Error' in t.lasterr():
-                    self.log.critical('{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(t.hostname, t.lastin(), t.lastout(), t.lasterr()))
+                    logger.critical(
+                        '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                            t.hostname, t.lastin(), t.lastout(), t.lasterr()))
                 if 'reboot to finish rollback' in t.lastout():
-                    self.log.warning('Please reboot the host {!s} to finish rollback'.format(t.hostname))
-        except:
+                    logger.warning('Please reboot the host {!s} to finish rollback'.format(t.hostname))
+        except BaseException:
             raise
         finally:
             self.unlock_hosts()
 
-
     def _run(self, type=None):
         versions = {}
-        lock = self.lock_hosts()
+        self.lock_hosts()
         try:
             for t in list(self.targets.values()):
                 queue.put([t.set_repo, ['remove', self.testreport]])
@@ -63,7 +64,7 @@ class Downgrade(object):
 
             for t in list(self.targets.values()):
                 if t.lasterr():
-                    self.log.critical(
+                    logger.critical(
                         'failed to downgrade host {!s}. stopping.\n# {!s}\n{!s}'.format(
                             t.hostname, t.lastin(), t.lasterr()))
                     return
@@ -112,7 +113,7 @@ class Downgrade(object):
             for command in self.post_commands:
                 self.targets.run(command)
 
-        except:
+        except BaseException:
             raise
         finally:
             self.unlock_hosts()
@@ -120,27 +121,27 @@ class Downgrade(object):
     # TODO: check if this work correctly -> maybe use re
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'A ZYpp transaction is already in progress.' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError(target.hostname, 'update stack locked')
         if 'System management is locked' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if '(c): c' in stdout:
-            self.log.critical(
+            logger.critical(
                 '{!s}: unresolved dependency problem. please resolve manually:\n{!s}'.format(
                     target.hostname, stdout))
             raise UpdateError('Dependency Error', target.hostname)
         if exitcode == 104:
-            self.log.critical(
+            logger.critical(
                 '{!s}: zypper returned with errorcode 104:\n{!s}'.format(
                     target.hostname, stderr))
             raise UpdateError('Unspecified Error', target.hostname)
         if exitcode == 106:
-            self.log.warning(
+            logger.warning(
                 "{!s}: zypper returned with errocode 106:\n{!s}".format(
                     target.hostname, stderr))
 
@@ -157,11 +158,11 @@ class Downgrade(object):
                 lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
-                    self.log.warning(
+                    logger.warning(
                         'host {!s} is locked since {!s} by {!s}. skipping.'.format(
                             t.hostname, lock.time(), lock.user))
                     if lock.comment:
-                        self.log.info(
+                        logger.info(
                             "{!s}'s comment: {!s}".format(
                                 lock.user, lock.comment))
                 else:
@@ -177,11 +178,10 @@ class Downgrade(object):
                     except AssertionError:
                         pass
                 raise UpdateError('Hosts locked')
-        except:
+        except BaseException:
             raise
         finally:
             self.unlock_hosts()
-
 
     def unlock_hosts(self):
         for t in list(self.targets.values()):

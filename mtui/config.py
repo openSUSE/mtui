@@ -8,10 +8,13 @@ import getpass
 import collections
 import configparser
 
+from logging import getLogger
 from fnmatch import fnmatch
 from traceback import format_exc
 from mtui.refhost import RefhostsFactory
 from mtui.messages import InvalidLocationError
+
+logger = getLogger('mtui.config')
 
 
 class InvalidOptionNameError(RuntimeError):
@@ -23,8 +26,7 @@ class Config(object):
     """Read and store the variables from mtui config files"""
     # FIXME: change str paths to L{filepath.FilePath}
 
-    def __init__(self, logger, refhosts=RefhostsFactory, paths=None):
-        self.log = logger
+    def __init__(self, refhosts=RefhostsFactory, paths=None):
         self.refhosts = refhosts
         self._location = 'default'
 
@@ -50,7 +52,7 @@ class Config(object):
         try:
             self.config.read(self.configfiles)
         except configparser.Error as e:
-            self.log.error(e)
+            logger.error(e)
 
     @property
     def location(self):
@@ -59,9 +61,9 @@ class Config(object):
     @location.setter
     def location(self, x):
         try:
-            self.refhosts(self, self.log).check_location_sanity(x)
+            self.refhosts(self).check_location_sanity(x)
         except InvalidLocationError as e:
-            self.log.error(e)
+            logger.error(e)
             return
 
         self._location = x
@@ -79,7 +81,7 @@ class Config(object):
                     val = default
 
             setattr(self, attr, fixup(val))
-            self.log.debug('config.{!s} set to "{!s}"'.format(attr, val))
+            logger.debug('config.{!s} set to "{!s}"'.format(attr, val))
 
     def _define_config_options(self):
         def normalizer(x): return x
@@ -192,35 +194,35 @@ class Config(object):
 
     def _handle_testopia_cred(self):
         if not self.use_keyring:
-            self.log.debug("keyring disabled by configuration")
+            logger.debug("keyring disabled by configuration")
             return
 
         try:
             import keyring
         except ImportError:
-            self.log.warning("keyring library not available")
+            logger.warning("keyring library not available")
             return
 
-        self.log.debug('querying keyring for Testopia password')
+        logger.debug('querying keyring for Testopia password')
         if self.testopia_pass and self.testopia_user:
             try:
                 keyring.set_password('Testopia', self.testopia_user,
                                      self.testopia_pass)
             except Exception:
-                self.log.warning(
+                logger.warning(
                     'failed to add Testopia password to the keyring')
-                self.log.debug(format_exc())
+                logger.debug(format_exc())
         elif self.testopia_user:
             try:
                 self.testopia_pass = keyring.get_password(
                     'Testopia',
                     self.testopia_user)
             except Exception:
-                self.log.warning(
+                logger.warning(
                     'failed to get Testopia password from the keyring')
-                self.log.debug(format_exc())
+                logger.debug(format_exc())
 
-        self.log.debug('config.testopia_pass = {0!r}'.format(
+        logger.debug('config.testopia_pass = {0!r}'.format(
             self.testopia_pass))
 
     def _list_terms(self):
@@ -238,12 +240,12 @@ class Config(object):
             return getter(*secopt)
         except (configparser.NoSectionError, configparser.NoOptionError):
             msg = 'Config option {0}.{1} not found.'
-            self.log.debug(msg.format(*secopt))
+            logger.debug(msg.format(*secopt))
             raise
         except Exception:
             msg = 'Config option {0}.{1} extraction from {2} ' + \
                 'failed.'
-            self.log.error(msg.format(secopt + (self.configfiles, )))
+            logger.error(msg.format(secopt + (self.configfiles, )))
             raise
 
     def merge_args(self, args):

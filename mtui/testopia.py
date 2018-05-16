@@ -5,12 +5,15 @@
 
 import re
 import collections
-
+from logging import getLogger
 from xml.sax import saxutils
 
 from mtui.connector.bugzilla import Bugzilla
 
 from mtui.utils import nottest
+
+
+logger = getLogger("mtui.testopia")
 
 
 @nottest
@@ -28,7 +31,7 @@ class Testopia(object):
     status = {3: 'disabled', 2: 'confirmed', 1: 'proposed'}
     automated = {1: 'yes', 0: 'no'}
 
-    def __init__(self, config, logger, product=None, packages=None):
+    def __init__(self, config, product=None, packages=None):
         """create xmlrpclib.ServerProxy object for communication
 
         creates a ServerProxy XMLRPC instance with Testopie credentials
@@ -38,7 +41,6 @@ class Testopia(object):
 
         """
 
-        self.log = logger
         self.testcases = {}
         self.product = product
         self.packages = packages
@@ -48,8 +50,8 @@ class Testopia(object):
         username = config.testopia_user
         password = config.testopia_pass
 
-        self.log.debug('creating Testopia Interface at {!s}'.format(interface))
-        self.bugzilla = Bugzilla(self.log, interface, username, password)
+        logger.debug('creating Testopia Interface at {!s}'.format(interface))
+        self.bugzilla = Bugzilla(interface, username, password)
 
         # cache testcases since Testopia is slow
         self.update_testcase_list()
@@ -85,7 +87,7 @@ class Testopia(object):
                     datafield['isautomated'] = automated[
                         datafield.pop('automated')]
                 except KeyError as error:
-                    self.log.critical(
+                    logger.critical(
                         'unknown value for automated: {!s}. using default.'.format(error))
             elif key == 'status':
                 status = {}
@@ -95,17 +97,17 @@ class Testopia(object):
                     datafield['case_status_id'] = status[
                         datafield.pop('status')]
                 except KeyError as error:
-                    self.log.critical(
+                    logger.critical(
                         'unknown value for status: {!s}. using default.'.format(error))
 
         return datafield
 
     def update_testcase_list(self):
-        self.log.debug('updating Testopia testcase list')
+        logger.debug('updating Testopia testcase list')
         self.testcases = self.get_testcase_list()
 
     def append_testcase_cache(self, case_id, testcase):
-        self.log.debug('writing testcase {!s} to cache'.format(case_id))
+        logger.debug('writing testcase {!s} to cache'.format(case_id))
         self.casebuffer.append({'case_id': case_id, 'testcase': testcase})
 
     def remove_testcase_cache(self, case_id):
@@ -115,7 +117,7 @@ class Testopia(object):
                 element = case
 
         if element:
-            self.log.debug(
+            logger.debug(
                 'removing testcase {!s} from cache'.format(element['case_id']))
             self.casebuffer.remove(element)
 
@@ -135,7 +137,7 @@ class Testopia(object):
         if not self.product and not self.packages:
             return {}
 
-        self.log.debug(
+        logger.debug(
             'getting testcase list for packages {!s} in testplan {!s}'.format(
                 self.packages, self.plans[
                     self.product]))
@@ -149,7 +151,7 @@ class Testopia(object):
                     'tags': tags, 'tags_type': 'anyexact', 'plan_id': self.plans[
                         self.product]})
         except Exception:
-            self.log.critical('failed to query TestCase.list')
+            logger.critical('failed to query TestCase.list')
             return {}
 
         # since we're too lazy to copy testcases over to our latest products,
@@ -159,10 +161,10 @@ class Testopia(object):
                 'TestCase.list', {
                     'tags': tags, 'tags_type': 'anyexact', 'plan_id': self.plans['11']})
             if response:
-                self.log.warning(
+                logger.warning(
                     'found testcases for product 11 while {!s} was empty'.format(
                         self.product))
-                self.log.warning(
+                logger.warning(
                     'please consider migrating the testcases to product {!s}'.format(
                         self.product))
 
@@ -189,13 +191,13 @@ class Testopia(object):
 
         for case in self.casebuffer:
             if case['case_id'] == case_id:
-                self.log.debug('found testcase {!s} in cache'.format(case_id))
+                logger.debug('found testcase {!s} in cache'.format(case_id))
                 return case['testcase']
 
         try:
             response = self.bugzilla.query_interface('TestCase.get', case_id)
         except Exception:
-            self.log.critical('failed to query TestCase.get')
+            logger.critical('failed to query TestCase.get')
             return {}
 
         # first, import mandatory fields
@@ -207,7 +209,7 @@ class Testopia(object):
                     response['case_status_id']], 'automated': self.automated[
                     response['isautomated']]}
         except KeyError:
-            self.log.error('testcase {!s} not found'.format(case_id))
+            logger.error('testcase {!s} not found'.format(case_id))
             return {}
 
         # import optional fields
@@ -247,11 +249,11 @@ class Testopia(object):
         try:
             plan = self.plans[self.product]
         except KeyError:
-            self.log.error(
+            logger.error(
                 'no testplan found for product {!s}'.format(self.product))
             raise
 
-        self.log.debug(
+        logger.debug(
             'creating testcase for product {!s}'.format(
                 self.product))
 
@@ -273,7 +275,7 @@ class Testopia(object):
                 'TestCase.create',
                 testcase)
         except Exception:
-            self.log.critical('failed to query TestCase.create')
+            logger.critical('failed to query TestCase.create')
             raise
 
         self.testcases.update(
@@ -315,7 +317,7 @@ class Testopia(object):
         try:
             self.bugzilla.query_interface('TestCase.update', case_id, update)
         except Exception:
-            self.log.critical('failed to query TestCase.update')
+            logger.critical('failed to query TestCase.update')
             raise
 
         try:
@@ -327,13 +329,13 @@ class Testopia(object):
                 setup,
                 breakdown)
         except Exception:
-            self.log.critical('failed to query TestCase.store_text')
+            logger.critical('failed to query TestCase.store_text')
             raise
 
         try:
             tags = self.bugzilla.query_interface('TestCase.get_tags', case_id)
         except Exception:
-            self.log.critical('failed to query TestCase.get_tags')
+            logger.critical('failed to query TestCase.get_tags')
             raise
 
         new_tags = set(
@@ -347,10 +349,10 @@ class Testopia(object):
                     case_id,
                     list(new_tags))
             except Exception:
-                self.log.critical('failed to query TestCase.add_tag')
+                logger.critical('failed to query TestCase.add_tag')
                 raise
 
-        self.log.debug('values for testcase {!s} stored'.format(case_id))
+        logger.debug('values for testcase {!s} stored'.format(case_id))
         # remove testcase from cache to get the updated version on
         # the next query
         self.remove_testcase_cache(case_id)

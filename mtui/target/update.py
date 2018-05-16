@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-# vim: et sw=2 sts=2
 
+from logging import getLogger
 
 from mtui.target.actions import UpdateError
 from mtui.target.actions import ThreadedMethod
@@ -17,11 +16,12 @@ from mtui.hooks import CompareScript
 from qamlib.types.rpmver import RPMVersion
 from mtui.utils import yellow
 
+logger = getLogger('mtui.target.update')
+
 
 class Update(object):
 
-    def __init__(self, logger, targets, packages, testreport):
-        self.log = logger
+    def __init__(self, targets, packages, testreport):
         self.targets = targets
         self.packages = packages
         self.testreport = testreport
@@ -36,11 +36,11 @@ class Update(object):
 
     def _run_transactional(self, params):
         if any(param for param in params):
-            self.log.warning(
+            logger.warning(
                 'The options --noprepare, --newpackage and --noscript are not valid for transactional updates')
 
         self.lock_and_run()
-        self.log.warning('Please reboot the host to activate the changes and avoid data loss')
+        logger.warning('Please reboot the host to activate the changes and avoid data loss')
 
     def _run(self, params):
         if 'noprepare' not in params:
@@ -61,12 +61,12 @@ class Update(object):
                     not_installed.append(pkgname)
                 else:
                     if RPMVersion(before) >= RPMVersion(required):
-                        self.log.warning(
+                        logger.warning(
                             '{!s}: package is too recent: {!s} ({!s}, target version is {!s})'.format(
                                 hn, pkgname, before, required))
 
             if not_installed:
-                self.log.warning(
+                logger.warning(
                     '{!s}: these packages are missing: {!s}'.format(
                         hn, not_installed))
 
@@ -90,12 +90,12 @@ class Update(object):
 
                 if after and before:
                     if RPMVersion(before) == RPMVersion(after):
-                        self.log.warning(
+                        logger.warning(
                             '{!s}: package was not updated: {!s} ({!s})'.format(
                                 hn, pkgname, after))
                 if after:
                     if RPMVersion(after) < RPMVersion(required):
-                        self.log.warning(
+                        logger.warning(
                             '{!s}: package does not match required version: {!s} ({!s}, required {!s})'.format(
                                 hn, pkgname, after, required))
 
@@ -105,16 +105,16 @@ class Update(object):
 
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'zypper' in stdin and exitcode == 104:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if 'zypper' in stdin and exitcode == 106:
-            self.log.warning(
+            logger.warning(
                 "{!s}: zypper returns exitcode 106:\n{!s}".format(
                     target.hostname, stderr))
         if 'Additional rpm output' in stdout:
-            self.log.warning(
+            logger.warning(
                 'There was additional rpm output on {!s}:'.format(
                     target.hostname))
             marker = 'Additional rpm output:'
@@ -122,17 +122,17 @@ class Update(object):
             end = stdout.find('Retrieving', start)
             print(stdout[start:end].replace('warning', yellow('warning')))
         if 'A ZYpp transaction is already in progress.' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if 'System management is locked' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if '(c): c' in stdout:
-            self.log.critical(
+            logger.critical(
                 '{!s}: unresolved dependency problem. please resolve manually:\n{!s}'.format(
                     target.hostname, stdout))
             raise UpdateError('Dependency Error', target.hostname)
@@ -154,11 +154,11 @@ class Update(object):
                 lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
-                    self.log.warning(
+                    logger.warning(
                         'host {!s} is locked since {!s} by {!s}. skipping.'.format(
                             t.hostname, lock.time(), lock.user))
                     if lock.comment:
-                        self.log.info(
+                        logger.info(
                             "{!s}'s comment: {!s}".format(
                                 lock.user, lock.comment))
                 else:

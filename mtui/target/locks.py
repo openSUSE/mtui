@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-# vim: et sw=2 sts=2
-
 
 import errno
 import os
+from logging import getLogger
 
 from qamlib.utils import timestamp
+
+logger = getLogger('mtui.target.locks')
 
 
 class TargetLockedError(Exception):
@@ -116,10 +116,9 @@ class TargetLock(object):
 
     filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
 
-    def __init__(self, connection, config, logger):
+    def __init__(self, connection, config):
         self.connection = connection
 
-        self.log = logger
         self.connection = connection
 
         self.i_am_user = config.session_user
@@ -135,7 +134,7 @@ class TargetLock(object):
         """
         :returns None:
         """
-        self.log.debug(
+        logger.debug(
             '{!s}: getting mtui lock state'.format(
                 self.connection.hostname))
 
@@ -181,7 +180,7 @@ class TargetLock(object):
                 # setting a different comment may be desired.
                 raise TargetLockedError(self.locked_by_msg())
 
-        self.log.debug('{!s}: setting lock'.format(self.connection.hostname))
+        logger.debug('{!s}: setting lock'.format(self.connection.hostname))
 
         rl = RemoteLock()
         rl.user = self.i_am_user
@@ -192,7 +191,7 @@ class TargetLock(object):
         try:
             lockfile = self.connection.open(self.filename, 'w+')
         except Exception as e:
-            self.log.error('failed to open lockfile: {!s}'.format(e))
+            logger.error('failed to open lockfile: {!s}'.format(e))
             raise
 
         lockfile.write(rl.to_lockfile())
@@ -231,7 +230,7 @@ class TargetLock(object):
             if e.errno == errno.ENOENT:
                 pass
         except Exception as e:
-            self.log.error('failed to remove lockfile: {!s}'.format(e))
+            logger.error('failed to remove lockfile: {!s}'.format(e))
             raise
 
         self._lock = RemoteLock()
@@ -257,7 +256,6 @@ class Locked(object):
 
     def __init__(
             self,
-            log,
             myself,
             locked=False,
             user='nobody',
@@ -265,7 +263,6 @@ class Locked(object):
             pid=0,
             comment=None):
         self.myself = myself
-        self.log = log
         self.locked = locked
         self.user = user
         self.timestamp = timestamp
@@ -275,12 +272,12 @@ class Locked(object):
     def own(self):
         u = self.myself
         if not self.user == u:
-            self.log.debug("user: {!s} != {!s}".format(self.user, u))
+            logger.debug("user: {!s} != {!s}".format(self.user, u))
             return False
 
         p = str(self._getpid())
         if not self.pid == p:
-            self.log.debug("pid: {!s} != {!s}".format(self.pid, p))
+            logger.debug("pid: {!s} != {!s}".format(self.pid, p))
             return False
 
         return True

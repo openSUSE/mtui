@@ -14,11 +14,14 @@ import termios
 import tty
 import getpass
 import logging
+from logging import getLogger
 from traceback import format_exc
 
 from mtui.utils import termsize
 
 import paramiko
+
+logger = getLogger("mtui.connection")
 
 
 class CommandTimeout(Exception):
@@ -40,7 +43,7 @@ class Connection(object):
 
     """manage SSH and SFTP connections"""
 
-    def __init__(self, logger, hostname, port, timeout):
+    def __init__(self, hostname, port, timeout):
         """opens SSH channel to specified host
 
         Tries AuthKey Authentication and falls back to password mode in case of errors.
@@ -57,8 +60,6 @@ class Connection(object):
         # uncomment to enable separate paramiko connection logging
 
         # paramiko.util.log_to_file("/tmp/paramiko.log")
-
-        self.log = logger
 
         self.hostname = hostname
 
@@ -97,11 +98,11 @@ class Connection(object):
                 cfg.parse(fd)
         except IOError as e:
             if e.errno != errno.ENOENT:
-                self.log.warning(e)
+                logger.warning(e)
         opts = cfg.lookup(self.hostname)
 
         try:
-            self.log.debug(
+            logger.debug(
                 'connecting to {!s}:{!s}'.format(
                     self.hostname, self.port))
             # if this fails, the user most likely has none or an outdated
@@ -120,10 +121,10 @@ class Connection(object):
             # if public key auth fails, fallback to a password prompt.
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.
-            self.log.warning(
+            logger.warning(
                 'Authentication failed on {!s}: AuthKey missing. Make sure your system is set up correctly'.format(
                     self.hostname))
-            self.log.warning('Trying manually, please enter the root password')
+            logger.warning('Trying manually, please enter the root password')
             password = getpass.getpass()
 
             try:
@@ -139,19 +140,19 @@ class Connection(object):
                 # if a wrong password was set, don't connect to the host and
                 # reraise the exception hoping it's catched somewhere in an
                 # upper layer.
-                self.log.error(
+                logger.error(
                     'Authentication failed on {!s}: wrong password'.format(
                         self.hostname))
                 raise
         except paramiko.SSHException:
             # unspecified general SSHException. the host/sshd is probably not
             # available.
-            self.log.error(
+            logger.error(
                 'SSHException while connecting to {!s}'.format(self.hostname))
             raise
         except Exception as error:
             # general Exception
-            self.log.debug('{!s}: {!s}'.format(self.hostname, error))
+            logger.debug('{!s}: {!s}'.format(self.hostname, error))
             raise
 
     def reconnect(self):
@@ -163,7 +164,7 @@ class Connection(object):
         """
 
         if not self.is_active():
-            self.log.debug(
+            logger.debug(
                 'lost connection to {!s}:{!s}, reconnecting'.format(
                     self.hostname, self.port))
 
@@ -186,7 +187,7 @@ class Connection(object):
         self.close_session(session)
         """
 
-        self.log.debug(
+        logger.debug(
             'creating new session at {!s}:{!s}'.format(
                 self.hostname, self.port))
         try:
@@ -300,14 +301,14 @@ class Connection(object):
                     stdout += buffer
                     for line in buffer.decode('utf-8', 'ignore').split('\n'):
                         if line:
-                            self.log.debug(line)
+                            logger.debug(line)
 
                 if session.recv_stderr_ready():
                     buffer = session.recv_stderr(1024)
                     stderr += buffer
                     for line in buffer.decode('utf-8', 'ignore').split('\n'):
                         if line:
-                            self.log.debug(line)
+                            logger.debug(line)
 
                 if not buffer:
                     break
@@ -432,7 +433,7 @@ class Connection(object):
                 except Exception:
                     created = True
 
-        self.log.debug('transmitting {!s} to {!s}:{!s}:{!s}'.format(
+        logger.debug('transmitting {!s} to {!s}:{!s}:{!s}'.format(
                            local, self.hostname, self.port, remote))
         sftp.put(local, remote)
 
@@ -454,7 +455,7 @@ class Connection(object):
         """
         sftp = self.__sftp_reconnect()
 
-        self.log.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(self.hostname, self.port, remote, local))
+        logger.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(self.hostname, self.port, remote, local))
         sftp.get(remote, local)
 
         sftp.close()
@@ -463,7 +464,7 @@ class Connection(object):
     def get_folder(self, remote_folder, local_folder):
 
         sftp = self.__sftp_reconnect()
-        self.log.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(
+        logger.debug('transmitting {!s}:{!s}:{!s} to {!s}'.format(
             self.hostname, self.port, remote_folder, local_folder))
         files = self.listdir(remote_folder)
         for f in files:
@@ -480,7 +481,7 @@ class Connection(object):
 
         """
 
-        self.log.debug('getting {!s}:{!s}:{!s} listing'.format(self.hostname, self.port, path))
+        logger.debug('getting {!s}:{!s}:{!s} listing'.format(self.hostname, self.port, path))
         sftp = self.__sftp_reconnect()
 
         listdir = sftp.listdir(path)
@@ -491,12 +492,12 @@ class Connection(object):
     def open(self, filename, mode='r', bufsize=-1):
         """open remote file for reading"""
 
-        self.log.debug('{0} open({1}, {2})'.format(
+        logger.debug('{0} open({1}, {2})'.format(
             repr(self), filename, mode
         ))
-        self.log.debug("  -> self.client.open_sftp")
+        logger.debug("  -> self.client.open_sftp")
         sftp = self.__sftp_reconnect()
-        self.log.debug("  -> sftp.open")
+        logger.debug("  -> sftp.open")
         try:
             ofile = sftp.open(filename, mode, bufsize)
         except BaseException:
@@ -504,7 +505,7 @@ class Connection(object):
             # doing sftp.open() so let's log any other exception here,
             # just in case it gets eaten by some caller in mtui
             # bnc#880934
-            self.log.debug(format_exc())
+            logger.debug(format_exc())
             if 'sftp' in locals():
                 if isinstance(sftp, paramiko.sftp_client.SFTPClient):
                     sftp.close()
@@ -514,7 +515,7 @@ class Connection(object):
     def remove(self, path):
         """delete remote file"""
 
-        self.log.debug(
+        logger.debug(
             'deleting file {!s}:{!s}:{!s}'.format(
                 self.hostname, self.port, path))
         sftp = self.__sftp_reconnect()
@@ -522,14 +523,14 @@ class Connection(object):
         try:
             sftp.remove(path)
         except IOError:
-            self.log.error("Can't remove {} from {}".format(path, self.hostname))
+            logger.error("Can't remove {} from {}".format(path, self.hostname))
 
         sftp.close()
 
     def rmdir(self, path):
         """delete remote directory"""
 
-        self.log.debug('deleting dir {!s}:{!s}:{!s}'.format(self.hostname, self.port, path))
+        logger.debug('deleting dir {!s}:{!s}:{!s}'.format(self.hostname, self.port, path))
         sftp = self.__sftp_reconnect()
         items = self.listdir(path)
         for item in items:
@@ -540,7 +541,7 @@ class Connection(object):
 
     def readlink(self, path):
         """ Return the target of a symbolic link (shortcut)."""
-        self.log.debug("read link {}:{}:{}".format(self.hostname, self.port, path))
+        logger.debug("read link {}:{}:{}".format(self.hostname, self.port, path))
 
         sftp = self.__sftp_reconnect()
         link = sftp.readlink(path)
@@ -558,6 +559,6 @@ class Connection(object):
 
         """
 
-        self.log.debug(
+        logger.debug(
             'closing connection to {!s}:{!s}'.format(self.hostname, self.port))
         self.client.close()

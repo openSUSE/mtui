@@ -67,7 +67,7 @@ class SetLocation(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
 
-        loc = RefhostsFactory(state['config'], state['log']).get_locations()
+        loc = RefhostsFactory(state['config']).get_locations()
 
         locations = [[str(x) for x in loc]]
 
@@ -106,7 +106,7 @@ class SetLogLevel(Command):
             'debug': logging.DEBUG}
         new = self.args.level[0]
 
-        self.log.setLevel(level=levels[new])
+        self.prompt.log.setLevel(level=levels[new])
 
         self.log.info('Log level is set to {}'.format(new))
 

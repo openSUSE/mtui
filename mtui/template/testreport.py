@@ -15,6 +15,9 @@ from abc import ABCMeta
 from abc import abstractmethod
 
 import shutil
+
+from logging import getLogger
+
 from mtui.utils import nottest
 
 from mtui.target import HostsGroup
@@ -32,6 +35,9 @@ from mtui.template import TestReportAlreadyLoaded
 from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
 
 from qamlib.utils import ensure_dir_exists
+
+logger = getLogger('mtui.template.testreport')
+
 
 
 @nottest
@@ -51,9 +57,8 @@ class TestReport(object, metaclass=ABCMeta):
             type.
         """
 
-    def __init__(self, config, log, scripts_src_dir=None):
+    def __init__(self, config, scripts_src_dir=None):
         self.config = config
-        self.log = log
 
         self._scripts_src_dir = scripts_src_dir or join(
             config.datadir,
@@ -169,7 +174,7 @@ class TestReport(object, metaclass=ABCMeta):
         missing = [x for x in self._attrs if not getattr(self, x)]
         if missing:
             msg = "TestReport: missing fields: {0}"
-            self.log.warning(msg.format(missing))
+            logger.warning(msg.format(missing))
 
     def get_package_list(self):
         return list(self.packages.keys())
@@ -211,7 +216,6 @@ class TestReport(object, metaclass=ABCMeta):
         updater = self.get_updater()
 
         display('\n'.join(updater(
-            self.log,
             targets,
             self.get_package_list(),
             self).commands
@@ -226,7 +230,6 @@ class TestReport(object, metaclass=ABCMeta):
     def perform_prepare(self, targets, **kw):
         preparer = self.get_preparer()
         preparer(
-            self.log,
             targets,
             self.get_package_list(),
             self,
@@ -242,16 +245,15 @@ class TestReport(object, metaclass=ABCMeta):
             ['update', str(self.id), ' '.join(self.get_package_list())])
 
         updater = self.get_updater()
-        self.log.debug("chosen updater: {!r}".format(updater))
+        logger.debug("chosen updater: {!r}".format(updater))
         try:
             updater(
-                self.log,
                 targets,
                 self.get_package_list(),
                 self).run(params)
         except UpdateError as e:
-            self.log.error('Update failed: {!s}'.format(e))
-            self.log.warning('Error while updating. Rolling back changes')
+            logger.error('Update failed: {!s}'.format(e))
+            logger.warning('Error while updating. Rolling back changes')
             self.perform_downgrade(targets)
 
     def perform_downgrade(self, targets):
@@ -260,7 +262,6 @@ class TestReport(object, metaclass=ABCMeta):
 
         downgrader = self.get_downgrader()
         downgrader(
-            self.log,
             targets,
             self.get_package_list(),
             self).run()
@@ -268,12 +269,12 @@ class TestReport(object, metaclass=ABCMeta):
     def perform_install(self, targets, packages):
         targets.add_history(['install', packages])
 
-        tool = self.get_installer()
-        tool(self.log, targets, packages).run()
+        installer = self.get_installer()
+        installer(targets, packages).run()
 
     def perform_uninstall(self, targets, packages):
-        tool = self.get_uninstaller()
-        tool(self.log, targets, packages).run()
+        uninstaller = self.get_uninstaller()
+        uninstaller(targets, packages).run()
 
     def copy_scripts(self):
         if not self.path:
@@ -291,7 +292,7 @@ class TestReport(object, metaclass=ABCMeta):
 
     def _copy_scripts(self, src, dst, ignore):
         try:
-            self.log.debug("Copying scripts: {0} -> {1}".format(
+            logger.debug("Copying scripts: {0} -> {1}".format(
                 src, dst
             ))
             self._copytree(src, dst, ignore=ignore)
@@ -302,14 +303,14 @@ class TestReport(object, metaclass=ABCMeta):
             msg = "Copy scripts {0} -> {1} failed. reason:"
             msg = msg.format(src, dst)
             if e.errno == ENOENT:
-                self.log.error(msg)
-                self.log.error(str(e))
-                self.log.error("copy scripts manually")
-                self.log.debug(format_exc())
+                logger.error(msg)
+                logger.error(str(e))
+                logger.error("copy scripts manually")
+                logger.debug(format_exc())
             elif e.errno == EEXIST:
-                self.log.warning(msg)
-                self.log.warning(str(e))
-                self.log.debug(format_exc())
+                logger.warning(msg)
+                logger.warning(str(e))
+                logger.debug(format_exc())
             else:
                 raise
 
@@ -345,14 +346,13 @@ class TestReport(object, metaclass=ABCMeta):
                     self.config,
                     host,
                     self.get_package_list(),
-                    logger=self.log,
                     timeout=self.config.connection_timeout)
                 targets[host].add_history(['connect'])
                 new_systems[host] = targets[host].get_system()
             except Exception:
-                self.log.debug(format_exc())
+                logger.debug(format_exc())
                 msg = 'failed to add host {0} to target list'
-                self.log.warning(msg.format(host))
+                logger.warning(msg.format(host))
             except KeyboardInterrupt:
                 # skip adding the reference host if CTRL-C was pressed.
                 # FIXME: this might not work if we are somewhere deep in
@@ -362,7 +362,7 @@ class TestReport(object, metaclass=ABCMeta):
                 # default.
                 # With paramiko we'd have to run it in threads, assuming
                 # the network/ssh code really can't KeyboardInterrupt
-                self.log.warning('skipping host {0}'.format(host))
+                logger.warning('skipping host {0}'.format(host))
 
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = new_systems
@@ -372,7 +372,7 @@ class TestReport(object, metaclass=ABCMeta):
 
     def add_target(self, hostname):
         if hostname in self.targets:
-            self.log.warning('already connected to {0}. skipping.'.format(
+            logger.warning('already connected to {0}. skipping.'.format(
                 self.targets[hostname].hostname
             ))
             return
@@ -381,31 +381,28 @@ class TestReport(object, metaclass=ABCMeta):
                 self.config,
                 hostname,
                 self.get_package_list(),
-                logger=self.log,
             )
 
             if self:
                 self.systems[hostname] = self.targets[hostname].get_system()
 
         except (SSHException, NoValidConnectionsError, ChannelException):
-            self.log.warning('failed to add host {0} to target list'.format(hostname))
-            self.log.debug(format_exc())
+            logger.warning('failed to add host {0} to target list'.format(hostname))
+            logger.debug(format_exc())
 
     def _refhosts_from_tp(self, testplatform):
-        refhosts = self.refhostsFactory(self.config, self.log)
+        refhosts = self.refhostsFactory(self.config)
 
         try:
-            hostnames = refhosts.search(Attributes.from_testplatform(
-                testplatform, self.log
-            ))
+            hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
         except (ValueError, KeyError):
             hostnames = []
             msg = 'failed to parse testplatform {0!r}'
-            self.log.warning(msg.format(testplatform))
+            logger.warning(msg.format(testplatform))
         else:
             if not hostnames:
                 msg = 'nothing found for testplatform {0!r}'
-                self.log.warning(msg.format(testplatform))
+                logger.warning(msg.format(testplatform))
         self.hostnames.update(set(hostnames))
 
     def list_bugs(self, sink, arg):
@@ -495,11 +492,11 @@ class TestReport(object, metaclass=ABCMeta):
         for r, _, fs in os.walk(d):
             if r == d:
                 for f in fs:
-                    x = s(self, join(d, f), self.log)
+                    x = s(self, join(d, f))
                     x.run(targets)
 
     def download_file(self, from_, into):
-        self.log.info("Downloading {!s}".format(from_))
+        logger.info("Downloading {!s}".format(from_))
         from contextlib import closing
         with open(into, 'wb') as dst, closing(urlopen(from_)) as src:
             dst.writelines(src)
@@ -510,7 +507,6 @@ class TestReport(object, metaclass=ABCMeta):
         except (AttributeError, AssertionError):
             self.testopia = Testopia(
                 self.config,
-                self.log,
                 self.get_release(),
                 packages or self.get_package_list(),
             )
@@ -545,7 +541,7 @@ class TestReport(object, metaclass=ABCMeta):
         for hn, t in list(targets.items()):
             by_host_pkg[hn] = dict()
             for line in t.lastout().split('\n'):
-                match = re.search('(\S+)\s+(\S+)', line)
+                match = re.search(r'(\S+)\s+(\S+)', line)
                 if not match:
                     continue
                 pkg, ver = match.group(1), match.group(2)
@@ -572,7 +568,6 @@ class TestReport(object, metaclass=ABCMeta):
     def generate_templatefile(self, xmllog):
         from mtui.export import fill_template
         return fill_template(self.id,
-                             self.log,
                              self.path,
                              xmllog,
                              self.config,
@@ -582,7 +577,6 @@ class TestReport(object, metaclass=ABCMeta):
     def generate_install_logs(self, xmllog, host):
         from mtui.export import xml_installog_to_template
         return xml_installog_to_template(
-            self.log,
             xmllog,
             self.config,
             host)

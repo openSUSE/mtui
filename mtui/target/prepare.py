@@ -1,6 +1,5 @@
-# -*- coding: utf-8 -*-
-# vim: et sw=2 sts=2
 
+from logging import getLogger
 
 from mtui.target.actions import UpdateError
 from mtui.target.actions import ThreadedMethod
@@ -8,19 +7,19 @@ from mtui.target.actions import ThreadedMethod
 from mtui.target.actions import queue
 from mtui.target.actions import spinner
 
+logger = getLogger('mtui.target.prepare')
+
 
 class Prepare(object):
 
     def __init__(
             self,
-            logger,
             targets,
             packages,
             testreport,
             testing=False,
             force=False,
             installed_only=False):
-        self.log = logger
         self.targets = targets
         self.packages = packages
         self.testreport = testreport
@@ -37,11 +36,11 @@ class Prepare(object):
                 lock = t.locked()
                 if lock.locked and not lock.own():
                     skipped = True
-                    self.log.warning(
+                    logger.warning(
                         'host {!s} is locked since {!s} by {!s}. skipping.'.format(
                             t.hostname, lock.time(), lock.user))
                     if lock.comment:
-                        self.log.info(
+                        logger.info(
                             "{!s}'s comment: {!s}".format(
                                 lock.user, lock.comment))
                 else:
@@ -71,7 +70,7 @@ class Prepare(object):
 
             for t in list(self.targets.values()):
                 if t.lasterr():
-                    self.log.critical(
+                    logger.critical(
                         'failed to prepare host {!s}. stopping.\n# {!s}\n{!s}'.format(
                             t.hostname, t.lastin(), t.lasterr()))
                     return
@@ -86,7 +85,7 @@ class Prepare(object):
                         t.lastout(),
                         t.lasterr(),
                         t.lastexit())
-        except:
+        except BaseException:
             raise
         finally:
             for t in list(self.targets.values()):
@@ -98,17 +97,17 @@ class Prepare(object):
 
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if 'A ZYpp transaction is already in progress.' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError(target.hostname, 'update stack locked')
         if 'System management is locked' in stderr:
-            self.log.critical(
+            logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
         if '(c): c' in stdout:
-            self.log.critical(
+            logger.critical(
                 '{!s}: unresolved dependency problem. please resolve manually:\n{!s}'.format(
                     target.hostname, stdout))
             raise UpdateError('Dependency Error', target.hostname)
