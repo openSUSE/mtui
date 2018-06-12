@@ -1,21 +1,23 @@
 
 def normalize_sle15(x):
-    """ Normalize SLES/D 15SPx products
-    Now probadly same rules as SLE12SPx+-"""
-    if x[0][0] == "SLE-SERVER" and "LTSS" in x[0][1]:
-        x[0][0] = "SLES-LTSS"
-        x[0][1] = x[0][1].replace("-LTSS", "")
-        return x
-    if x[0][0] == "SLE-SERVER":
+    """ Normalize SLES/D 15SPx products """
+
+    if x[0][0] == "SLE-Product-SLES":
         x[0][0] = "SLES"
         return x
-    if x[0][0] == "SLE-DESKTOP":
+    if x[0][0] == "SLE-Product-SLED":
         x[0][0] = "SLED"
         return x
-    if x[0][0] == "SLE-RPI":
-        x[0][0] = "SLES_RPI"
+    if x[0][0] == 'SLE-Product-WE':
+        x[0][0] = 'sle-we'
         return x
-    if x[0][0] == 'SLE-SAP':
+    if x[0][0] == 'SLE-Product-HA':
+        x[0][0] = 'sle-ha'
+        return x
+    if x[0][0] == 'SLE-Product-HPC':
+        x[0][0] = 'sle-hpc'
+        return x
+    if x[0][0] == 'SLE-Product-SLES_SAP':
         x[0][0] = 'SLES_SAP'
         return x
     # All other SLE12 modules/extensions in lowercase
