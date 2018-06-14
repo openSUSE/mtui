@@ -110,12 +110,12 @@ class Connection(object):
             # "ssh root@..." invocation helps in most cases.
             self.client.connect(
                 hostname=opts.get(
-                    'hostname', self.hostname), port=int(
+                    'hostname', self.hostname) if not 'proxycommand' in opts else self.hostname, port=int(
                     opts.get(
                         'port', self.port)), username=opts.get(
                     'user', 'root'), key_filename=opts.get(
-                    'identityfile', None), sock=paramiko.ProxyCommand(
-                    opts['proxycommand']) if 'proxycommand' in opts else None, )
+                        'identityfile', None), sock=paramiko.ProxyCommand(
+                            opts['proxycommand']) if 'proxycommand' in opts else None, )
 
         except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
             # if public key auth fails, fallback to a password prompt.
@@ -131,7 +131,7 @@ class Connection(object):
                 # try again with password auth instead of public/private key
                 self.client.connect(
                     hostname=opts.get(
-                        'hostname', self.hostname), port=int(
+                        'hostname', self.hostname) if not 'proxycommand' in opts else self.hostname, port=int(
                         opts.get(
                             'port', self.port)), username=opts.get(
                         'user', 'root'), password=password, sock=paramiko.ProxyCommand(
