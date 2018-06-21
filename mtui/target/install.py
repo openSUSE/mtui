@@ -65,33 +65,38 @@ class Install(object):
                         pass
 
     def _check(self, target, stdin, stdout, stderr, exitcode):
-        if 'zypper' in stdin and exitcode == 104:
+        if exitcode in [0, 100, 101, 102, 103, 106]:
+            return self.check(target, stdin, stdout, stderr, exitcode)  
+        elif 'zypper' in stdin and exitcode == 104:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('package not found', target.hostname)
-        if 'A ZYpp transaction is already in progress.' in stderr:
+        elif 'A ZYpp transaction is already in progress.' in stderr:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
-        if 'System management is locked' in stderr:
+        elif 'System management is locked' in stderr:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('update stack locked', target.hostname)
-        if 'Error:' in stderr:
+        elif 'Error:' in stderr:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
                     target.hostname, stdin, stdout, stderr))
             raise UpdateError('RPM Error', target.hostname)
-        if '(c): c' in stdout:
+        elif '(c): c' in stdout:
             logger.critical(
                 '{!s}: unresolved dependency problem. please resolve manually:\n{!s}'.format(
                     target.hostname, stdout))
             raise UpdateError('Dependency Error', target.hostname)
-
-        return self.check(target, stdin, stdout, stderr, exitcode)
+        else:
+            logger.critical(
+                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
+                    target.hostname, stdin, stdout, stderr))
+            raise UpdateError('Unknown Error', target.hostname)
 
     def check(self, target, stdin, stdout, stderr, exitcode):
         """stub. needs to be overwritten by inherited classes"""
