@@ -31,11 +31,19 @@ class SFTPPut(Command):
             self.log.error("File {!s} not found".format(self.args.filename[0]))
             return
 
-        for filename in files:
-            if not os.path.isfile(filename):
-                self.log.warn("Filename {!s} isn't file".format(filename))
+        transversed_files = []
+        for file in files:
+            if os.path.isfile(file):
+                transversed_files.append(file)
+            elif os.path.isdir(file):
+                for root, dirs, folder_files in os.walk(file):
+                    for folder_file in folder_files:
+                        transversed_files.append(os.path.join(root, folder_file));
+            else:
+                self.log.warn("Filename {!s} isn't file".format(file))
                 continue
 
+        for filename in transversed_files:
             remote = self.metadata.target_wd(os.path.basename(filename))
 
             self.targets.put(filename, remote)
