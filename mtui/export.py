@@ -7,6 +7,7 @@ import os
 import codecs
 import xml.dom.minidom
 from logging import getLogger
+import re
 
 from qamlib.types.rpmver import RPMVersion
 from mtui.systemcheck import system_info
@@ -80,10 +81,22 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
     template  -- maintenance template path (needs to exist)
     xmldata   -- mtui xml log
     """
-    with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
-        t = f.readlines()
-
     x = _read_xmldata(xmldata)
+    current_host = None
+    hosts = [h.getAttribute('hostname') for h in x.getElementsByTagName('host')]
+
+    with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
+        lines = f.readlines()
+        t=[]
+        # We want to avoid the repeating the scripts outcome, so we delete them from the current template if they are present in the new xmldata
+        for line in lines:
+            match=re.search("reference host:\s (.*)$", line)
+            if match:
+                current_host=match.group(0)
+                continue
+            if not re.search("\s:\s(SUCCEEDED|(?<!PASSED/)FAILED|INTERNAL ERROR)", line) or current_host not in hosts:
+                t.append(line)
+
 
     # since the maintenance template is more of a human readable file then
     # a pretty parsable log, we need to build on specific strings to know
@@ -267,6 +280,8 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
             logger.warning(
                 'installation test result on {!s} set to FAILED as some packages were not updated. please override manually.'.format(hostname))
 
+        # temporary variable to avoid repeating the same script. We only want the last result, so we store the previous position
+        scripts = {}
         for child in template_log.childNodes:
             # search for check scripts in the xml and inspect return code
             # return code values:   0 SUCCEEDED
@@ -301,12 +316,17 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
                     result = 'INTERNAL ERROR'
 
                 scriptline = '\t{0:25}: {1}\n'.format(scriptname, result)
-                if scriptname in t[i]:
-                    t[i] = scriptline
-                else:
-                    t.insert(i, scriptline)
 
-                i += 1
+                if scriptname in scripts:
+                    t[scripts[scriptname]] = scriptline
+                else:
+                    scripts[scriptname]=i;
+                    if scriptname in t[i]:
+                        t[i] = scriptline
+                    else:
+                        t.insert(i, scriptline)
+
+                    i += 1
 
         if 'PASSED/FAILED' in t[i + 1]:
             if failed == 0:
@@ -344,4 +364,17 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
     if system_information != t[-1]:
         t.append(system_information)
 
-    return t
+    # Remove any possible duplicated lines
+    previous_line = None
+    lines = []
+    for current_line in t:
+        if previous_line == None:
+            lines.append(current_line)
+        elif previous_line == current_line and current_line not in ['\n']:
+            None
+        else:
+            lines.append(current_line)
+
+        previous_line = current_line
+
+    return lines
