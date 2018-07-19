@@ -39,8 +39,6 @@ if [ "${plist#http://}" != "$plist" ]; then
 fi
 
 declare -a scripts=(
-   check_new_dependencies.sh:compare_new_dependencies.sh
-   check_from_same_srcrpm.pl:compare_from_same_srcrpm.sh
    check_vendor_and_disturl.pl:compare_vendor_and_disturl.sh
    check_initrd_state.sh:compare_initrd_state.sh
 )
