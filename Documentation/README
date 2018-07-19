@@ -188,17 +188,14 @@ mtui > update all
 info: preparing
 info: done... [\]
 start pre update scripts? (y/N) y
-info: preparing script check_from_same_srcrpm.pl
 info: preparing script check_all_updated.pl
 info: preparing script check_vendor_and_disturl.pl
 start update process? (y/N) y
 info: updating
 start post update scripts? (y/N) y
-info: preparing script check_from_same_srcrpm.pl
 info: preparing script check_all_updated.pl
 info: preparing script check_vendor_and_disturl.pl
 start compare scripts? (y/N) y
-info: preparing script compare_from_same_srcrpm.sh
 info: preparing script compare_all_updated.sh
 info: preparing script compare_vendor_and_disturl.pl
 info: done

@@ -27,8 +27,6 @@ Gone errors are reported on STDOUT.
 
 The return status is 1 if new errors appeared and otherwise 0.
 
-A good example for such a helper is ./compare_from_same_srcrpm.sh.
-
 FAQ:
 
 Q: What if I only want a script that is executed after an update ?
