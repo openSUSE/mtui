@@ -15,7 +15,7 @@ def normalize_sle15(x):
         x[0][0] = 'sle-ha'
         return x
     if x[0][0] == 'SLE-Product-HPC':
-        x[0][0] = 'sle-hpc'
+        x[0][0] = 'SLE_HPC'
         return x
     if x[0][0] == 'SLE-Product-SLES_SAP':
         x[0][0] = 'SLES_SAP'
