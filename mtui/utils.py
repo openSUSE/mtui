@@ -27,7 +27,7 @@ def flatten(xs): return list(chain.from_iterable(xs))
 
 
 def edit_text(text):
-    editor = os.environ.get('EDITOR', 'vi')
+    editor = os.getenv('EDITOR', 'vi')
     tmpfile = tempfile.NamedTemporaryFile()
 
     with open(tmpfile.name, 'w') as tmp:
@@ -101,8 +101,8 @@ def termsize():
 
 def filter_ansi(text):
     text = re.sub(chr(27), '', text)
-    text = re.sub('\[[0-9;]*[mA]', '', text)
-    text = re.sub('\[K', '', text)
+    text = re.sub(r'\[[0-9;]*[mA]', '', text)
+    text = re.sub(r'\[K', '', text)
 
     return text
 
