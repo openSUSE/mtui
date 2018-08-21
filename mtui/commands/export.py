@@ -6,6 +6,7 @@ from os.path import join
 from traceback import format_exc
 from itertools import zip_longest
 from functools import partial
+from pathlib import Path
 
 from mtui.commands import Command
 from mtui.utils import complete_choices_filelist
@@ -33,14 +34,33 @@ class Export(Command):
             help='force overwrite existing template')
         parser.add_argument(
             'filename',
-            nargs='?',
+            nargs="?",
+            type=Path,
             help='output template file name')
         cls._add_hosts_arg(parser)
 
         return parser
 
     def _template_fill(self, xmllog):
-        filename = self.args.filename if self.args.filename else self.metadata.path
+        def writer(fn, data):
+            if filename.exists() and not self.args.force:
+                self.log.warning('file {!s} exists.'.format(fn))
+                if not prompt_user(
+                    'Should I overwrite {!s} (y/N) '.format(fn),
+                    ['y', 'Y', 'yes', 'Yes', 'YES'],
+                        self.prompt.interactive):
+                    fn = fn / '.' / timestamp()
+
+            self.log.info('exporting log to {!s}'.format(fn))
+
+            try:
+                with fn.open(mode='w', encoding='utf-8') as f:
+                    f.write('\n'.join(line.rstrip() for line in data))
+            except IOError as e:
+                self.println('Failed to write {}: {}'.format(fn, e.strerror))
+                return
+        # TODO: change all paths to Path like objects..
+        filename = self.args.filename if self.args.filename else Path(self.metadata.path)
 
         try:
             template = self.metadata.generate_templatefile(xmllog)
@@ -50,24 +70,15 @@ class Export(Command):
             self.log.debug(format_exc())
             return
 
-        if os.path.exists(filename) and not self.args.force:
-            self.log.warning('file {!s} exists.'.format(filename))
-            if not prompt_user(
-                    'Should I overwrite {!s} (y/N) '.format(filename),
-                    ['y', 'Y', 'yes', 'Yes', 'YES'],
-                    self.prompt.interactive):
-                filename += '.' + timestamp()
+        template, smelt = self.metadata.strip_smeltdata(template)
 
-        self.log.info('exporting XML to {!s}'.format(filename))
-
-        try:
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write('\n'.join(line.rstrip() for line in template))
-        except IOError as e:
-            self.println('Failed to write {}: {}'.format(filename, e.strerror))
-            return
-
+        writer(filename, template)
         self.println('wrote template to {}'.format(filename))
+
+        if smelt:
+            filename = filename.parent / "checkers.log"
+            writer(filename, smelt)
+            self.println('wrote checkers results to {}'.format(filename))
 
     def _installlogs_fill(self, xmllog, targets):
         filepath = join(self.config.template_dir, str(

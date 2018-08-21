@@ -39,7 +39,6 @@ from qamlib.utils import ensure_dir_exists
 logger = getLogger('mtui.template.testreport')
 
 
-
 @nottest
 class TestReport(object, metaclass=ABCMeta):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
@@ -573,6 +572,11 @@ class TestReport(object, metaclass=ABCMeta):
                              self.config,
                              self.smelt
                              )
+
+    def strip_smeltdata(self, template):
+        # param: template - list of template lines
+        from mtui.export import cut_smelt_data
+        return cut_smelt_data(template, self.config)
 
     def generate_install_logs(self, xmllog, host):
         from mtui.export import xml_installog_to_template
