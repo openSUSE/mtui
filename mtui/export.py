@@ -70,6 +70,28 @@ def fill_template(review_id, template, xmldata, config, smelt):
     return _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_links)
 
 
+def cut_smelt_data(template, config):
+    # returns None if Smelt checkers shorter than 10 lines
+    # returns tuple ( template , checkers ) .. smelt has more than 10 lines
+    # TODO make it confiruable
+    threshold = 10
+
+    start = template.index("SMELT Checkers:\n")
+    end = template.index('REGRESSION TEST SUMMARY:\n', start)
+
+    if end - start < threshold:
+        return template, None
+    else:
+        smelt = template[start:end]
+        del template[start+threshold:end]
+
+        template.insert(start+threshold, "\n")
+        template.insert(start+threshold, "Rest of SMELT checkers results were moved to checkers.log file, please check it\n")
+        template.insert(start+threshold, "\n")
+        logger.info("Checkers results were stripped and moved to checkers.log file")
+    return template, smelt
+
+
 def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_links):
     """ export mtui xml data to an existing maintenance template
 
@@ -87,16 +109,16 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
 
     with codecs.open(template, 'r', 'utf-8', errors='replace') as f:
         lines = f.readlines()
-        t=[]
-        # We want to avoid the repeating the scripts outcome, so we delete them from the current template if they are present in the new xmldata
+        t = []
+        # We want to avoid the repeating the scripts outcome, so we delete them
+        # from the current template if they are present in the new xmldata
         for line in lines:
-            match=re.search("reference host:\s (.*)$", line)
+            match = re.search(r"reference host:\s (.*)$", line)
             if match:
-                current_host=match.group(0)
+                current_host = match.group(0)
                 continue
-            if not re.search("\s:\s(SUCCEEDED|(?<!PASSED/)FAILED|INTERNAL ERROR)", line) or current_host not in hosts:
+            if not re.search(r"\s:\s(SUCCEEDED|(?<!PASSED/)FAILED|INTERNAL ERROR)", line) or current_host not in hosts:
                 t.append(line)
-
 
     # since the maintenance template is more of a human readable file then
     # a pretty parsable log, we need to build on specific strings to know
@@ -280,7 +302,8 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
             logger.warning(
                 'installation test result on {!s} set to FAILED as some packages were not updated. please override manually.'.format(hostname))
 
-        # temporary variable to avoid repeating the same script. We only want the last result, so we store the previous position
+        # temporary variable to avoid repeating the same script. We only want the
+        # last result, so we store the previous position
         scripts = {}
         for child in template_log.childNodes:
             # search for check scripts in the xml and inspect return code
@@ -320,7 +343,7 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
                 if scriptname in scripts:
                     t[scripts[scriptname]] = scriptline
                 else:
-                    scripts[scriptname]=i;
+                    scripts[scriptname] = i
                     if scriptname in t[i]:
                         t[i] = scriptline
                     else:
@@ -336,13 +359,14 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
 
     # Add output of checkers and link to openQA
     i = t.index('REGRESSION TEST SUMMARY:\n', 0)
-    if openqa_links and "openQA tests:\n" not in t:
-        for line in reversed(openqa_links):
-            t.insert(i, line)
 
     if smelt_output and "SMELT Checkers:\n" not in t:
         t.insert(i, '\n')
         for line in reversed(smelt_output):
+            t.insert(i, line)
+
+    if openqa_links and "openQA tests:\n" not in t:
+        for line in reversed(openqa_links):
             t.insert(i, line)
 
     i = t.index('zypper update log:\n', 0) + 1
@@ -368,7 +392,7 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
     previous_line = None
     lines = []
     for current_line in t:
-        if previous_line == None:
+        if previous_line is None:
             lines.append(current_line)
         elif previous_line == current_line and current_line not in ['\n']:
             None
