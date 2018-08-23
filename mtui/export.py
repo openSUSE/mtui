@@ -76,7 +76,12 @@ def cut_smelt_data(template, config):
     # TODO make it confiruable
     threshold = 10
 
-    start = template.index("SMELT Checkers:\n")
+    try:
+        start = template.index("SMELT Checkers:\n")
+    except ValueError:
+        logger.debug("No smelt data in template")
+        return template, None
+
     end = template.index('REGRESSION TEST SUMMARY:\n', start)
 
     if end - start < threshold:
