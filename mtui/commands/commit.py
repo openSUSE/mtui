@@ -45,7 +45,7 @@ class Commit(Command):
                 'svn add --force {!s}'.format(self.config.install_logs).split(),
                 cwd=checkout)
             if checkout.joinpath("checkers.log").exists():
-                subprocess.check_call('svn add --force {!s}'.format(checkout / "checkers.log").split(), cwd=checkout)
+                subprocess.check_call('svn add --force {}'.format(str(checkout / "checkers.log")).split(), cwd=checkout)
             subprocess.check_call('svn up'.split(), cwd=checkout)
             subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
 
