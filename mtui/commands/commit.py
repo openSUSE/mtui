@@ -35,6 +35,7 @@ class Commit(Command):
     def run(self):
 
         checkout = Path(self.metadata.report_wd())
+        cwd = str(checkout)
 
         msg = []
         if self.args.msg:
@@ -42,12 +43,12 @@ class Commit(Command):
 
         try:
             subprocess.check_call(
-                'svn add --force {!s}'.format(self.config.install_logs).split(),
-                cwd=checkout)
+                'svn add --force {}'.format(self.config.install_logs).split(),
+                cwd=cwd)
             if checkout.joinpath("checkers.log").exists():
-                subprocess.check_call('svn add --force {}'.format(str(checkout / "checkers.log")).split(), cwd=checkout)
-            subprocess.check_call('svn up'.split(), cwd=checkout)
-            subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
+                subprocess.check_call('svn add --force {}'.format(checkout / "checkers.log").split(), cwd=cwd)
+            subprocess.check_call('svn up'.split(), cwd=cwd)
+            subprocess.check_call('svn ci'.split() + msg, cwd=cwd)
 
             self.log.info(
                 "Testreport in: {}".format(
