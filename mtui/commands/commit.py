@@ -8,9 +8,6 @@ from traceback import format_exc
 from mtui.commands import Command
 from mtui.utils import requires_update, complete_choices
 
-# TODO: when move to Path-like objects refactor is needed
-from .. import Path
-
 
 class Commit(Command):
 
@@ -31,7 +28,9 @@ class Commit(Command):
     @requires_update
     def run(self):
 
-        checkout = Path(self.metadata.report_wd())
+        checkout = self.metadata.report_wd()
+        # TODO: not needed from py3.6
+        cwd = str(checkout)
 
         msg = []
         if self.args.msg:
@@ -40,15 +39,15 @@ class Commit(Command):
         try:
             subprocess.check_call(
                 "svn add --force {}".format(str(self.config.install_logs)).split(),
-                cwd=checkout,
+                cwd=cwd,
             )
             if checkout.joinpath("checkers.log").exists():
                 subprocess.check_call(
                     "svn add --force {}".format(str(checkout / "checkers.log")).split(),
-                    cwd=checkout,
+                    cwd=cwd,
                 )
-            subprocess.check_call("svn up".split(), cwd=checkout)
-            subprocess.check_call("svn ci".split() + msg, cwd=checkout)
+            subprocess.check_call("svn up".split(), cwd=cwd)
+            subprocess.check_call("svn ci".split() + msg, cwd=cwd)
 
             self.log.info("Testreport in: {}".format(self.metadata._testreport_url()))
 
