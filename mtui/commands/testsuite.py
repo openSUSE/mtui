@@ -18,7 +18,8 @@ class TestSuiteList(Command):
     """
     List available testsuites on the target hosts.
     """
-    command = 'testsuite_list'
+
+    command = "testsuite_list"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -29,14 +30,14 @@ class TestSuiteList(Command):
         targets = self.parse_hosts()
 
         targets.report_testsuites(
-            self.display.testsuite_list,
-            self.config.target_testsuitedir)
+            self.display.testsuite_list, self.config.target_testsuitedir
+        )
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )
 
 
 class TestSuiteRun(Command):
@@ -45,11 +46,12 @@ class TestSuiteRun(Command):
     target hosts. Results can be submitted with the testsuite_submit
     command.
     """
-    command = 'testsuite_run'
+
+    command = "testsuite_run"
 
     @classmethod
     def _add_arguments(cls, parser):
-        parser.add_argument('testsuite', nargs=1, help="testsuite-run command")
+        parser.add_argument("testsuite", nargs=1, help="testsuite-run command")
         cls._add_hosts_arg(parser)
         return parser
 
@@ -61,26 +63,27 @@ class TestSuiteRun(Command):
         if not cmd.startswith('/'):
             cmd = os.path.join(self.config.target_testsuitedir, cmd.strip())
 
-        cmd = 'export TESTS_LOGDIR=/var/log/qa/{}; {}'.format(
-            self.metadata.id, cmd)
-        name = os.path.basename(cmd).replace('-run', '')
+        cmd = "export TESTS_LOGDIR=/var/log/qa/{}; {}".format(
+            self.metadata.id, str(cmd)
+        )
+        name = os.path.basename(cmd).replace("-run", "")
 
         try:
             targets.run(cmd)
         except KeyboardInterrupt:
-            self.log.info('testsuite run canceled')
+            self.log.info("testsuite run canceled")
             return
 
         for hn, t in list(targets.items()):
             t.report_testsuite_results(self.display.testsuite_run, name)
 
-        self.log.info('done')
+        self.log.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )
 
 
 class TestSuiteSubmit(Command):
@@ -90,11 +93,12 @@ class TestSuiteSubmit(Command):
     testsuite name, but can also be edited before the results get
     submitted.
     """
-    command = 'testsuite_submit'
+
+    command = "testsuite_submit"
 
     @classmethod
     def _add_arguments(cls, parser):
-        parser.add_argument('testsuite', nargs=1, help="testsuite-run command")
+        parser.add_argument("testsuite", nargs=1, help="testsuite-run command")
         cls._add_hosts_arg(parser)
         return parser
 
@@ -102,60 +106,70 @@ class TestSuiteSubmit(Command):
     def run(self):
         targets = self.parse_hosts()
         cmd = self.args.testsuite[0]
-        name = os.path.basename(cmd).replace('-run', '')
+        name = os.path.basename(cmd).replace("-run", "")
         username = self.config.session_user
 
         comment = self.metadata.get_testsuite_comment(
-            name, date.today().strftime('%d/%m/%y'))
+            name, date.today().strftime("%d/%m/%y")
+        )
 
         try:
             comment = edit_text(comment)
         except subprocess.CalledProcessError as e:
-            self.log.error('editor failed: {!s}'.format(e))
+            self.log.error("editor failed: {!s}".format(e))
             self.log.debug(format_exc())
             return
 
         if len(comment) > 99:
             self.log.warning(messages.QadbReportCommentLengthWarning())
 
-        cmd = "DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl" + \
-            " -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c '{2}'".format(self.metadata.id, username, comment)
+        cmd = (
+            "DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl"
+            + " -b -t patch:{0} -T {1} -f /var/log/qa/{0} -c '{2}'".format(
+                self.metadata.id, username, comment
+            )
+        )
 
         try:
             for hostname, target in list(targets.items()):
                 self.log.info(
-                    'Submiting results of {}-run from {}'.format(name, hostname))
+                    "Submiting results of {}-run from {}".format(name, hostname)
+                )
                 target.run(cmd)
         except KeyboardInterrupt:
-            self.log.info('Testsuite results submission canceled')
+            self.log.info("Testsuite results submission canceled")
             return
 
         for hostname, target in list(targets.items()):
             if target.lastexit() != 0:
                 self.log.critical(
-                    'submitting testsuite results failed on {!s}'.format(hostname))
-                self.println(
-                    '{}:~> {} [{}]'.format(
-                        hostname, name, target.lastexit()))
+                    "submitting testsuite results failed on {!s}".format(hostname)
+                )
+                self.println("{}:~> {} [{}]".format(hostname, name, target.lastexit()))
                 self.println(target.lastout())
                 if target.lasterr():
                     self.println(target.lasterr())
             else:
                 match = re.search(
-                    '(http://.*/submission.php.submission_id=\d+)',
-                    target.lasterr())
+                    "(http://.*/submission.php.submission_id=\d+)", target.lasterr()
+                )
                 if match:
                     self.log.info(
-                        'submission for {!s} ({!s}): {!s}'.format(
-                            hostname, target.system, match.group(1)))
+                        "submission for {!s} ({!s}): {!s}".format(
+                            hostname, target.system, match.group(1)
+                        )
+                    )
                 else:
                     self.log.critical(
-                        'no submission found for {0!s}. please use "show_log -t {0!s}" to see what went wrong'.format(hostname))
+                        'no submission found for {0!s}. please use "show_log -t {0!s}" to see what went wrong'.format(
+                            hostname
+                        )
+                    )
 
-        self.log.info('done')
+        self.log.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )

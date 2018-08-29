@@ -11,25 +11,29 @@ class SetRepo(Command):
     Add or remove issue repository to/from hosts.
     """
 
-    command = 'set_repo'
+    command = "set_repo"
 
     @classmethod
     def _add_arguments(cls, parser):
 
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument(
-            '-A', '--add',
-            dest='operation',
-            action='store_const',
-            const='add',
-            help="Add issue repos to refhosts")
+            "-A",
+            "--add",
+            dest="operation",
+            action="store_const",
+            const="add",
+            help="Add issue repos to refhosts",
+        )
 
         group.add_argument(
-            '-R', '--remove',
-            dest='operation',
-            action='store_const',
-            const='remove',
-            help="Remove issue repos from refhosts")
+            "-R",
+            "--remove",
+            dest="operation",
+            action="store_const",
+            const="remove",
+            help="Remove issue repos from refhosts",
+        )
 
         cls._add_hosts_arg(parser)
 
@@ -48,6 +52,8 @@ class SetRepo(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'),
-             ('-A', '--add', '-R', '--remove'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target"), ("-A", "--add", "-R", "--remove")],
+            line,
+            text,
+            state["hosts"].names(),
+        )

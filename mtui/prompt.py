@@ -23,7 +23,7 @@ from qamlib.utils import ensure_dir_exists
 from qamlib.utils import timestamp
 from mtui.utils import prompt_user
 
-logger = getLogger('mtui.prompt')
+logger = getLogger("mtui.prompt")
 
 
 class QuitLoop(RuntimeError):
@@ -111,20 +111,20 @@ class CommandPrompt(cmd.Cmd):
 
         self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
-        self.identchars += '-'
+        self.identchars += "-"
         # support commands with dashes in them
 
     def notify_user(self, msg, class_=None):
-        notification.display('MTUI', msg, class_)
+        notification.display("MTUI", msg, class_)
 
-    def println(self, msg='', eol='\n'):
+    def println(self, msg="", eol="\n"):
         return self.stdout.write(msg + eol)
 
     def _read_history(self):
         try:
             readline.read_history_file('{!s}/.mtui_history'.format(self.homedir))
         except IOError as e:
-            logger.debug('failed to open history file: {!s}'.format(e))
+            logger.debug("failed to open history file: {!s}".format(e))
 
     def _add_subcommand(self, cmd):
         if cmd.command in self.commands:
@@ -168,17 +168,18 @@ class CommandPrompt(cmd.Cmd):
         return names
 
     def __getattr__(self, x):
-        if x.startswith('help_'):
-            y = x.replace('help_', '', 1)
+        if x.startswith("help_"):
+            y = x.replace("help_", "", 1)
             if y in self.commands:
                 c = self.commands[y]
 
                 def help():
                     c.argparser(self.sys).print_help()
+
                 return help
 
-        if x.startswith('do_'):
-            y = x.replace('do_', '', 1)
+        if x.startswith("do_"):
+            y = x.replace("do_", "", 1)
             if y in self.commands:
                 c = self.commands[y]
 
@@ -187,33 +188,37 @@ class CommandPrompt(cmd.Cmd):
                         args = c.parse_args(arg, self.sys)
                     except ArgsParseFailure:
                         return
-                    c(args, self.targets.select(), self.config, self.sys,  self).run()
+                    c(args, self.targets.select(), self.config, self.sys, self).run()
+
                 return do
 
-        if x.startswith('complete_'):
+        if x.startswith("complete_"):
             y = x.replace("complete_", "", 1)
             if y in self.commands:
                 c = self.commands[y]
 
                 def complete(*args, **kw):
                     try:
-                        if self.metadata and 'testopia' in x:
+                        if self.metadata and "testopia" in x:
                             try:
                                 self.ensure_testopia_loaded()
                             except Exception:
                                 logger.debug(format_exc())
-                        return c.complete({
-                            'hosts': self.targets.select(),
-                            'metadata': self.metadata,
-                            'config': self.config,
-                            'testopia': self.testopia,
+                        return c.complete(
+                            {
+                                "hosts": self.targets.select(),
+                                "metadata": self.metadata,
+                                "config": self.config,
+                                "testopia": self.testopia,
                             },
                             *args,
-                            **kw)
+                            **kw
+                        )
                     except Exception as e:
                         logger.error(e)
                         logger.debug(format_exc())
                         raise e
+
                 return complete
 
         raise AttributeError(str(x))
@@ -226,21 +231,19 @@ class CommandPrompt(cmd.Cmd):
 
     def set_prompt(self, session=None):
         self.session = session
-        session = ":"+str(session) if session else ''
-        self.prompt = 'mtui{0}> '.format(session)
+        session = ":" + str(session) if session else ""
+        self.prompt = "mtui{0}> ".format(session)
 
     def load_update(self, update, autoconnect):
-        tr = update.make_testreport(
-            self.config,
-            autoconnect=autoconnect)
+        tr = update.make_testreport(self.config, autoconnect=autoconnect)
 
         if self.metadata and self.metadata.id is self.session:
             self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
 
-    def _do_save_impl(self, path='log.xml'):
-        if not path.startswith('/'):
+    def _do_save_impl(self, path="log.xml"):
+        if not path.startswith("/"):
             dir_ = self.metadata.report_wd()
             path = os.path.join(dir_, 'output', path)
 
@@ -252,7 +255,7 @@ class CommandPrompt(cmd.Cmd):
             if not prompt_user(m, ['y', 'yes'], self.interactive):
                 path += '.' + timestamp()
 
-        logger.info('saving output to {0}'.format(path))
+        logger.info("saving output to {0}".format(path))
 
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             f.write(self.metadata.generate_xmllog())

@@ -5,8 +5,10 @@ from logging import getLogger
 
 from ..argparse import ArgumentParser
 from mtui.messages import HostIsNotConnectedError
+from argparse import RawDescriptionHelpFormatter
 
-logger = getLogger('mtui.commands.command')
+
+logger = getLogger("mtui.commands.command")
 
 
 class Command(object, metaclass=ABCMeta):
@@ -19,10 +21,6 @@ class Command(object, metaclass=ABCMeta):
         On python 3 L{Command.parse_args} then checks if the attribute
         is set in parsed L{argparse.Namespace} and if not, prints an
         error message.
-
-        This behaviour changed between python 2 an 3 where python2
-        argparse printed the error message by itself but python3
-        returns an empty Namespace instance instead.
     """
 
     def __init__(self, args, hosts, config, sys, prompt):
@@ -45,14 +43,11 @@ class Command(object, metaclass=ABCMeta):
 
     @classmethod
     def parse_args(cls, args, sys):
-        args = [] if args is '' else args.split()
+        args = [] if args is "" else args.split()
         p = cls.argparser(sys)
         pa = p.parse_args(args)
 
         if cls._check_subparser and not hasattr(pa, cls._check_subparser):
-            # workaround for python3 to keep same behaviour as with
-            # python2
-            # see https://gist.github.com/yaccz/2b7835b1e9429ee35ae5
             p.error("too few arguments")
 
         return pa
@@ -69,8 +64,12 @@ class Command(object, metaclass=ABCMeta):
         """
         :returns: L{ArgumentParser}
         """
-        p = ArgumentParser(sys_=sys, prog=cls.command,
-                           description=cls.__doc__)
+        p = ArgumentParser(
+            sys_=sys,
+            prog=cls.command,
+            description=cls.__doc__,
+            formatter_class=RawDescriptionHelpFormatter,
+        )
         cls._add_arguments(p)
 
         return p
@@ -98,9 +97,14 @@ class Command(object, metaclass=ABCMeta):
     @classmethod
     def _add_hosts_arg(cls, parser):
         parser.add_argument(
-            '-t', '--target', dest='hosts', action='append', type=str,
-            help='Host to act on. Can be used multiple times. ' +
-            'If is ommited all hosts are used')
+            "-t",
+            "--target",
+            dest="hosts",
+            action="append",
+            type=str,
+            help="Host to act on. Can be used multiple times. "
+            + "If is ommited all hosts are used",
+        )
 
     def parse_hosts(self, enabled=True):
         """
@@ -119,10 +123,9 @@ class Command(object, metaclass=ABCMeta):
             else:
                 targets = self.hosts.select(enabled=enabled)
         except HostIsNotConnectedError as e:
-            if e.host == 'all':
+            if e.host == "all":
                 self.log.error(e)
-                self.log.info(
-                    "Using all hosts. Warning option 'all' is decaprated")
+                self.log.info("Using all hosts. Warning option 'all' is decaprated")
 
                 targets = self.hosts.select(enabled=enabled)
 

@@ -6,33 +6,38 @@ from mtui.commands import Command
 from mtui.utils import requires_update, complete_choices
 from mtui.messages import NoRefhostsDefinedError
 
+
 class Prepare(Command):
     """
-    Installs missing or outdated packages from the UPDATE repositories.
+    Installs missing and update packages to last released version.
     This is also run by the update procedure before applying the updates.
     """
-    command = 'prepare'
+
+    command = "prepare"
 
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            '-f',
-            '--force',
-            action='store_const',
-            const='force',
-            help="force package installation")
+            "-f",
+            "--force",
+            action="store_const",
+            const="force",
+            help="force package installation",
+        )
         parser.add_argument(
-            '-i',
-            '--installed',
-            action='store_const',
-            const='installed',
-            help="prepare only installed packages")
+            "-i",
+            "--installed",
+            action="store_const",
+            const="installed",
+            help="prepare only installed packages",
+        )
         parser.add_argument(
-            '-u',
-            '--update',
-            action='store_const',
-            const='testing',
-            help="enable test update repositories")
+            "-u",
+            "--update",
+            action="store_const",
+            const="testing",
+            help="enable test update repositories",
+        )
         cls._add_hosts_arg(parser)
         return parser
 
@@ -48,14 +53,15 @@ class Prepare(Command):
         params.append(self.args.installed)
         params.append(self.args.update)
 
-        self.log.info('preparing')
+        self.log.info("preparing")
 
         try:
             self.metadata.perform_prepare(
                 targets,
-                force='force' in params,
-                installed_only='installed' in params,
-                testing='testing' in params)
+                force="force" in params,
+                installed_only="installed" in params,
+                testing="testing" in params,
+            )
         except KeyboardInterrupt:
             self.log.info("preparation process canceled")
             return False
@@ -64,13 +70,18 @@ class Prepare(Command):
             self.log.debug(format_exc())
             return False
 
-        self.log.info('done')
+        self.log.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'),
-             ('-i', '--installed'),
-             ('-f', '--force'),
-             ('-u', '--update')],
-            line, text, state['hosts'].names())
+            [
+                ("-t", "--target"),
+                ("-i", "--installed"),
+                ("-f", "--force"),
+                ("-u", "--update"),
+            ],
+            line,
+            text,
+            state["hosts"].names(),
+        )

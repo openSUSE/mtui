@@ -24,11 +24,8 @@ class Commit(Command):
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            "-m",
-            "--msg",
-            action="append",
-            nargs=REMAINDER,
-            help='commit message')
+            "-m", "--msg", action="append", nargs=REMAINDER, help="commit message"
+        )
         return parser
 
     @requires_update
@@ -49,14 +46,12 @@ class Commit(Command):
             subprocess.check_call('svn up'.split(), cwd=checkout)
             subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
 
-            self.log.info(
-                "Testreport in: {}".format(
-                    self.metadata._testreport_url()))
+            self.log.info("Testreport in: {}".format(self.metadata._testreport_url()))
 
         except Exception:
-            self.log.error('committing template.failed')
+            self.log.error("committing template.failed")
             self.log.debug(format_exc())
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
-        return complete_choices([('-m', '--msg'), ], line, text)
+        return complete_choices([("-m", "--msg")], line, text)

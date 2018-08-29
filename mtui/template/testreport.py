@@ -32,11 +32,16 @@ from mtui.target.actions import UpdateError
 from mtui.template import _TemplateIOError
 from mtui.template import TestReportAlreadyLoaded
 
-from paramiko.ssh_exception import SSHException, NoValidConnectionsError, ChannelException
+from paramiko.ssh_exception import (
+    SSHException,
+    NoValidConnectionsError,
+    ChannelException,
+)
 
 from qamlib.utils import ensure_dir_exists
+from qamlib.utils import makedirs
 
-logger = getLogger('mtui.template.testreport')
+logger = getLogger("mtui.template.testreport")
 
 
 @nottest
@@ -100,12 +105,12 @@ class TestReport(object, metaclass=ABCMeta):
         self.repository = None
 
         self._attrs = [
-            'category',
-            'packager',
-            'reviewer',
-            'packages',
-            'bugs',
-            'repository',
+            "category",
+            "packager",
+            "reviewer",
+            "packages",
+            "bugs",
+            "repository",
         ]
         """
         :type attrs: [str]
@@ -207,18 +212,14 @@ class TestReport(object, metaclass=ABCMeta):
         return self._get_doer(updater.Downgrader)
 
     def list_update_commands(self, targets, display):
-        '''
+        """
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         :display: callable(str -> None)
-        '''
+        """
         updater = self.get_updater()
 
-        display('\n'.join(updater(
-            targets,
-            self.get_package_list(),
-            self).commands
-        ))
+        display("\n".join(updater(targets, self.get_package_list(), self).commands))
         del updater
 
     def perform_get(self, targets, remote):
@@ -228,45 +229,34 @@ class TestReport(object, metaclass=ABCMeta):
 
     def perform_prepare(self, targets, **kw):
         preparer = self.get_preparer()
-        preparer(
-            targets,
-            self.get_package_list(),
-            self,
-            **kw
-        ).run()
+        preparer(targets, self.get_package_list(), self, **kw).run()
 
     def perform_update(self, targets, params):
-        '''
+        """
         :type  targets: dict(hostname = L{Target})
             where hostname = str
-        '''
-        targets.add_history(
-            ['update', str(self.id), ' '.join(self.get_package_list())])
+        """
+        targets.add_history(["update", str(self.id), " ".join(self.get_package_list())])
 
         updater = self.get_updater()
         logger.debug("chosen updater: {!r}".format(updater))
         try:
-            updater(
-                targets,
-                self.get_package_list(),
-                self).run(params)
+            updater(targets, self.get_package_list(), self).run(params)
         except UpdateError as e:
-            logger.error('Update failed: {!s}'.format(e))
-            logger.warning('Error while updating. Rolling back changes')
+            logger.error("Update failed: {!s}".format(e))
+            logger.warning("Error while updating. Rolling back changes")
             self.perform_downgrade(targets)
 
     def perform_downgrade(self, targets):
         targets.add_history(
-            ['downgrade', str(self.id), ' '.join(self.get_package_list())])
+            ["downgrade", str(self.id), " ".join(self.get_package_list())]
+        )
 
         downgrader = self.get_downgrader()
-        downgrader(
-            targets,
-            self.get_package_list(),
-            self).run()
+        downgrader(targets, self.get_package_list(), self).run()
 
     def perform_install(self, targets, packages):
-        targets.add_history(['install', packages])
+        targets.add_history(["install", packages])
 
         installer = self.get_installer()
         installer(targets, packages).run()
@@ -284,16 +274,14 @@ class TestReport(object, metaclass=ABCMeta):
         src = self._scripts_src_dir
         dst = self.scripts_wd()
 
-        ignore = shutil.ignore_patterns('*.svn')
+        ignore = shutil.ignore_patterns("*.svn")
 
         self._copy_scripts(src, dst, ignore)
-        self._ensure_executable('{0}/*/compare_*'.format(dst))
+        self._ensure_executable("{0}/*/compare_*".format(dst))
 
     def _copy_scripts(self, src, dst, ignore):
         try:
-            logger.debug("Copying scripts: {0} -> {1}".format(
-                src, dst
-            ))
+            logger.debug("Copying scripts: {0} -> {1}".format(src, dst))
             self._copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
@@ -345,12 +333,13 @@ class TestReport(object, metaclass=ABCMeta):
                     self.config,
                     host,
                     self.get_package_list(),
-                    timeout=self.config.connection_timeout)
-                targets[host].add_history(['connect'])
+                    timeout=self.config.connection_timeout,
+                )
+                targets[host].add_history(["connect"])
                 new_systems[host] = targets[host].get_system()
             except Exception:
                 logger.debug(format_exc())
-                msg = 'failed to add host {0} to target list'
+                msg = "failed to add host {0} to target list"
                 logger.warning(msg.format(host))
             except KeyboardInterrupt:
                 # skip adding the reference host if CTRL-C was pressed.
@@ -361,7 +350,7 @@ class TestReport(object, metaclass=ABCMeta):
                 # default.
                 # With paramiko we'd have to run it in threads, assuming
                 # the network/ssh code really can't KeyboardInterrupt
-                logger.warning('skipping host {0}'.format(host))
+                logger.warning("skipping host {0}".format(host))
 
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = new_systems
@@ -371,22 +360,22 @@ class TestReport(object, metaclass=ABCMeta):
 
     def add_target(self, hostname):
         if hostname in self.targets:
-            logger.warning('already connected to {0}. skipping.'.format(
-                self.targets[hostname].hostname
-            ))
+            logger.warning(
+                "already connected to {0}. skipping.".format(
+                    self.targets[hostname].hostname
+                )
+            )
             return
         try:
             self.targets[hostname] = Target(
-                self.config,
-                hostname,
-                self.get_package_list(),
+                self.config, hostname, self.get_package_list()
             )
 
             if self:
                 self.systems[hostname] = self.targets[hostname].get_system()
 
         except (SSHException, NoValidConnectionsError, ChannelException):
-            logger.warning('failed to add host {0} to target list'.format(hostname))
+            logger.warning("failed to add host {0} to target list".format(hostname))
             logger.debug(format_exc())
 
     def _refhosts_from_tp(self, testplatform):
@@ -396,11 +385,11 @@ class TestReport(object, metaclass=ABCMeta):
             hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
         except (ValueError, KeyError):
             hostnames = []
-            msg = 'failed to parse testplatform {0!r}'
+            msg = "failed to parse testplatform {0!r}"
             logger.warning(msg.format(testplatform))
         else:
             if not hostnames:
-                msg = 'nothing found for testplatform {0!r}'
+                msg = "nothing found for testplatform {0!r}"
                 logger.warning(msg.format(testplatform))
         self.hostnames.update(set(hostnames))
 
@@ -409,14 +398,15 @@ class TestReport(object, metaclass=ABCMeta):
 
     def _show_yourself_data(self):
         return [
-            ('Category', self.category),
-            ('Hosts', ' '.join(sorted(self.systems.keys()))),
-            ('Reviewer', self.reviewer),
-            ('Packager', self.packager),
-            ('Bugs', ', '.join(sorted(self.bugs.keys()))),
-            ('Packages', ' '.join(sorted(self.get_package_list()))),
-            ('Testreport', self._testreport_url()),
-            ('Repository', self.repository), ] + [('Testplatform', x) for x in self.testplatforms]
+            ("Category", self.category),
+            ("Hosts", " ".join(sorted(self.systems.keys()))),
+            ("Reviewer", self.reviewer),
+            ("Packager", self.packager),
+            ("Bugs", ", ".join(sorted(self.bugs.keys()))),
+            ("Packages", " ".join(sorted(self.get_package_list()))),
+            ("Testreport", self._testreport_url()),
+            ("Repository", self.repository),
+        ] + [("Testplatform", x) for x in self.testplatforms]
 
     def show_yourself(self, writer):
         self._aligned_write(writer, self._show_yourself_data())
@@ -431,7 +421,7 @@ class TestReport(object, metaclass=ABCMeta):
             writer.write("{0:15}: {1}\n".format(*x))
 
     def _testreport_url(self):
-        return '/'.join([self.config.reports_url, str(self.id), 'log'])
+        return "/".join([self.config.reports_url, str(self.id), "log"])
 
     def local_wd(self, *paths):
         """
@@ -468,18 +458,12 @@ class TestReport(object, metaclass=ABCMeta):
         return join(self.report_wd(), *["scripts"] + list(paths))
 
     def get_testsuite_comment(self, testsuite, date):
-        return 'testing {!s} on {!s} on {!s}'.format(
-            testsuite,
-            "{!s} {!s}".format(self._type, self.id),
-            date,
+        return "testing {!s} on {!s} on {!s}".format(
+            testsuite, "{!s} {!s}".format(self._type, self.id), date
         )
 
     def __repr__(self):
-        return "<{0}.{1} {2}>".format(
-            self.__module__,
-            self.__class__.__name__,
-            self.id
-        )
+        return "<{0}.{1} {2}>".format(self.__module__, self.__class__.__name__, self.id)
 
     def run_scripts(self, s, targets):
         """
@@ -497,34 +481,33 @@ class TestReport(object, metaclass=ABCMeta):
     def download_file(self, from_, into):
         logger.info("Downloading {!s}".format(from_))
         from contextlib import closing
-        with open(into, 'wb') as dst, closing(urlopen(from_)) as src:
+
+        with open(into, "wb") as dst, closing(urlopen(from_)) as src:
             dst.writelines(src)
 
     def load_testopia(self, *packages):
         try:
-            assert(self.testopia.testcases and not packages)
+            assert self.testopia.testcases and not packages
         except (AttributeError, AssertionError):
             self.testopia = Testopia(
-                self.config,
-                self.get_release(),
-                packages or self.get_package_list(),
+                self.config, self.get_release(), packages or self.get_package_list()
             )
 
         return self.testopia
 
     def list_versions(self, sink, targets, packages):
-        query = r'''
+        query = r"""
             for p in {!s}; do \
                 zypper -n search -s --match-exact -t package $p; \
             done \
             | grep -e ^[iv] \
             | awk -F '|' '{{ print $2 $4 }}' \
             | sort -u
-        '''
+        """
 
         packages = packages or self.get_package_list()
 
-        targets.run(query.format(' '.join(packages)))
+        targets.run(query.format(" ".join(packages)))
 
         # this is a bit convoluted because the data is aggregated
         # on display (see the example in CommandPrompt#do_list_versions)
@@ -539,8 +522,8 @@ class TestReport(object, metaclass=ABCMeta):
         by_host_pkg = dict()
         for hn, t in list(targets.items()):
             by_host_pkg[hn] = dict()
-            for line in t.lastout().split('\n'):
-                match = re.search(r'(\S+)\s+(\S+)', line)
+            for line in t.lastout().split("\n"):
+                match = re.search(r"(\S+)\s+(\S+)", line)
                 if not match:
                     continue
                 pkg, ver = match.group(1), match.group(2)
@@ -550,11 +533,7 @@ class TestReport(object, metaclass=ABCMeta):
         by_pkg_vers = dict()
         for hn, pvs in list(by_host_pkg.items()):
             for pkg, vs in list(pvs.items()):
-                by_pkg_vers.setdefault(
-                    pkg,
-                    dict()).setdefault(
-                    tuple(vs),
-                    []).append(hn)
+                by_pkg_vers.setdefault(pkg, dict()).setdefault(tuple(vs), []).append(hn)
 
         # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
         by_hosts_pkg = dict()
@@ -566,24 +545,19 @@ class TestReport(object, metaclass=ABCMeta):
 
     def generate_templatefile(self, xmllog):
         from mtui.export import fill_template
-        return fill_template(self.id,
-                             self.path,
-                             xmllog,
-                             self.config,
-                             self.smelt
-                             )
+
+        return fill_template(self.id, self.path, xmllog, self.config, self.smelt)
 
     def strip_smeltdata(self, template):
         # param: template - list of template lines
         from mtui.export import cut_smelt_data
+
         return cut_smelt_data(template, self.config)
 
     def generate_install_logs(self, xmllog, host):
         from mtui.export import xml_installog_to_template
-        return xml_installog_to_template(
-            xmllog,
-            self.config,
-            host)
+
+        return xml_installog_to_template(xmllog, self.config, host)
 
     def generate_xmllog(self, targetHosts=None):
         from mtui.xmlout import XMLOutput

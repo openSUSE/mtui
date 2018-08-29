@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-#
-# occasionally used functions which don't match anywhere else
-#
-
-
 import os
 import fcntl
 import struct
@@ -20,23 +14,26 @@ from mtui.messages import TestReportNotLoadedError
 try:
     from nose.tools import nottest
 except ImportError:
-    def nottest(x): return x
+
+    def nottest(x):
+        return x
 
 
-def flatten(xs): return list(chain.from_iterable(xs))
+def flatten(xs):
+    return list(chain.from_iterable(xs))
 
 
 def edit_text(text):
-    editor = os.getenv('EDITOR', 'vi')
+    editor = os.getenv("EDITOR", "vi")
     tmpfile = tempfile.NamedTemporaryFile()
 
-    with open(tmpfile.name, 'w') as tmp:
+    with open(tmpfile.name, "w") as tmp:
         tmp.write(text)
 
     subprocess.check_call((editor, tmpfile.name))
 
-    with open(tmpfile.name, 'r') as tmp:
-        text = tmp.read().strip('\n')
+    with open(tmpfile.name, "r") as tmp:
+        text = tmp.read().strip("\n")
         text = text.replace("'", '"')
 
     del tmpfile
@@ -44,14 +41,21 @@ def edit_text(text):
     return text
 
 
-if os.getenv('COLOR', 'always') == 'always':
-    def green(xs): return "\033[1;32m{!s}\033[1;m".format(xs)
+if os.getenv("COLOR", "always") == "always":
 
-    def red(xs): return "\033[1;31m{!s}\033[1;m".format(xs)
+    def green(xs):
+        return "\033[1;32m{!s}\033[1;m".format(xs)
 
-    def yellow(xs): return "\033[1;33m{!s}\033[1;m".format(xs)
+    def red(xs):
+        return "\033[1;31m{!s}\033[1;m".format(xs)
 
-    def blue(xs): return "\033[1;34m{!s}\033[1;m".format(xs)
+    def yellow(xs):
+        return "\033[1;33m{!s}\033[1;m".format(xs)
+
+    def blue(xs):
+        return "\033[1;34m{!s}\033[1;m".format(xs)
+
+
 else:
     green = red = yellow = blue = lambda xs: str(xs)
 
@@ -83,13 +87,13 @@ def prompt_user(text, options, interactive=True):
 
 def termsize():
     try:
-        x = fcntl.ioctl(0, termios.TIOCGWINSZ, '1234')
-        height, width = struct.unpack('hh', x)
+        x = fcntl.ioctl(0, termios.TIOCGWINSZ, "1234")
+        height, width = struct.unpack("hh", x)
     except IOError:
         # FIXME: remove this when you figure out how to simulate tty
         # this might work:
         # https://github.com/dagwieers/ansible/commit/7192eb30477f8987836c075eece6e530eb9b07f2
-        k_rows, k_cols = 'ACCTEST_ROWS', 'ACCTEST_COLS'
+        k_rows, k_cols = "ACCTEST_ROWS", "ACCTEST_COLS"
         env = os.environ
         if not (k_rows in env and k_cols in env):
             raise
@@ -100,9 +104,9 @@ def termsize():
 
 
 def filter_ansi(text):
-    text = re.sub(chr(27), '', text)
-    text = re.sub(r'\[[0-9;]*[mA]', '', text)
-    text = re.sub(r'\[K', '', text)
+    text = re.sub(chr(27), "", text)
+    text = re.sub(r"\[[0-9;]*[mA]", "", text)
+    text = re.sub(r"\[K", "", text)
 
     return text
 
@@ -118,16 +122,16 @@ def page(text, interactive=True):
     text.reverse()
 
     try:
-        line = filter_ansi(text.pop().rstrip('\r\n'))
+        line = filter_ansi(text.pop().rstrip("\r\n"))
     except IndexError:
         return
 
     while True:
         linesleft = height - 1
         while linesleft:
-            linelist = [line[i:i+width] for i in range(0, len(line), width)]
+            linelist = [line[i : i + width] for i in range(0, len(line), width)]
             if not linelist:
-                linelist = ['']
+                linelist = [""]
             lines2print = min(len(linelist), linesleft)
             for i in range(lines2print):
                 print(linelist[i])
@@ -135,11 +139,11 @@ def page(text, interactive=True):
             linelist = linelist[lines2print:]
 
             if linelist:
-                line = ''.join(linelist)
+                line = "".join(linelist)
                 continue
             else:
                 try:
-                    line = filter_ansi(text.pop().rstrip('\r\n'))
+                    line = filter_ansi(text.pop().rstrip("\r\n"))
                 except IndexError:
                     return
 
@@ -164,18 +168,21 @@ def ass_is(x, class_, maybe_none=False):
 
 
 if __debug__:
+
     def ass_isL(xs, class_):
         for x in xs:
             ass_is(x, class_)
+
+
 else:
+
     def ass_isL(_, __):
         pass
 
 
 class DictWithInjections(dict):
-
     def __init__(self, *args, **kw):
-        self.key_error = kw.pop('key_error', KeyError)
+        self.key_error = kw.pop("key_error", KeyError)
 
         super(DictWithInjections, self).__init__(*args, **kw)
 
@@ -187,11 +194,10 @@ class DictWithInjections(dict):
 
 
 class SUTParse(object):
-
     def __init__(self, args):
         suts = args.split(",")
-        targets = ['-t {!s}'.format(i) for i in suts]
-        self.args = ' '.join(targets)
+        targets = ["-t {!s}".format(i) for i in suts]
+        self.args = " ".join(targets)
 
     def print_args(self):
         return self.args
@@ -237,28 +243,27 @@ def complete_choices(synonyms, line, text, hostnames=None):
     for c in choices:
         if text == c:
             return [c]
-        if text == c[0:len(text)]:
+        if text == c[0 : len(text)]:
             endchoices.append(c)
 
     return endchoices
 
 
 def complete_choices_filelist(synonyms, line, text, hostnames=None):
-    dirname = ''
-    filename = ''
+    dirname = ""
+    filename = ""
 
-    if text.startswith('~'):
-        text = text.replace('~', os.path.expanduser('~'), 1)
-        text += '/'
+    if text.startswith("~"):
+        text = text.replace("~", os.path.expanduser("~"), 1)
+        text += "/"
 
-    if '/' in text:
-        dirname = '/'.join(text.split('/')[:-1])
-        dirname += '/'
+    if "/" in text:
+        dirname = "/".join(text.split("/")[:-1])
+        dirname += "/"
 
     if not dirname:
-        dirname = './'
+        dirname = "./"
 
-    synonyms += [(dirname + i,)
-                 for i in os.listdir(dirname) if i.startswith(filename)]
+    synonyms += [(dirname + i,) for i in os.listdir(dirname) if i.startswith(filename)]
 
     return complete_choices(synonyms, line, text, hostnames)

@@ -167,6 +167,7 @@ class Config(object):
 
         def add_getter(x):
             return x if len(x) > 4 else x + (getter,)
+
         data = [add_getter(x) for x in data]
         self.data = data
 

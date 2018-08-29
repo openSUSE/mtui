@@ -8,10 +8,14 @@ from mtui.utils import complete_choices
 
 class LoadTemplate(Command):
     """
-    Load QA Maintenance template by RRID identifier. All changes and logs
-    from an already loaded template are lost if not saved previously.
+    Load QA Maintenance template by RRID identifier.
+    All changes and logs  from an already loaded template are lost
+    if not saved previously.
+
     Already connected hosts are kept and extended by the reference hosts
     defined in the template file.
+
+    This behaviour can be changed with -c/--clean-hosts paramater
     """
     command = 'load_template'
 

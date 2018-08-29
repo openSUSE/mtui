@@ -40,39 +40,30 @@ class Script(object):
 
     def __repr__(self):
         return "<{0}.{1} {2} for {3}>".format(
-            self.__module__,
-            self.__class__.__name__,
-            self.path,
-            repr(self.testreport),
+            self.__module__, self.__class__.__name__, self.path, repr(self.testreport)
         )
 
     def __str__(self):
-        return "{0} script {1}".format(
-            self.subdir,
-            self.name,
-        )
+        return "{0} script {1}".format(self.subdir, self.name)
 
     def _result(self, cls, bname, t):
         return self.testreport.report_wd(
-            *
-            cls.result_parts(
-                bname,
-                t.hostname),
-            filepath=True)
+            *cls.result_parts(bname, t.hostname), filepath=True
+        )
 
     @classmethod
     def result_parts(cls, *basename):
-        return ('output/scripts', '.'.join((cls.subdir,) + basename))
+        return ("output/scripts", ".".join((cls.subdir,) + basename))
 
     def run(self, targets):
         """
         :type targets: [{HostsGroup}]
         """
         try:
-            log.info('running {0}'.format(self))
+            log.info("running {0}".format(self))
             self._run(targets)
         except KeyboardInterrupt:
-            log.warning('skipping {0}'.format(self))
+            log.warning("skipping {0}".format(self))
             return
 
 
@@ -81,29 +72,26 @@ class PreScript(Script):
 
     def _run(self, targets):
         rname = self.testreport.target_wd("{!s}.{!s}".format(self.subdir, self.bname))
-        targets.put(
-            self.path,
-            rname,
-        )
+        targets.put(self.path, rname)
 
         targets.put(
-            self.testreport.report_wd('packages-list.txt', filepath=True),
-            self.testreport.target_wd('package-list.txt'),
+            self.testreport.report_wd("packages-list.txt", filepath=True),
+            self.testreport.target_wd("package-list.txt"),
         )
 
         targets.run(
             "{exe} -r {repository} -p {pkg_list_file} {id}".format(
                 exe=rname,
                 repository=self.testreport.repository,
-                pkg_list_file=self.testreport.target_wd('package-list.txt'),
+                pkg_list_file=self.testreport.target_wd("package-list.txt"),
                 id=self.testreport.id,
-                )
+            )
         )
 
         for t in list(targets.values()):
             fname = self._result(type(self), self.bname, t)
             try:
-                with open(fname, 'w') as f:
+                with open(fname, "w") as f:
                     f.write(t.lastout())
                     f.write(t.lasterr())
             except IOError as e:
@@ -124,7 +112,7 @@ class CompareScript(Script):
     def _run_single_target(self, t):
         bcheck = self.bname.replace("compare_", "check_")
         argv = [
-            self.path,
+            (self.path),
             self._result(PreScript, bcheck, t),
             self._result(PostScript, bcheck, t),
         ]
@@ -132,22 +120,18 @@ class CompareScript(Script):
         log.debug("running {0}".format(argv))
         stdout = stderr = None
         try:
-            p = subprocess.Popen(
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
+            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except EnvironmentError as e:
-            t.out.append([' '.join(argv), '', '', 0x100, 0])
+            t.out.append([" ".join(argv), "", "", 0x100, 0])
             log.critical(messages.StartingCompareScriptError(e, argv))
             log.debug(format_exc())
             return
 
         (stdout, stderr) = p.communicate()
         rc = p.wait()
-        stdout = stdout.decode('utf-8')
-        stderr = stderr.decode('utf-8')
-        t.out.append([' '.join(argv), str(stdout), str(stderr), rc, 0])
+        stdout = stdout.decode("utf-8")
+        stderr = stderr.decode("utf-8")
+        t.out.append([" ".join(argv), str(stdout), str(stderr), rc, 0])
 
         if rc == 0:
             return
@@ -157,6 +141,8 @@ class CompareScript(Script):
         else:
             logger, msg = log.warning, messages.CompareScriptFailed
 
-        assert isinstance(logger, collections.Callable), "{0!r} not callable".format(logger)
+        assert isinstance(logger, collections.Callable), "{0!r} not callable".format(
+            logger
+        )
 
         logger(msg(argv, stdout, stderr, rc))

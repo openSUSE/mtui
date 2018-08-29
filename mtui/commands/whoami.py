@@ -13,16 +13,13 @@ class Whoami(Command):
     (username, pid) is used as user identity in rest of the codebase
     (eg. locking, logging on hosts) so it makes sense to treat this
     command consistently with those.
-
-    TODO: consolidate these into a SessionIdentity object
     """
-    command = 'whoami'
+
+    # TODO: consolidate these into a SessionIdentity object
+    command = "whoami"
 
     def get_pid(self):
         return os.getpid()
 
     def run(self):
-        self.println(" ".join([
-            self.config.session_user,
-            str(self.get_pid()),
-            ]))
+        self.println(" ".join([self.config.session_user, str(self.get_pid())]))

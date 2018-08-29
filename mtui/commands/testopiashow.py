@@ -9,18 +9,20 @@ class TestopiaShow(Command):
     """
     Show Testopia testcase
     """
-    command = 'testopia_show'
+
+    command = "testopia_show"
 
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
             "-t",
             "--testcase",
-            action='append',
+            action="append",
             default=[],
             type=str,
             required=True,
-            help='testcase to show')
+            help="testcase to show",
+        )
 
         return parser
 
@@ -31,12 +33,15 @@ class TestopiaShow(Command):
         url = self.config.bugzilla_url
         cases = []
         for case in self.args.testcase:
-            case = case.replace('_', ' ')
+            case = case.replace("_", " ")
             try:
                 cases.append(str(int(case)))
             except ValueError:
-                cases += [k for k, v in list(self.prompt.testopia.testcases.items())
-                          if v['summary'].replace('_', ' ') in case]
+                cases += [
+                    k
+                    for k, v in list(self.prompt.testopia.testcases.items())
+                    if v["summary"].replace("_", " ") in case
+                ]
 
         for case_id in cases:
             testcase = self.prompt.testopia.get_testcase(case_id)
@@ -45,21 +50,23 @@ class TestopiaShow(Command):
                 continue
 
             self.display.testopia_show(
-                url, case_id,
-                testcase['summary'],
-                testcase['status'],
-                testcase['automated'],
-                testcase['requirement'],
-                testcase['setup'],
-                testcase['action'],
-                testcase['breakdown'],
-                testcase['effect'],
+                url,
+                case_id,
+                testcase["summary"],
+                testcase["status"],
+                testcase["automated"],
+                testcase["requirement"],
+                testcase["setup"],
+                testcase["action"],
+                testcase["breakdown"],
+                testcase["effect"],
             )
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         testcases = [
-            (i['summary'].replace(' ', '_'),)
-            for i in list(state['testopia'].testcases.values())]
-        testcases += [('-t', '--testcase')]
+            (i["summary"].replace(" ", "_"),)
+            for i in list(state["testopia"].testcases.values())
+        ]
+        testcases += [("-t", "--testcase")]
         return complete_choices(testcases, line, text)

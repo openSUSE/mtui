@@ -8,8 +8,16 @@ class Config(Command):
     """
     Display and manipulate (TODO) configuration in runtime.
     """
+
     command = "config"
     _check_subparser = "func"
+
+    @classmethod
+    def _add_arguments(cls, p):
+        sp = p.add_subparsers()
+        p_show = sp.add_parser("show", help="show config values", sys_=p.sys)
+        p_show.add_argument("attributes", type=str, nargs="*")
+        p_show.set_defaults(func="show")
 
     def run(self):
         getattr(self, self.args.func)()
@@ -23,11 +31,3 @@ class Config(Command):
         for i in attrs:
             fmt = "{0:<" + str(max_attr_len) + "} = {1!r}"
             self.println(fmt.format(i, getattr(self.config, i)))
-
-    @classmethod
-    def _add_arguments(cls, p):
-        sp = p.add_subparsers()
-        p_show = sp.add_parser("show", help="show config values",
-                               sys_=p.sys)
-        p_show.add_argument("attributes", type=str, nargs="*")
-        p_show.set_defaults(func="show")
