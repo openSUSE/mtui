@@ -3,13 +3,14 @@
 # mtui config file parser and default values
 #
 
-import os
+from os import getenv
+
+from . import Path
 import getpass
 import collections
 import configparser
 
 from logging import getLogger
-from fnmatch import fnmatch
 from traceback import format_exc
 from mtui.refhost import RefhostsFactory
 from mtui.messages import InvalidLocationError
@@ -26,19 +27,18 @@ class Config(object):
     """Read and store the variables from mtui config files"""
     # FIXME: change str paths to L{filepath.FilePath}
 
-    def __init__(self, refhosts=RefhostsFactory, paths=None):
+    def __init__(self, refhosts=RefhostsFactory):
         self.refhosts = refhosts
         self._location = 'default'
 
-        try:
-            # FIXME: gotta read config overide from env instead of argv
-            # because this crap is used as a singleton all over the
-            # place
-            self.configfiles = [os.environ['MTUI_CONF']]
-        except KeyError:
-            self.configfiles = paths or [
-                '/etc/mtui.cfg', os.path.expanduser('~/.mtuirc')
-            ]
+        # FIXME: gotta read config overide from env instead of argv
+        # because this crap is used as a singleton all over the
+        # place
+        _pth = getenv('MTUI_CONF')
+        if _pth:
+            self.configfiles = [Path(_pth).expanduser()]
+        else:
+            self.configfiles = [Path('/etc/mtui.cfg'), Path('~/.mtuirc').expanduser()]
         self.read()
 
         self._define_config_options()
@@ -86,23 +86,25 @@ class Config(object):
     def _define_config_options(self):
         def normalizer(x): return x
 
+        def expanduser(p): return Path(p).expanduser()
+
         data = [
             ('datadir', ('mtui', 'datadir'),
-             lambda: os.path.dirname(os.path.dirname(__file__)),
-             os.path.expanduser),
+             Path("/usr/share/mtui"),
+             expanduser),
 
             ('template_dir', ('mtui', 'template_dir'),
-             lambda: os.path.expanduser(os.getenv('TEMPLATE_DIR', '.')),
-             os.path.expanduser),
+             lambda: Path(getenv('TEMPLATE_DIR', '.')),
+             expanduser),
 
             ('local_tempdir', ('mtui', 'tempdir'),
-             lambda: os.path.expanduser(os.getenv('TMPDIR', '/tmp')),
-             os.path.expanduser),
+             lambda: Path(getenv('TMPDIR', '/tmp')),
+             expanduser),
 
             ('session_user', ('mtui', 'user'),
              getpass.getuser),
 
-            ('install_logs', ('mtui', 'install_logs'), 'install_logs'),
+            ('install_logs', ('mtui', 'install_logs'), Path('install_logs'), Path),
 
             # connection.timeout appears to be in units of seconds as
             # indicated by
@@ -120,10 +122,10 @@ class Config(object):
              'http://qam.suse.de/testreports'),
 
             ('target_tempdir', ('target', 'tempdir'),
-             '/tmp'),
+             Path('/tmp'), Path),
 
             ('target_testsuitedir', ('target', 'testsuitedir'),
-             '/usr/share/qa/tools'),
+             Path('/usr/share/qa/tools'), Path),
 
             ('testopia_interface', ('testopia', 'interface'),
              'https://apibugzilla.novell.com/xmlrpc.cgi'),
@@ -142,7 +144,7 @@ class Config(object):
                                            'https_expiration'), 3600*12, int, self.config.getint),
 
             ('refhosts_path', ('refhosts', 'path'),
-                '/usr/share/qam-metadata/refhosts.yml'),
+                Path('/usr/share/qam-metadata/refhosts.yml'), Path),
             # }}}
 
             ('use_keyring', ('mtui', 'use_keyring'),
@@ -227,9 +229,7 @@ class Config(object):
             self.testopia_pass))
 
     def _list_terms(self):
-        scripts = [
-            x[5: -3] for x in os.listdir(self.datadir)
-            if fnmatch(x, 'term.*.sh')]
+        scripts = [x.name[5: -3] for x in self.datadir.glob('term.*.sh')]
         self.termnames = scripts
 
     def _get_option(self, secopt, getter):

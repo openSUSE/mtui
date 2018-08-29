@@ -1,8 +1,3 @@
-# -*- coding: utf-8 -*-
-# vim: et sw=2 sts=2
-
-from os.path import basename
-from os.path import splitext
 from logging import getLogger
 
 from traceback import format_exc
@@ -34,8 +29,8 @@ class Script(object):
         :param path: absolute path to the script
         """
         self.path = path
-        self.name = basename(path)
-        self.bname = splitext(self.name)[0]
+        self.name = path.parent
+        self.bname = path.stem
         self.testreport = tr
 
     def __repr__(self):
@@ -116,6 +111,7 @@ class CompareScript(Script):
             self._result(PreScript, bcheck, t),
             self._result(PostScript, bcheck, t),
         ]
+        argv = [str(x) for x in argv]
 
         log.debug("running {0}".format(argv))
         stdout = stderr = None

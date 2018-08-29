@@ -9,7 +9,7 @@ from mtui.commands import Command
 from mtui.utils import requires_update, complete_choices
 
 # TODO: when move to Path-like objects refactor is needed
-from pathlib import Path
+from .. import Path
 
 
 class Commit(Command):
@@ -39,12 +39,16 @@ class Commit(Command):
 
         try:
             subprocess.check_call(
-                'svn add --force {!s}'.format(self.config.install_logs).split(),
-                cwd=checkout)
+                "svn add --force {}".format(str(self.config.install_logs)).split(),
+                cwd=checkout,
+            )
             if checkout.joinpath("checkers.log").exists():
-                subprocess.check_call('svn add --force {}'.format(str(checkout / "checkers.log")).split(), cwd=checkout)
-            subprocess.check_call('svn up'.split(), cwd=checkout)
-            subprocess.check_call('svn ci'.split() + msg, cwd=checkout)
+                subprocess.check_call(
+                    "svn add --force {}".format(str(checkout / "checkers.log")).split(),
+                    cwd=checkout,
+                )
+            subprocess.check_call("svn up".split(), cwd=checkout)
+            subprocess.check_call("svn ci".split() + msg, cwd=checkout)
 
             self.log.info("Testreport in: {}".format(self.metadata._testreport_url()))
 

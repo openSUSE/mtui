@@ -1,12 +1,7 @@
-# -*- coding: utf-8 -*-
-
-import os
-
-from os.path import join
 from traceback import format_exc
 from itertools import zip_longest
 from functools import partial
-from pathlib import Path
+from .. import Path
 
 from mtui.commands import Command
 from mtui.utils import complete_choices_filelist
@@ -88,8 +83,9 @@ class Export(Command):
             self.println("wrote checkers results to {}".format(filename))
 
     def _installlogs_fill(self, xmllog, targets):
-        filepath = join(self.config.template_dir, str(
-            self.metadata.id), self.config.install_logs)
+        filepath = (
+            self.config.template_dir / str(self.metadata.id) / self.config.install_logs
+        )
         generator = partial(self.metadata.generate_install_logs, xmllog)
 
         ilogs = zip_longest(targets, map(generator, targets))
@@ -97,8 +93,8 @@ class Export(Command):
         for i, y in ilogs:
             filename = i + ".log"
 
-            if os.path.exists(join(filepath, filename)) and not self.args.force:
-                self.log.warning('file {!s} exists.'.format(filename))
+            if filepath.joinpath(filename).exists() and not self.args.force:
+                self.log.warning("file {!s} exists.".format(filename))
                 if not prompt_user(
                     "Should I overwrite {!s} (y/N) ".format(filename),
                     ["y", "Y", "yes", "Yes", "YES"],
@@ -108,8 +104,8 @@ class Export(Command):
             self.log.info("exporting zypper log from {!s} to {!s}".format(i, filename))
 
             try:
-                with open(join(filepath, filename), 'w', encoding='utf-8') as f:
-                    f.write('\n'.join(line.rstrip() for line in y))
+                with filepath.joinpath(filename).open(mode="w", encoding="utf-8") as f:
+                    f.write("\n".join(line.rstrip() for line in y))
             except IOError as e:
                 self.println("Failed to write {}: {}".format(filename, e.strerror))
 

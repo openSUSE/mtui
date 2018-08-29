@@ -4,7 +4,6 @@
 # almost all exceptions here are passed to the upper layer.
 #
 
-import os
 import sys
 import stat
 import errno
@@ -14,6 +13,7 @@ import termios
 import tty
 import getpass
 import logging
+from . import Path
 from logging import getLogger
 from traceback import format_exc
 
@@ -94,7 +94,7 @@ class Connection(object):
         """connect to the remote host using paramiko as ssh subsystem"""
         cfg = paramiko.config.SSHConfig()
         try:
-            with open(os.path.expanduser("~/.ssh/config")) as fd:
+            with Path("~/.ssh/config").expanduser().open() as fd:
                 cfg.parse(fd)
         except IOError as e:
             if e.errno != errno.ENOENT:
@@ -428,6 +428,8 @@ class Connection(object):
         remote -- remote file name
 
         """
+        remote = str(remote)
+        local = str(local)
 
         path = ""
         sftp = self.__sftp_reconnect()
@@ -473,6 +475,8 @@ class Connection(object):
         local  -- local file name
 
         """
+        remote = str(remote)
+        local = str(local)
         sftp = self.__sftp_reconnect()
 
         logger.debug(
@@ -487,6 +491,8 @@ class Connection(object):
     # Similar to 'get' but handles folders.
     def get_folder(self, remote_folder, local_folder):
 
+        remote_folder = str(remote_folder)
+        local_folder = str(local_folder)
         sftp = self.__sftp_reconnect()
         logger.debug(
             "transmitting {!s}:{!s}:{!s} to {!s}".format(
@@ -523,6 +529,7 @@ class Connection(object):
     # TODO: context manager
     def open(self, filename, mode="r", bufsize=-1):
         """open remote file for reading"""
+        str(filename)
 
         logger.debug("{0} open({1}, {2})".format(repr(self), filename, mode))
         logger.debug("  -> self.client.open_sftp")
@@ -544,7 +551,7 @@ class Connection(object):
 
     def remove(self, path):
         """delete remote file"""
-
+        path = str(path)
         logger.debug(
             "deleting file {!s}:{!s}:{!s}".format(self.hostname, self.port, path)
         )
@@ -565,14 +572,15 @@ class Connection(object):
         sftp = self.__sftp_reconnect()
         items = self.listdir(path)
         for item in items:
-            filename = os.path.join(path, item)
+            filename = path / item
             self.remove(filename)
-        sftp.rmdir(path)
+        sftp.rmdir(str(path))
         sftp.close()
 
     def readlink(self, path):
         """ Return the target of a symbolic link (shortcut)."""
         logger.debug("read link {}:{}:{}".format(self.hostname, self.port, path))
+        path = str(path)
 
         sftp = self.__sftp_reconnect()
         link = sftp.readlink(path)

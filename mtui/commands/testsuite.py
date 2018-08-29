@@ -60,8 +60,8 @@ class TestSuiteRun(Command):
         targets = self.parse_hosts()
         cmd = self.args.testsuite[0]
 
-        if not cmd.startswith('/'):
-            cmd = os.path.join(self.config.target_testsuitedir, cmd.strip())
+        if not cmd.startswith("/"):
+            cmd = self.config.target_testsuitedir / cmd.strip()
 
         cmd = "export TESTS_LOGDIR=/var/log/qa/{}; {}".format(
             self.metadata.id, str(cmd)

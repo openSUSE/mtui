@@ -1,6 +1,4 @@
-
 import os
-from os.path import abspath, join, basename, dirname
 from errno import ENOENT
 from errno import EEXIST
 
@@ -18,6 +16,7 @@ import shutil
 
 from logging import getLogger
 
+from .. import Path
 from mtui.utils import nottest
 
 from mtui.target import HostsGroup
@@ -64,18 +63,18 @@ class TestReport(object, metaclass=ABCMeta):
     def __init__(self, config, scripts_src_dir=None):
         self.config = config
 
-        self._scripts_src_dir = scripts_src_dir or join(
-            config.datadir,
-            'scripts')
+        self._scripts_src_dir = (
+            scripts_src_dir if scripts_src_dir else config.datadir.joinpath("scripts")
+        )
         self.directory = config.template_dir
 
         # Note: the default values here are unchanged from the previous
         # class Metadata for backward compaibility purposes, so we don't
         # have to modify every user of this class at the same time as
         # refactoring the internals.
-        self.path = ''
+        self.path = None
         """
-        :type path: str or None
+        :type path: Path or None
         :param path: path to the testreport file if loaded, otherwise None
         """
 
@@ -129,9 +128,9 @@ class TestReport(object, metaclass=ABCMeta):
 
     def _open_and_parse(self, path):
         try:
-            with open(path, 'r') as f:
+            with path.open(mode="r") as f:
                 self._parse(f)
-        except IOError as e:
+        except FileNotFoundError as e:
             args = list(e.args) + [e.filename]
             e_new = _TemplateIOError(*args)
             e_new.__cause__ = e  # PEP 3134
@@ -139,10 +138,11 @@ class TestReport(object, metaclass=ABCMeta):
 
     def read(self, path):
         self._open_and_parse(path)
-        self.path = abspath(path)
+        self.path = path.resolve()
         self._update_repos_parse()
         if self.config.chdir_to_template_dir:
-            os.chdir(dirname(path))
+            # os.chdir supports Path-like object from python 3.6
+            os.chdir(str(path.parent))
 
         self.copy_scripts()
         self.create_installogs_dir()
@@ -223,7 +223,7 @@ class TestReport(object, metaclass=ABCMeta):
         del updater
 
     def perform_get(self, targets, remote):
-        local = self.report_wd('downloads', basename(remote), filepath=True)
+        local = self.report_wd("downloads", remote.name, filepath=True)
 
         targets.get(remote, local)
 
@@ -308,12 +308,7 @@ class TestReport(object, metaclass=ABCMeta):
         self._create_installogs_dir()
 
     def _create_installogs_dir(self):
-        os.makedirs(
-            join(
-                self.config.template_dir,
-                str(self.id),
-                self.config.install_logs),
-            exist_ok=True)
+        makedirs(self.config.template_dir / str(self.id) / self.config.install_logs)
 
     @staticmethod
     def _ensure_executable(pattern):
@@ -436,7 +431,7 @@ class TestReport(object, metaclass=ABCMeta):
         """
         assert self.path, "empty path"
 
-        return self._wd(dirname(self.path), *paths, **kw)
+        return self._wd(self.path.parent, *paths, **kw)
 
     @staticmethod
     def _wd(*paths, **kwargs):
@@ -446,7 +441,7 @@ class TestReport(object, metaclass=ABCMeta):
         """
         :return: str remote working directory on SUT
         """
-        return join(self.config.target_tempdir, str(self.id), *paths)
+        return self.config.target_tempdir.joinpath(str(self.id), *paths)
 
     def scripts_wd(self, *paths):
         """
@@ -455,7 +450,7 @@ class TestReport(object, metaclass=ABCMeta):
         Note this method does not create the directories as needed
         because that's handled by L{TestReport.copy_scripts}
         """
-        return join(self.report_wd(), *["scripts"] + list(paths))
+        return self.report_wd().joinpath(*["scripts"] + list(paths))
 
     def get_testsuite_comment(self, testsuite, date):
         return "testing {!s} on {!s} on {!s}".format(
@@ -470,12 +465,14 @@ class TestReport(object, metaclass=ABCMeta):
         :type s: L{Script} class
         """
 
-        d = self.scripts_wd(s.subdir)
+        # os.walk returns string ...
+        # and os. supports Path-like objects from 3.6
+        d = str(self.scripts_wd(s.subdir))
 
-        for r, _, fs in os.walk(d):
+        for r, _, filelist in os.walk(d):
             if r == d:
-                for f in fs:
-                    x = s(self, join(d, f))
+                for f in filelist:
+                    x = s(self, Path(d) / f)
                     x.run(targets)
 
     def download_file(self, from_, into):

@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 
-import os
-
 from subprocess import check_call
 from traceback import format_exc
 
@@ -32,8 +30,8 @@ class Terms(Command):
 
         if self.args.termname:
             if self.args.termname in self.config.termnames:
-                filename = 'term.' + self.args.termname + '.sh'
-                path = os.path.join(dirname, filename)
+                filename = "term." + self.args.termname + ".sh"
+                path = dirname / filename
                 try:
                     check_call([path] + hosts)
                 except Exception:

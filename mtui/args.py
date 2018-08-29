@@ -1,5 +1,6 @@
 
 from argparse import FileType
+from . import Path
 
 from .argparse import ArgumentParser
 from mtui.template.updateid import OBSUpdateID
@@ -14,9 +15,7 @@ def get_parser(sys):
         "-l", "--location", type=str, help="override config mtui.location"
     )
     parser.add_argument(
-        '-t', '--template_dir',
-        type=str,
-        help='override config mtui.template_dir'
+        "-t", "--template_dir", type=Path, help="override config mtui.template_dir"
     )
     parser.add_argument(
         "-r",

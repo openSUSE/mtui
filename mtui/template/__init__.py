@@ -22,6 +22,11 @@ class TestReportAlreadyLoaded(RuntimeError):
 
 
 def testreport_svn_checkout(config, path, id):
+    """
+    param: path type: str - svn base path - not handled by pathlib
+    param: config type: instance of Config singleton
+    param: id type: str - RequestReviewID 
+    """
     ensure_dir_exists(
         config.template_dir,
         on_create=lambda path: logger.debug(
@@ -30,7 +35,7 @@ def testreport_svn_checkout(config, path, id):
     )
 
     uri = join(path, id)
-    with chdir(config.template_dir):
+    with chdir(str(config.template_dir)):
         try:
             subprocess.check_call(["svn", "co", uri])
         except KeyboardInterrupt:

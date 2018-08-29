@@ -4,7 +4,6 @@
 # below the abstractions layer (like updating, preparing, etc.)
 #
 
-import os
 import re
 import signal
 from traceback import format_exc

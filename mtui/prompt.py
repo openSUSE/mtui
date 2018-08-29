@@ -3,7 +3,6 @@
 # mtui command line prompt
 #
 
-import os
 import cmd
 import readline
 import subprocess
@@ -16,6 +15,7 @@ from traceback import format_exc
 
 from .argparse import ArgsParseFailure
 
+from . import Path
 from mtui import commands
 from mtui import messages
 from mtui.template.nulltestreport import NullTestReport
@@ -92,7 +92,7 @@ class CommandPrompt(cmd.Cmd):
         alias to ease refactoring
         """
 
-        self.homedir = os.path.expanduser('~')
+        self.homedir = Path("~").expanduser()
         self.config = config
         self.log = log
         self.datadir = self.config.datadir
@@ -122,7 +122,7 @@ class CommandPrompt(cmd.Cmd):
 
     def _read_history(self):
         try:
-            readline.read_history_file('{!s}/.mtui_history'.format(self.homedir))
+            readline.read_history_file("{!s}/.mtui_history".format(self.homedir))
         except IOError as e:
             logger.debug("failed to open history file: {!s}".format(e))
 
@@ -245,15 +245,15 @@ class CommandPrompt(cmd.Cmd):
     def _do_save_impl(self, path="log.xml"):
         if not path.startswith("/"):
             dir_ = self.metadata.report_wd()
-            path = os.path.join(dir_, 'output', path)
+            path = Path(dir_) / "output" / path
 
-        ensure_dir_exists(os.path.dirname(path))
+        ensure_dir_exists(path.parent)
 
-        if os.path.exists(path):
-            logger.warning('file {0} exists.'.format(path))
-            m = 'should i overwrite {0}? (y/N) '.format(path)
-            if not prompt_user(m, ['y', 'yes'], self.interactive):
-                path += '.' + timestamp()
+        if path.exists():
+            logger.warning("file {0} exists.".format(path))
+            m = "should i overwrite {0}? (y/N) ".format(path)
+            if not prompt_user(m, ["y", "yes"], self.interactive):
+                path += "." + timestamp()
 
         logger.info("saving output to {0}".format(path))
 
