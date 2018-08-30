@@ -5,7 +5,7 @@ from logging import getLogger
 
 from qamlib.utils import timestamp
 
-logger = getLogger('mtui.target.locks')
+logger = getLogger("mtui.target.locks")
 
 
 class TargetLockedError(Exception):
@@ -72,7 +72,7 @@ class RemoteLock(object):
         line = line.strip()
         line = line.split(":", 3)
         if len(line) < 3:
-            raise ValueError('got weird format in lockfile')
+            raise ValueError("got weird format in lockfile")
 
         if len(line) < 4:
             line += [None]
@@ -86,7 +86,6 @@ class RemoteLock(object):
 
 
 class LockedTargets(object):
-
     def __init__(self, targets):
         self.targets = targets
 
@@ -109,12 +108,13 @@ class TargetLock(object):
       lock. Only place that takes this into consideration is `run`
       command.
     """
+
     # FIXME: use netstrings to ensure proper (de)serialization
     # NOTE: the user name is not guaranteed not to collide.
     # Unfortunately, I don't see a way to do this without unreasonably
     # raising the logic complexity and usability
 
-    filename = os.path.join('/', 'var', 'lock', 'mtui.lock')
+    filename = "/var/lock/mtui.lock"
 
     def __init__(self, connection, config):
         self.connection = connection
@@ -134,9 +134,7 @@ class TargetLock(object):
         """
         :returns None:
         """
-        logger.debug(
-            '{!s}: getting mtui lock state'.format(
-                self.connection.hostname))
+        logger.debug("{!s}: getting mtui lock state".format(self.connection.hostname))
 
         self._lock = RemoteLock()  # make sure lock is reset.
 
@@ -180,7 +178,7 @@ class TargetLock(object):
                 # setting a different comment may be desired.
                 raise TargetLockedError(self.locked_by_msg())
 
-        logger.debug('{!s}: setting lock'.format(self.connection.hostname))
+        logger.debug("{!s}: setting lock".format(self.connection.hostname))
 
         rl = RemoteLock()
         rl.user = self.i_am_user
@@ -189,9 +187,9 @@ class TargetLock(object):
         rl.comment = comment
 
         try:
-            lockfile = self.connection.open(self.filename, 'w+')
+            lockfile = self.connection.open(self.filename, "w+")
         except Exception as e:
-            logger.error('failed to open lockfile: {!s}'.format(e))
+            logger.error("failed to open lockfile: {!s}".format(e))
             raise
 
         lockfile.write(rl.to_lockfile())
@@ -230,7 +228,7 @@ class TargetLock(object):
             if e.errno == errno.ENOENT:
                 pass
         except Exception as e:
-            logger.error('failed to remove lockfile: {!s}'.format(e))
+            logger.error("failed to remove lockfile: {!s}".format(e))
             raise
 
         self._lock = RemoteLock()
@@ -253,15 +251,9 @@ class TargetLock(object):
 
 
 class Locked(object):
-
     def __init__(
-            self,
-            myself,
-            locked=False,
-            user='nobody',
-            timestamp=0,
-            pid=0,
-            comment=None):
+        self, myself, locked=False, user="nobody", timestamp=0, pid=0, comment=None
+    ):
         self.myself = myself
         self.locked = locked
         self.user = user
@@ -289,7 +281,7 @@ class Locked(object):
         from datetime import datetime
 
         if style is None:
-            style = '%A, %d.%m.%Y %H:%M UTC'
+            style = "%A, %d.%m.%Y %H:%M UTC"
 
         time = datetime.fromtimestamp(float(self.timestamp))
 

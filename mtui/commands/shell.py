@@ -9,7 +9,8 @@ class Shell(Command):
     Invokes a remote root shell on the target host.
     The terminal size is set once, but isn't adapted on subsequent changes.
     """
-    command = 'shell'
+
+    command = "shell"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -19,11 +20,11 @@ class Shell(Command):
     def run(self):
         targets = self.parse_hosts()
 
-        self.log.debug('Starting shell')
+        self.log.debug("Starting shell")
 
         for target in list(targets.keys()):
             targets[target].shell()
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices([], line, text, state['hosts'].names())
+        return complete_choices([], line, text, state["hosts"].names())

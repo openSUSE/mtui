@@ -4,6 +4,10 @@ from mtui.utils import requires_update
 
 
 class Showrepos(Command):
+    """
+    Show update repositories valid for update
+    """
+
     command = "show_update_repos"
 
     @requires_update

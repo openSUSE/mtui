@@ -11,13 +11,11 @@ class ListBugs(Command):
     Lists related bugs and corresponding Bugzilla URLs.
     """
 
-    command = 'list_bugs'
+    command = "list_bugs"
 
     @requires_update
     def run(self):
-        self.metadata.list_bugs(
-            self.display.list_bugs,
-            self.config.bugzilla_url)
+        self.metadata.list_bugs(self.display.list_bugs, self.config.bugzilla_url)
 
 
 class ListLocks(Command):
@@ -25,7 +23,7 @@ class ListLocks(Command):
     Lists lock state of all connected hosts
     """
 
-    command = 'list_locks'
+    command = "list_locks"
 
     def run(self):
 
@@ -35,10 +33,12 @@ class ListLocks(Command):
 class ListHosts(Command):
     """
     Lists all connected hosts including the system types and their
-    current state. State could be "Enabled", "Disabled" or "Dryrun".
+    current state.
+
+    State could be "Enabled", "Disabled" or "Dryrun".
     """
 
-    command = 'list_hosts'
+    command = "list_hosts"
 
     def run(self):
 
@@ -49,7 +49,8 @@ class ListTimeout(Command):
     """
     Prints the current timeout values per host in seconds.
     """
-    command = 'list_timeout'
+
+    command = "list_timeout"
 
     def run(self):
 
@@ -61,7 +62,8 @@ class ListUpdateCommands(Command):
     List all commands which are invoked when applying updates on the
     target hosts.
     """
-    command = 'list_update_commands'
+
+    command = "list_update_commands"
 
     def run(self):
         self.metadata.list_update_commands(self.targets, self.println)
@@ -71,7 +73,8 @@ class ListSessions(Command):
     """
     Lists current active ssh sessions on target hosts.
     """
-    command = 'list_sessions'
+
+    command = "list_sessions"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -91,15 +94,17 @@ class ListSessions(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices([('-t', '--target'), ],
-                                line, text, state['hosts'].names())
+        return complete_choices(
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )
 
 
 class ListMetadata(Command):
     """
     Lists patchinfo metadata like ReviewRequestID or packager.
     """
-    command = 'list_metadata'
+
+    command = "list_metadata"
 
     @requires_update
     def run(self):
@@ -108,11 +113,12 @@ class ListMetadata(Command):
 
 class ListLog(Command):
     """
-    Prints the command protocol from the specified hosts. This might be
-    handy for the tester, as one can simply dump the command history to
-    the reproducer section of the template.
+    Prints the command protocol from the specified hosts.
+    This might be handy for the tester, as one can simply dump the command
+    history to the reproducer section of the template.
     """
-    command = 'show_log'
+
+    command = "show_log"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -127,8 +133,9 @@ class ListLog(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices([('-t', '--target'), ],
-                                line, text, state['hosts'].names())
+        return complete_choices(
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )
 
 
 class ListVersions(Command):
@@ -136,17 +143,19 @@ class ListVersions(Command):
     Prints available package versions in enabled repositories.
     Uses `zypper search` command. And prints versions from oldest to newest.
     """
-    command = 'list_versions'
+
+    command = "list_versions"
 
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            '-p',
-            '--package',
+            "-p",
+            "--package",
             default=[],
             type=str,
-            action='append',
-            help='packagename to show versions')
+            action="append",
+            help="packagename to show versions",
+        )
         cls._add_hosts_arg(parser)
         return parser
 
@@ -160,9 +169,11 @@ class ListVersions(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'),
-             ('-p', '--package'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target"), ("-p", "--package")],
+            line,
+            text,
+            state["hosts"].names(),
+        )
 
 
 class ListHistory(Command):
@@ -171,30 +182,27 @@ class ListHistory(Command):
     or updating packages. Date, username and event is shown.
     Events could be filtered with the event parameter.
     """
-    command = 'list_history'
 
-    filters = set(['connect',
-                   'disconnect',
-                   'install',
-                   'update',
-                   'downgrade'])
+    command = "list_history"
+
+    filters = set(["connect", "disconnect", "install", "update", "downgrade"])
 
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            '-e',
-            '--event',
-            action='append',
+            "-e",
+            "--event",
+            action="append",
             default=[],
             choices=cls.filters,
-            help='event to list')
+            help="event to list",
+        )
         cls._add_hosts_arg(parser)
         return parser
 
     def run(self):
         targets = self.parse_hosts(enabled=False)
-        option = [("{!s}".format(x))
-                  for x in set(self.args.event) & self.filters]
+        option = [("{!s}".format(x)) for x in set(self.args.event) & self.filters]
 
         count = 50
         if len(targets) >= 3:
@@ -205,11 +213,12 @@ class ListHistory(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         cstring = [
-            ('-t', '--target'),
-            ('-e', '--event'),
-            ('connect',),
-            ('disconnect',),
-            ('update',),
-            ('downgrade',),
-            ('install',)]
-        return complete_choices(cstring, line, text, state['hosts'].names())
+            ("-t", "--target"),
+            ("-e", "--event"),
+            ("connect",),
+            ("disconnect",),
+            ("update",),
+            ("downgrade",),
+            ("install",),
+        ]
+        return complete_choices(cstring, line, text, state["hosts"].names())

@@ -1,7 +1,7 @@
 
 import os
 
-from os.path import join
+from .. import Path
 
 from mtui.template.testreport import TestReport
 
@@ -12,13 +12,13 @@ class NullTestReport(TestReport):
     def __init__(self, *a, **kw):
         super(NullTestReport, self).__init__(*a, **kw)
         self.id = None
-        self.path = join(os.getcwd(), "None")
+        self.path = Path(os.getcwd()) / "None"
 
     def __bool__(tr):
         return False
 
     def target_wd(self, *paths):
-        return join(self.config.target_tempdir, *paths)
+        return self.config.target_tempdir.joinpath(*paths)
 
     def _get_updater_id(tr):
         return None

@@ -1,5 +1,4 @@
 
-from os.path import join
 from errno import ENOENT
 from logging import getLogger
 
@@ -25,7 +24,7 @@ class UpdateID(object):
         tr = self.testreport_factory(
             config,
         )
-        trpath = join(config.template_dir, str(self.id), 'log')
+        trpath = config.template_dir / str(self.id) / 'log'
 
         try:
             tr.read(trpath)

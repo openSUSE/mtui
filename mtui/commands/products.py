@@ -2,11 +2,13 @@
 from mtui.commands import Command
 from mtui.utils import complete_choices
 
+
 class ListProducts(Command):
     """
     Prints installed products on refhosts.
     """
-    command = 'list_products'
+
+    command = "list_products"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -20,4 +22,6 @@ class ListProducts(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-        return complete_choices([('-t', '--target')], line, text, state['hosts'].names())
+        return complete_choices(
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )

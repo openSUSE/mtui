@@ -8,10 +8,10 @@ class RemoveHost(Command):
     """
     Disconnects from host and remove host from list.
     Warning: The host log is purged as well.
-
     Warning 2: without parameters removes all hosts.
     """
-    command = 'remove_host'
+
+    command = "remove_host"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -31,5 +31,5 @@ class RemoveHost(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )

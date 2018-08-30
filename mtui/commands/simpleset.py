@@ -15,18 +15,19 @@ class SessionName(Command):
     sessions are active.
     """
 
-    command = 'set_session_name'
+    command = "set_session_name"
 
     @classmethod
     def _add_arguments(cls, parser):
 
         parser.add_argument(
             "name",
-            action='store',
+            action="store",
             type=str,
-            nargs='?',
-            default='',
-            help="name of session")
+            nargs="?",
+            default="",
+            help="name of session",
+        )
 
         return parser
 
@@ -43,17 +44,15 @@ class SetLocation(Command):
     """
     Change current reference host location to another site.
     """
-    command = 'set_location'
+
+    command = "set_location"
 
     @classmethod
     def _add_arguments(cls, parser):
 
         parser.add_argument(
-            "site",
-            action='store',
-            type=str,
-            nargs=1,
-            help="location name")
+            "site", action="store", type=str, nargs=1, help="location name"
+        )
 
         return parser
 
@@ -67,7 +66,7 @@ class SetLocation(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
 
-        loc = RefhostsFactory(state['config']).get_locations()
+        loc = RefhostsFactory(state["config"]).get_locations()
 
         locations = [[str(x) for x in loc]]
 
@@ -76,14 +75,16 @@ class SetLocation(Command):
 
 class SetLogLevel(Command):
     """
-       Changes the current MTUI loglevel "info" or "warning"
-       or "debug". To enable debug messages, one can set the loglevel
-       to "debug". This could be handy for longer running commands as
-       the output is shown in realtime. The "warning" loglevel prints
-       just basic error or warning conditions. Therefore it's not
-       recommended to use the "warning" loglevel.
+       Changes the current MTUI loglevel "info" or "warning"  or "debug".
+
+       To enable debug messages, one can set the loglevel to "debug".
+       This could be handy for longer running commands as
+       the output is shown in realtime.
+       The "warning" loglevel prints just basic error or warning conditions.
+       Therefore it's not recommended to use the "warning" loglevel.
     """
-    command = 'set_log_level'
+
+    command = "set_log_level"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -93,27 +94,30 @@ class SetLogLevel(Command):
             action="store",
             type=str,
             nargs=1,
-            choices=['info', 'error', 'warning', 'debug'],
-            help="log level for mtui - info, warning or debug")
+            choices=["info", "error", "warning", "debug"],
+            help="log level for mtui - info, warning or debug",
+        )
 
         return parser
 
     def run(self):
         levels = {
-            'error': logging.ERROR,
-            'warning': logging.WARNING,
-            'info': logging.INFO,
-            'debug': logging.DEBUG}
+            "error": logging.ERROR,
+            "warning": logging.WARNING,
+            "info": logging.INFO,
+            "debug": logging.DEBUG,
+        }
         new = self.args.level[0]
 
         self.prompt.log.setLevel(level=levels[new])
 
-        self.log.info('Log level is set to {}'.format(new))
+        self.log.info("Log level is set to {}".format(new))
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
         return complete_choices(
-            [('warning',), ('info',), ('debug',), ('error', ), ], line, text)
+            [("warning",), ("info",), ("debug",), ("error",)], line, text
+        )
 
 
 class SetTimeout(Command):
@@ -122,21 +126,22 @@ class SetTimeout(Command):
     When the timeout limit was hit the user is asked to wait
     for the current command to return or to proceed with the
     next one.
-    The timeout value is set in seconds. To disable the
-    timeout set it to "0".
+    The timeout value is set in seconds.
+    To disable the timeout set it to "0".
     """
 
-    command = 'set_timeout'
+    command = "set_timeout"
 
     @classmethod
     def _add_arguments(cls, parser):
 
         parser.add_argument(
             "timeout",
-            action='store',
+            action="store",
             type=int,
             nargs=1,
-            help='Timeout in sec, "0" disables it')
+            help='Timeout in sec, "0" disables it',
+        )
 
         cls._add_hosts_arg(parser)
 
@@ -150,10 +155,10 @@ class SetTimeout(Command):
 
         for target in targets:
             targets[target].set_timeout(value)
-            self.log.info('Timeout on {} is set to {}'.format(target, value))
+            self.log.info("Timeout on {} is set to {}".format(target, value))
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )

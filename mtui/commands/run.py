@@ -19,14 +19,14 @@ class Run(Command):
     the return code) of each host is shown on the console. Please be aware that
     no interactive commands can be run with this procedure.
     """
-    command = 'run'
+
+    command = "run"
 
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            "command",
-            nargs=REMAINDER,
-            help="Command to run on refhost")
+            "command", nargs=REMAINDER, help="Command to run on refhost"
+        )
         cls._add_hosts_arg(parser)
         return parser
 
@@ -36,12 +36,12 @@ class Run(Command):
         if not targets:
             raise NoRefhostsDefinedError
 
-        command = ''
+        command = ""
 
         for i in self.args.command:
-            command += i + ' '
+            command += i + " "
 
-        command = command.rstrip(' ')
+        command = command.rstrip(" ")
         try:
             with LockedTargets(list(targets.values())):
                 try:
@@ -53,24 +53,28 @@ class Run(Command):
 
                 for target in targets:
                     output.append(
-                        '{!s}:-> {!s} [{!s}]'.format(
-                            target,
-                            targets[target].lastin(),
-                            targets[target].lastexit()))
-                    list(map(output.append, targets[target].lastout().split('\n')))
+                        "{!s}:-> {!s} [{!s}]".format(
+                            target, targets[target].lastin(), targets[target].lastexit()
+                        )
+                    )
+                    list(map(output.append, targets[target].lastout().split("\n")))
                     if targets[target].lasterr():
-                        list(map(output.append, ['stderr:'] +
-                                 targets[target].lasterr().split('\n')))
+                        list(
+                            map(
+                                output.append,
+                                ["stderr:"] + targets[target].lasterr().split("\n"),
+                            )
+                        )
 
         except TargetLockedError as e:
             self.log.error("Target {}".format(e))
             return
 
         page(output, self.prompt.interactive)
-        self.log.info('done')
+        self.log.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [('-t', '--target'), ],
-            line, text, state['hosts'].names())
+            [("-t", "--target")], line, text, state["hosts"].names()
+        )

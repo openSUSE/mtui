@@ -2,19 +2,16 @@
 
 
 import importlib
-import os
-import os.path
-from mtui.commands._command import Command
+from .. import Path
+from mtui.commands._command import Command # noqa W0611
 
-_rootdir = os.path.dirname(os.path.realpath(__file__))
+_rootdir = Path(__file__).resolve().parent
 
 cmd_list = []
 
-for name in os.listdir(_rootdir):
-    # list all ".py"
-    path = os.path.join(_rootdir, name)
-    if os.path.isfile(path) and name.endswith(".py"):
-        modname = name[:-3]
+for pth in _rootdir.glob("*.py"):
+    if pth.is_file():
+        modname = pth.name[:-3]
     else:
         continue
 

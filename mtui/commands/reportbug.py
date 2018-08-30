@@ -15,10 +15,11 @@ class ReportBug(Command):
     """
     Open mtui bugzilla with fields common for all mtui bugs prefilled
     """
+
     command = "report-bug"
 
     def __init__(self, *a, **kw):
-        self.popen = kw.pop('popen', subprocess.Popen)
+        self.popen = kw.pop("popen", subprocess.Popen)
 
         super(ReportBug, self).__init__(*a, **kw)
 
@@ -64,13 +65,14 @@ class ReportBug(Command):
     @classmethod
     def _add_arguments(cls, parser):
         parser.add_argument(
-            "-p", "--print-url",
-            help='just print url to the stdout',
-            action='store_true',
+            "-p",
+            "--print-url",
+            help="just print url to the stdout",
+            action="store_true",
         )
 
         return parser
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
-        return complete_choices([("-p", "--print-url"), ], line, text)
+        return complete_choices([("-p", "--print-url")], line, text)
