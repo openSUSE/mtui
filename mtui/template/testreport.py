@@ -124,7 +124,7 @@ class TestReport(object, metaclass=ABCMeta):
 
     def _open_and_parse(self, path):
         try:
-            with open(path, 'r') as f:
+            with open(path, 'r', errors='replace') as f:
                 self._parse(f)
         except IOError as e:
             args = list(e.args) + [e.filename]
