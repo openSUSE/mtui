@@ -128,7 +128,7 @@ class TestReport(object, metaclass=ABCMeta):
 
     def _open_and_parse(self, path):
         try:
-            with path.open(mode="r") as f:
+            with path.open(mode="r", errors="replace") as f:
                 self._parse(f)
         except FileNotFoundError as e:
             args = list(e.args) + [e.filename]
