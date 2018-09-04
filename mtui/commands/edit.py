@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 from os import getenv
 
 from subprocess import check_call
@@ -36,7 +34,8 @@ class Edit(Command):
 
         try:
             self.log.debug("call {!s} on {!s}".format(editor, path))
-            check_call([editor, path])
+            # python 3.4 compat str
+            check_call([editor, str(path)])
         except Exception:
             self.log.error("failed to run {!s}".format(editor))
             self.log.debug(format_exc())
