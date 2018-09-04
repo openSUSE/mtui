@@ -50,7 +50,8 @@ class Config(object):
         self.config = configparser.ConfigParser(
             inline_comment_prefixes=('#', ';'))
         try:
-            self.config.read(self.configfiles)
+            # Python 3.4 limitiation workaround
+            self.config.read([str(x) for x in self.configfiles])
         except configparser.Error as e:
             logger.error(e)
 
