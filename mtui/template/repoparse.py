@@ -1,5 +1,4 @@
 
-from os.path import join
 
 import xml.etree.ElementTree as ET
 from mtui.types import Product
@@ -8,13 +7,16 @@ from mtui.template.products import normalize
 
 
 def _read_project(path):
-    with open(join(path, 'project.xml'), mode='r') as f:
+    with path.joinpath("project.xml").open(mode="r") as f:
         return ET.fromstringlist(f)
 
 
 def _xmlparse(xml):
-    return ((x.find('releasetarget').attrib['project'].split(':')[-3:], x.attrib['name'])
-            for x in xml.findall("repository/path[@repository='update']/..") if 'DEBUG' not in x.attrib['name'])
+    return (
+        (x.find("releasetarget").attrib["project"].split(":")[-3:], x.attrib["name"])
+        for x in xml.findall("repository/path[@repository='update']/..")
+        if "DEBUG" not in x.attrib["name"]
+    )
 
 
 def repoparse(path):
