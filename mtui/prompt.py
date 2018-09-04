@@ -257,5 +257,5 @@ class CommandPrompt(cmd.Cmd):
 
         logger.info("saving output to {0}".format(path))
 
-        with open(path, "w") as f:
+        with path.open(mode="w") as f:
             f.write(self.metadata.generate_xmllog())
