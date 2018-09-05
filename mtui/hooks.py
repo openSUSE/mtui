@@ -86,7 +86,7 @@ class PreScript(Script):
         for t in list(targets.values()):
             fname = self._result(type(self), self.bname, t)
             try:
-                with open(fname, "w") as f:
+                with fname.open(mode="w") as f:
                     f.write(t.lastout())
                     f.write(t.lasterr())
             except IOError as e:
