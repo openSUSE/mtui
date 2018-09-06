@@ -253,7 +253,7 @@ class CommandPrompt(cmd.Cmd):
             logger.warning("file {0} exists.".format(path))
             m = "should i overwrite {0}? (y/N) ".format(path)
             if not prompt_user(m, ["y", "yes"], self.interactive):
-                path += "." + timestamp()
+                path = path.parent / (path.name + "." + timestamp())
 
         logger.info("saving output to {0}".format(path))
 
