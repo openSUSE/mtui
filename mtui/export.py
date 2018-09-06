@@ -10,7 +10,6 @@ logger = getLogger("mtui.export")
 
 
 def _read_xmldata(xmldata):
-    import pdb;pdb.set_trace()
     try:
         if os.path.isfile(xmldata):
             x = xml.dom.minidom.parse(xmldata)
