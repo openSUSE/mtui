@@ -57,6 +57,8 @@ Loads the test report for the maintenance update Review Request ID (RRID).
 ``RRID`` is a string in the form ``SUSE:Maintenance:XXXX:YYYYYY``, where ``XXXX``
 is the Incident ID and ``YYYYYY`` is the Request ID.
 
+``RRID`` can also use the short format ``S:M:XXX:YYYY``.
+
 ``-s SPEC, --sut SPEC``
 ~~~~~~~~~~~~~~~~~~~~~~~
 

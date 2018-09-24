@@ -643,7 +643,9 @@ template file.
 
 .. option:: update_id
 
-  OBS request ID for the update.
+  Review request ID for the update.
+  Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY``) or short
+  (``S:M:XXXX:YYYYYY``) format.
 
 
 list_metadata
