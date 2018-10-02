@@ -27,9 +27,9 @@ class Testopia(object):
     """
 
     # product to testplan maps
-    plans = {'9': '251', '10': '263,351', '11': '2672', '12': '4809', '15': '5755'}
-    status = {3: 'disabled', 2: 'confirmed', 1: 'proposed'}
-    automated = {1: 'yes', 0: 'no'}
+    plans = {"9": "251", "10": "263,351", "11": "2672", "12": "4809", "15": "6151"}
+    status = {3: "disabled", 2: "confirmed", 1: "proposed"}
+    automated = {1: "yes", 0: "no"}
 
     def __init__(self, config, product=None, packages=None):
         """create xmlrpclib.ServerProxy object for communication
@@ -50,7 +50,7 @@ class Testopia(object):
         username = config.testopia_user
         password = config.testopia_pass
 
-        logger.debug('creating Testopia Interface at {!s}'.format(interface))
+        logger.debug("creating Testopia Interface at {!s}".format(interface))
         self.bugzilla = Bugzilla(interface, username, password)
 
         # cache testcases since Testopia is slow
@@ -58,11 +58,11 @@ class Testopia(object):
 
     @staticmethod
     def _unescape_html(text):
-        text = re.sub('<br>', '\n', text)
-        text = re.sub('</span>', '\n', text)
-        text = re.sub('</div>', '\n', text)
-        text = re.sub('&nbsp;', ' ', text)
-        text = re.sub('<[^>]*>', '', text)
+        text = re.sub("<br>", "\n", text)
+        text = re.sub("</span>", "\n", text)
+        text = re.sub("</div>", "\n", text)
+        text = re.sub("&nbsp;", " ", text)
+        text = re.sub("<[^>]*>", "", text)
 
         try:
             return saxutils.unescape(text)
@@ -71,7 +71,7 @@ class Testopia(object):
 
     @staticmethod
     def _escape_html(text):
-        entities = {'|br|': '<br>'}
+        entities = {"|br|": "<br>"}
         try:
             return saxutils.escape(text, entities)
         except Exception:
@@ -79,46 +79,47 @@ class Testopia(object):
 
     def convert_datafield(self, datafield):
         for key in list(datafield.keys()):
-            if key == 'automated':
+            if key == "automated":
                 automated = {}
                 for k, v in list(self.automated.items()):
                     automated[v] = k
                 try:
-                    datafield['isautomated'] = automated[
-                        datafield.pop('automated')]
+                    datafield["isautomated"] = automated[datafield.pop("automated")]
                 except KeyError as error:
                     logger.critical(
-                        'unknown value for automated: {!s}. using default.'.format(error))
-            elif key == 'status':
+                        "unknown value for automated: {!s}. using default.".format(
+                            error
+                        )
+                    )
+            elif key == "status":
                 status = {}
                 for k, v in list(self.status.items()):
                     status[v] = k
                 try:
-                    datafield['case_status_id'] = status[
-                        datafield.pop('status')]
+                    datafield["case_status_id"] = status[datafield.pop("status")]
                 except KeyError as error:
                     logger.critical(
-                        'unknown value for status: {!s}. using default.'.format(error))
+                        "unknown value for status: {!s}. using default.".format(error)
+                    )
 
         return datafield
 
     def update_testcase_list(self):
-        logger.debug('updating Testopia testcase list')
+        logger.debug("updating Testopia testcase list")
         self.testcases = self.get_testcase_list()
 
     def append_testcase_cache(self, case_id, testcase):
-        logger.debug('writing testcase {!s} to cache'.format(case_id))
-        self.casebuffer.append({'case_id': case_id, 'testcase': testcase})
+        logger.debug("writing testcase {!s} to cache".format(case_id))
+        self.casebuffer.append({"case_id": case_id, "testcase": testcase})
 
     def remove_testcase_cache(self, case_id):
         element = None
         for case in self.casebuffer:
-            if case['case_id'] == case_id:
+            if case["case_id"] == case_id:
                 element = case
 
         if element:
-            logger.debug(
-                'removing testcase {!s} from cache'.format(element['case_id']))
+            logger.debug("removing testcase {!s} from cache".format(element["case_id"]))
             self.casebuffer.remove(element)
 
     def get_testcase_list(self):
@@ -138,41 +139,52 @@ class Testopia(object):
             return {}
 
         logger.debug(
-            'getting testcase list for packages {!s} in testplan {!s}'.format(
-                self.packages, self.plans[
-                    self.product]))
-        tags = ','.join(
-            ['packagename_{name},testcase_{name}'.format
-             (name=i) for i in self.packages])
+            "getting testcase list for packages {!s} in testplan {!s}".format(
+                self.packages, self.plans[self.product]
+            )
+        )
+        tags = ",".join(
+            ["packagename_{name},testcase_{name}".format(name=i) for i in self.packages]
+        )
 
         try:
             response = self.bugzilla.query_interface(
-                'TestCase.list', {
-                    'tags': tags, 'tags_type': 'anyexact', 'plan_id': self.plans[
-                        self.product]})
+                "TestCase.list",
+                {
+                    "tags": tags,
+                    "tags_type": "anyexact",
+                    "plan_id": self.plans[self.product],
+                },
+            )
         except Exception:
-            logger.critical('failed to query TestCase.list')
+            logger.critical("failed to query TestCase.list")
             return {}
 
         # since we're too lazy to copy testcases over to our latest products,
         # fall back to the old ones if none were found
         if not response:
             response = self.bugzilla.query_interface(
-                'TestCase.list', {
-                    'tags': tags, 'tags_type': 'anyexact', 'plan_id': self.plans['11']})
+                "TestCase.list",
+                {"tags": tags, "tags_type": "anyexact", "plan_id": self.plans["11"]},
+            )
             if response:
                 logger.warning(
-                    'found testcases for product 11 while {!s} was empty'.format(
-                        self.product))
+                    "found testcases for product 11 while {!s} was empty".format(
+                        self.product
+                    )
+                )
                 logger.warning(
-                    'please consider migrating the testcases to product {!s}'.format(
-                        self.product))
+                    "please consider migrating the testcases to product {!s}".format(
+                        self.product
+                    )
+                )
 
         for case in response:
-            cases[
-                case['case_id']] = {'summary': case['summary'],
-                                    'status': self.status[case['case_status_id']],
-                                    'automated': self.automated[case['isautomated']]}
+            cases[case["case_id"]] = {
+                "summary": case["summary"],
+                "status": self.status[case["case_status_id"]],
+                "automated": self.automated[case["isautomated"]],
+            }
 
         return cases
 
@@ -190,48 +202,45 @@ class Testopia(object):
             return {}
 
         for case in self.casebuffer:
-            if case['case_id'] == case_id:
-                logger.debug('found testcase {!s} in cache'.format(case_id))
-                return case['testcase']
+            if case["case_id"] == case_id:
+                logger.debug("found testcase {!s} in cache".format(case_id))
+                return case["testcase"]
 
         try:
-            response = self.bugzilla.query_interface('TestCase.get', case_id)
+            response = self.bugzilla.query_interface("TestCase.get", case_id)
         except Exception:
-            logger.critical('failed to query TestCase.get')
+            logger.critical("failed to query TestCase.get")
             return {}
 
         # first, import mandatory fields
         try:
             testcase = {
-                'action': self._unescape_html(
-                    response['text']['action']), 'summary': self._unescape_html(
-                    response['summary']), 'status': self.status[
-                    response['case_status_id']], 'automated': self.automated[
-                    response['isautomated']]}
+                "action": self._unescape_html(response["text"]["action"]),
+                "summary": self._unescape_html(response["summary"]),
+                "status": self.status[response["case_status_id"]],
+                "automated": self.automated[response["isautomated"]],
+            }
         except KeyError:
-            logger.error('testcase {!s} not found'.format(case_id))
+            logger.error("testcase {!s} not found".format(case_id))
             return {}
 
         # import optional fields
         try:
-            testcase['requirement'] = self._unescape_html(
-                response['requirement'])
+            testcase["requirement"] = self._unescape_html(response["requirement"])
         except KeyError:
-            testcase['requirement'] = ''
+            testcase["requirement"] = ""
         try:
-            testcase['breakdown'] = self._unescape_html(
-                response['text']['breakdown'])
+            testcase["breakdown"] = self._unescape_html(response["text"]["breakdown"])
         except KeyError:
-            testcase['breakdown'] = ''
+            testcase["breakdown"] = ""
         try:
-            testcase['setup'] = self._unescape_html(response['text']['setup'])
+            testcase["setup"] = self._unescape_html(response["text"]["setup"])
         except KeyError:
-            testcase['setup'] = ''
+            testcase["setup"] = ""
         try:
-            testcase['effect'] = self._unescape_html(
-                response['text']['effect'])
+            testcase["effect"] = self._unescape_html(response["text"]["effect"])
         except KeyError:
-            testcase['effect'] = ''
+            testcase["effect"] = ""
 
         self.append_testcase_cache(case_id, testcase)
 
@@ -249,19 +258,12 @@ class Testopia(object):
         try:
             plan = self.plans[self.product]
         except KeyError:
-            logger.error(
-                'no testplan found for product {!s}'.format(self.product))
+            logger.error("no testplan found for product {!s}".format(self.product))
             raise
 
-        logger.debug(
-            'creating testcase for product {!s}'.format(
-                self.product))
+        logger.debug("creating testcase for product {!s}".format(self.product))
 
-        testcase = {'status': 2,
-                    'category': 2919,
-                    'priority': 6,
-                    'plans': plan
-                    }
+        testcase = {"status": 2, "category": 2919, "priority": 6, "plans": plan}
 
         for k, v in list(values.items()):
             values[k] = self._escape_html(v)
@@ -271,20 +273,22 @@ class Testopia(object):
         testcase = self.convert_datafield(testcase)
 
         try:
-            response = self.bugzilla.query_interface(
-                'TestCase.create',
-                testcase)
+            response = self.bugzilla.query_interface("TestCase.create", testcase)
         except Exception:
-            logger.critical('failed to query TestCase.create')
+            logger.critical("failed to query TestCase.create")
             raise
 
         self.testcases.update(
-            {response['case_id']:
-             {'summary': response['summary'], 'status': self.status
-              [response['case_status_id']], 'automated': self.automated
-              [response['isautomated']]}})
+            {
+                response["case_id"]: {
+                    "summary": response["summary"],
+                    "status": self.status[response["case_status_id"]],
+                    "automated": self.automated[response["isautomated"]],
+                }
+            }
+        )
 
-        return response['case_id']
+        return response["case_id"]
 
     def modify_testcase(self, case_id, values):
         """ modify existing Testopia testcase
@@ -299,60 +303,59 @@ class Testopia(object):
         for k, v in list(values.items()):
             values[k] = self._escape_html(v)
 
-        summary = values['summary']
-        requirement = values['requirement']
-        action = values['action']
-        setup = values['setup']
-        effect = values['effect']
-        breakdown = values['breakdown']
+        summary = values["summary"]
+        requirement = values["requirement"]
+        action = values["action"]
+        setup = values["setup"]
+        effect = values["effect"]
+        breakdown = values["breakdown"]
 
         update = {
-            'summary': summary,
-            'requirement': requirement,
-            'automated': values['automated'],
-            'status': values['status']}
+            "summary": summary,
+            "requirement": requirement,
+            "automated": values["automated"],
+            "status": values["status"],
+        }
 
         update = self.convert_datafield(update)
 
         try:
-            self.bugzilla.query_interface('TestCase.update', case_id, update)
+            self.bugzilla.query_interface("TestCase.update", case_id, update)
         except Exception:
-            logger.critical('failed to query TestCase.update')
+            logger.critical("failed to query TestCase.update")
             raise
 
         try:
             self.bugzilla.query_interface(
-                'TestCase.store_text',
-                case_id,
-                action,
-                effect,
-                setup,
-                breakdown)
+                "TestCase.store_text", case_id, action, effect, setup, breakdown
+            )
         except Exception:
-            logger.critical('failed to query TestCase.store_text')
+            logger.critical("failed to query TestCase.store_text")
             raise
 
         try:
-            tags = self.bugzilla.query_interface('TestCase.get_tags', case_id)
+            tags = self.bugzilla.query_interface("TestCase.get_tags", case_id)
         except Exception:
-            logger.critical('failed to query TestCase.get_tags')
+            logger.critical("failed to query TestCase.get_tags")
             raise
 
         new_tags = set(
-            [tag.replace
-             ('packagename_', 'testcase_')
-             for tag in tags if tag.startswith('packagename')]) - set(tags)
+            [
+                tag.replace("packagename_", "testcase_")
+                for tag in tags
+                if tag.startswith("packagename")
+            ]
+        ) - set(tags)
         if new_tags:
             try:
                 tags = self.bugzilla.query_interface(
-                    'TestCase.add_tag',
-                    case_id,
-                    list(new_tags))
+                    "TestCase.add_tag", case_id, list(new_tags)
+                )
             except Exception:
-                logger.critical('failed to query TestCase.add_tag')
+                logger.critical("failed to query TestCase.add_tag")
                 raise
 
-        logger.debug('values for testcase {!s} stored'.format(case_id))
+        logger.debug("values for testcase {!s} stored".format(case_id))
         # remove testcase from cache to get the updated version on
         # the next query
         self.remove_testcase_cache(case_id)
