@@ -3,3 +3,4 @@ recursive-include scripts *
 recursive-include helper *
 include Documentation/*
 include *.rst
+recursive-include tests *
