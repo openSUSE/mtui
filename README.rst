@@ -45,11 +45,12 @@ MTUI was originally written by:
 * Heiko Rommel <rommel@suse.de>
 * Jan Matějka <jmatejka@suse.cz>
 * Roman Neuhauser <rneuhauser@suse.cz>
+* David Santiago <dasantiago@suse.cz>
 
 The project is currently maintained mainly by:
 
 * Ondřej Súkup <osukup@suse.cz>
-* David Santiago <dasantiago@suse.cz>
+* Jan Baier <jbaier@suse.cz>
 
 Besides that, numerous other `contributors`_ have committed to MTUI.
 Thanks everyone for their contributions!
