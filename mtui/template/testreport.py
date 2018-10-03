@@ -19,7 +19,7 @@ from logging import getLogger
 from .. import Path
 from mtui.utils import nottest
 
-from mtui.target import HostsGroup
+from mtui.target.hostgroup import HostsGroup
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
