@@ -379,11 +379,14 @@ class TestReport(object, metaclass=ABCMeta):
             self.targets[hostname] = Target(
                 self.config, hostname, self.get_package_list()
             )
+            self.targets[hostname].connect()
 
             if self:
                 self.systems[hostname] = self.targets[hostname].get_system()
 
         except (SSHException, NoValidConnectionsError, ChannelException):
+            if hostname in self.targets:
+                del (self.targets[hostname])
             logger.warning("failed to add host {0} to target list".format(hostname))
             logger.debug(format_exc())
 
