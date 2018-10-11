@@ -42,7 +42,6 @@ class Target(object):
         state="enabled",
         timeout=300,
         exclusive=False,
-        connect=True,
         lock=TargetLock,
         connection=Connection,
     ):
@@ -74,9 +73,6 @@ class Target(object):
 
         for package in packages:
             self.packages[package] = Package(package)
-
-        if connect:
-            self.connect()
 
     def _parse_system(self):
         logger.debug("get and parse target installed products")
