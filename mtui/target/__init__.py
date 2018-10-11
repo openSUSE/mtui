@@ -444,17 +444,12 @@ class Target(object):
                     )
 
     def close(self, action=None):
-        def alarm_handler(signum, frame):
-            logger.warning("timeout reached on {}".format(self.hostname))
-            raise CommandTimeout("close")
-
-        handler = signal.signal(signal.SIGALRM, alarm_handler)
-        signal.alarm(15)
-
+        self.timeout = 15
         try:
             assert self.connection
 
             if self.connection.is_active():
+                self.connection.timeout = 15
                 self.add_history(["disconnect"])
                 self.remove_lock()
         except Exception:
@@ -473,12 +468,6 @@ class Target(object):
         if self.connection:
             self.connection.close()
             self.connection = None
-
-        # restoring signal handler
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, handler)
-
-        return
 
     def report_self(self, sink):
         return sink(self.hostname, self.system, self.state, self.exclusive)

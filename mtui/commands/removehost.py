@@ -1,5 +1,4 @@
-# -*- coding: utf-8 -*-
-
+import concurrent.futures
 from mtui.commands import Command
 from mtui.utils import complete_choices
 
@@ -20,13 +19,20 @@ class RemoveHost(Command):
 
         return parser
 
+    def _remove_target(self, target):
+        self.targets[target].close()
+        self.targets.pop(target)
+        if target in self.metadata.systems:
+            del self.metadata.systems[target]
+
     def run(self):
-        targets = list(self.parse_hosts(enabled=None).keys())
-        for target in targets:
-            self.targets[target].close()
-            self.targets.pop(target)
-            if target in self.metadata.systems:
-                del self.metadata.systems[target]
+        targets = self.parse_hosts(enabled=None).keys()
+        # for target in targets:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            conn = [
+                executor.submit(self._remove_target, target) for target in targets
+            ]
+            concurrent.futures.wait(conn)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
