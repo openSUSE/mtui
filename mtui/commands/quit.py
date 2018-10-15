@@ -1,5 +1,4 @@
-# -*- coding: utf-8 -*-
-
+import concurrent.futures
 import readline
 
 from mtui.commands import Command
@@ -26,6 +25,10 @@ class Quit(Command):
         )
         return parser
 
+    def _close_target(self, target, args):
+        self.targets[target].close(*args)
+        self.targets.pop(target)
+
     def run(self):
 
         if not prompt_user(
@@ -37,9 +40,12 @@ class Quit(Command):
 
         args_ = [self.args.bootarg] if self.args.bootarg else []
 
-        for x in set(self.targets):
-            self.targets[x].close(*args_)
-            self.targets.pop(x)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            targets = [
+                executor.submit(self._close_target, target, args_)
+                for target in set(self.targets)
+            ]
+            concurrent.futures.wait(targets)
 
         try:
             readline.write_history_file(

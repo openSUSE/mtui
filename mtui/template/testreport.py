@@ -1,7 +1,7 @@
 import os
 from errno import ENOENT
 from errno import EEXIST
-
+import concurrent.futures
 import stat
 from traceback import format_exc
 from urllib.request import urlopen
@@ -19,7 +19,7 @@ from logging import getLogger
 from .. import Path
 from mtui.utils import nottest
 
-from mtui.target import HostsGroup
+from mtui.target.hostgroup import HostsGroup
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
@@ -320,33 +320,46 @@ class TestReport(object, metaclass=ABCMeta):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
+    def connect_target(self, host, make_target):
+        try:
+            target = make_target(
+                self.config,
+                host,
+                self.get_package_list(),
+                timeout=self.config.connection_timeout,
+            )
+            target.connect()
+            target.add_history(["connect"])
+            new_system = target.get_system()
+        except Exception:
+            logger.debug(format_exc())
+            msg = "failed to add host {0} to target list"
+            logger.warning(msg.format(host))
+        except KeyboardInterrupt:
+            # skip adding the reference host if CTRL-C was pressed.
+            # FIXME: this might not work if we are somewhere deep in
+            # the network/ssh code where KeyboardInterrupt is not
+            # thrown.
+            # Note: this wouldn't be a problem with Twisted by
+            # default.
+            # With paramiko we'd have to run it in threads, assuming
+            # the network/ssh code really can't KeyboardInterrupt
+            logger.warning("skipping host {0}".format(host))
+        else:
+            return target, new_system
+
     def connect_targets(self, make_target=Target):
         targets = {}
         new_systems = {}
-        for host in self.hostnames:
-            try:
-                targets[host] = make_target(
-                    self.config,
-                    host,
-                    self.get_package_list(),
-                    timeout=self.config.connection_timeout,
-                )
-                targets[host].add_history(["connect"])
-                new_systems[host] = targets[host].get_system()
-            except Exception:
-                logger.debug(format_exc())
-                msg = "failed to add host {0} to target list"
-                logger.warning(msg.format(host))
-            except KeyboardInterrupt:
-                # skip adding the reference host if CTRL-C was pressed.
-                # FIXME: this might not work if we are somewhere deep in
-                # the network/ssh code where KeyboardInterrupt is not
-                # thrown.
-                # Note: this wouldn't be a problem with Twisted by
-                # default.
-                # With paramiko we'd have to run it in threads, assuming
-                # the network/ssh code really can't KeyboardInterrupt
-                logger.warning("skipping host {0}".format(host))
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            connections = {
+                executor.submit(self.connect_target, host, make_target): host
+                for host in self.hostnames
+            }
+
+            for future in concurrent.futures.as_completed(connections):
+                host = connections[future]
+                targets[host], new_systems[host] = future.result()
 
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = new_systems
@@ -366,11 +379,14 @@ class TestReport(object, metaclass=ABCMeta):
             self.targets[hostname] = Target(
                 self.config, hostname, self.get_package_list()
             )
+            self.targets[hostname].connect()
 
             if self:
                 self.systems[hostname] = self.targets[hostname].get_system()
 
         except (SSHException, NoValidConnectionsError, ChannelException):
+            if hostname in self.targets:
+                del (self.targets[hostname])
             logger.warning("failed to add host {0} to target list".format(hostname))
             logger.debug(format_exc())
 
