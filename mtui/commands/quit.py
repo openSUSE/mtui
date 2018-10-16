@@ -45,7 +45,7 @@ class Quit(Command):
                 executor.submit(self._close_target, target, args_)
                 for target in set(self.targets)
             ]
-            concurrent.futures.wait(targets)
+            concurrent.futures.wait(targets, timeout=15)
 
         try:
             readline.write_history_file(

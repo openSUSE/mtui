@@ -29,10 +29,8 @@ class RemoveHost(Command):
         targets = self.parse_hosts(enabled=None).keys()
         # for target in targets:
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            conn = [
-                executor.submit(self._remove_target, target) for target in targets
-            ]
-            concurrent.futures.wait(conn)
+            conn = [executor.submit(self._remove_target, target) for target in targets]
+            concurrent.futures.wait(conn, timeout=30)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
