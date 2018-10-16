@@ -335,16 +335,7 @@ class TestReport(object, metaclass=ABCMeta):
             logger.debug(format_exc())
             msg = "failed to add host {0} to target list"
             logger.warning(msg.format(host))
-        except KeyboardInterrupt:
-            # skip adding the reference host if CTRL-C was pressed.
-            # FIXME: this might not work if we are somewhere deep in
-            # the network/ssh code where KeyboardInterrupt is not
-            # thrown.
-            # Note: this wouldn't be a problem with Twisted by
-            # default.
-            # With paramiko we'd have to run it in threads, assuming
-            # the network/ssh code really can't KeyboardInterrupt
-            logger.warning("skipping host {0}".format(host))
+            return False, False
         else:
             return target, new_system
 
@@ -361,11 +352,12 @@ class TestReport(object, metaclass=ABCMeta):
                 host = connections[future]
                 targets[host], new_systems[host] = future.result()
 
+
         # We need to be sure that only the system property only have the  connected hosts
-        self.systems = new_systems
+        self.systems = { host : system for host, system in new_systems.items() if system}
         for t in self.targets:
             del self.targets[t]
-        self.targets.update(targets)
+        self.targets.update({host: target for host,target in targets.items() if target} )
 
     def add_target(self, hostname):
         if hostname in self.targets:
