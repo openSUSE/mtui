@@ -282,8 +282,7 @@ class TestReport(object, metaclass=ABCMeta):
     def _copy_scripts(self, src, dst, ignore):
         try:
             logger.debug("Copying scripts: {0} -> {1}".format(src, dst))
-            # python 3.4 pathlib workaround
-            self._copytree(str(src), str(dst), ignore=ignore)
+            self._copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
             # twice.  probable due to nfs timeouts if mtui was checked
