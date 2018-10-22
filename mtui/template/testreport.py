@@ -122,10 +122,6 @@ class TestReport(object, metaclass=ABCMeta):
         :type testopia: L{Testopia}
         """
 
-    @staticmethod
-    def _copytree(*args, **kw):
-        return shutil.copytree(*args, **kw)
-
     def _open_and_parse(self, path):
         try:
             with path.open(mode="r", errors="replace") as f:
@@ -282,7 +278,7 @@ class TestReport(object, metaclass=ABCMeta):
     def _copy_scripts(self, src, dst, ignore):
         try:
             logger.debug("Copying scripts: {0} -> {1}".format(src, dst))
-            self._copytree(src, dst, ignore=ignore)
+            shutil.copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
             # twice.  probable due to nfs timeouts if mtui was checked
@@ -351,12 +347,13 @@ class TestReport(object, metaclass=ABCMeta):
                 host = connections[future]
                 targets[host], new_systems[host] = future.result()
 
-
         # We need to be sure that only the system property only have the  connected hosts
-        self.systems = { host : system for host, system in new_systems.items() if system}
+        self.systems = {host: system for host, system in new_systems.items() if system}
         for t in self.targets:
             del self.targets[t]
-        self.targets.update({host: target for host,target in targets.items() if target} )
+        self.targets.update(
+            {host: target for host, target in targets.items() if target}
+        )
 
     def add_target(self, hostname):
         if hostname in self.targets:
