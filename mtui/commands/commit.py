@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import subprocess
 
 from argparse import REMAINDER
@@ -29,8 +27,6 @@ class Commit(Command):
     def run(self):
 
         checkout = self.metadata.report_wd()
-        # TODO: not needed from py3.6
-        cwd = str(checkout)
 
         msg = []
         if self.args.msg:
@@ -39,15 +35,15 @@ class Commit(Command):
         try:
             subprocess.check_call(
                 "svn add --force {}".format(str(self.config.install_logs)).split(),
-                cwd=cwd,
+                cwd=checkout,
             )
             if checkout.joinpath("checkers.log").exists():
                 subprocess.check_call(
                     "svn add --force {}".format(str(checkout / "checkers.log")).split(),
-                    cwd=cwd,
+                    cwd=checkout,
                 )
-            subprocess.check_call("svn up".split(), cwd=cwd)
-            subprocess.check_call("svn ci".split() + msg, cwd=cwd)
+            subprocess.check_call("svn up".split(), cwd=checkout)
+            subprocess.check_call("svn ci".split() + msg, cwd=checkout)
 
             self.log.info("Testreport in: {}".format(self.metadata._testreport_url()))
 
