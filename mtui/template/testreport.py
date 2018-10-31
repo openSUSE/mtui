@@ -137,8 +137,7 @@ class TestReport(object, metaclass=ABCMeta):
         self.path = path.resolve()
         self._update_repos_parse()
         if self.config.chdir_to_template_dir:
-            # os.chdir supports Path-like object from python 3.6
-            os.chdir(str(path.parent))
+            os.chdir(path.parent)
 
         self.copy_scripts()
         self.create_installogs_dir()
@@ -470,14 +469,13 @@ class TestReport(object, metaclass=ABCMeta):
         :type s: L{Script} class
         """
 
-        # os.walk returns string ...
-        # and os. supports Path-like objects from 3.6
-        d = str(self.scripts_wd(s.subdir))
+        d = self.scripts_wd(s.subdir)
 
+        # os.walk returns path as string and list of string with filenames
         for r, _, filelist in os.walk(d):
-            if r == d:
+            if r == str(d):
                 for f in filelist:
-                    x = s(self, Path(d) / f)
+                    x = s(self, d / f)
                     x.run(targets)
 
     def download_file(self, from_, into):

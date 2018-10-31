@@ -25,7 +25,6 @@ class InvalidOptionNameError(RuntimeError):
 class Config(object):
 
     """Read and store the variables from mtui config files"""
-    # FIXME: change str paths to L{filepath.FilePath}
 
     def __init__(self, refhosts=RefhostsFactory):
         self.refhosts = refhosts
@@ -50,8 +49,7 @@ class Config(object):
         self.config = configparser.ConfigParser(
             inline_comment_prefixes=('#', ';'))
         try:
-            # Python 3.4 limitiation workaround
-            self.config.read([str(x) for x in self.configfiles])
+            self.config.read(self.configfiles)
         except configparser.Error as e:
             logger.error(e)
 
