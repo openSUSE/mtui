@@ -122,10 +122,6 @@ class TestReport(object, metaclass=ABCMeta):
         :type testopia: L{Testopia}
         """
 
-    @staticmethod
-    def _copytree(*args, **kw):
-        return shutil.copytree(*args, **kw)
-
     def _open_and_parse(self, path):
         try:
             with path.open(mode="r", errors="replace") as f:
@@ -141,8 +137,7 @@ class TestReport(object, metaclass=ABCMeta):
         self.path = path.resolve()
         self._update_repos_parse()
         if self.config.chdir_to_template_dir:
-            # os.chdir supports Path-like object from python 3.6
-            os.chdir(str(path.parent))
+            os.chdir(path.parent)
 
         self.copy_scripts()
         self.create_installogs_dir()
@@ -282,8 +277,7 @@ class TestReport(object, metaclass=ABCMeta):
     def _copy_scripts(self, src, dst, ignore):
         try:
             logger.debug("Copying scripts: {0} -> {1}".format(src, dst))
-            # python 3.4 pathlib workaround
-            self._copytree(str(src), str(dst), ignore=ignore)
+            shutil.copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
             # twice.  probable due to nfs timeouts if mtui was checked
@@ -352,12 +346,13 @@ class TestReport(object, metaclass=ABCMeta):
                 host = connections[future]
                 targets[host], new_systems[host] = future.result()
 
-
         # We need to be sure that only the system property only have the  connected hosts
-        self.systems = { host : system for host, system in new_systems.items() if system}
+        self.systems = {host: system for host, system in new_systems.items() if system}
         for t in self.targets:
             del self.targets[t]
-        self.targets.update({host: target for host,target in targets.items() if target} )
+        self.targets.update(
+            {host: target for host, target in targets.items() if target}
+        )
 
     def add_target(self, hostname):
         if hostname in self.targets:
@@ -474,14 +469,13 @@ class TestReport(object, metaclass=ABCMeta):
         :type s: L{Script} class
         """
 
-        # os.walk returns string ...
-        # and os. supports Path-like objects from 3.6
-        d = str(self.scripts_wd(s.subdir))
+        d = self.scripts_wd(s.subdir)
 
+        # os.walk returns path as string and list of string with filenames
         for r, _, filelist in os.walk(d):
-            if r == d:
+            if r == str(d):
                 for f in filelist:
-                    x = s(self, Path(d) / f)
+                    x = s(self, d / f)
                     x.run(targets)
 
     def download_file(self, from_, into):
