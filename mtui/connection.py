@@ -294,7 +294,7 @@ class Connection(object):
                         'command "{}" timed out on {}. wait? (Y/n) '.format(
                             command, self.hostname
                         )
-                    ).lower() in ["n", "No", "no"]:
+                    ).lower() not in ("no", "n", "ne", "nein"):
                         continue
                     else:
                         # if the user don't want to wait, raise CommandTimeout
