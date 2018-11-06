@@ -282,6 +282,7 @@ class Target(object):
         if remote.endswith("/"):
             f = self.connection.get_folder
             s = "folder"
+            local = str(local) + "/"
         else:
             f = self.connection.get
             s = "file"

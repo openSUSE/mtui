@@ -218,7 +218,7 @@ class TestReport(object, metaclass=ABCMeta):
         del updater
 
     def perform_get(self, targets, remote):
-        local = self.report_wd("downloads", remote.name, filepath=True)
+        local = self.report_wd("downloads", os.path.basename(remote), filepath=True)
 
         targets.get(remote, local)
 
