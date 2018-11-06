@@ -373,24 +373,36 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
     if openqa_links and "openQA tests:\n" not in t:
         for line in reversed(openqa_links):
             t.insert(i, line)
+    o = 0
+    for l in t:
+        if "HAS_UNTRACKED" in l:
+            break
+        o += 1
 
-    i = t.index('zypper update log:\n', 0) + 1
+    i = len(t)
+    if "## export MTUI:" in t[i-1]:
+        i -= 1
+    t.insert(i, "\n")
+    t.insert(i+1, "Links for update logs from refhosts:\n")
+    t.insert(i+2, "\n")
+    i += 2
     add_empty_line = 0
-    for host in x.getElementsByTagName('host'):
-        hostname = host.getAttribute('hostname')
-        install_log = '{!s}/{!s}/{!s}/{!s}.log\n'.format(
-            config.reports_url, review_id, config.install_logs, hostname)
-        if install_log not in t[i:]:
+    for host in x.getElementsByTagName("host"):
+        hostname = host.getAttribute("hostname")
+        install_log = "{!s}/{!s}/{!s}/{!s}.log\n".format(
+            config.reports_url, review_id, config.install_logs, hostname
+        )
+        if install_log not in t[o:]:
             i += 1
             t.insert(i, install_log)
             add_empty_line = 1
     if add_empty_line:
-        t.insert(i + 1, '\n')
+        t.insert(i + 1, "\n")
 
     system_information = system_info(
         config.distro, config.distro_ver, config.distro_kernel, config.session_user)
     # Avoid adding the same info everytime we export
-    if system_information != t[-1]:
+    if system_information != t[-1].rstrip():
         t.append(system_information)
 
     # Remove any possible duplicated lines
