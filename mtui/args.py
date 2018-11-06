@@ -1,6 +1,6 @@
 
 from argparse import FileType
-from . import Path
+from pathlib import Path
 
 from .argparse import ArgumentParser
 from mtui.template.updateid import OBSUpdateID

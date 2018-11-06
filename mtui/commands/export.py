@@ -1,7 +1,7 @@
 from traceback import format_exc
 from itertools import zip_longest
 from functools import partial
-from .. import Path
+from pathlib import Path
 
 from mtui.commands import Command
 from mtui.utils import complete_choices_filelist

@@ -5,7 +5,7 @@
 
 from os import getenv
 
-from . import Path
+from pathlib import Path
 import getpass
 import collections
 import configparser

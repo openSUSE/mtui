@@ -1,5 +1,4 @@
 from distutils.version import LooseVersion
-from qamlib.utils import Path
 
 __all__ = ["main"]
 

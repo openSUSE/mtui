@@ -13,7 +13,7 @@ import termios
 import tty
 import getpass
 import logging
-from . import Path
+from pathlib import Path
 from logging import getLogger
 from traceback import format_exc
 

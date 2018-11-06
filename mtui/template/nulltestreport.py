@@ -1,7 +1,7 @@
 
 import os
 
-from .. import Path
+from pathlib import Path
 
 from mtui.template.testreport import TestReport
 
