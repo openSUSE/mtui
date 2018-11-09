@@ -5,7 +5,7 @@
 
 from os import getenv
 
-from . import Path
+from pathlib import Path
 import getpass
 import collections
 import configparser
@@ -15,7 +15,7 @@ from traceback import format_exc
 from mtui.refhost import RefhostsFactory
 from mtui.messages import InvalidLocationError
 
-logger = getLogger('mtui.config')
+logger = getLogger("mtui.config")
 
 
 class InvalidOptionNameError(RuntimeError):
@@ -28,16 +28,16 @@ class Config(object):
 
     def __init__(self, refhosts=RefhostsFactory):
         self.refhosts = refhosts
-        self._location = 'default'
+        self._location = "default"
 
         # FIXME: gotta read config overide from env instead of argv
         # because this crap is used as a singleton all over the
         # place
-        _pth = getenv('MTUI_CONF')
+        _pth = getenv("MTUI_CONF")
         if _pth:
             self.configfiles = [Path(_pth).expanduser()]
         else:
-            self.configfiles = [Path('/etc/mtui.cfg'), Path('~/.mtuirc').expanduser()]
+            self.configfiles = [Path("/etc/mtui.cfg"), Path("~/.mtuirc").expanduser()]
         self.read()
 
         self._define_config_options()
@@ -46,8 +46,7 @@ class Config(object):
         self._list_terms()
 
     def read(self):
-        self.config = configparser.ConfigParser(
-            inline_comment_prefixes=('#', ';'))
+        self.config = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         try:
             self.config.read(self.configfiles)
         except configparser.Error as e:
@@ -83,78 +82,88 @@ class Config(object):
             logger.debug('config.{!s} set to "{!s}"'.format(attr, val))
 
     def _define_config_options(self):
-        def normalizer(x): return x
+        def normalizer(x):
+            return x
 
-        def expanduser(p): return Path(p).expanduser()
+        def expanduser(p):
+            return Path(p).expanduser()
 
         data = [
-            ('datadir', ('mtui', 'datadir'),
-             Path("/usr/share/mtui"),
-             expanduser),
-
-            ('template_dir', ('mtui', 'template_dir'),
-             lambda: Path(getenv('TEMPLATE_DIR', '.')),
-             expanduser),
-
-            ('local_tempdir', ('mtui', 'tempdir'),
-             lambda: Path(getenv('TMPDIR', '/tmp')),
-             expanduser),
-
-            ('session_user', ('mtui', 'user'),
-             getpass.getuser),
-
-            ('install_logs', ('mtui', 'install_logs'), Path('install_logs'), Path),
-
+            ("datadir", ("mtui", "datadir"), Path("/usr/share/mtui"), expanduser),
+            (
+                "template_dir",
+                ("mtui", "template_dir"),
+                lambda: Path(getenv("TEMPLATE_DIR", ".")),
+                expanduser,
+            ),
+            (
+                "local_tempdir",
+                ("mtui", "tempdir"),
+                lambda: Path(getenv("TMPDIR", "/tmp")),
+                expanduser,
+            ),
+            ("session_user", ("mtui", "user"), getpass.getuser),
+            ("install_logs", ("mtui", "install_logs"), Path("install_logs"), Path),
             # connection.timeout appears to be in units of seconds as
             # indicated by
             # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
-            ('connection_timeout', ('mtui', 'connection_timeout'),
-             300, int),
-
-            ('svn_path', ('svn', 'path'),
-             'svn+ssh://svn@qam.suse.de/testreports'),
-
-            ('bugzilla_url', ('url', 'bugzilla'),
-             'https://bugzilla.suse.com'),
-
-            ('reports_url', ('url', 'testreports'),
-             'http://qam.suse.de/testreports'),
-
-            ('target_tempdir', ('target', 'tempdir'),
-             Path('/tmp'), Path),
-
-            ('target_testsuitedir', ('target', 'testsuitedir'),
-             Path('/usr/share/qa/tools'), Path),
-
-            ('testopia_interface', ('testopia', 'interface'),
-             'https://apibugzilla.novell.com/xmlrpc.cgi'),
-
-            ('testopia_user', ('testopia', 'user'), ''),
-            ('testopia_pass', ('testopia', 'pass'), ''),
-            ('chdir_to_template_dir', ('mtui', 'chdir_to_template_dir'),
-                False, normalizer, self.config.getboolean),
-
-            # {{{ refhosts
-            ('refhosts_resolvers', ('refhosts', 'resolvers'), 'https,path'),
-
-            ('refhosts_https_uri', ('refhosts', 'https_uri'),
-                'https://qam.suse.de/metadata/refhosts.yml'),
-            ('refhosts_https_expiration', ('refhosts',
-                                           'https_expiration'), 3600*12, int, self.config.getint),
-
-            ('refhosts_path', ('refhosts', 'path'),
-                Path('/usr/share/qam-metadata/refhosts.yml'), Path),
-            # }}}
-
-            ('use_keyring', ('mtui', 'use_keyring'),
-                False, bool, self.config.getboolean),
-
-            ('report_bug_url', ('mtui', 'report_bug_url'),
-                'https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI'
-             ),
-
-            ('location', ('mtui', 'location'),
-             'default'),
+            ("connection_timeout", ("mtui", "connection_timeout"), 300, int),
+            ("svn_path", ("svn", "path"), "svn+ssh://svn@qam.suse.de/testreports"),
+            ("bugzilla_url", ("url", "bugzilla"), "https://bugzilla.suse.com"),
+            ("reports_url", ("url", "testreports"), "http://qam.suse.de/testreports"),
+            ("target_tempdir", ("target", "tempdir"), Path("/tmp"), Path),
+            (
+                "target_testsuitedir",
+                ("target", "testsuitedir"),
+                Path("/usr/share/qa/tools"),
+                Path,
+            ),
+            (
+                "testopia_interface",
+                ("testopia", "interface"),
+                "https://apibugzilla.novell.com/xmlrpc.cgi",
+            ),
+            ("testopia_user", ("testopia", "user"), ""),
+            ("testopia_pass", ("testopia", "pass"), ""),
+            (
+                "chdir_to_template_dir",
+                ("mtui", "chdir_to_template_dir"),
+                False,
+                normalizer,
+                self.config.getboolean,
+            ),
+            ("refhosts_resolvers", ("refhosts", "resolvers"), "https,path"),
+            (
+                "refhosts_https_uri",
+                ("refhosts", "https_uri"),
+                "https://qam.suse.de/metadata/refhosts.yml",
+            ),
+            (
+                "refhosts_https_expiration",
+                ("refhosts", "https_expiration"),
+                3600 * 12,
+                int,
+                self.config.getint,
+            ),
+            (
+                "refhosts_path",
+                ("refhosts", "path"),
+                Path("/usr/share/qam-metadata/refhosts.yml"),
+                Path,
+            ),
+            (
+                "use_keyring",
+                ("mtui", "use_keyring"),
+                False,
+                bool,
+                self.config.getboolean,
+            ),
+            (
+                "report_bug_url",
+                ("mtui", "report_bug_url"),
+                "https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI",
+            ),
+            ("location", ("mtui", "location"), "default"),
             # process location last as that needs to access
             # RefhostsFactory which need access to parts of config.
         ]
@@ -205,30 +214,26 @@ class Config(object):
             logger.warning("keyring library not available")
             return
 
-        logger.debug('querying keyring for Testopia password')
+        logger.debug("querying keyring for Testopia password")
         if self.testopia_pass and self.testopia_user:
             try:
-                keyring.set_password('Testopia', self.testopia_user,
-                                     self.testopia_pass)
+                keyring.set_password("Testopia", self.testopia_user, self.testopia_pass)
             except Exception:
-                logger.warning(
-                    'failed to add Testopia password to the keyring')
+                logger.warning("failed to add Testopia password to the keyring")
                 logger.debug(format_exc())
         elif self.testopia_user:
             try:
                 self.testopia_pass = keyring.get_password(
-                    'Testopia',
-                    self.testopia_user)
+                    "Testopia", self.testopia_user
+                )
             except Exception:
-                logger.warning(
-                    'failed to get Testopia password from the keyring')
+                logger.warning("failed to get Testopia password from the keyring")
                 logger.debug(format_exc())
 
-        logger.debug('config.testopia_pass = {0!r}'.format(
-            self.testopia_pass))
+        logger.debug("config.testopia_pass = {0!r}".format(self.testopia_pass))
 
     def _list_terms(self):
-        scripts = [x.name[5: -3] for x in self.datadir.glob('term.*.sh')]
+        scripts = [x.name[5:-3] for x in self.datadir.glob("term.*.sh")]
         self.termnames = scripts
 
     def _get_option(self, secopt, getter):
@@ -239,13 +244,12 @@ class Config(object):
         try:
             return getter(*secopt)
         except (configparser.NoSectionError, configparser.NoOptionError):
-            msg = 'Config option {0}.{1} not found.'
+            msg = "Config option {0}.{1} not found."
             logger.debug(msg.format(*secopt))
             raise
         except Exception:
-            msg = 'Config option {0}.{1} extraction from {2} ' + \
-                'failed.'
-            logger.error(msg.format(secopt + (self.configfiles, )))
+            msg = "Config option {0}.{1} extraction from {2} " + "failed."
+            logger.error(msg.format(secopt + (self.configfiles,)))
             raise
 
     def merge_args(self, args):

@@ -15,7 +15,7 @@ from traceback import format_exc
 
 from .argparse import ArgsParseFailure
 
-from . import Path
+from pathlib import Path
 from mtui import commands
 from mtui import messages
 from mtui.template.nulltestreport import NullTestReport

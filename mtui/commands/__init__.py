@@ -2,7 +2,7 @@
 
 
 import importlib
-from .. import Path
+from pathlib import Path
 from mtui.commands._command import Command # noqa W0611
 
 _rootdir = Path(__file__).resolve().parent

@@ -13,7 +13,7 @@ import termios
 import tty
 import getpass
 import logging
-from . import Path
+from pathlib import Path
 from logging import getLogger
 from traceback import format_exc
 
@@ -294,7 +294,7 @@ class Connection(object):
                         'command "{}" timed out on {}. wait? (Y/n) '.format(
                             command, self.hostname
                         )
-                    ).lower() in ["n", "No", "no"]:
+                    ).lower() not in ("no", "n", "ne", "nein"):
                         continue
                     else:
                         # if the user don't want to wait, raise CommandTimeout

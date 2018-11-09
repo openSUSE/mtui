@@ -16,7 +16,7 @@ import shutil
 
 from logging import getLogger
 
-from .. import Path
+from pathlib import Path
 from mtui.utils import nottest
 
 from mtui.target.hostgroup import HostsGroup

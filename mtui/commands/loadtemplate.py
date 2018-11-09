@@ -45,6 +45,7 @@ class LoadTemplate(Command):
         re_add = list(self.targets.keys())
         for target in re_add:
             self.targets[target].close()
+            del self.targets[target]
 
         self.prompt.load_update(self.args.update_id[0], autoconnect=True)
 
