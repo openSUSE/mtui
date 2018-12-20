@@ -39,4 +39,7 @@ def parse_system(connection):
             logger.debug("parsing - {}".format(x))
             name, version, arch = product.parse_product(f)
             addons.add(Product(name, version, arch))
+    # SLE4SAP on sle12 contains also SLES repos :(
+    if base.name == "SLES_SAP":
+        addons.add(Product("SLES", base.version, base.arch))
     return System(base, addons)
