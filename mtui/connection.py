@@ -23,6 +23,11 @@ import paramiko
 
 logger = getLogger("mtui.connection")
 
+if not sys.warnoptions:
+    import warnings
+
+    warnings.simplefilter("ignore")
+
 
 class CommandTimeout(Exception):
 
