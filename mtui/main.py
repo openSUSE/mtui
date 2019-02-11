@@ -30,7 +30,8 @@ def main():
         p.print_help()
         return 1
 
-    cfg = Config()
+    cfg = Config(args.config)
+
     sys.exit(run_mtui(sys, cfg, logger, CommandPrompt, CommandPromptDisplay, args))
 
 
@@ -62,9 +63,9 @@ def run_mtui(sys, config, logger, Prompt, Display, args):
     prompt.interactive = not args.noninteractive
 
     if args.prerun:
-        prompt.set_cmdqueue([x.rstrip()
-                             for x in args.prerun.readlines()
-                             if not x.startswith('#')])
+        prompt.set_cmdqueue(
+            [x.rstrip() for x in args.prerun.readlines() if not x.startswith("#")]
+        )
 
     prompt.cmdloop()
     return 0

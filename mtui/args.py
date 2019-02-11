@@ -1,4 +1,3 @@
-
 from argparse import FileType
 from pathlib import Path
 
@@ -63,6 +62,9 @@ def get_parser(sys):
         action="version",
         version="{}".format(__version__),
         help="print version and exit",
+    )
+    parser.add_argument(
+        "-c", "--config", type=Path, default=None, help="Override default config path"
     )
 
     return parser
