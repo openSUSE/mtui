@@ -14,6 +14,7 @@ from logging import getLogger
 from traceback import format_exc
 from mtui.refhost import RefhostsFactory
 from mtui.messages import InvalidLocationError
+from mtui.refhost import RefhostsResolveFailed
 
 logger = getLogger("mtui.config")
 
@@ -62,8 +63,11 @@ class Config(object):
     def location(self, x):
         try:
             self.refhosts(self).check_location_sanity(x)
-        except InvalidLocationError as e:
+        except (InvalidLocationError) as e:
             logger.error(e)
+            return
+        except RefhostsResolveFailed:
+            logger.error("Can't read `refhosts.yml` file, no valid refhosts database")
             return
 
         self._location = x
