@@ -23,6 +23,7 @@ from mtui.target.hostgroup import HostsGroup
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
 from mtui.refhost import Attributes
+from mtui.refhost import RefhostsResolveFailed
 from mtui.testopia import Testopia
 
 from mtui import updater
@@ -378,7 +379,10 @@ class TestReport(object, metaclass=ABCMeta):
             logger.debug(format_exc())
 
     def _refhosts_from_tp(self, testplatform):
-        refhosts = self.refhostsFactory(self.config)
+        try:
+            refhosts = self.refhostsFactory(self.config)
+        except RefhostsResolveFailed:
+            pass
 
         try:
             hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
