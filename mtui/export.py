@@ -1,7 +1,8 @@
 import os
+import re
 import xml.dom.minidom
 from logging import getLogger
-import re
+from urllib.request import urlopen
 
 from qamlib.types.rpmver import RPMVersion
 from mtui.systemcheck import system_info
@@ -22,8 +23,15 @@ def _read_xmldata(xmldata):
     return x
 
 
-def xml_installog_to_template(xmldata, config, target):
-    x = _read_xmldata(xmldata)
+def _openqa_installog_to_template(url):
+    # input is URLs instance
+    with urlopen(url.url) as log:
+        t = log.readlines()
+    return [x.decode() for x in t]
+
+
+def _host_installog_to_template(xml, target):
+    x = _read_xmldata(xml)
     t = []
     for host in x.getElementsByTagName("host"):
         if host.getAttribute("hostname") == target:
@@ -32,7 +40,7 @@ def xml_installog_to_template(xmldata, config, target):
     # add hostname to indicate from which host the log was exported
     updatehost = template_log.parentNode.getAttribute("hostname")
 
-    t.append("log from {!s}\n".format(updatehost))
+    t.append("log from {!s}:\n".format(updatehost))
 
     for child in template_log.childNodes:
         if not hasattr(child, "getAttribute"):
@@ -44,36 +52,55 @@ def xml_installog_to_template(xmldata, config, target):
     return t
 
 
-def fill_template(review_id, template, xmldata, config, smelt):
+def installog_to_template(auto, *args):
+    if auto:
+        return _openqa_installog_to_template(*args)
+    else:
+        return _host_installog_to_template(*args)
+
+
+def fill_template(review_id, template, xmldata, config, smelt, openqa):
+    results = {}
     if not smelt:
         logger.warning("No data from SMELT api")
-        return _xml_to_template(
-            review_id, template, xmldata, config, smelt_output=None, openqa_links=None
-        )
+        results["smelt"] = False
+        results["oqa_links"] = False
+    else:
+        logger.debug("parse smelt data and prepare pretty report")
+        openqa_links = smelt.openqa_links_verbose()
+        if openqa_links:
+            openqa_links = (
+                ["openQA tests:\n", "=============\n", "\n"]
+                + [a + "\n" for a in openqa_links]
+                + ["\n"]
+            )
+            results["oqa_links"] = openqa_links
+        else:
+            results["oqa_links"] = False
 
-    logger.debug("parse smelt data and prepare pretty report")
-    openqa_links = smelt.openqa_links_verbose()
-    if openqa_links:
-        openqa_links = (
-            ["openQA tests:\n", "=============\n", "\n"]
-            + [a + "\n" for a in openqa_links]
-            + ["\n"]
-        )
+        smelt_output = smelt.pretty_output()
+        if smelt_output:
+            smelt_output = ["SMELT Checkers:\n", "===============\n"] + smelt_output
+            results["smelt"] = smelt_output
+        else:
+            results["smelt"] = False
 
-    smelt_output = smelt.pretty_output()
-    if smelt_output:
-        smelt_output = ["SMELT Checkers:\n", "===============\n"] + smelt_output
+    if not openqa:
+        logger.info("No Incidents jobs in openQA")
+        results["oqa_inc"] = False
+        results["oqa_logs"] = False
+    else:
+        results["oqa_inc"] = openqa.pprint_results()
+        results["oqa_logs"] = openqa.get_logs_url()
 
-    return _xml_to_template(
-        review_id, template, xmldata, config, smelt_output, openqa_links
-    )
+    return _xml_to_template(review_id, template, xmldata, config, results)
 
 
 def cut_smelt_data(template, config):
     # returns None if Smelt checkers shorter than 10 lines
     # returns tuple ( template , checkers ) .. smelt has more than 10 lines
     # TODO make it confiruable
-    threshold = 10
+    threshold = config.threshold
 
     try:
         start = template.index("SMELT Checkers:\n")
@@ -99,44 +126,9 @@ def cut_smelt_data(template, config):
     return template, smelt
 
 
-def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_links):
-    """ export mtui xml data to an existing maintenance template
-
-    simple method to export package versions and
-    update log from the log to the template file
-
-    Keyword arguments:
-    review_id -- mtui.types.obs.RequestReviewID
-    template  -- maintenance template path (needs to exist)
-    xmldata   -- mtui xml log
-    """
-    x = _read_xmldata(xmldata)
-    current_host = None
-    hosts = [h.getAttribute("hostname") for h in x.getElementsByTagName("host")]
-
-    with template.open(mode="r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-        t = []
-        # We want to avoid the repeating the scripts outcome, so we delete them
-        # from the current template if they are present in the new xmldata
-        for line in lines:
-            match = re.search(r"reference host:\s (.*)$", line)
-            if match:
-                current_host = match.group(0)
-                continue
-            if (
-                not re.search(
-                    r"\s:\s(SUCCEEDED|(?<!PASSED/)FAILED|INTERNAL ERROR)", line
-                )
-                or current_host not in hosts
-            ):
-                t.append(line)
-
-    # since the maintenance template is more of a human readable file then
-    # a pretty parsable log, we need to build on specific strings to know
-    # where to add which information. if these strings change, we need to
-    # adapt.
-
+def _fillup_hosts_to_template(template, xmldata):
+    t = template
+    x = xmldata
     # for each host/system of the mtui session, search for the correct location
     # in the template. disabled hosts are not excluded.
     # if the location was found, add the hostname.
@@ -374,41 +366,107 @@ def _xml_to_template(review_id, template, xmldata, config, smelt_output, openqa_
             elif failed == 1:
                 t[i + 1] = "=> FAILED\n"
 
+    return t
+
+
+def _xml_to_template(review_id, template, xmldata, config, results):
+    """ export mtui xml data to an existing maintenance template
+
+    simple method to export package versions and
+    update log from the log to the template file
+
+    Keyword arguments:
+    review_id -- mtui.types.obs.RequestReviewID
+    template  -- maintenance template path (needs to exist)
+    xmldata   -- mtui xml log
+    """
+    x = _read_xmldata(xmldata)
+    hosts = [h.getAttribute("hostname") for h in x.getElementsByTagName("host")]
+
+    with template.open(mode="r", encoding="utf-8", errors="replace") as f:
+        lines = f.readlines()
+
+    t = []
+    # We want to avoid the repeating the scripts outcome, so we delete them
+    # from the current template if they are present in the new xmldata
+    current_host = None
+    for line in lines:
+        match = re.search(r"reference host:\s (.*)$", line)
+        if match:
+            current_host = match.group(0)
+            continue
+        if (
+            not re.search(r"\s:\s(SUCCEEDED|(?<!PASSED/)FAILED|INTERNAL ERROR)", line)
+            or current_host not in hosts
+        ):
+            t.append(line)
+
+    # since the maintenance template is more of a human readable file then
+    # a pretty parsable log, we need to build on specific strings to know
+    # where to add which information. if these strings change, we need to
+    # adapt.
+    if not config.auto:
+        t = _fillup_hosts_to_template(t, x)
+    else:
+        i = t.index("Test results by product-arch:\n", 0)
+        t.insert(
+            i + 3,
+            "All installation tests done in openQA please see installlogs section\n",
+        )
+
     # Add output of checkers and link to openQA
     i = t.index("REGRESSION TEST SUMMARY:\n", 0)
 
-    if smelt_output and "SMELT Checkers:\n" not in t:
+    if results["smelt"] and "SMELT Checkers:\n" not in t:
         t.insert(i, "\n")
-        for line in reversed(smelt_output):
+        for line in reversed(results["smelt"]):
             t.insert(i, line)
 
-    if openqa_links and "openQA tests:\n" not in t:
-        for line in reversed(openqa_links):
+    if results["oqa_links"] and "openQA tests:\n" not in t:
+        for line in reversed(results["oqa_links"]):
             t.insert(i, line)
-    
+
+    if results["oqa_inc"]:
+        i = t.index("source code change review:\n", 0) - 1
+        for line in reversed(results["oqa_inc"]):
+            t.insert(i, line)
+
+    # host duplicate prevention
     o = 0
     for l in t:
         if "HAS_UNTRACKED" in l:
             break
-        o +=1
+        o += 1
 
     i = len(t)
-    if "## export MTUI:" in t[i-1]:
+    if "## export MTUI:" in t[i - 1]:
         i -= 1
     t.insert(i, "\n")
-    t.insert(i+1, "Links for update logs from refhosts:\n")
-    t.insert(i+2, "\n")
+    t.insert(i + 1, "Links for update logs:\n")
+    t.insert(i + 2, "\n")
     i += 2
     add_empty_line = 0
-    for host in x.getElementsByTagName("host"):
-        hostname = host.getAttribute("hostname")
-        install_log = "{!s}/{!s}/{!s}/{!s}.log\n".format(
-            config.reports_url, review_id, config.install_logs, hostname
-        )
-        if install_log not in t[o:]:
-            i += 1
-            t.insert(i, install_log)
-            add_empty_line = 1
+    if not config.auto:
+        for host in x.getElementsByTagName("host"):
+            hostname = host.getAttribute("hostname")
+            install_log = "{!s}/{!s}/{!s}/{!s}.log\n".format(
+                config.reports_url, review_id, config.install_logs, hostname
+            )
+            if install_log not in t[o:]:
+                i += 1
+                t.insert(i, install_log)
+                add_empty_line = 1
+    else:
+        for link in results["oqa_logs"]:
+            logfile = "{}_{}_{}.log".format(link.distri, link.version, link.arch)
+            install_log = "{!s}/{!s}/{!s}/{}".format(
+                config.reports_url, review_id, config.install_logs, logfile
+            )
+            if install_log not in t[o:]:
+                i += 1
+                t.insert(i, install_log)
+                add_empty_line = 1
+
     if add_empty_line:
         t.insert(i + 1, "\n")
 

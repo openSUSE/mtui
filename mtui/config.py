@@ -169,9 +169,16 @@ class Config(object):
                 ("mtui", "report_bug_url"),
                 "https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI",
             ),
-            ("location", ("mtui", "location"), "default"),
+            # openQA connector
+            ("openqa_instance", ("openqa", "openqa"), "https://openqa.suse.de"),
+            ("openqa_install_distri", ("openqa", "distri"), "sle"),
+            ("openqa_install_test", ("openqa", "install_test"), "qam-incidentinstall"),
+            ("openqa_install_logs", ("openqa", "logfile"), "update_install-zypper.log"),
+            # config for template export
+            ("threshold", ("template", "smelt_threshold"), 10, int, self.config.getint),
             # process location last as that needs to access
             # RefhostsFactory which need access to parts of config.
+            ("location", ("mtui", "location"), "default"),
         ]
 
         def add_normalizer(x):
@@ -274,3 +281,10 @@ class Config(object):
 
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout
+
+        if args.review_id:
+            self.auto = False
+        elif args.auto_review_id:
+            self.auto = True
+        else:
+            self.auto = False

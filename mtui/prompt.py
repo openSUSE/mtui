@@ -80,7 +80,6 @@ class CommandPrompt(cmd.Cmd):
     # would be great if it could replace the ssh layer as well.
 
     def __init__(self, config, log, sys, display_factory):
-        self.set_prompt()
         self.sys = sys
 
         cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
@@ -113,6 +112,7 @@ class CommandPrompt(cmd.Cmd):
         # self.stdout is used by cmd.Cmd
         self.identchars += "-"
         # support commands with dashes in them
+        self.set_prompt()
 
     def notify_user(self, msg, class_=None):
         notification.display("MTUI", msg, class_)
@@ -178,7 +178,7 @@ class CommandPrompt(cmd.Cmd):
 
                 return help
 
-        if x.startswith("do_"):
+        elif x.startswith("do_"):
             y = x.replace("do_", "", 1)
             if y in self.commands:
                 c = self.commands[y]
@@ -192,7 +192,7 @@ class CommandPrompt(cmd.Cmd):
 
                 return do
 
-        if x.startswith("complete_"):
+        elif x.startswith("complete_"):
             y = x.replace("complete_", "", 1)
             if y in self.commands:
                 c = self.commands[y]
@@ -232,7 +232,10 @@ class CommandPrompt(cmd.Cmd):
     def set_prompt(self, session=None):
         self.session = session
         session = ":" + str(session) if session else ""
-        self.prompt = "mtui{0}> ".format(session)
+        mode = "mtui"
+        if self.config.auto:
+            mode += "-auto"
+        self.prompt = "{}{}> ".format(mode, session)
 
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(self.config, autoconnect=autoconnect)

@@ -2,6 +2,7 @@ from traceback import format_exc
 from itertools import zip_longest
 from functools import partial
 from pathlib import Path
+from logging import getLogger
 
 from mtui.commands import Command
 from mtui.utils import complete_choices_filelist
@@ -10,6 +11,8 @@ from mtui.utils import prompt_user
 
 
 from qamlib.utils import timestamp
+
+logger = getLogger("mtui.commands.export")
 
 
 class Export(Command):
@@ -42,15 +45,15 @@ class Export(Command):
     def _template_fill(self, xmllog):
         def writer(fn, data):
             if filename.exists() and not self.args.force:
-                self.log.warning("file {!s} exists.".format(fn))
+                logger.warning("file {!s} exists.".format(fn))
                 if not prompt_user(
                     "Should I overwrite {!s} (y/N) ".format(fn),
                     ["y", "Y", "yes", "Yes", "YES"],
                     self.prompt.interactive,
                 ):
-                    fn = fn / "." / timestamp()
+                    fn = fn.with_suffix("." + timestamp())
 
-            self.log.info("exporting log to {!s}".format(fn))
+            logger.info("exporting log to {!s}".format(fn))
 
             try:
                 with fn.open(mode="w", encoding="utf-8") as f:
@@ -67,9 +70,9 @@ class Export(Command):
         try:
             template = self.metadata.generate_templatefile(xmllog)
         except Exception as e:
-            self.log.error("Failed to export XML")
-            self.log.error(e)
-            self.log.debug(format_exc())
+            logger.error("Failed to export XML")
+            logger.error(e)
+            logger.debug(format_exc())
             return
 
         template, smelt = self.metadata.strip_smeltdata(template)
@@ -82,26 +85,36 @@ class Export(Command):
             writer(filename, smelt)
             self.println("wrote checkers results to {}".format(filename))
 
-    def _installlogs_fill(self, xmllog, targets):
+    def _installlogs_fill(self, xmllog, hosts):
         filepath = (
             self.config.template_dir / str(self.metadata.id) / self.config.install_logs
         )
-        generator = partial(self.metadata.generate_install_logs, xmllog)
 
-        ilogs = zip_longest(targets, map(generator, targets))
+        # generator = partial(self.metadata.generate_install_logs, targets)
+
+        if self.config.auto:
+            generator = self.metadata.generate_install_logs
+        else:
+            generator = partial(self.metadata.generate_install_logs(xmllog))
+
+        ilogs = zip_longest(hosts, map(generator, hosts))
 
         for i, y in ilogs:
-            filename = i + ".log"
+            if self.config.auto:
+                filename = "{}_{}_{}.log".format(i.distri.lower(), i.version, i.arch)
+            else:
+                filename = i + ".log"
 
             if filepath.joinpath(filename).exists() and not self.args.force:
-                self.log.warning("file {!s} exists.".format(filename))
+                logger.warning("file {!s} exists.".format(filename))
                 if not prompt_user(
                     "Should I overwrite {!s} (y/N) ".format(filename),
                     ["y", "Y", "yes", "Yes", "YES"],
                     self.prompt.interactive,
                 ):
                     filename += "." + timestamp()
-            self.log.info("exporting zypper log from {!s} to {!s}".format(i, filename))
+
+            logger.info("exporting zypper log from {!s} to {!s}".format(i, filename))
 
             try:
                 with filepath.joinpath(filename).open(mode="w", encoding="utf-8") as f:
@@ -116,8 +129,14 @@ class Export(Command):
         targets = self.parse_hosts().keys()
         xmllog = self.metadata.generate_xmllog(self.targets.select(targets).values())
 
-        self._template_fill(xmllog)
-        self._installlogs_fill(xmllog, targets)
+        if self.metadata.config.auto:
+            self.metadata.get_openqa_results()
+            self._template_fill(xmllog)
+            self._installlogs_fill(xmllog, self.metadata.openqa.get_logs_url())
+        else:
+            self.metadata.get_openqa_results()
+            self._template_fill(xmllog)
+            self._installlogs_fill(xmllog, targets)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
