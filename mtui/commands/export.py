@@ -95,7 +95,7 @@ class Export(Command):
         if self.config.auto:
             generator = self.metadata.generate_install_logs
         else:
-            generator = partial(self.metadata.generate_install_logs(xmllog))
+            generator = partial(self.metadata.generate_install_logs, xmllog)
 
         ilogs = zip_longest(hosts, map(generator, hosts))
 
