@@ -76,14 +76,11 @@ MTUI expects testing scripts to be found in this directory.
 
 .. _refhosts.yml: https://gitlab.suse.de/qa-maintenance/metadata/blob/master/refhosts.yml
 
-.. tip:: View valid locations using `refdb`_:
+.. tip:: View valid locations using ``refdb``:
 
     ::
 
         refdb -p location | sort | uniq
-
-
-.. _refdb: https://gitlab.suse.de/rneuhauser/refdb/blob/master/README.rest
 
 MTUI will limit reference hosts to those found in ``mtui.location``.
 If a required system cannot be found in ``mtui.location``, it will be loaded
@@ -160,6 +157,7 @@ Used e.g. in lock files.
 
 .. __: https://docs.python.org/2/library/getpass.html#getpass.getuser
 
+
 ``mtui.install_logs``
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -170,6 +168,51 @@ Used e.g. in lock files.
 
 Name of directory for storing install logs
 Please don't change it
+
+
+``openqa.openqa``
+~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     URL
+  | **default**
+  |     https://openqa.suse.de 
+
+URL of openqa instance
+
+
+``openqa.distri``
+~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     string
+  | **default**
+  |     sle
+
+Default 'DISTRI' value for openqa jobs
+
+
+``openqa.install_test``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     string
+  | **default**
+  |     qam-incidentinstall
+
+Name of automatic installation test.
+
+
+``openqa.logfile``
+~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     string
+  | **default**
+  |     update_install-zypper.log 
+
+Name of automatic installation test logfile
+
 
 ``refhosts.https_expiration``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -249,6 +292,18 @@ MTUI checks out the testreport from, and commits it to,
 MTUI uses testsuites in this directory in refhosts.
 
 
+``template.smelt_threshold``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     int 
+  | **default**
+  |     10 
+
+Set text wrapping for smelt checkers results.
+Default is first 10 lines in template.
+
+
 ``testopia.interface``
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -270,6 +325,7 @@ MTUI accesses Testopia through this URL.
 
 Password used to log into ``testopia.interface``.
 Testopia is integrated with Bugzilla and uses the same credentials.
+
 
 ``testopia.user``
 ~~~~~~~~~~~~~~~~~
@@ -330,3 +386,6 @@ Example
 
   [url]
   bugzilla = https://bugzilla.suse.com
+
+  [openqa]
+  openqa = https://openqa.suse.de

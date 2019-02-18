@@ -326,8 +326,9 @@ update
 Runs the `prepare`_ command and applies the testing update to the target hosts.
 (To skip the preparation procedure, use ``--noprepare``.)
 
-While updating the machines, the pre-, post- and compare scripts are run before
-and after the update process.
+In classic workflow, while updating the machines, the pre-, post- and compare
+scripts are run before and after the update process. During auto mode, scripts are
+always disabled.
 (To skip run of scripts use ``--noscript`` parameter.)
 
 If the update adds new packages to the channel, the "newpackage" parameter
@@ -809,19 +810,19 @@ config
 
 ::
 
-    config show
+    config show [option,..] | set option value
 
-Displays MTUI configuration values.
-
-In future versions of MTUI, the ``config`` command will also allow the user to
-manipulate config values in runtime.
+Displays or sets runtime MTUI configuration values.
 
 **Options:**
 
 .. option:: show
 
-  Shows config values.
+  Shows config values. ``option`` can be specified.
 
+.. option:: set
+
+  Sets config runtime value ... ``option`` and ``value``
 
 save
 ++++
