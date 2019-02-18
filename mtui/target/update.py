@@ -1,4 +1,3 @@
-
 from logging import getLogger
 
 from mtui.target.actions import UpdateError
@@ -16,11 +15,10 @@ from mtui.hooks import CompareScript
 from qamlib.types.rpmver import RPMVersion
 from mtui.utils import yellow
 
-logger = getLogger('mtui.target.update')
+logger = getLogger("mtui.target.update")
 
 
 class Update(object):
-
     def __init__(self, targets, packages, testreport):
         self.targets = targets
         self.packages = packages
@@ -29,7 +27,7 @@ class Update(object):
 
     def run(self, params):
         with LockedTargets(list(self.targets.values())):
-            if hasattr(self, 'type') and self.type == 'transactional':
+            if hasattr(self, "type") and self.type == "transactional":
                 self._run_transactional(params)
             else:
                 self._run(params)
@@ -37,13 +35,16 @@ class Update(object):
     def _run_transactional(self, params):
         if any(param for param in params):
             logger.warning(
-                'The options --noprepare, --newpackage and --noscript are not valid for transactional updates')
+                "The options --noprepare, --newpackage and --noscript are not valid for transactional updates"
+            )
 
         self.lock_and_run()
-        logger.warning('Please reboot the host to activate the changes and avoid data loss')
+        logger.warning(
+            "Please reboot the host to activate the changes and avoid data loss"
+        )
 
     def _run(self, params):
-        if 'noprepare' not in params:
+        if "noprepare" not in params:
             self.testreport.perform_prepare(self.targets)
 
         for hn, t in list(self.targets.items()):
@@ -62,19 +63,21 @@ class Update(object):
                 else:
                     if RPMVersion(before) >= RPMVersion(required):
                         logger.warning(
-                            '{!s}: package is too recent: {!s} ({!s}, target version is {!s})'.format(
-                                hn, pkgname, before, required))
+                            "{!s}: package is too recent: {!s} ({!s}, target version is {!s})".format(
+                                hn, pkgname, before, required
+                            )
+                        )
 
             if not_installed:
                 logger.warning(
-                    '{!s}: these packages are missing: {!s}'.format(
-                        hn, not_installed))
+                    "{!s}: these packages are missing: {!s}".format(hn, not_installed)
+                )
 
-        if 'noscript' not in params:
+        if "noscript" not in params and not self.testreport.config.auto:
             self.testreport.run_scripts(PreScript, self.targets)
 
         self.lock_and_run()
-        if 'newpackage' in params:
+        if "newpackage" in params:
             # TODO: testing=True for newpackage ? oh
             self.testreport.perform_prepare(self.targets, testing=True)
 
@@ -91,51 +94,65 @@ class Update(object):
                 if after and before:
                     if RPMVersion(before) == RPMVersion(after):
                         logger.warning(
-                            '{!s}: package was not updated: {!s} ({!s})'.format(
-                                hn, pkgname, after))
+                            "{!s}: package was not updated: {!s} ({!s})".format(
+                                hn, pkgname, after
+                            )
+                        )
                 if after:
                     if RPMVersion(after) < RPMVersion(required):
                         logger.warning(
-                            '{!s}: package does not match required version: {!s} ({!s}, required {!s})'.format(
-                                hn, pkgname, after, required))
+                            "{!s}: package does not match required version: {!s} ({!s}, required {!s})".format(
+                                hn, pkgname, after, required
+                            )
+                        )
 
-        if 'noscript' not in params:
+        if "noscript" not in params and not self.testreport.config.auto:
             self.testreport.run_scripts(PostScript, self.targets)
             self.testreport.run_scripts(CompareScript, self.targets)
 
     def _check(self, target, stdin, stdout, stderr, exitcode):
-        if 'zypper' in stdin and exitcode == 104:
+        if "zypper" in stdin and exitcode == 104:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                    target.hostname, stdin, stdout, stderr))
-            raise UpdateError('update stack locked', target.hostname)
-        if 'zypper' in stdin and exitcode == 106:
+                    target.hostname, stdin, stdout, stderr
+                )
+            )
+            raise UpdateError("update stack locked", target.hostname)
+        if "zypper" in stdin and exitcode == 106:
             logger.warning(
                 "{!s}: zypper returns exitcode 106:\n{!s}".format(
-                    target.hostname, stderr))
-        if 'Additional rpm output' in stdout:
+                    target.hostname, stderr
+                )
+            )
+        if "Additional rpm output" in stdout:
             logger.warning(
-                'There was additional rpm output on {!s}:'.format(
-                    target.hostname))
-            marker = 'Additional rpm output:'
+                "There was additional rpm output on {!s}:".format(target.hostname)
+            )
+            marker = "Additional rpm output:"
             start = stdout.find(marker) + len(marker)
-            end = stdout.find('Retrieving', start)
-            print(stdout[start:end].replace('warning', yellow('warning')))
-        if 'A ZYpp transaction is already in progress.' in stderr:
+            end = stdout.find("Retrieving", start)
+            print(stdout[start:end].replace("warning", yellow("warning")))
+        if "A ZYpp transaction is already in progress." in stderr:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                    target.hostname, stdin, stdout, stderr))
-            raise UpdateError('update stack locked', target.hostname)
-        if 'System management is locked' in stderr:
+                    target.hostname, stdin, stdout, stderr
+                )
+            )
+            raise UpdateError("update stack locked", target.hostname)
+        if "System management is locked" in stderr:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                    target.hostname, stdin, stdout, stderr))
-            raise UpdateError('update stack locked', target.hostname)
-        if '(c): c' in stdout:
+                    target.hostname, stdin, stdout, stderr
+                )
+            )
+            raise UpdateError("update stack locked", target.hostname)
+        if "(c): c" in stdout:
             logger.critical(
-                '{!s}: unresolved dependency problem. please resolve manually:\n{!s}'.format(
-                    target.hostname, stdout))
-            raise UpdateError('Dependency Error', target.hostname)
+                "{!s}: unresolved dependency problem. please resolve manually:\n{!s}".format(
+                    target.hostname, stdout
+                )
+            )
+            raise UpdateError("Dependency Error", target.hostname)
 
         return self.check(target, stdin, stdout, stderr, exitcode)
 
@@ -155,12 +172,14 @@ class Update(object):
                 if lock.locked and not lock.own():
                     skipped = True
                     logger.warning(
-                        'host {!s} is locked since {!s} by {!s}. skipping.'.format(
-                            t.hostname, lock.time(), lock.user))
+                        "host {!s} is locked since {!s} by {!s}. skipping.".format(
+                            t.hostname, lock.time(), lock.user
+                        )
+                    )
                     if lock.comment:
                         logger.info(
-                            "{!s}'s comment: {!s}".format(
-                                lock.user, lock.comment))
+                            "{!s}'s comment: {!s}".format(lock.user, lock.comment)
+                        )
                 else:
                     t.set_locked()
                     thread = ThreadedMethod(queue)
@@ -172,11 +191,13 @@ class Update(object):
                         t.remove_lock()
                     except AssertionError:
                         pass
-                raise UpdateError('Hosts locked')
+                raise UpdateError("Hosts locked")
 
             for t in list(self.targets.values()):
-                if (hasattr(self, 'type') and self.type != 'transactional') or not hasattr(self, 'type'):
-                    queue.put([t.set_repo, ['add', self.testreport]])
+                if (
+                    hasattr(self, "type") and self.type != "transactional"
+                ) or not hasattr(self, "type"):
+                    queue.put([t.set_repo, ["add", self.testreport]])
 
             while queue.unfinished_tasks:
                 spinner()
@@ -187,12 +208,7 @@ class Update(object):
                 self.targets.run(command)
 
                 for t in list(self.targets.values()):
-                    self._check(
-                        t,
-                        t.lastin(),
-                        t.lastout(),
-                        t.lasterr(),
-                        t.lastexit())
+                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
         except BaseException:
             raise
         finally:

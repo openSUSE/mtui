@@ -19,6 +19,7 @@ from logging import getLogger
 from pathlib import Path
 from mtui.utils import nottest
 
+from mtui.connector.openqa import Openqa
 from mtui.target.hostgroup import HostsGroup
 from mtui.target import Target
 from mtui.refhost import RefhostsFactory
@@ -78,7 +79,6 @@ class TestReport(object, metaclass=ABCMeta):
         :type path: Path or None
         :param path: path to the testreport file if loaded, otherwise None
         """
-
         self.packages = {}
         self.systems = {}
         """
@@ -122,6 +122,7 @@ class TestReport(object, metaclass=ABCMeta):
         """
         :type testopia: L{Testopia}
         """
+        self.openqa = Openqa()
 
     def _open_and_parse(self, path):
         try:
@@ -142,9 +143,12 @@ class TestReport(object, metaclass=ABCMeta):
 
         self.copy_scripts()
         self.create_installogs_dir()
-
-        for tp in self.testplatforms:
-            self._refhosts_from_tp(tp)
+        if not self.config.auto:
+            logger.debug("Standard update workflow")
+            for tp in self.testplatforms:
+                self._refhosts_from_tp(tp)
+        else:
+            logger.info("Automated update workflow without reference hosts")
 
     @abstractmethod
     def _parser(self):
@@ -547,10 +551,16 @@ class TestReport(object, metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
+    def get_openqa_results(self):
+        self.openqa.postinit(self.config, self.rrid, self.smelt)
+        self.openqa.get_jobs()
+
     def generate_templatefile(self, xmllog):
         from mtui.export import fill_template
 
-        return fill_template(self.id, self.path, xmllog, self.config, self.smelt)
+        return fill_template(
+            self.id, self.path, xmllog, self.config, self.smelt, self.openqa
+        )
 
     def strip_smeltdata(self, template):
         # param: template - list of template lines
@@ -558,10 +568,10 @@ class TestReport(object, metaclass=ABCMeta):
 
         return cut_smelt_data(template, self.config)
 
-    def generate_install_logs(self, xmllog, host):
-        from mtui.export import xml_installog_to_template
+    def generate_install_logs(self, *args):
+        from mtui.export import installog_to_template
 
-        return xml_installog_to_template(xmllog, self.config, host)
+        return installog_to_template(self.config.auto, *args)
 
     def generate_xmllog(self, targetHosts=None):
         from mtui.xmlout import XMLOutput

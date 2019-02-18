@@ -17,12 +17,6 @@ def get_parser(sys):
         "-t", "--template_dir", type=Path, help="override config mtui.template_dir"
     )
     parser.add_argument(
-        "-r",
-        "--review-id",
-        type=OBSUpdateID,
-        help="OBS request review id\nexample: SUSE:Maintenance:1:1",
-    )
-    parser.add_argument(
         "-s",
         "--sut",
         type=SUTParse,
@@ -65,6 +59,21 @@ def get_parser(sys):
     )
     parser.add_argument(
         "-c", "--config", type=Path, default=None, help="Override default config path"
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "-r",
+        "--review-id",
+        metavar="RequestReviewID",
+        type=OBSUpdateID,
+        help="OBS request review id\nexample: SUSE:Maintenance:1:1",
+    )
+    group.add_argument(
+        "-a",
+        "--auto-review-id",
+        metavar="RequestReviewID",
+        type=OBSUpdateID,
+        help="OBS request review id\nexample: SUSE:Maintenance:1:1 for fully openQA review",
     )
 
     return parser
