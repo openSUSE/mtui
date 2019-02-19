@@ -9,6 +9,25 @@
 Options
 =======
 
+``-a RRID, --auto-review-id RRID``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Loads the test report for the maintenance update Review Request ID (RRID) in 
+autoinstall update workflow. It skips connecting refhosts and script run in update
+command. Downloads logs from openQA.
+
+``RRID`` is a string in the form ``SUSE:Maintenance:XXXX:YYYYYY``, where ``XXXX``
+is the Incident ID and ``YYYYYY`` is the Request ID.
+
+``RRID`` can also use the short format ``S:M:XXX:YYYY``.
+
+
+``-c, --config file``
+~~~~~~~~~~~~~~~~~~~~~
+
+Overrides default config files with custom file
+
+
 ``-d, --debug``
 ~~~~~~~~~~~~~~~
 
@@ -30,10 +49,12 @@ The default log level is ``info``, while ``-d`` sets it to ``debug``.
 MTUI will display a short description of its options, operands and their usage,
 and exit.
 
+
 ``-l SITE, --location SITE``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Overrides the ``mtui.location`` configuration.
+
 
 ``-n, --noninteractive``
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -42,6 +63,7 @@ When set, MTUI is run in a noninteractive mode without a command shell.
 MTUI automatically applies the update and exports the results to the
 maintenance template before it quits. User input is not required.
 
+
 ``-p FILE, --prerun FILE``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -49,15 +71,18 @@ Runs a script with a set of MTUI commands prior to starting the interactive shel
 or the update process. User input is not required if in noninteractive mode
 (``-n`` parameter).
 
+
 ``-r RRID, --review-id RRID``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Loads the test report for the maintenance update Review Request ID (RRID).
+Classic maintenance test update workflow.
 
 ``RRID`` is a string in the form ``SUSE:Maintenance:XXXX:YYYYYY``, where ``XXXX``
 is the Incident ID and ``YYYYYY`` is the Request ID.
 
 ``RRID`` can also use the short format ``S:M:XXX:YYYY``.
+
 
 ``-s SPEC, --sut SPEC``
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -66,15 +91,18 @@ Cumulatively overrides default refhosts given in the test report.
 
 ``SPEC`` is a string in the form ``hostname,hostname2..``.
 
+
 ``-t DIR, --template_dir DIR``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Overrides the ``mtui.template_dir`` configuration.
 
+
 ``-V, --version``
 ~~~~~~~~~~~~~~~~~
 
 Prints MTUI version and exits.
+
 
 ``-w SECONDS, --connection_timeout SECONDS``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

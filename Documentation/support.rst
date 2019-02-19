@@ -5,13 +5,15 @@ Support
 Bug reports
 ###########
 
-Whenever you encounter any bugs, please report them at `bugzilla.suse.com`_.
+Whenever you encounter any bugs, please report them at `bugzilla.suse.com`_,
+or use MTUI's `gitlab`_.
 
 .. hint:: MTUI conveniently provides the ``report-bug`` command to point your
   browser to the appropriate location.
 
 .. _bugzilla.suse.com: https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI
 
+.. _gitlab: https://gitlab.suse.de/qa-maintenance/mtui
 
 Feature requests
 ################
