@@ -822,7 +822,7 @@ Displays or sets runtime MTUI configuration values.
 
 .. option:: set
 
-  Sets config runtime value ... ``option`` and ``value``
+  Sets config runtime value ``option`` for ``value``
 
 save
 ++++
