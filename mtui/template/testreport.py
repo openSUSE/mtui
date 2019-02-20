@@ -146,7 +146,7 @@ class TestReport(object, metaclass=ABCMeta):
         if not self.config.auto:
             logger.debug("Standard update workflow")
             for tp in self.testplatforms:
-                self._refhosts_from_tp(tp)
+                self.refhosts_from_tp(tp)
         else:
             logger.info("Automated update workflow without reference hosts")
 
@@ -384,7 +384,7 @@ class TestReport(object, metaclass=ABCMeta):
             logger.warning("failed to add host {0} to target list".format(hostname))
             logger.debug(format_exc())
 
-    def _refhosts_from_tp(self, testplatform):
+    def refhosts_from_tp(self, testplatform):
         try:
             refhosts = self.refhostsFactory(self.config)
         except RefhostsResolveFailed:

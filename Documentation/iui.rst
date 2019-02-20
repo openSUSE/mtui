@@ -47,11 +47,10 @@ add_host
 
 ::
 
-  add_host -t HOST
+  add_host [-t HOST]
 
 Adds another machine to the target host list.
-
-Target host need to be specified when adding a host.
+Without parameter adds all hosts from testplatform based on location
 
 
 remove_host
