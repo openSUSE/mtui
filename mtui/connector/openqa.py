@@ -18,11 +18,11 @@ class Openqa(object):
         try:
             logger.info("Getting jobs from openQA")
             self.jobs = self.client.openqa_request("GET", "jobs", self.params)["jobs"]
-        except (
-            openqa_client.exceptions.ConnectionError,
-            openqa_client.exceptions.RequestError,
-        ) as e:
+        except openqa_client.exceptions.RequestError as e:
             logger.error("openqa returned {}".format(e[-1]))
+            self.jobs = None
+        except openqa_client.exceptions.ConnectionError as e:
+            logger.error(str(e))
             self.jobs = None
 
     def postinit(self, config, rrid, smelt):
@@ -78,13 +78,7 @@ class Openqa(object):
                 job["settings"]["HDD_1"].split("-")[0],
                 job["settings"]["ARCH"],
                 job["settings"]["VERSION"],
-                join(
-                    self.host,
-                    "tests",
-                    str(job["id"]),
-                    "file",
-                    self.test["logname"],
-                ),
+                join(self.host, "tests", str(job["id"]), "file", self.test["logname"]),
             )
             for job in self.jobs
             if job["test"] == self.test["testname"]
