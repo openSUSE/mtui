@@ -86,6 +86,10 @@ class Export(Command):
             self.println("wrote checkers results to {}".format(filename))
 
     def _installlogs_fill(self, xmllog, hosts):
+        if not hosts:
+            logger.error("No logs to export")
+            return
+
         filepath = (
             self.config.template_dir / str(self.metadata.id) / self.config.install_logs
         )
