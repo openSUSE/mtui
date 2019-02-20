@@ -85,7 +85,7 @@ class Target(object):
             self.connection = self.Connection(self.host, self.port, self.timeout)
         except Exception as e:
             logger.critical(messages.ConnectingTargetFailedMessage(self.hostname, e))
-            raise
+            raise e
 
         self._lock = self.TargetLock(self.connection, self.config)
         if self.is_locked():
