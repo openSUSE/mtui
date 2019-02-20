@@ -5,8 +5,8 @@ from mtui.utils import complete_choices
 
 class AddHost(Command):
     """
-    Adds another machine to the target host list. The system type needs
-    to be specified as well.
+    Adds another machine to the target host list.\n
+    Withou parameter adds all host by Testplatform
     """
 
     command = "add_host"
@@ -16,19 +16,23 @@ class AddHost(Command):
         parser.add_argument(
             "-t",
             "--target",
-            required=True,
             action="append",
             help="address of the target host (should be the FQDN)",
         )
         return parser
 
     def run(self):
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            connections = [
-                executor.submit(self.metadata.add_target, hostname)
-                for hostname in self.args.target
-            ]
-            concurrent.futures.wait(connections)
+        if not self.args.target:
+            for tp in self.metadata.testplatforms:
+                self.metadata.refhosts_from_tp(tp)
+            self.metadata.connect_targets()
+        else:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                connections = [
+                    executor.submit(self.metadata.add_target, hostname)
+                    for hostname in self.args.target
+                ]
+                concurrent.futures.wait(connections)
 
     @staticmethod
     def complete(_, text, line, begidx, endix):
