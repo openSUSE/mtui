@@ -457,15 +457,16 @@ def _xml_to_template(review_id, template, xmldata, config, results):
                 t.insert(i, install_log)
                 add_empty_line = 1
     else:
-        for link in results["oqa_logs"]:
-            logfile = "{}_{}_{}.log".format(link.distri, link.version, link.arch)
-            install_log = "{!s}/{!s}/{!s}/{}".format(
-                config.reports_url, review_id, config.install_logs, logfile
-            )
-            if install_log not in t[o:]:
-                i += 1
-                t.insert(i, install_log)
-                add_empty_line = 1
+        if results["oqa_logs"]:
+            for link in results["oqa_logs"]:
+                logfile = "{}_{}_{}.log".format(link.distri, link.version, link.arch)
+                install_log = "{!s}/{!s}/{!s}/{}".format(
+                    config.reports_url, review_id, config.install_logs, logfile
+                )
+                if install_log not in t[o:]:
+                    i += 1
+                    t.insert(i, install_log)
+                    add_empty_line = 1
 
     if add_empty_line:
         t.insert(i + 1, "\n")
