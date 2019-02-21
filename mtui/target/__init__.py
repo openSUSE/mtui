@@ -138,11 +138,18 @@ class Target(object):
             where
               package = str
         """
-        self.run(
-            'rpm -q --queryformat "%{{Name}} %{{Version}}-%{{Release}}\n" {}'.format(
-                " ".join(packages)
+        if self.system.get_base().name != "ubuntu":
+            self.run(
+                'rpm -q --queryformat "%{{Name}} %{{Version}}-%{{Release}}\n" {}'.format(
+                    " ".join(packages)
+                )
             )
-        )
+        else:
+            self.run(
+                "dpkg-query -W -f='${{package}} ${{version}}\n' {}".format(
+                    " ".join(packages)
+                )
+            )
 
         packages = {}
         for line in self.lastout().splitlines():
