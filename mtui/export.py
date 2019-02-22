@@ -430,6 +430,12 @@ def _xml_to_template(review_id, template, xmldata, config, results):
             t.insert(i, line)
 
     if results["oqa_inc"]:
+        # remove previous results
+        if "Results from incidents openQA jobs:\n" in t:
+            r_start = t.index("Results from incidents openQA jobs:\n")
+            r_end = t.index("End of openQA Incidents results\n") + 1
+            del(t[r_start:r_end])
+        # add detailed openQA incident results
         i = t.index("source code change review:\n", 0) - 1
         for line in reversed(results["oqa_inc"]):
             t.insert(i, line)
