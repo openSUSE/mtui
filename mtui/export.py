@@ -3,7 +3,7 @@ import re
 import xml.dom.minidom
 from logging import getLogger
 from urllib.request import urlopen
-
+from http.client import RemoteDisconnected
 from qamlib.types.rpmver import RPMVersion
 from mtui.systemcheck import system_info
 
@@ -25,10 +25,13 @@ def _read_xmldata(xmldata):
 
 def _openqa_installog_to_template(url):
     # input is URLs instance
-    with urlopen(url.url) as log:
-        t = log.readlines()
-    return [x.decode() for x in t]
-
+    try:
+        with urlopen(url.url) as log:
+            t = log.readlines()
+        return [x.decode() for x in t]
+    except RemoteDisconnected as e:
+        logger.error(f"log {url.url} failed to download - {e}")
+        return [] 
 
 def _host_installog_to_template(xml, target):
     x = _read_xmldata(xml)
