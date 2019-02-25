@@ -217,10 +217,14 @@ class TestReport(object, metaclass=ABCMeta):
             where hostname = str
         :display: callable(str -> None)
         """
-        updater = self.get_updater()
-
-        display("\n".join(updater(targets, self.get_package_list(), self).commands))
-        del updater
+        try:
+            updater = self.get_updater()
+        except IndexError:
+            logger.warning("No refhosts connected")
+            return
+        else:
+            display("\n".join(updater(targets, self.get_package_list(), self).commands))
+            del updater
 
     def perform_get(self, targets, remote):
         local = self.report_wd("downloads", os.path.basename(remote), filepath=True)
@@ -341,15 +345,26 @@ class TestReport(object, metaclass=ABCMeta):
     def connect_targets(self, make_target=Target):
         targets = {}
         new_systems = {}
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        executor = concurrent.futures.ThreadPoolExecutor()
+        try:
             connections = {
                 executor.submit(self.connect_target, host, make_target): host
                 for host in self.hostnames
             }
-
-            for future in concurrent.futures.as_completed(connections):
+            done, _ = concurrent.futures.wait(connections)
+            for future in done:
                 host = connections[future]
                 targets[host], new_systems[host] = future.result()
+        except KeyboardInterrupt:
+            for future in connections.keys():
+                future.cancel()
+            logger.debug("CTRL-C .. ...")
+            targets = {}
+            logger.warning("Connection to refhosts cancelled by user")
+        finally:
+            executor.shutdown(wait=False)
+            del connections
+            del executor
 
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = {host: system for host, system in new_systems.items() if system}
