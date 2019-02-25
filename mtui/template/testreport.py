@@ -217,10 +217,14 @@ class TestReport(object, metaclass=ABCMeta):
             where hostname = str
         :display: callable(str -> None)
         """
-        updater = self.get_updater()
-
-        display("\n".join(updater(targets, self.get_package_list(), self).commands))
-        del updater
+        try:
+            updater = self.get_updater()
+        except IndexError:
+            logger.warning("No refhosts connected")
+            return
+        else:
+            display("\n".join(updater(targets, self.get_package_list(), self).commands))
+            del updater
 
     def perform_get(self, targets, remote):
         local = self.report_wd("downloads", os.path.basename(remote), filepath=True)
