@@ -3,6 +3,7 @@ import re
 import xml.dom.minidom
 from logging import getLogger
 from urllib.request import urlopen
+from urllib.error import HTTPError, URLError
 from http.client import RemoteDisconnected
 from qamlib.types.rpmver import RPMVersion
 from mtui.systemcheck import system_info
@@ -29,9 +30,10 @@ def _openqa_installog_to_template(url):
         with urlopen(url.url) as log:
             t = log.readlines()
         return [x.decode() for x in t]
-    except RemoteDisconnected as e:
+    except (RemoteDisconnected, HTTPError, URLError) as e:
         logger.error(f"log {url.url} failed to download - {e}")
-        return [] 
+        return []
+
 
 def _host_installog_to_template(xml, target):
     x = _read_xmldata(xml)
@@ -434,7 +436,7 @@ def _xml_to_template(review_id, template, xmldata, config, results):
         if "Results from incidents openQA jobs:\n" in t:
             r_start = t.index("Results from incidents openQA jobs:\n")
             r_end = t.index("End of openQA Incidents results\n") + 1
-            del(t[r_start:r_end])
+            del (t[r_start:r_end])
         # add detailed openQA incident results
         i = t.index("source code change review:\n", 0) - 1
         for line in reversed(results["oqa_inc"]):
