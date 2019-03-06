@@ -470,7 +470,9 @@ def _xml_to_template(review_id, template, xmldata, config, results):
     else:
         if results["oqa_logs"]:
             for link in results["oqa_logs"]:
-                logfile = "{}_{}_{}.log".format(link.distri, link.version, link.arch)
+                logfile = "{}_{}_{}.log".format(
+                    link.distri.lower(), link.version, link.arch
+                )
                 install_log = "{!s}/{!s}/{!s}/{}".format(
                     config.reports_url, review_id, config.install_logs, logfile
                 )
