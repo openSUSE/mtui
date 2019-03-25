@@ -16,7 +16,6 @@ import shutil
 
 from logging import getLogger
 
-from pathlib import Path
 from mtui.utils import nottest
 
 from mtui.connector.openqa import Openqa
@@ -32,12 +31,6 @@ from mtui.target.actions import UpdateError
 
 from mtui.template import _TemplateIOError
 from mtui.template import TestReportAlreadyLoaded
-
-from paramiko.ssh_exception import (
-    SSHException,
-    NoValidConnectionsError,
-    ChannelException,
-)
 
 from qamlib.utils import ensure_dir_exists
 from qamlib.utils import makedirs
@@ -368,7 +361,7 @@ class TestReport(object, metaclass=ABCMeta):
 
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = {host: system for host, system in new_systems.items() if system}
-        for t in self.targets:
+        for t in self.targets.copy():
             del self.targets[t]
         self.targets.update(
             {host: target for host, target in targets.items() if target}
