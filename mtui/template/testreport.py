@@ -16,7 +16,6 @@ import shutil
 
 from logging import getLogger
 
-from pathlib import Path
 from mtui.utils import nottest
 
 from mtui.connector.openqa import Openqa
@@ -32,12 +31,6 @@ from mtui.target.actions import UpdateError
 
 from mtui.template import _TemplateIOError
 from mtui.template import TestReportAlreadyLoaded
-
-from paramiko.ssh_exception import (
-    SSHException,
-    NoValidConnectionsError,
-    ChannelException,
-)
 
 from qamlib.utils import ensure_dir_exists
 from qamlib.utils import makedirs
