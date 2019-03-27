@@ -39,7 +39,7 @@ class UpdateID(object):
 
             tr.read(trpath)
 
-        if autoconnect:
+        if autoconnect and not tr.config.auto:
             tr.connect_targets()
 
         tr.smelt = self.smelt
