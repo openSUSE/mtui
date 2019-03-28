@@ -73,7 +73,7 @@ def fill_template(review_id, template, xmldata, config, smelt, openqa):
     else:
         logger.debug("parse smelt data and prepare pretty report")
         openqa_links = smelt.openqa_links_verbose()
-        if openqa_links:
+        if openqa_links and not config.auto:
             openqa_links = (
                 ["openQA tests:\n", "=============\n", "\n"]
                 + [a + "\n" for a in openqa_links]
@@ -436,7 +436,7 @@ def _xml_to_template(review_id, template, xmldata, config, results):
         if "Results from incidents openQA jobs:\n" in t:
             r_start = t.index("Results from incidents openQA jobs:\n")
             r_end = t.index("End of openQA Incidents results\n") + 1
-            del (t[r_start:r_end])
+            del t[r_start:r_end]
         # add detailed openQA incident results
         i = t.index("source code change review:\n", 0) - 1
         for line in reversed(results["oqa_inc"]):

@@ -46,6 +46,7 @@ class Openqa(object):
             return ret
 
         ret.append("Results from incidents openQA jobs:\n")
+        ret.append("\n")
 
         for job in self.jobs:
             ret.append(
@@ -65,7 +66,7 @@ class Openqa(object):
                 ret.append("    Failed modules:\n")
                 for mod in failed_modules:
                     ret.append("      Module: {} in category {} failed\n".format(*mod))
-            ret.append("\n")
+                ret.append("\n")
         ret.append("End of openQA Incidents results\n")
 
         return ret
