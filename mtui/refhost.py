@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 # managing and parsing of the refhosts.yml file
 #
@@ -20,7 +19,7 @@ from ruamel.yaml import YAML
 
 import copy
 
-logger = getLogger('mtui.refhost')
+logger = getLogger("mtui.refhost")
 
 
 class Attributes(object):
@@ -32,72 +31,38 @@ class Attributes(object):
     """
 
     def __init__(self):
-        # scalar attributes
-        self.minimal = None
-        self.arch = ''
-
-        # list attributes
+        self.arch = ""
         self.addons = []
-
-        # table attributes
         self.product = {}
-        self.kernel = {}
-        self.ltss = {}
-        self.virtual = {}
 
     def __str__(self):
         """
         Human readable output of the current attributes
         """
 
-        product = ''
-        if 'name' in self.product:
-            product = self.product['name']
-            if 'version' in self.product:
-                product += ' ' + str(self.product['version']['major'])
-                if 'minor' in self.product['version']:
+        product = ""
+        if "name" in self.product:
+            product = self.product["name"]
+            if "version" in self.product:
+                product += " " + str(self.product["version"]["major"])
+                if "minor" in self.product["version"]:
                     # If it's numbers, then a.b, if it's strings then ab
-                    if(isinstance(self.product['version']['minor'], int)):
-                        product += '.'
+                    if isinstance(self.product["version"]["minor"], int):
+                        product += "."
 
-                    product += str(self.product['version']['minor'])
+                    product += str(self.product["version"]["minor"])
 
-        kernel = ''
-        if 'enabled' in self.kernel and self.kernel['enabled']:
-            kernel = 'kernel'
-
-        ltss = ''
-        if 'enabled' in self.ltss and self.ltss['enabled']:
-            ltss = 'ltss'
-
-        minimal = ''
-        if self.minimal:
-            minimal = 'minimal'
         addons = []
-        for addon in sorted(self.addons, key=lambda addon: addon['name']):
-            serialization = addon['name']
-            if 'version' in addon and 'major' in addon['version']:
-                serialization += ' ' + str(addon['version']['major']) + '.'
-                if 'minor' in addon['version']:
-                    serialization += str(addon['version']['minor'])
+        for addon in sorted(self.addons, key=lambda addon: addon["name"]):
+            serialization = addon["name"]
+            if "version" in addon and "major" in addon["version"]:
+                serialization += " " + str(addon["version"]["major"]) + "."
+                if "minor" in addon["version"]:
+                    serialization += str(addon["version"]["minor"])
 
             addons.append(serialization)
 
-        virtual = ' '
-        if 'mode' in self.virtual:
-            virtual = self.virtual['mode']
-        if 'hypervisor' in self.virtual:
-            virtual += ' ' + self.virtual['hypervisor']
-
-        representation = ' '.join([
-            product,
-            self.arch,
-            kernel,
-            ltss,
-            minimal,
-            virtual,
-            ' '.join(addons)
-        ])
+        representation = " ".join([product, self.arch, " ".join(addons)])
 
         # remove the double spaces
         representation = re.sub(r"\s+", " ", representation.strip())
@@ -125,45 +90,36 @@ class Attributes(object):
         # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11)
         attribute = Attributes()
         arch_list = []
-        for pattern in testplatform.split(';'):
+        for pattern in testplatform.split(";"):
             try:
-                property_name, content = pattern.split('=', 1)
+                property_name, content = pattern.split("=", 1)
             except ValueError:
-                logger.error(
-                    'error when parsing line "{!s}"'.format(testplatform))
+                logger.error('error when parsing line "{!s}"'.format(testplatform))
                 continue
-            # special cases: arch, virtual
+            # special case: arch
             # *- arch because is a list so it will create a list of several attributes
-            # *- virtual because it contains specific data
             # --
             # The rest of elements contains a version
             if property_name == "arch":
                 capture = re.match(r"\[(.*)\]", content)
-                code_evaluation = "','".join(capture.group(1).split(','))
+                code_evaluation = "','".join(capture.group(1).split(","))
                 arch_list = eval("['{0}']".format(code_evaluation))
-            elif property_name == "virtual":
-                capture = re.match(r"\((.*)\)", content)
-                virtual_property = {}
-                for element in capture.group(1).split(','):
-                    [key, value] = element.split('=')
-                    virtual_property[key] = value
-                setattr(attribute, property_name, virtual_property)
             elif property_name == "tags":
                 capture = re.match(r"\((.*)\)", content)
-                setattr(attribute, capture.group(1), {'enabled': True})
+                setattr(attribute, capture.group(1), {"enabled": True})
             else:
-                complex_property = {'version': {}}
+                complex_property = {"version": {}}
                 capture = re.match(r"(.*)\((.*)\)", content)
-                complex_property['name'] = capture.group(1)
+                complex_property["name"] = capture.group(1)
 
-                for element in capture.group(2).split(','):
-                    [key, value] = element.split('=')
+                for element in capture.group(2).split(","):
+                    [key, value] = element.split("=")
                     # Note: When the minor is '' then it's used to search for unset values
                     # We want number as numbers not as strings
                     try:
-                        complex_property['version'][key] = int(value)
+                        complex_property["version"][key] = int(value)
                     except ValueError:
-                        complex_property['version'][key] = value
+                        complex_property["version"][key] = value
 
                 if property_name == "base":
                     attribute.product = complex_property
@@ -181,7 +137,7 @@ class Attributes(object):
 
 
 class Refhosts(object):
-    _default_location = 'default'
+    _default_location = "default"
 
     def __init__(self, hostmap, location=None):
         """
@@ -205,11 +161,11 @@ class Refhosts(object):
     def _parse_refhosts(self, hostmap):
         try:
             with open(hostmap) as f:
-                self.data = YAML(typ='safe').load(f)
+                self.data = YAML(typ="safe").load(f)
 
         except Exception as error:
             # nothing to do for us if we can't load the hosts
-            logger.error('failed to parse refhosts.yml: {!s}'.format(error))
+            logger.error("failed to parse refhosts.yml: {!s}".format(error))
             raise
 
     def search(self, attributes=None):
@@ -224,15 +180,17 @@ class Refhosts(object):
         for attribute in attributes:
             host = []
             host = [
-                candidate['name'] for candidate in self.data[
-                    self.location] if self.is_candidate_match(
-                    candidate, attribute)]
+                candidate["name"]
+                for candidate in self.data[self.location]
+                if self.is_candidate_match(candidate, attribute)
+            ]
 
             if host == [] and self.location != self._default_location:
                 host = [
-                    candidate['name']
+                    candidate["name"]
                     for candidate in self.data[self._default_location]
-                    if self.is_candidate_match(candidate, attribute)]
+                    if self.is_candidate_match(candidate, attribute)
+                ]
 
             results += host
 
@@ -251,18 +209,22 @@ class Refhosts(object):
             if getattr(attribute, key):
                 if key not in candidate:
                     return False
-                elif key == 'addons':
+                elif key == "addons":
                     if not self._includes_addons_list(
-                            candidate[key], getattr(attribute, key)):
+                        candidate[key], getattr(attribute, key)
+                    ):
                         return False
-                elif (isinstance(candidate[key], str) or
-                      isinstance(candidate[key], int) or
-                      isinstance(candidate[key], bool)):  # scalar options. Options that are non iterable
+                elif (
+                    isinstance(candidate[key], str)
+                    or isinstance(candidate[key], int)
+                    or isinstance(candidate[key], bool)
+                ):  # scalar options. Options that are non iterable
                     if getattr(attribute, key) != candidate[key]:
                         return False
                 else:
                     if not self._includes_simple_attributes(
-                            candidate[key], getattr(attribute, key)):
+                        candidate[key], getattr(attribute, key)
+                    ):
                         return False
 
         return True
@@ -291,9 +253,10 @@ class Refhosts(object):
         for k in attribute:
             if k not in candidate:
                 return False
-            elif k == 'version':
+            elif k == "version":
                 if not self._includes_version(
-                        candidate['version'], attribute['version']):
+                    candidate["version"], attribute["version"]
+                ):
                     return False
             elif attribute[k] != candidate[k]:
                 return False
@@ -304,16 +267,15 @@ class Refhosts(object):
         """
         Helper function for _is_candidate_match.
         """
-        if 'minor' in element and element['minor'] != '':
-            if 'minor' not in candidate or element[
-                    'minor'] != candidate['minor']:
+        if "minor" in element and element["minor"] != "":
+            if "minor" not in candidate or element["minor"] != candidate["minor"]:
                 return False
-        elif 'minor' in element and element['minor'] == '':
-            if 'minor' in candidate:
+        elif "minor" in element and element["minor"] == "":
+            if "minor" in candidate:
                 return False
 
         # major is mandatory
-        if element['major'] != candidate['major']:
+        if element["major"] != candidate["major"]:
             return False
 
         return True
@@ -327,16 +289,16 @@ class Refhosts(object):
         False otherwise
         """
 
-        element_addons_map = {addon['name']: addon for addon in element_addons}
-        candidate_addons_map = {
-            addon['name']: addon for addon in candidate_addons}
+        element_addons_map = {addon["name"]: addon for addon in element_addons}
+        candidate_addons_map = {addon["name"]: addon for addon in candidate_addons}
 
         for addon in element_addons_map:
             if addon not in candidate_addons_map:
                 return False
             else:
                 if not self._includes_simple_attributes(
-                        candidate_addons_map[addon], element_addons_map[addon]):
+                    candidate_addons_map[addon], element_addons_map[addon]
+                ):
                     return False
         return True
 
@@ -374,31 +336,27 @@ class Refhosts(object):
 
         attributes = Attributes()
 
-        nodes = [e for e in self._location_hosts(
-            self.location) if e['name'] == hostname]
+        nodes = [
+            e for e in self._location_hosts(self.location) if e["name"] == hostname
+        ]
 
         if nodes == [] and self.location != self._default_location:
-            nodes = [e for e in self._location_hosts(
-                self._default_location) if e['name'] == hostname]
+            nodes = [
+                e
+                for e in self._location_hosts(self._default_location)
+                if e["name"] == hostname
+            ]
 
         # technically this iterates over all found host elements.
         # but since we just return one attribute object, we choose the first
         # one for now and return
         for node in nodes:
-            if 'addons' in node:
-                attributes.addons = node['addons']
-            if 'product' in node:
-                attributes.product = node['product']
-            if 'arch' in node:
-                attributes.arch = node['arch']
-            if 'kernel' in node:
-                attributes.kernel = node['kernel']
-            if 'ltss' in node:
-                attributes.ltss = node['ltss']
-            if 'minimal' in node:
-                attributes.minimal = node['minimal']
-            if 'virtual' in node:
-                attributes.virtual = node['virtual']
+            if "addons" in node:
+                attributes.addons = node["addons"]
+            if "product" in node:
+                attributes.product = node["product"]
+            if "arch" in node:
+                attributes.arch = node["arch"]
 
             return attributes
 
@@ -440,7 +398,7 @@ class _RefhostsFactory(object):
         urlopener,
         file_writer,
         cache_path,
-        refhosts_factory=Refhosts
+        refhosts_factory=Refhosts,
     ):
         self._time_now = time_now_getter
         self._stat = statter
@@ -451,20 +409,18 @@ class _RefhostsFactory(object):
         self.refhosts_factory = refhosts_factory
 
     def __call__(self, config):
-        for resolver in [x.strip()
-                         for x in config.refhosts_resolvers.split(",")]:
+        for resolver in [x.strip() for x in config.refhosts_resolvers.split(",")]:
             try:
                 return self._resolve_one(resolver, config)
             except BaseException:
-                logger.warning('Refhosts: resolver {0} failed'.format(
-                    resolver))
+                logger.warning("Refhosts: resolver {0} failed".format(resolver))
                 logger.debug(format_exc())
 
         raise RefhostsResolveFailed()
 
     def _resolve_one(self, name, config):
         try:
-            resolver = getattr(self, 'resolve_{0}'.format(name))
+            resolver = getattr(self, "resolve_{0}".format(name))
         except AttributeError:
             logger.warning("Refhosts: invalid resolver: {0}".format(name))
             raise
@@ -472,8 +428,7 @@ class _RefhostsFactory(object):
             return resolver(config)
 
     def refresh_https_cache_if_needed(self, path, config):
-        if self._is_https_cache_refresh_needed(
-                path, config.refhosts_https_expiration):
+        if self._is_https_cache_refresh_needed(path, config.refhosts_https_expiration):
             self.refresh_https_cache(path, config.refhosts_https_uri)
 
     def _is_https_cache_refresh_needed(self, path, expiration):
@@ -497,14 +452,9 @@ class _RefhostsFactory(object):
         return self.refhosts_factory(f, config.location)
 
     def resolve_path(self, config):
-        return self.refhosts_factory(
-            config.refhosts_path, config.location
-        )
+        return self.refhosts_factory(config.refhosts_path, config.location)
 
 
 RefhostsFactory = _RefhostsFactory(
-    time.time,
-    os.stat,
-    urlopen,
-    atomic_write_file,
-    save_cache_path('refhosts.yml'))
+    time.time, os.stat, urlopen, atomic_write_file, save_cache_path("refhosts.yml")
+)
