@@ -40,6 +40,7 @@ def parse_system(connection):
             name, version, arch = product.parse_product(f)
             addons.add(Product(name, version, arch))
     # SLE4SAP on sle12 contains also SLES repos :(
-    if base.name == "SLES_SAP":
+    if base.name == "SLES_SAP" and base.version.startswith("12"):
         addons.add(Product("SLES", base.version, base.arch))
+        addons.add(Product("sle-ha", base.version, base.arch))
     return System(base, addons)
