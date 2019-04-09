@@ -232,7 +232,7 @@ update it from ``refhosts.https_uri`` if the ``https`` resolver is used.
   | **type**
   |     URL
   | **default**
-  |     https://qam.suse.de/metadata/refhosts.yml
+  |     https://qam.suse.de/refhosts/refhosts.yml
 
 The ``https`` resolver fetches the refhost database from this URL.
 
@@ -381,7 +381,7 @@ Example
 
   [refhosts]
   resolvers = https
-  https_uri = https://qam.suse.de/metadata/refhosts.yml
+  https_uri = https://qam.suse.de/refhosts/refhosts.yml
   path = /usr/share/qam-metadata/refhosts.yml
 
   [url]
