@@ -134,11 +134,9 @@ class Export(Command):
         xmllog = self.metadata.generate_xmllog(self.targets.select(targets).values())
 
         if self.metadata.config.auto:
-            self.metadata.get_openqa_results()
             self._template_fill(xmllog)
             self._installlogs_fill(xmllog, self.metadata.openqa.get_logs_url())
         else:
-            self.metadata.get_openqa_results()
             self._template_fill(xmllog)
             self._installlogs_fill(xmllog, targets)
 

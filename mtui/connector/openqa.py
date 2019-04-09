@@ -39,10 +39,28 @@ class Openqa(object):
         self.host = config.openqa_instance
         self.client = OpenQA_Client(self.host)
 
+    def has_passed_install_jobs(self):
+        if not self.jobs:
+            return False
+
+        def normalize(x):
+            if x == "passed" or x == "softfailed":
+                return True
+            return False
+
+        # get all 'qam-incidentinstall' test results and return False if any
+        # test FAILS or is Incomplete etc.
+        return all(
+            normalize(y["result"])
+            for y in self.jobs
+            if y["test"] == "qam-incidentinstall"
+        )
+
     def pprint_results(self):
         ret = []
 
         if not self.jobs:
+            logger.debug("No job - no results")
             return ret
 
         ret.append("Results from incidents openQA jobs:\n")
