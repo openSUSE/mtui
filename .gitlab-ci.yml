@@ -1,0 +1,16 @@
+image: leap:latest
+
+buildibs:
+  script:
+    - zypper in --no-confirm obs-service-tar_scm obs-service-recompress obs-service-set_version
+    - cd $CI_PROJECT_DIR
+    - osc co QA:Maintenance:Test mtui
+    - cd QA:Maintenance:Test/mtui
+    - rm -f *.tar.xz
+    - osc service disabledrun
+    - osc ar
+    - osc ci -m "Automatic update"
+  tags:
+    - qam
+  only:
+    - master@qa-maintenance/mtui
