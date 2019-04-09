@@ -136,12 +136,6 @@ class TestReport(object, metaclass=ABCMeta):
 
         self.copy_scripts()
         self.create_installogs_dir()
-        if not self.config.auto:
-            logger.debug("Standard update workflow")
-            for tp in self.testplatforms:
-                self.refhosts_from_tp(tp)
-        else:
-            logger.info("Automated update workflow without reference hosts")
 
     @abstractmethod
     def _parser(self):
@@ -560,10 +554,6 @@ class TestReport(object, metaclass=ABCMeta):
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
         return sink(targets, by_hosts_pkg)
-
-    def get_openqa_results(self):
-        self.openqa.postinit(self.config, self.rrid, self.smelt)
-        self.openqa.get_jobs()
 
     def generate_templatefile(self, xmllog):
         from mtui.export import fill_template

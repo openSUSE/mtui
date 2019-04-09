@@ -26,7 +26,7 @@ Example::
   run uname -a
   list_hosts
 
-  # mtui -n -p prerun.example -r SUSE:Maintenance:3601:126030
+  # mtui -n -p prerun.example -a SUSE:Maintenance:3601:126030
   info: connecting to edna.qam.suse.cz
   info: connecting to s390vsl048.suse.de
   info: connecting to moe.qam.suse.cz
@@ -375,8 +375,7 @@ Refhosts
 I need to add a refhost to the list. How can I do it?
 =====================================================
 
-The ``add_host`` command adds a specific host to the list. Both hostname and
-system type must be provided.
+The ``add_host`` command adds a specific host to the list. 
 
 Example::
 

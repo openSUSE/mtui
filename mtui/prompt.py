@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 # mtui command line prompt
 #
@@ -112,7 +111,6 @@ class CommandPrompt(cmd.Cmd):
         # self.stdout is used by cmd.Cmd
         self.identchars += "-"
         # support commands with dashes in them
-        self.set_prompt()
 
     def notify_user(self, msg, class_=None):
         notification.display("MTUI", msg, class_)
@@ -239,11 +237,9 @@ class CommandPrompt(cmd.Cmd):
 
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(self.config, autoconnect=autoconnect)
-
-        if self.metadata and self.metadata.id is self.session:
-            self.set_prompt(None)
         self.metadata = tr
         self.targets = tr.targets
+        self.set_prompt(None)
 
     def _do_save_impl(self, path="log.xml"):
         if not path.startswith("/"):

@@ -60,15 +60,7 @@ def get_parser(sys):
     parser.add_argument(
         "-c", "--config", type=Path, default=None, help="Override default config path"
     )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "-r",
-        "--review-id",
-        metavar="RequestReviewID",
-        type=OBSUpdateID,
-        help="OBS request review id\nexample: SUSE:Maintenance:1:1",
-    )
-    group.add_argument(
+    parser.add_argument(
         "-a",
         "--auto-review-id",
         metavar="RequestReviewID",

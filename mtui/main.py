@@ -39,10 +39,7 @@ def run_mtui(sys, config, logger, Prompt, Display, args):
 
     config.merge_args(args)
 
-    if args.auto_review_id:
-        update = args.auto_review_id
-    else:
-        update = args.review_id
+    update = args.auto_review_id
 
     config.distro, config.distro_ver, config.distro_kernel = detect_system()
 

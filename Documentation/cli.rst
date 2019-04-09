@@ -72,18 +72,6 @@ or the update process. User input is not required if in noninteractive mode
 (``-n`` parameter).
 
 
-``-r RRID, --review-id RRID``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Loads the test report for the maintenance update Review Request ID (RRID).
-Classic maintenance test update workflow.
-
-``RRID`` is a string in the form ``SUSE:Maintenance:XXXX:YYYYYY``, where ``XXXX``
-is the Incident ID and ``YYYYYY`` is the Request ID.
-
-``RRID`` can also use the short format ``S:M:XXX:YYYY``.
-
-
 ``-s SPEC, --sut SPEC``
 ~~~~~~~~~~~~~~~~~~~~~~~
 

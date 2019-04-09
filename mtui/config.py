@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 # mtui config file parser and default values
 #
@@ -282,9 +281,4 @@ class Config(object):
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout
 
-        if args.review_id:
-            self.auto = False
-        elif args.auto_review_id:
-            self.auto = True
-        else:
-            self.auto = False
+        self.auto = True
