@@ -107,10 +107,13 @@ class CommandPrompt(cmd.Cmd):
         for x in commands.cmd_list:
             self._add_subcommand(getattr(commands, x))
 
-        self.stdout = self.sys.stdout
         # self.stdout is used by cmd.Cmd
-        self.identchars += "-"
+        self.stdout = self.sys.stdout
         # support commands with dashes in them
+        self.identchars += "-"
+        # set default prompt, when is loadet template is overrriden. So wisible
+        # only wheen mtui is started without param.
+        self.prompt = "mtui-empty:>"
 
     def notify_user(self, msg, class_=None):
         notification.display("MTUI", msg, class_)
