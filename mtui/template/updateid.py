@@ -47,12 +47,13 @@ class UpdateID(object):
                 logger.info("Switch mode to manual")
                 tr.config.auto = False
                 if autoconnect:
-                    logger.info("Adding refhosts from testreport")
+                    logger.info("Connect refhosts from testreport")
                     tr.connect_targets()
-                    logger.info("Adding refhosts from TestPlatform")
                     for tp in tr.testplatforms:
                         logger.debug("Testplatform: {}".format(tp))
                         tr.refhosts_from_tp(tp)
+                    logger.info("Connect refhosts from TestPlatform")
+                    tr.connect_targets()
 
         return tr
 
