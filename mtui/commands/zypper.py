@@ -20,7 +20,7 @@ class Install(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         self.log.info("Installing")
         packages = self.args.package
         targets = self.parse_hosts()
@@ -62,7 +62,7 @@ class Uninstall(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         self.log.info("Removing")
         packages = self.args.package
         targets = self.parse_hosts()

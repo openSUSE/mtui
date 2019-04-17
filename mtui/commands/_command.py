@@ -83,7 +83,7 @@ class Command(object, metaclass=ABCMeta):
         return lambda text, line, begidx, endidx: []
 
     @abstractmethod
-    def run(self):
+    def __call__(self):
         raise RuntimeError()
 
     def println(self, xs=""):

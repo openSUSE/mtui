@@ -25,7 +25,7 @@ class SFTPPut(Command):
         )
         return parser
 
-    def run(self):
+    def __call__(self):
         files = glob(self.args.filename[0])
         if not files:
             self.log.error("File {!s} not found".format(self.args.filename[0]))
@@ -72,6 +72,6 @@ class SFTPGet(Command):
         )
         return parser
 
-    def run(self):
+    def __call__(self):
         self.metadata.perform_get(self.targets, self.args.filename[0])
         self.log.info("downloaded {}".format(self.args.filename[0]))

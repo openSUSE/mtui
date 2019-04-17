@@ -24,7 +24,7 @@ class Terms(Command):
         cls._add_hosts_arg(parser)
         return parser
 
-    def run(self):
+    def __call__(self):
         dirname = self.config.datadir
         hosts = [host for host in sorted(self.parse_hosts().names())]
 

@@ -29,7 +29,7 @@ class Edit(Command):
     def _template(self):
         return self.metadata.path
 
-    def run(self):
+    def __call__(self):
         path = self.args.filename if self.args.filename else self._template()
 
         editor = getenv("EDITOR", "vim")

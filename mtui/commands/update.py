@@ -48,7 +48,7 @@ class Update(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
 
         self.log.info("Updating")
 

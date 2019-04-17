@@ -24,7 +24,7 @@ class Commit(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
 
         checkout = self.metadata.report_wd()
 

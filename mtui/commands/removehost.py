@@ -25,7 +25,7 @@ class RemoveHost(Command):
         if target in self.metadata.systems:
             del self.metadata.systems[target]
 
-    def run(self):
+    def __call__(self):
         targets = self.parse_hosts(enabled=None).keys()
         # for target in targets:
         with concurrent.futures.ThreadPoolExecutor() as executor:

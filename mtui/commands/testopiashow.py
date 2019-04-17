@@ -27,7 +27,7 @@ class TestopiaShow(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         self.prompt.ensure_testopia_loaded()
 
         url = self.config.bugzilla_url

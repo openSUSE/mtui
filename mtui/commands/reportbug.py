@@ -23,7 +23,7 @@ class ReportBug(Command):
 
         super(ReportBug, self).__init__(*a, **kw)
 
-    def run(self):
+    def __call__(self):
         url = self.config.report_bug_url
 
         if self.args.print_url:

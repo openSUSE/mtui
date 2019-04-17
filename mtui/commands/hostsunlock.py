@@ -23,7 +23,7 @@ class HostsUnlock(Command):
         cls._add_hosts_arg(parser)
         return parser
 
-    def run(self):
+    def __call__(self):
 
         hosts = self.parse_hosts()
         hosts.unlock(force=self.args.force)
