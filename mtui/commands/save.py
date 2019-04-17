@@ -21,5 +21,5 @@ class DoSave(Command):
             help='save log as file filename')
         return parser
 
-    def run(self):
+    def __call__(self):
         self.prompt._do_save_impl(self.args.filename)

@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import os
 
 from mtui.commands import Command
@@ -21,5 +19,5 @@ class Whoami(Command):
     def get_pid(self):
         return os.getpid()
 
-    def run(self):
+    def __call__(self):
         self.println(" ".join([self.config.session_user, str(self.get_pid())]))

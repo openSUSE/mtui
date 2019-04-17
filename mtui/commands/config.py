@@ -23,7 +23,7 @@ class Config(Command):
         p_set.add_argument("value", type=str)
         p_set.set_defaults(func="set")
 
-    def run(self):
+    def __call__(self):
         getattr(self, self.args.func)()
 
     def show(self):

@@ -23,7 +23,7 @@ class Downgrade(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
 
         targets = self.parse_hosts()
         if not targets:

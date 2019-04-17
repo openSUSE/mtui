@@ -34,7 +34,7 @@ class LoadTemplate(Command):
             help='clean up old hosts')
         return parser
 
-    def run(self):
+    def __call__(self):
         if self.metadata:
             msg = 'Should i owerwrite already loaded session {}? (y/N) '
             if not prompt_user(msg.format(self.metadata.id),

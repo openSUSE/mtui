@@ -129,7 +129,7 @@ class Export(Command):
             self.println("wrote zypper log to {}".format(filename))
 
     @requires_update
-    def run(self):
+    def __call__(self):
         targets = self.parse_hosts().keys()
         xmllog = self.metadata.generate_xmllog(self.targets.select(targets).values())
 

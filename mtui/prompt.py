@@ -189,7 +189,7 @@ class CommandPrompt(cmd.Cmd):
                         args = c.parse_args(arg, self.sys)
                     except ArgsParseFailure:
                         return
-                    c(args, self.targets.select(), self.config, self.sys, self).run()
+                    c(args, self.targets.select(), self.config, self.sys, self)()
 
                 return do
 

@@ -28,7 +28,7 @@ class OSCAssign(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
         self.log.info("Assign request: {}".format(reviewid))
         cmd = "osc -A {} qam assign".format(osc_api[apiid])
@@ -68,7 +68,7 @@ class OSCUnassign(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
         self.log.info("Unassign request: {}".format(reviewid))
         cmd = "osc -A {} qam unassign".format(osc_api[apiid])
@@ -112,7 +112,7 @@ class OSCApprove(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
         self.log.info("Approve request: {}".format(reviewid))
         cmd = "osc -A {} qam approve".format(osc_api[apiid])
@@ -177,7 +177,7 @@ class OSCReject(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
         self.log.info("Reject request: {}".format(reviewid))
         cmd = "osc -A {} qam reject".format(osc_api[apiid])

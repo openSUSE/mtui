@@ -21,7 +21,7 @@ class LocalRun(Command):
         )
         return parser
 
-    def run(self):
+    def __call__(self):
         if not self.args.command:
             self.log.error("Missing argument")
             return

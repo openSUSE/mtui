@@ -51,7 +51,7 @@ class ListPackages(Command):
         for xs in list(self.metadata.packages.items()):
             self.printPVLN(*(xs + ("",)))
 
-    def run(self):
+    def __call__(self):
         if self.args.wanted:
             self._run_just_wanted()
             return

@@ -31,7 +31,7 @@ class SessionName(Command):
 
         return parser
 
-    def run(self):
+    def __call__(self):
 
         session = self.args.name if self.args.name else self.metadata.id
 
@@ -56,7 +56,7 @@ class SetLocation(Command):
 
         return parser
 
-    def run(self):
+    def __call__(self):
 
         old = self.config.location
         new = str(self.args.site[0])
@@ -100,7 +100,7 @@ class SetLogLevel(Command):
 
         return parser
 
-    def run(self):
+    def __call__(self):
         levels = {
             "error": logging.ERROR,
             "warning": logging.WARNING,
@@ -147,7 +147,7 @@ class SetTimeout(Command):
 
         return parser
 
-    def run(self):
+    def __call__(self):
 
         value = self.args.timeout[0]
 

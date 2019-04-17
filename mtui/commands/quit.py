@@ -29,7 +29,7 @@ class Quit(Command):
         self.targets[target].close(*args)
         self.targets.pop(target)
 
-    def run(self):
+    def __call__(self):
 
         if not prompt_user(
             "save log? (Y,n) ",

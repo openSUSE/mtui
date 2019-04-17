@@ -21,7 +21,7 @@ class AddHost(Command):
         )
         return parser
 
-    def run(self):
+    def __call__(self):
         if not self.args.target:
             for tp in self.metadata.testplatforms:
                 self.metadata.refhosts_from_tp(tp)

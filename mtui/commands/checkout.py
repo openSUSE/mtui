@@ -14,7 +14,7 @@ class Checkout(Command):
     command = 'checkout'
 
     @requires_update
-    def run(self):
+    def __call__(self):
         try:
             check_call('svn up'.split(), cwd=self.metadata.report_wd())
         except Exception:

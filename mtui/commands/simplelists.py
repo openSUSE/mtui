@@ -14,7 +14,7 @@ class ListBugs(Command):
     command = "list_bugs"
 
     @requires_update
-    def run(self):
+    def __call__(self):
         self.metadata.list_bugs(self.display.list_bugs, self.config.bugzilla_url)
 
 
@@ -25,7 +25,7 @@ class ListLocks(Command):
 
     command = "list_locks"
 
-    def run(self):
+    def __call__(self):
 
         self.hosts.select(enabled=True).report_locks(self.display.list_locks)
 
@@ -40,7 +40,7 @@ class ListHosts(Command):
 
     command = "list_hosts"
 
-    def run(self):
+    def __call__(self):
 
         self.targets.report_self(self.display.list_host)
 
@@ -52,7 +52,7 @@ class ListTimeout(Command):
 
     command = "list_timeout"
 
-    def run(self):
+    def __call__(self):
 
         self.targets.report_timeout(self.display.list_timeout)
 
@@ -65,7 +65,7 @@ class ListUpdateCommands(Command):
 
     command = "list_update_commands"
 
-    def run(self):
+    def __call__(self):
         self.metadata.list_update_commands(self.targets, self.println)
 
 
@@ -81,7 +81,7 @@ class ListSessions(Command):
         cls._add_hosts_arg(parser)
         return parser
 
-    def run(self):
+    def __call__(self):
         targets = self.parse_hosts()
         cmd = "ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\\1/p' | sort -u"
 
@@ -107,7 +107,7 @@ class ListMetadata(Command):
     command = "list_metadata"
 
     @requires_update
-    def run(self):
+    def __call__(self):
         self.metadata.show_yourself(self.sys.stdout)
 
 
@@ -125,7 +125,7 @@ class ListLog(Command):
         cls._add_hosts_arg(parser)
         return parser
 
-    def run(self):
+    def __call__(self):
         output = []
         targets = self.parse_hosts()
         targets.report_log(self.display.show_log, output.append)
@@ -160,7 +160,7 @@ class ListVersions(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
         targets = self.parse_hosts()
         params = self.args.package
 
@@ -200,7 +200,7 @@ class ListHistory(Command):
         cls._add_hosts_arg(parser)
         return parser
 
-    def run(self):
+    def __call__(self):
         targets = self.parse_hosts(enabled=False)
         option = [("{!s}".format(x)) for x in set(self.args.event) & self.filters]
 

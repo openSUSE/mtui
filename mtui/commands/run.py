@@ -30,7 +30,7 @@ class Run(Command):
         cls._add_hosts_arg(parser)
         return parser
 
-    def run(self):
+    def __call__(self):
 
         targets = self.parse_hosts()
         if not targets:

@@ -40,7 +40,7 @@ class SetRepo(Command):
         return parser
 
     @requires_update
-    def run(self):
+    def __call__(self):
 
         operation = self.args.operation
         hosts = self.parse_hosts()

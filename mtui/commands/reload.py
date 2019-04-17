@@ -13,7 +13,7 @@ class ReloadProducts(Command):
         cls._add_hosts_arg(parser)
         return parser
 
-    def run(self):
+    def __call__(self):
         targets = self.parse_hosts()
         for target in targets:
             targets[target]._parse_system()
