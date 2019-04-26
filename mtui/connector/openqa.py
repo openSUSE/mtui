@@ -49,12 +49,18 @@ class Openqa(object):
             return False
 
         # get all 'qam-incidentinstall' test results and return False if any
-        # test FAILS or is Incomplete etc.
-        return all(
+        # test FAILS or is Incomplete etc or empty
+
+        ret = [
             normalize(y["result"])
             for y in self.jobs
             if y["test"] == "qam-incidentinstall"
-        )
+        ]
+
+        if ret:
+            return all(ret)
+        else:
+            return False
 
     def pprint_results(self):
         ret = []
