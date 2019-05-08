@@ -110,7 +110,7 @@ class Command(object, metaclass=ABCMeta):
         """
         parses self.args.hosts
         returns [str] with hosts, or connection error.
-        Handles decaprated 'all' alias
+        Handles deprecated 'all' alias
 
         By default all selects only enabled hosts
 
@@ -125,7 +125,7 @@ class Command(object, metaclass=ABCMeta):
         except HostIsNotConnectedError as e:
             if e.host == "all":
                 self.log.error(e)
-                self.log.info("Using all hosts. Warning option 'all' is decaprated")
+                self.log.info("Using all hosts. Warning option 'all' is deprecated")
 
                 targets = self.hosts.select(enabled=enabled)
 
