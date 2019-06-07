@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 # mtui ssh connection handling using paramiko.
 # almost all exceptions here are passed to the upper layer.
