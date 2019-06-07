@@ -256,3 +256,10 @@ class InvalidLocationError(UserError):
         self.available = available
 
         self.message = self._msg.format(requested, ", ".join(available))
+
+
+class ReConnectFailed(ErrorMessage):
+    _msg = "Failed to re-connect to {}"
+
+    def __init__(self, host):
+        self.message = self._msg.format(host)
