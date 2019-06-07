@@ -45,7 +45,8 @@ class NoRefhostsDefinedError(UserError, ValueError):
     """
 
     def __init__(self):
-        self.message = "No refhosts defined";
+        self.message = "No refhosts defined"
+
 
 class HostIsNotConnectedError(UserError, ValueError):
 
@@ -76,10 +77,7 @@ class SystemCommandError(ErrorMessage):
 
     @property
     def message(self):
-        return self._message + " rc = {0} Command: {1!r}".format(
-            self.rc,
-            self.command
-        )
+        return self._message + " rc = {0} Command: {1!r}".format(self.rc, self.command)
 
 
 class UnexpectedlyFastCleanExitFromXdgOpen(UserMessage):
@@ -95,79 +93,63 @@ class SvnCheckoutInterruptedError(ErrorMessage):
 
 
 class QadbReportCommentLengthWarning(UserMessage):
-
     def __str__(self):
-        return 'comment strings > 100 chars are truncated by remote_qa_db_report.pl'
+        return "comment strings > 100 chars are truncated by remote_qa_db_report.pl"
 
 
 class ConnectingTargetFailedMessage(UserMessage):
-
     def __init__(self, hostname, reason):
         self.hostname = hostname
         self.reason = reason
 
     def __str__(self):
-        return 'connecting to {0} failed: {1}'.format(
-            self.hostname, self.reason
-        )
+        return "connecting to {0} failed: {1}".format(self.hostname, self.reason)
 
     def __repr__(self):
-        return '<{0} {1!r}:{2!r}>'.format(
-            self.__class__,
-            self.hostname,
-            self.reason
-        )
+        return "<{0} {1!r}:{2!r}>".format(self.__class__, self.hostname, self.reason)
 
 
 class ConnectingToMessage(UserMessage):
-
     def __init__(self, hostname):
         self.hostname = hostname
 
     def __str__(self):
-        return 'connecting to {0}'.format(self.hostname)
+        return "connecting to {0}".format(self.hostname)
 
 
 class MissingPackagesError(UserError):
-
     def __str__(self):
         return "Missing packages: TestReport not loaded and no -p given."
 
 
 class TestReportNotLoadedError(UserError):
-
     def __str__(self):
-        return 'TestReport not loaded'
+        return "TestReport not loaded"
 
 
 class FailedToWriteScriptResult(UserMessage):
-
     def __init__(self, path, reason):
         self.path = path
         self.reason = reason
 
     def __str__(self):
         return "failed to write script output to {0}: {1}".format(
-            self.path,
-            self.reason,
+            self.path, self.reason
         )
 
 
 class StartingCompareScriptError(UserMessage):
-
     def __init__(self, reason, argv):
         self.reason = reason
         self.argv = argv
 
     def __str__(self):
         return "Starting compare script {0!r} failed: {1}".format(
-            self.argv,
-            self.reason
+            self.argv, self.reason
         )
 
 
 class CompareScriptError(UserMessage):
-
     def __init__(self, argv, stdout, stderr, rc):
         self.argv = argv
         self.stderr = stderr
@@ -179,47 +161,38 @@ class CompareScriptError(UserMessage):
 
 
 class CompareScriptFailed(CompareScriptError):
-
     def __str__(self):
         return "Compare script {0!r} failed: rc = {1} err:\n{2}".format(
-            self.argv,
-            self.rc,
-            self.stderr,
+            self.argv, self.rc, self.stderr
         )
 
 
 class CompareScriptCrashed(CompareScriptError):
-
     def __str__(self):
-        return "Compare script {0!r} crashed:\n{1}".format(
-            self.argv,
-            self.stderr,
-        )
+        return "Compare script {0!r} crashed:\n{1}".format(self.argv, self.stderr)
 
 
 class LocationChangedMessage(UserMessage):
-
     def __init__(self, old, new):
         self.old = old
         self.new = new
 
     @property
     def message(self):
-        return 'changed location from {0!r} to {1!r}'.format(
-            self.old, self.new
-        )
+        return "changed location from {0!r} to {1!r}".format(self.old, self.new)
 
 
 class PackageRevisionHasntChangedWarning(UserMessage):
-    _msg = "Revision of package {0!r} hasn't changed, " \
+    _msg = (
+        "Revision of package {0!r} hasn't changed, "
         + "it's most likely already updated. skipping."
+    )
 
     def __init__(self, package):
         self.message = self._msg.format(package)
 
 
 class MissingDoerError(ErrorMessage):
-
     def __init__(self, release):
         self.release = release
 
@@ -256,3 +229,10 @@ class InvalidLocationError(UserError):
         self.available = available
 
         self.message = self._msg.format(requested, ", ".join(available))
+
+
+class ReConnectFailed(ErrorMessage):
+    _msg = "Failed to re-connect to {}"
+
+    def __init__(self, host):
+        self.message = self._msg.format(host)

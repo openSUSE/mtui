@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 # mtui ssh connection handling using paramiko.
 # almost all exceptions here are passed to the upper layer.
@@ -17,11 +16,14 @@ from pathlib import Path
 from logging import getLogger
 from traceback import format_exc
 
-from mtui.utils import termsize
+from .utils import termsize
+from .messages import ReConnectFailed
 
 import paramiko
 
 logger = getLogger("mtui.connection")
+RETRIES = 5
+
 
 if not sys.warnoptions:
     import warnings
@@ -278,9 +280,14 @@ class Connection(object):
 
         session = self.__run_command(command)
 
+        counter = 0
         while not session:
+            if counter == RETRIES:
+                raise ReConnectFailed(self.hostname)
+
             self.reconnect()
             session = self.__run_command(command)
+            counter += 1
 
         while True:
             buffer = b""
@@ -419,9 +426,13 @@ class Connection(object):
 
     def __sftp_reconnect(self):
         sftp = self.__sftp_open()
+        counter = 0
         while not sftp:
+            if counter == RETRIES:
+                raise ReConnectFailed(self.hostname)
             self.reconnect()
             sftp = self.__sftp_open()
+            counter += 1
         return sftp
 
     def put(self, local, remote):
