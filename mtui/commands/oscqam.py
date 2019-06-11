@@ -33,7 +33,7 @@ class OSCCommand(Command):
     def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
         self.log.info("{}: {}".format(self._infopl, reviewid))
-        cmd = "osc -A {} qam {}".format(self.command, osc_api[apiid])
+        cmd = "osc -A {} qam {}".format(osc_api[apiid], self.command)
         group = " "
 
         if self.args.group:
