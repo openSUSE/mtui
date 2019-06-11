@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 from argparse import REMAINDER
 from shlex import quote
 from subprocess import check_call
@@ -42,7 +40,6 @@ class OSCCommand(Command):
 
         cmd += group + reviewid
         self.log.debug(cmd)
-        return
         try:
             check_call(cmd.split())
         except Exception as e:
