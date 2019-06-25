@@ -1,8 +1,15 @@
-image: leap:latest
+image: opensuse/leap:latest
+
+stages:
+  - deploy
 
 buildibs:
+  stage: deploy
+  before_script:
+    - zypper in --no-confirm python-xml python2-packaging osc obs-service-tar_scm obs-service-recompress obs-service-set_version
+    - mv "$SUSE_CA" /etc/pki/trust/anchors/SUSE_Trust_Root.pem && update-ca-certificates
+    - mkdir -p /root/.config/osc && mv "$OSC_RC" /root/.config/osc/oscrc
   script:
-    - zypper in --no-confirm obs-service-tar_scm obs-service-recompress obs-service-set_version
     - cd $CI_PROJECT_DIR
     - osc co QA:Maintenance:Test mtui
     - cd QA:Maintenance:Test/mtui
@@ -10,7 +17,5 @@ buildibs:
     - osc service disabledrun
     - osc ar
     - osc ci -m "Automatic update"
-  tags:
-    - qam
   only:
     - master@qa-maintenance/mtui
