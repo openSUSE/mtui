@@ -1,21 +1,48 @@
 image: opensuse/leap:latest
 
+variables:
+  OSC_PACKAGE: mtui
+
 stages:
+  - test
   - deploy
 
-buildibs:
+test:
+  stage: test
+  before_script:
+    - zypper ar http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Leap_15.1/QA:Maintenance.repo
+    - zypper --gpg-auto-import-keys ref
+    - zypper in --no-confirm python3-pytest python3-openqa_client python3-paramiko python3-pyxdg python3-qamlib python3-ruamel.yaml qam-metadata subversion
+  script:
+    - python3 -m pytest -v
+
+.publish_template: &publish_template
   stage: deploy
   before_script:
-    - zypper in --no-confirm python-xml python2-packaging osc obs-service-tar_scm obs-service-recompress obs-service-set_version
+    - zypper in --no-confirm python-xml python-packaging osc obs-service-tar_scm obs-service-recompress obs-service-set_version
     - mv "$SUSE_CA" /etc/pki/trust/anchors/SUSE_Trust_Root.pem && update-ca-certificates
     - mkdir -p /root/.config/osc && mv "$OSC_RC" /root/.config/osc/oscrc
   script:
     - cd $CI_PROJECT_DIR
-    - osc co QA:Maintenance:Test mtui
-    - cd QA:Maintenance:Test/mtui
+    - osc co $OSC_PROJECT $OSC_PACKAGE
+    - cd $OSC_PROJECT/$OSC_PACKAGE
     - rm -f *.tar.xz
     - osc service disabledrun
     - osc ar
-    - osc ci -m "Automatic update"
+    - osc ci -m "Automatic update to $CI_COMMIT_SHORT_SHA"
+
+publish_devel:
+  <<: *publish_template
+  variables:
+    OSC_PROJECT: QA:Maintenance:Test
   only:
     - master@qa-maintenance/mtui
+
+#publish:
+#  <<: *publish_template
+#  variables:
+#    OSC_PROJECT: QA:Maintenance
+#  only:
+#    - tags@qa-maintenance/mtui
+#  except:
+#    - branches
