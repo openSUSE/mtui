@@ -1,39 +1,26 @@
-import os
-from errno import ENOENT
-from errno import EEXIST
 import concurrent.futures
+import glob
+import os
+import re
+import shutil
 import stat
+from abc import ABCMeta, abstractmethod
+from errno import EEXIST, ENOENT
+from logging import getLogger
 from traceback import format_exc
 from urllib.request import urlopen
 
-import glob
-import re
-
-from abc import ABCMeta
-from abc import abstractmethod
-
-import shutil
-
-from logging import getLogger
-
-from mtui.utils import nottest
-
-from mtui.connector.openqa import Openqa
-from mtui.target.hostgroup import HostsGroup
-from mtui.target import Target
-from mtui.refhost import RefhostsFactory
-from mtui.refhost import Attributes
-from mtui.refhost import RefhostsResolveFailed
-from mtui.testopia import Testopia
+from qamlib.utils import ensure_dir_exists
 
 from mtui import updater
+from mtui.connector.openqa import Openqa
+from mtui.refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
+from mtui.target import Target
 from mtui.target.actions import UpdateError
-
-from mtui.template import _TemplateIOError
-from mtui.template import TestReportAlreadyLoaded
-
-from qamlib.utils import ensure_dir_exists
-from qamlib.utils import makedirs
+from mtui.target.hostgroup import HostsGroup
+from mtui.template import TestReportAlreadyLoaded, _TemplateIOError
+from mtui.testopia import Testopia
+from mtui.utils import nottest
 
 logger = getLogger("mtui.template.testreport")
 
@@ -299,7 +286,8 @@ class TestReport(object, metaclass=ABCMeta):
         self._create_installogs_dir()
 
     def _create_installogs_dir(self):
-        makedirs(self.config.template_dir / str(self.id) / self.config.install_logs)
+        directory = self.config.template_dir / str(self.id) / self.config.install_logs
+        directory.mkdir(parents=False, exist_ok=True)
 
     @staticmethod
     def _ensure_executable(pattern):
