@@ -67,5 +67,6 @@ def get_parser(sys):
         type=OBSUpdateID,
         help="OBS request review id\nexample: SUSE:Maintenance:1:1 for fully openQA review",
     )
+    parser.add_argument("--smelt_api", type=str, help="SMELT graphQL API endpoint")
 
     return parser
