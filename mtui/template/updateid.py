@@ -1,17 +1,17 @@
 from errno import ENOENT
 from logging import getLogger
 
-from mtui.template import _TemplateIOError
-from mtui.template import testreport_svn_checkout
-from mtui.template.obstestreport import OBSTestReport
-
-from qamlib.types.obs import RequestReviewID
 from qamlib.smelt import SMELT
+from qamlib.types.obs import RequestReviewID
+
+from mtui.template import _TemplateIOError, testreport_svn_checkout
+from mtui.template.obstestreport import OBSTestReport
 
 logger = getLogger("mtui.template.updateid")
 
 
 class UpdateID(object):
+
     def __init__(self, id_, testreport_factory, testreport_svn_checkout):
         self.id = id_
         self.smelt = None
@@ -59,9 +59,10 @@ class UpdateID(object):
 
 
 class OBSUpdateID(UpdateID):
-    def __init__(self, rrid, *args, **kw):
-        super(OBSUpdateID, self).__init__(
-            RequestReviewID(rrid), OBSTestReport, testreport_svn_checkout
-        )
 
-        self.smelt = SMELT(self.id)
+    def __init__(self, rrid, *args, **kw):
+        super().__init__(RequestReviewID(rrid), OBSTestReport, testreport_svn_checkout)
+
+    def make_testreport(self, config, autoconnect=True):
+        self.smelt = SMELT(self.id, config.smelt_api)
+        return super().make_testreport(config, autoconnect=True)

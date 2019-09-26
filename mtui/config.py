@@ -2,18 +2,16 @@
 # mtui config file parser and default values
 #
 
-from os import getenv
-
-from pathlib import Path
-import getpass
 import collections
 import configparser
-
+import getpass
 from logging import getLogger
+from os import getenv
+from pathlib import Path
 from traceback import format_exc
-from mtui.refhost import RefhostsFactory
+
 from mtui.messages import InvalidLocationError
-from mtui.refhost import RefhostsResolveFailed
+from mtui.refhost import RefhostsFactory, RefhostsResolveFailed
 
 logger = getLogger("mtui.config")
 
@@ -116,6 +114,11 @@ class Config(object):
             ("svn_path", ("svn", "path"), "svn+ssh://svn@qam.suse.de/testreports"),
             ("bugzilla_url", ("url", "bugzilla"), "https://bugzilla.suse.com"),
             ("reports_url", ("url", "testreports"), "http://qam.suse.de/testreports"),
+            (
+                "smelt_api",
+                ("smelt", "endpoint"),
+                "http://merkur.qam.suse.de/smelt/graphql/",
+            ),
             ("target_tempdir", ("target", "tempdir"), Path("/tmp"), Path),
             (
                 "target_testsuitedir",
@@ -280,5 +283,8 @@ class Config(object):
 
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout
+
+        if args.smelt_api:
+            self.smelt_api = args.smelt_api
 
         self.auto = True
