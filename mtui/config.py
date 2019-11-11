@@ -117,7 +117,7 @@ class Config(object):
             (
                 "smelt_api",
                 ("smelt", "endpoint"),
-                "http://merkur.qam.suse.de/smelt/graphql/",
+                "http://merkur.qam.suse.de/graphql/",
             ),
             ("target_tempdir", ("target", "tempdir"), Path("/tmp"), Path),
             (
