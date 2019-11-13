@@ -34,7 +34,7 @@ class Openqa(object):
         self.params["latest"] = 1
 
         self.test = {}
-        self.test["testname"] = config.openqa_install_test
+        self.test["testname"] = ["qam-incidentinstall-ha","qam-incidentinstall"]
         self.test["logname"] = config.openqa_install_logs
         self.host = config.openqa_instance
         self.client = OpenQA_Client(self.host)
@@ -53,7 +53,7 @@ class Openqa(object):
         return all(
             normalize(y["result"])
             for y in self.jobs
-            if y["test"] == "qam-incidentinstall"
+            if y["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
         )
 
     def pprint_results(self):
@@ -100,7 +100,7 @@ class Openqa(object):
                 join(self.host, "tests", str(job["id"]), "file", self.test["logname"]),
             )
             for job in self.jobs
-            if job["test"] == self.test["testname"]
+            if job["test"] in self.test["testname"]
         ]
 
     def __bool__(self):
