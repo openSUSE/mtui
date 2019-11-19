@@ -406,6 +406,7 @@ class TestReport(object, metaclass=ABCMeta):
             ("Packager", self.packager),
             ("Bugs", ", ".join(sorted(self.bugs.keys()))),
             ("Packages", " ".join(sorted(self.get_package_list()))),
+            ("Build checks", self._testreport_url()[:-3] + "build_checks")
             ("Testreport", self._testreport_url()),
             ("Repository", self.repository),
         ] + [("Testplatform", x) for x in self.testplatforms]
