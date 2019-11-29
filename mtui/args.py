@@ -60,13 +60,23 @@ def get_parser(sys):
     parser.add_argument(
         "-c", "--config", type=Path, default=None, help="Override default config path"
     )
-    parser.add_argument(
+    parser.add_argument("--smelt_api", type=str, help="SMELT graphQL API endpoint")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "-a",
         "--auto-review-id",
         metavar="RequestReviewID",
-        type=OBSUpdateID,
-        help="OBS request review id\nexample: SUSE:Maintenance:1:1 for fully openQA review",
+        type=AutoOBSUpdateID,
+        help="OBS request review id\nexample: SUSE:Maintenance:1:1",
+        dest="update"
     )
-    parser.add_argument("--smelt_api", type=str, help="SMELT graphQL API endpoint")
+    group.add_argument(
+        "-k",
+        "--kernel-review-id",
+        metavar="RequestReviewID",
+        type=KernelOBSUpdateID,
+        help="OBS kernel/live-patch request review id\nexample: SUSE:Maintenance:1:1",
+        dest="update"
+    )
 
     return parser
