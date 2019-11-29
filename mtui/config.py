@@ -173,9 +173,22 @@ class Config:
             ),
             # openQA connector
             ("openqa_instance", ("openqa", "openqa"), "https://openqa.suse.de"),
+            (
+                "openqa_instance_baremetal",
+                ("openqa", "baremetal"),
+                "http://openqa.qam.suse.cz",
+            ),
             ("openqa_install_distri", ("openqa", "distri"), "sle"),
-            ("openqa_install_test", ("openqa", "install_test"), "qam-incidentinstall"),
-            ("openqa_install_logs", ("openqa", "logfile"), "update_install-zypper.log"),
+            (
+                "openqa_install_logs",
+                ("openqa", "install_logfile"),
+                "update_install-zypper.log",
+            ),
+            (
+                "openqa_kernel_install_logs",
+                ("openqa", "kernel_install_logfile"),
+                "update_kernel-zypper.log",
+            ),
             # config for template export
             ("threshold", ("template", "smelt_threshold"), 10, int, self.config.getint),
             # process location last as that needs to access
@@ -286,5 +299,3 @@ class Config:
 
         if args.smelt_api:
             self.smelt_api = args.smelt_api
-
-        self.auto = True
