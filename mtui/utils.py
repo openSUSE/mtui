@@ -162,25 +162,6 @@ def requires_update(fn):
     return wrap
 
 
-def ass_is(x, class_, maybe_none=False):
-    if maybe_none and x is None:
-        return
-    assert isinstance(x, class_), "got {0!r}".format(x)
-
-
-if __debug__:
-
-    def ass_isL(xs, class_):
-        for x in xs:
-            ass_is(x, class_)
-
-
-else:
-
-    def ass_isL(_, __):
-        pass
-
-
 class DictWithInjections(dict):
     def __init__(self, *args, **kw):
         self.key_error = kw.pop("key_error", KeyError)
@@ -268,3 +249,92 @@ def complete_choices_filelist(synonyms, line, text, hostnames=None):
     synonyms += [(dirname + i,) for i in os.listdir(dirname) if i.startswith(filename)]
 
     return complete_choices(synonyms, line, text, hostnames)
+
+
+def timestamp():
+    # remove fractional part
+    return str(int(time.time()))
+
+
+class check_eq(object):
+
+    """
+    Usage: check_eq(x)(y)
+    :return: y for y if (x == y) is True otherwise raises
+    :raises: ValueError
+    """
+
+    def __init__(self, *x):
+        self.x = x
+
+    def __call__(self, y):
+        if y not in self.x:
+            raise ValueError("Expected: {0!r}, got: {1!r}".format(self.x, y))
+        return y
+
+    def __repr__(self):
+        return "<{0}.{1} {2!r}>".format(
+            self.__class__.__module__, self.__class__.__name__, self.x
+        )
+
+
+@contextmanager
+def chdir(newpath):
+    """Context manager for changing the current working directory"""
+    storedpath = os.getcwd()
+    os.chdir(newpath)
+    yield
+    os.chdir(storedpath)
+
+
+def ensure_dir_exists(*path, **kwargs):
+    """
+    :returns: str joined path with dirs created as needed.
+    :type path: [str] to join
+
+    :type filepath: bool
+    :param filepath: path is treated as directory if False, otherwise as
+        file and last component is not created as directory.
+    :param on_create: Callable operation on created dir
+    """
+
+    on_create = kwargs.get("on_create", None)
+    filepath = kwargs.get("filepath", False)
+
+    path = Path().joinpath(*path)
+    dirn = path.parent if filepath else path
+
+    os.makedirs(dirn, exist_ok=True)
+
+    if isinstance(on_create, Callable):
+        on_create(path=dirn)
+
+    return path
+
+
+def atomic_write_file(data, path):
+    if isinstance(data, bytes):
+        data = data.decode("utf-8")
+    fd, fname = mkstemp(dir=dirname(path))
+    with os.fdopen(fd, "w") as f:
+        f.write(data)
+
+    move(fname, path)
+
+
+def walk(inc):
+    if isinstance(inc, list):
+        for i, j in enumerate(inc):
+            inc[i] = walk(j)
+    if isinstance(inc, dict):
+        if len(inc) == 1:
+            if "edges" in inc:
+                return walk(inc["edges"])
+            elif "node" in inc:
+                tmp = deepcopy(inc["node"])
+                del inc["node"]
+                inc.update(tmp)
+        for key in inc:
+            if isinstance(inc[key], (list, dict)):
+                inc[key] = walk(inc[key])
+    return inc
