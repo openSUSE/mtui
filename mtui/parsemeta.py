@@ -8,6 +8,11 @@ class MetadataParser:
         """
         :returns: bool True if line was parsed, otherwise False
         """
+        match = re.search("Products: (.+)", line)
+        if match:
+            results.products = match.group(1).replace("), ", ")|").split('|')
+            return True
+
         match = re.search("Category: (.+)", line)
         if match:
             results.category = match.group(1)

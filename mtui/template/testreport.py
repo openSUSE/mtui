@@ -82,6 +82,7 @@ class TestReport(metaclass=ABCMeta):
         self.repository = None
 
         self._attrs = [
+            "products",
             "category",
             "packager",
             "reviewer",
@@ -396,17 +397,21 @@ class TestReport(metaclass=ABCMeta):
         return sink(self.bugs, arg)
 
     def _show_yourself_data(self):
-        return [
-            ("Category", self.category),
-            ("Hosts", " ".join(sorted(self.systems.keys()))),
-            ("Reviewer", self.reviewer),
-            ("Packager", self.packager),
-            ("Bugs", ", ".join(sorted(self.bugs.keys()))),
-            ("Packages", " ".join(sorted(self.get_package_list()))),
-            ("Build checks", self._testreport_url()[:-3] + "build_checks")
-            ("Testreport", self._testreport_url()),
-            ("Repository", self.repository),
-        ] + [("Testplatform", x) for x in self.testplatforms]
+        return (
+            [
+                ("Category", self.category),
+                ("Hosts", " ".join(sorted(self.systems.keys()))),
+                ("Reviewer", self.reviewer),
+                ("Packager", self.packager),
+                ("Bugs", ", ".join(sorted(self.bugs.keys()))),
+                ("Packages", " ".join(sorted(self.get_package_list()))),
+                ("Build checks", self._testreport_url()[:-3] + "build_checks"),
+                ("Testreport", self._testreport_url()),
+                ("Repository", self.repository),
+            ]
+            + [("Testplatform", x) for x in self.testplatforms]
+            + [("Products", x) for x in self.products]
+        )
 
     def show_yourself(self, writer):
         self._aligned_write(writer, self._show_yourself_data())
