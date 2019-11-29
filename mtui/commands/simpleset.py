@@ -162,3 +162,95 @@ class SetTimeout(Command):
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()
         )
+
+
+class SetWorkflow(Command):
+    """Sets workflow and reload data from openQA\n
+    'auto' workflow will be automaticaly set to manual if openQA install tests
+    missiong or have failed state"""
+
+    command = "set_workflow"
+
+    @classmethod
+    def _add_arguments(cls, parser):
+        parser.add_argument(
+            "workflow", choices=["auto", "manual", "kernel"], help="desired workflow"
+        )
+        return parser
+
+    @requires_update
+    def __call__(self):
+        state = self.args.workflow
+
+        if state == "kernel":
+            if self.config.kernel:
+                logger.info(f"Desired workflow {state} is same as current")
+                self.metadata.openqa["auto"].run()
+                for oq in self.metada.openqa["kernel"]:
+                    oq.run()
+                return
+            else:
+                logger.info(f"Setting workflow to '{state}'")
+                self.config.auto = False
+                self.config.kernel = True
+                self.metadata.openqa["auto"] = AutoOpenQA(
+                    self.config,
+                    self.config.openqa_instance,
+                    self.metadata.smelt,
+                    self.metadata.id,
+                ).run()
+                self.metadata.openqa["kernel"] = []
+                self.metadata.openqa["kernel"].append(
+                    KernelOpenQA(
+                        self.config,
+                        self.config.openqa_instance,
+                        self.metadata.smelt,
+                        self.metadata.id,
+                    ).run()
+                )
+                self.metadata.openqa["kernel"].append(
+                    KernelOpenQA(
+                        self.config,
+                        self.config.openqa_instance_baremetal,
+                        self.metadata.smelt,
+                        self.metadata.id,
+                    ).run()
+                )
+                return
+        elif state == "auto":
+            if self.config.auto:
+                logger.info(f"Desired workflow {state} is same as current")
+                self.metadata.openqa["auto"].run()
+                return
+            else:
+                logger.info(f"Setting workflow to '{state}'")
+                self.config.auto = True
+                self.config.kernel = False
+                self.metadata.openqa["auto"] = AutoOpenQA(
+                    self.config,
+                    self.config.openqa_instance,
+                    self.metadata.smelt,
+                    self.metadata.id,
+                ).run()
+                self.metadata.openqa["kernel"] = []
+                if self.metadata.openqa["auto"].results is None:
+                    logger.warning("No install jobs or install jobs failed")
+                    logger.info("Switch mode to manual")
+                    self.config.auto = False
+                return
+        else:
+            if not self.config.auto and not self.config.kernel:
+                logger.info(f"Desired workflow {state} is same as current")
+                self.metadata.openqa["auto"].run()
+                return
+            else:
+                logger.info(f"Setting workflow to '{state}'")
+                self.config.auto = False
+                self.config.kernel = False
+                self.metadata.openqa["auto"].run()
+                self.metadata.openqa["kernel"] = []
+                return
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx):
+        return complete_choices([("auto",), ("manual",), ("kernel",)], line, text)
