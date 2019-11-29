@@ -21,17 +21,30 @@ class LoadTemplate(Command):
 
     @classmethod
     def _add_arguments(cls, parser):
+        group = parser.add_mutually_exclusive_group(required=True)
+        group.add_argument(
+            "-a",
+            "--auto-review-id",
+            metavar="RequestReviewID",
+            type=AutoOBSUpdateID,
+            help="OBS request review id\nexample: SUSE:Maintenance:1:1",
+            dest="update"
+        )
+        group.add_argument(
+            "-k",
+            "--kernel-review-id",
+            metavar="RequestReviewID",
+            type=KernelOBSUpdateID,
+            help="OBS kernel/live-patch request review id\nexample: SUSE:Maintenance:1:1",
+            dest="update"
+        )
         parser.add_argument(
-            'update_id',
-            nargs=1,
-            type=OBSUpdateID,
-            help='OBS request id for update')
-        parser.add_argument(
-            '-c',
-            '--clean-hosts',
-            dest='chosts',
-            action='store_false',
-            help='clean up old hosts')
+            "-c",
+            "--clean-hosts",
+            dest="chosts",
+            action="store_false",
+            help="clean up old hosts",
+        )
         return parser
 
     def __call__(self):
@@ -49,7 +62,17 @@ class LoadTemplate(Command):
             self.targets[target].close()
             del self.targets[target]
 
-        self.prompt.load_update(self.args.update_id[0], autoconnect=True)
+        if self.args.update.kind == "kernel":
+            self.config.kernel = True
+            self.config.auto = False
+        elif self.args.update.kind == "auto":
+            self.config.kernel = False
+            self.config.auto = True
+        else:
+            raise TestReportNotLoadedError
+
+
+        self.prompt.load_update(self.args.update, autoconnect=True)
 
         # Reload hosts to which we already have a connection
         # close hosts we are already connected to but add them to the
@@ -67,6 +90,12 @@ class LoadTemplate(Command):
     @staticmethod
     def complete(_, text, line, begidx, endix):
         return complete_choices(
-            [('-c', '--clean-hosts'),
-             ("SUSE:Maintenance:", "openSUSE:Maintenance:")],
-            line, text)
+            [
+                ("-c", "--clean-hosts"),
+                ("SUSE:Maintenance:", "openSUSE:Maintenance:"),
+                ("-a", "--auto-review-id"),
+                ("-k", "--kernel-review-id"),
+            ],
+            line,
+            text,
+        )
