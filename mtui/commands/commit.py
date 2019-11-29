@@ -1,10 +1,9 @@
 import subprocess
-
 from argparse import REMAINDER
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import requires_update, complete_choices
+from mtui.utils import complete_choices, requires_update
 
 
 class Commit(Command):

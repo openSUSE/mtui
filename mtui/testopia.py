@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 #
 # manage connection to Testopia
 #
@@ -8,15 +7,13 @@ import collections
 from logging import getLogger
 from xml.sax import saxutils
 
-from mtui.connector.bugzilla import Bugzilla
+from .connector.bugzilla import Bugzilla
 
-from mtui.utils import nottest
 
 
 logger = getLogger("mtui.testopia")
 
 
-@nottest
 class Testopia(object):
 
     """Managing Testopia testcases

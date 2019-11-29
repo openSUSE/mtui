@@ -1,8 +1,9 @@
-from os.path import join
 import subprocess
 from logging import getLogger
-from qamlib.utils import ensure_dir_exists, chdir
-from mtui.messages import SvnCheckoutInterruptedError
+from os.path import join
+
+from ..messages import SvnCheckoutInterruptedError
+from ..utils import chdir, ensure_dir_exists
 
 logger = getLogger("mtui.template")
 

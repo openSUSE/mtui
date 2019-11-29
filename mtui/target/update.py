@@ -1,24 +1,16 @@
 from logging import getLogger
 
-from mtui.target.actions import UpdateError
-from mtui.target.actions import ThreadedMethod
-
-from mtui.target.actions import queue
-from mtui.target.actions import spinner
-
-from mtui.target.locks import LockedTargets
-
-from mtui.hooks import PreScript
-from mtui.hooks import PostScript
-from mtui.hooks import CompareScript
-
-from qamlib.types.rpmver import RPMVersion
-from mtui.utils import yellow
+from ..hooks import CompareScript, PostScript, PreScript
+from ..types.rpmver import RPMVersion
+from ..utils import yellow
+from .actions import ThreadedMethod, UpdateError, queue, spinner
+from .locks import LockedTargets
 
 logger = getLogger("mtui.target.update")
 
 
-class Update(object):
+class Update:
+
     def __init__(self, targets, packages, testreport):
         self.targets = targets
         self.packages = packages

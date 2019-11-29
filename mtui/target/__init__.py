@@ -1,34 +1,20 @@
-# -*- coding: utf-8 -*-
 #
 # target host management. this is right above the ssh/transmission layer and
 # below the abstractions layer (like updating, preparing, etc.)
 #
 
 import re
-import signal
-from traceback import format_exc
 from logging import getLogger
+from traceback import format_exc
 
-from mtui.connection import Connection
-from mtui.connection import errno
-from mtui.connection import CommandTimeout
-
-from qamlib.types.rpmver import RPMVersion
-from mtui import messages
-
-
-from mtui.target.locks import Locked
-
-from mtui.target.locks import TargetLock
-from mtui.target.locks import TargetLockedError
-
+from .. import messages
+from ..connection import CommandTimeout, Connection, errno
 # Import for other modules -- not used directly here
-from mtui.target.locks import LockedTargets
-from mtui.target.locks import RemoteLock
-
-from qamlib.utils import timestamp
-
-from mtui.target.parsers import parse_system
+from ..target.locks import (Locked, LockedTargets, RemoteLock, TargetLock,
+                            TargetLockedError)
+from ..target.parsers import parse_system
+from ..types.rpmver import RPMVersion
+from ..utils import timestamp
 
 logger = getLogger("mtui.target")
 

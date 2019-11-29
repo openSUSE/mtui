@@ -7,7 +7,7 @@ class OBSTestReport(TestReport):
     _type = "OBS"
 
     def __init__(self, *a, **kw):
-        super(OBSTestReport, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         self.rrid = None
         self.rating = None
@@ -35,7 +35,7 @@ class OBSTestReport(TestReport):
         return [
             ('ReviewRequestID', self.rrid),
             ('Rating', self.rating),
-        ] + super(OBSTestReport, self)._show_yourself_data()
+        ] + super()._show_yourself_data()
 
     def set_repo(self, target, operation):
         if operation == 'add':

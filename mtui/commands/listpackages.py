@@ -1,12 +1,7 @@
-# -*- coding: utf-8 -*-
-
-
-from mtui.commands import Command
-from mtui.utils import blue, yellow, red, green
-from mtui.utils import requires_update
-from mtui.utils import complete_choices
-from mtui import messages
-from qamlib.types.rpmver import RPMVersion
+from .. import messages
+from ..types.rpmver import RPMVersion
+from ..utils import blue, complete_choices, green, red, requires_update, yellow
+from . import Command
 
 
 class ListPackages(Command):

@@ -5,22 +5,16 @@
 import cmd
 import readline
 import subprocess
-
 from logging import getLogger
+from pathlib import Path
+from traceback import format_exc
 
 import mtui.notification as notification
 
-from traceback import format_exc
-
+from . import commands, messages
 from .argparse import ArgsParseFailure
-
-from pathlib import Path
-from mtui import commands
-from mtui import messages
-from mtui.template.nulltestreport import NullTestReport
-from qamlib.utils import ensure_dir_exists
-from qamlib.utils import timestamp
-from mtui.utils import prompt_user
+from .template.nulltestreport import NullTestReport
+from .utils import prompt_user, timestamp
 
 logger = getLogger("mtui.prompt")
 

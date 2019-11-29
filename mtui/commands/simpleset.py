@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
-
 import logging
 
 from mtui.commands import Command
-from mtui.utils import complete_choices
+from mtui.utils import complete_choices, requires_update
 from mtui import messages
 from mtui.refhost import RefhostsFactory
+from mtui.connector.openqa import AutoOpenQA, KernelOpenQA
 
+logger = logging.getLogger("mtui.commands.simplesets")
 
 class SessionName(Command):
     """

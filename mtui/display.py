@@ -1,118 +1,108 @@
 from datetime import datetime
 
-from qamlib.types.rpmver import RPMVersion
+from .types.rpmver import RPMVersion
+from .utils import blue, green, red, yellow
 
-from mtui.utils import blue, green, red, yellow
 
-
-class CommandPromptDisplay(object):
-
+class CommandPromptDisplay:
     def __init__(self, output):
         self.output = output
 
-    def println(self, msg='', eol='\n'):
+    def println(self, msg="", eol="\n"):
         return self.output.write(msg + eol)
 
     def list_bugs(self, bugs, url):
         ids = sorted(bugs.keys())
 
-        self.println(
-            'Buglist: {}/buglist.cgi?bug_id={}'.format(url, ','.join(ids)))
+        self.println(f'Buglist: {url}/buglist.cgi?bug_id={",".join(ids)}')
         for (bug, summary) in [(bug, bugs[bug]) for bug in ids]:
             self.println()
-            self.println('Bug #{0:5}: {1}'.format(bug, summary))
-            self.println('{}/show_bug.cgi?id={}'.format(url, bug))
+            self.println("Bug #{0:5}: {1}".format(bug, summary))
+            self.println(f"{url}/show_bug.cgi?id={bug}")
 
     def list_history(self, hostname, system, lines):
-        self.println('history from {} ({}):'.format(
-            hostname,
-            system
-        ))
+        self.println(f"history from {hostname} ({system}):")
         lines.reverse()
         for line in lines:
             try:
-                when = line.split(':')[0]
-                who = line.split(':')[1]
-                event = ':'.join(line.split(':')[2:])
+                when = line.split(":")[0]
+                who = line.split(":")[1]
+                event = ":".join(line.split(":")[2:])
             except IndexError:
                 continue
 
             time = datetime.fromtimestamp(float(when))
-            self.println('{}, {}: {}'.format(
-                time.strftime('%A, %d.%m.%Y %H:%M'),
-                who,
-                event
-            ))
+            self.println(
+                "{}, {}: {}".format(time.strftime("%A, %d.%m.%Y %H:%M"), who, event)
+            )
         self.println()
 
     def list_host(self, hostname, system, state, exclusive):
         if exclusive:
-            mode = 'serial'
+            mode = "serial"
         else:
-            mode = 'parallel'
+            mode = "parallel"
 
-        if state == 'enabled':
-            state = green('Enabled')
-        elif state == 'dryrun':
-            state = yellow('Dryrun')
+        if state == "enabled":
+            state = green("Enabled")
+        elif state == "dryrun":
+            state = yellow("Dryrun")
         else:
-            state = red('Disabled')
+            state = red("Disabled")
 
-        self.println('{0:20} {1:20}: {2} ({3})'.format(
-            hostname,
-            '({!s})'.format(system),
-            state,
-            mode
-        ))
+        self.println(
+            "{0:20} {1:20}: {2} ({3})".format(
+                hostname, "({!s})".format(system), state, mode
+            )
+        )
 
     def list_locks(self, hostname, system, lock):
-        system = '({!s})'.format(system)
+        system = "({!s})".format(system)
         if lock.locked:
             if lock.own():
-                lockedby = 'me'
+                lockedby = "me"
             else:
                 lockedby = lock.user
 
-            self.println(eol='', msg='{0:20} {1:20}: {2}'.format(
-                hostname,
-                system,
-                yellow('since {} by {}'.format(lock.time(), lockedby))
-            ))
+            self.println(
+                eol="",
+                msg="{0:20} {1:20}: {2}".format(
+                    hostname,
+                    system,
+                    yellow("since {} by {}".format(lock.time(), lockedby)),
+                ),
+            )
             if lock.comment:
-                self.println(' : {}'.format(lock.comment))
+                self.println(" : {}".format(lock.comment))
             else:
                 self.println()
         else:
-            self.println('{0:20} {1:20}: {2}'.format(
-                hostname,
-                system,
-                green('not locked')
-            ))
+            self.println(
+                "{0:20} {1:20}: {2}".format(hostname, system, green("not locked"))
+            )
 
     def list_sessions(self, hostname, system, stdout):
-        self.println('sessions on {} ({}):'.format(hostname, system))
+        self.println("sessions on {} ({}):".format(hostname, system))
         self.println(stdout)
 
     def list_timeout(self, hostname, system, timeout):
-        self.println('{0:20} {1:20}: {2}s'.format(
-            hostname,
-            '({!s})'.format(system),
-            timeout,
-        ))
+        self.println(
+            "{0:20} {1:20}: {2}s".format(hostname, "({!s})".format(system), timeout)
+        )
 
     def list_versions(self, targets, hosts_pvs):
         for hs, pvs in list(hosts_pvs.items()):
             if len(hosts_pvs) > 1:
-                self.println('version history from:')
+                self.println("version history from:")
                 for hn in hs:
-                    self.println('  {} ({})'.format(hn, targets[hn].system))
+                    self.println("  {} ({})".format(hn, targets[hn].system))
                 self.println()
 
             for pkg, vers in pvs:
-                self.println('{}:'.format(pkg))
+                self.println("{}:".format(pkg))
                 indent = 0
                 for ver in sorted(vers, key=RPMVersion, reverse=True):
-                    self.println('  ' * indent + '-> {}'.format(ver))
+                    self.println("  " * indent + "-> {}".format(ver))
                     indent = indent + 1
                 self.println()
 
@@ -123,77 +113,89 @@ class CommandPromptDisplay(object):
         self.println()
 
     def list_update_repos(self, repos, update_id):
-        server_update = "http://download.suse.de/ibs/" + ":/".join(str(update_id).split(":")[0:-1])
+        server_update = "http://download.suse.de/ibs/" + ":/".join(
+            str(update_id).split(":")[0:-1]
+        )
 
         for p, r in repos.items():
-            self.println("{}: {} - {}: {} - {}: {}".format(green("Product"), yellow(p.name),
-                                                           green("version"), yellow(p.version), green("arch"), yellow(p.arch)))
+            self.println(
+                "{}: {} - {}: {} - {}: {}".format(
+                    green("Product"),
+                    yellow(p.name),
+                    green("version"),
+                    yellow(p.version),
+                    green("arch"),
+                    yellow(p.arch),
+                )
+            )
             self.println("    {}".format(server_update + "/" + r))
 
     @staticmethod
     def show_log(hostname, hostlog, sink):
-        sink('log from {!s}:'.format(hostname))
+        sink("log from {!s}:".format(hostname))
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
-            sink('{!s}:~> {!s} [{!s}]'.format(hostname, cmdline, exitcode))
-            sink('stdout:')
-            list(map(sink, stdout.split('\n')))
-            sink('stderr:')
-            list(map(sink, stderr.split('\n')))
+            sink("{!s}:~> {!s} [{!s}]".format(hostname, cmdline, exitcode))
+            sink("stdout:")
+            list(map(sink, stdout.split("\n")))
+            sink("stderr:")
+            list(map(sink, stderr.split("\n")))
 
     def testopia_list(self, url, tcid, summary, status, automated):
-        if status == 'disabled':
-            status = red('disabled')
-        elif status == 'confirmed':
-            status = green('confirmed')
+        if status == "disabled":
+            status = red("disabled")
+        elif status == "confirmed":
+            status = green("confirmed")
         else:
-            status = yellow('proposed')
-        if automated == 'yes':
-            automated = 'automated'
+            status = yellow("proposed")
+        if automated == "yes":
+            automated = "automated"
         else:
-            automated = 'manual'
-        self.println('{0:40}: {1} ({2})'.format(summary, status, automated))
-        self.println('{}/tr_show_case.cgi?case_id={}'.format(url, tcid))
+            automated = "manual"
+        self.println("{0:40}: {1} ({2})".format(summary, status, automated))
+        self.println("{}/tr_show_case.cgi?case_id={}".format(url, tcid))
         self.println()
 
     def testopia_show(
-            self,
-            url,
-            case_id,
-            summary,
-            status,
-            automated,
-            requirement,
-            setup,
-            action,
-            breakdown,
-            effect):
-        self.println('{!s} {!s}'.format(blue('Testcase summary:'), summary))
-        self.println('{!s} {!s}'.format(
-            blue('Testcase URL:'), '{}/tr_show_case.cgi?case_id={}'.format(url, case_id)))
-        self.println('{!s} {!s}'.format(blue('Testcase automated:'), automated))
-        self.println('{!s} {!s}'.format(blue('Testcase status:'), status))
-        self.println('{!s} {!s}'.format(blue('Testcase requirements:'), requirement))
+        self,
+        url,
+        case_id,
+        summary,
+        status,
+        automated,
+        requirement,
+        setup,
+        action,
+        breakdown,
+        effect,
+    ):
+        self.println("{!s} {!s}".format(blue("Testcase summary:"), summary))
+        self.println(
+            "{!s} {!s}".format(
+                blue("Testcase URL:"), f"{url}/tr_show_case.cgi?case_id={case_id}"
+            )
+        )
+        self.println("{!s} {!s}".format(blue("Testcase automated:"), automated))
+        self.println("{!s} {!s}".format(blue("Testcase status:"), status))
+        self.println("{!s} {!s}".format(blue("Testcase requirements:"), requirement))
         if setup:
-            self.println(blue('Testcase setup:'))
+            self.println(blue("Testcase setup:"))
             self.println(setup)
         if breakdown:
-            self.println(blue('Testcase breakdown:'))
+            self.println(blue("Testcase breakdown:"))
             self.println(breakdown)
-        self.println(blue('Testcase actions:'))
+        self.println(blue("Testcase actions:"))
         self.println(action)
         if effect:
-            self.println(blue('Testcase effect:'))
+            self.println(blue("Testcase effect:"))
             self.println(effect)
 
     def testsuite_list(self, hostname, system, suites):
-        self.println('testsuites on {} ({}):'.format(hostname, system))
-        self.println(
-            '\n'.join([i for i in sorted(suites) if i.endswith('-run')]))
+        self.println(f"testsuites on {hostname} ({system}):")
+        self.println("\n".join([i for i in sorted(suites) if i.endswith("-run")]))
         self.println()
 
     def testsuite_run(self, hostname, exit, stdout, stderr, suitename):
-        self.println(
-            '{}:~> {}-testsuite [{}]'.format(hostname, suitename, exit))
+        self.println(f"{hostname}:~> {suitename} - testsuite [{exit}]")
         self.println(stdout)
         if stderr:
             self.println(stderr)

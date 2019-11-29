@@ -2,7 +2,7 @@ import sys
 import logging
 from subprocess import CalledProcessError
 
-from qamlib.colorlog import create_logger
+from .colorlog import create_logger
 
 from .argparse import ArgsParseFailure
 from mtui.config import Config

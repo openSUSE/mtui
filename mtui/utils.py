@@ -1,22 +1,23 @@
-import os
 import fcntl
-import struct
-import termios
-import tempfile
-import readline
-import subprocess
+import os
 import re
-
-from itertools import chain
+import readline
+import struct
+import subprocess
+import tempfile
+import termios
+import time
+from collections.abc import Callable
+from contextlib import contextmanager
+from copy import deepcopy
 from functools import wraps
+from itertools import chain
+from os.path import dirname
+from pathlib import Path
+from shutil import move
+from tempfile import mkstemp
+
 from mtui.messages import TestReportNotLoadedError
-
-try:
-    from nose.tools import nottest
-except ImportError:
-
-    def nottest(x):
-        return x
 
 
 def flatten(xs):
@@ -193,7 +194,7 @@ class DictWithInjections(dict):
             raise self.key_error(x)
 
 
-class SUTParse(object):
+class SUTParse:
     def __init__(self, args):
         suts = args.split(",")
         targets = ["-t {!s}".format(i) for i in suts]

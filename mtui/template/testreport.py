@@ -10,23 +10,19 @@ from logging import getLogger
 from traceback import format_exc
 from urllib.request import urlopen
 
-from qamlib.utils import ensure_dir_exists
-
-from mtui import updater
-from mtui.connector.openqa import Openqa
-from mtui.refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
-from mtui.target import Target
-from mtui.target.actions import UpdateError
-from mtui.target.hostgroup import HostsGroup
-from mtui.template import TestReportAlreadyLoaded, _TemplateIOError
-from mtui.testopia import Testopia
-from mtui.utils import nottest
+from .. import updater
+from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
+from ..target import Target
+from ..target.actions import UpdateError
+from ..target.hostgroup import HostsGroup
+from ..template import TestReportAlreadyLoaded, _TemplateIOError
+from ..testopia import Testopia
+from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
 
 
-@nottest
-class TestReport(object, metaclass=ABCMeta):
+class TestReport(metaclass=ABCMeta):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read
@@ -48,6 +44,7 @@ class TestReport(object, metaclass=ABCMeta):
         self._scripts_src_dir = (
             scripts_src_dir if scripts_src_dir else config.datadir.joinpath("scripts")
         )
+
         self.directory = config.template_dir
 
         # Note: the default values here are unchanged from the previous
@@ -523,9 +520,9 @@ class TestReport(object, metaclass=ABCMeta):
         #   input = *(line EOL)
 
         # by_host_pkg[hostname][package] = [version, ...]
-        by_host_pkg = dict()
+        by_host_pkg = {}
         for hn, t in list(targets.items()):
-            by_host_pkg[hn] = dict()
+            by_host_pkg[hn] = {}
             for line in t.lastout().split("\n"):
                 match = re.search(r"(\S+)\s+(\S+)", line)
                 if not match:
@@ -534,13 +531,13 @@ class TestReport(object, metaclass=ABCMeta):
                 by_host_pkg[hn].setdefault(pkg, []).append(ver)
 
         # by_pkg_vers[package][(version, ...)] = [hostname, ...]
-        by_pkg_vers = dict()
+        by_pkg_vers = {}
         for hn, pvs in list(by_host_pkg.items()):
             for pkg, vs in list(pvs.items()):
-                by_pkg_vers.setdefault(pkg, dict()).setdefault(tuple(vs), []).append(hn)
+                by_pkg_vers.setdefault(pkg, {}).setdefault(tuple(vs), []).append(hn)
 
         # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
-        by_hosts_pkg = dict()
+        by_hosts_pkg = {}
         for pkg, vshs in list(by_pkg_vers.items()):
             for vs, hs in list(vshs.items()):
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
@@ -566,7 +563,7 @@ class TestReport(object, metaclass=ABCMeta):
         return installog_to_template(self.config.auto, *args)
 
     def generate_xmllog(self, targetHosts=None):
-        from mtui.xmlout import XMLOutput
+        from mtui.export import XMLOutput
 
         output = XMLOutput()
 
@@ -580,7 +577,7 @@ class TestReport(object, metaclass=ABCMeta):
         for t in targets:
             output.add_target(t)
 
-        return output.pretty()
+        return output.export()
 
     @abstractmethod
     def _update_repos_parser(self):

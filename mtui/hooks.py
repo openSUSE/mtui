@@ -1,21 +1,19 @@
+import collections
+import subprocess
 from logging import getLogger
-
 from traceback import format_exc
 
-import subprocess
-
 from mtui import messages
-import collections
 
 log = getLogger("mtui.script")
 
 
-class Script(object):
+class Script:
 
     """
-    :type subdir: str
+    :type subdir: Path 
     :param subdir: subdirectory in the L{TestReport.scripts_wd} where the
-      scripts are located.
+          scripts are located.
 
       Note: also used as a "type of the script" and can be shown to
       the user.
@@ -83,7 +81,7 @@ class PreScript(Script):
             )
         )
 
-        for t in list(targets.values()):
+        for t in targets.values():
             fname = self._result(type(self), self.bname, t)
             try:
                 with fname.open(mode="w") as f:
@@ -101,7 +99,7 @@ class CompareScript(Script):
     subdir = "compare"
 
     def _run(self, targets):
-        for t in list(targets.values()):
+        for t in targets.values():
             self._run_single_target(t)
 
     def _run_single_target(self, t):
@@ -137,8 +135,8 @@ class CompareScript(Script):
         else:
             logger, msg = log.warning, messages.CompareScriptFailed
 
-        assert isinstance(logger, collections.Callable), "{0!r} not callable".format(
-            logger
-        )
+        assert isinstance(
+            logger, collections.abc.Callable
+        ), "{0!r} not callable".format(logger)
 
         logger(msg(argv, stdout, stderr, rc))

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from abc import ABCMeta
 
 
@@ -193,6 +192,7 @@ class PackageRevisionHasntChangedWarning(UserMessage):
 
 
 class MissingDoerError(ErrorMessage):
+
     def __init__(self, release):
         self.release = release
 

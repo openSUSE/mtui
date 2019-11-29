@@ -1,9 +1,8 @@
-
-
-from mtui.template.updateid import OBSUpdateID
-from mtui.commands import Command
-from mtui.utils import prompt_user
-from mtui.utils import complete_choices
+from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
+from . import Command
+from ..utils import prompt_user
+from ..utils import complete_choices
+from ..messages import TestReportNotLoadedError
 
 
 class LoadTemplate(Command):
@@ -17,7 +16,8 @@ class LoadTemplate(Command):
 
     This behaviour can be changed with -c/--clean-hosts paramater
     """
-    command = 'load_template'
+
+    command = "load_template"
 
     @classmethod
     def _add_arguments(cls, parser):
@@ -36,10 +36,12 @@ class LoadTemplate(Command):
 
     def __call__(self):
         if self.metadata:
-            msg = 'Should i owerwrite already loaded session {}? (y/N) '
-            if not prompt_user(msg.format(self.metadata.id),
-                               ['y', 'Y', 'yes', 'YES', 'Yes'],
-                               self.prompt.interactive):
+            msg = "Should i owerwrite already loaded session {}? (y/N) "
+            if not prompt_user(
+                msg.format(self.metadata.id),
+                ["y", "Y", "yes", "YES", "Yes"],
+                self.prompt.interactive,
+            ):
                 return
 
         re_add = list(self.targets.keys())

@@ -20,7 +20,7 @@ class InvalidOptionNameError(RuntimeError):
     pass
 
 
-class Config(object):
+class Config:
 
     """Read and store the variables from mtui config files"""
 
@@ -200,7 +200,7 @@ class Config(object):
         """
         :return True: if opt is valid option name
         """
-        return opt in [x[0] for x in self.data]
+        return opt in (x[0] for x in self.data)
 
     def set_option(self, opt, val):
         """

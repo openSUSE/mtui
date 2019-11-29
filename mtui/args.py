@@ -1,11 +1,11 @@
 from argparse import FileType
 from pathlib import Path
 
-from .argparse import ArgumentParser
-from mtui.template.updateid import OBSUpdateID
-from mtui.utils import SUTParse
-
 from mtui import __version__
+
+from .argparse import ArgumentParser
+from .types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
+from .utils import SUTParse
 
 
 def get_parser(sys):
