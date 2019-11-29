@@ -100,7 +100,7 @@ class TestReport(metaclass=ABCMeta):
         """
         :type testopia: L{Testopia}
         """
-        self.openqa = Openqa()
+        self.openqa = {"auto": None, "kernel": []}
 
     def _open_and_parse(self, path):
         try:
@@ -120,7 +120,6 @@ class TestReport(metaclass=ABCMeta):
             os.chdir(path.parent)
 
         self.copy_scripts()
-        self.create_installogs_dir()
 
     @abstractmethod
     def _parser(self):
@@ -271,21 +270,9 @@ class TestReport(metaclass=ABCMeta):
                 logger.error("copy scripts manually")
                 logger.debug(format_exc())
             elif e.errno == EEXIST:
-                logger.warning(msg)
-                logger.warning(str(e))
-                logger.debug(format_exc())
+                logger.info("Scripts are in place")
             else:
                 raise
-
-    def create_installogs_dir(self):
-        if not self.path:
-            raise RuntimeError("Called while missing path")
-
-        self._create_installogs_dir()
-
-    def _create_installogs_dir(self):
-        directory = self.config.template_dir / str(self.id) / self.config.install_logs
-        directory.mkdir(parents=False, exist_ok=True)
 
     @staticmethod
     def _ensure_executable(pattern):
@@ -549,23 +536,6 @@ class TestReport(metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
-    def generate_templatefile(self, xmllog):
-        from mtui.export import fill_template
-
-        return fill_template(
-            self.id, self.path, xmllog, self.config, self.smelt, self.openqa
-        )
-
-    def strip_smeltdata(self, template):
-        # param: template - list of template lines
-        from mtui.export import cut_smelt_data
-
-        return cut_smelt_data(template, self.config)
-
-    def generate_install_logs(self, *args):
-        from mtui.export import installog_to_template
-
-        return installog_to_template(self.config.auto, *args)
 
     def generate_xmllog(self, targetHosts=None):
         from mtui.export import XMLOutput
