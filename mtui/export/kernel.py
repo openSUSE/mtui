@@ -1,0 +1,56 @@
+from datetime import datetime
+from itertools import chain
+from logging import getLogger
+
+from mtui.utils import ensure_dir_exists
+
+from .base import BaseExport
+from .downloader import download_logs
+
+logger = getLogger("mtui.export.kernel")
+
+
+class KernelExport(BaseExport):
+    """Exporter for kernel jobs"""
+
+    def get_logs(self, *args, **kwds):
+        in_path = self.config.template_dir / str(self.rrid) / self.config.install_logs
+        res_path = self.config.template_dir / str(self.rrid) / "results"
+        ensure_dir_exists(res_path)
+        oqa = (result for result in self.openqa["kernel"])
+        # TODO: configurable errormode
+        download_logs(oqa, res_path, in_path, "tolerant")
+
+        return (fn.name for fn in in_path.glob("*.log"))
+
+    def kernel_results(self):
+        line = self.template.index("regression tests:\n")
+        line = self.template.index("(put your details here)\n", line)
+        del self.template[line]
+        self.template.insert(line, f"Results added on {datetime.now()}\n")
+        self.template.insert(line + 1, "\n")
+        self.template.insert(line + 2, "Results from openQA:\n")
+        self.template.insert(line + 3, "\n")
+        line += 4
+
+        for results in self.openqa["kernel"]:
+            if results:
+                for r in results.pp:
+                    self.template.insert(line, r)
+                    line += 1
+                line += 1
+
+        line = self.template.index("build log review:\n")
+        self.template.insert(line, "\n")
+
+    def run(self, *args, **kwds):
+        self.install_results()
+        self.inject_openqa()
+        self.inject_smelt()
+        self.kernel_results()
+        filenames = self.get_logs()
+        self.installlogs_lines(filenames)
+        self.cut_smelt_data()
+        self.add_sysinfo()
+        self.dedup_lines()
+        return self.template
