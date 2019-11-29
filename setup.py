@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 
-from setuptools import setup
-from setuptools import find_packages
-from mtui import loose_version
+from setuptools import find_packages, setup
 
+from mtui import loose_version
 
 setup(
     name="mtui",
@@ -13,12 +12,10 @@ setup(
     url="http://www.suse.com",
     download_url="http://qam.suse.de/infrastructure/mtui/",
     version=str(loose_version),
-    install_requires=["paramiko", "pyxdg", "ruamel.yaml"],
+    install_requires=["paramiko", "pyxdg", "ruamel.yaml", "requests", "rpm"],
     include_package_data=True,
     # dependencies not on cheeseshop:
-    # rpm (http://www.rpm.org) with python enabled
     # osc (http://en.opensuse.org/openSUSE:OSC)
-    # qamlib
     extras_require={"keyring": ["keyring"]},
     # extra dependencies:
     # notify (http://www.galago-project.org/specs/notification)
