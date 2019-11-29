@@ -114,18 +114,15 @@ class CompareScript(Script):
         log.debug("running {0}".format(argv))
         stdout = stderr = None
         try:
-            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ret = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except EnvironmentError as e:
             t.out.append([" ".join(argv), "", "", 0x100, 0])
             log.critical(messages.StartingCompareScriptError(e, argv))
             log.debug(format_exc())
             return
-
-        (stdout, stderr) = p.communicate()
-        rc = p.wait()
-        stdout = stdout.decode("utf-8")
-        stderr = stderr.decode("utf-8")
-        t.out.append([" ".join(argv), str(stdout), str(stderr), rc, 0])
+        stdout = ret.stdout.decode("utf-8")
+        stderr = ret.stderr.decode("utf-8")
+        t.out.append([" ".join(argv), stdout, stderr, ret.returncode, 0])
 
         if rc == 0:
             return
