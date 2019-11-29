@@ -243,21 +243,3 @@ class CommandPrompt(cmd.Cmd):
         self.metadata = tr
         self.targets = tr.targets
         self.set_prompt(None)
-
-    def _do_save_impl(self, path="log.xml"):
-        if not path.startswith("/"):
-            dir_ = self.metadata.report_wd()
-            path = Path(dir_) / "output" / path
-
-        ensure_dir_exists(path.parent)
-
-        if path.exists():
-            logger.warning("file {0} exists.".format(path))
-            m = "should i overwrite {0}? (y/N) ".format(path)
-            if not prompt_user(m, ["y", "yes"], self.interactive):
-                path = path.parent / (path.name + "." + timestamp())
-
-        logger.info("saving output to {0}".format(path))
-
-        with path.open(mode="w") as f:
-            f.write(self.metadata.generate_xmllog())
