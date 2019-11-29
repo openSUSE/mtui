@@ -2,9 +2,9 @@
 # mtui config file parser and default values
 #
 
-import collections
 import configparser
 import getpass
+from collections.abc import Callable
 from logging import getLogger
 from os import getenv
 from pathlib import Path
@@ -76,7 +76,7 @@ class Config:
             try:
                 val = self._get_option(inipath, getter)
             except BaseException:
-                if isinstance(default, collections.Callable):
+                if isinstance(default, Callable):
                     val = default()
                 else:
                     val = default
