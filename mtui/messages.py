@@ -236,3 +236,41 @@ class ReConnectFailed(ErrorMessage):
 
     def __init__(self, host):
         self.message = self._msg.format(host)
+
+
+class RepositoryError(ErrorMessage):
+    """ failed to read IBS Repository """
+
+    def __init__(self, repo):
+        self.repo = repo
+        self.message = "Repository empty {}".format(repo)
+
+
+class openQAError(ErrorMessage):
+    """ openQA related Errors """
+
+    def __init__(self):
+        self.message = "Something wrong with openQA connection"
+
+
+class ResultsMissingError(ErrorMessage):
+    """ missing results json file """
+
+    def __init__(self, test, arch):
+        self.test = test
+        self.arch = arch
+        self.message = f"Test: {test} on arch: {arch} missing results.json file. Please restart it."
+
+
+class SMELTError(ErrorMessage):
+
+    def __init__(self):
+        self.message = "Sommething wrong with SMELT connection"
+
+
+class SVNError(ErrorMessage):
+    """ SVN related Errors """
+
+    def __init__(self, cmd):
+        self.cmd = cmd
+        self.message = "SVN {} command failed".format(cmd)
