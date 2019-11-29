@@ -235,9 +235,11 @@ class CommandPrompt(cmd.Cmd):
         self.session = session
         session = ":" + str(session) if session else ""
         mode = "mtui"
-        if self.config.auto:
+        if self.config.auto and not self.config.kernel:
             mode += "-auto"
-        self.prompt = "{}{}> ".format(mode, session)
+        elif self.config.kernel:
+            mode += "-kernel"
+        self.prompt = f"{mode}{session}> "
 
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(self.config, autoconnect=autoconnect)
