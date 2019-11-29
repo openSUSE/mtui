@@ -113,7 +113,7 @@ class CommandPrompt(cmd.Cmd):
         self.identchars += "-"
         # set default prompt, when is loadet template is overrriden. So wisible
         # only wheen mtui is started without param.
-        self.prompt = "mtui-empty:>"
+        self.prompt = "mtui-empty>"
 
     def notify_user(self, msg, class_=None):
         notification.display("MTUI", msg, class_)
@@ -161,6 +161,13 @@ class CommandPrompt(cmd.Cmd):
                 logger.debug(format_exc())
             except Exception:
                 logger.error(format_exc())
+
+    def postcmd(self, stop, __):
+        if isinstance(self.metadata, NullTestReport):
+            return stop
+        else:
+            self.set_prompt(session=self.__dict__.get("session", None))
+            return stop
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
