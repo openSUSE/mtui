@@ -20,7 +20,7 @@ class SMELT:
     param rrid: RequestReviewID instance
     """
 
-    def __init__(self, rrid, apiurl="http://merkur.qam.suse.de/graphql/"):
+    def __init__(self, rrid, apiurl="https://smelt.suse.de/graphql/"):
         self.rrid = rrid
         self.apiurl = apiurl
         self.data = self._get_data()
