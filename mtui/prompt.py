@@ -5,22 +5,16 @@
 import cmd
 import readline
 import subprocess
-
 from logging import getLogger
+from pathlib import Path
+from traceback import format_exc
 
 import mtui.notification as notification
 
-from traceback import format_exc
-
+from . import commands, messages
 from .argparse import ArgsParseFailure
-
-from pathlib import Path
-from mtui import commands
-from mtui import messages
-from mtui.template.nulltestreport import NullTestReport
-from qamlib.utils import ensure_dir_exists
-from qamlib.utils import timestamp
-from mtui.utils import prompt_user
+from .template.nulltestreport import NullTestReport
+from .utils import prompt_user, timestamp
 
 logger = getLogger("mtui.prompt")
 
@@ -113,7 +107,7 @@ class CommandPrompt(cmd.Cmd):
         self.identchars += "-"
         # set default prompt, when is loadet template is overrriden. So wisible
         # only wheen mtui is started without param.
-        self.prompt = "mtui-empty:>"
+        self.prompt = "mtui-empty>"
 
     def notify_user(self, msg, class_=None):
         notification.display("MTUI", msg, class_)
@@ -161,6 +155,13 @@ class CommandPrompt(cmd.Cmd):
                 logger.debug(format_exc())
             except Exception:
                 logger.error(format_exc())
+
+    def postcmd(self, stop, __):
+        if isinstance(self.metadata, NullTestReport):
+            return stop
+        else:
+            self.set_prompt(session=self.__dict__.get("session", None))
+            return stop
 
     def get_names(self):
         names = cmd.Cmd.get_names(self)
@@ -234,30 +235,14 @@ class CommandPrompt(cmd.Cmd):
         self.session = session
         session = ":" + str(session) if session else ""
         mode = "mtui"
-        if self.config.auto:
+        if self.config.auto and not self.config.kernel:
             mode += "-auto"
-        self.prompt = "{}{}> ".format(mode, session)
+        elif self.config.kernel:
+            mode += "-kernel"
+        self.prompt = f"{mode}{session}> "
 
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(self.config, autoconnect=autoconnect)
         self.metadata = tr
         self.targets = tr.targets
         self.set_prompt(None)
-
-    def _do_save_impl(self, path="log.xml"):
-        if not path.startswith("/"):
-            dir_ = self.metadata.report_wd()
-            path = Path(dir_) / "output" / path
-
-        ensure_dir_exists(path.parent)
-
-        if path.exists():
-            logger.warning("file {0} exists.".format(path))
-            m = "should i overwrite {0}? (y/N) ".format(path)
-            if not prompt_user(m, ["y", "yes"], self.interactive):
-                path = path.parent / (path.name + "." + timestamp())
-
-        logger.info("saving output to {0}".format(path))
-
-        with path.open(mode="w") as f:
-            f.write(self.metadata.generate_xmllog())

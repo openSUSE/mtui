@@ -1,7 +1,3 @@
-# -*- coding: utf-8 -*-
-
-
-
 from os.path import join
 from xdg.BaseDirectory import save_cache_path as x_save_cache_path
 

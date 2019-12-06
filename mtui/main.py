@@ -2,7 +2,7 @@ import sys
 import logging
 from subprocess import CalledProcessError
 
-from qamlib.colorlog import create_logger
+from .colorlog import create_logger
 
 from .argparse import ArgsParseFailure
 from mtui.config import Config
@@ -38,15 +38,24 @@ def run_mtui(sys, config, logger, Prompt, Display, args):
         logger.setLevel(level=logging.DEBUG)
 
     config.merge_args(args)
+    config.kernel = False
+    config.auto = False
 
-    update = args.auto_review_id
 
     config.distro, config.distro_ver, config.distro_kernel = detect_system()
-
+    
     prompt = Prompt(config, logger, sys, Display)
-    if update:
+    if args.update:
+        if args.update.kind == "kernel":
+            config.kernel = True
+            config.auto = False
+        elif args.update.kind == "auto":
+            config.auto = True
+            config.kernel = False
+        else:
+            pass
         try:
-            prompt.load_update(update, autoconnect=not bool(args.sut))
+            prompt.load_update(args.update, autoconnect=not bool(args.sut))
         except (SvnCheckoutInterruptedError, CalledProcessError) as e:
             logger.error(e)
             return 1

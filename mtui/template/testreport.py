@@ -10,23 +10,19 @@ from logging import getLogger
 from traceback import format_exc
 from urllib.request import urlopen
 
-from qamlib.utils import ensure_dir_exists
-
-from mtui import updater
-from mtui.connector.openqa import Openqa
-from mtui.refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
-from mtui.target import Target
-from mtui.target.actions import UpdateError
-from mtui.target.hostgroup import HostsGroup
-from mtui.template import TestReportAlreadyLoaded, _TemplateIOError
-from mtui.testopia import Testopia
-from mtui.utils import nottest
+from .. import updater
+from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
+from ..target import Target
+from ..target.actions import UpdateError
+from ..target.hostgroup import HostsGroup
+from ..template import TestReportAlreadyLoaded, _TemplateIOError
+from ..testopia import Testopia
+from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
 
 
-@nottest
-class TestReport(object, metaclass=ABCMeta):
+class TestReport(metaclass=ABCMeta):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read
@@ -48,6 +44,7 @@ class TestReport(object, metaclass=ABCMeta):
         self._scripts_src_dir = (
             scripts_src_dir if scripts_src_dir else config.datadir.joinpath("scripts")
         )
+
         self.directory = config.template_dir
 
         # Note: the default values here are unchanged from the previous
@@ -85,6 +82,7 @@ class TestReport(object, metaclass=ABCMeta):
         self.repository = None
 
         self._attrs = [
+            "products",
             "category",
             "packager",
             "reviewer",
@@ -102,7 +100,7 @@ class TestReport(object, metaclass=ABCMeta):
         """
         :type testopia: L{Testopia}
         """
-        self.openqa = Openqa()
+        self.openqa = {"auto": None, "kernel": []}
 
     def _open_and_parse(self, path):
         try:
@@ -122,7 +120,6 @@ class TestReport(object, metaclass=ABCMeta):
             os.chdir(path.parent)
 
         self.copy_scripts()
-        self.create_installogs_dir()
 
     @abstractmethod
     def _parser(self):
@@ -273,21 +270,9 @@ class TestReport(object, metaclass=ABCMeta):
                 logger.error("copy scripts manually")
                 logger.debug(format_exc())
             elif e.errno == EEXIST:
-                logger.warning(msg)
-                logger.warning(str(e))
-                logger.debug(format_exc())
+                logger.info("Scripts are in place")
             else:
                 raise
-
-    def create_installogs_dir(self):
-        if not self.path:
-            raise RuntimeError("Called while missing path")
-
-        self._create_installogs_dir()
-
-    def _create_installogs_dir(self):
-        directory = self.config.template_dir / str(self.id) / self.config.install_logs
-        directory.mkdir(parents=False, exist_ok=True)
 
     @staticmethod
     def _ensure_executable(pattern):
@@ -399,17 +384,21 @@ class TestReport(object, metaclass=ABCMeta):
         return sink(self.bugs, arg)
 
     def _show_yourself_data(self):
-        return [
-            ("Category", self.category),
-            ("Hosts", " ".join(sorted(self.systems.keys()))),
-            ("Reviewer", self.reviewer),
-            ("Packager", self.packager),
-            ("Bugs", ", ".join(sorted(self.bugs.keys()))),
-            ("Packages", " ".join(sorted(self.get_package_list()))),
-            ("Build checks", self._testreport_url()[:-3] + "build_checks")
-            ("Testreport", self._testreport_url()),
-            ("Repository", self.repository),
-        ] + [("Testplatform", x) for x in self.testplatforms]
+        return (
+            [
+                ("Category", self.category),
+                ("Hosts", " ".join(sorted(self.systems.keys()))),
+                ("Reviewer", self.reviewer),
+                ("Packager", self.packager),
+                ("Bugs", ", ".join(sorted(self.bugs.keys()))),
+                ("Packages", " ".join(sorted(self.get_package_list()))),
+                ("Build checks", self._testreport_url()[:-3] + "build_checks"),
+                ("Testreport", self._testreport_url()),
+                ("Repository", self.repository),
+            ]
+            + [("Testplatform", x) for x in self.testplatforms]
+            + [("Products", x) for x in self.products]
+        )
 
     def show_yourself(self, writer):
         self._aligned_write(writer, self._show_yourself_data())
@@ -523,9 +512,9 @@ class TestReport(object, metaclass=ABCMeta):
         #   input = *(line EOL)
 
         # by_host_pkg[hostname][package] = [version, ...]
-        by_host_pkg = dict()
+        by_host_pkg = {}
         for hn, t in list(targets.items()):
-            by_host_pkg[hn] = dict()
+            by_host_pkg[hn] = {}
             for line in t.lastout().split("\n"):
                 match = re.search(r"(\S+)\s+(\S+)", line)
                 if not match:
@@ -534,39 +523,22 @@ class TestReport(object, metaclass=ABCMeta):
                 by_host_pkg[hn].setdefault(pkg, []).append(ver)
 
         # by_pkg_vers[package][(version, ...)] = [hostname, ...]
-        by_pkg_vers = dict()
+        by_pkg_vers = {}
         for hn, pvs in list(by_host_pkg.items()):
             for pkg, vs in list(pvs.items()):
-                by_pkg_vers.setdefault(pkg, dict()).setdefault(tuple(vs), []).append(hn)
+                by_pkg_vers.setdefault(pkg, {}).setdefault(tuple(vs), []).append(hn)
 
         # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
-        by_hosts_pkg = dict()
+        by_hosts_pkg = {}
         for pkg, vshs in list(by_pkg_vers.items()):
             for vs, hs in list(vshs.items()):
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
         return sink(targets, by_hosts_pkg)
 
-    def generate_templatefile(self, xmllog):
-        from mtui.export import fill_template
-
-        return fill_template(
-            self.id, self.path, xmllog, self.config, self.smelt, self.openqa
-        )
-
-    def strip_smeltdata(self, template):
-        # param: template - list of template lines
-        from mtui.export import cut_smelt_data
-
-        return cut_smelt_data(template, self.config)
-
-    def generate_install_logs(self, *args):
-        from mtui.export import installog_to_template
-
-        return installog_to_template(self.config.auto, *args)
 
     def generate_xmllog(self, targetHosts=None):
-        from mtui.xmlout import XMLOutput
+        from mtui.export import XMLOutput
 
         output = XMLOutput()
 
@@ -580,7 +552,7 @@ class TestReport(object, metaclass=ABCMeta):
         for t in targets:
             output.add_target(t)
 
-        return output.pretty()
+        return output.export()
 
     @abstractmethod
     def _update_repos_parser(self):

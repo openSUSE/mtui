@@ -1,21 +1,19 @@
+import collections
+import subprocess
 from logging import getLogger
-
 from traceback import format_exc
 
-import subprocess
-
 from mtui import messages
-import collections
 
 log = getLogger("mtui.script")
 
 
-class Script(object):
+class Script:
 
     """
-    :type subdir: str
+    :type subdir: Path 
     :param subdir: subdirectory in the L{TestReport.scripts_wd} where the
-      scripts are located.
+          scripts are located.
 
       Note: also used as a "type of the script" and can be shown to
       the user.
@@ -83,7 +81,7 @@ class PreScript(Script):
             )
         )
 
-        for t in list(targets.values()):
+        for t in targets.values():
             fname = self._result(type(self), self.bname, t)
             try:
                 with fname.open(mode="w") as f:
@@ -101,7 +99,7 @@ class CompareScript(Script):
     subdir = "compare"
 
     def _run(self, targets):
-        for t in list(targets.values()):
+        for t in targets.values():
             self._run_single_target(t)
 
     def _run_single_target(self, t):
@@ -116,18 +114,16 @@ class CompareScript(Script):
         log.debug("running {0}".format(argv))
         stdout = stderr = None
         try:
-            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p = subprocess.run(argv, capture_output=True)
         except EnvironmentError as e:
             t.out.append([" ".join(argv), "", "", 0x100, 0])
             log.critical(messages.StartingCompareScriptError(e, argv))
             log.debug(format_exc())
             return
-
-        (stdout, stderr) = p.communicate()
-        rc = p.wait()
-        stdout = stdout.decode("utf-8")
-        stderr = stderr.decode("utf-8")
-        t.out.append([" ".join(argv), str(stdout), str(stderr), rc, 0])
+        rc = p.returncode
+        stdout = p.stdout.decode("utf-8")
+        stderr = p.stderr.decode("utf-8")
+        t.out.append([" ".join(argv), stdout, stderr, rc, 0])
 
         if rc == 0:
             return
@@ -137,8 +133,8 @@ class CompareScript(Script):
         else:
             logger, msg = log.warning, messages.CompareScriptFailed
 
-        assert isinstance(logger, collections.Callable), "{0!r} not callable".format(
-            logger
-        )
+        assert isinstance(
+            logger, collections.abc.Callable
+        ), "{0!r} not callable".format(logger)
 
         logger(msg(argv, stdout, stderr, rc))

@@ -1,11 +1,10 @@
-# -*- coding: utf-8 -*-
 #
 # xml log output
 #
 
 import xml.dom.minidom
 
-from mtui.utils import filter_ansi
+from ..utils import filter_ansi
 
 
 class XMLOutput(object):
@@ -69,3 +68,6 @@ class XMLOutput(object):
 
     def pretty(self):
         return filter_ansi(self.output.toprettyxml())
+
+    def export(self):
+        return self.output

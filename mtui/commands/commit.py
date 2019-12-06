@@ -1,10 +1,9 @@
 import subprocess
-
 from argparse import REMAINDER
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import requires_update, complete_choices
+from mtui.utils import complete_choices, requires_update
 
 
 class Commit(Command):
@@ -35,6 +34,12 @@ class Commit(Command):
         try:
             subprocess.check_call(
                 "svn add --force {}".format(str(self.config.install_logs)).split(),
+                cwd=checkout,
+            )
+            subprocess.call(
+                "svn add --force {}".format(
+                    str(self.config.template_dir / "results")
+                ).split(),
                 cwd=checkout,
             )
             if checkout.joinpath("checkers.log").exists():

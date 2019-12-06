@@ -12,9 +12,9 @@ test:
   before_script:
     - zypper ar http://download.suse.de/ibs/QA:/Maintenance/openSUSE_Leap_15.1/QA:Maintenance.repo
     - zypper --gpg-auto-import-keys ref
-    - zypper in --no-confirm python3-pytest python3-openqa_client python3-paramiko python3-pyxdg python3-qamlib python3-ruamel.yaml qam-metadata subversion
+    - zypper in --no-confirm python3-pytest python3-openqa_client python3-paramiko python3-pyxdg python3-ruamel.yaml qam-metadata subversion python3-requests python3-responses python3-rpm
   script:
-    - python3 -m pytest -v
+    - python3 -m pytest -v -k'not test_create_permission_denied'
 
 .publish_template: &publish_template
   stage: deploy

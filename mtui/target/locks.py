@@ -3,7 +3,7 @@ import errno
 import os
 from logging import getLogger
 
-from qamlib.utils import timestamp
+from mtui.utils import timestamp
 
 logger = getLogger("mtui.target.locks")
 

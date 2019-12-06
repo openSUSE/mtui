@@ -2,9 +2,9 @@
 # mtui config file parser and default values
 #
 
-import collections
 import configparser
 import getpass
+from collections.abc import Callable
 from logging import getLogger
 from os import getenv
 from pathlib import Path
@@ -20,7 +20,7 @@ class InvalidOptionNameError(RuntimeError):
     pass
 
 
-class Config(object):
+class Config:
 
     """Read and store the variables from mtui config files"""
 
@@ -76,7 +76,7 @@ class Config(object):
             try:
                 val = self._get_option(inipath, getter)
             except BaseException:
-                if isinstance(default, collections.Callable):
+                if isinstance(default, Callable):
                     val = default()
                 else:
                     val = default
@@ -117,7 +117,7 @@ class Config(object):
             (
                 "smelt_api",
                 ("smelt", "endpoint"),
-                "http://merkur.qam.suse.de/graphql/",
+                "https://smelt.suse.de/graphql/",
             ),
             ("target_tempdir", ("target", "tempdir"), Path("/tmp"), Path),
             (
@@ -173,9 +173,22 @@ class Config(object):
             ),
             # openQA connector
             ("openqa_instance", ("openqa", "openqa"), "https://openqa.suse.de"),
+            (
+                "openqa_instance_baremetal",
+                ("openqa", "baremetal"),
+                "http://openqa.qam.suse.cz",
+            ),
             ("openqa_install_distri", ("openqa", "distri"), "sle"),
-            ("openqa_install_test", ("openqa", "install_test"), "qam-incidentinstall"),
-            ("openqa_install_logs", ("openqa", "logfile"), "update_install-zypper.log"),
+            (
+                "openqa_install_logs",
+                ("openqa", "install_logfile"),
+                "update_install-zypper.log",
+            ),
+            (
+                "openqa_kernel_install_logs",
+                ("openqa", "kernel_install_logfile"),
+                "update_kernel-zypper.log",
+            ),
             # config for template export
             ("threshold", ("template", "smelt_threshold"), 10, int, self.config.getint),
             # process location last as that needs to access
@@ -200,7 +213,7 @@ class Config(object):
         """
         :return True: if opt is valid option name
         """
-        return opt in [x[0] for x in self.data]
+        return opt in (x[0] for x in self.data)
 
     def set_option(self, opt, val):
         """
@@ -286,5 +299,3 @@ class Config(object):
 
         if args.smelt_api:
             self.smelt_api = args.smelt_api
-
-        self.auto = True

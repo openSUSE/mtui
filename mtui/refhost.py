@@ -1,23 +1,20 @@
 #
 # managing and parsing of the refhosts.yml file
 #
-import re
-import os
-import time
+import copy
 import errno
-from urllib.request import urlopen
-
-from mtui.xdg import save_cache_path
-from mtui import messages
-
-from qamlib.utils import atomic_write_file
-
-from traceback import format_exc
+import os
+import re
+import time
 from logging import getLogger
+from traceback import format_exc
+from urllib.request import urlopen
 
 from ruamel.yaml import YAML
 
-import copy
+from . import messages
+from .utils import atomic_write_file
+from .xdg import save_cache_path
 
 logger = getLogger("mtui.refhost")
 

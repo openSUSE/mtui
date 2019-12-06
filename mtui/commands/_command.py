@@ -1,17 +1,15 @@
-# -*- coding: utf-8 -*-
-
 from abc import ABCMeta, abstractmethod
+from argparse import RawDescriptionHelpFormatter
 from logging import getLogger
 
-from ..argparse import ArgumentParser
 from mtui.messages import HostIsNotConnectedError
-from argparse import RawDescriptionHelpFormatter
 
+from ..argparse import ArgumentParser
 
 logger = getLogger("mtui.commands.command")
 
 
-class Command(object, metaclass=ABCMeta):
+class Command(metaclass=ABCMeta):
     _check_subparser = None
     """
     :type _check_subparser: str
@@ -43,7 +41,7 @@ class Command(object, metaclass=ABCMeta):
 
     @classmethod
     def parse_args(cls, args, sys):
-        args = [] if args is "" else args.split()
+        args = [] if args == "" else args.split()
         p = cls.argparser(sys)
         pa = p.parse_args(args)
 
@@ -84,7 +82,7 @@ class Command(object, metaclass=ABCMeta):
 
     @abstractmethod
     def __call__(self):
-        raise RuntimeError()
+        pass
 
     def println(self, xs=""):
         """
