@@ -24,7 +24,6 @@ class Commit(Command):
 
     @requires_update
     def __call__(self):
-
         checkout = self.metadata.report_wd()
 
         msg = []
@@ -36,16 +35,13 @@ class Commit(Command):
                 "svn add --force {}".format(str(self.config.install_logs)).split(),
                 cwd=checkout,
             )
-            subprocess.call(
-                "svn add --force {}".format(
-                    str(self.config.template_dir / "results")
-                ).split(),
-                cwd=checkout,
-            )
+            if checkout.joinpath("results").exists():
+                subprocess.call(
+                    "svn add --force {}".format("results").split(), cwd=checkout,
+                )
             if checkout.joinpath("checkers.log").exists():
                 subprocess.check_call(
-                    "svn add --force {}".format(str(checkout / "checkers.log")).split(),
-                    cwd=checkout,
+                    "svn add --force {}".format("checkers.log").split(), cwd=checkout,
                 )
             subprocess.check_call("svn up".split(), cwd=checkout)
             subprocess.check_call("svn ci".split() + msg, cwd=checkout)
