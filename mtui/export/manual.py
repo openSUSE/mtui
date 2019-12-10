@@ -268,14 +268,12 @@ class ManualExport(BaseExport):
         updatehost = template_log.parentNode.getAttribute("hostname")
         t.append("log from {!s}:\n".format(updatehost))
         for child in template_log.childNodes:
+
             if not hasattr(child, "getAttribute"):
                 continue
             cmd = child.getAttribute("name")
-            if not cmd.startswith("zypper ") or not cmd.startswith(
-                "transactional-update"
-            ):
-                continue
-            t.append("# {!s}\n{!s}\n".format(cmd, child.childNodes[0].nodeValue))
+            if cmd.startswith("zypper ") or cmd.startswith("transactional-update"):
+                t.append("# {!s}\n{!s}\n".format(cmd, child.childNodes[0].nodeValue))
         return t
 
     def install_results(self):
