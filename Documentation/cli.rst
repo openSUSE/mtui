@@ -22,6 +22,20 @@ is the Incident ID and ``YYYYYY`` is the Request ID.
 ``RRID`` can also use the short format ``S:M:XXX:YYYY``.
 
 
+``-k RRID, --kernel-review-id RRID``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Loads the test report for the maintenance update Review Request ID (RRID) in 
+kernel update workflow. It skips connecting refhosts and script run in update
+command. Downloads logs from openQA.
+
+``RRID`` is a string in the form ``SUSE:Maintenance:XXXX:YYYYYY``, where ``XXXX``
+is the Incident ID and ``YYYYYY`` is the Request ID.
+
+``RRID`` can also use the short format ``S:M:XXX:YYYY``.
+
+
+
 ``-c, --config file``
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -59,7 +73,7 @@ Overrides the ``mtui.location`` configuration.
 ``-n, --noninteractive``
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-When set, MTUI is run in a noninteractive mode without a command shell.
+When set, MTUI is run in a non interactive mode without a command shell.
 MTUI automatically applies the update and exports the results to the
 maintenance template before it quits. User input is not required.
 
@@ -68,7 +82,7 @@ maintenance template before it quits. User input is not required.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Runs a script with a set of MTUI commands prior to starting the interactive shell
-or the update process. User input is not required if in noninteractive mode
+or the update process. User input is not required if in non interactive mode
 (``-n`` parameter).
 
 
@@ -84,6 +98,14 @@ Cumulatively overrides default refhosts given in the test report.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Overrides the ``mtui.template_dir`` configuration.
+
+
+``--smelt_api SMELT_API``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Overrides the ``mtui.smelt_api`` configuration.
+
+``SMELT_API`` is SMELT2 graphQL endpoint address
 
 
 ``-V, --version``
