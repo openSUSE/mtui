@@ -130,6 +130,33 @@ reload_products
 Refresh informations about installed products on selected or all host.
 
 
+reload_openqa
++++++++++++++
+
+::
+  
+  reload_openqa
+
+Reload informations from openQA instances.
+
+
+set_workflow
+++++++++++++
+
+::
+  
+  set_workflow {auto,manual,kernel}
+
+Sets workflow and reload data from openQA.
+
+'auto' workflow will be automatically set to manual if openQA install tests
+missing or have failed state
+
+.. option:: workflow
+
+  one of supported workflows 
+
+
 set_host_state
 ++++++++++++++
 
@@ -628,12 +655,12 @@ load_template
 
 ::
 
-    load_template [-c] update_id
+    load_template (-a RequestReviewID | -k RequestReviewID) [-c] 
 
 Loads a QA Maintenance template by its RRID identifier. All changes and logs
 from an already loaded template are lost if not saved previously. Already
 connected hosts are kept and extended by the reference hosts defined in the
-template file.
+template file. `-a` and `-k` options are mutually exclusive.
 
 **Options:**
 
@@ -641,9 +668,15 @@ template file.
 
   Cleans up old hosts.
 
-.. option:: update_id
+.. option:: -a RequestReviewID
 
-  Review request ID for the update.
+  Review request ID for the update in automode.
+  Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY``) or short
+  (``S:M:XXXX:YYYYYY``) format.
+
+.. option:: -k RequestReviewID
+
+  Review request ID for the update in kernel/livepatching mode.
   Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY``) or short
   (``S:M:XXXX:YYYYYY``) format.
 
@@ -822,27 +855,6 @@ Displays or sets runtime MTUI configuration values.
 .. option:: set
 
   Sets config runtime value ``option`` for ``value``
-
-save
-++++
-
-::
-
-    save [filename]
-
-Saves the session log (all commands and package versions) to an XML file.
-When no parameter is given, the XML is saved to ``$TEMPLATE_DIR/output/log.xml``.
-If that file already exists and the tester doesn't want to overwrite it, a
-postfix (current timestamp) is added to the filename.
-
-The log can be used to facilitate filling the required sections of the testing
-template after the testing has finished.
-
-**Options:**
-
-.. option:: filename
-
-  Name of the file to save log as.
 
 
 exit, quit, EOF

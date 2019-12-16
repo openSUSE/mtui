@@ -7,20 +7,7 @@ Automated Tests
 
 You can run unit tests with
 
-.. code-block:: text
-
-   $ make check
-
-or with coverage
-
-.. code-block:: text
-
-   $ make checkcover
-
-And you can find `acceptance test suite`_ at `gitlab.suse.de`_
-
-.. _acceptance test suite: https://gitlab.suse.de/qa-maintenance/mtui-acceptance-tests
-.. _gitlab.suse.de: https://gitlab.suse.de
+$ python3 -m pytest 
 
 
 Commit keywords
@@ -34,6 +21,7 @@ Please refer to relevant bugzilla.suse.com bugs, whenever applicable:
 .. code-block:: text
 
     bsc#<ID>
+    boo#<ID>
 
 
 Documentation

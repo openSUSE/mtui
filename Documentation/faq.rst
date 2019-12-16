@@ -49,8 +49,6 @@ Example::
   s390vsl048.suse.de   (sles12_module-s390x): Enabled (parallel)
 
   mtui> quit
-  save log? (Y/n)
-  info: saving output to /suse/testing/testreports/SUSE:Maintenance:3601:126030/output/log.xml
   info: closing connection to edna.qam.suse.cz
   info: closing connection to s390vsl048.suse.de
   info: closing connection to moe.qam.suse.cz
@@ -129,7 +127,7 @@ Example::
   mtui> list_metadata
   error: TestReport not loaded
 
-  mtui> load_template SUSE:Maintenance:3601:126030
+  mtui> load_template -a SUSE:Maintenance:3601:126030
   info: connecting to moe.qam.suse.cz
   info: connecting to s390vsl048.suse.de
   info: connecting to edna.qam.suse.cz
@@ -229,7 +227,7 @@ Example::
 How do I get the URL to the test report?
 ========================================
 
-If the current test report was already commited to the central
+If the current test report was already committed to the central
 repository, the ``list_metadata`` command lists the test report URL,
 among other things.
 
@@ -254,7 +252,7 @@ Can I export the update log from a specific refhost?
 
 MTUI exports the update log from the first refhost into the test report
 by default. In case you want to export the log from a specific refhost, you can
-do so by using the ``-it`` parameter and adding the hostname to the ``export``
+do so by using the ``-t`` parameter and adding the hostname to the ``export``
 command.
 
 Example::
@@ -405,7 +403,7 @@ machines, the host list could be overwritten with the ``-s`` option.
 
 Example::
 
-  # mtui -s edna.qam.suse.cz -s moe.qam.suse.cz -r SUSE:Maintenance:3601:126030
+  # mtui -s edna.qam.suse.cz,moe.qam.suse.cz -r SUSE:Maintenance:3601:126030
   info: connecting to edna.qam.suse.cz
   info: connecting to moe.qam.suse.cz
   mtui> list_hosts
@@ -582,7 +580,7 @@ Run a specific testsuite::
   info: done
 
 
-Submit the testsuite results to QADB::
+Submit the testsuite results to QADB2::
 
   mtui> testsuite_submit -t moe.qam.suse.cz test_bzip2-run
   info: Submiting results of test_bzip2-run from moe.qam.suse.cz
