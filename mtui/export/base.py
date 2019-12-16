@@ -22,7 +22,9 @@ class BaseExport(ABC):
         "interactive",
     ]
 
-    def __init__(self, config, xmllog, openqa, smelt, template, force, rrid, interactive):
+    def __init__(
+        self, config, xmllog, openqa, smelt, template, force, rrid, interactive
+    ):
         """ param: config = Config()
             param: xmllog = xml.minidom
             param: openqa = testreport.openqa
@@ -189,8 +191,10 @@ class BaseExport(ABC):
         index = self.template.index("source code change review:\n", 0) - 1
         for line in reversed(openqa):
             self.template.insert(index, line)
-        
+
         self.template.insert(index, "\n")
+        self.template.insert(index + 1, "Results from openQA incidents jobs:\n")
+        self.template.insert(index + 2, "\n")
 
     def install_results(self):
         index = self.template.index("Test results by product-arch:\n", 0)
@@ -198,4 +202,4 @@ class BaseExport(ABC):
             index + 3,
             "All installation tests done in openQA please see installlogs section\n",
         )
-        self.template.insert(index+4, "\n")
+        self.template.insert(index + 4, "\n")
