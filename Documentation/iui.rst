@@ -823,27 +823,6 @@ Displays or sets runtime MTUI configuration values.
 
   Sets config runtime value ``option`` for ``value``
 
-save
-++++
-
-::
-
-    save [filename]
-
-Saves the session log (all commands and package versions) to an XML file.
-When no parameter is given, the XML is saved to ``$TEMPLATE_DIR/output/log.xml``.
-If that file already exists and the tester doesn't want to overwrite it, a
-postfix (current timestamp) is added to the filename.
-
-The log can be used to facilitate filling the required sections of the testing
-template after the testing has finished.
-
-**Options:**
-
-.. option:: filename
-
-  Name of the file to save log as.
-
 
 exit, quit, EOF
 +++++++++++++++
