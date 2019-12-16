@@ -181,6 +181,17 @@ Please don't change it
 URL of openqa instance
 
 
+``openqa.baremetal``
+~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     URL
+  | **default**
+  |     http://openqa.qam.suse.cz
+
+URL of baremetal openqa instance
+
+
 ``openqa.distri``
 ~~~~~~~~~~~~~~~~~
 
@@ -192,18 +203,8 @@ URL of openqa instance
 Default 'DISTRI' value for openqa jobs
 
 
-``openqa.install_test``
-~~~~~~~~~~~~~~~~~~~~~~~
 
-  | **type**
-  |     string
-  | **default**
-  |     qam-incidentinstall
-
-Name of automatic installation test.
-
-
-``openqa.logfile``
+``openqa.install_logfile``
 ~~~~~~~~~~~~~~~~~~
 
   | **type**
@@ -212,6 +213,17 @@ Name of automatic installation test.
   |     update_install-zypper.log 
 
 Name of automatic installation test logfile
+
+
+``openqa.kernel_install_logfile``
+~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     string
+  | **default**
+  |     update_kernel-zypper.log 
+
+Name of kernel installation test logfile
 
 
 ``refhosts.https_expiration``
@@ -371,7 +383,6 @@ Example
   user = <your username>
   location = <your location>
   template_dir = /path/to/where/you/want/to/store/test-reports
-  chdir_to_templatedir = yes
   datadir = /usr/share/mtui
 
   [testopia]
