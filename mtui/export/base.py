@@ -180,20 +180,29 @@ class BaseExport(ABC):
 
         if "Results from incidents openQA jobs:\n" in self.template:
             r_start = self.template.index("Results from incidents openQA jobs:\n")
-            r_end = self.template.index("End of openQA Incidents results\n") + 1
+            try:
+                r_end = self.template.index("End of openQA Incidents results\n") + 1
+            except ValueError:
+                r_end = self.template.index("source code change review:\n", 0) - 1
+
             del self.template[r_start:r_end]
         # new title
         elif "Results from openQA incidents jobs:\n" in self.template:
             r_start = self.template.index("Results from openQA incidents jobs:\n")
-            r_end = self.template.index("End of openQA Incidents results\n") + 1
+            try:
+                r_end = self.template.index("End of openQA Incidents results\n") + 1
+            except ValueError:
+                r_end = self.template.index("source code change review:\n", 0) - 1
+
             del self.template[r_start:r_end]
 
         index = self.template.index("source code change review:\n", 0) - 1
         for line in reversed(openqa):
             self.template.insert(index, line)
 
+        index = self.template.index("source code change review:\n", 0) - 1
         self.template.insert(index, "\n")
-        self.template.insert(index + 1, "Results from openQA incidents jobs:\n")
+        self.template.insert(index + 1, "\End of openQA Incidents results\n")
         self.template.insert(index + 2, "\n")
 
     def install_results(self):
