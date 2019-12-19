@@ -1,5 +1,4 @@
 from datetime import datetime
-from itertools import chain
 from logging import getLogger
 
 from mtui.utils import ensure_dir_exists
@@ -25,8 +24,19 @@ class KernelExport(BaseExport):
 
     def kernel_results(self):
         line = self.template.index("regression tests:\n")
-        line = self.template.index("(put your details here)\n", line)
-        del self.template[line]
+        try:
+            line = self.template.index("(put your details here)\n", line)
+            del self.template[line]
+        except ValueError:
+            line = (
+                self.template.index(
+                    "    * https://pes.suse.de/QA_Maintenance/kernel-default/\n"
+                )
+                + 1
+            )
+            e_line = self.template.index("build log review:\n")
+            del self.template[line : e_line]
+
         self.template.insert(line, f"Results added on {datetime.now()}\n")
         self.template.insert(line + 1, "\n")
         self.template.insert(line + 2, "Results from openQA:\n")
