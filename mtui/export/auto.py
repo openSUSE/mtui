@@ -13,16 +13,13 @@ class AutoExport(BaseExport):
     """ Export class for automatic worflow"""
 
     def get_logs(self, *args, **kwds):
-        filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs
         ilogs = zip_longest(
             self.openqa["auto"].results,
             map(self._openqa_installog_to_template, self.openqa["auto"].results),
         )
         filenames = []
         for i, y in ilogs:
-            fn = filepath.joinpath(
-                "{}_{}_{}.log".format(i.distri.lower(), i.version, i.arch)
-            )
+            fn ="{}_{}_{}.log".format(i.distri.lower(), i.version, i.arch)
             if y:
                 self._writer(fn, y)
                 filenames.append(fn)
