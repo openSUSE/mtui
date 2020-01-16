@@ -1,12 +1,13 @@
 import logging
 
-from mtui.commands import Command
-from mtui.utils import complete_choices, requires_update
 from mtui import messages
-from mtui.refhost import RefhostsFactory
+from mtui.commands import Command
 from mtui.connector.openqa import AutoOpenQA, KernelOpenQA
+from mtui.refhost import RefhostsFactory
+from mtui.utils import complete_choices, requires_update
 
 logger = logging.getLogger("mtui.commands.simplesets")
+
 
 class SessionName(Command):
     """
@@ -61,7 +62,7 @@ class SetLocation(Command):
         old = self.config.location
         new = str(self.args.site[0])
         self.config.location = new
-        self.log.info(messages.LocationChangedMessage(old, new))
+        logger.info(messages.LocationChangedMessage(old, new))
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
@@ -111,7 +112,7 @@ class SetLogLevel(Command):
 
         self.prompt.log.setLevel(level=levels[new])
 
-        self.log.info("Log level is set to {}".format(new))
+        logger.info("Log level is set to {}".format(new))
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
@@ -155,7 +156,7 @@ class SetTimeout(Command):
 
         for target in targets:
             targets[target].set_timeout(value)
-            self.log.info("Timeout on {} is set to {}".format(target, value))
+            logger.info("Timeout on {} is set to {}".format(target, value))
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

@@ -1,10 +1,11 @@
-# -*- coding: utf-8 -*-
-
+from logging import getLogger
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import requires_update, complete_choices
 from mtui.messages import NoRefhostsDefinedError
+from mtui.utils import complete_choices, requires_update
+
+logger = getLogger("mtui.commands.prepare")
 
 
 class Prepare(Command):
@@ -53,7 +54,7 @@ class Prepare(Command):
         params.append(self.args.installed)
         params.append(self.args.update)
 
-        self.log.info("preparing")
+        logger.info("preparing")
 
         try:
             self.metadata.perform_prepare(
@@ -63,14 +64,14 @@ class Prepare(Command):
                 testing="testing" in params,
             )
         except KeyboardInterrupt:
-            self.log.info("preparation process canceled")
+            logger.info("preparation process canceled")
             return False
         except Exception:
-            self.log.critical("Failed to prepare systems")
-            self.log.debug(format_exc())
+            logger.critical("Failed to prepare systems")
+            logger.debug(format_exc())
             return False
 
-        self.log.info("done")
+        logger.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

@@ -32,7 +32,6 @@ class Command(metaclass=ABCMeta):
         self.hosts = hosts
         self.args = args
         self.sys = sys
-        self.log = logger
         self.config = config
         self.prompt = prompt
         self.metadata = prompt.metadata
@@ -122,8 +121,8 @@ class Command(metaclass=ABCMeta):
                 targets = self.hosts.select(enabled=enabled)
         except HostIsNotConnectedError as e:
             if e.host == "all":
-                self.log.error(e)
-                self.log.info("Using all hosts. Warning option 'all' is decaprated")
+                logger.error(e)
+                logger.info("Using all hosts. Warning option 'all' is decaprated")
 
                 targets = self.hosts.select(enabled=enabled)
 

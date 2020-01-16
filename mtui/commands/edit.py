@@ -1,13 +1,12 @@
-# -*- coding: utf-8 -*-
-
+from logging import getLogger
 from os import getenv
-
 from subprocess import check_call
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import complete_choices_filelist
-from mtui.utils import requires_update
+from mtui.utils import complete_choices_filelist, requires_update
+
+logger = getLogger("mtui.command.edit")
 
 
 class Edit(Command):
@@ -35,11 +34,11 @@ class Edit(Command):
         editor = getenv("EDITOR", "vim")
 
         try:
-            self.log.debug("call {!s} on {!s}".format(editor, path))
+            logger.debug("call {!s} on {!s}".format(editor, path))
             check_call([editor, path])
         except Exception:
-            self.log.error("failed to run {!s}".format(editor))
-            self.log.debug(format_exc())
+            logger.error("failed to run {!s}".format(editor))
+            logger.debug(format_exc())
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):

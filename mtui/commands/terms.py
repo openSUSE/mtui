@@ -1,10 +1,11 @@
-# -*- coding: utf-8 -*-
-
+from logging import getLogger
 from subprocess import check_call
 from traceback import format_exc
 
 from mtui.commands import Command
 from mtui.utils import complete_choices
+
+logger = getLogger("mtui.command.terms")
 
 
 class Terms(Command):
@@ -26,7 +27,7 @@ class Terms(Command):
 
     def __call__(self):
         dirname = self.config.datadir
-        hosts = [host for host in sorted(self.parse_hosts().names())]
+        hosts = sorted(self.parse_hosts().names())
 
         if self.args.termname:
             if self.args.termname in self.config.termnames:
@@ -35,11 +36,11 @@ class Terms(Command):
                 try:
                     check_call([path] + hosts)
                 except Exception:
-                    self.log.error("running {!s} failed".format(filename))
-                    self.log.debug(format_exc())
+                    logger.error("running {!s} failed".format(filename))
+                    logger.debug(format_exc())
             else:
-                self.log.error("Term script not found")
-                self.log.info(
+                logger.error("Term script not found")
+                logger.info(
                     "Aviable term scripts: {}".format(" ".join(self.config.termnames))
                 )
         else:

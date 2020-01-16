@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-
 import os
-
 from glob import glob
+from logging import getLogger
 
 from mtui.commands import Command
 from mtui.utils import complete_choices_filelist
+
+logger = getLogger("mtui.command.sftp")
 
 
 class SFTPPut(Command):
@@ -28,7 +28,7 @@ class SFTPPut(Command):
     def __call__(self):
         files = glob(self.args.filename[0])
         if not files:
-            self.log.error("File {!s} not found".format(self.args.filename[0]))
+            logger.error("File {!s} not found".format(self.args.filename[0]))
             return
 
         transversed_files = []
@@ -36,18 +36,18 @@ class SFTPPut(Command):
             if os.path.isfile(file):
                 transversed_files.append(file)
             elif os.path.isdir(file):
-                for root, dirs, folder_files in os.walk(file):
+                for root, _, folder_files in os.walk(file):
                     for folder_file in folder_files:
                         transversed_files.append(os.path.join(root, folder_file))
             else:
-                self.log.warn("Filename {!s} isn't file".format(file))
+                logger.warn("Filename {!s} isn't file".format(file))
                 continue
 
         for filename in transversed_files:
             remote = self.metadata.target_wd(os.path.basename(filename))
 
             self.targets.put(filename, remote)
-            self.log.info("uploaded {} to {}".format(filename, remote))
+            logger.info("uploaded {} to {}".format(filename, remote))
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
@@ -74,4 +74,4 @@ class SFTPGet(Command):
 
     def __call__(self):
         self.metadata.perform_get(self.targets, self.args.filename[0])
-        self.log.info("downloaded {}".format(self.args.filename[0]))
+        logger.info("downloaded {}".format(self.args.filename[0]))

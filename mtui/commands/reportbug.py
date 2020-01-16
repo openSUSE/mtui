@@ -1,13 +1,13 @@
-# -*- coding: utf-8 -*-
-
-import subprocess
 import errno
-
+import subprocess
+from logging import getLogger
 from time import sleep
 
 from mtui import messages
 from mtui.commands import Command
 from mtui.utils import complete_choices
+
+logger = getLogger("mtui.commands.reportbug")
 
 
 class ReportBug(Command):
@@ -60,7 +60,7 @@ class ReportBug(Command):
             # otherwise log a debug message as this state is expected
             # not to happen and we might be interested in knowing about
             # when it does.
-            self.log.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
+            logger.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
 
     @classmethod
     def _add_arguments(cls, parser):

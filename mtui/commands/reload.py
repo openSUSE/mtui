@@ -1,6 +1,9 @@
+from logging import getLogger
 
 from mtui.commands import Command
 from mtui.utils import complete_choices
+
+logger = getLogger("mtui.commands.reload")
 
 
 class ReloadProducts(Command):
@@ -17,7 +20,7 @@ class ReloadProducts(Command):
         targets = self.parse_hosts()
         for target in targets:
             targets[target]._parse_system()
-            self.log.info("Reloaded products on refhost {}".format(target))
+            logger.info("Reloaded products on refhost {}".format(target))
 
     def complete(state, text, line, begidx, endidx):
         return complete_choices(

@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-
+from logging import getLogger
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
 from mtui.messages import NoRefhostsDefinedError
+from mtui.utils import complete_choices, requires_update
+
+logger = getLogger("mtui.command.downgrade")
 
 
 class Downgrade(Command):
@@ -29,16 +29,16 @@ class Downgrade(Command):
         if not targets:
             raise NoRefhostsDefinedError
 
-        self.log.info("Downgrading")
+        logger.info("Downgrading")
 
         try:
             self.metadata.perform_downgrade(targets)
         except KeyboardInterrupt:
-            self.log.info("downgrade process canceled")
+            logger.info("downgrade process canceled")
             return
         except Exception:
-            self.log.critical("failed to downgrade target systems")
-            self.log.debug(format_exc())
+            logger.critical("failed to downgrade target systems")
+            logger.debug(format_exc())
             return
 
         message = "done"
@@ -54,9 +54,9 @@ class Downgrade(Command):
                 break
 
         if message == "done":
-            self.log.info(message)
+            logger.info(message)
         else:
-            self.log.warn(message)
+            logger.warn(message)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-
-
 import importlib
 from pathlib import Path
 from mtui.commands._command import Command # noqa W0611

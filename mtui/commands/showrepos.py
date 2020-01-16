@@ -1,4 +1,3 @@
-
 from mtui.commands import Command
 from mtui.utils import requires_update
 

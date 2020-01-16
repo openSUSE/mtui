@@ -1,13 +1,13 @@
-# -*- coding: utf-8 -*-
-
-import subprocess
 import re
-from traceback import format_exc
-from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
-from mtui.utils import edit_text
+import subprocess
 from argparse import REMAINDER
+from logging import getLogger
+from traceback import format_exc
+
+from mtui.commands import Command
+from mtui.utils import complete_choices, edit_text, requires_update
+
+logger = getLogger("mtui.command.testopia")
 
 
 class TestopiaCreate(Command):
@@ -61,12 +61,12 @@ class TestopiaCreate(Command):
         try:
             edited = edit_text(text)
         except subprocess.CalledProcessError as e:
-            self.log.error("editor failed: {!s}".format(e))
-            self.log.debug(format_exc())
+            logger.error("editor failed: {!s}".format(e))
+            logger.debug(format_exc())
             return
 
         if edited == text:
-            self.log.warning("testcase was not modified. not uploading.")
+            logger.warning("testcase was not modified. not uploading.")
             return
 
         # Parse what the user saved. We need to fill the testcase
@@ -90,9 +90,9 @@ class TestopiaCreate(Command):
         try:
             case_id = self.prompt.testopia.create_testcase(testcase)
         except Exception:
-            self.log.error("failed to create testcase")
+            logger.error("failed to create testcase")
         else:
-            self.log.info(
+            logger.info(
                 "created testcase {!s}/tr_show_case.cgi?case_id={!s}".format(
                     self.config.bugzilla_url, case_id
                 )
