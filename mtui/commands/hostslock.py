@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 from mtui.commands import Command
 from mtui.utils import complete_choices
 

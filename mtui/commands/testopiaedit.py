@@ -1,11 +1,11 @@
-# -*- coding: utf-8 -*-
-
 import subprocess
-from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
-from mtui.utils import edit_text
+from logging import getLogger
 from traceback import format_exc
+
+from mtui.commands import Command
+from mtui.utils import complete_choices, edit_text, requires_update
+
+logger = getLogger("mtui.command.testopiaedit")
 
 
 class TestopiaEdit(Command):
@@ -49,10 +49,10 @@ class TestopiaEdit(Command):
             ]
 
         if not candidates:
-            self.log.warning("No testcase found")
+            logger.warning("No testcase found")
             return
         elif len(candidates) > 1:
-            self.log.warning(
+            logger.warning(
                 "Possible candidates found: {!s}. Please be more specific".format(
                     candidates
                 )
@@ -71,13 +71,13 @@ class TestopiaEdit(Command):
         try:
             edited_text = edit_text("\n".join(template))
         except subprocess.CalledProcessError as e:
-            self.log.error("editor failed: {!s}".format(e))
-            self.log.debug(format_exc())
+            logger.error("editor failed: {!s}".format(e))
+            logger.debug(format_exc())
             return
 
         edited_text = edited_text.strip()
         if edited_text == "\n".join(template):
-            self.log.warning("testcase was not modified. not updating.")
+            logger.warning("testcase was not modified. not updating.")
             return
 
         template_text = edited_text.replace("\n", "|br|")
@@ -95,9 +95,9 @@ class TestopiaEdit(Command):
         try:
             self.prompt.testopia.modify_testcase(candidates[0], testcase)
         except Exception:
-            self.log.error("failed to modify testcase {!s}".format(candidates[0]))
+            logger.error("failed to modify testcase {!s}".format(candidates[0]))
         else:
-            self.log.info(
+            logger.info(
                 "testcase saved: {!s}/tr_show_case.cgi?case_id={!s}".format(
                     self.config.bugzilla_url, candidates[0]
                 )

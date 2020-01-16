@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
+from logging import getLogger
 
 from mtui.commands import Command
 from mtui.utils import complete_choices
+
+logger = getLogger("mtui.command.hoststate")
 
 
 class HostState(Command):
@@ -42,11 +44,11 @@ class HostState(Command):
             elif state == "parallel":
                 exclusive = False
             for target in targets:
-                self.log.info("Setting host {} mode to {}".format(target, state))
+                logger.info(f"Setting host {target} mode to {state}")
                 targets[target].exclusive = exclusive
         else:
             for target in targets:
-                self.log.info("Setting host {} state to {}".format(target, state))
+                logger.info(f"Setting host {target} state to {state}")
                 targets[target].state = state
 
     @staticmethod

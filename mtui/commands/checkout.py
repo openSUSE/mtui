@@ -1,22 +1,24 @@
-# -*- coding: utf-8 -*-
-
+from logging import getLogger
 from subprocess import check_call
 from traceback import format_exc
 
 from mtui.commands import Command
 from mtui.utils import requires_update
 
+logger = getLogger("mtui.command.checkout")
+
 
 class Checkout(Command):
     """
     Update template files from the SVN.
     """
-    command = 'checkout'
+
+    command = "checkout"
 
     @requires_update
     def __call__(self):
         try:
-            check_call('svn up'.split(), cwd=self.metadata.report_wd())
+            check_call("svn up".split(), cwd=self.metadata.report_wd())
         except Exception:
-            self.log.error('updating template failed')
-            self.log.debug(format_exc())
+            logger.error("updating template failed")
+            logger.debug(format_exc())

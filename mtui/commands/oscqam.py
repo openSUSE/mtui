@@ -1,13 +1,15 @@
 from argparse import REMAINDER
+from logging import getLogger
 from shlex import quote
 from subprocess import check_call
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import requires_update
-from mtui.utils import complete_choices
+from mtui.utils import complete_choices, requires_update
 
 osc_api = {"SUSE": "https://api.suse.de", "openSUSE": "https://api.opensuse.org"}
+
+logger = getLogger("mtui.command.osc")
 
 
 class OSCCommand(Command):
@@ -30,7 +32,7 @@ class OSCCommand(Command):
     @requires_update
     def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
-        self.log.info("{}: {}".format(self._infopl, reviewid))
+        logger.info("{}: {}".format(self._infopl, reviewid))
         cmd = "osc -A {} qam {}".format(osc_api[apiid], self.command)
         group = " "
 
@@ -39,12 +41,12 @@ class OSCCommand(Command):
                 group += "".join("-G " + i) + " "
 
         cmd += group + reviewid
-        self.log.debug(cmd)
+        logger.debug(cmd)
         try:
             check_call(cmd.split())
         except Exception as e:
-            self.log.error("{}: {!s}".format(self._errorpl, e))
-            self.log.debug(format_exc())
+            logger.error("{}: {!s}".format(self._errorpl, e))
+            logger.debug(format_exc())
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):
@@ -127,7 +129,7 @@ class OSCReject(Command):
     @requires_update
     def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
-        self.log.info("Reject request: {}".format(reviewid))
+        logger.info("Reject request: {}".format(reviewid))
         cmd = "osc -A {} qam reject".format(osc_api[apiid])
         group = " "
 
@@ -143,13 +145,13 @@ class OSCReject(Command):
             message += " ".join(self.args.msg)
             cmd += "-M " + quote(message)
 
-        self.log.debug(cmd)
+        logger.debug(cmd)
 
         try:
             check_call(cmd, shell=True)
         except Exception as e:
-            self.log.error("Reject failed: {!s}".format(e))
-            self.log.debug(format_exc())
+            logger.error("Reject failed: {!s}".format(e))
+            logger.debug(format_exc())
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):

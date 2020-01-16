@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
+from logging import getLogger
 
 from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
+from mtui.utils import complete_choices, requires_update
+
+logger = getLogger("mtui.command.zypper")
 
 
 class Install(Command):
@@ -21,21 +22,21 @@ class Install(Command):
 
     @requires_update
     def __call__(self):
-        self.log.info("Installing")
+        logger.info("Installing")
         packages = self.args.package
         targets = self.parse_hosts()
 
         try:
             self.metadata.perform_install(targets, packages)
         except KeyboardInterrupt:
-            self.log.info("Installation process aborted")
+            logger.info("Installation process aborted")
             return
         except Exception as e:
-            self.log.critical("failed to install packages")
-            self.log.debug("{!s}".format(e))
+            logger.critical("failed to install packages")
+            logger.debug("{!s}".format(e))
             return
 
-        self.log.info("Done")
+        logger.info("Done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
@@ -63,21 +64,21 @@ class Uninstall(Command):
 
     @requires_update
     def __call__(self):
-        self.log.info("Removing")
+        logger.info("Removing")
         packages = self.args.package
         targets = self.parse_hosts()
 
         try:
             self.metadata.perform_uninstall(targets, packages)
         except KeyboardInterrupt:
-            self.log.info("Uninstallation process aborted")
+            logger.info("Uninstallation process aborted")
             return
         except Exception as e:
-            self.log.critical("failed to install packages")
-            self.log.debug("{!s}".format(e))
+            logger.critical("failed to install packages")
+            logger.debug("{!s}".format(e))
             return
 
-        self.log.info("Done")
+        logger.info("Done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

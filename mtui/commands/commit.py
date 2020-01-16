@@ -1,9 +1,12 @@
 import subprocess
 from argparse import REMAINDER
+from logging import getLogger
 from traceback import format_exc
 
 from mtui.commands import Command
 from mtui.utils import complete_choices, requires_update
+
+logger = getLogger("mtui.command.commit")
 
 
 class Commit(Command):
@@ -46,11 +49,11 @@ class Commit(Command):
             subprocess.check_call("svn up".split(), cwd=checkout)
             subprocess.check_call("svn ci".split() + msg, cwd=checkout)
 
-            self.log.info("Testreport in: {}".format(self.metadata._testreport_url()))
+            logger.info("Testreport in: {}".format(self.metadata._testreport_url()))
 
         except Exception:
-            self.log.error("committing template.failed")
-            self.log.debug(format_exc())
+            logger.error("committing template.failed")
+            logger.debug(format_exc())
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):

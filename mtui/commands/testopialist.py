@@ -1,8 +1,9 @@
-# -*- coding: utf-8 -*-
+from logging import getLogger
 
 from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
+from mtui.utils import complete_choices, requires_update
+
+logger = getLogger("mtui.command.testopialist")
 
 
 class TestopiaList(Command):
@@ -34,7 +35,7 @@ class TestopiaList(Command):
         url = self.config.bugzilla_url
 
         if not self.prompt.testopia.testcases:
-            self.log.info("no testcases found")
+            logger.info("no testcases found")
 
         for tcid, tc in list(self.prompt.testopia.testcases.items()):
             self.display.testopia_list(

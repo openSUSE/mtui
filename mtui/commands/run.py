@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
-
 from argparse import REMAINDER
+from logging import getLogger
 
 from mtui.commands import Command
-from mtui.utils import complete_choices, page
-from mtui.target.locks import LockedTargets
-from mtui.target.locks import TargetLockedError
 from mtui.messages import NoRefhostsDefinedError
+from mtui.target.locks import LockedTargets, TargetLockedError
+from mtui.utils import complete_choices, page
+
+logger = getLogger("mtui.command.run")
 
 
 class Run(Command):
@@ -57,21 +57,19 @@ class Run(Command):
                             target, targets[target].lastin(), targets[target].lastexit()
                         )
                     )
-                    list(map(output.append, targets[target].lastout().split("\n")))
+                    for line in targets[target].lastout().split("\n"):
+                        output.append(line)
                     if targets[target].lasterr():
-                        list(
-                            map(
-                                output.append,
-                                ["stderr:"] + targets[target].lasterr().split("\n"),
-                            )
-                        )
+                        output.append("stderr:")
+                        for line in targets[target].lasterr().split("\n"):
+                            output.append(line)
 
         except TargetLockedError as e:
-            self.log.error("Target {}".format(e))
+            logger.error("Target {}".format(e))
             return
 
         page(output, self.prompt.interactive)
-        self.log.info("done")
+        logger.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

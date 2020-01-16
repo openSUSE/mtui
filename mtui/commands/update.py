@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
-
+from logging import getLogger
 from traceback import format_exc
 
 from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
 from mtui.messages import NoRefhostsDefinedError
 from mtui.target.locks import TargetLockedError
+from mtui.utils import complete_choices, requires_update
+
+logger = getLogger("mtui.command.update")
 
 
 class Update(Command):
@@ -50,7 +50,7 @@ class Update(Command):
     @requires_update
     def __call__(self):
 
-        self.log.info("Updating")
+        logger.info("Updating")
 
         targets = self.parse_hosts()
         if not targets:
@@ -65,24 +65,24 @@ class Update(Command):
             self.metadata.perform_update(targets, params)
 
         except TargetLockedError as e:
-            self.log.warning(e)
-            self.log.critical("failed to update target systems")
-            self.log.debug(format_exc())
+            logger.warning(e)
+            logger.critical("failed to update target systems")
+            logger.debug(format_exc())
             return
-        except Exception as e:
-            self.log.critical("failed to update target systems")
-            self.log.debug(format_exc())
+        except Exception:
+            logger.critical("failed to update target systems")
+            logger.debug(format_exc())
             self.prompt.notify_user(
                 "updating {!s} failed".format(self.prompt.session), "stock_dialog-error"
             )
             raise
 
         except KeyboardInterrupt:
-            self.log.info("update process canceled")
+            logger.info("update process canceled")
             return
 
         self.prompt.notify_user("updating {!s} finished".format(self.prompt.session))
-        self.log.info("done")
+        logger.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

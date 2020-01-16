@@ -1,8 +1,5 @@
-# -*- coding: utf-8 -*-
-
 from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
+from mtui.utils import complete_choices, requires_update
 
 
 class TestopiaShow(Command):

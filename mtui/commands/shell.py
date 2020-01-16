@@ -1,7 +1,9 @@
-# -*- coding: utf-8 -*-
+from logging import getLogger
 
 from mtui.commands import Command
 from mtui.utils import complete_choices
+
+logger = getLogger("mtui.command.shell")
 
 
 class Shell(Command):
@@ -20,7 +22,7 @@ class Shell(Command):
     def __call__(self):
         targets = self.parse_hosts()
 
-        self.log.debug("Starting shell")
+        logger.debug("Starting shell")
 
         for target in list(targets.keys()):
             targets[target].shell()

@@ -1,17 +1,15 @@
-# -*- coding: utf-8 -*-
-
 import os
 import re
 import subprocess
-
 from datetime import date
+from logging import getLogger
 from traceback import format_exc
 
 from mtui import messages
 from mtui.commands import Command
-from mtui.utils import complete_choices
-from mtui.utils import requires_update
-from mtui.utils import edit_text
+from mtui.utils import complete_choices, edit_text, requires_update
+
+logger = getLogger("mtui.command.testsuite")
 
 
 class TestSuiteList(Command):
@@ -71,13 +69,13 @@ class TestSuiteRun(Command):
         try:
             targets.run(cmd)
         except KeyboardInterrupt:
-            self.log.info("testsuite run canceled")
+            logger.info("testsuite run canceled")
             return
 
-        for hn, t in list(targets.items()):
+        for _, t in list(targets.items()):
             t.report_testsuite_results(self.display.testsuite_run, name)
 
-        self.log.info("done")
+        logger.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
@@ -116,12 +114,12 @@ class TestSuiteSubmit(Command):
         try:
             comment = edit_text(comment)
         except subprocess.CalledProcessError as e:
-            self.log.error("editor failed: {!s}".format(e))
-            self.log.debug(format_exc())
+            logger.error("editor failed: {!s}".format(e))
+            logger.debug(format_exc())
             return
 
         if len(comment) > 99:
-            self.log.warning(messages.QadbReportCommentLengthWarning())
+            logger.warning(messages.QadbReportCommentLengthWarning())
 
         cmd = (
             "DISPLAY=dummydisplay:0 /usr/share/qa/tools/remote_qa_db_report.pl"
@@ -132,17 +130,17 @@ class TestSuiteSubmit(Command):
 
         try:
             for hostname, target in list(targets.items()):
-                self.log.info(
+                logger.info(
                     "Submiting results of {}-run from {}".format(name, hostname)
                 )
                 target.run(cmd)
         except KeyboardInterrupt:
-            self.log.info("Testsuite results submission canceled")
+            logger.info("Testsuite results submission canceled")
             return
 
         for hostname, target in list(targets.items()):
             if target.lastexit() != 0:
-                self.log.critical(
+                logger.critical(
                     "submitting testsuite results failed on {!s}".format(hostname)
                 )
                 self.println("{}:~> {} [{}]".format(hostname, name, target.lastexit()))
@@ -154,19 +152,19 @@ class TestSuiteSubmit(Command):
                     "(http://.*/submission.php.submission_id=\d+)", target.lasterr()
                 )
                 if match:
-                    self.log.info(
+                    logger.info(
                         "submission for {!s} ({!s}): {!s}".format(
                             hostname, target.system, match.group(1)
                         )
                     )
                 else:
-                    self.log.critical(
+                    logger.critical(
                         'no submission found for {0!s}. please use "show_log -t {0!s}" to see what went wrong'.format(
                             hostname
                         )
                     )
 
-        self.log.info("done")
+        logger.info("done")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
