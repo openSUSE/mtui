@@ -1,4 +1,4 @@
-from logging import getLogger
+from logging import getLogger, DEBUG
 from pathlib import Path
 
 from . import Command
@@ -64,6 +64,8 @@ class Export(Command):
                 text.clear()
                 text.extend(template)
             except Exception as e:
+                if logger.getEffectiveLevel() == DEBUG:
+                    logger.exception("traceback of export")
                 logger.error(f"While exporting template was thrown exception {e}")
 
     @staticmethod
