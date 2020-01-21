@@ -1,14 +1,15 @@
 import re
 
-from mtui import __version__ as mtui_version
 from paramiko import __version__ as paramiko_version
+
+from mtui import __version__ as mtui_version
 
 
 def detect_system():
-    _distro = re.compile("NAME=[\"|](.*)[\"|]")
-    _v_id = re.compile("VERSION_ID=[\"|](.*)[\"|]")
+    _distro = re.compile('NAME=["|](.*)["|]')
+    _v_id = re.compile('VERSION_ID=["|](.*)["|]')
     try:
-        with open('/etc/os-release', mode='r', encoding='utf-8') as f:
+        with open("/etc/os-release", mode="r", encoding="utf-8") as f:
             for line in f:
                 if _distro.match(line):
                     distro = _distro.match(line).group(1)
@@ -21,8 +22,8 @@ def detect_system():
         distro = "Unknown"
 
     try:
-        with open('/proc/version', mode='r', encoding='utf-8') as f:
-            kernel=f.readline().split(' ')[2]
+        with open("/proc/version", mode="r", encoding="utf-8") as f:
+            kernel = f.readline().split(" ")[2]
     except:
         kernel = "Unknown"
 
@@ -30,6 +31,5 @@ def detect_system():
 
 
 def system_info(distro, verid, kernel, user):
-    string = "## export MTUI:{}, paramiko {} on {}-{} (kernel: {}) by {}".format(
-        mtui_version, paramiko_version, distro, verid, kernel, user)
+    string = f"## export MTUI:{mtui_version}, paramiko {paramiko_version} on {distro}-{verid} (kernel: {kernel}) by {user}\n"
     return string
