@@ -3,6 +3,7 @@ from traceback import format_exc
 
 from mtui.commands import Command
 from mtui.messages import NoRefhostsDefinedError
+from mtui.types.systems import UnknownSystemError
 from mtui.utils import complete_choices, requires_update
 
 logger = getLogger("mtui.commands.prepare")
@@ -65,6 +66,9 @@ class Prepare(Command):
             )
         except KeyboardInterrupt:
             logger.info("preparation process canceled")
+            return False
+        except UnknownSystemError as e:
+            logger.critical(f"Failed to prepare system due unknown base system : {e}")
             return False
         except Exception:
             logger.critical("Failed to prepare systems")
