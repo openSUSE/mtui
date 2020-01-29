@@ -309,10 +309,16 @@ class TestReport(metaclass=ABCMeta):
         targets = {}
         new_systems = {}
         executor = concurrent.futures.ThreadPoolExecutor()
+        hosts = {host for host in self.hostnames if host not in self.targets}
+        if hosts:
+            logger.info(f"Adding {hosts}")
+        else:
+            logger.info("No refhosts to add")
+
         try:
             connections = {
                 executor.submit(self.connect_target, host, make_target): host
-                for host in self.hostnames
+                for host in hosts
             }
             done, _ = concurrent.futures.wait(connections)
             for future in done:
@@ -332,7 +338,9 @@ class TestReport(metaclass=ABCMeta):
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = {host: system for host, system in new_systems.items() if system}
         for t in self.targets.copy():
-            del self.targets[t]
+            if not self.targets[t].connection.is_active():
+                del self.targets[t]
+
         self.targets.update(
             {host: target for host, target in targets.items() if target}
         )
@@ -535,7 +543,6 @@ class TestReport(metaclass=ABCMeta):
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
         return sink(targets, by_hosts_pkg)
-
 
     def generate_xmllog(self, targetHosts=None):
         from mtui.export import XMLOutput
