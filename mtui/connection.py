@@ -604,7 +604,7 @@ class Connection(object):
         sftp.close()
         return link
 
-    def is_active(self):
+    def is_active(self) -> bool:
         return self.client._transport.is_active()
 
     def close(self):
