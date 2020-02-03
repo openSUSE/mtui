@@ -28,7 +28,7 @@ class Commit(Command):
 
         msg = []
         if self.args.msg:
-            msg = ["-m"] + ['"' + " ".join([x for x in self.args.msg[0]]) + '"']
+            msg = ["-m"] + ['"' + " ".join(self.args.msg[0]) + '"']
 
         try:
             subprocess.check_call(
