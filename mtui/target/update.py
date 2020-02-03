@@ -10,7 +10,6 @@ logger = getLogger("mtui.target.update")
 
 
 class Update:
-
     def __init__(self, targets, packages, testreport):
         self.targets = targets
         self.packages = packages
@@ -18,7 +17,7 @@ class Update:
         self.commands = []
 
     def run(self, params):
-        with LockedTargets(list(self.targets.values())):
+        with LockedTargets(self.targets.values()):
             if hasattr(self, "type") and self.type == "transactional":
                 self._run_transactional(params)
             else:
@@ -39,7 +38,7 @@ class Update:
         if "noprepare" not in params:
             self.testreport.perform_prepare(self.targets)
 
-        for hn, t in list(self.targets.items()):
+        for hn, t in self.targets.items():
             not_installed = []
 
             t.query_versions()
@@ -159,33 +158,34 @@ class Update:
         skipped = False
 
         try:
-            for t in list(self.targets.values()):
-                lock = t.locked()
-                if lock.locked and not lock.own():
+            for t in self.targets.values():
+                if t.is_locked() and not t._lock.is_mine():
                     skipped = True
                     logger.warning(
                         "host {!s} is locked since {!s} by {!s}. skipping.".format(
-                            t.hostname, lock.time(), lock.user
+                            t.hostname, t._lock.time(), t._lock.locked_by()
                         )
                     )
-                    if lock.comment:
+                    if t._lock.comment():
                         logger.info(
-                            "{!s}'s comment: {!s}".format(lock.user, lock.comment)
+                            "{!s}'s comment: {!s}".format(
+                                t._lock.locked_by(), t._lock.comment()
+                            )
                         )
                 else:
-                    t.set_locked()
+                    t.lock()
                     thread = ThreadedMethod(queue)
                     thread.setDaemon(True)
                     thread.start()
             if skipped:
-                for t in list(self.targets.values()):
+                for t in self.targets.values():
                     try:
-                        t.remove_lock()
+                        t.unlock()
                     except AssertionError:
                         pass
                 raise UpdateError("Hosts locked")
 
-            for t in list(self.targets.values()):
+            for t in self.targets.values():
                 if (
                     hasattr(self, "type") and self.type != "transactional"
                 ) or not hasattr(self, "type"):
@@ -204,10 +204,9 @@ class Update:
         except BaseException:
             raise
         finally:
-            for t in list(self.targets.values()):
-                lock = t.locked()
-                if not lock.locked:  # wasn't locked earlier by set_host_lock
+            for t in self.targets.values():
+                if t.is_lock():
                     try:
-                        t.remove_lock()
+                        t.unlock()
                     except AssertionError:
                         pass

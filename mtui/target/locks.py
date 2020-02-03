@@ -1,6 +1,6 @@
-
 import errno
 import os
+from datetime import datetime
 from logging import getLogger
 
 from mtui.utils import timestamp
@@ -12,7 +12,7 @@ class TargetLockedError(Exception):
     pass
 
 
-class RemoteLock(object):
+class RemoteLock:
 
     """
     Localy represent the state of remote lock
@@ -50,14 +50,13 @@ class RemoteLock(object):
             xs.append(self.comment)
         return ":".join(xs)
 
-    def __str__(self):
+    def __str__(self) -> str:
         if self.comment:
             comment = " ({!s})".format(self.comment)
         else:
             comment = ""
 
-        user = self.user
-        return "locked by {0}{1}.".format(user, comment)
+        return f"locked by {self.user}{comment}."
 
     @classmethod
     def from_lockfile(cls, line):
@@ -85,7 +84,7 @@ class RemoteLock(object):
         return self
 
 
-class LockedTargets(object):
+class LockedTargets:
     def __init__(self, targets):
         self.targets = targets
 
@@ -98,7 +97,7 @@ class LockedTargets(object):
             target.unlock()
 
 
-class TargetLock(object):
+class TargetLock:
 
     """
       This class is not supposted to be used directly but via
@@ -118,23 +117,17 @@ class TargetLock(object):
 
     def __init__(self, connection, config):
         self.connection = connection
-
-        self.connection = connection
-
         self.i_am_user = config.session_user
         self.i_am_pid = os.getpid()
-        self.timestamp_factory = timestamp
         """
     :type timestampFactory: callable
     """
 
         self._lock = RemoteLock()
 
-    def load(self):
-        """
-        :returns None:
-        """
-        logger.debug("{!s}: getting mtui lock state".format(self.connection.hostname))
+    # TODO: some cache needed
+    def load(self) -> None:
+        logger.debug(f"{self.connection.hostname}: getting mtui lock state")
 
         self._lock = RemoteLock()  # make sure lock is reset.
 
@@ -150,7 +143,7 @@ class TargetLock(object):
 
         self._lock = RemoteLock.from_lockfile(data)
 
-    def is_locked(self):
+    def is_locked(self) -> bool:
         """
         :returns: bool True if target system is locked by someone else
 
@@ -182,7 +175,7 @@ class TargetLock(object):
 
         rl = RemoteLock()
         rl.user = self.i_am_user
-        rl.timestamp = self.timestamp_factory()
+        rl.timestamp = timestamp()
         rl.pid = self.i_am_pid
         rl.comment = comment
 
@@ -196,17 +189,27 @@ class TargetLock(object):
         lockfile.close()
         self._lock = rl
 
-    def locked_by_msg(self):
+    def locked_by_msg(self) -> str:
         """
         :returns str: locked by message suitable for display to user
         """
-        host = self.connection.hostname
-        return "{0} is {1}".format(host, str(self._lock))
+        self.load()
+        return f"{self.connection.hostname} is {self._lock}"
 
-    def locked_by(self):
-        return self._lock
+    def locked_by(self) -> str:
+        self.load()
+        return self._lock.user
 
-    def unlock(self, force=False):
+    def comment(self) -> str:
+        self.load()
+        return self._lock.comment
+
+    def time(self) -> str:
+        self.load()
+        time = datetime.fromtimestamp(float(self._lock.timestamp))
+        return time.strftime("%A, %d.%m.%Y %H:%M UTC")
+
+    def unlock(self, force=False) -> None:
         """
         Unlocks target system
 
@@ -233,7 +236,7 @@ class TargetLock(object):
 
         self._lock = RemoteLock()
 
-    def is_mine(self):
+    def is_mine(self) -> bool:
         """
         :returns bool: True if the lock is owned by user running this
         """
@@ -246,43 +249,4 @@ class TargetLock(object):
             # NOTE: checking pid handles the case where one user is
             # running multiple mtui instances against the same hosts
             return False
-
         return True
-
-
-class Locked(object):
-    def __init__(
-        self, myself, locked=False, user="nobody", timestamp=0, pid=0, comment=None
-    ):
-        self.myself = myself
-        self.locked = locked
-        self.user = user
-        self.timestamp = timestamp
-        self.pid = pid
-        self.comment = comment
-
-    def own(self):
-        u = self.myself
-        if not self.user == u:
-            logger.debug("user: {!s} != {!s}".format(self.user, u))
-            return False
-
-        p = str(self._getpid())
-        if not self.pid == p:
-            logger.debug("pid: {!s} != {!s}".format(self.pid, p))
-            return False
-
-        return True
-
-    def _getpid(self):
-        return os.getpid()
-
-    def time(self, style=None):
-        from datetime import datetime
-
-        if style is None:
-            style = "%A, %d.%m.%Y %H:%M UTC"
-
-        time = datetime.fromtimestamp(float(self.timestamp))
-
-        return time.strftime(style)

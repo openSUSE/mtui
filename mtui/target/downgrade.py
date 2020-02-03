@@ -31,7 +31,7 @@ class Downgrade:
             for command in self.commands:
                 self.targets.run(command)
 
-            for t in list(self.targets.values()):
+            for t in self.targets.values():
                 if "Error" in t.lasterr():
                     logger.critical(
                         '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
@@ -158,29 +158,30 @@ class Downgrade:
     def lock_hosts(self):
         try:
             skipped = False
-            for t in list(self.targets.values()):
-                lock = t.locked()
-                if lock.locked and not lock.own():
+            for t in self.targets.values():
+                if t.is_locked() and not t._lock.is_mine():
                     skipped = True
                     logger.warning(
                         "host {!s} is locked since {!s} by {!s}. skipping.".format(
-                            t.hostname, lock.time(), lock.user
+                            t.hostname, t._lock.time(), t._lock.locked_by()
                         )
                     )
                     if lock.comment:
                         logger.info(
-                            "{!s}'s comment: {!s}".format(lock.user, lock.comment)
+                            "{!s}'s comment: {!s}".format(
+                                t._lock.locked_by(), t._lock.comment()
+                            )
                         )
                 else:
-                    t.set_locked()
+                    t.lock()
                     thread = ThreadedMethod(queue)
                     thread.setDaemon(True)
                     thread.start()
 
             if skipped:
-                for t in list(self.targets.values()):
+                for t in self.targets.values():
                     try:
-                        t.remove_lock()
+                        t.unlock()
                     except AssertionError:
                         pass
                 raise UpdateError("Hosts locked")
@@ -190,10 +191,9 @@ class Downgrade:
             self.unlock_hosts()
 
     def unlock_hosts(self):
-        for t in list(self.targets.values()):
-            lock = t.locked()
-            if lock.locked:  # wasn't locked earlier by set_host_lock
+        for t in self.targets.values():
+            if t.is_locked():
                 try:
-                    t.remove_lock()
+                    t.unlock()
                 except AssertionError:
                     pass
