@@ -1,3 +1,5 @@
+from argparse import REMAINDER
+
 from mtui.commands import Command
 from mtui.utils import complete_choices
 
@@ -20,16 +22,21 @@ class HostLock(Command):
     @classmethod
     def _add_arguments(cls, parser):
         cls._add_hosts_arg(parser)
+        parser.add_argument(
+            "-c", "--comment", action="append", nargs=REMAINDER, help="lock comment"
+        )
         return parser
 
     def __call__(self):
         targets = self.parse_hosts()
-        comment = input("comment: ").strip()
-
+        comment = "" if not self.args.comment else " ".join(self.args.comment[0])
         targets.lock(comment)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
-            [("-t", "--target")], line, text, state["hosts"].names()
+            [("-t", "--target"), ("-c", "--comment")],
+            line,
+            text,
+            state["hosts"].names(),
         )

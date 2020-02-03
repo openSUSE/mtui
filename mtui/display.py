@@ -5,6 +5,7 @@ from .utils import blue, green, red, yellow
 
 
 class CommandPromptDisplay:
+
     def __init__(self, output):
         self.output = output
 
@@ -58,11 +59,8 @@ class CommandPromptDisplay:
 
     def list_locks(self, hostname, system, lock):
         system = "({!s})".format(system)
-        if lock.locked:
-            if lock.own():
-                lockedby = "me"
-            else:
-                lockedby = lock.user
+        if lock.is_locked():
+            lockedby = "me" if lock.is_mine() else lock.locked_by()
 
             self.println(
                 eol="",
@@ -72,8 +70,11 @@ class CommandPromptDisplay:
                     yellow("since {} by {}".format(lock.time(), lockedby)),
                 ),
             )
-            if lock.comment:
-                self.println(" : {}".format(lock.comment))
+
+            # TODO: walrus operator in python 3.8 .....
+            comment = lock.comment()
+            if comment:
+                self.println(" : {}".format(comment))
             else:
                 self.println()
         else:

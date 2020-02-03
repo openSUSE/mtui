@@ -10,7 +10,7 @@ from traceback import format_exc
 from .. import messages
 from ..connection import CommandTimeout, Connection, errno
 # Import for other modules -- not used directly here
-from ..target.locks import (Locked, LockedTargets, RemoteLock, TargetLock,
+from ..target.locks import (LockedTargets, RemoteLock, TargetLock,
                             TargetLockedError)
 from ..target.parsers import parse_system
 from ..types.rpmver import RPMVersion
@@ -24,7 +24,7 @@ class Target(object):
         self,
         config,
         hostname,
-        packages=[],
+        packages=None,
         state="enabled",
         timeout=300,
         exclusive=False,
@@ -56,9 +56,9 @@ class Target(object):
         self.timeout = timeout
         self.exclusive = exclusive
         self.connection = None
-
-        for package in packages:
-            self.packages[package] = Package(package)
+        if packages:
+            for package in packages:
+                self.packages[package] = Package(package)
 
     def _parse_system(self):
         logger.debug("get and parse target installed products")
@@ -75,8 +75,6 @@ class Target(object):
 
         self._lock = self.TargetLock(self.connection, self.config)
         if self.is_locked():
-            # NOTE: the condition was originally locked and lock.comment
-            # idk why.
             logger.warning(self._lock.locked_by_msg())
 
         # get system
@@ -322,7 +320,7 @@ class Target(object):
         except BaseException:
             return ""
 
-    def is_locked(self):
+    def is_locked(self) -> bool:
         """
         :returns bool: True if target is locked by someone else
         """
@@ -340,59 +338,6 @@ class Target(object):
         except TargetLockedError as e:
             logger.warning(e)
             raise
-
-    def locked(self):
-        """
-        :deprecated: by is_locked method
-        """
-        logger.debug("{!s}: getting mtui lock state".format(self.hostname))
-        lock = Locked(self.config.session_user, False)
-
-        if self.state != "enabled":
-            return lock
-
-        try:
-            lock.locked = self._lock.is_locked()
-        except Exception:
-            logger.error("Reading remote lock failed for {0}".format(self.host))
-            return lock
-
-        if lock.locked:
-            rl = self._lock.locked_by()
-            lock.timestamp = rl.timestamp
-            lock.user = rl.user
-            lock.pid = str(rl.pid)
-            lock.comment = rl.comment
-
-        return lock
-
-    def set_locked(self, comment=None):
-        """
-        :deprecated: by lock method
-        """
-        if self.state == "enabled":
-            try:
-                self._lock.lock(comment)
-            except BaseException:
-                return
-
-    def remove_lock(self):
-        """
-        :deprecated:
-        """
-        if self.state != "enabled":
-            return
-
-        try:
-            self.unlock()
-        except TargetLockedError:
-            logger.debug(
-                "unable to remove lock from {}. lock is probably not held by this session".format(
-                    self.hostname
-                )
-            )
-        except BaseException:
-            pass
 
     def add_history(self, comment):
         if self.state == "enabled":
@@ -445,7 +390,7 @@ class Target(object):
             if self.connection.is_active():
                 self.connection.timeout = 15
                 self.add_history(["disconnect"])
-                self.remove_lock()
+                self.unlock()
         except Exception:
             # ignore if the connection seems to be lost
             pass
@@ -470,7 +415,7 @@ class Target(object):
         return sink(self.hostname, self.system, self.lastout().split("\n"))
 
     def report_locks(self, sink):
-        return sink(self.hostname, self.system, self.locked())
+        return sink(self.hostname, self.system, self._lock)
 
     def report_timeout(self, sink):
         return sink(self.hostname, self.system, self.get_timeout())
@@ -494,6 +439,7 @@ class Target(object):
 
 
 class Package(object):
+
     def __init__(self, name):
         self.name = name
         self.before = None
