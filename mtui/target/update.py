@@ -205,7 +205,7 @@ class Update:
             raise
         finally:
             for t in self.targets.values():
-                if t.is_lock():
+                if t.is_locked():
                     try:
                         t.unlock()
                     except AssertionError:
