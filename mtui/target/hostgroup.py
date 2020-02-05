@@ -1,4 +1,3 @@
-
 from collections import UserDict
 
 from mtui.target.actions import FileDelete
@@ -28,7 +27,7 @@ class HostsGroup(UserDict):
         """
         :param targets: list of L{Target}
         """
-        self.data = dict([(h.host, h) for h in hosts])
+        self.data = {h.host: h for h in hosts}
 
     def select(self, hosts=[], enabled=None):
         if hosts == []:
