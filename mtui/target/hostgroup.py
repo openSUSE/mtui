@@ -27,7 +27,7 @@ class HostsGroup(UserDict):
         """
         :param targets: list of L{Target}
         """
-        self.data = {h.host: h for h in hosts}
+        self.data = {h.hostname: h for h in hosts}
 
     def select(self, hosts=[], enabled=None):
         if hosts == []:
