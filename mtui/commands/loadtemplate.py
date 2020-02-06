@@ -71,7 +71,6 @@ class LoadTemplate(Command):
         else:
             raise TestReportNotLoadedError
 
-
         self.prompt.load_update(self.args.update, autoconnect=True)
 
         # Reload hosts to which we already have a connection
@@ -85,7 +84,7 @@ class LoadTemplate(Command):
 
         if self.args.chosts:
             for target in re_add:
-                self.metadata.add_target(target)
+                self.prompt.metadata.add_target(target)
 
     @staticmethod
     def complete(_, text, line, begidx, endix):
