@@ -129,8 +129,8 @@ class OSCReject(Command):
     @requires_update
     def __call__(self):
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
-        logger.info("Reject request: {}".format(reviewid))
-        cmd = "osc -A {} qam reject".format(osc_api[apiid])
+        logger.info(f"Reject request: {reviewid}")
+        cmd = f"osc -A {osc_api[apiid]} qam reject"
         group = " "
 
         if self.args.group:
@@ -173,3 +173,25 @@ class OSCReject(Command):
             line,
             text,
         )
+
+
+class OSCComment(Command):
+    """
+    Wrapper around 'osc qam comment' command.
+    """
+
+    command = "comment"
+
+    @requires_update
+    def __call__(self):
+        comment = input("Comment: ")
+        reviewid = str(self.metadata.id)
+        apiid = self.metadata.id.project
+        cmd = f"osc -A {osc_api[apiid]} qam {self.command} {reviewid}"
+        logger.debug(f"comment release request with: {cmd} {comment}")
+
+        try:
+            check_call(cmd.split() + [comment])
+        except Exception as e:
+            logger.error("Comment failed: {!s}".format(e))
+            logger.debug(format_exc())
