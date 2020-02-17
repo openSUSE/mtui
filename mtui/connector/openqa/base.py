@@ -1,8 +1,8 @@
 from abc import ABCMeta, abstractmethod
 from logging import getLogger
 
-import openqa_client.exceptions
-from openqa_client.client import OpenQA_Client as oqa
+import openqa_client.exceptions  #type: ignore
+from openqa_client.client import OpenQA_Client as oqa  # type: ignore
 
 logger = getLogger("mtui.connector.openqa")
 

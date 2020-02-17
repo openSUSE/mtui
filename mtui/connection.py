@@ -3,26 +3,26 @@
 # almost all exceptions here are passed to the upper layer.
 #
 
-import sys
-import stat
 import errno
-import select
-import socket
-import termios
-import tty
 import getpass
 import logging
-from pathlib import Path
+import select
+import socket
+import stat
+import sys
+import termios
+import tty
 from logging import getLogger
+from pathlib import Path
 from traceback import format_exc
+from typing import Union
+import paramiko # type: ignore
 
-from .utils import termsize
 from .messages import ReConnectFailed
-
-import paramiko
+from .utils import termsize
 
 logger = getLogger("mtui.connection")
-RETRIES = 5
+RETRIES: int = 5
 
 
 if not sys.warnoptions:
@@ -42,15 +42,17 @@ class CommandTimeout(Exception):
     def __init__(self, command=None):
         self.command = command
 
-    def __str__(self):
+    def __str__(self) -> str:
         return repr(self.command)
 
 
-class Connection(object):
+class Connection():
 
     """manage SSH and SFTP connections"""
 
-    def __init__(self, hostname, port, timeout):
+    __slots__ = ["hostname", "port", "timeout", "client", "stdout", "stdin", "command", "stderr"]
+
+    def __init__(self, hostname: str, port: Union[int, str], timeout: int) -> None:
         """opens SSH channel to specified host
 
         Tries AuthKey Authentication and falls back to password mode in case of errors.
@@ -88,12 +90,12 @@ class Connection(object):
         # self.client.set_combine_stderr(True)
         self.connect()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "<{0} object hostname={1} port={2}>".format(
             self.__class__.__name__, self.hostname, self.port
         )
 
-    def load_keys(self):
+    def load_keys(self) -> None:
         self.client.load_system_host_keys()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
@@ -171,7 +173,7 @@ class Connection(object):
             logger.debug("{!s}: {!s}".format(self.hostname, e))
             raise e
 
-    def reconnect(self):
+    def reconnect(self) -> None:
         """try to reconnect to the host
 
         currently, there's no reconnection limit. needs to be implemented
@@ -230,7 +232,7 @@ class Connection(object):
         return session
 
     @staticmethod
-    def close_session(session=None):
+    def close_session(session=None) -> None:
         """close the current session"""
         if session:
             try:
@@ -607,7 +609,7 @@ class Connection(object):
     def is_active(self) -> bool:
         return self.client._transport.is_active()
 
-    def close(self):
+    def close(self) -> None:
         """closes SSH channel to host and disconnects
 
         Keyword arguments:

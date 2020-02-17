@@ -10,7 +10,7 @@ from logging import getLogger
 from traceback import format_exc
 from urllib.request import urlopen
 
-from ruamel.yaml import YAML
+from ruamel.yaml import YAML  # type: ignore
 
 from . import messages
 from .utils import atomic_write_file

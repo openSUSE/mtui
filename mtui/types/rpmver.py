@@ -1,10 +1,10 @@
 
 """Quering and comparing tags of RPM file names """
+from typing import Any
+import rpm  # type: ignore
 
-import rpm
 
-
-class RPMVersion(object):
+class RPMVersion:
 
     """RPMVersion holds an rpm version-release string
 
@@ -26,7 +26,7 @@ class RPMVersion(object):
     :param _arch_suffixes: arch suffixes we get in addition to version on sle12
     """
 
-    def __init__(self, ver, *args):
+    def __init__(self, ver: str, *args: Any) -> None:
         if not ver:
             raise ValueError
 
@@ -40,31 +40,31 @@ class RPMVersion(object):
             self.ver = ver
             self.rel = '0'
 
-    def __lt__(self, other):
+    def __lt__(self, other) -> bool:
         return rpm.labelCompare(
             ('1', self.ver, self.rel), ('1', other.ver, other.rel)) < 0
 
-    def __gt__(self, other):
+    def __gt__(self, other) ->bool:
         return rpm.labelCompare(
             ('1', self.ver, self.rel), ('1', other.ver, other.rel)) > 0
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         return rpm.labelCompare(
             ('1', self.ver, self.rel), ('1', other.ver, other.rel)) == 0
 
-    def __le__(self, other):
+    def __le__(self, other) -> bool:
         return rpm.labelCompare(
             ('1', self.ver, self.rel), ('1', other.ver, other.rel)) <= 0
 
-    def __ge__(self, other):
+    def __ge__(self, other) -> bool:
         return rpm.labelCompare(
             ('1', self.ver, self.rel), ('1', other.ver, other.rel)) >= 0
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         return rpm.labelCompare(
             ('1', self.ver, self.rel), ('1', other.ver, other.rel)) != 0
 
-    def __str__(self):
+    def __str__(self) -> str:
         s = str(self.ver)
         if self.rel != '0':
             s += "-" + str(self.rel)

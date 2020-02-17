@@ -2,7 +2,7 @@
 # xml log output
 #
 
-import xml.dom.minidom
+import xml.dom.minidom # type: ignore
 
 from ..utils import filter_ansi
 

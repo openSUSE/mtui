@@ -1,10 +1,11 @@
 import importlib
 from pathlib import Path
-from mtui.commands._command import Command # noqa W0611
+from typing import List
+
+from mtui.commands._command import Command  # noqa W0611
 
 _rootdir = Path(__file__).resolve().parent
-
-cmd_list = []
+cmd_list: List[str] = []
 
 for pth in _rootdir.glob("*.py"):
     if pth.is_file():
@@ -16,7 +17,7 @@ for pth in _rootdir.glob("*.py"):
     if modname.startswith("_"):
         continue
     try:
-        module = importlib.import_module("." + modname, 'mtui.commands')
+        module = importlib.import_module("." + modname, "mtui.commands")
     except BaseException:
         continue
 

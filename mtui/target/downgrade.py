@@ -123,9 +123,7 @@ class Downgrade:
             raise UpdateError(target.hostname, "update stack locked")
         if "System management is locked" in stderr:
             logger.critical(
-                '{s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                    target.hostname, stdin, stdout, stderr
-                )
+                f'{target.hostname}: command "{stdin}" failed:\nstdout:\n{stdout}\nstderr:\n{stderr}'
             )
             raise UpdateError("update stack locked", target.hostname)
         if "(c): c" in stdout:
