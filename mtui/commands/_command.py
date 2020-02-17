@@ -10,7 +10,17 @@ logger = getLogger("mtui.commands.command")
 
 
 class Command(metaclass=ABCMeta):
-    _check_subparser = None
+    __slots__ = [
+        "hosts",
+        "args",
+        "sys",
+        "config",
+        "prompt",
+        "metadata",
+        "display",
+        "targets",
+    ]
+    _check_subparser: str = "" 
     """
     :type _check_subparser: str
     :param _check_subparser: Name of the subparser attribute if the

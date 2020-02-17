@@ -1,14 +1,13 @@
-# -*- coding: utf-8 -*-
 #
 # manage connection to Bugzilla
 #
-import xmlrpc.client
+import xmlrpc.client  # type: ignore
 from logging import getLogger
 
 logger = getLogger("mtui.connector.bugzilla")
 
 
-class Bugzilla(object):
+class Bugzilla():
     """Connector to the Bugzilla XMLRPC interface
 
     Interface to the Bugzilla XMLRPC API documented at

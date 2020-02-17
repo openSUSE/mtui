@@ -14,7 +14,7 @@ def display(summary=None, text=None, icon='stock_dialog-info'):
     global __impl
     if __impl is None:
         try:
-            import pynotify as __impl
+            import pynotify as __impl  # type: ignore
         except ImportError:
             __impl = False
             logger.debug('pynotify not installed. notification disabled.')

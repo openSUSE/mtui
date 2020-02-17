@@ -5,11 +5,10 @@ from queue import Queue
 
 from mtui.utils import prompt_user
 
-queue = Queue()
+queue: Queue[int] = Queue()
 
 
 class UpdateError(Exception):
-
     def __init__(self, reason, host=None):
         self.reason = reason
         self.host = host
@@ -18,12 +17,11 @@ class UpdateError(Exception):
         if self.host is None:
             string = self.reason
         else:
-            string = '{!s}: {!s}'.format(self.host, self.reason)
+            string = "{!s}: {!s}".format(self.host, self.reason)
         return repr(string)
 
 
 class ThreadedMethod(threading.Thread):
-
     def __init__(self, queue):
         threading.Thread.__init__(self)
         self.queue = queue
@@ -47,7 +45,6 @@ class ThreadedMethod(threading.Thread):
 
 
 class ThreadedTargetGroup(object):
-
     def __init__(self, targets):
         self.targets = targets
 
@@ -75,7 +72,6 @@ class ThreadedTargetGroup(object):
 
 
 class FileDelete(ThreadedTargetGroup):
-
     def __init__(self, targets, path):
         super(FileDelete, self).__init__(targets)
         self.path = path
@@ -85,7 +81,6 @@ class FileDelete(ThreadedTargetGroup):
 
 
 class FileUpload(ThreadedTargetGroup):
-
     def __init__(self, targets, local, remote):
         super(FileUpload, self).__init__(targets)
         self.local = local
@@ -96,7 +91,6 @@ class FileUpload(ThreadedTargetGroup):
 
 
 class FileDownload(ThreadedTargetGroup):
-
     def __init__(self, targets, remote, local):
         super(FileDownload, self).__init__(targets)
 
@@ -108,7 +102,6 @@ class FileDownload(ThreadedTargetGroup):
 
 
 class RunCommand(object):
-
     def __init__(self, targets, command):
         self.targets = targets
         self.command = command
@@ -130,8 +123,7 @@ class RunCommand(object):
                 thread.daemon = True
                 thread.start()
                 if isinstance(self.command, dict):
-                    queue.put(
-                        [parallel[target].run, [self.command[target], lock]])
+                    queue.put([parallel[target].run, [self.command[target], lock]])
                 elif isinstance(self.command, str):
                     queue.put([parallel[target].run, [self.command, lock]])
 
@@ -142,8 +134,11 @@ class RunCommand(object):
 
             for target in serial:
                 prompt_user(
-                    'press Enter key to proceed with {!s}'.format(
-                        serial[target].hostname), '')
+                    "press Enter key to proceed with {!s}".format(
+                        serial[target].hostname
+                    ),
+                    "",
+                )
                 thread = ThreadedMethod(queue)
                 thread.daemon = True
                 thread.start()
@@ -153,7 +148,7 @@ class RunCommand(object):
 
                 queue.join()
         except KeyboardInterrupt:
-            print('stopping command queue, please wait.')
+            print("stopping command queue, please wait.")
             try:
                 while queue.unfinished_tasks:
                     spinner(lock)
@@ -176,12 +171,12 @@ class RunCommand(object):
 def spinner(lock=None):
     """simple spinner to show some process"""
 
-    for pos in ['|', '/', '-', '\\']:
+    for pos in ["|", "/", "-", "\\"]:
         if lock is not None:
             lock.acquire()
 
         try:
-            sys.stdout.write('processing... [{!s}]\r'.format(pos))
+            sys.stdout.write("processing... [{!s}]\r".format(pos))
             sys.stdout.flush()
         finally:
             if lock is not None:

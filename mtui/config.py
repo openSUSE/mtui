@@ -237,7 +237,7 @@ class Config:
             return
 
         try:
-            import keyring
+            import keyring # type: ignore
         except ImportError:
             logger.warning("keyring library not available")
             return
