@@ -5,7 +5,7 @@ from queue import Queue
 
 from mtui.utils import prompt_user
 
-queue: Queue[int] = Queue()
+queue: 'Queue[int]' = Queue()
 
 
 class UpdateError(Exception):
