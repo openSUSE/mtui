@@ -18,11 +18,6 @@ class ReportBug(Command):
 
     command = "report-bug"
 
-    def __init__(self, *a, **kw):
-        self.popen = kw.pop("popen", subprocess.Popen)
-
-        super(ReportBug, self).__init__(*a, **kw)
-
     def __call__(self):
         url = self.config.report_bug_url
 
@@ -32,7 +27,9 @@ class ReportBug(Command):
 
         args = ["xdg-open", url]
         try:
-            p = self.popen(args)
+            p = subprocess.Popen(
+                args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
         except OSError as e:
             if e.errno == errno.ENOENT:
                 raise messages.SystemCommandNotFoundError(args[0])
