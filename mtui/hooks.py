@@ -73,11 +73,11 @@ class PreScript(Script):
         )
 
         targets.run(
-            "{exe} -r {repository} -p {pkg_list_file} {id}".format(
+            "{exe} -r {repository} -p {pkg_list_file} {kind}".format(
                 exe=rname,
                 repository=self.testreport.repository,
                 pkg_list_file=self.testreport.target_wd("package-list.txt"),
-                id=self.testreport.id,
+                kind=self.testreport.id,
             )
         )
 
@@ -114,23 +114,20 @@ class CompareScript(Script):
         log.debug("running {0}".format(argv))
         stdout = stderr = None
         try:
-            p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ret = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except EnvironmentError as e:
             t.out.append([" ".join(argv), "", "", 0x100, 0])
             log.critical(messages.StartingCompareScriptError(e, argv))
             log.debug(format_exc())
             return
+        stdout = ret.stdout.decode("utf-8")
+        stderr = ret.stderr.decode("utf-8")
+        t.out.append([" ".join(argv), stdout, stderr, ret.returncode, 0])
 
-        (stdout, stderr) = p.communicate()
-        rc = p.wait()
-        stdout = stdout.decode("utf-8")
-        stderr = stderr.decode("utf-8")
-        t.out.append([" ".join(argv), str(stdout), str(stderr), rc, 0])
-
-        if rc == 0:
+        if ret.returncode == 0:
             return
 
-        if rc == 2:
+        if ret.returncode == 2:
             logger, msg = log.critical, messages.CompareScriptCrashed
         else:
             logger, msg = log.warning, messages.CompareScriptFailed
@@ -139,4 +136,4 @@ class CompareScript(Script):
             logger, collections.abc.Callable
         ), "{0!r} not callable".format(logger)
 
-        logger(msg(argv, stdout, stderr, rc))
+        logger(msg(argv, stdout, stderr, ret.returncode))
