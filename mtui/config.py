@@ -144,7 +144,7 @@ class Config:
             (
                 "refhosts_https_uri",
                 ("refhosts", "https_uri"),
-                "https://qam.suse.de/metadata/refhosts.yml",
+                "https://qam.suse.de/refhosts/refhosts.yml",
             ),
             (
                 "refhosts_https_expiration",
