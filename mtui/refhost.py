@@ -323,40 +323,6 @@ class Refhosts(object):
 
         return set(self.data.keys())
 
-    def get_host_attributes(self, hostname):
-        """
-        return attributes object for the hostname
-
-        Keyword arguments:
-        hostname -- host to return attributes for
-        """
-
-        attributes = Attributes()
-
-        nodes = [
-            e for e in self._location_hosts(self.location) if e["name"] == hostname
-        ]
-
-        if nodes == [] and self.location != self._default_location:
-            nodes = [
-                e
-                for e in self._location_hosts(self._default_location)
-                if e["name"] == hostname
-            ]
-
-        # technically this iterates over all found host elements.
-        # but since we just return one attribute object, we choose the first
-        # one for now and return
-        for node in nodes:
-            if "addons" in node:
-                attributes.addons = node["addons"]
-            if "product" in node:
-                attributes.product = node["product"]
-            if "arch" in node:
-                attributes.arch = node["arch"]
-
-            return attributes
-
 
 class RefhostsResolveFailed(RuntimeError):
     pass
