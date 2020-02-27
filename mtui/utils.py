@@ -20,10 +20,6 @@ from tempfile import mkstemp
 from mtui.messages import TestReportNotLoadedError
 
 
-def flatten(xs):
-    return list(chain.from_iterable(xs))
-
-
 def edit_text(text):
     editor = os.getenv("EDITOR", "vi")
     tmpfile = tempfile.NamedTemporaryFile()
@@ -204,7 +200,7 @@ def complete_choices(synonyms, line, text, hostnames=None):
     if not hostnames:
         hostnames = []
 
-    choices = set(flatten(synonyms) + hostnames)
+    choices = set(list(chain.from_iterable(synonyms)) + hostnames)
 
     ls = line.split(" ")
     ls.pop(0)

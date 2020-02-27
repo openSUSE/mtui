@@ -1,16 +1,16 @@
-import sys
 import logging
+import sys
 from subprocess import CalledProcessError
 
-from .colorlog import create_logger
-
-from .argparse import ArgsParseFailure
+from mtui.args import get_parser
 from mtui.config import Config
-from mtui.prompt import CommandPrompt
 from mtui.display import CommandPromptDisplay
 from mtui.messages import SvnCheckoutInterruptedError
-from mtui.args import get_parser
+from mtui.prompt import CommandPrompt
 from mtui.systemcheck import detect_system
+
+from .argparse import ArgsParseFailure
+from .colorlog import create_logger
 
 
 def main():
@@ -41,9 +41,8 @@ def run_mtui(sys, config, logger, Prompt, Display, args):
     config.kernel = False
     config.auto = False
 
-
     config.distro, config.distro_ver, config.distro_kernel = detect_system()
-    
+
     prompt = Prompt(config, logger, sys, Display)
     if args.update:
         if args.update.kind == "kernel":

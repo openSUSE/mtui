@@ -114,15 +114,13 @@ class CompareScript(Script):
         log.debug("running {0}".format(argv))
         stdout = stderr = None
         try:
-            ret = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ret = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         except EnvironmentError as e:
             t.out.append([" ".join(argv), "", "", 0x100, 0])
             log.critical(messages.StartingCompareScriptError(e, argv))
             log.debug(format_exc())
             return
-        stdout = ret.stdout.decode("utf-8")
-        stderr = ret.stderr.decode("utf-8")
-        t.out.append([" ".join(argv), stdout, stderr, ret.returncode, 0])
+        t.out.append([" ".join(argv), ret.stdout, ret.stderr, ret.returncode, 0])
 
         if ret.returncode == 0:
             return
@@ -136,4 +134,4 @@ class CompareScript(Script):
             logger, collections.abc.Callable
         ), "{0!r} not callable".format(logger)
 
-        logger(msg(argv, stdout, stderr, ret.returncode))
+        logger(msg(argv, ret.stdout, ret.setderr, ret.returncode))
