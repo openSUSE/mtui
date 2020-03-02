@@ -134,4 +134,4 @@ class CompareScript(Script):
             logger, collections.abc.Callable
         ), "{0!r} not callable".format(logger)
 
-        logger(msg(argv, ret.stdout, ret.setderr, ret.returncode))
+        logger(msg(argv, ret.stdout, ret.stderr, ret.returncode))
