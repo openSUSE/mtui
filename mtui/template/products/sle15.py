@@ -2,6 +2,10 @@
 def normalize_sle15(x):
     """ Normalize SLES/D 15SPx products """
 
+    if x[0][0] == "SLE-Product-SLES" and "LTSS" in x[0][1]:
+        x[0][0] = "SLES-LTSS"
+        x[0][1] = x[0][1].replace("-LTSS", "")
+        return x
     if x[0][0] == "SLE-Product-SLES":
         x[0][0] = "SLES"
         return x
