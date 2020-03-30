@@ -42,8 +42,12 @@ class AutoExport(BaseExport):
         self.install_results()
         self.inject_openqa()
         self.inject_smelt()
-        filenames = self.get_logs()
-        self.installlogs_lines(filenames)
+        if (
+            "Installation tests done in openQA with following results: PASSED\n"
+            not in self.template
+        ):
+            filenames = self.get_logs()
+            self.installlogs_lines(filenames)
         self.cut_smelt_data()
         self.add_sysinfo()
         self.dedup_lines()
