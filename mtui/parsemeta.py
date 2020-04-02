@@ -35,7 +35,7 @@ class MetadataParser:
             results.reviewer = match.group(1)
             return True
 
-        match = re.search('Bug #(\d+) \("(.*)"\):', line)  # deprecated
+        match = re.search('Bug (\d+) \("(.*)"\):', line)  # deprecated
         if match:
             results.bugs[match.group(1)] = match.group(2)
             return True
