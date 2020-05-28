@@ -283,9 +283,9 @@ class TestReport(metaclass=ABCMeta):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
-    def connect_target(self, host, make_target):
+    def connect_target(self, host):
         try:
-            target = make_target(
+            target = Target(
                 self.config,
                 host,
                 self.get_package_list(),
@@ -305,7 +305,7 @@ class TestReport(metaclass=ABCMeta):
         else:
             return target, new_system
 
-    def connect_targets(self, make_target=Target):
+    def connect_targets(self):
         targets = {}
         new_systems = {}
         executor = concurrent.futures.ThreadPoolExecutor()
@@ -317,8 +317,7 @@ class TestReport(metaclass=ABCMeta):
 
         try:
             connections = {
-                executor.submit(self.connect_target, host, make_target): host
-                for host in hosts
+                executor.submit(self.connect_target, host): host for host in hosts
             }
             done, _ = concurrent.futures.wait(connections)
             for future in done:
@@ -328,6 +327,10 @@ class TestReport(metaclass=ABCMeta):
             for future in connections.keys():
                 future.cancel()
             logger.debug("CTRL-C .. ...")
+
+            # explicitly call del over Target instances
+            for host in list(targets.keys()):
+                del targets[host]
             targets = {}
             logger.warning("Connection to refhosts cancelled by user")
         finally:
