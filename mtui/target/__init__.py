@@ -13,13 +13,14 @@ from ..connection import CommandTimeout, Connection, errno
 # Import for other modules -- not used directly here
 from ..target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
 from ..target.parsers import parse_system
+from ..types.package import Package
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
 
 logger = getLogger("mtui.target")
 
 
-class Target(object):
+class Target:
     def __init__(
         self,
         config,
@@ -438,20 +439,3 @@ class Target(object):
         return sink(self.hostname, self.system)
 
 
-class Package:
-    __slots__ = ["name", "before", "after", "required", "current"]
-
-    def __init__(self, name):
-        self.name = name
-        self.before = None
-        self.after = None
-        self.required = None
-        self.current = None
-
-    def set_versions(self, before=None, after=None, required=None):
-        if before:
-            self.before = before
-        if after:
-            self.after = after
-        if required:
-            self.required = required
