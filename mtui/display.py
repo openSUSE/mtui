@@ -137,9 +137,11 @@ class CommandPromptDisplay:
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
             sink("{!s}:~> {!s} [{!s}]".format(hostname, cmdline, exitcode))
             sink("stdout:")
-            list(map(sink, stdout.split("\n")))
+            for line in stdout.split("\n"):
+                sink(line)
             sink("stderr:")
-            list(map(sink, stderr.split("\n")))
+            for line in stdstderr.split("\n"):
+                sink(line)
 
     def testopia_list(self, url, tcid, summary, status, automated):
         if status == "disabled":
