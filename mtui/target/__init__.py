@@ -7,12 +7,14 @@ import re
 from logging import getLogger
 from traceback import format_exc
 
+
 from .. import messages
 from ..connection import CommandTimeout, Connection, errno
 
 # Import for other modules -- not used directly here
 from ..target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
 from ..target.parsers import parse_system
+from ..types.hostlog import HostLog
 from ..types.package import Package
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
@@ -44,7 +46,7 @@ class Target:
         self.hostname = hostname
         self.system = None
         self.packages = {}
-        self.out = []
+        self.out = HostLog()
         self.TargetLock = lock
         self.Connection = connection
 
@@ -437,5 +439,3 @@ class Target:
 
     def report_products(self, sink):
         return sink(self.hostname, self.system)
-
-

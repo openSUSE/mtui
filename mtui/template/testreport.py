@@ -5,6 +5,7 @@ import re
 import shutil
 import stat
 from abc import ABCMeta, abstractmethod
+from collections import namedtuple
 from errno import EEXIST, ENOENT
 from logging import getLogger
 from traceback import format_exc
@@ -20,6 +21,7 @@ from ..testopia import Testopia
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
+target_meta = namedtuple("TargetMeta", ["hostname", "system", "packages", "hostlog"])
 
 
 class TestReport(metaclass=ABCMeta):
@@ -547,22 +549,18 @@ class TestReport(metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
-    def generate_xmllog(self, targetHosts=None):
-        from mtui.export import XMLOutput
+    def report_results(self, targetHosts=None):
+        results = []
 
-        output = XMLOutput()
-
-        if self:
-            output.add_header(self)
-
-        targets = list(self.targets.values())
         if targetHosts is not None:
             targets = list(targetHosts)
+        else:
+            targets = self.targets.values()
 
         for t in targets:
-            output.add_target(t)
+            results.append(target_meta(t.hostname, str(t.system), t.packages, t.out))
 
-        return output.export()
+        return results
 
     @abstractmethod
     def _update_repos_parser(self):
