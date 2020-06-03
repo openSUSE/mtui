@@ -140,7 +140,7 @@ class CommandPromptDisplay:
             for line in stdout.split("\n"):
                 sink(line)
             sink("stderr:")
-            for line in stdstderr.split("\n"):
+            for line in stderr.split("\n"):
                 sink(line)
 
     def testopia_list(self, url, tcid, summary, status, automated):
@@ -194,7 +194,7 @@ class CommandPromptDisplay:
 
     def testsuite_list(self, hostname, system, suites):
         self.println(f"testsuites on {hostname} ({system}):")
-        self.println("\n".join([i for i in sorted(suites) if i.endswith("-run")]))
+        self.println("\n".join(i for i in sorted(suites) if i.endswith("-run")))
         self.println()
 
     def testsuite_run(self, hostname, exit, stdout, stderr, suitename):

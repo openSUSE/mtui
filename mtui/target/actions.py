@@ -73,7 +73,7 @@ class ThreadedTargetGroup(object):
 
 class FileDelete(ThreadedTargetGroup):
     def __init__(self, targets, path):
-        super(FileDelete, self).__init__(targets)
+        super().__init__(targets)
         self.path = path
 
     def mk_cmd(self, t):
@@ -82,7 +82,7 @@ class FileDelete(ThreadedTargetGroup):
 
 class FileUpload(ThreadedTargetGroup):
     def __init__(self, targets, local, remote):
-        super(FileUpload, self).__init__(targets)
+        super().__init__(targets)
         self.local = local
         self.remote = remote
 
@@ -92,7 +92,7 @@ class FileUpload(ThreadedTargetGroup):
 
 class FileDownload(ThreadedTargetGroup):
     def __init__(self, targets, remote, local):
-        super(FileDownload, self).__init__(targets)
+        super().__init__(targets)
 
         self.remote = remote
         self.local = local
@@ -101,7 +101,7 @@ class FileDownload(ThreadedTargetGroup):
         return [t.get, [self.remote, self.local]]
 
 
-class RunCommand(object):
+class RunCommand:
     def __init__(self, targets, command):
         self.targets = targets
         self.command = command
