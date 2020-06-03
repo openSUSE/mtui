@@ -66,7 +66,7 @@ class Target:
     def _parse_system(self):
         logger.debug("get and parse target installed products")
         if self.connection:
-            self.system = parse_system(self.connection)
+            return parse_system(self.connection)
 
     def connect(self):
         try:
@@ -81,7 +81,7 @@ class Target:
             logger.warning(self._lock.locked_by_msg())
 
         # get system
-        self._parse_system()
+        self.system = self._parse_system()
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
