@@ -5,6 +5,7 @@ import re
 import shutil
 import stat
 from abc import ABCMeta, abstractmethod
+from collections import namedtuple
 from errno import EEXIST, ENOENT
 from logging import getLogger
 from traceback import format_exc
@@ -20,6 +21,7 @@ from ..testopia import Testopia
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
+target_meta = namedtuple("TargetMeta", ["hostname", "system", "packages", "hostlog"])
 
 
 class TestReport(metaclass=ABCMeta):
@@ -283,9 +285,9 @@ class TestReport(metaclass=ABCMeta):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
-    def connect_target(self, host, make_target):
+    def connect_target(self, host):
         try:
-            target = make_target(
+            target = Target(
                 self.config,
                 host,
                 self.get_package_list(),
@@ -305,7 +307,7 @@ class TestReport(metaclass=ABCMeta):
         else:
             return target, new_system
 
-    def connect_targets(self, make_target=Target):
+    def connect_targets(self):
         targets = {}
         new_systems = {}
         executor = concurrent.futures.ThreadPoolExecutor()
@@ -317,8 +319,7 @@ class TestReport(metaclass=ABCMeta):
 
         try:
             connections = {
-                executor.submit(self.connect_target, host, make_target): host
-                for host in hosts
+                executor.submit(self.connect_target, host): host for host in hosts
             }
             done, _ = concurrent.futures.wait(connections)
             for future in done:
@@ -328,6 +329,10 @@ class TestReport(metaclass=ABCMeta):
             for future in connections.keys():
                 future.cancel()
             logger.debug("CTRL-C .. ...")
+
+            # explicitly call del over Target instances
+            for host in list(targets.keys()):
+                del targets[host]
             targets = {}
             logger.warning("Connection to refhosts cancelled by user")
         finally:
@@ -544,22 +549,18 @@ class TestReport(metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
-    def generate_xmllog(self, targetHosts=None):
-        from mtui.export import XMLOutput
+    def report_results(self, targetHosts=None):
+        results = []
 
-        output = XMLOutput()
-
-        if self:
-            output.add_header(self)
-
-        targets = list(self.targets.values())
         if targetHosts is not None:
             targets = list(targetHosts)
+        else:
+            targets = self.targets.values()
 
         for t in targets:
-            output.add_target(t)
+            results.append(target_meta(t.hostname, str(t.system), t.packages, t.out))
 
-        return output.export()
+        return results
 
     @abstractmethod
     def _update_repos_parser(self):

@@ -31,9 +31,9 @@ class ManualExport(BaseExport):
         # if the location was found, add the hostname.
         # if the location isn't found, it's considered that it doesn't exist.
         # in this case, a whole new host section including the systemname is added.
-        for host in self.xmllog.getElementsByTagName("host"):
-            hostname = host.getAttribute("hostname")
-            systemtype = host.getAttribute("system")
+        for host in self.results:
+            hostname = host.hostname
+            systemtype = host.system
             # systemname/reference host string in the maintenance template
             # in case the hostname is already set
             line = f"{systemtype} (reference host: {hostname})\n"
@@ -116,10 +116,10 @@ class ManualExport(BaseExport):
                     self.template.insert(index, "\n")
 
         # add package version log and script results for each host to the template
-        for host in self.xmllog.getElementsByTagName("host"):
+        for host in self.results:
             versions = {}
-            hostname = host.getAttribute("hostname")
-            systemtype = host.getAttribute("system")
+            hostname = host.hostname
+            systemtype = host.system
 
             # Skip the caasp hosts
             if systemtype.startswith("caasp"):
@@ -146,34 +146,32 @@ class ManualExport(BaseExport):
                         logger.error(f"{state} packages section not found")
                         continue
 
-                for package in host.getElementsByTagName(state):
-                    for child in package.childNodes:
-                        try:
-                            name = child.getAttribute("name")
-                            version = child.getAttribute("version")
-                            versions[state].update({name: version})
-
-                            # if the package version was already exported, overwrite it with
-                            # the new version. if the package version was not yet exported,
-                            # add a new line
-                            if name in self.template[index]:
-                                # if package version is 0, package isn't installed
-                                if version != "None":
-                                    self.template[index] = f"\t{name}-{version}\n"
-                                else:
-                                    self.templatet[
-                                        index
-                                    ] = f"\tpackage {name} is not installed\n"
+                for package in host.packages.values():
+                    name = package.name
+                    version = package.__getattribute__(state)
+                    versions[state].update({name: version})
+                    try:
+                        # if the package version was already exported, overwrite it with
+                        # the new version. if the package version was not yet exported,
+                        # add a new line
+                        if name in self.template[index]:
+                            # if package version is 0, package isn't installed
+                            if version != "None":
+                                self.template[index] = f"\t{name}-{version}\n"
                             else:
-                                if version != "None":
-                                    self.template.insert(index, f"\t{name}-{version}\n")
-                                else:
-                                    self.template.insert(
-                                        index, f"\tpackage {name} is not installed\n"
-                                    )
-                            index += 1
-                        except Exception:
-                            pass
+                                self.templatet[
+                                    index
+                                ] = f"\tpackage {name} is not installed\n"
+                        else:
+                            if version != "None":
+                                self.template.insert(index, f"\t{name}-{version}\n")
+                            else:
+                                self.template.insert(
+                                    index, f"\tpackage {name} is not installed\n"
+                                )
+                        index += 1
+                    except Exception:
+                        pass
             try:
                 # search for scripts starting point
                 index = self.template.index("scripts:\n", index - 1) + 1
@@ -183,12 +181,10 @@ class ManualExport(BaseExport):
                 self.template.insert(index, "      scripts:\n")
                 index += 1
 
-            template_log = host.getElementsByTagName("log")[0]
-
             # if the package versions were not updated or one of the testscripts
             # failed, set the result to FAILED, otherwise to PASSED
             failed = False
-            for package in list(versions["before"].keys()):
+            for package in versions["before"].keys():
                 # check if the packages have a higher version after the update
                 if (
                     versions["after"][package] != "None"
@@ -205,8 +201,9 @@ class ManualExport(BaseExport):
 
             # temporary variable to avoid repeating the same script. We only want the
             # last result, so we store the previous position
+            template_log = host.hostlog
             scripts = {}
-            for child in template_log.childNodes:
+            for cmdlog in template_log:
                 # search for check scripts in the xml and inspect return code
                 # return code values:   0 SUCCEEDED
                 #                       1 FAILED
@@ -214,25 +211,26 @@ class ManualExport(BaseExport):
                 #                       3 NOT RUN
                 try:
                     # name == command, exitcode == exitcode
-                    name = child.getAttribute("name")
-                    exitcode = child.getAttribute("return")
-                    # move on if the script wasn't run
-                    if exitcode == "3":
-                        continue
+                    name = cmdlog.command
+                    exitcode = cmdlog.exitcode
 
                 except Exception:
                     continue
 
-                    # check if command is a compare_* script
+                # check if command is a compare_* script
                 if "scripts/compare/compare_" in name:
                     scriptname = os.path.basename(name.split(" ")[0])
                     scriptname = scriptname.replace("compare_", "")
                     scriptname = scriptname.replace(".pl", "")
                     scriptname = scriptname.replace(".sh", "")
 
-                    if exitcode == "0":
+                    # move on if the script wasn't run
+                    if exitcode == 3:
+                        continue
+
+                    if exitcode == 0:
                         result = "SUCCEEDED"
-                    elif exitcode == "1":
+                    elif exitcode == 1:
                         failed = True
                         result = "FAILED"
                     else:
@@ -261,25 +259,21 @@ class ManualExport(BaseExport):
     def _host_installog_to_template(self, target):
 
         t = []
-        for host in self.xmllog.getElementsByTagName("host"):
-            if host.getAttribute("hostname") == target:
-                template_log = host.getElementsByTagName("log")[0]
-        # add hostname to indicate from which host the log was exported
-        updatehost = template_log.parentNode.getAttribute("hostname")
-        t.append("log from {!s}:\n".format(updatehost))
-        for child in template_log.childNodes:
+        try:
+            host_log = [host for host in self.results if host.hostname == target][0]
+        except IndexError:
+            return []
 
-            if not hasattr(child, "getAttribute"):
-                continue
-            cmd = child.getAttribute("name")
+        # add hostname to indicate from which host the log was exported
+        t.append(f"log from {host_log.hostname}:\n")
+        for cmd_log in host_log.hostlog:
+            cmd = cmd_log.command
             if cmd.startswith("zypper ") or cmd.startswith("transactional-update"):
-                t.append("# {!s}\n{!s}\n".format(cmd, child.childNodes[0].nodeValue))
+                t.append("# {!s}\n{!s}\n".format(cmd, cmd_log.stdout))
         return t
 
     def install_results(self):
-        hosts = [
-            h.getAttribute("hostname") for h in self.xmllog.getElementsByTagName("host")
-        ]
+        hosts = [h.hostname for h in self.results]
         c_host = None
         tmp_template = []
         for line in self.template:

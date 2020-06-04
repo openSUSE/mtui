@@ -7,19 +7,22 @@ import re
 from logging import getLogger
 from traceback import format_exc
 
+
 from .. import messages
 from ..connection import CommandTimeout, Connection, errno
 
 # Import for other modules -- not used directly here
 from ..target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
 from ..target.parsers import parse_system
+from ..types.hostlog import HostLog
+from ..types.package import Package
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
 
 logger = getLogger("mtui.target")
 
 
-class Target(object):
+class Target:
     def __init__(
         self,
         config,
@@ -43,7 +46,7 @@ class Target(object):
         self.hostname = hostname
         self.system = None
         self.packages = {}
-        self.out = []
+        self.out = HostLog()
         self.TargetLock = lock
         self.Connection = connection
 
@@ -63,7 +66,7 @@ class Target(object):
     def _parse_system(self):
         logger.debug("get and parse target installed products")
         if self.connection:
-            self.system = parse_system(self.connection)
+            return parse_system(self.connection)
 
     def connect(self):
         try:
@@ -78,7 +81,7 @@ class Target(object):
             logger.warning(self._lock.locked_by_msg())
 
         # get system
-        self._parse_system()
+        self.system = self._parse_system()
 
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
@@ -436,22 +439,3 @@ class Target(object):
 
     def report_products(self, sink):
         return sink(self.hostname, self.system)
-
-
-class Package:
-    __slots__ = ["name", "before", "after", "required", "current"]
-
-    def __init__(self, name):
-        self.name = name
-        self.before = None
-        self.after = None
-        self.required = None
-        self.current = None
-
-    def set_versions(self, before=None, after=None, required=None):
-        if before:
-            self.before = before
-        if after:
-            self.after = after
-        if required:
-            self.required = required

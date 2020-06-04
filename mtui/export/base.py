@@ -23,8 +23,7 @@ class BaseExport(ABC):
     ]
 
     def __init__(
-        self, config, xmllog, openqa, smelt, template, force, rrid, interactive
-    ):
+        self, config, openqa, smelt, template, force, rrid, interactive, **kwargs ):
         """ param: config = Config()
             param: xmllog = xml.minidom
             param: openqa = testreport.openqa
@@ -36,13 +35,14 @@ class BaseExport(ABC):
         """
 
         self.config = config
-        self.xmllog = xmllog
         self.openqa = openqa
         self.smelt = smelt
         self.template = template[:]
         self.force = force
         self.rrid = rrid
         self.interactive = interactive
+        for key in kwargs:
+            self.__setattr__(key, kwargs[key])
 
     def _writer(self, fn, data):
         if fn.exists() and not self.force:

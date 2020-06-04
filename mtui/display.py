@@ -137,9 +137,11 @@ class CommandPromptDisplay:
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
             sink("{!s}:~> {!s} [{!s}]".format(hostname, cmdline, exitcode))
             sink("stdout:")
-            list(map(sink, stdout.split("\n")))
+            for line in stdout.split("\n"):
+                sink(line)
             sink("stderr:")
-            list(map(sink, stderr.split("\n")))
+            for line in stderr.split("\n"):
+                sink(line)
 
     def testopia_list(self, url, tcid, summary, status, automated):
         if status == "disabled":
@@ -192,7 +194,7 @@ class CommandPromptDisplay:
 
     def testsuite_list(self, hostname, system, suites):
         self.println(f"testsuites on {hostname} ({system}):")
-        self.println("\n".join([i for i in sorted(suites) if i.endswith("-run")]))
+        self.println("\n".join(i for i in sorted(suites) if i.endswith("-run")))
         self.println()
 
     def testsuite_run(self, hostname, exit, stdout, stderr, suitename):

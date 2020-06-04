@@ -39,7 +39,6 @@ class Export(Command):
     @requires_update
     def __call__(self):
         targets = self.parse_hosts().keys()
-        xmllog = self.metadata.generate_xmllog(self.targets.select(targets).values())
         filename = (
             self.args.filename if self.args.filename else Path(self.metadata.path)
         )
@@ -47,19 +46,26 @@ class Export(Command):
             (True, False): AutoExport,
             (False, True): KernelExport,
             (False, False): ManualExport,
-        }
+        }[(self.config.auto, self.config.kernel)]
+
+        if issubclass(exporter, ManualExport):
+            results = self.metadata.report_results(
+                self.targets.select(targets).values()
+            )
+        else:
+            results = []
 
         with FileList.load(filename) as text:
             try:
-                template = exporter[(self.config.auto, self.config.kernel)](
+                template = exporter(
                     self.config,
-                    xmllog,
                     self.metadata.openqa,
                     self.metadata.smelt,
                     text,
                     self.args.force,
                     self.metadata.id,
                     self.prompt.interactive,
+                    results=results,
                 ).run(targets)
                 text.clear()
                 text.extend(template)

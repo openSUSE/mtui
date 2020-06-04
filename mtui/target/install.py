@@ -5,7 +5,7 @@ from mtui.target.actions import ThreadedMethod, UpdateError, queue
 logger = getLogger("mtui.target.install")
 
 
-class Install(object):
+class Install:
     def __init__(self, targets, packages=None):
         self.targets = targets
         self.packages = packages
