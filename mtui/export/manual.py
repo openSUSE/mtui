@@ -156,14 +156,14 @@ class ManualExport(BaseExport):
                         # add a new line
                         if name in self.template[index]:
                             # if package version is 0, package isn't installed
-                            if version != "None":
+                            if version is not None:
                                 self.template[index] = f"\t{name}-{version}\n"
                             else:
                                 self.templatet[
                                     index
                                 ] = f"\tpackage {name} is not installed\n"
                         else:
-                            if version != "None":
+                            if version is not None:
                                 self.template.insert(index, f"\t{name}-{version}\n")
                             else:
                                 self.template.insert(
@@ -187,8 +187,8 @@ class ManualExport(BaseExport):
             for package in versions["before"].keys():
                 # check if the packages have a higher version after the update
                 if (
-                    versions["after"][package] != "None"
-                    and versions["before"][package] != "None"
+                    versions["after"][package] is not None
+                    and versions["before"][package] is not None
                 ):
                     if not RPMVersion(versions["before"][package]) < RPMVersion(
                         versions["after"][package]
