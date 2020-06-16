@@ -178,6 +178,8 @@ class SMELT:
 
         c_dict = {}
         for check in data["checkerresultsSet"]:
+            if not check["name"] or not check["architecture"] or not check["checkType"]:
+                continue
             if (
                 check["name"],
                 check["architecture"]["name"],
