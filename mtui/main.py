@@ -12,9 +12,10 @@ from mtui.systemcheck import detect_system
 from .argparse import ArgsParseFailure
 from .colorlog import create_logger
 
+logger = create_logger("mtui")
+
 
 def main():
-    logger = create_logger("mtui")
 
     p = get_parser(sys)
     try:
@@ -29,10 +30,10 @@ def main():
 
     cfg = Config(args.config)
 
-    sys.exit(run_mtui(sys, cfg, logger, CommandPrompt, CommandPromptDisplay, args))
+    sys.exit(run_mtui(sys, cfg, CommandPrompt, CommandPromptDisplay, args))
 
 
-def run_mtui(sys, config, logger, Prompt, Display, args):
+def run_mtui(sys, config, Prompt, Display, args):
 
     if args.debug:
         logger.setLevel(level=logging.DEBUG)
@@ -43,7 +44,7 @@ def run_mtui(sys, config, logger, Prompt, Display, args):
 
     config.distro, config.distro_ver, config.distro_kernel = detect_system()
 
-    prompt = Prompt(config, logger, sys, Display)
+    prompt = Prompt(config, sys, Display)
     if args.update:
         if args.update.kind == "kernel":
             config.kernel = True
