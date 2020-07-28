@@ -75,7 +75,7 @@ class CommandPrompt(cmd.Cmd):
     def __init__(self, config, sys, display_factory):
         self.sys = sys
 
-        cmd.Cmd.__init__(self, stdout=self.sys.stdout, stdin=self.sys.stdin)
+        super().__init__(stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive = True
         self.display = display_factory(self.sys.stdout)
         self.metadata = NullTestReport(config)
@@ -133,13 +133,13 @@ class CommandPrompt(cmd.Cmd):
 
         self.cmdqueue = CmdQueue(q, self.prompt, self.sys)
 
-    def cmdloop(self):
+    def cmdloop(self,intro=None):
         """
         Customized cmd.Cmd.cmdloop so it handles Ctrl-C and prerun
         """
         while True:
             try:
-                cmd.Cmd.cmdloop(self)
+                super().cmdloop(intro=intro)
             except KeyboardInterrupt:
                 # Drop to interactive mode.
                 # This takes effect only if we are in prerun
@@ -163,7 +163,7 @@ class CommandPrompt(cmd.Cmd):
             return stop
 
     def get_names(self):
-        names = cmd.Cmd.get_names(self)
+        names = super().get_names()
         names += ["do_" + x for x in self.commands.keys()]
         names += ["help_" + x for x in self.commands.keys()]
         return names
