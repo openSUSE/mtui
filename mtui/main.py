@@ -74,5 +74,5 @@ def run_mtui(sys, config, Prompt, Display, args):
             [x.rstrip() for x in args.prerun.readlines() if not x.startswith("#")]
         )
 
-    prompt.cmdloop()
+    prompt.cmdloop(intro="Maintenance Test Update Installer")
     return 0
