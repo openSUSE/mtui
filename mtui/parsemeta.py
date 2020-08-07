@@ -10,7 +10,7 @@ class MetadataParser:
         """
         match = re.search("Products: (.+)", line)
         if match:
-            results.products = match.group(1).replace("), ", ")|").split('|')
+            results.products = match.group(1).replace("), ", ")|").split("|")
             return True
 
         match = re.search("Category: (.+)", line)
@@ -35,6 +35,11 @@ class MetadataParser:
             results.reviewer = match.group(1)
             return True
 
+        match = re.search('Jira ([A-Z]+-\d+) \("(.*)"\):', line)  # deprecated
+        if match:
+            results.jira[match.group(1)] = match.group(2)
+            return True
+
         match = re.search('Bug (\d+) \("(.*)"\):', line)  # deprecated
         if match:
             results.bugs[match.group(1)] = match.group(2)
@@ -55,6 +60,12 @@ class MetadataParser:
         if match:
             for bug in match.group(1).split(","):
                 results.bugs[bug.strip(" ")] = "Description not available"
+            return True
+
+        match = re.search("Jira: (.*)", line)
+        if match:
+            for issue in match.group(1).split(","):
+                results.jira[issue.strip(" ")] = "Description not available"
             return True
 
         m = re.match("Repository: (.+)", line)

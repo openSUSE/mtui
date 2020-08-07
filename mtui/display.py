@@ -5,21 +5,33 @@ from .utils import blue, green, red, yellow
 
 
 class CommandPromptDisplay:
-
     def __init__(self, output):
         self.output = output
 
     def println(self, msg="", eol="\n"):
         return self.output.write(msg + eol)
 
-    def list_bugs(self, bugs, url):
-        ids = sorted(bugs.keys())
+    def list_bugs(self, bugs, jira, url):
 
-        self.println(f'Buglist: {url}/buglist.cgi?bug_id={",".join(ids)}')
-        for (bug, summary) in [(bug, bugs[bug]) for bug in ids]:
+        ids = sorted(bugs.keys())
+        if ids == [""]:
+            self.println("No bugs associated with Release Request.")
+        else:
+            self.println(f'Buglist: {url}/buglist.cgi?bug_id={",".join(ids)}')
+            for (bug, summary) in [(bug, bugs[bug]) for bug in ids]:
+                self.println()
+                self.println("Bug #{0:5}: {1}".format(bug, summary))
+                self.println(f"{url}/show_bug.cgi?id={bug}")
+        
+        ids = sorted(jira.keys())
+        if ids == [""] or not ids:
             self.println()
-            self.println("Bug #{0:5}: {1}".format(bug, summary))
-            self.println(f"{url}/show_bug.cgi?id={bug}")
+            self.println("No Jira issues associated with Release Request.")
+        else:
+            for (issue, summary) in [(issue, jira[issue]) for issue in ids]:
+                self.println()
+                self.println("Jira #{0:5}: {1}".format(issue, summary))
+                self.println(f"https://jira.suse.com/browse/{issue}")
 
     def list_history(self, hostname, system, lines):
         self.println(f"history from {hostname} ({system}):")
