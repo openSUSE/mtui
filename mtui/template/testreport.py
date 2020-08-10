@@ -77,6 +77,7 @@ class TestReport(metaclass=ABCMeta):
         """
         self.hostnames = set()
         self.bugs = {}
+        self.jira = {}
         self.testplatforms = []
         self.category = ""
         self.packager = ""
@@ -90,6 +91,7 @@ class TestReport(metaclass=ABCMeta):
             "reviewer",
             "packages",
             "bugs",
+            "jira",
             "repository",
         ]
         """
@@ -148,7 +150,9 @@ class TestReport(metaclass=ABCMeta):
         self._warn_missing_fields()
 
     def _warn_missing_fields(self):
-        missing = [x for x in self._attrs if not getattr(self, x)]
+        missing = {x for x in self._attrs if not getattr(self, x)}
+        missing -= {'jira'}
+
         if missing:
             msg = "TestReport: missing fields: {0}"
             logger.warning(msg.format(missing))
@@ -394,7 +398,7 @@ class TestReport(metaclass=ABCMeta):
         self.hostnames.update(set(hostnames))
 
     def list_bugs(self, sink, arg):
-        return sink(self.bugs, arg)
+        return sink(self.bugs, self.jira, arg)
 
     def _show_yourself_data(self):
         return (
@@ -404,6 +408,7 @@ class TestReport(metaclass=ABCMeta):
                 ("Reviewer", self.reviewer),
                 ("Packager", self.packager),
                 ("Bugs", ", ".join(sorted(self.bugs.keys()))),
+                ("Jira", ", ".join(sorted(self.jira.keys()))),
                 ("Packages", " ".join(sorted(self.get_package_list()))),
                 ("Build checks", self._testreport_url()[:-3] + "build_checks"),
                 ("Testreport", self._testreport_url()),

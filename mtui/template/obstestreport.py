@@ -1,6 +1,6 @@
-from mtui.template.testreport import TestReport
 from mtui.parsemeta import OBSMetadataParser
 from mtui.template.repoparse import repoparse
+from mtui.template.testreport import TestReport
 
 
 class OBSTestReport(TestReport):
