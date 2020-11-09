@@ -72,7 +72,7 @@ class CommandPrompt(cmd.Cmd):
     # frameworks. Eg. cement. Maybe there's something in twisted, which
     # would be great if it could replace the ssh layer as well.
 
-    def __init__(self, config, sys, display_factory):
+    def __init__(self, config, log, sys, display_factory):
         self.sys = sys
 
         super().__init__(stdout=self.sys.stdout, stdin=self.sys.stdin)
@@ -86,6 +86,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.homedir = Path("~").expanduser()
         self.config = config
+        self.log = log
         self.datadir = self.config.datadir
 
         self.testopia = None
