@@ -14,14 +14,13 @@ class Quit(Command):
     command = "quit"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "bootarg",
             nargs="?",
             choices=["reboot", "poweroff"],
             help="reboot or poweroff refhosts",
         )
-        return parser
 
     def _close_target(self, target, args):
         self.targets[target].close(*args)

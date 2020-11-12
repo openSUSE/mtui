@@ -18,9 +18,8 @@ class TestopiaEdit(Command):
     command = "testopia_edit"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument("testcase_id", help="Test case id")
-        return parser
 
     @requires_update
     def __call__(self):

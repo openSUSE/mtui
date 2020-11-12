@@ -60,7 +60,7 @@ class Command(metaclass=ABCMeta):
         return pa
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         """
         :returns: None
         """

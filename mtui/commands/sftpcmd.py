@@ -19,11 +19,10 @@ class SFTPPut(Command):
     command = "put"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "filename", nargs=1, type=str, help="file to upload to all hosts"
         )
-        return parser
 
     def __call__(self):
         files = glob(self.args.filename[0])
@@ -66,11 +65,10 @@ class SFTPGet(Command):
     command = "get"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "filename", nargs=1, help="file to download from target hosts"
         )
-        return parser
 
     def __call__(self):
         self.metadata.perform_get(self.targets, self.args.filename[0])

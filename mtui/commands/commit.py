@@ -19,11 +19,10 @@ class Commit(Command):
     command = "commit"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-m", "--msg", action="append", nargs=REMAINDER, help="commit message"
         )
-        return parser
 
     @requires_update
     def __call__(self):

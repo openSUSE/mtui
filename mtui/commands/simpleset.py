@@ -19,7 +19,7 @@ class SessionName(Command):
     command = "set_session_name"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
 
         parser.add_argument(
             "name",
@@ -30,14 +30,10 @@ class SessionName(Command):
             help="name of session",
         )
 
-        return parser
 
     def __call__(self):
-
         session = self.args.name if self.args.name else self.metadata.id
-
         self.prompt.session = session
-
         self.prompt.set_prompt(session)
 
 
@@ -49,13 +45,11 @@ class SetLocation(Command):
     command = "set_location"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
 
         parser.add_argument(
             "site", action="store", type=str, nargs=1, help="location name"
         )
-
-        return parser
 
     def __call__(self):
 
@@ -66,9 +60,7 @@ class SetLocation(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
-
         loc = RefhostsFactory(state["config"]).get_locations()
-
         locations = [[str(x) for x in loc]]
 
         return complete_choices(locations, line, text)
@@ -88,7 +80,7 @@ class SetLogLevel(Command):
     command = "set_log_level"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
 
         parser.add_argument(
             "level",
@@ -98,8 +90,6 @@ class SetLogLevel(Command):
             choices=["info", "error", "warning", "debug"],
             help="log level for mtui - info, warning or debug",
         )
-
-        return parser
 
     def __call__(self):
         levels = {
@@ -134,8 +124,7 @@ class SetTimeout(Command):
     command = "set_timeout"
 
     @classmethod
-    def _add_arguments(cls, parser):
-
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "timeout",
             action="store",
@@ -146,12 +135,9 @@ class SetTimeout(Command):
 
         cls._add_hosts_arg(parser)
 
-        return parser
-
     def __call__(self):
 
         value = self.args.timeout[0]
-
         targets = self.parse_hosts()
 
         for target in targets:
@@ -173,11 +159,10 @@ class SetWorkflow(Command):
     command = "set_workflow"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "workflow", choices=["auto", "manual", "kernel"], help="desired workflow"
         )
-        return parser
 
     @requires_update
     def __call__(self):
@@ -187,7 +172,7 @@ class SetWorkflow(Command):
             if self.config.kernel:
                 logger.info(f"Desired workflow {state} is same as current")
                 self.metadata.openqa["auto"].run()
-                for oq in self.metada.openqa["kernel"]:
+                for oq in self.metadata.openqa["kernel"]:
                     oq.run()
                 return
             else:

@@ -13,14 +13,13 @@ class AddHost(Command):
     command = "add_host"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-t",
             "--target",
             action="append",
             help="address of the target host (should be the FQDN)",
         )
-        return parser
 
     def __call__(self):
         if not self.args.target:

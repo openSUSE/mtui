@@ -15,11 +15,10 @@ class LocalRun(Command):
     command = "lrun"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "command", nargs=REMAINDER, help="command to run on local shell"
         )
-        return parser
 
     def __call__(self):
         if not self.args.command:

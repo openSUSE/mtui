@@ -18,12 +18,11 @@ class Terms(Command):
     command = "terms"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "termname", nargs="?", help="terminal emulator to spawn consoles on"
         )
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         dirname = self.config.datadir

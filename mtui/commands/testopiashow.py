@@ -10,7 +10,7 @@ class TestopiaShow(Command):
     command = "testopia_show"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-t",
             "--testcase",
@@ -20,8 +20,6 @@ class TestopiaShow(Command):
             required=True,
             help="testcase to show",
         )
-
-        return parser
 
     @requires_update
     def __call__(self):
