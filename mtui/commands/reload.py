@@ -12,9 +12,8 @@ class ReloadProducts(Command):
     command = "reload_products"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         targets = self.parse_hosts()
@@ -22,6 +21,7 @@ class ReloadProducts(Command):
             targets[target]._parse_system()
             logger.info("Reloaded products on refhost {}".format(target))
 
+    @staticmethod
     def complete(state, text, line, begidx, endidx):
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()

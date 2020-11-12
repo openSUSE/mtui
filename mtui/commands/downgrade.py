@@ -18,9 +18,8 @@ class Downgrade(Command):
     command = "downgrade"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
-        return parser
 
     @requires_update
     def __call__(self):

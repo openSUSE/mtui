@@ -20,9 +20,8 @@ class TestSuiteList(Command):
     command = "testsuite_list"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         targets = self.parse_hosts()
@@ -48,7 +47,7 @@ class TestSuiteRun(Command):
     command = "testsuite_run"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument("testsuite", nargs=1, help="testsuite-run command")
         cls._add_hosts_arg(parser)
         return parser
@@ -95,10 +94,9 @@ class TestSuiteSubmit(Command):
     command = "testsuite_submit"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument("testsuite", nargs=1, help="testsuite-run command")
         cls._add_hosts_arg(parser)
-        return parser
 
     @requires_update
     def __call__(self):

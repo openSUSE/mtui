@@ -18,6 +18,15 @@ class ReportBug(Command):
 
     command = "report-bug"
 
+    @classmethod
+    def _add_arguments(cls, parser) -> None:
+        parser.add_argument(
+            "-p",
+            "--print-url",
+            help="just print url to the stdout",
+            action="store_true",
+        )
+
     def __call__(self):
         url = self.config.report_bug_url
 
@@ -58,17 +67,6 @@ class ReportBug(Command):
             # not to happen and we might be interested in knowing about
             # when it does.
             logger.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
-
-    @classmethod
-    def _add_arguments(cls, parser):
-        parser.add_argument(
-            "-p",
-            "--print-url",
-            help="just print url to the stdout",
-            action="store_true",
-        )
-
-        return parser
 
     @staticmethod
     def complete(_, text, line, begidx, endidx):

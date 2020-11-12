@@ -15,9 +15,8 @@ class Shell(Command):
     command = "shell"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         targets = self.parse_hosts()

@@ -21,7 +21,7 @@ class ListPackages(Command):
         return self.state_map[(current > wanted) - (current < wanted)]
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-p",
             "--package",

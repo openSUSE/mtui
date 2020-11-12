@@ -20,12 +20,11 @@ class HostLock(Command):
     command = "lock"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
         parser.add_argument(
             "-c", "--comment", action="append", nargs=REMAINDER, help="lock comment"
         )
-        return parser
 
     def __call__(self):
         targets = self.parse_hosts()
