@@ -20,7 +20,7 @@ class LoadTemplate(Command):
     command = "load_template"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument(
             "-a",
@@ -45,7 +45,6 @@ class LoadTemplate(Command):
             action="store_false",
             help="clean up old hosts",
         )
-        return parser
 
     def __call__(self):
         if self.metadata:

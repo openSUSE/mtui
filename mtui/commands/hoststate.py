@@ -26,14 +26,13 @@ class HostState(Command):
     command = "set_host_state"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "state",
             nargs=1,
             choices=["parallel", "serial", "dryrun", "disabled", "enabled"],
         )
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         targets = self.parse_hosts(enabled=False)

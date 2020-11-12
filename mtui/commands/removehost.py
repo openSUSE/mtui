@@ -1,4 +1,5 @@
 import concurrent.futures
+
 from mtui.commands import Command
 from mtui.utils import complete_choices
 
@@ -13,11 +14,8 @@ class RemoveHost(Command):
     command = "remove_host"
 
     @classmethod
-    def _add_arguments(cls, parser):
-
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
-
-        return parser
 
     def _remove_target(self, target):
         self.targets[target].close()

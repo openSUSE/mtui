@@ -73,9 +73,8 @@ class ListSessions(Command):
     command = "list_sessions"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         targets = self.parse_hosts()
@@ -117,9 +116,8 @@ class ListLog(Command):
     command = "show_log"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         output = []
@@ -143,7 +141,7 @@ class ListVersions(Command):
     command = "list_versions"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-p",
             "--package",
@@ -153,7 +151,6 @@ class ListVersions(Command):
             help="packagename to show versions",
         )
         cls._add_hosts_arg(parser)
-        return parser
 
     @requires_update
     def __call__(self):
@@ -184,7 +181,7 @@ class ListHistory(Command):
     filters = set(["connect", "disconnect", "install", "update", "downgrade"])
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-e",
             "--event",
@@ -194,7 +191,6 @@ class ListHistory(Command):
             help="event to list",
         )
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
         targets = self.parse_hosts(enabled=False)

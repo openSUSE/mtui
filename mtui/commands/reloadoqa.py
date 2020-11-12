@@ -51,7 +51,3 @@ class ReloadOpenQA(Command):
         else:
             logger.info("Refreshing data from openQA")
             self.metadata.openqa["auto"].run()
-
-    @staticmethod
-    def complete(_, text, line, begix, endix):
-        return complete_choices([], line, text)

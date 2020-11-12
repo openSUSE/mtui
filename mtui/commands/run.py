@@ -23,12 +23,11 @@ class Run(Command):
     command = "run"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "command", nargs=REMAINDER, help="Command to run on refhost"
         )
         cls._add_hosts_arg(parser)
-        return parser
 
     def __call__(self):
 

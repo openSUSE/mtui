@@ -14,11 +14,10 @@ class Install(Command):
     command = "install"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument("package", nargs="+", help="package to install")
 
         cls._add_hosts_arg(parser)
-        return parser
 
     @requires_update
     def __call__(self):

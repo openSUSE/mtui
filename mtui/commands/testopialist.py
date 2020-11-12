@@ -16,7 +16,7 @@ class TestopiaList(Command):
     command = "testopia_list"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-p",
             "--package",
@@ -25,8 +25,6 @@ class TestopiaList(Command):
             default=[],
             help="package to display testcases for",
         )
-
-        return parser
 
     @requires_update
     def __call__(self):

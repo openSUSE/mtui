@@ -19,7 +19,7 @@ class OSCCommand(Command):
     _errorpl = ""
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-g",
             "--group",
@@ -27,7 +27,6 @@ class OSCCommand(Command):
             action="append",
             help="Group wanted to {}".format(cls.command),
         )
-        return parser
 
     @requires_update
     def __call__(self):
@@ -94,7 +93,7 @@ class OSCReject(Command):
     command = "reject"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument(
             "-g",
             "--group",
@@ -124,7 +123,6 @@ class OSCReject(Command):
             help="Message to use for rejection-comment."
             + "Always as last part of command please",
         )
-        return parser
 
     @requires_update
     def __call__(self):

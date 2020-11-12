@@ -19,12 +19,9 @@ class TestopiaCreate(Command):
     command = "testopia_create"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser) -> None:
         parser.add_argument("package", help="package to create testcases for")
-
         parser.add_argument("summary", nargs=REMAINDER, help="summary of the testcase")
-
-        return parser
 
     @requires_update
     def __call__(self):
