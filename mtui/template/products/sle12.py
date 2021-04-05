@@ -1,6 +1,14 @@
 
 def normalize_sle12(x):
     """ Normalize SLES/D 12SPx products"""
+    if x[0][0] == "SLE-SERVER" and "LTSS-ERICSSON" in x[0][1]:
+        x[0][0] = "SLES-LTSS-ERICSSON"
+        x[0][1] = x[0][1].replace("-LTSS-ERICSSON", "")
+        return x
+    if x[0][0] == "SLE-SERVER" and "LTSS-SAP" in x[0][1]:
+        x[0][0] = "SLES-LTSS-SAP"
+        x[0][1] = x[0][1].replace("-LTSS-SAP", "")
+        return x
     if x[0][0] == "SLE-SERVER" and "LTSS" in x[0][1]:
         x[0][0] = "SLES-LTSS"
         x[0][1] = x[0][1].replace("-LTSS", "")
