@@ -392,7 +392,7 @@ class TestReport(metaclass=ABCMeta):
             msg = "failed to parse testplatform {0!r}"
             logger.warning(msg.format(testplatform))
         else:
-            if not hostnames:
+            if not hostnames and 'openstack' not in testplatform:
                 msg = "nothing found for testplatform {0!r}"
                 logger.warning(msg.format(testplatform))
         self.hostnames.update(set(hostnames))
