@@ -58,7 +58,6 @@ class TestReport(metaclass=ABCMeta):
         :type path: Path or None
         :param path: path to the testreport file if loaded, otherwise None
         """
-        self.packages = {}
         self.systems = {}
         """
         :type systems: dict str -> str
@@ -83,6 +82,7 @@ class TestReport(metaclass=ABCMeta):
         self.packager = ""
         self.reviewer = ""
         self.repository = None
+        self.packages = {}
 
         self._attrs = [
             "products",
@@ -91,7 +91,6 @@ class TestReport(metaclass=ABCMeta):
             "reviewer",
             "packages",
             "bugs",
-            "jira",
             "repository",
         ]
         """
@@ -151,7 +150,6 @@ class TestReport(metaclass=ABCMeta):
 
     def _warn_missing_fields(self):
         missing = {x for x in self._attrs if not getattr(self, x)}
-        missing -= {'jira'}
 
         if missing:
             msg = "TestReport: missing fields: {0}"
@@ -165,7 +163,7 @@ class TestReport(metaclass=ABCMeta):
         # deduplicate list
         ret = list(set(ret))
 
-        return ret 
+        return ret
 
     def get_release(self):
         # TODO ...Fix usability with multiple systems types
@@ -323,6 +321,7 @@ class TestReport(metaclass=ABCMeta):
         new_systems = {}
         executor = concurrent.futures.ThreadPoolExecutor()
         hosts = {host for host in self.hostnames if host not in self.targets}
+
         if hosts:
             logger.info(f"Adding {hosts}")
         else:
@@ -361,7 +360,7 @@ class TestReport(metaclass=ABCMeta):
             {host: target for host, target in targets.items() if target}
         )
 
-    def add_target(self, hostname):
+    def add_target(self, hostname) -> None:
         if hostname in self.targets:
             logger.warning(
                 "already connected to {0}. skipping.".format(
@@ -370,9 +369,7 @@ class TestReport(metaclass=ABCMeta):
             )
             return
         try:
-            self.targets[hostname] = Target(
-                self.config, hostname, self.packages
-            )
+            self.targets[hostname] = Target(self.config, hostname, self.packages)
             self.targets[hostname].connect()
 
             if self:
@@ -399,7 +396,7 @@ class TestReport(metaclass=ABCMeta):
             msg = "failed to parse testplatform {0!r}"
             logger.warning(msg.format(testplatform))
         else:
-            if not hostnames and 'openstack' not in testplatform:
+            if not hostnames and "openstack" not in testplatform:
                 msg = "nothing found for testplatform {0!r}"
                 logger.warning(msg.format(testplatform))
         self.hostnames.update(set(hostnames))

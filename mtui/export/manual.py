@@ -42,7 +42,7 @@ class ManualExport(BaseExport):
                 index = self.template.index(line)
             except ValueError:
                 # system line not found
-                logger.debug(f"host section {hostname} not found, searching system")
+                logger.debug("host section %s not found, searching system" % hostname)
                 # systemname/reference host string in the maintenance template
                 # in case the hostname is not yet set
                 line = "{systemtype} (reference host: ?)\n"
@@ -54,7 +54,7 @@ class ManualExport(BaseExport):
                     # system line still not found (not with already set hostname, nor
                     # with not yet set hostname). create new one
                     logger.debug(
-                        f"system section {systemtype} not found, creating new one"
+                        "system section %s not found, creating new one" % systemtype
                     )
                     # starting point, just above the hosts section
                     line = "Test results by product-arch:\n"

@@ -26,7 +26,7 @@ class RPMVersion:
     :param _arch_suffixes: arch suffixes we get in addition to version on sle12
     """
 
-    def __init__(self, ver: str, *args: Any) -> None:
+    def __init__(self, ver: str) -> None:
         if not ver:
             raise ValueError
 

@@ -166,29 +166,29 @@ class Target:
                 packages[p] = RPMVersion(v)
         return packages
 
-    def disable_repo(self, repo):
+    def disable_repo(self, repo: str) -> None:
         logger.debug("{}: disabling repo {}".format(self.hostname, repo))
         self.run("zypper mr -d {}".format(repo))
 
-    def enable_repo(self, repo):
+    def enable_repo(self, repo: str) -> None:
         logger.debug("{}: enabling repo {}".format(self.hostname, repo))
         self.run("zypper mr -e {}".format(repo))
 
-    def set_timeout(self, value):
+    def set_timeout(self, value: int) -> None:
         logger.debug("{}: setting timeout to {}".format(self.hostname, value))
         self.connection.timeout = value
 
-    def get_timeout(self):
+    def get_timeout(self) -> int:
         return self.connection.timeout
 
     def get_system(self):
         return str(self.system)
 
-    def set_repo(self, operation, testreport):
+    def set_repo(self, operation, testreport) -> None:
         logger.debug("{}: enabling {} repos".format(self.hostname, operation))
         testreport.set_repo(self, operation)
 
-    def run_zypper(self, cmd, repos, rrid):
+    def run_zypper(self, cmd, repos, rrid) -> None:
         # ur - generator returning tuple with product, repopart
         ur = ((x, y) for x, y in repos.items() if x in self.system.flatten())
 
@@ -200,7 +200,7 @@ class Target:
         def fullpath(path, rrid):
             # TODO: confiruable download path?
             dl_path = "http://download.suse.de/ibs/"
-            return dl_path + "/" + ":/".join(str(rrid).split(":")[:-1]) + "/" + path
+            return dl_path + ":/".join(str(rrid).split(":")[:-1]) + "/" + path
 
         for x, y in ur:
             if "ar" in cmd:
@@ -219,7 +219,7 @@ class Target:
 
         self.run("zypper -n ref")
 
-    def run(self, command, lock=None):
+    def run(self, command, lock=None) -> None:
         if self.state == "enabled":
             logger.debug('{}: running "{}"'.format(self.hostname, command))
             time_before = timestamp()
@@ -312,25 +312,25 @@ class Target:
                 "dryrun: get {} {}:{} {}".format(self.hostname, s, remote, local)
             )
 
-    def lastin(self):
+    def lastin(self) -> str:
         try:
             return self.out[-1][0]
         except BaseException:
             return ""
 
-    def lastout(self):
+    def lastout(self) -> str:
         try:
             return self.out[-1][1]
         except BaseException:
             return ""
 
-    def lasterr(self):
+    def lasterr(self) -> str:
         try:
             return self.out[-1][2]
         except BaseException:
             return ""
 
-    def lastexit(self):
+    def lastexit(self) -> str:
         try:
             return self.out[-1][3]
         except BaseException:
@@ -355,7 +355,7 @@ class Target:
             logger.warning(e)
             raise
 
-    def add_history(self, comment):
+    def add_history(self, comment) -> None:
         if self.state == "enabled":
             logger.debug("{}: adding history entry".format(self.hostname))
             try:
