@@ -3,15 +3,13 @@
 # below the abstractions layer (like updating, preparing, etc.)
 #
 
-import re
 from logging import getLogger
+import re
 from traceback import format_exc
-
+from typing import Dict, Optional
 
 from .. import messages
 from ..connection import CommandTimeout, Connection, errno
-
-# Import for other modules -- not used directly here
 from ..target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
 from ..target.parsers import parse_system
 from ..types.hostlog import HostLog
@@ -35,10 +33,10 @@ class Target:
         connection=Connection,
     ):
         """
-            :type connect: bool
-            :param connect:
-                introduced in order to run unit tests witout
-                having the target automatically connect
+        :type connect: bool
+        :param connect:
+            introduced in order to run unit tests witout
+            having the target automatically connect
         """
 
         self.config = config
@@ -59,9 +57,21 @@ class Target:
         self.timeout = timeout
         self.exclusive = exclusive
         self.connection = None
-        if packages:
-            for package in packages:
-                self.packages[package] = Package(package)
+
+        # helper for packages before system analysis
+        self._pkgs = packages
+
+    def _parse_packages(self):
+        ret = {}
+        if self._pkgs:
+            packages = self._pkgs.get(
+                self.system.get_base().version, self._pkgs["default"]
+            )
+            for key, value in packages.items():
+                package = Package(key)
+                package.required = value
+                ret[key] = package
+        return ret
 
     def _parse_system(self):
         logger.debug("get and parse target installed products")
@@ -83,6 +93,9 @@ class Target:
         # get system
         self.system = self._parse_system()
 
+        # parse packages
+        self.packages = self._parse_packages()
+
     def __lt__(self, other):
         return sorted([self.system, other.system])[0] == self.system
 
@@ -95,13 +108,13 @@ class Target:
     def __ne__(self, other):
         return self.system != other.system
 
-    def query_versions(self, packages=None):
+    def query_versions(self, packages=None) -> None:
         if packages is None:
-            packages = list(self.packages.keys())
+            packages = self.packages.keys()
 
         if self.state == "enabled":
             pvs = self.query_package_versions(packages)
-            for p, v in list(pvs.items()):
+            for p, v in pvs.items():
                 if v:
                     self.packages[p].current = str(v)
                 else:
@@ -116,7 +129,7 @@ class Target:
 
             self.out.append(["", "", "", 0, 0])
 
-    def query_package_versions(self, packages):
+    def query_package_versions(self, packages) -> Optional[Dict[str, RPMVersion]]:
         """
         :type packages: [str]
         :param packages: packages to query versions for
