@@ -25,10 +25,25 @@ class MetadataParser:
 
         match = re.search("Packages: (.+)", line)
         if match:
-            results.packages = {
+            pkgs = {
                 pack.split()[0]: pack.split()[2] for pack in match.group(1).split(",")
             }
-            return True
+            results.packages["default"] = pkgs
+            return
+
+        match = re.search("PackageVer: (.+)", line)
+        if match:
+            ret = {}
+
+            pkgver = (x.strip(" )").split("(") for x in match.group(1).split(";"))
+
+            for prod in pkgver:
+                ver = prod[0]
+                pkgs = {p: v for p, _, v in (pv.split() for pv in prod[1].split(", "))}
+                ret[ver] = pkgs
+
+            results.packages.update(ret)
+            return
 
         match = re.search("Test Plan Reviewer(?:s)?: (.+)", line)
         if match:
