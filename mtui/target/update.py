@@ -5,14 +5,14 @@ from ..types.rpmver import RPMVersion
 from ..utils import yellow
 from .actions import ThreadedMethod, UpdateError, queue, spinner
 from .locks import LockedTargets
+from abc import ABCMeta, abstractmethod
 
 logger = getLogger("mtui.target.update")
 
 
-class Update:
-    def __init__(self, targets, packages, testreport):
+class Update(metaclass=ABCMeta):
+    def __init__(self, targets, testreport):
         self.targets = targets
-        self.packages = packages
         self.testreport = testreport
         self.commands = []
 
@@ -43,19 +43,19 @@ class Update:
 
             t.query_versions()
 
-            for pkgname, pkg in list(t.packages.items()):
-                required = self.testreport.packages[pkgname]
-                before = pkg.current
+            for pkg in t.packages.keys():
+                required = t.packages[pkg].required
+                before = t.packages[pkg].current
 
-                pkg.set_versions(before=before, required=required)
+                t.packages[pkg].before=before
 
                 if not before:
-                    not_installed.append(pkgname)
+                    not_installed.append(pkg)
                 else:
                     if RPMVersion(before) >= RPMVersion(required):
                         logger.warning(
                             "{!s}: package is too recent: {!s} ({!s}, target version is {!s})".format(
-                                hn, pkgname, before, required
+                                hn, pkg, before, required
                             )
                         )
 
@@ -75,12 +75,12 @@ class Update:
         for hn, t in list(self.targets.items()):
             t.query_versions()
 
-            for pkgname, pkg in list(t.packages.items()):
-                before = pkg.before
-                required = pkg.required
-                after = pkg.current
+            for pkg in t.packages.keys():
+                before = t.packages[pkg].before
+                required = t.packages[pkg].required
+                after = t.packages[pkg].current
 
-                pkg.set_versions(after=after)
+                t.packages[pkg].after=after
 
                 if after and before:
                     if RPMVersion(before) == RPMVersion(after):
@@ -147,9 +147,10 @@ class Update:
 
         return self.check(target, stdin, stdout, stderr, exitcode)
 
+    @abstractmethod
     def check(self, target, stdin, stdout, stderr, exitcode):
         """stub. needs to be overwritten by inherited classes"""
-        return
+        pass 
 
     def lock_and_run(self):
         """
@@ -199,7 +200,7 @@ class Update:
             for command in self.commands:
                 self.targets.run(command)
 
-                for t in list(self.targets.values()):
+                for t in self.targets.values():
                     self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
         except BaseException:
             raise

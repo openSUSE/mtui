@@ -1,7 +1,7 @@
+from . import Command
 from .. import messages
 from ..types.rpmver import RPMVersion
 from ..utils import blue, complete_choices, green, red, requires_update, yellow
-from . import Command
 
 
 class ListPackages(Command):
@@ -43,8 +43,10 @@ class ListPackages(Command):
 
     @requires_update
     def _run_just_wanted(self):
-        for xs in list(self.metadata.packages.items()):
-            self.printPVLN(*(xs + ("",)))
+        for key in self.metadata.packages.keys():
+            self.println(f"Packages for version {key}:")
+            for xs in list(self.metadata.packages[key].items()):
+                self.printPVLN(*(xs + ("",)))
 
     def __call__(self):
         if self.args.wanted:
@@ -53,7 +55,7 @@ class ListPackages(Command):
 
         hosts = self.parse_hosts()
 
-        pkgs = list(self.metadata.packages.keys()) if self.metadata else []
+        pkgs = self.metadata.get_package_list() if self.metadata else []
         pkgs += self.args.package
 
         if not pkgs:
@@ -68,7 +70,7 @@ class ListPackages(Command):
             for p, v in list(pvs.items()):
                 if self.metadata:
                     try:
-                        wanted = self.metadata.packages[p]
+                        wanted = target.packages[p].required
                     except KeyError:
                         state = None
                     else:

@@ -158,7 +158,14 @@ class TestReport(metaclass=ABCMeta):
             logger.warning(msg.format(missing))
 
     def get_package_list(self):
-        return list(self.packages.keys())
+        ret = []
+        for key in self.packages:
+            for k in self.packages[key].keys():
+                ret.append(k)
+        # deduplicate list
+        ret = list(set(ret))
+
+        return ret 
 
     def get_release(self):
         # TODO ...Fix usability with multiple systems types
@@ -222,9 +229,9 @@ class TestReport(metaclass=ABCMeta):
         updater = self.get_updater()
         logger.debug("chosen updater: {!r}".format(updater))
         try:
-            updater(targets, self.get_package_list(), self).run(params)
+            updater(targets, self).run(params)
         except UpdateError as e:
-            logger.error("Update failed: {!s}".format(e))
+            logger.error("Update failed: %s" % e)
             logger.warning("Error while updating. Rolling back changes")
             self.perform_downgrade(targets)
 
@@ -294,7 +301,7 @@ class TestReport(metaclass=ABCMeta):
             target = Target(
                 self.config,
                 host,
-                self.get_package_list(),
+                self.packages,
                 timeout=self.config.connection_timeout,
             )
             target.connect()
@@ -364,7 +371,7 @@ class TestReport(metaclass=ABCMeta):
             return
         try:
             self.targets[hostname] = Target(
-                self.config, hostname, self.get_package_list()
+                self.config, hostname, self.packages
             )
             self.targets[hostname].connect()
 

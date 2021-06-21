@@ -44,9 +44,14 @@ class Downgrade(Command):
         for target in targets.values():
             target.query_versions()
             if message == "done":
-                for package in list(target.packages.values()):
-                    package.set_versions(before=package.after, after=package.current)
-                    if package.before == package.after and package.after is not None:
+                for package in target.packages.keys():
+                    target.packages[package].before = target.packages[package].after
+                    target.packages[package].after = target.packages[package].current
+                    if (
+                        target.packages[package].before
+                        == target.packages[package].after
+                        and target.packages[package].after is not None
+                    ):
                         message = "downgrade not completed"
                         break
             else:
