@@ -776,6 +776,27 @@ list_sessions
 Lists current active ssh sessions on target hosts.
 
 
+analyze-diff
+++++++++++++
+
+::
+
+    analyze-diff
+
+Check source diff file for patches and prints them to user
+
+
+show-diff
++++++++++
+
+::
+
+    show-diff
+
+Prints source.diff with pager to user
+
+
+
 Internal Commands
 *****************
 
