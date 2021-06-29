@@ -1,3 +1,4 @@
+from abc import ABCMeta, abstractmethod
 from logging import getLogger
 
 from ..hooks import CompareScript, PostScript, PreScript
@@ -5,7 +6,6 @@ from ..types.rpmver import RPMVersion
 from ..utils import yellow
 from .actions import ThreadedMethod, UpdateError, queue, spinner
 from .locks import LockedTargets
-from abc import ABCMeta, abstractmethod
 
 logger = getLogger("mtui.target.update")
 
@@ -47,7 +47,7 @@ class Update(metaclass=ABCMeta):
                 required = t.packages[pkg].required
                 before = t.packages[pkg].current
 
-                t.packages[pkg].before=before
+                t.packages[pkg].before = before
 
                 if not before:
                     not_installed.append(pkg)
@@ -80,20 +80,20 @@ class Update(metaclass=ABCMeta):
                 required = t.packages[pkg].required
                 after = t.packages[pkg].current
 
-                t.packages[pkg].after=after
+                t.packages[pkg].after = after
 
                 if after and before:
                     if RPMVersion(before) == RPMVersion(after):
                         logger.warning(
                             "{!s}: package was not updated: {!s} ({!s})".format(
-                                hn, pkgname, after
+                                hn, pkg, after
                             )
                         )
                 if after:
                     if RPMVersion(after) < RPMVersion(required):
                         logger.warning(
                             "{!s}: package does not match required version: {!s} ({!s}, required {!s})".format(
-                                hn, pkgname, after, required
+                                hn, pkg, after, required
                             )
                         )
 
@@ -150,7 +150,7 @@ class Update(metaclass=ABCMeta):
     @abstractmethod
     def check(self, target, stdin, stdout, stderr, exitcode):
         """stub. needs to be overwritten by inherited classes"""
-        pass 
+        pass
 
     def lock_and_run(self):
         """
