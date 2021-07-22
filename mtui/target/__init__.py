@@ -63,10 +63,12 @@ class Target:
 
     def _parse_packages(self):
         ret = {}
+        base_version = self.system.get_base().version
         if self._pkgs:
-            packages = self._pkgs.get(
-                self.system.get_base().version, self._pkgs["default"]
-            )
+            packages = self._pkgs.get(base_version, self._pkgs["default"])
+            if base_version.startswith("12"):
+                packages.update(self._pkgs.get("12", {}))
+
             for key, value in packages.items():
                 package = Package(key)
                 package.required = value
