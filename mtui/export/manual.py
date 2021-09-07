@@ -148,7 +148,7 @@ class ManualExport(BaseExport):
 
                 for package in host.packages.values():
                     name = package.name
-                    version = package.__getattribute__(state)
+                    version = getattr(package, state)
                     versions[state].update({name: version})
                     try:
                         # if the package version was already exported, overwrite it with

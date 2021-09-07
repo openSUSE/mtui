@@ -22,7 +22,7 @@ class Package:
 
     @before.setter
     def before(self, ver: Optional[str]) -> None:
-        self._before = None
+        self._before = ver 
 
     @property
     def after(self) -> Optional[str]:
