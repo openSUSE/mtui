@@ -32,6 +32,7 @@ class System(object):
             "SUSE_SLES_SAP",
             "SLE_HPC",
             "SLES_TERADATA",
+            "SLE_RT",
         ):
             return self._data["base"].version[:2]
         elif self._data["base"].name == "openSUSE":
