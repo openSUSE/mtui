@@ -60,7 +60,6 @@ class Export(Command):
                 template = exporter(
                     self.config,
                     self.metadata.openqa,
-                    self.metadata.smelt,
                     text,
                     self.args.force,
                     self.metadata.id,

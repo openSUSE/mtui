@@ -297,10 +297,8 @@ class ManualExport(BaseExport):
     def run(self, hosts, *args, **kwds):
         self.install_results()
         self.inject_openqa()
-        self.inject_smelt()
         filenames = self.get_logs(hosts)
         self.installlogs_lines(filenames)
-        self.cut_smelt_data()
         self.add_sysinfo()
         self.dedup_lines()
         return self.template

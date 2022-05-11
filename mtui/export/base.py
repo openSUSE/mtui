@@ -15,7 +15,6 @@ class BaseExport(ABC):
         "config",
         "xmllog",
         "openqa",
-        "smelt",
         "template",
         "force",
         "rrid",
@@ -23,11 +22,10 @@ class BaseExport(ABC):
     ]
 
     def __init__(
-        self, config, openqa, smelt, template, force, rrid, interactive, **kwargs ):
+        self, config, openqa, template, force, rrid, interactive, **kwargs ):
         """ param: config = Config()
             param: xmllog = xml.minidom
             param: openqa = testreport.openqa
-            param: smelt = testreport.smelt
             param: template = FileList()
             param: force = Bool()
             param: rrid = testreport.id
@@ -36,7 +34,6 @@ class BaseExport(ABC):
 
         self.config = config
         self.openqa = openqa
-        self.smelt = smelt
         self.template = template[:]
         self.force = force
         self.rrid = rrid
@@ -122,50 +119,6 @@ class BaseExport(ABC):
     def run(self, *args, **kwds):
         pass
 
-    def cut_smelt_data(self):
-        """ trip melt chechers to defined lenght and rest sends to own list,
-        must be called after **inject_smelt** """
-
-        try:
-            start = self.template.index("SMELT Checkers:\n")
-        except ValueError:
-            logger.debug("No SMELT data in template")
-            return
-
-        end = self.template.index("REGRESSION TEST SUMMARY:\n", start)
-
-        if end - start < self.config.threshold:
-            return
-        else:
-            smelt = self.template[start:end]
-            del self.template[start + self.config.threshold : end]
-            self.template.insert(start + self.config.threshold, "\n")
-            self.template.insert(
-                start + self.config.threshold,
-                "Rest of SMELT checkers results were moved to checkers.log file, please check it\n",
-            )
-            self.template.insert(start + self.config.threshold, "\n")
-            logger.info("Checkers results were stripped and moved to checkers.log file")
-
-        # Write checkers.log
-        fn = self.config.template_dir / str(self.rrid) / "checkers.log"
-        self._writer(fn, smelt)
-        logger.info(f"Wrote checkers results to {fn}")
-
-    def inject_smelt(self):
-        if not self.smelt:
-            return
-        smelt_output = self.smelt.pretty_output()
-        if smelt_output:
-            smelt_output = ["SMELT Checkers:\n", "===============\n"] + smelt_output
-        else:
-            return
-
-        i = self.template.index("REGRESSION TEST SUMMARY:\n", 0)
-        if "SMELT Checkers:\n" not in self.template:
-            self.template.insert(i, "\n")
-            for line in reversed(smelt_output):
-                self.template.insert(i, line)
 
     def inject_openqa(self):
         if not self.openqa["auto"]:

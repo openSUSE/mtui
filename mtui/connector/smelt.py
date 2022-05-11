@@ -70,19 +70,6 @@ class SMELT:
             }}
           }}
         }}
-        checkerresultsSet {{
-          edges {{
-            node {{
-              name
-              checkType
-              output
-              revision
-              architecture {{
-                name
-              }}
-            }}
-          }}
-        }}
       }}
     }}
   }}
@@ -169,58 +156,6 @@ class SMELT:
 
         return last["text"].split("\n")
 
-    @staticmethod
-    def _parse_checkers(data):
-        if not data:
-            return {}
-        if not data["checkerresultsSet"]:
-            return {}
-
-        c_dict = {}
-        for check in data["checkerresultsSet"]:
-            if not check["name"] or not check["architecture"] or not check["checkType"]:
-                continue
-            if (
-                check["name"],
-                check["architecture"]["name"],
-                check["checkType"],
-            ) in c_dict:
-                if c_dict[
-                    (check["name"], check["architecture"]["name"], check["checkType"])
-                ][0] < (check["revision"]):
-                    c_dict[
-                        (
-                            check["name"],
-                            check["architecture"]["name"],
-                            check["checkType"],
-                        )
-                    ] = (check["revision"], check["output"])
-            else:
-                c_dict[
-                    (check["name"], check["architecture"]["name"], check["checkType"])
-                ] = (check["revision"], check["output"])
-
-        for c in list(c_dict.keys()):
-            if not c_dict[c][1]:
-                del c_dict[c]
-
-        return c_dict
-
-    def pretty_output(self):
-        checks = self._parse_checkers(self.data)
-        if not checks:
-            logger.debug("No data from SMELT checkers")
-            return []
-        out = []
-        for x, y in checks.items():
-            out += [f"{x[2].capitalize()} checker:\n"]
-            arch = "all" if x[1] == "UNKNOWN" else x[1]
-            name = "all" if x[0] == r" \ " else x[0]
-            out += [f"    product: {name} arch: {arch}\n"]
-            out += ["        " + a + "\n" for a in y[1].split("\n") if a]
-            out += ["\n"]
-        return out
-
     def get_incident_name(self):
         if not self:
             return None
@@ -243,7 +178,6 @@ class SMELT:
                 "packages": [],
                 "repositories": [],
                 "comments": [],
-                "checkerresultsSet": [],
             }
             or not self.data
         ):

@@ -60,11 +60,9 @@ class KernelExport(BaseExport):
     def run(self, *args, **kwds):
         self.install_results()
         self.inject_openqa()
-        self.inject_smelt()
         self.kernel_results()
         filenames = self.get_logs()
         self.installlogs_lines(filenames)
-        self.cut_smelt_data()
         self.add_sysinfo()
         self.dedup_lines()
         return self.template
