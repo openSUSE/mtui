@@ -23,7 +23,7 @@ is the Incident ID and ``YYYYYY`` is the Request ID.
 
 
 ``-k RRID, --kernel-review-id RRID``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Loads the test report for the maintenance update Review Request ID (RRID) in 
 kernel update workflow. It skips connecting refhosts and script run in update
