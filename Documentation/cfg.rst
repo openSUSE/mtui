@@ -182,7 +182,7 @@ URL of openqa instance
 
 
 ``openqa.baremetal``
-~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~
 
   | **type**
   |     URL
@@ -205,7 +205,7 @@ Default 'DISTRI' value for openqa jobs
 
 
 ``openqa.install_logfile``
-~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   | **type**
   |     string
@@ -216,7 +216,7 @@ Name of automatic installation test logfile
 
 
 ``openqa.kernel_install_logfile``
-~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
   | **type**
   |     string
