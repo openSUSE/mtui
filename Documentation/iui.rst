@@ -781,7 +781,7 @@ analyze-diff
 
 ::
 
-    analyze-diff
+    analyze_diff
 
 Check source diff file for patches and prints them to user
 
@@ -791,7 +791,7 @@ show-diff
 
 ::
 
-    show-diff
+    show_diff
 
 Prints source.diff with pager to user
 
