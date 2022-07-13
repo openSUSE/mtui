@@ -24,7 +24,7 @@ from ..testopia import Testopia
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
-target_meta = namedtuple("TargetMeta", ["hostname", "system", "packages", "hostlog"])
+TargetMeta = namedtuple("TargetMeta", ["hostname", "system", "packages", "hostlog"])
 
 
 class TestReport(metaclass=ABCMeta):
@@ -355,10 +355,11 @@ class TestReport(metaclass=ABCMeta):
         hosts = {host for host in self.hostnames if host not in self.targets}
 
         if hosts:
-            logger.info(f"Adding {hosts}")
+            logger.info("Adding %s" % hosts)
         else:
             logger.info("No refhosts to add")
 
+        connections = {}
         try:
             connections = {
                 executor.submit(self.connect_target, host): host for host in hosts
@@ -590,7 +591,7 @@ class TestReport(metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
-    def report_results(self, targetHosts=None):
+    def report_results(self, targetHosts=None) -> List[TargetMeta]:
         results = []
 
         if targetHosts is not None:
@@ -599,7 +600,7 @@ class TestReport(metaclass=ABCMeta):
             targets = self.targets.values()
 
         for t in targets:
-            results.append(target_meta(t.hostname, str(t.system), t.packages, t.out))
+            results.append(TargetMeta(t.hostname, str(t.system), t.packages, t.out))
 
         return results
 
