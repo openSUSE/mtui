@@ -1,17 +1,18 @@
-
-import os
 from pathlib import Path
 
 from mtui.template.testreport import TestReport
 
 
 class NullTestReport(TestReport):
-    _type = "No"
+
+    @property
+    def _type(self):
+        return "No"
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.id = None
-        self.path = Path(os.getcwd()) / "None"
+        self.path = Path.cwd() / "None"
 
     def __bool__(tr):
         return False
