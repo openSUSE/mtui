@@ -1,5 +1,4 @@
-from mtui.parsemeta import ReucedMetadataParser
-from mtui.parsemeta import MetadataParser
+from mtui.parsemeta import MetadataParser, ReducedMetadataParser
 from mtui.parsemetajson import JSONParser
 from mtui.types.obs import RequestReviewID
 
@@ -57,7 +56,7 @@ def test_parse_new(log_txt, log_json):
     JSONParser.parse(report, log_json)
 
     for line in log_txt.splitlines():
-        ReucedMetadataParser.parse(report, line)
+        ReducedMetadataParser.parse(report, line)
 
     assert report.rating == "low"
     assert report.bugs == {"12345": "[foo] bar"}

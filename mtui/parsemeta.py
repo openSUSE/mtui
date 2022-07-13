@@ -3,7 +3,7 @@ import re
 from .types.obs import RequestReviewID
 
 
-class ReucedMetadataParser:
+class ReducedMetadataParser:
     hostnames = re.compile(r".* \(reference host: (\S+).*\)")
     jira = re.compile(r'Jira ([A-Z]+-\d+) \("(.*)"\):')
     bugs = re.compile(r'Bug (\d+) \("(.*)"\):')
@@ -29,7 +29,7 @@ class ReucedMetadataParser:
         return
 
 
-class MetadataParser(ReucedMetadataParser):
+class MetadataParser(ReducedMetadataParser):
     products = re.compile(r"Products: (.+)")
     category = re.compile(r"Category: (.+)")
     packager = re.compile(r"Packager: (.+)")

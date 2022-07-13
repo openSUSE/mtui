@@ -1,4 +1,4 @@
-from ..parsemeta import MetadataParser, ReucedMetadataParser
+from ..parsemeta import MetadataParser, ReducedMetadataParser
 from ..parsemetajson import JSONParser
 from ..template.repoparse import repoparse
 from ..template.testreport import TestReport
@@ -30,7 +30,7 @@ class OBSTestReport(TestReport):
     def _parser(self):
         parsers = {
             "full": MetadataParser,
-            "hosts": ReucedMetadataParser,
+            "hosts": ReducedMetadataParser,
             "json": JSONParser,
         }
         return parsers
