@@ -5,8 +5,6 @@ from ..template.testreport import TestReport
 
 
 class OBSTestReport(TestReport):
-    _type = "OBS"
-
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
 
@@ -14,9 +12,13 @@ class OBSTestReport(TestReport):
         self.rating = None
 
         self._attrs += [
-            'rrid',
-            'rating',
+            "rrid",
+            "rating",
         ]
+
+    @property
+    def _type(self):
+        return "OBS"
 
     @property
     def id(self):
@@ -39,15 +41,14 @@ class OBSTestReport(TestReport):
 
     def _show_yourself_data(self):
         return [
-            ('ReviewRequestID', self.rrid),
-            ('Rating', self.rating),
+            ("ReviewRequestID", self.rrid),
+            ("Rating", self.rating),
         ] + super()._show_yourself_data()
 
     def set_repo(self, target, operation):
-        if operation == 'add':
-            target.run_zypper('-n ar -ckn', self.update_repos, self.rrid)
-        elif operation == 'remove':
-            target.run_zypper('-n rr', self.update_repos, self.rrid)
+        if operation == "add":
+            target.run_zypper("-n ar -ckn", self.update_repos, self.rrid)
+        elif operation == "remove":
+            target.run_zypper("-n rr", self.update_repos, self.rrid)
         else:
-            raise ValueError(
-                "Not supported repose operation {}".format(operation))
+            raise ValueError("Not supported repose operation {}".format(operation))
