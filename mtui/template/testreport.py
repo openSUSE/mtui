@@ -1,14 +1,17 @@
+from abc import ABCMeta, abstractmethod
+from collections import namedtuple
 import concurrent.futures
+from errno import EEXIST, ENOENT
 import glob
+from json import loads
+from json.decoder import JSONDecodeError
+from logging import getLogger
 import os
 import re
 import shutil
 import stat
-from abc import ABCMeta, abstractmethod
-from collections import namedtuple
-from errno import EEXIST, ENOENT
-from logging import getLogger
 from traceback import format_exc
+from typing import List
 from urllib.request import urlopen
 
 from .. import updater
@@ -21,7 +24,7 @@ from ..testopia import Testopia
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
-target_meta = namedtuple("TargetMeta", ["hostname", "system", "packages", "hostlog"])
+TargetMeta = namedtuple("TargetMeta", ["hostname", "system", "packages", "hostlog"])
 
 
 class TestReport(metaclass=ABCMeta):
@@ -78,6 +81,7 @@ class TestReport(metaclass=ABCMeta):
         self.bugs = {}
         self.jira = {}
         self.testplatforms = []
+        self.products = []
         self.category = ""
         self.packager = ""
         self.reviewer = ""
@@ -106,14 +110,27 @@ class TestReport(metaclass=ABCMeta):
         self.openqa = {"auto": None, "kernel": []}
 
     def _open_and_parse(self, path):
+        metadata = path.parent / "metadata.json"
         try:
-            with path.open(mode="r", errors="replace") as f:
-                self._parse(f)
+            tpl = path.read_text(errors="replace")
         except FileNotFoundError as e:
             args = list(e.args) + [e.filename]
             e_new = _TemplateIOError(*args)
             e_new.__cause__ = e  # PEP 3134
             raise e_new
+
+        data = None
+        if metadata.exists() and metadata.is_file():
+            data = metadata.read_text()
+            try:
+                data = loads(data)
+            except JSONDecodeError:
+                data = None
+
+        if data:
+            self._parse_json(data, tpl)
+        else:
+            self._parse(tpl)
 
     def read(self, path):
         self._open_and_parse(path)
@@ -130,7 +147,7 @@ class TestReport(metaclass=ABCMeta):
         :returns: L{MetadataParser}
         """
 
-    def _parse(self, tpl):
+    def _parse(self, tpl: str) -> None:
         """
         Parse qam testreport template into self attributes
 
@@ -141,10 +158,25 @@ class TestReport(metaclass=ABCMeta):
         if self.path:
             raise TestReportAlreadyLoaded(self.path)
 
-        parser = self._parser()
+        parser = self._parser()["full"]
 
-        for line in tpl.readlines():
-            parser.parse_line(self, line)
+        for line in tpl.splitlines():
+            parser.parse(self, line)
+
+        self._warn_missing_fields()
+
+    def _parse_json(self, data, tpl: str) -> None:
+
+        if self.path:
+            raise TestReportAlreadyLoaded(self.path)
+
+        parser_json = self._parser()["json"]
+        parser_hosts = self._parser()["hosts"]
+
+        for line in tpl.splitlines():
+            parser_hosts.parse(self, line)
+
+        parser_json.parse(self, data)
 
         self._warn_missing_fields()
 
@@ -323,10 +355,11 @@ class TestReport(metaclass=ABCMeta):
         hosts = {host for host in self.hostnames if host not in self.targets}
 
         if hosts:
-            logger.info(f"Adding {hosts}")
+            logger.info("Adding %s" % hosts)
         else:
             logger.info("No refhosts to add")
 
+        connections = {}
         try:
             connections = {
                 executor.submit(self.connect_target, host): host for host in hosts
@@ -558,7 +591,7 @@ class TestReport(metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
-    def report_results(self, targetHosts=None):
+    def report_results(self, targetHosts=None) -> List[TargetMeta]:
         results = []
 
         if targetHosts is not None:
@@ -567,7 +600,7 @@ class TestReport(metaclass=ABCMeta):
             targets = self.targets.values()
 
         for t in targets:
-            results.append(target_meta(t.hostname, str(t.system), t.packages, t.out))
+            results.append(TargetMeta(t.hostname, str(t.system), t.packages, t.out))
 
         return results
 

@@ -1,11 +1,10 @@
-from mtui.parsemeta import OBSMetadataParser
-from mtui.template.repoparse import repoparse
-from mtui.template.testreport import TestReport
+from ..parsemeta import MetadataParser, ReucedMetadataParser
+from ..parsemetajson import JSONParser
+from ..template.repoparse import repoparse
+from ..template.testreport import TestReport
 
 
 class OBSTestReport(TestReport):
-    _type = "OBS"
-
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
 
@@ -13,9 +12,13 @@ class OBSTestReport(TestReport):
         self.rating = None
 
         self._attrs += [
-            'rrid',
-            'rating',
+            "rrid",
+            "rating",
         ]
+
+    @property
+    def _type(self):
+        return "OBS"
 
     @property
     def id(self):
@@ -25,7 +28,12 @@ class OBSTestReport(TestReport):
         return self.get_release()
 
     def _parser(self):
-        return OBSMetadataParser()
+        parsers = {
+            "full": MetadataParser,
+            "hosts": ReucedMetadataParser,
+            "json": JSONParser,
+        }
+        return parsers
 
     def _update_repos_parser(self):
         # TODO: exceptions handling
@@ -33,15 +41,14 @@ class OBSTestReport(TestReport):
 
     def _show_yourself_data(self):
         return [
-            ('ReviewRequestID', self.rrid),
-            ('Rating', self.rating),
+            ("ReviewRequestID", self.rrid),
+            ("Rating", self.rating),
         ] + super()._show_yourself_data()
 
     def set_repo(self, target, operation):
-        if operation == 'add':
-            target.run_zypper('-n ar -ckn', self.update_repos, self.rrid)
-        elif operation == 'remove':
-            target.run_zypper('-n rr', self.update_repos, self.rrid)
+        if operation == "add":
+            target.run_zypper("-n ar -ckn", self.update_repos, self.rrid)
+        elif operation == "remove":
+            target.run_zypper("-n rr", self.update_repos, self.rrid)
         else:
-            raise ValueError(
-                "Not supported repose operation {}".format(operation))
+            raise ValueError("Not supported repose operation {}".format(operation))
