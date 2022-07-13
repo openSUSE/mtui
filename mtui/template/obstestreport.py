@@ -1,6 +1,7 @@
-from mtui.parsemeta import OBSMetadataParser
-from mtui.template.repoparse import repoparse
-from mtui.template.testreport import TestReport
+from ..parsemeta import MetadataParser, ReucedMetadataParser
+from ..parsemetajson import JSONParser
+from ..template.repoparse import repoparse
+from ..template.testreport import TestReport
 
 
 class OBSTestReport(TestReport):
@@ -25,7 +26,12 @@ class OBSTestReport(TestReport):
         return self.get_release()
 
     def _parser(self):
-        return OBSMetadataParser()
+        parsers = {
+            "full": MetadataParser,
+            "hosts": ReucedMetadataParser,
+            "json": JSONParser,
+        }
+        return parsers
 
     def _update_repos_parser(self):
         # TODO: exceptions handling
