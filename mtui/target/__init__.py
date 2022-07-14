@@ -65,7 +65,7 @@ class Target:
         ret = {}
         base_version = self.system.get_base().version
         if self._pkgs:
-            packages = self._pkgs.get(base_version)
+            packages = self._pkgs.get(base_version, {})
             if base_version.startswith("12"):
                 packages.update(self._pkgs.get("12", {}))
 
