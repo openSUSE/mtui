@@ -237,7 +237,7 @@ class TestReport(metaclass=ABCMeta):
             logger.warning("No refhosts connected")
             return
         else:
-            display("\n".join(updater(targets, self.get_package_list(), self).commands))
+            display("\n".join(updater(targets, self).commands))
             del updater
 
     def perform_get(self, targets, remote):
