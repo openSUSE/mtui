@@ -29,7 +29,7 @@ class ReducedMetadataParser:
         return
 
 
-class MetadataParser(ReducedMetadataParser):
+class MetadataParser:
     products = re.compile(r"Products: (.+)")
     category = re.compile(r"Category: (.+)")
     packager = re.compile(r"Packager: (.+)")
@@ -87,16 +87,6 @@ class MetadataParser(ReducedMetadataParser):
             results.reviewer = match.group(1)
             return
 
-        match = re.search(cls.jira, line)
-        if match:
-            results.jira[match.group(1)] = match.group(2)
-            return
-
-        match = re.search(cls.bugs, line)
-        if match:
-            results.bugs[match.group(1)] = match.group(2)
-            return
-
         match = re.search(cls.testplatforms, line)
         if match:
             results.testplatforms.append(match.group(1))
@@ -130,4 +120,4 @@ class MetadataParser(ReducedMetadataParser):
             return
 
         # continue with parernt parse
-        return super(MetadataParser, cls).parse(results, line)
+        return ReducedMetadataParser.parse(results, line)
