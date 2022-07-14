@@ -42,7 +42,7 @@ class ZypperUpdate(Update):
 
 class ZypperOBSUpdate(ZypperUpdate):
     def __init__(self, *a, **kw):
-        super(ZypperOBSUpdate, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
         repat = ":p={:d}"
         repo = repat.format(self.testreport.rrid.maintenance_id)
 
@@ -63,7 +63,7 @@ class ZypperOBSUpdate(ZypperUpdate):
 
 class RedHatUpdate(Update):
     def __init__(self, *a, **kw):
-        super(RedHatUpdate, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         self.commands = [
             "export LANG=",
@@ -74,7 +74,7 @@ class RedHatUpdate(Update):
 
 class CaaSPUpdate(Update):
     def __init__(self, *a, **kw):
-        super(CaaSPUpdate, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
         self.type = "transactional"
         self.commands = ["export LANG=", "transactional-update cleanup dup"]
 
@@ -102,7 +102,7 @@ Updater = DictWithInjections(
 
 class ZypperPrepare(Prepare):
     def __init__(self, *a, **kw):
-        super(ZypperPrepare, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         parameter = ""
         commands = []
@@ -138,7 +138,7 @@ class ZypperPrepare(Prepare):
 
 class RedHatPrepare(Prepare):
     def __init__(self, *a, **kw):
-        super(RedHatPrepare, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         parameter = ""
         commands = []
@@ -178,7 +178,7 @@ Preparer = DictWithInjections(
 
 class ZypperDowngrade(Downgrade):
     def __init__(self, *a, **kw):
-        super(ZypperDowngrade, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         self.list_command = r"""
             for p in {!s}; do \
@@ -196,13 +196,13 @@ class ZypperDowngrade(Downgrade):
 
 class RedHatDowngrade(Downgrade):
     def __init__(self, *a, **kw):
-        super(RedHatDowngrade, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
         self.commands = ["yum -y downgrade {!s}".format(" ".join(self.packages))]
 
 
 class CaaSPDowngrade(Downgrade):
     def __init__(self, *a, **kw):
-        super(CaaSPDowngrade, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
         self.kind = "transactional"
         self.commands = [
             'transactional-update rollback $(transactional-update rollback | cut -d" " -f 4)'
@@ -223,7 +223,7 @@ Downgrader = DictWithInjections(
 
 class ZypperInstall(Install):
     def __init__(self, *a, **kw):
-        super(ZypperInstall, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         commands = []
 
@@ -234,7 +234,7 @@ class ZypperInstall(Install):
 
 class RedHatInstall(Install):
     def __init__(self, *a, **kw):
-        super(RedHatInstall, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         commands = []
 
@@ -257,7 +257,7 @@ Installer = DictWithInjections(
 
 class ZypperUninstall(Install):
     def __init__(self, *a, **kw):
-        super(ZypperUninstall, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         commands = []
 
@@ -268,7 +268,7 @@ class ZypperUninstall(Install):
 
 class RedHatUninstall(Install):
     def __init__(self, *a, **kw):
-        super(RedHatUninstall, self).__init__(*a, **kw)
+        super().__init__(*a, **kw)
 
         commands = []
 
