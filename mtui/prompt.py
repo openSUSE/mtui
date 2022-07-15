@@ -134,7 +134,7 @@ class CommandPrompt(cmd.Cmd):
 
         self.cmdqueue = CmdQueue(q, self.prompt, self.sys)
 
-    def cmdloop(self,intro=None):
+    def cmdloop(self, intro=None):
         """
         Customized cmd.Cmd.cmdloop so it handles Ctrl-C and prerun
         """
@@ -214,7 +214,7 @@ class CommandPrompt(cmd.Cmd):
                                 "testopia": self.testopia,
                             },
                             *args,
-                            **kw
+                            **kw,
                         )
                     except Exception as e:
                         logger.error(e)

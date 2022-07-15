@@ -44,6 +44,7 @@ class UpdateID(metaclass=ABCMeta):
 
 class AutoOBSUpdateID(UpdateID):
     kind = "auto"
+
     def __init__(self, rrid, *args, **kw):
         super().__init__(RequestReviewID(rrid), OBSTestReport, testreport_svn_checkout)
 
@@ -75,6 +76,7 @@ class AutoOBSUpdateID(UpdateID):
 
 class KernelOBSUpdateID(UpdateID):
     kind = "kernel"
+
     def __init__(self, rrid, *args, **kw):
         super().__init__(RequestReviewID(rrid), OBSTestReport, testreport_svn_checkout)
 

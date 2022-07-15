@@ -3,6 +3,7 @@ from mtui.systemcheck import detect_system
 
 import pytest
 
+
 def test_systemcheck():
     config = Config([])
     config.distro, config.distro_ver, config.distro_kernel = detect_system()

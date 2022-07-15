@@ -192,7 +192,6 @@ class PackageRevisionHasntChangedWarning(UserMessage):
 
 
 class MissingDoerError(ErrorMessage):
-
     def __init__(self, release):
         self.release = release
 
@@ -239,7 +238,7 @@ class ReConnectFailed(ErrorMessage):
 
 
 class RepositoryError(ErrorMessage):
-    """ failed to read IBS Repository """
+    """failed to read IBS Repository"""
 
     def __init__(self, repo):
         self.repo = repo
@@ -247,14 +246,14 @@ class RepositoryError(ErrorMessage):
 
 
 class openQAError(ErrorMessage):
-    """ openQA related Errors """
+    """openQA related Errors"""
 
     def __init__(self):
         self.message = "Something wrong with openQA connection"
 
 
 class ResultsMissingError(ErrorMessage):
-    """ missing results json file """
+    """missing results json file"""
 
     def __init__(self, test, arch):
         self.test = test
@@ -263,13 +262,12 @@ class ResultsMissingError(ErrorMessage):
 
 
 class SMELTError(ErrorMessage):
-
     def __init__(self):
         self.message = "Sommething wrong with SMELT connection"
 
 
 class SVNError(ErrorMessage):
-    """ SVN related Errors """
+    """SVN related Errors"""
 
     def __init__(self, cmd):
         self.cmd = cmd

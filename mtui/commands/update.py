@@ -45,7 +45,6 @@ class Update(Command):
 
         cls._add_hosts_arg(parser)
 
-
     @requires_update
     def __call__(self):
 

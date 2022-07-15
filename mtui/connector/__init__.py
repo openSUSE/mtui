@@ -1,2 +1,1 @@
-__all__ = ['bugzilla']
-
+__all__ = ["bugzilla"]

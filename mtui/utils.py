@@ -52,7 +52,6 @@ if os.getenv("COLOR", "always") == "always":
     def blue(xs):
         return "\033[1;34m{!s}\033[1;m".format(xs)
 
-
 else:
     green = red = yellow = blue = lambda xs: str(xs)
 

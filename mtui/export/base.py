@@ -21,15 +21,14 @@ class BaseExport(ABC):
         "interactive",
     ]
 
-    def __init__(
-        self, config, openqa, template, force, rrid, interactive, **kwargs ):
-        """ param: config = Config()
-            param: xmllog = xml.minidom
-            param: openqa = testreport.openqa
-            param: template = FileList()
-            param: force = Bool()
-            param: rrid = testreport.id
-            param: interactive
+    def __init__(self, config, openqa, template, force, rrid, interactive, **kwargs):
+        """param: config = Config()
+        param: xmllog = xml.minidom
+        param: openqa = testreport.openqa
+        param: template = FileList()
+        param: force = Bool()
+        param: rrid = testreport.id
+        param: interactive
         """
 
         self.config = config
@@ -118,7 +117,6 @@ class BaseExport(ABC):
     @abstractmethod
     def run(self, *args, **kwds):
         pass
-
 
     def inject_openqa(self):
         if not self.openqa["auto"]:

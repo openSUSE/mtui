@@ -24,7 +24,6 @@ incident_12538nc = json.loads(
 q_url = Config(_rootdir / "fixtures/mtuirc").smelt_api
 
 
-
 @responses.activate
 def helper_smelt_instance(kind):
     if kind == "full":
@@ -97,6 +96,7 @@ def test_openqa_link_verbose_empty():
 def test_incident_name():
     name = helper_smelt_instance("full").get_incident_name()
     assert name == "kernel-ec2"
+
 
 def test_get_version():
     version = helper_smelt_instance("full").get_version()

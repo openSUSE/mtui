@@ -3,8 +3,8 @@ from mtui.utils import complete_choices
 
 
 class HostsUnlock(Command):
-    """"Unlock refhost
-        can be forced by -f/--force parameter
+    """ "Unlock refhost
+    can be forced by -f/--force parameter
     """
 
     command = "unlock"

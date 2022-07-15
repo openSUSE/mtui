@@ -1,5 +1,6 @@
 from typing import Optional
 
+
 class Package:
     __slots__ = [
         "name",
@@ -22,7 +23,7 @@ class Package:
 
     @before.setter
     def before(self, ver: Optional[str]) -> None:
-        self._before = ver 
+        self._before = ver
 
     @property
     def after(self) -> Optional[str]:

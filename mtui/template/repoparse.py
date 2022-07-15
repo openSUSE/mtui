@@ -1,5 +1,3 @@
-
-
 import xml.etree.ElementTree as ET
 from mtui.types import Product
 

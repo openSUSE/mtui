@@ -6,6 +6,7 @@ from mtui.commands import Command
 
 logger = getLogger("mtui.commands.lrun")
 
+
 class LocalRun(Command):
     """
     Run command in local shell

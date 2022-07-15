@@ -92,7 +92,7 @@ class SMELT:
         return inc
 
     def openqa_links(self):
-        """" Get openQA links from comments in IBS .. copied to SMELT api:) """
+        """ " Get openQA links from comments in IBS .. copied to SMELT api:)"""
         links = self._comments(self.data)
         if not links:
             logger.debug("None known openQA jobs")
@@ -162,7 +162,7 @@ class SMELT:
         return sorted([pkg["name"] for pkg in self.data["packages"]], key=len)[0]
 
     def get_version(self):
-        """ Usable only for kernel/live-patching updates, normal updates can have multiple products versions"""
+        """Usable only for kernel/live-patching updates, normal updates can have multiple products versions"""
 
         if not self:
             return None

@@ -22,7 +22,7 @@ class CommandPromptDisplay:
                 self.println()
                 self.println("Bug #{0:5}: {1}".format(bug, summary))
                 self.println(f"{url}/show_bug.cgi?id={bug}")
-        
+
         ids = sorted(jira.keys())
         if ids == [""] or not ids:
             self.println()

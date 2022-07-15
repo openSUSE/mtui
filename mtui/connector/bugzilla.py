@@ -7,7 +7,7 @@ from logging import getLogger
 logger = getLogger("mtui.connector.bugzilla")
 
 
-class Bugzilla():
+class Bugzilla:
     """Connector to the Bugzilla XMLRPC interface
 
     Interface to the Bugzilla XMLRPC API documented at
@@ -29,8 +29,7 @@ class Bugzilla():
         """
 
         # just basic auth for the start
-        self.url = interface.replace(
-            '://', '://{!s}:{!s}@'.format(username, password))
+        self.url = interface.replace("://", "://{!s}:{!s}@".format(username, password))
         self.proxy = xmlrpc.client.ServerProxy(self.url)
 
     def query_interface(self, service, *query):
@@ -53,9 +52,9 @@ class Bugzilla():
             raise
         except xmlrpc.client.ProtocolError as error:
             if error.errcode == 401:
-                logger.critical('failed to authorize with Bugzilla')
+                logger.critical("failed to authorize with Bugzilla")
             raise
         except xmlrpc.client.Fault as error:
             if error.faultCode == 32000:
-                logger.critical('testcase does not exist')
+                logger.critical("testcase does not exist")
             raise
