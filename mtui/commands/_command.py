@@ -20,7 +20,7 @@ class Command(metaclass=ABCMeta):
         "display",
         "targets",
     ]
-    _check_subparser: str = "" 
+    _check_subparser: str = ""
     """
     :type _check_subparser: str
     :param _check_subparser: Name of the subparser attribute if the

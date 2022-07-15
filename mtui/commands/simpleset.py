@@ -30,7 +30,6 @@ class SessionName(Command):
             help="name of session",
         )
 
-
     def __call__(self):
         session = self.args.name if self.args.name else self.metadata.id
         self.prompt.session = session
@@ -68,13 +67,13 @@ class SetLocation(Command):
 
 class SetLogLevel(Command):
     """
-       Changes the current MTUI loglevel "info" or "warning"  or "debug".
+    Changes the current MTUI loglevel "info" or "warning"  or "debug".
 
-       To enable debug messages, one can set the loglevel to "debug".
-       This could be handy for longer running commands as
-       the output is shown in realtime.
-       The "warning" loglevel prints just basic error or warning conditions.
-       Therefore it's not recommended to use the "warning" loglevel.
+    To enable debug messages, one can set the loglevel to "debug".
+    This could be handy for longer running commands as
+    the output is shown in realtime.
+    The "warning" loglevel prints just basic error or warning conditions.
+    Therefore it's not recommended to use the "warning" loglevel.
     """
 
     command = "set_log_level"

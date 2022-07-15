@@ -39,11 +39,13 @@ class Commit(Command):
             )
             if checkout.joinpath("results").exists():
                 subprocess.call(
-                    "svn add --force {}".format("results").split(), cwd=checkout,
+                    "svn add --force {}".format("results").split(),
+                    cwd=checkout,
                 )
             if checkout.joinpath("checkers.log").exists():
                 subprocess.check_call(
-                    "svn add --force {}".format("checkers.log").split(), cwd=checkout,
+                    "svn add --force {}".format("checkers.log").split(),
+                    cwd=checkout,
                 )
             subprocess.check_call("svn up".split(), cwd=checkout)
             subprocess.check_call("svn ci".split() + msg, cwd=checkout)

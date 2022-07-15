@@ -11,7 +11,7 @@ log = getLogger("mtui.script")
 class Script:
 
     """
-    :type subdir: Path 
+    :type subdir: Path
     :param subdir: subdirectory in the L{TestReport.scripts_wd} where the
           scripts are located.
 
@@ -114,7 +114,12 @@ class CompareScript(Script):
         log.debug("running {0}".format(argv))
         stdout = stderr = None
         try:
-            ret = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            ret = subprocess.run(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+            )
         except EnvironmentError as e:
             t.out.append([" ".join(argv), "", "", 0x100, 0])
             log.critical(messages.StartingCompareScriptError(e, argv))

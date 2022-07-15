@@ -68,7 +68,7 @@ def get_parser(sys):
         metavar="RequestReviewID",
         type=AutoOBSUpdateID,
         help="OBS request review id\nexample: SUSE:Maintenance:1:1",
-        dest="update"
+        dest="update",
     )
     group.add_argument(
         "-k",
@@ -76,7 +76,7 @@ def get_parser(sys):
         metavar="RequestReviewID",
         type=KernelOBSUpdateID,
         help="OBS kernel/live-patch request review id\nexample: SUSE:Maintenance:1:1",
-        dest="update"
+        dest="update",
     )
 
     return parser

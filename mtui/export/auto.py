@@ -10,7 +10,7 @@ logger = getLogger("mtui.export.auto")
 
 
 class AutoExport(BaseExport):
-    """ Export class for automatic worflow"""
+    """Export class for automatic worflow"""
 
     def get_logs(self, *args, **kwds):
         filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs

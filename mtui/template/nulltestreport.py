@@ -4,7 +4,6 @@ from mtui.template.testreport import TestReport
 
 
 class NullTestReport(TestReport):
-
     @property
     def _type(self):
         return "No"

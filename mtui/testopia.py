@@ -10,7 +10,6 @@ from xml.sax import saxutils
 from .connector.bugzilla import Bugzilla
 
 
-
 logger = getLogger("mtui.testopia")
 
 
@@ -244,7 +243,7 @@ class Testopia(object):
         return testcase
 
     def create_testcase(self, values):
-        """ create new testopia testcase
+        """create new testopia testcase
 
         creates new testopia testcase in current update testrun
 
@@ -288,7 +287,7 @@ class Testopia(object):
         return response["case_id"]
 
     def modify_testcase(self, case_id, values):
-        """ modify existing Testopia testcase
+        """modify existing Testopia testcase
 
         updates fields of already existing Testopia testcase
 

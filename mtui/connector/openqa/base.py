@@ -1,7 +1,7 @@
 from abc import ABCMeta, abstractmethod
 from logging import getLogger
 
-import openqa_client.exceptions  #type: ignore
+import openqa_client.exceptions  # type: ignore
 from openqa_client.client import OpenQA_Client as oqa  # type: ignore
 
 logger = getLogger("mtui.connector.openqa")
@@ -45,7 +45,7 @@ class OpenQA(metaclass=ABCMeta):
 
     @abstractmethod
     def run(self):
-        """ Method to get processed result from openQA, can be used for refresh.
+        """Method to get processed result from openQA, can be used for refresh.
         For example when is manually changed type of workflow"""
         pass
 

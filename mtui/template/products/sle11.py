@@ -1,5 +1,5 @@
 def normalize_sle11(x):
-    """ Normalize SLE 11 Products """
+    """Normalize SLE 11 Products"""
 
     if x[0][0] == "SLE-SDK":
         x[0][0] = "sle-sdk"

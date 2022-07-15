@@ -28,7 +28,7 @@ class LoadTemplate(Command):
             metavar="RequestReviewID",
             type=AutoOBSUpdateID,
             help="OBS request review id\nexample: SUSE:Maintenance:1:1",
-            dest="update"
+            dest="update",
         )
         group.add_argument(
             "-k",
@@ -36,7 +36,7 @@ class LoadTemplate(Command):
             metavar="RequestReviewID",
             type=KernelOBSUpdateID,
             help="OBS kernel/live-patch request review id\nexample: SUSE:Maintenance:1:1",
-            dest="update"
+            dest="update",
         )
         parser.add_argument(
             "-c",

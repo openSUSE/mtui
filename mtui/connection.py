@@ -16,7 +16,7 @@ from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
 from typing import Union
-import paramiko # type: ignore
+import paramiko  # type: ignore
 
 from .messages import ReConnectFailed
 from .utils import termsize
@@ -46,11 +46,20 @@ class CommandTimeout(Exception):
         return repr(self.command)
 
 
-class Connection():
+class Connection:
 
     """manage SSH and SFTP connections"""
 
-    __slots__ = ["hostname", "port", "timeout", "client", "stdout", "stdin", "command", "stderr"]
+    __slots__ = [
+        "hostname",
+        "port",
+        "timeout",
+        "client",
+        "stdout",
+        "stdin",
+        "command",
+        "stderr",
+    ]
 
     def __init__(self, hostname: str, port: Union[int, str], timeout: int) -> None:
         """opens SSH channel to specified host
@@ -243,7 +252,7 @@ class Connection():
                 pass
 
     def __run_command(self, command):
-        """ open new session and run command in it
+        """open new session and run command in it
 
         parameter: command -> str
         result: Succes - session instance with running command
@@ -597,7 +606,7 @@ class Connection():
         sftp.close()
 
     def readlink(self, path):
-        """ Return the target of a symbolic link (shortcut)."""
+        """Return the target of a symbolic link (shortcut)."""
         logger.debug("read link {}:{}:{}".format(self.hostname, self.port, path))
         path = str(path)
 
