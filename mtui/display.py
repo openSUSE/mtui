@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from .types.rpmver import RPMVersion
-from .utils import blue, green, red, yellow
+from .utils import green, red, yellow
 
 
 class CommandPromptDisplay:
@@ -154,55 +154,6 @@ class CommandPromptDisplay:
             sink("stderr:")
             for line in stderr.split("\n"):
                 sink(line)
-
-    def testopia_list(self, url, tcid, summary, status, automated):
-        if status == "disabled":
-            status = red("disabled")
-        elif status == "confirmed":
-            status = green("confirmed")
-        else:
-            status = yellow("proposed")
-        if automated == "yes":
-            automated = "automated"
-        else:
-            automated = "manual"
-        self.println("{0:40}: {1} ({2})".format(summary, status, automated))
-        self.println("{}/tr_show_case.cgi?case_id={}".format(url, tcid))
-        self.println()
-
-    def testopia_show(
-        self,
-        url,
-        case_id,
-        summary,
-        status,
-        automated,
-        requirement,
-        setup,
-        action,
-        breakdown,
-        effect,
-    ):
-        self.println("{!s} {!s}".format(blue("Testcase summary:"), summary))
-        self.println(
-            "{!s} {!s}".format(
-                blue("Testcase URL:"), f"{url}/tr_show_case.cgi?case_id={case_id}"
-            )
-        )
-        self.println("{!s} {!s}".format(blue("Testcase automated:"), automated))
-        self.println("{!s} {!s}".format(blue("Testcase status:"), status))
-        self.println("{!s} {!s}".format(blue("Testcase requirements:"), requirement))
-        if setup:
-            self.println(blue("Testcase setup:"))
-            self.println(setup)
-        if breakdown:
-            self.println(blue("Testcase breakdown:"))
-            self.println(breakdown)
-        self.println(blue("Testcase actions:"))
-        self.println(action)
-        if effect:
-            self.println(blue("Testcase effect:"))
-            self.println(effect)
 
     def testsuite_list(self, hostname, system, suites):
         self.println(f"testsuites on {hostname} ({system}):")

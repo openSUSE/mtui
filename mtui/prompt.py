@@ -3,10 +3,10 @@
 #
 
 import cmd
-import readline
-import subprocess
 from logging import getLogger
 from pathlib import Path
+import readline
+import subprocess
 from traceback import format_exc
 
 import mtui.notification as notification
@@ -14,7 +14,6 @@ import mtui.notification as notification
 from . import commands, messages
 from .argparse import ArgsParseFailure
 from .template.nulltestreport import NullTestReport
-from .utils import prompt_user, timestamp
 
 logger = getLogger("mtui.prompt")
 
@@ -88,8 +87,6 @@ class CommandPrompt(cmd.Cmd):
         self.config = config
         self.log = log
         self.datadir = self.config.datadir
-
-        self.testopia = None
 
         readline.set_completer_delims(r'`!@#$%^&*()=+[{]}\|;",<>? ')
 
@@ -201,17 +198,11 @@ class CommandPrompt(cmd.Cmd):
 
                 def complete(*args, **kw):
                     try:
-                        if self.metadata and "testopia" in x:
-                            try:
-                                self.ensure_testopia_loaded()
-                            except Exception:
-                                logger.debug(format_exc())
                         return c.complete(
                             {
                                 "hosts": self.targets.select(),
                                 "metadata": self.metadata,
                                 "config": self.config,
-                                "testopia": self.testopia,
                             },
                             *args,
                             **kw,
@@ -227,9 +218,6 @@ class CommandPrompt(cmd.Cmd):
 
     def emptyline(self):
         pass
-
-    def ensure_testopia_loaded(self, *packages):
-        self.testopia = self.metadata.load_testopia(*packages)
 
     def set_prompt(self, session=None):
         self.session = session

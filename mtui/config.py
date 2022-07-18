@@ -2,13 +2,12 @@
 # mtui config file parser and default values
 #
 
+from collections.abc import Callable
 import configparser
 import getpass
-from collections.abc import Callable
 from logging import getLogger
 from os import getenv
 from pathlib import Path
-from traceback import format_exc
 
 from mtui.messages import InvalidLocationError
 from mtui.refhost import RefhostsFactory, RefhostsResolveFailed
@@ -42,7 +41,6 @@ class Config:
 
         self._define_config_options()
         self._parse_config()
-        self._handle_testopia_cred()
         self._list_terms()
 
     def read(self):
@@ -126,13 +124,6 @@ class Config:
                 Path("/usr/share/qa/tools"),
                 Path,
             ),
-            (
-                "testopia_interface",
-                ("testopia", "interface"),
-                "https://apibugzilla.novell.com/xmlrpc.cgi",
-            ),
-            ("testopia_user", ("testopia", "user"), ""),
-            ("testopia_pass", ("testopia", "pass"), ""),
             (
                 "chdir_to_template_dir",
                 ("mtui", "chdir_to_template_dir"),
@@ -230,35 +221,6 @@ class Config:
             raise InvalidOptionNameError()
 
         setattr(self, opt, val)
-
-    def _handle_testopia_cred(self):
-        if not self.use_keyring:
-            logger.debug("keyring disabled by configuration")
-            return
-
-        try:
-            import keyring  # type: ignore
-        except ImportError:
-            logger.warning("keyring library not available")
-            return
-
-        logger.debug("querying keyring for Testopia password")
-        if self.testopia_pass and self.testopia_user:
-            try:
-                keyring.set_password("Testopia", self.testopia_user, self.testopia_pass)
-            except Exception:
-                logger.warning("failed to add Testopia password to the keyring")
-                logger.debug(format_exc())
-        elif self.testopia_user:
-            try:
-                self.testopia_pass = keyring.get_password(
-                    "Testopia", self.testopia_user
-                )
-            except Exception:
-                logger.warning("failed to get Testopia password from the keyring")
-                logger.debug(format_exc())
-
-        logger.debug("config.testopia_pass = {0!r}".format(self.testopia_pass))
 
     def _list_terms(self):
         scripts = [x.name[5:-3] for x in self.datadir.glob("term.*.sh")]
