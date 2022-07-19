@@ -11,7 +11,7 @@ import re
 import shutil
 import stat
 from traceback import format_exc
-from typing import List
+from typing import Any, Dict, List
 from urllib.request import urlopen
 
 from .. import updater
@@ -20,7 +20,6 @@ from ..target import Target
 from ..target.actions import UpdateError
 from ..target.hostgroup import HostsGroup
 from ..template import TestReportAlreadyLoaded, _TemplateIOError
-from ..testopia import Testopia
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
@@ -103,10 +102,6 @@ class TestReport(metaclass=ABCMeta):
             parsing the template
         """
 
-        self.testopia = None
-        """
-        :type testopia: L{Testopia}
-        """
         self.openqa = {"auto": None, "kernel": []}
 
     def _open_and_parse(self, path):
@@ -142,7 +137,7 @@ class TestReport(metaclass=ABCMeta):
         self.copy_scripts()
 
     @abstractmethod
-    def _parser(self):
+    def _parser(self) -> Dict[str, Any]:
         """
         :returns: L{MetadataParser}
         """
@@ -532,16 +527,6 @@ class TestReport(metaclass=ABCMeta):
 
         with open(into, "wb") as dst, closing(urlopen(from_)) as src:
             dst.writelines(src)
-
-    def load_testopia(self, *packages):
-        try:
-            assert self.testopia.testcases and not packages
-        except (AttributeError, AssertionError):
-            self.testopia = Testopia(
-                self.config, self.get_release(), packages or self.get_package_list()
-            )
-
-        return self.testopia
 
     def list_versions(self, sink, targets, packages):
         query = r"""

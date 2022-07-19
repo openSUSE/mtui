@@ -316,41 +316,6 @@ Set text wrapping for smelt checkers results.
 Default is first 10 lines in template.
 
 
-``testopia.interface``
-~~~~~~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     URL
-  | **default**
-  |     https://apibugzilla.novell.com/tr_xmlrpc.cgi
-
-MTUI accesses Testopia through this URL.
-
-
-``testopia.pass``
-~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     string
-  | **default**
-  |     <EMPTY>
-
-Password used to log into ``testopia.interface``.
-Testopia is integrated with Bugzilla and uses the same credentials.
-
-
-``testopia.user``
-~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     string
-  | **default**
-  |     <EMPTY>
-
-Username used to log into ``testopia.interface``.
-Testopia is integrated with Bugzilla and uses the same credentials.
-
-
 ``url.bugzilla``
 ~~~~~~~~~~~~~~~~
 
@@ -359,7 +324,7 @@ Testopia is integrated with Bugzilla and uses the same credentials.
   | **default**
   |     https://bugzilla.suse.com
 
-Used to construct URLs in Bugzilla- and Testopia-related commands.
+Used to construct URLs in Bugzilla-related commands.
 
 
 ``url.testreports``
@@ -384,11 +349,6 @@ Example
   location = <your location>
   template_dir = /path/to/where/you/want/to/store/test-reports
   datadir = /usr/share/mtui
-
-  [testopia]
-  interface = https://apibugzilla.novell.com/xmlrpc.cgi
-  user = <your Bugzilla ID>
-  pass = <your Bugzilla password>
 
   [refhosts]
   resolvers = https
