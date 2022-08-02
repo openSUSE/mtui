@@ -2,7 +2,7 @@ from logging import getLogger
 import re
 
 from mtui.commands import Command
-from mtui.utils import complete_choices, page, requires_update
+from mtui.utils import page, requires_update
 
 
 logger = getLogger("mtui.commands.showdiff")
@@ -40,7 +40,12 @@ class AnalyzeDiff(Command):
         text = diff.read_text()
 
         changes = text.split("\n")
-        changes = changes[: changes.index("spec files:")]
+        try:
+            changes = changes[: changes.index("spec files:")]
+        except ValueError:
+            self.prompt.println("No spec mentioned in source.diff")
+            return
+
         changes = "\n".join(
             ch for ch in changes if ch.startswith("+") or ch.startswith("-")
         )
