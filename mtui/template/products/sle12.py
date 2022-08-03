@@ -8,6 +8,10 @@ def normalize_sle12(x):
         x[0][0] = "SLES-LTSS-SAP"
         x[0][1] = x[0][1].replace("-LTSS-SAP", "")
         return x
+    if x[0][0] == "SLE-SERVER" and "LTSS-TERADATA" in x[0][1]:
+        x[0][0] = "SLES_LTSS_TERADATA"
+        x[0][1] = x[0][1].replace("-LTSS-TERADATA", "")
+        return x
     if x[0][0] == "SLE-SERVER" and "LTSS" in x[0][1]:
         x[0][0] = "SLES-LTSS"
         x[0][1] = x[0][1].replace("-LTSS", "")
