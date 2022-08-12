@@ -1,0 +1,7 @@
+openqa_client
+paramiko
+pyxdg
+requests
+responses
+ruamel.yaml
+pysqlite3

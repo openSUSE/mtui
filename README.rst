@@ -18,10 +18,7 @@ Testopia and test report templates.
 License
 #######
 
-MTUI is licensed as `unpublished work of SUSE`_.
-
-.. _unpublished work of SUSE: https://gitlab.suse.de/qa-maintenance/mtui/blob/master/LICENSE
-
+This project is licensed under the GPLv2 license, see the COPYING file for details.
 
 Contents
 ########
@@ -52,7 +49,5 @@ The project is currently maintained mainly by:
 * Ondřej Súkup <osukup@suse.cz>
 * Jan Baier <jbaier@suse.cz>
 
-Besides that, numerous other `contributors`_ have committed to MTUI.
+Besides that, numerous other *contributors* have committed to MTUI.
 Thanks everyone for their contributions!
-
-.. _contributors: https://gitlab.suse.de/qa-maintenance/mtui/graphs/master
