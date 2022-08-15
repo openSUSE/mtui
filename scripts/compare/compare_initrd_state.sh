@@ -1,0 +1,1 @@
+../../helper/compare_initrd_state.sh

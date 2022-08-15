@@ -1,0 +1,262 @@
+Maintenance Test Update Installer
+==================================
+
+
+Purpose
+-------------------------
+
+The Maintenance Test Update Installer (MTUI) automates common task in the
+maintenance update process and provides handy shortcuts and commands
+for update testing and verifying. While MTUI provides a framework for
+testing, updating and reporting, the tester does not need to handle
+different console terminals, hosts or package versions himself. The
+tester could now focus on the bug and regression testing while leaving
+most of the tools overhead behind. This should speed up the testing and
+make the testing workflows better comparable. All issued commands are
+stored for later processing, i.e. for completing the maintenance template
+or for reference on subsequent updates.
+
+
+Interface
+-------------------------
+
+Parameters
+-------------------------
+
+See cli.rst.
+
+Configuration File
+-------------------------
+
+See cfg.rst.
+
+Shell
+-------------------------
+
+See iui.rst.
+
+User Scripts
+-------------------------
+In order to automate serveral steps the tester has done manually, MTUI provides
+some hooks to include user scripts for i.e. setting up the system or checking
+the system state. Some of these scripts are already available in the "helper"
+subdirectory. See the README file in that directory for further reading on how
+these scripts are working. In short: the scripts are copied over to the
+template directory and are run when invoking the "update" procedure.
+The scripts which are linked to the scripts/pre/ directory
+are run before the update is applied. The tester should deploy own scripts to
+$TEMPLATE_DIR/scripts. This makes sure that scripts which are specific to an
+update are not run on all other updates as well. All scripts in the
+scripts/post/ directory are run after the update was applied. To check if
+there are any regressions introduced by the update, the scripts in
+scripts/compare/ are run with the output from the pre and post scripts as
+parameter. The compare scripts signal possible regressions with the return
+code. MTUI shows this errors to the tester who hast to decide what to do with
+the findings.
+
+All scripts with the same name form a testing group. For instance, if the
+tester wants to run a qa_ testcase for the update, he should write a script
+which spawns the testcase on the hosts:
+
+#!/bin/sh
+/usr/share/qa/tools/cpio-run
+
+This script (with the name check_cpio.sh) is then linked to
+scrips/pre/check_cpio.sh and scripts/post/check_cpio.sh. Now, it's run before
+the update and afterwards. The output is saved to
+$TEMPLATE_DIR/output/scripts/[pre|post].check_cpio.sh.$hostname. When the post
+scripts have finished, the compare scripts are run. They need to have the same
+name ("compare" prefix instead of "check", though) as the check script.
+In this case it's compare_check_cpio.sh.
+
+compare_check_cpio.sh is run with the previous results as parameter:
+compare_check_cpio.sh \
+  $TEMPLATE_DIR/output/scripts/pre.check_cpio.sh.$hostname \
+  $TEMPLATE_DIR/output/scripts/post.check_cpio.sh.$hostname
+
+If there are some unwanted differences, the compare script should return 1.
+Otherwise, return 0. If the script didn't get any sensible output, 3 may be
+returned to indicate the script wasn't run.
+
+
+Proposed Testing Workflow
+-------------------------
+Invoke mtui.py with the update RRID as parameter in interactive mode and set the
+testreports directory if it's not already set by the TEMPLATE_DIR environment
+variable or the configuration file.
+The script connects then to the reference hosts mentioned in the template file.
+
+mtui -a SUSE:Maintenance:1:2
+info: connecting to frisch.suse.de
+info: connecting to merope.suse.de
+info: connecting to libra.suse.de
+info: connecting to sunrise.suse.de
+
+mtui > 
+
+The interactive shell is now loaded and ready. First the tester could check if
+the correct package versions are installed. By running list_packages without
+parameter, the package list with the required version numbers is shown. This
+versions should be higher than the versions currently installed
+(list_packages all).
+
+mtui > list_packages
+libibumad1-x86                : 1.2.3_20090314-0.12.1
+libibumad1                    : 1.2.3_20090314-0.12.1
+libibmad1                     : 1.2.3_20090314-0.12.1
+libibmad1-32bit               : 1.2.3_20090314-0.12.1
+libibumad1-32bit              : 1.2.3_20090314-0.12.1
+libibmad1-x86                 : 1.2.3_20090314-0.12.1
+
+mtui > list_packages
+packages on libra.suse.de:
+libibumad1-x86                : 0
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 0
+libibumad1-32bit              : 0
+libibmad1-x86                 : 0
+
+packages on merope.suse.de:
+libibumad1-x86                : 1.2.3_20090314-0.10.1
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 0
+libibumad1-32bit              : 0
+libibmad1-x86                 : 1.2.3_20090314-0.10.1
+
+packages on frisch.suse.de:
+libibumad1-x86                : 0
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 1.2.3_20090314-0.10.1
+libibumad1-32bit              : 1.2.3_20090314-0.10.1
+libibmad1-x86                 : 0
+
+packages on sunrise.suse.de:
+libibumad1-x86                : 0
+libibumad1                    : 1.2.3_20090314-0.10.1
+libibmad1                     : 1.2.3_20090314-0.10.1
+libibmad1-32bit               : 1.2.3_20090314-0.10.1
+libibumad1-32bit              : 1.2.3_20090314-0.10.1
+libibmad1-x86                 : 0
+
+If all packages are in a consistent state, the first testcase could be run. In
+this case, the provides for the libraries are not correct. The output of the
+run command could later be added as reproducer to the bug section of the
+template.
+
+mtui > run rpm -q --provides libibmad1
+libra.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1  
+libibmad.so.1(IBMAD_1.3)  
+libibmad.so.1(libibmad.so.1)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+merope.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+frisch.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+sunrise.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad1 = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.10.1
+
+info: done
+
+When all bugs are reproduced (be it with MTUI or per direct login on the
+reference host), the update process could be started. To get more information
+on the update command, please see above.
+In case of errors or warnings in the update process, the tester can stop the
+process if he's asked for the next step and resolve these issues first before
+running update again.
+
+mtui > update
+info: preparing
+info: done... [\]
+start pre update scripts? (y/N) y
+info: preparing script check_all_updated.pl
+info: preparing script check_vendor_and_disturl.pl
+start update process? (y/N) y
+info: updating
+start post update scripts? (y/N) y
+info: preparing script check_all_updated.pl
+info: preparing script check_vendor_and_disturl.pl
+start compare scripts? (y/N) y
+info: preparing script compare_all_updated.sh
+info: preparing script compare_vendor_and_disturl.pl
+info: done
+
+After the update, the package versions and the update log could be exported
+to the template file for further processing.
+
+mtui > export
+info: exporting XML to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log
+wrote template to /suse/ckornacker/testing/testreports//7cf90e0522b1b961e418455feb815531/log
+
+To verify that the bugs are actually fixed, one can run the reproducers again.
+In this case, the provides are fixed.
+
+mtui > run rpm -q --provides libibmad1
+libra.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1  
+libibmad.so.1(IBMAD_1.3)  
+libibmad.so.1(libibmad.so.1)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+merope.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+frisch.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+sunrise.suse.de:~> rpm -q --provides libibmad1 [0]
+libibmad = 1.2.3_20090314
+libibmad.so.1()(64bit)  
+libibmad.so.1(IBMAD_1.3)(64bit)  
+libibmad.so.1(libibmad.so.1)(64bit)  
+libibmad1 = 1.2.3_20090314-0.12.1
+
+info: done
+
+For regression tests the run command could be used as well. For instance,
+running a ctcs testcase with "run all,/usr/share/qa/tools/*-run".
+Now the tester could add the reproducers, regression tests and their
+output to the template file with the edit command and a little copy + paste.
+The tester just needs to set the update state to PASSED or FAILED before
+submitting the template to the SVN.
+
+mtui > edit template
+mtui > commit
+Revision 6824.
+
+When the testing is finished, "quit" exits MTUI and disconnects from the
+remote hosts.
+mtui > quit
+info: closing connection to libra.suse.de
+info: closing connection to merope.suse.de
+info: closing connection to frisch.suse.de
+info: closing connection to sunrise.suse.de
+

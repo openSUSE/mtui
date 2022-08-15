@@ -1,0 +1,1 @@
+../../helper/compare_vendor_and_disturl.sh
