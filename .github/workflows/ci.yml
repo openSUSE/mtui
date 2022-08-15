@@ -1,0 +1,36 @@
+---
+name: ci
+# yamllint disable-line rule:truthy
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v3
+        with:
+          python-version: '3.8'
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-openqa-client \
+            python3-paramiko \
+            python3-xdg \
+            python3-requests \
+            python3-responses \
+            python3-rpm \
+            python3-ruamel.yaml \
+            subversion \
+            python3-pytest \
+            python3-pytest-cov \
+            python3-coverage \
+            black
+      - name: Run tests + cov report
+        run: pytest-3 -v --cov=./mtui --cov-report=xml --cov-report=term
+      - name: Check style
+        run: make checkstyle
+      - name: Upload coverage to CodeCov
+        uses: codecov/codecov-action@v2
+        with:
+          files: coverage.xml

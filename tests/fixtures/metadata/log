@@ -1,0 +1,170 @@
+SUMMARY: PASSED/FAILED
+
+comment: (none)
+
+BUGS SUMMARY:
+=============
+=> references:
+    * jsc#SLE-22357 ()
+    * bsc#12345 ([foo] bar)
+
+=> new bugs:
+
+INSTALL TESTS SUMMARY:
+======================
+
+REGRESSION TEST SUMMARY:
+========================
+    For more details see "regression testing" below.
+
+METADATA:
+=========
+Products: SLE-Module-Development-Tools-OBS 15-SP4 (aarch64, ppc64le, s390x, x86_64), SLE-Module-Python2 15-SP3 (aarch64, ppc64le, s390x, x86_64)
+Category: recommended
+Rating: low
+Packager: slemke@suse.com
+Bugs: 12345
+Jira: SLE-22357
+ReviewRequestID: SUSE:Maintenance:24993:275518
+Repository: http://download.suse.de/ibs/SUSE:/Maintenance:/24993/
+Packages: sle-module-python2-release = 15.3-150300.59.4.1
+PackageVer: 15-SP3(sle-module-python2-release = 15.3-150300.59.4.1); 15-SP4(sle-module-python2-release = 15.3-150300.59.4.1)
+SRCRPMs: sle-module-python2-release
+Suggested Test Plan Reviewers: #maintenance
+Testplatform: base=sles(major=15,minor=sp3);arch=[s390x,x86_64];addon=python2(major=15,minor=sp3)
+Testplatform: base=sles(major=15,minor=sp4);arch=[s390x,x86_64];addon=Development-Tools-OBS(major=15,minor=sp4)
+Testplatform: base=SLES(major=15,minor=SP3);arch=[aarch64,ppc64le,s390x,x86_64];addon=sle-module-python2(major=15,minor=SP3)
+Testplatform: base=SLES(major=15,minor=SP4);arch=[aarch64,ppc64le,s390x,x86_64];addon=sle-module-development-tools-obs(major=15,minor=SP4)
+
+#############################
+Test results by product-arch:
+#############################
+
+sles-modules-15-SP3-s390x (reference host: s390vsl138.suse.de)
+--------------
+before:
+	sle-module-python2-release-15.3-47.1
+after:
+	sle-module-python2-release-15.3-150300.59.4.1
+scripts:
+	initrd_state             : SUCCEEDED
+	vendor_and_disturl       : SUCCEEDED
+
+=> PASSED
+
+comment: (none)
+
+
+sles-modules-15-SP3-s390x (reference host: s390vsl116.suse.de)
+--------------
+before:
+	sle-module-python2-release-15.3-47.1
+after:
+	sle-module-python2-release-15.3-150300.59.4.1
+scripts:
+	initrd_state             : SUCCEEDED
+	vendor_and_disturl       : SUCCEEDED
+
+=> PASSED
+
+comment: (none)
+
+
+########################
+notes for/by the tester:
+########################
+
+Jira SLE-22357 (""):
+--------------------
+
+https://jira.suse.com/browse/SLE-22357
+
+REPRODUCER_PRESENT: YES/NO
+STATUS:             FIXED/NOT_FIXED/HYPOTHETICAL/NOT_REPRODUCIBLE/NO_ENVIRONMENT/TOO_COMPLEX/OTHER
+
+...
+
+Bug 12345 ("[foo] bar"):
+------------------------------------------------------------
+
+https://bugzilla.suse.com/show_bug.cgi?id=12345
+
+REPRODUCER_PRESENT: YES/NO
+STATUS:             FIXED/NOT_FIXED/HYPOTHETICAL/NOT_REPRODUCIBLE/NO_ENVIRONMENT/TOO_COMPLEX/OTHER
+
+...
+
+regression tests:
+-----------------
+
+(put your details here)
+
+build log review:
+-----------------
+
+TEST_SUITE_PRESENT:    NO
+Results from openQA incidents jobs:
+===================================
+
+  Job in flavor: Desktop-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: qam-allpatterns - result: softfailed
+  Job in flavor: Desktop-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: qam-gnome - result: softfailed
+  Job in flavor: Desktop-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: qam-regression-installation-SLED - result: passed
+  Job in flavor: Desktop-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: qam-regression-other - result: passed
+  Job in flavor: Desktop-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: qam-regression-piglit - result: passed
+  Job in flavor: Desktop-DVD-Incidents-Install - arch: x86_64 - version: 15-SP3 - test: qam-incidentinstall - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-webserver - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: qam-allpatterns+addons - result: softfailed
+  Job in flavor: Server-DVD-Incidents-Install - arch: x86_64 - version: 15-SP3 - test: qam-incidentinstall - result: passed
+  Job in flavor: Server-DVD-Incidents-Install - arch: ppc64le - version: 15-SP3 - test: qam-incidentinstall - result: passed
+  Job in flavor: Server-DVD-Incidents-Install - arch: aarch64 - version: 15-SP3 - test: qam-incidentinstall - result: passed
+  Job in flavor: Server-DVD-Incidents-Install - arch: s390x - version: 15-SP3 - test: qam-incidentinstall - result: failed
+    Failed modules:
+      Module: boot_to_desktop in category boot failed
+
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mru-install-minimal-with-addons - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-sles-sys-param-check - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: create_hdd_external_testkit - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: start_external_testkit_offline - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-extratests-kdump - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-extratests-phub - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-extratests-zypper - result: passed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-extratests1 - result: softfailed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-extratests2 - result: softfailed
+  Job in flavor: Server-DVD-Incidents - arch: x86_64 - version: 15-SP3 - test: mau-filesystem - result: passed
+
+\End of openQA Incidents results
+
+
+source code change review:
+--------------------------
+Put here the assessment of the spec + source changes when compared to the latest release.
+For convenience, a copy of the 1st source diff can be found in the test report directory.
+In case of FAILED, add some details (relevant BSC ids, patch file name etc).
+
+NEW_VERSION_OR_NEW_PACKAGE:    YES
+ALL_TRACKED_ISSUES_DOCUMENTED: YES
+HAS_UNTRACKED_CHANGES:         YES/NO
+
+comment:
+-Version:        15.2
++Version:        15.3
+
+
+##############
+Install tests:
+##############
+
+Installation tests done in openQA with following results: FAILED
+
+sled_15-SP3_x86_64 => none: https://openqa.suse.de/tests/9113619
+sles_15-SP3_aarch64 => none: https://openqa.suse.de/tests/9113771
+sles_15-SP3_ppc64le => passed: http://qam.suse.de/testreports/SUSE:Maintenance:24993:275518/install_logs/sles_15-SP3_ppc64le.log
+sles_15-SP3_s390x => none: https://openqa.suse.de/tests/9113784
+sles_15-SP3_x86_64 => none: https://openqa.suse.de/tests/9113744
+
+Links for update logs:
+
+http://qam.suse.de/testreports/SUSE:Maintenance:24993:275518/install_logs/s390vsl116.suse.de.log
+http://qam.suse.de/testreports/SUSE:Maintenance:24993:275518/install_logs/s390vsl138.suse.de.log
+
+## export MTUI:13.2.0, paramiko 2.6.0 on openSUSE Leap-15.4 (kernel: 5.14.21-150400.22-default) by mimi
