@@ -465,6 +465,9 @@ class TestReport(metaclass=ABCMeta):
     def _testreport_url(self):
         return "/".join([self.config.reports_url, str(self.id), "log"])
 
+    def _fancy_report_url(self):
+        return "/".join([self.config.fancy_reports_url, str(self.id), "log"])
+
     def local_wd(self, *paths):
         """
         :return: str local working directory
