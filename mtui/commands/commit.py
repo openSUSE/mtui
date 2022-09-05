@@ -50,7 +50,7 @@ class Commit(Command):
             subprocess.check_call("svn up".split(), cwd=checkout)
             subprocess.check_call("svn ci".split() + msg, cwd=checkout)
 
-            logger.info("Testreport in: {}".format(self.metadata._testreport_url()))
+            logger.info("Testreport in: {}".format(self.metadata._fancy_report_url()))
 
         except Exception:
             logger.error("committing template.failed")
