@@ -111,7 +111,12 @@ class Config:
             ("connection_timeout", ("mtui", "connection_timeout"), 300, int),
             ("svn_path", ("svn", "path"), "svn+ssh://svn@qam.suse.de/testreports"),
             ("bugzilla_url", ("url", "bugzilla"), "https://bugzilla.suse.com"),
-            ("reports_url", ("url", "testreports"), "http://qam.suse.de/testreports"),
+            ("reports_url", ("url", "testreports"), "https://qam.suse.de/testreports"),
+            (
+                "fancy_reports_url",
+                ("url", "fancy_reports"),
+                "https://qam.suse.de/reports",
+            ),
             (
                 "smelt_api",
                 ("smelt", "endpoint"),
