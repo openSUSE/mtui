@@ -31,7 +31,6 @@ def helper_smelt_instance(kind):
             responses.GET,
             q_url,
             json=incident_12538,
-            match_querystring=False,
             status=200,
         )
     elif kind == "checkers_only":
@@ -39,7 +38,6 @@ def helper_smelt_instance(kind):
             responses.GET,
             q_url,
             json=incident_12538nl,
-            match_querystring=False,
             status=200,
         )
     elif kind == "comments_only":
@@ -47,7 +45,6 @@ def helper_smelt_instance(kind):
             responses.GET,
             q_url,
             json=incident_12538nc,
-            match_querystring=False,
             status=200,
         )
     instance = SMELT(RequestReviewID("SUSE:Maintenance:12358:199773"))
