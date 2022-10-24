@@ -1,7 +1,7 @@
 " Vim syntax file
 " Language: QAM Testreport
 " Maintainer: Jan Baier
-" Latest Revision: 16 Jul 2020
+" Latest Revision: 24 Oct 2022
 
 if exists("b:current_syntax")
     finish
@@ -9,7 +9,7 @@ endif
 
 " Keywords
 syn keyword positiveKeyword PASSED SUCCEEDED YES FIXED
-syn keyword negativeKeyword FAILED NO NOT_FIXED HYPOTHETICAL NOT_REPRODUCIBLE NO_ENVIRONMENT TOO_COMPLEX OTHER
+syn keyword negativeKeyword FAILED NO NOT_FIXED HYPOTHETICAL NOT_REPRODUCIBLE NO_ENVIRONMENT TOO_COMPLEX SKIPPED OTHER
 
 " Matches
 syn match Comment 'For more details see "regression testing" below.'
