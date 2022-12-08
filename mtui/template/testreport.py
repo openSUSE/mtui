@@ -7,11 +7,12 @@ from json import loads
 from json.decoder import JSONDecodeError
 from logging import getLogger
 import os
+from pathlib import Path
 import re
 import shutil
 import stat
 from traceback import format_exc
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.request import urlopen
 
 from .. import updater
@@ -55,9 +56,8 @@ class TestReport(metaclass=ABCMeta):
         # class Metadata for backward compaibility purposes, so we don't
         # have to modify every user of this class at the same time as
         # refactoring the internals.
-        self.path = None
+        self.path: Optional[Path] = None
         """
-        :type path: Path or None
         :param path: path to the testreport file if loaded, otherwise None
         """
         self.systems = {}

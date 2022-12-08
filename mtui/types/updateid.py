@@ -4,7 +4,13 @@ from logging import getLogger
 
 from ..connector.openqa import AutoOpenQA, KernelOpenQA
 from ..connector.smelt import SMELT
+from ..messages import (
+    SvnCheckoutFailed,
+    SvnCheckoutInterruptedError,
+    TestReportNotLoadedError,
+)
 from ..template import _TemplateIOError, testreport_svn_checkout
+from ..template.nulltestreport import NullTestReport
 from ..template.obstestreport import OBSTestReport
 from ..types.obs import RequestReviewID
 
@@ -27,10 +33,14 @@ class UpdateID(metaclass=ABCMeta):
         except _TemplateIOError as e:
             if e.errno != ENOENT:
                 raise
+            try:
+                self._vcs_checkout(config, config.svn_path, str(self.id))
+            except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
+                logger.error(e)
+                raise TestReportNotLoadedError
+            else:
+                tr.read(trpath)
 
-            self._vcs_checkout(config, config.svn_path, str(self.id))
-
-            tr.read(trpath)
         return tr
 
     def _create_installogs_dir(self, config):
@@ -49,7 +59,11 @@ class AutoOBSUpdateID(UpdateID):
         super().__init__(RequestReviewID(rrid), OBSTestReport, testreport_svn_checkout)
 
     def make_testreport(self, config, autoconnect=True):
-        tr = self._checkout(config)
+        try:
+            tr = self._checkout(config)
+        except TestReportNotLoadedError:
+            return NullTestReport(config)
+
         self._create_installogs_dir(config)
         tr.smelt = SMELT(self.id, config.smelt_api)
         logger.info("Getting data from openQA")
@@ -85,7 +99,11 @@ class KernelOBSUpdateID(UpdateID):
         directory.mkdir(parents=False, exist_ok=True)
 
     def make_testreport(self, config, autoconnect=False):
-        tr = self._checkout(config)
+        try:
+            tr = self._checkout(config)
+        except TestReportNotLoadedError:
+            return NullTestReport(config)
+
         self._create_installogs_dir(config)
         self.create_results_dir(config)
         tr.smelt = SMELT(self.id, config.smelt_api)
