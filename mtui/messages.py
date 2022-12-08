@@ -91,6 +91,15 @@ class SvnCheckoutInterruptedError(ErrorMessage):
         self.message = self._msg.format(uri)
 
 
+class SvnCheckoutFailed(ErrorMessage):
+    _msg = "Svn checkout of {0!r} Failed\n Please check {1!s}"
+
+    def __init__(self, uri, f_url):
+        self.uri = uri
+        self.f_url = f_url
+        self.message = self._msg.format(uri, f_url)
+
+
 class QadbReportCommentLengthWarning(UserMessage):
     def __str__(self):
         return "comment strings > 100 chars are truncated by remote_qa_db_report.pl"

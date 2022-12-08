@@ -2,7 +2,7 @@ import subprocess
 from logging import getLogger
 from os.path import join
 
-from ..messages import SvnCheckoutInterruptedError
+from ..messages import SvnCheckoutInterruptedError, SvnCheckoutFailed
 from ..utils import chdir, ensure_dir_exists
 
 logger = getLogger("mtui.template")
@@ -22,7 +22,7 @@ class TestReportAlreadyLoaded(RuntimeError):
     pass
 
 
-def testreport_svn_checkout(config, path, id):
+def testreport_svn_checkout(config, path, rrid):
     """
     param: path type: str - svn base path - not handled by pathlib
     param: config type: instance of Config singleton
@@ -35,9 +35,13 @@ def testreport_svn_checkout(config, path, id):
         ),
     )
 
-    uri = join(path, id)
+    uri = join(path, rrid)
+
     with chdir(config.template_dir):
         try:
             subprocess.check_call(["svn", "co", uri])
         except KeyboardInterrupt:
             raise SvnCheckoutInterruptedError(uri)
+        except subprocess.CalledProcessError:
+            f_url = join(config.fancy_reports_url, rrid)
+            raise SvnCheckoutFailed(uri, f_url)
