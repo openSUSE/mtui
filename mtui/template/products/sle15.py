@@ -27,6 +27,9 @@ def normalize_sle15(x):
     if x[0][0] == "SLE-Product-SLES_SAP":
         x[0][0] = "SLES_SAP"
         return x
+    if x[0][0] == "SLE-Product-RT":
+        x[0][0] = "SLE_RT"
+        return x
     # All other SLE12 modules/extensions in lowercase
     x[0][0] = x[0][0].lower()
     return x
