@@ -151,9 +151,9 @@ class SetTimeout(Command):
 
 
 class SetWorkflow(Command):
-    """Sets workflow and reload data from openQA\n
-    'auto' workflow will be automaticaly set to manual if openQA install tests
-    missiong or have failed state"""
+    """Sets workflow and reloads data from openQA\n
+    'auto' workflow will be automatically set to manual if openQA install tests
+    are missing or have failed state"""
 
     command = "set_workflow"
 
