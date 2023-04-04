@@ -330,7 +330,6 @@ class TestReport(metaclass=ABCMeta):
                 timeout=self.config.connection_timeout,
             )
             target.connect()
-            target.add_history(["connect"])
             new_system = target.get_system()
         except KeyboardInterrupt:
             logger.warning("Connection to {} canceled by user".format(host))
