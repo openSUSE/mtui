@@ -407,7 +407,6 @@ class Target:
 
             if self.connection.is_active():
                 self.connection.timeout = 15
-                self.add_history(["disconnect"])
                 self.unlock()
         except Exception:
             # ignore if the connection seems to be lost
