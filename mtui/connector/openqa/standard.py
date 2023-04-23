@@ -2,9 +2,9 @@ from collections import namedtuple
 from logging import getLogger
 from os.path import join
 
+from ...types.urls import URLs
 from .base import OpenQA
 
-Urls = namedtuple("URLs", ["distri", "arch", "version", "url"])
 logger = getLogger("mtui.connector.openqa.standard")
 
 
@@ -57,7 +57,7 @@ class AutoOpenQA(OpenQA):
         if not jobs:
             return None
         return [
-            Urls(
+            URLs(
                 job["settings"]["HDD_1"].split("-")[0],
                 job["settings"]["ARCH"],
                 job["settings"]["VERSION"],

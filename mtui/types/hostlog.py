@@ -1,7 +1,9 @@
-from collections import namedtuple
+from typing import Union
+
+from .commandlog import CommandLog
 
 
-def to_string(item):
+def to_string(item: Union[str, bytes]) -> str:
     if isinstance(item, bytes):
         return item.decode()
     else:
@@ -9,9 +11,7 @@ def to_string(item):
 
 
 class HostLog(list):
-    log = namedtuple(
-        "CommandLog", ["command", "stdout", "stderr", "exitcode", "runtime"]
-    )
+    log = CommandLog
 
     def __init__(self):
         super().__init__()

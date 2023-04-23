@@ -1,5 +1,4 @@
 from abc import ABCMeta, abstractmethod
-from collections import namedtuple
 import concurrent.futures
 from errno import EEXIST, ENOENT
 import glob
@@ -21,10 +20,10 @@ from ..target import Target
 from ..target.actions import UpdateError
 from ..target.hostgroup import HostsGroup
 from ..template import TestReportAlreadyLoaded, _TemplateIOError
+from ..types.targetmeta import TargetMeta
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
-TargetMeta = namedtuple("TargetMeta", ["hostname", "system", "packages", "hostlog"])
 
 
 class TestReport(metaclass=ABCMeta):
