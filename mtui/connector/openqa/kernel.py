@@ -1,11 +1,9 @@
-from collections import namedtuple
 from logging import getLogger
 
+from ...types.test import Test
 from .base import OpenQA
 
 logger = getLogger("mtui.connector.openqa.kernel")
-
-Test = namedtuple("test", ["name", "result", "test_id", "arch", "modules"])
 
 
 class KernelOpenQA(OpenQA):
