@@ -41,8 +41,12 @@ class BaseExport(ABC):
             self.__setattr__(key, kwargs[key])
 
     def _writer(self, fn, data):
+        to_write = "\n".join(data)
         if fn.exists() and not self.force:
-            logger.warning(f"file {fn} exists.")
+            if to_write == fn.read_text():
+                logger.info("Log %s exists and is same as export" % fn)
+                return
+            logger.warning("file %s exists." % fn)
             if not prompt_user(
                 f"Should I overwrite {fn} (y/N) ",
                 ["y", "Y", "yes", "Yes", "YES"],
@@ -50,14 +54,13 @@ class BaseExport(ABC):
             ):
                 fn = fn.with_suffix("." + timestamp())
 
-        logger.info(f"exporting log to {fn}")
+        logger.info("exporting log to %s" % fn)
 
         try:
             with fn.open(mode="w", encoding="utf-8") as f:
-                f.write("\n".join(line.rstrip() for line in data))
+                f.write(to_write)
         except IOError as e:
             logger.error("Failed to write {}: {}".format(fn, e.strerror))
-            return
 
     def installlogs_lines(self, filenames):
         o = 0
@@ -153,7 +156,7 @@ class BaseExport(ABC):
 
         index = self.template.index("source code change review:\n", 0) - 1
         self.template.insert(index, "\n")
-        self.template.insert(index + 1, "\End of openQA Incidents results\n")
+        self.template.insert(index + 1, "End of openQA Incidents results\n")
         self.template.insert(index + 2, "\n")
 
     def install_results(self):
