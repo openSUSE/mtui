@@ -1,11 +1,8 @@
 import json
-import logging
 from pathlib import Path
 
-import pytest
 import responses
 
-from mtui.messages import RepositoryError
 from mtui.connector.smelt import SMELT
 from mtui.types.obs import RequestReviewID
 from mtui.config import Config
