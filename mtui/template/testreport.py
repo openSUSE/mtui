@@ -85,6 +85,7 @@ class TestReport(metaclass=ABCMeta):
         self.reviewer = ""
         self.repository = None
         self.packages = {}
+        self.srpms = []
 
         self._attrs = [
             "products",
@@ -92,6 +93,7 @@ class TestReport(metaclass=ABCMeta):
             "packager",
             "reviewer",
             "packages",
+            "srpms",
             "bugs",
             "repository",
         ]
@@ -160,7 +162,6 @@ class TestReport(metaclass=ABCMeta):
         self._warn_missing_fields()
 
     def _parse_json(self, data, tpl: str) -> None:
-
         if self.path:
             raise TestReportAlreadyLoaded(self.path)
 
@@ -430,6 +431,14 @@ class TestReport(metaclass=ABCMeta):
     def list_bugs(self, sink, arg):
         return sink(self.bugs, self.jira, arg)
 
+    def _get_result_links(self):
+        incident_id = self.repository.rstrip("/").split("/")[-1]
+        dboard_burl = "http://dashboard.qam.suse.de/incident/"
+        openqa_burl = "https://openqa.suse.de/tests/overview?build=:"
+        dboard_lnk = dboard_burl + incident_id
+        openqa_lnk = openqa_burl + incident_id + ":" + self.srpms[0]
+        return (dboard_lnk, openqa_lnk)
+
     def _show_yourself_data(self):
         return (
             [
@@ -443,6 +452,8 @@ class TestReport(metaclass=ABCMeta):
                 ("Build checks", self._testreport_url()[:-3] + "build_checks"),
                 ("Testreport", self._testreport_url()),
                 ("Repository", self.repository),
+                ("DashBoard Link", self._get_result_links()[0]),
+                ("OpenQA Link", self._get_result_links()[1]),
             ]
             + [("Testplatform", x) for x in self.testplatforms]
             + [("Products", x) for x in self.products]

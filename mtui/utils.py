@@ -333,3 +333,7 @@ def walk(inc):
             if isinstance(inc[key], (list, dict)):
                 inc[key] = walk(inc[key])
     return inc
+
+
+def get_short_rrid(id_str):
+    return id_str.replace("SUSE", "S").replace("Maintenance", "M")

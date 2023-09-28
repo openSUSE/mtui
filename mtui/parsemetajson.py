@@ -12,6 +12,7 @@ class JSONParser:
 
         results.rrid = RequestReviewID(data.get("rrid"))
         results.packager = data.get("packager")
+        results.srpms = data.get("SRCRPMs")
         results.rating = data.get("rating")
         results.repository = data.get("repository")
         results.category = data.get("category")

@@ -1,6 +1,7 @@
 import logging
 import sys
 from subprocess import CalledProcessError
+import setproctitle
 
 from mtui.args import get_parser
 from mtui.config import Config
@@ -11,6 +12,7 @@ from mtui.systemcheck import detect_system
 
 from .argparse import ArgsParseFailure
 from .colorlog import create_logger
+from .utils import get_short_rrid
 
 
 def main():
@@ -33,7 +35,6 @@ def main():
 
 
 def run_mtui(sys, config, logger, Prompt, Display, args):
-
     if args.debug:
         logger.setLevel(level=logging.DEBUG)
 
@@ -45,6 +46,9 @@ def run_mtui(sys, config, logger, Prompt, Display, args):
 
     prompt = Prompt(config, logger, sys, Display)
     if args.update:
+        short_rrid = get_short_rrid(str(args.update.id))
+        # helps to set window/tab title with reviewid
+        setproctitle.setproctitle("mtui-" + short_rrid)
         if args.update.kind == "kernel":
             config.kernel = True
             config.auto = False
