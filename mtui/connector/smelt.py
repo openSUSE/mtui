@@ -7,7 +7,7 @@ from logging import getLogger
 
 import requests
 
-from ..messages import RepositoryError
+from ..messages import RepositoryError  # noqa: F401
 from ..utils import walk
 
 logger = getLogger("mtui.connector.smelt")

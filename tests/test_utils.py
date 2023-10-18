@@ -1,7 +1,7 @@
 from mtui.utils import ensure_dir_exists
 from mtui.utils import chdir
 from mtui.utils import atomic_write_file
-from mtui.utils import SUTParse
+from mtui.utils import SUTParse  # noqa: F401
 
 import os
 

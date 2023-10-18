@@ -1,4 +1,4 @@
-from collections import namedtuple
+from collections import namedtuple  # noqa: F401
 from logging import getLogger
 from os.path import join
 
