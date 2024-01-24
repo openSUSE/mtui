@@ -58,7 +58,7 @@ class Config:
     def location(self, x):
         try:
             self.refhosts(self).check_location_sanity(x)
-        except (InvalidLocationError) as e:
+        except InvalidLocationError as e:
             logger.error(e)
             return
         except RefhostsResolveFailed:

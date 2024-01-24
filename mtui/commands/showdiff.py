@@ -17,7 +17,6 @@ class ShowDiff(Command):
 
     @requires_update
     def __call__(self):
-
         diff = self.metadata.report_wd() / "source.diff"
         text = diff.read_text().split("\n")
         page(text, self.prompt.interactive)
@@ -32,7 +31,6 @@ class AnalyzeDiff(Command):
 
     @requires_update
     def __call__(self):
-
         patchdef = re.compile(r"[+-]Patch(\d*):\s+(.*\.patch)$", flags=re.M)
         patchapply = re.compile(r"[+-]%patch(\d+|)\s+(?:-p\d*|)", flags=re.M)
 

@@ -20,7 +20,6 @@ class SessionName(Command):
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
-
         parser.add_argument(
             "name",
             action="store",
@@ -45,13 +44,11 @@ class SetLocation(Command):
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
-
         parser.add_argument(
             "site", action="store", type=str, nargs=1, help="location name"
         )
 
     def __call__(self):
-
         old = self.config.location
         new = str(self.args.site[0])
         self.config.location = new
@@ -80,7 +77,6 @@ class SetLogLevel(Command):
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
-
         parser.add_argument(
             "level",
             action="store",
@@ -135,7 +131,6 @@ class SetTimeout(Command):
         cls._add_hosts_arg(parser)
 
     def __call__(self):
-
         value = self.args.timeout[0]
         targets = self.parse_hosts()
 

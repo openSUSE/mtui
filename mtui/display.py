@@ -12,13 +12,12 @@ class CommandPromptDisplay:
         return self.output.write(msg + eol)
 
     def list_bugs(self, bugs, jira, url):
-
         ids = sorted(bugs.keys())
         if ids == [""]:
             self.println("No bugs associated with Release Request.")
         else:
             self.println(f'Buglist: {url}/buglist.cgi?bug_id={",".join(ids)}')
-            for (bug, summary) in [(bug, bugs[bug]) for bug in ids]:
+            for bug, summary in [(bug, bugs[bug]) for bug in ids]:
                 self.println()
                 self.println("Bug #{0:5}: {1}".format(bug, summary))
                 self.println(f"{url}/show_bug.cgi?id={bug}")
@@ -28,7 +27,7 @@ class CommandPromptDisplay:
             self.println()
             self.println("No Jira issues associated with Release Request.")
         else:
-            for (issue, summary) in [(issue, jira[issue]) for issue in ids]:
+            for issue, summary in [(issue, jira[issue]) for issue in ids]:
                 self.println()
                 self.println("Jira #{0:5}: {1}".format(issue, summary))
                 self.println(f"https://jira.suse.com/browse/{issue}")

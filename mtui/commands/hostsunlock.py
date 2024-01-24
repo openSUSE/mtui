@@ -22,7 +22,6 @@ class HostsUnlock(Command):
         return parser
 
     def __call__(self):
-
         hosts = self.parse_hosts()
         hosts.unlock(force=self.args.force)
 

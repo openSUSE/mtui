@@ -257,7 +257,6 @@ class ManualExport(BaseExport):
                     self.template[index + 1] = "=> PASSED\n"
 
     def _host_installog_to_template(self, target):
-
         t = []
         try:
             host_log = [host for host in self.results if host.hostname == target][0]

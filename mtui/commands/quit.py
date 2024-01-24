@@ -27,7 +27,6 @@ class Quit(Command):
         self.targets.pop(target)
 
     def __call__(self):
-
         args_ = [self.args.bootarg] if self.args.bootarg else []
 
         with concurrent.futures.ThreadPoolExecutor() as executor:

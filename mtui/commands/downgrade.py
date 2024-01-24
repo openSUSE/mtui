@@ -23,7 +23,6 @@ class Downgrade(Command):
 
     @requires_update
     def __call__(self):
-
         targets = self.parse_hosts()
         if not targets:
             raise NoRefhostsDefinedError

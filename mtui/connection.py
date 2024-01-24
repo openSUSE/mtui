@@ -518,7 +518,6 @@ class Connection:
 
     # Similar to 'get' but handles folders.
     def get_folder(self, remote_folder, local_folder):
-
         remote_folder = str(remote_folder)
         local_folder = str(local_folder)
         sftp = self.__sftp_reconnect()

@@ -122,13 +122,11 @@ class Target:
                 else:
                     self.packages[p].current = None
         elif self.state == "dryrun":
-
             logger.info(
                 'dryrun: {} running "rpm -q {}"'.format(self.hostname, packages)
             )
             self.out.append(["rpm -q {}".format(packages), "dryrun\n", "", 0, 0])
         elif self.state == "disabled":
-
             self.out.append(["", "", "", 0, 0])
 
     def query_package_versions(self, packages) -> Optional[Dict[str, RPMVersion]]:
@@ -256,11 +254,9 @@ class Target:
                 ]
             )
         elif self.state == "dryrun":
-
             logger.info('dryrun: {} running "{}"'.format(self.hostname, command))
             self.out.append([command, "dryrun\n", "", 0, 0])
         elif self.state == "disabled":
-
             self.out.append(["", "", "", 0, 0])
 
     def shell(self):
@@ -287,7 +283,6 @@ class Target:
             logger.info("dryrun: put {} {}:{}".format(local, self.hostname, remote))
 
     def get(self, remote, local):
-
         if remote.endswith("/"):
             f = self.connection.get_folder
             s = "folder"
