@@ -136,7 +136,7 @@ class Connection:
                 else None,
             )
 
-        except (paramiko.AuthenticationException, paramiko.BadHostKeyException) as e:
+        except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
             # if public key auth fails, fallback to a password prompt.
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.

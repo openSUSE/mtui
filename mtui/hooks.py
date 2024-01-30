@@ -112,7 +112,6 @@ class CompareScript(Script):
         argv = [str(x) for x in argv]
 
         log.debug("running {0}".format(argv))
-        stdout = stderr = None
         try:
             ret = subprocess.run(
                 argv,

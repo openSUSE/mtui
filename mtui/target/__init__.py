@@ -10,7 +10,7 @@ from typing import Dict, Optional
 
 from .. import messages
 from ..connection import CommandTimeout, Connection, errno
-from ..target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
+from ..target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError  # noqa: F401
 from ..target.parsers import parse_system
 from ..types.hostlog import HostLog
 from ..types.package import Package

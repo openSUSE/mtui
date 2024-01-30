@@ -1,7 +1,7 @@
 from logging import getLogger
 
 from ..connector.openqa import AutoOpenQA, KernelOpenQA
-from ..utils import complete_choices, requires_update
+from ..utils import complete_choices, requires_update  # noqa: F401
 from . import Command
 
 logger = getLogger("mtui.commands.reloadopenqa")
