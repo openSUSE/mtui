@@ -26,7 +26,6 @@ class SMELT:
         self.data = self._get_data()
 
     def _get_data(self):
-
         query_incident = f"""{{
   incidents(incidentId: {self.rrid.maintenance_id} ) {{
     edges {{
@@ -127,7 +126,6 @@ class SMELT:
 
     @staticmethod
     def _comments(data):
-
         if not data:
             return None
         if "comments" not in data:

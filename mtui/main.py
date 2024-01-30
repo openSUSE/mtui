@@ -33,7 +33,6 @@ def main():
 
 
 def run_mtui(sys, config, logger, Prompt, Display, args):
-
     if args.debug:
         logger.setLevel(level=logging.DEBUG)
 

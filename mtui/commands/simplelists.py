@@ -22,7 +22,6 @@ class ListLocks(Command):
     command = "list_locks"
 
     def __call__(self):
-
         self.hosts.select(enabled=True).report_locks(self.display.list_locks)
 
 
@@ -37,7 +36,6 @@ class ListHosts(Command):
     command = "list_hosts"
 
     def __call__(self):
-
         self.targets.report_self(self.display.list_host)
 
 
@@ -49,7 +47,6 @@ class ListTimeout(Command):
     command = "list_timeout"
 
     def __call__(self):
-
         self.targets.report_timeout(self.display.list_timeout)
 
 

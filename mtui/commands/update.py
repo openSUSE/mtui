@@ -23,7 +23,6 @@ class Update(Command):
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
-
         parser.add_argument(
             "--newpackage",
             action="store_const",
@@ -47,7 +46,6 @@ class Update(Command):
 
     @requires_update
     def __call__(self):
-
         logger.info("Updating")
 
         targets = self.parse_hosts()

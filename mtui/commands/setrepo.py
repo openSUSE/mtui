@@ -12,7 +12,6 @@ class SetRepo(Command):
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
-
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument(
             "-A",
@@ -36,7 +35,6 @@ class SetRepo(Command):
 
     @requires_update
     def __call__(self):
-
         operation = self.args.operation
         hosts = self.parse_hosts()
 

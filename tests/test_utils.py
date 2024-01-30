@@ -18,7 +18,6 @@ def create_temp(tmpdir_factory):
 
 
 class TestEnsureDirExists(object):
-
     _callback_paths = []
 
     def test_create(self, create_temp):

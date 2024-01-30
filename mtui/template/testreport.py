@@ -160,7 +160,6 @@ class TestReport(metaclass=ABCMeta):
         self._warn_missing_fields()
 
     def _parse_json(self, data, tpl: str) -> None:
-
         if self.path:
             raise TestReportAlreadyLoaded(self.path)
 
