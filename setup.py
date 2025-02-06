@@ -24,7 +24,7 @@ setup(
     maintainer="SUSE QA Maintenance",
     maintainer_email="qa-maintenance@suse.de",
     license="License :: Other/Proprietary License",
-    platforms=["Linux", "Mac OSX"],
+    platforms=["Linux"],
     keywords=["SUSE", "Maintenance", "update", "testing"],
     packages=find_packages(exclude=["*.tests", "*.tests.*", "tests.*", "tests"]),
     entry_points={"console_scripts": ["mtui = mtui.main:main"]},
