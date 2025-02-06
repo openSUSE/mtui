@@ -1,10 +1,9 @@
 """Quering and comparing tags of RPM file names """
-from typing import Any
+
 import rpm  # type: ignore
 
 
 class RPMVersion:
-
     """RPMVersion holds an rpm version-release string
 
     this is userd for rpm version arithmetics, like comparing

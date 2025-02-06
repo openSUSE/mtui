@@ -1,8 +1,9 @@
 from abc import ABCMeta, abstractmethod
 from logging import getLogger
+from typing import Self
 
+from openqa_client.client import OpenQA_Client as oqa
 import openqa_client.exceptions  # type: ignore
-from openqa_client.client import OpenQA_Client as oqa  # type: ignore
 
 logger = getLogger("mtui.connector.openqa")
 
@@ -40,14 +41,14 @@ class OpenQA(metaclass=ABCMeta):
         return jobs
 
     @abstractmethod
-    def _pretty_print(self, *args):
+    def _pretty_print(self, *args) -> list[str]:
         pass
 
     @abstractmethod
-    def run(self):
+    def run(self) -> Self:
         """Method to get processed result from openQA, can be used for refresh.
         For example when is manually changed type of workflow"""
         pass
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.results)

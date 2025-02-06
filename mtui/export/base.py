@@ -64,8 +64,8 @@ class BaseExport(ABC):
 
     def installlogs_lines(self, filenames):
         o = 0
-        for l in self.template:
-            if "HAS_UNTRACKED" in l:
+        for line in self.template:
+            if "HAS_UNTRACKED" in line:
                 break
         o += 1
 

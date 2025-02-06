@@ -1,4 +1,5 @@
 from logging import getLogger
+from typing import Self
 
 from ...types.test import Test
 from .base import OpenQA
@@ -50,18 +51,18 @@ class KernelOpenQA(OpenQA):
             )
         ]
 
-    def _pretty_print(self):
+    def _pretty_print(self, *args) -> list[str]:
         if not self:
             return []
-        lines = []
+        lines: list[str] = []
         lines.insert(0, f"openQA instance: {self.host} :\n")
 
-        for i, l in enumerate(self._result_matrix(self.results), start=1):
-            lines.insert(i, l)
+        for i, line in enumerate(self._result_matrix(self.results), start=1):
+            lines.insert(i, line)
 
         return lines
 
-    def run(self):
+    def run(self) -> Self:
         jobs = self._get_jobs()
         jobs = self._filter_jobs(jobs)
         self.results = self._parse_jobs(jobs)

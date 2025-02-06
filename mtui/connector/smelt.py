@@ -7,7 +7,6 @@ from logging import getLogger
 
 import requests
 
-from ..messages import RepositoryError
 from ..utils import walk
 
 logger = getLogger("mtui.connector.smelt")

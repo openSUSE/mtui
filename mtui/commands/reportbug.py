@@ -11,7 +11,6 @@ logger = getLogger("mtui.commands.reportbug")
 
 
 class ReportBug(Command):
-
     """
     Open mtui bugzilla with fields common for all mtui bugs prefilled
     """

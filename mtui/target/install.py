@@ -6,9 +6,12 @@ logger = getLogger("mtui.target.install")
 
 
 class Install:
+    """Base install class, should not be directly used."""
+
     def __init__(self, targets, packages=None):
         self.targets = targets
         self.packages = packages
+        self.commands = {}
 
     def run(self):
         skipped = False

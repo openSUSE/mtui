@@ -159,9 +159,9 @@ class ManualExport(BaseExport):
                             if version is not None:
                                 self.template[index] = f"\t{name}-{version}\n"
                             else:
-                                self.templatet[
-                                    index
-                                ] = f"\tpackage {name} is not installed\n"
+                                self.templatet[index] = (
+                                    f"\tpackage {name} is not installed\n"
+                                )
                         else:
                             if version is not None:
                                 self.template.insert(index, f"\t{name}-{version}\n")

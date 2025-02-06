@@ -20,7 +20,6 @@ logger = getLogger("mtui.refhost")
 
 
 class Attributes(object):
-
     """
     Host attributes.
     This class has two purposes: to set the the attributes of a refhost and

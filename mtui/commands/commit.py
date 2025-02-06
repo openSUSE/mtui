@@ -10,7 +10,6 @@ logger = getLogger("mtui.command.commit")
 
 
 class Commit(Command):
-
     """
     Commits testing template to the SVN. This can be run after the
     testing has finished an the template is in the final state.

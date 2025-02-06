@@ -2,7 +2,6 @@ from abc import ABCMeta
 
 
 class UserMessage(BaseException, metaclass=ABCMeta):
-
     """
     Message to be displayed to the user
     """
@@ -19,14 +18,12 @@ class UserMessage(BaseException, metaclass=ABCMeta):
 
 
 class ErrorMessage(UserMessage, RuntimeError):
-
     """
     Program error message to be displayed to the user
     """
 
 
 class UserError(UserMessage, RuntimeError):
-
     """
     Error, caused by improper usage of the program,
     to be displayed to the user
@@ -38,7 +35,6 @@ class DeprecationMessage(UserMessage):
 
 
 class NoRefhostsDefinedError(UserError, ValueError):
-
     """
     Thrown when user requests an operation without defined refhosts
     """
@@ -48,7 +44,6 @@ class NoRefhostsDefinedError(UserError, ValueError):
 
 
 class HostIsNotConnectedError(UserError, ValueError):
-
     """
     Thrown when user requests an operation to be performed on a host
     that is not connected.
