@@ -164,7 +164,7 @@ class Downgrade:
                             t.hostname, t._lock.time(), t._lock.locked_by()
                         )
                     )
-                    if lock.comment:
+                    if t._lock.comment():
                         logger.info(
                             "{!s}'s comment: {!s}".format(
                                 t._lock.locked_by(), t._lock.comment()

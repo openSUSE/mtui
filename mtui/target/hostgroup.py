@@ -10,7 +10,6 @@ from mtui.messages import HostIsNotConnectedError
 
 
 class HostsGroup(UserDict):
-
     """
     Composite pattern for L{Target}
 

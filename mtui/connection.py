@@ -32,7 +32,6 @@ if not sys.warnoptions:
 
 
 class CommandTimeout(Exception):
-
     """remote command timeout exception
 
     returns timed out remote command as __str__
@@ -47,7 +46,6 @@ class CommandTimeout(Exception):
 
 
 class Connection:
-
     """manage SSH and SFTP connections"""
 
     __slots__ = [
@@ -125,18 +123,22 @@ class Connection:
             # hostkey for the specified host. checking back with a manual
             # "ssh root@..." invocation helps in most cases.
             self.client.connect(
-                hostname=opts.get("hostname", self.hostname)
-                if "proxycommand" not in opts
-                else self.hostname,
+                hostname=(
+                    opts.get("hostname", self.hostname)
+                    if "proxycommand" not in opts
+                    else self.hostname
+                ),
                 port=int(opts.get("port", self.port)),
                 username=opts.get("user", "root"),
                 key_filename=opts.get("identityfile", None),
-                sock=paramiko.ProxyCommand(opts["proxycommand"])
-                if "proxycommand" in opts
-                else None,
+                sock=(
+                    paramiko.ProxyCommand(opts["proxycommand"])
+                    if "proxycommand" in opts
+                    else None
+                ),
             )
 
-        except (paramiko.AuthenticationException, paramiko.BadHostKeyException) as e:
+        except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
             # if public key auth fails, fallback to a password prompt.
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.
@@ -151,15 +153,19 @@ class Connection:
             try:
                 # try again with password auth instead of public/private key
                 self.client.connect(
-                    hostname=opts.get("hostname", self.hostname)
-                    if "proxycommand" not in opts
-                    else self.hostname,
+                    hostname=(
+                        opts.get("hostname", self.hostname)
+                        if "proxycommand" not in opts
+                        else self.hostname
+                    ),
                     port=int(opts.get("port", self.port)),
                     username=opts.get("user", "root"),
                     password=password,
-                    sock=paramiko.ProxyCommand(opts["proxycommand"])
-                    if "proxycommand" in opts
-                    else None,
+                    sock=(
+                        paramiko.ProxyCommand(opts["proxycommand"])
+                        if "proxycommand" in opts
+                        else None
+                    ),
                 )
             except paramiko.AuthenticationException as e:
                 # if a wrong password was set, don't connect to the host and

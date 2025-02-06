@@ -2,7 +2,6 @@ from mtui.commands import Command
 
 
 class Config(Command):
-
     """
     Display and manipulate (TODO) configuration in runtime.
     """

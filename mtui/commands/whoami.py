@@ -4,7 +4,6 @@ from mtui.commands import Command
 
 
 class Whoami(Command):
-
     """
     Display current user name and session pid.
 

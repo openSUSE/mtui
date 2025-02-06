@@ -20,7 +20,6 @@ class InvalidOptionNameError(RuntimeError):
 
 
 class Config:
-
     """Read and store the variables from mtui config files"""
 
     def __init__(self, path, refhosts=RefhostsFactory):

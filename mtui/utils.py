@@ -1,27 +1,27 @@
-import fcntl
-import os
-import re
-import readline
-import struct
-import subprocess
-import tempfile
-import termios
-import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
+import fcntl
 from functools import wraps
 from itertools import chain
+import os
 from os.path import dirname
 from pathlib import Path
+import re
+import readline
 from shutil import move
+import struct
+import subprocess
+import tempfile
 from tempfile import mkstemp
+import termios
+import time
 
 from mtui.messages import TestReportNotLoadedError
 
 
-def edit_text(text):
-    editor = os.getenv("EDITOR", "vi")
+def edit_text(text: str) -> str:
+    editor = os.getenv("EDITOR", "vim")
     tmpfile = tempfile.NamedTemporaryFile()
 
     with open(tmpfile.name, "w") as tmp:
@@ -56,9 +56,9 @@ else:
     green = red = yellow = blue = lambda xs: str(xs)
 
 
-def prompt_user(text, options, interactive=True):
+def prompt_user(text, options, interactive: bool = True) -> bool:
     result = False
-    response = False
+    response = ""
 
     if not interactive:
         print(text)
@@ -83,7 +83,7 @@ def prompt_user(text, options, interactive=True):
 
 def termsize():
     try:
-        x = fcntl.ioctl(0, termios.TIOCGWINSZ, "1234")
+        x = fcntl.ioctl(0, termios.TIOCGWINSZ, b"1234")
         height, width = struct.unpack("hh", x)
     except IOError:
         # FIXME: remove this when you figure out how to simulate tty
@@ -99,7 +99,7 @@ def termsize():
     return width, height
 
 
-def filter_ansi(text):
+def filter_ansi(text: str) -> str:
     text = re.sub(chr(27), "", text)
     text = re.sub(r"\[[0-9;]*[mA]", "", text)
     text = re.sub(r"\[K", "", text)
@@ -107,9 +107,9 @@ def filter_ansi(text):
     return text
 
 
-def page(text, interactive=True):
+def page(text, interactive: bool = True) -> None:
     if not interactive:
-        return
+        return None
 
     prompt = "Press Enter to continue... (q to quit)"
 
@@ -120,7 +120,7 @@ def page(text, interactive=True):
     try:
         line = filter_ansi(text.pop().rstrip("\r\n"))
     except IndexError:
-        return
+        return None
 
     while True:
         linesleft = height - 1
@@ -141,13 +141,13 @@ def page(text, interactive=True):
                 try:
                     line = filter_ansi(text.pop().rstrip("\r\n"))
                 except IndexError:
-                    return
+                    return None
 
         if prompt_user(prompt, "q"):
-            return
+            return None
 
 
-def requires_update(fn):
+def requires_update(fn: Callable) -> Callable:
     @wraps(fn)
     def wrap(self, *a, **kw):
         if not self.metadata:
@@ -176,7 +176,7 @@ class SUTParse:
         targets = ["-t {!s}".format(i) for i in suts]
         self.args = " ".join(targets)
 
-    def print_args(self):
+    def print_args(self) -> str:
         return self.args
 
 
@@ -204,16 +204,16 @@ def complete_choices(synonyms, line, text, hostnames=None):
     ls = line.split(" ")
     ls.pop(0)
 
-    for l in ls:
-        if len(l) >= 2 and l[0] == "-" and l[1] != "-":
-            if len(l) > 2:
-                for c in list(l[1:]):
+    for line in ls:
+        if len(line) >= 2 and line[0] == "-" and line[1] != "-":
+            if len(line) > 2:
+                for c in list(line[1:]):
                     ls.append("-" + c)
 
                 continue
 
         for s in synonyms:
-            if l in s:
+            if line in s:
                 choices = choices - set(s)
 
     endchoices = []
@@ -246,13 +246,12 @@ def complete_choices_filelist(synonyms, line, text, hostnames=None):
     return complete_choices(synonyms, line, text, hostnames)
 
 
-def timestamp():
+def timestamp() -> str:
     # remove fractional part
     return str(int(time.time()))
 
 
 class check_eq(object):
-
     """
     Usage: check_eq(x)(y)
     :return: y for y if (x == y) is True otherwise raises
@@ -282,7 +281,7 @@ def chdir(newpath):
     os.chdir(storedpath)
 
 
-def ensure_dir_exists(*path, **kwargs):
+def ensure_dir_exists(*path, **kwargs) -> Path:
     """
     :returns: str joined path with dirs created as needed.
     :type path: [str] to join
@@ -293,21 +292,21 @@ def ensure_dir_exists(*path, **kwargs):
     :param on_create: Callable operation on created dir
     """
 
-    on_create = kwargs.get("on_create", None)
-    filepath = kwargs.get("filepath", False)
+    on_create: None | Callable = kwargs.get("on_create", None)
+    filepath: bool = kwargs.get("filepath", False)
 
-    path = Path().joinpath(*path)
-    dirn = path.parent if filepath else path
+    pt = Path().joinpath(*path)
+    dirn = pt.parent if filepath else pt
 
     os.makedirs(dirn, exist_ok=True)
 
-    if isinstance(on_create, Callable):
+    if on_create:
         on_create(path=dirn)
 
-    return path
+    return pt
 
 
-def atomic_write_file(data, path):
+def atomic_write_file(data, path) -> None:
     if isinstance(data, bytes):
         data = data.decode("utf-8")
     fd, fname = mkstemp(dir=dirname(path))

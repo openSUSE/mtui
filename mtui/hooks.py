@@ -1,5 +1,6 @@
-import collections
 import subprocess
+from abc import ABCMeta, abstractmethod
+from collections.abc import Callable
 from logging import getLogger
 from traceback import format_exc
 
@@ -8,8 +9,7 @@ from mtui import messages
 log = getLogger("mtui.script")
 
 
-class Script:
-
+class Script(metaclass=ABCMeta):
     """
     :type subdir: Path
     :param subdir: subdirectory in the L{TestReport.scripts_wd} where the
@@ -21,7 +21,9 @@ class Script:
     FIXME: should be an abstract attribute
     """
 
-    def __init__(self, tr, path):
+    subdir: str = ""
+
+    def __init__(self, tr, path) -> None:
         """
         :type path: str
         :param path: absolute path to the script
@@ -31,12 +33,12 @@ class Script:
         self.bname = path.stem
         self.testreport = tr
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "<{0}.{1} {2} for {3}>".format(
             self.__module__, self.__class__.__name__, self.path, repr(self.testreport)
         )
 
-    def __str__(self):
+    def __str__(self) -> str:
         return "{0} script {1}".format(self.subdir, self.name)
 
     def _result(self, cls, bname, t):
@@ -44,11 +46,14 @@ class Script:
             *cls.result_parts(bname, t.hostname), filepath=True
         )
 
+    @abstractmethod
+    def _run(self, targets) -> None: ...
+
     @classmethod
     def result_parts(cls, *basename):
         return ("output/scripts", ".".join((cls.subdir,) + basename))
 
-    def run(self, targets):
+    def run(self, targets) -> None:
         """
         :type targets: [{HostsGroup}]
         """
@@ -112,7 +117,7 @@ class CompareScript(Script):
         argv = [str(x) for x in argv]
 
         log.debug("running {0}".format(argv))
-        stdout = stderr = None
+
         try:
             ret = subprocess.run(
                 argv,
@@ -135,8 +140,6 @@ class CompareScript(Script):
         else:
             logger, msg = log.warning, messages.CompareScriptFailed
 
-        assert isinstance(
-            logger, collections.abc.Callable
-        ), "{0!r} not callable".format(logger)
+        assert isinstance(logger, Callable), "{0!r} not callable".format(logger)
 
         logger(msg(argv, ret.stdout, ret.stderr, ret.returncode))

@@ -13,7 +13,6 @@ class TargetLockedError(Exception):
 
 
 class RemoteLock:
-
     """
     Localy represent the state of remote lock
     """
@@ -98,7 +97,6 @@ class LockedTargets:
 
 
 class TargetLock:
-
     """
     This class is not supposted to be used directly but via
     L{Target} methods

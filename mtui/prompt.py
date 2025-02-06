@@ -23,7 +23,6 @@ class QuitLoop(RuntimeError):
 
 
 class CmdQueue(list):
-
     """
     Prerun support.
 

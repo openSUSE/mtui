@@ -1,6 +1,6 @@
-from collections import namedtuple
 from logging import getLogger
 from os.path import join
+from typing import Self
 
 from ...types.urls import URLs
 from .base import OpenQA
@@ -28,11 +28,11 @@ class AutoOpenQA(OpenQA):
             if y["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
         )
 
-    def _pretty_print(self, jobs):
+    def _pretty_print(self, jobs) -> list[str]:
         if not jobs:
             logger.debug("No job - no results")
             return []
-        ret = []
+        ret: list[str] = []
         ret.append("Results from openQA incidents jobs:\n")
         ret.append("===================================\n")
         ret.append("\n")
@@ -73,7 +73,7 @@ class AutoOpenQA(OpenQA):
             if job["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
         ]
 
-    def run(self):
+    def run(self) -> Self:
         jobs = self._get_jobs()
         if self._has_passed_install_jobs(jobs):
             self.results = self._get_logs_url(jobs)
@@ -83,5 +83,5 @@ class AutoOpenQA(OpenQA):
 
         return self
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.pp) or bool(self.results)
