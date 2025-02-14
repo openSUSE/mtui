@@ -443,13 +443,5 @@ class Target:
     def report_log(self, sink, arg):
         return sink(self.hostname, self.out, arg)
 
-    def report_testsuites(self, sink, suitedir):
-        return sink(self.hostname, self.system, self.listdir(suitedir))
-
-    def report_testsuite_results(self, sink, suitename):
-        return sink(
-            self.hostname, self.lastexit(), self.lastout(), self.lasterr(), suitename
-        )
-
     def report_products(self, sink):
         return sink(self.hostname, self.system)
