@@ -124,14 +124,6 @@ class HostsGroup(UserDict):
         for hn in sorted(self.data.keys()):
             self.data[hn].report_log(sink, arg)
 
-    def report_testsuites(self, sink, arg):
-        for hn in sorted(self.data.keys()):
-            self.data[hn].report_testsuites(sink, arg)
-
-    def report_testsuite_results(self, sink, arg):
-        for hn in sorted(self.data.keys()):
-            self.data[hn].report_testsuite_results(sink, arg)
-
     def report_products(self, sink):
         for hn in sorted(self.data.keys()):
             self.data[hn].report_products(sink)

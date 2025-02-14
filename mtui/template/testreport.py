@@ -499,11 +499,6 @@ class TestReport(metaclass=ABCMeta):
         """
         return self.report_wd().joinpath(*["scripts"] + list(paths))
 
-    def get_testsuite_comment(self, testsuite, date):
-        return "testing {!s} on {!s} on {!s}".format(
-            testsuite, "{!s} {!s}".format(self._type, self.id), date
-        )
-
     def __repr__(self):
         return "<{0}.{1} {2}>".format(self.__module__, self.__class__.__name__, self.id)
 

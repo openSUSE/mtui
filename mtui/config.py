@@ -123,12 +123,6 @@ class Config:
             ),
             ("target_tempdir", ("target", "tempdir"), Path("/tmp"), Path),
             (
-                "target_testsuitedir",
-                ("target", "testsuitedir"),
-                Path("/usr/share/qa/tools"),
-                Path,
-            ),
-            (
                 "chdir_to_template_dir",
                 ("mtui", "chdir_to_template_dir"),
                 False,

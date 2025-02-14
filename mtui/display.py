@@ -153,14 +153,3 @@ class CommandPromptDisplay:
             sink("stderr:")
             for line in stderr.split("\n"):
                 sink(line)
-
-    def testsuite_list(self, hostname, system, suites):
-        self.println(f"testsuites on {hostname} ({system}):")
-        self.println("\n".join(i for i in sorted(suites) if i.endswith("-run")))
-        self.println()
-
-    def testsuite_run(self, hostname, exit, stdout, stderr, suitename):
-        self.println(f"{hostname}:~> {suitename} - testsuite [{exit}]")
-        self.println(stdout)
-        if stderr:
-            self.println(stderr)
