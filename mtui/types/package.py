@@ -1,6 +1,3 @@
-from typing import Optional
-
-
 class Package:
     __slots__ = [
         "name",
@@ -10,41 +7,41 @@ class Package:
         "_current",
     ]
 
-    def __init__(self, name):
+    def __init__(self, name: str) -> None:
         self.name = name
-        self._before = None
-        self._after = None
-        self._required = None
-        self._current = None
+        self._before: str | None = None
+        self._after: str | None = None
+        self._required: str | None = None
+        self._current: str | None = None
 
     @property
-    def before(self) -> Optional[str]:
+    def before(self) -> str | None:
         return self._before
 
     @before.setter
-    def before(self, ver: Optional[str]) -> None:
+    def before(self, ver: str | None) -> None:
         self._before = ver
 
     @property
-    def after(self) -> Optional[str]:
+    def after(self) -> str | None:
         return self._after
 
     @after.setter
-    def after(self, ver: Optional[str]) -> None:
+    def after(self, ver: str | None) -> None:
         self._after = ver
 
     @property
-    def required(self) -> Optional[str]:
+    def required(self) -> str | None:
         return self._required
 
     @required.setter
-    def required(self, ver: Optional[str]) -> None:
+    def required(self, ver: str | None) -> None:
         self._required = ver
 
     @property
-    def current(self) -> Optional[str]:
+    def current(self) -> str | None:
         return self._current
 
     @current.setter
-    def current(self, ver: Optional[str]) -> None:
+    def current(self, ver: str | None) -> None:
         self._current = ver

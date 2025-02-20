@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
 from logging import getLogger
+from pathlib import Path
 
 from mtui.systemcheck import system_info
 from mtui.utils import prompt_user, timestamp
+
+from ..types import FileList
 
 logger = getLogger("mtui.export.base")
 
@@ -11,17 +14,16 @@ class BaseExport(ABC):
     """Base Export class, it modify 'template' in place (ugly sideeffect)
     and downloads/exports all helper logs"""
 
-    __slots__ = [
-        "config",
-        "xmllog",
-        "openqa",
-        "template",
-        "force",
-        "rrid",
-        "interactive",
-    ]
-
-    def __init__(self, config, openqa, template, force, rrid, interactive, **kwargs):
+    def __init__(
+        self,
+        config,
+        openqa,
+        template: FileList,
+        force: bool,
+        rrid,
+        interactive,
+        **kwargs,
+    ) -> None:
         """param: config = Config()
         param: xmllog = xml.minidom
         param: openqa = testreport.openqa
@@ -33,20 +35,20 @@ class BaseExport(ABC):
 
         self.config = config
         self.openqa = openqa
-        self.template = template[:]
+        self.template: FileList | list[str] = template[:]
         self.force = force
         self.rrid = rrid
         self.interactive = interactive
         for key in kwargs:
             self.__setattr__(key, kwargs[key])
 
-    def _writer(self, fn, data):
+    def _writer(self, fn: Path, data) -> None:
         to_write = "\n".join(data)
         if fn.exists() and not self.force:
             if to_write == fn.read_text():
-                logger.info("Log %s exists and is same as export" % fn)
+                logger.info(f"Log {fn} exists and is same as export")  # noqa
                 return
-            logger.warning("file %s exists." % fn)
+            logger.warning(f"file {fn} exists.")  # noqa
             if not prompt_user(
                 f"Should I overwrite {fn} (y/N) ",
                 ["y", "Y", "yes", "Yes", "YES"],
@@ -54,15 +56,15 @@ class BaseExport(ABC):
             ):
                 fn = fn.with_suffix("." + timestamp())
 
-        logger.info("exporting log to %s" % fn)
+        logger.info("exporting log to %s", fn)
 
         try:
             with fn.open(mode="w", encoding="utf-8") as f:
                 f.write(to_write)
         except IOError as e:
-            logger.error("Failed to write {}: {}".format(fn, e.strerror))
+            logger.error("Failed to write %s: %s", fn, e.strerror)
 
-    def installlogs_lines(self, filenames):
+    def installlogs_lines(self, filenames) -> None:
         o = 0
         for line in self.template:
             if "HAS_UNTRACKED" in line:
@@ -90,7 +92,7 @@ class BaseExport(ABC):
         if add_empty_line:
             self.template.insert(index + 1, "\n")
 
-    def dedup_lines(self):
+    def dedup_lines(self) -> None:
         """simple deduplication, start it as last"""
         pr_line = None
         lines = []
@@ -103,7 +105,7 @@ class BaseExport(ABC):
 
         self.template = lines
 
-    def add_sysinfo(self):
+    def add_sysinfo(self) -> None:
         system_information = system_info(
             self.config.distro,
             self.config.distro_ver,
@@ -114,14 +116,14 @@ class BaseExport(ABC):
             self.template.append(system_information)
 
     @abstractmethod
-    def get_logs(self, *args, **kwds):
+    def get_logs(self, *args, **kwds) -> list[Path]:
         pass
 
     @abstractmethod
-    def run(self, *args, **kwds):
+    def run(self, *args, **kwds) -> FileList | list[str]:
         pass
 
-    def inject_openqa(self):
+    def inject_openqa(self) -> None:
         if not self.openqa["auto"]:
             return
 
@@ -159,7 +161,7 @@ class BaseExport(ABC):
         self.template.insert(index + 1, "End of openQA Incidents results\n")
         self.template.insert(index + 2, "\n")
 
-    def install_results(self):
+    def install_results(self) -> None:
         index = self.template.index("Test results by product-arch:\n", 0)
         self.template.insert(
             index + 3,

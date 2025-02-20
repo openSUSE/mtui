@@ -15,7 +15,7 @@ class ReloadOpenQA(Command):
     command = "reload_openqa"
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         if self.config.kernel:
             if self.metadata.openqa["kernel"] == []:
                 logger.info("Getting data from kernel openQA")
@@ -27,7 +27,7 @@ class ReloadOpenQA(Command):
                         self.metadata.id,
                     ).run()
                 )
-                self.metadata.openqa["kernel"].append(
+                self.metadata.openqa["baremetal"].append(
                     KernelOpenQA(
                         self.config,
                         self.config.openqa_instance_baremetal,

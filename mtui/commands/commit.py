@@ -1,6 +1,6 @@
-import subprocess
 from argparse import REMAINDER
 from logging import getLogger
+import subprocess
 from traceback import format_exc
 
 from mtui.commands import Command
@@ -24,7 +24,7 @@ class Commit(Command):
         )
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         checkout = self.metadata.report_wd()
 
         msg = []
@@ -56,5 +56,5 @@ class Commit(Command):
             logger.debug(format_exc())
 
     @staticmethod
-    def complete(_, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx):
         return complete_choices([("-m", "--msg")], line, text)

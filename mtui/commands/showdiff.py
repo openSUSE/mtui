@@ -16,12 +16,13 @@ class ShowDiff(Command):
     command = "show_diff"
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         diff = self.metadata.report_wd() / "source.diff"
         text = diff.read_text().split("\n")
         page(text, self.prompt.interactive)
 
 
+# TODO: this command needs some love, in current state is too brittle
 class AnalyzeDiff(Command):
     """
     Check source diff for patches
@@ -30,7 +31,7 @@ class AnalyzeDiff(Command):
     command = "analyze_diff"
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         patchdef = re.compile(r"[+-]Patch(\d*):\s+(.*\.patch)$", flags=re.M)
         patchapply = re.compile(r"[+-]%patch(\d+|)\s+(?:-p\d*|)", flags=re.M)
 
@@ -63,7 +64,7 @@ class AnalyzeDiff(Command):
         for patch in (x[1] for x in spec_patches):
             match = re.search(patch, changes)
             if not match:
-                logger.warning("Patch %s isn't mentioned in any changelog" % patch)
+                logger.warning("Patch %s isn't mentioned in any changelog", patch)
             else:
                 changes_patches.append(patch)
 

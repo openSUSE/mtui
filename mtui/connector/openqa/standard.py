@@ -11,11 +11,11 @@ logger = getLogger("mtui.connector.openqa.standard")
 class AutoOpenQA(OpenQA):
     kind = "auto"
 
-    def _has_passed_install_jobs(self, jobs):
+    def _has_passed_install_jobs(self, jobs) -> bool:
         if jobs is None:
             return False
 
-        def normalize(x):
+        def normalize(x: str) -> bool:
             if x == "passed" or x == "softfailed":
                 return True
             return False
@@ -28,7 +28,8 @@ class AutoOpenQA(OpenQA):
             if y["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
         )
 
-    def _pretty_print(self, jobs) -> list[str]:
+    def _pretty_print(self, *args) -> list[str]:
+        jobs = args[1]
         if not jobs:
             logger.debug("No job - no results")
             return []
@@ -53,7 +54,7 @@ class AutoOpenQA(OpenQA):
 
         return ret
 
-    def _get_logs_url(self, jobs):
+    def _get_logs_url(self, jobs) -> list[URLs] | None:
         if not jobs:
             return None
         return [

@@ -5,10 +5,10 @@ from mtui.export.base import BaseExport
 
 class FakeExport(BaseExport):
     def get_logs(self, *args, **kwds):
-        return None
+        return []
 
     def run(self, *args, **kwds):
-        return None
+        return []
 
 
 def test_duplicate_found(caplog, log_install) -> None:

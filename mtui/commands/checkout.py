@@ -16,7 +16,7 @@ class Checkout(Command):
     command = "checkout"
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         try:
             check_call("svn up".split(), cwd=self.metadata.report_wd())
         except Exception:

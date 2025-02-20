@@ -1,6 +1,7 @@
 from argparse import REMAINDER
 from logging import getLogger
 
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.messages import NoRefhostsDefinedError
 from mtui.target.locks import LockedTargets, TargetLockedError
@@ -23,18 +24,18 @@ class Run(Command):
     command = "run"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "command", nargs=REMAINDER, help="Command to run on refhost"
         )
         cls._add_hosts_arg(parser)
 
-    def __call__(self):
+    def __call__(self) -> None:
         targets = self.parse_hosts()
         if not targets:
             raise NoRefhostsDefinedError
 
-        command = ""
+        command: str = ""
 
         for i in self.args.command:
             command += i + " "
@@ -63,14 +64,14 @@ class Run(Command):
                             output.append(line)
 
         except TargetLockedError as e:
-            logger.error("Target {}".format(e))
+            logger.error("Target %s", e)
             return
 
         page(output, self.prompt.interactive)
         logger.info("done")
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()
         )

@@ -1,29 +1,34 @@
 from pathlib import Path
+from typing import Any
 
-from mtui.template.testreport import TestReport
+from ..types import Product
+from .testreport import TestReport
 
 
 class NullTestReport(TestReport):
     @property
-    def _type(self):
+    def _type(self) -> str:
         return "No"
 
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
-        self.id = None
         self.path = Path.cwd() / "None"
 
-    def __bool__(tr):
+    @property
+    def id(self) -> str:
+        return ""
+
+    def __bool__(self) -> bool:
         return False
 
-    def target_wd(self, *paths):
-        return self.config.target_tempdir.joinpath(*paths)
+    def target_wd(self, *paths) -> Path:
+        return self.config.target_tempdir.joinpath(*paths)  # type: ignore
 
-    def _get_updater_id(tr):
-        return None
+    def _get_updater_id(self) -> str:
+        return ""
 
-    def _parser(tr):
-        return None
+    def _parser(self) -> dict[str, Any]:
+        return {}
 
-    def _update_repos_parser(tr):
+    def _update_repos_parser(self) -> dict[Product, str]:
         return {}

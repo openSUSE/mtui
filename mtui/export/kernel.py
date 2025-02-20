@@ -1,6 +1,8 @@
 from datetime import datetime
 from logging import getLogger
+from pathlib import Path
 
+from mtui.types import FileList
 from mtui.utils import ensure_dir_exists
 
 from .base import BaseExport
@@ -12,7 +14,7 @@ logger = getLogger("mtui.export.kernel")
 class KernelExport(BaseExport):
     """Exporter for kernel jobs"""
 
-    def get_logs(self, *args, **kwds):
+    def get_logs(self, *args, **kwds) -> list[Path]:
         in_path = self.config.template_dir / str(self.rrid) / self.config.install_logs
         res_path = self.config.template_dir / str(self.rrid) / "results"
         ensure_dir_exists(res_path)
@@ -20,9 +22,9 @@ class KernelExport(BaseExport):
         # TODO: configurable errormode
         download_logs(oqa, res_path, in_path, "tolerant")
 
-        return (fn.name for fn in in_path.glob("*.log"))
+        return [fn.name for fn in in_path.glob("*.log")]
 
-    def kernel_results(self):
+    def kernel_results(self) -> None:
         line = self.template.index("regression tests:\n")
         try:
             line = self.template.index("(put your details here)\n", line)
@@ -57,7 +59,7 @@ class KernelExport(BaseExport):
         line = self.template.index("build log review:\n")
         self.template.insert(line, "\n")
 
-    def run(self, *args, **kwds):
+    def run(self, *args, **kwds) -> FileList | list[str]:
         self.install_results()
         self.inject_openqa()
         self.kernel_results()

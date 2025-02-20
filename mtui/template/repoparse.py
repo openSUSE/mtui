@@ -1,12 +1,13 @@
+from pathlib import Path
 import xml.etree.ElementTree as ET
-from mtui.types import Product
 
-from mtui.template.products import normalize
+from ..types import Product
+from .products import normalize
 
 
-def _read_project(path):
-    with path.joinpath("project.xml").open(mode="r") as f:
-        return ET.fromstringlist(f)
+def _read_project(path: Path) -> ET.Element:
+    xml = path.joinpath("project.xml").read_text()
+    return ET.fromstringlist(xml)
 
 
 def _xmlparse(xml):
@@ -17,6 +18,6 @@ def _xmlparse(xml):
     )
 
 
-def repoparse(path):
+def repoparse(path: Path) -> dict[Product, str]:
     project = _xmlparse(_read_project(path))
     return {Product(x[0], x[1], x[2]): y for x, y in map(normalize, project)}

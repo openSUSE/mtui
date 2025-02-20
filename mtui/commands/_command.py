@@ -1,23 +1,24 @@
-from abc import ABCMeta, abstractmethod
-from argparse import RawDescriptionHelpFormatter
+from abc import ABC, abstractmethod
+from argparse import Namespace, RawDescriptionHelpFormatter
 from logging import getLogger
 
-from mtui.messages import HostIsNotConnectedError
-
 from ..argparse import ArgumentParser
+from ..messages import HostIsNotConnectedError
+from ..target.hostgroup import HostsGroup
 
 logger = getLogger("mtui.commands.command")
 
 
-class Command(metaclass=ABCMeta):
+class Command(ABC):
+    command: str
+
     __slots__ = [
-        "hosts",
         "args",
-        "sys",
         "config",
-        "prompt",
-        "metadata",
         "display",
+        "metadata",
+        "prompt",
+        "sys",
         "targets",
     ]
     _check_subparser: str = ""
@@ -31,46 +32,39 @@ class Command(metaclass=ABCMeta):
         error message.
     """
 
-    def __init__(self, args, hosts, config, sys, prompt):
-        """
-        :type args: str
+    def __init__(self, args, config, sys, prompt) -> None:
+        """:type args: str
         :param args: arguments remaidner for the command
 
         :type hosts: L{mtui.target.HostGroup}
         :param hosts: enabled hosts
         """
-        self.hosts = hosts
+
         self.args = args
         self.sys = sys
         self.config = config
         self.prompt = prompt
         self.metadata = prompt.metadata
         self.display = prompt.display
-        self.targets = prompt.targets
+        self.targets: HostsGroup = prompt.targets
 
     @classmethod
-    def parse_args(cls, args, sys):
-        args = [] if args == "" else args.split()
+    def parse_args(cls, args: str, sys) -> Namespace:
+        arg = [] if args == "" else args.split()
         p = cls.argparser(sys)
-        pa = p.parse_args(args)
+        pa = p.parse_args(arg)
 
         if cls._check_subparser and not hasattr(pa, cls._check_subparser):
             p.error("too few arguments")
 
         return pa
 
+    # in reality abstract method which implemenatation is optional
     @classmethod
-    def _add_arguments(cls, parser) -> None:
-        """
-        :returns: None
-        """
-        pass
+    def _add_arguments(cls, parser: ArgumentParser) -> None: ...
 
     @classmethod
-    def argparser(cls, sys):
-        """
-        :returns: L{ArgumentParser}
-        """
+    def argparser(cls, sys) -> ArgumentParser:
         p = ArgumentParser(
             sys_=sys,
             prog=cls.command,
@@ -82,27 +76,26 @@ class Command(metaclass=ABCMeta):
         return p
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
-        """
-        :type state: dict(prompt instance states)
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """:type state: dict(prompt instance states)
         :returns: callable suitable for tab completion
         """
-        return lambda text, line, begidx, endidx: []
+
+        return []
 
     @abstractmethod
-    def __call__(self):
-        pass
+    def __call__(self) -> None: ...
 
-    def println(self, xs=""):
-        """
-        `print` replacement method for the outputs to be testable by
+    def println(self, xs: str = "") -> None:
+        """`print` replacement method for the outputs to be testable by
         injecting `StringIO`
         """
+
         self.sys.stdout.write(xs + "\n")
         self.sys.stdout.flush()
 
     @classmethod
-    def _add_hosts_arg(cls, parser):
+    def _add_hosts_arg(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "-t",
             "--target",
@@ -113,28 +106,26 @@ class Command(metaclass=ABCMeta):
             + "If is ommited all hosts are used",
         )
 
-    def parse_hosts(self, enabled=True):
-        """
-        parses self.args.hosts
-        returns [str] with hosts, or connection error.
+    def parse_hosts(self, enabled: bool = True) -> HostsGroup:
+        """Parses self.args.hosts
+        returns HostsGroup with hosts, or connection error.
         Handles decaprated 'all' alias
 
         By default all selects only enabled hosts
 
         use in run(self) ... etc
         """
-
         try:
             if self.args.hosts:
-                targets = self.hosts.select(self.args.hosts)
+                targets = self.targets.select(self.args.hosts)
             else:
-                targets = self.hosts.select(enabled=enabled)
+                targets = self.targets.select(enabled=enabled)
         except HostIsNotConnectedError as e:
             if e.host == "all":
                 logger.error(e)
                 logger.info("Using all hosts. Warning option 'all' is decaprated")
 
-                targets = self.hosts.select(enabled=enabled)
+                targets = self.targets.select(enabled=enabled)
 
             else:
                 raise

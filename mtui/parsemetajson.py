@@ -3,7 +3,7 @@ from .types.obs import RequestReviewID
 
 class JSONParser:
     @staticmethod
-    def parse(results, data):
+    def parse(results, data) -> None:
         for i in data.get("jira"):
             results.jira[i] = "Description not available"
 

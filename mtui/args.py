@@ -8,7 +8,7 @@ from .types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 from .utils import SUTParse
 
 
-def get_parser(sys):
+def get_parser(sys) -> ArgumentParser:
     parser = ArgumentParser(sys_=sys)
     parser.add_argument(
         "-l", "--location", type=str, help="override config mtui.location"

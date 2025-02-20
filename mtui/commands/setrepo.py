@@ -1,3 +1,4 @@
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.target.locks import LockedTargets
 from mtui.utils import complete_choices, requires_update
@@ -11,7 +12,7 @@ class SetRepo(Command):
     command = "set_repo"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument(
             "-A",
@@ -34,7 +35,7 @@ class SetRepo(Command):
         cls._add_hosts_arg(parser)
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         operation = self.args.operation
         hosts = self.parse_hosts()
 
@@ -43,7 +44,7 @@ class SetRepo(Command):
                 t.set_repo(operation, self.metadata)
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices(
             [("-t", "--target"), ("-A", "--add", "-R", "--remove")],
             line,

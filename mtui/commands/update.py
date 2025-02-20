@@ -1,6 +1,7 @@
 from logging import getLogger
 from traceback import format_exc
 
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.messages import NoRefhostsDefinedError
 from mtui.target.locks import TargetLockedError
@@ -22,7 +23,7 @@ class Update(Command):
     command = "update"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "--newpackage",
             action="store_const",
@@ -45,14 +46,14 @@ class Update(Command):
         cls._add_hosts_arg(parser)
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         logger.info("Updating")
 
         targets = self.parse_hosts()
         if not targets:
             raise NoRefhostsDefinedError
 
-        params = []
+        params: list[str] = []
         params.append(self.args.newpackage)
         params.append(self.args.noprepare)
         params.append(self.args.noscript)
@@ -81,7 +82,7 @@ class Update(Command):
         logger.info("done")
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices(
             [("-t", "--target"), ("--noprepare",), ("--newpackage",), ("--noscript",)],
             line,

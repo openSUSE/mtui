@@ -1,3 +1,4 @@
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.utils import complete_choices
 
@@ -10,7 +11,7 @@ class HostsUnlock(Command):
     command = "unlock"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "-f",
             "--force",
@@ -19,14 +20,13 @@ class HostsUnlock(Command):
         )
 
         cls._add_hosts_arg(parser)
-        return parser
 
-    def __call__(self):
+    def __call__(self) -> None:
         hosts = self.parse_hosts()
         hosts.unlock(force=self.args.force)
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices(
             [("-f", "--force"), ("-t", "--target")], line, text, state["hosts"].names()
         )

@@ -1,29 +1,32 @@
-from abc import ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
 from logging import getLogger
-from typing import Self
+from typing import ClassVar, Self
 
 from openqa_client.client import OpenQA_Client as oqa
-import openqa_client.exceptions  # type: ignore
+import openqa_client.exceptions
+
+from .. import SMELT
+from ...types import RequestReviewID, Test, URLs
 
 logger = getLogger("mtui.connector.openqa")
 
 
-class OpenQA(metaclass=ABCMeta):
-    kind = "base"
+class OpenQA(ABC):
+    kind: ClassVar[str] = "base"
 
-    def __init__(self, config, host, smelt, rrid):
+    def __init__(self, config, host, smelt: SMELT, rrid: RequestReviewID) -> None:
         logger.debug("init openQA client")
         self.host = host
         self.config = config
         self.smelt = smelt
-        self.params = {}
+        self.params: dict[str, str | int] = {}
         self.params["distri"] = config.openqa_install_distri
         self.params["scope"] = "relevant"
         self.params["latest"] = 1
         self.params["build"] = f":{rrid.maintenance_id}:{smelt.get_incident_name()}"
         self.client = oqa(host)
-        self.pp = []
-        self.results = None
+        self.pp: list[str] = []
+        self.results: list[URLs] | list[Test] | None = None
 
     def _get_jobs(self):
         logger.debug(f"Get data from openQA - {self.host}")

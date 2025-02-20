@@ -1,4 +1,5 @@
-from abc import ABCMeta, abstractmethod
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 import concurrent.futures
 from errno import EEXIST, ENOENT
 import glob
@@ -11,22 +12,27 @@ import re
 import shutil
 import stat
 from traceback import format_exc
-from typing import Any, Dict, List, Optional
+from typing import Any, Literal
 from urllib.request import urlopen
 
 from .. import updater
+from ..config import Config
+from ..connector import SMELT
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
 from ..target import Target
 from ..target.actions import UpdateError
 from ..target.hostgroup import HostsGroup
-from ..template import TestReportAlreadyLoaded, _TemplateIOError
-from ..types.targetmeta import TargetMeta
+from ..template import TemplateIOError, TestReportAlreadyLoaded
+from ..types import Product, TargetMeta
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
 
 
-class TestReport(metaclass=ABCMeta):
+re_ver = re.compile(r"(\S+)\s+(\S+)")
+
+
+class TestReport(ABC):
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read
@@ -36,30 +42,32 @@ class TestReport(metaclass=ABCMeta):
 
     @property
     @abstractmethod
-    def _type(self):
+    def _type(self) -> str:
         """
         :return: str Short human readable description of the TestReport
             type.
         """
+        ...
 
-    def __init__(self, config, scripts_src_dir=None):
+    def __init__(self, config: Config, scripts_src_dir: Path | None = None) -> None:
+        self.smelt: SMELT
         self.config = config
 
-        self._scripts_src_dir = (
-            scripts_src_dir if scripts_src_dir else config.datadir.joinpath("scripts")
+        self._scripts_src_dir: Path = (
+            scripts_src_dir if scripts_src_dir else config.datadir.joinpath("scripts")  # type: ignore
         )
 
-        self.directory = config.template_dir
+        self.directory: Path = config.template_dir
 
         # Note: the default values here are unchanged from the previous
         # class Metadata for backward compaibility purposes, so we don't
         # have to modify every user of this class at the same time as
         # refactoring the internals.
-        self.path: Optional[Path] = None
+        self.path: Path | None = None
         """
         :param path: path to the testreport file if loaded, otherwise None
         """
-        self.systems = {}
+        self.systems: dict[str, str] = {}
         """
         :type systems: dict str -> str
         :param systems: hostname -> system
@@ -69,16 +77,16 @@ class TestReport(metaclass=ABCMeta):
         :type  targets: dict(hostname = L{Target})
             where hostname = str
         """
-        self.update_repos = {}
+        self.update_repos: dict[Product, str] = {}
         """
         :type update_repos dict(Product = repository)
            where Product = namedtuple
                  repository = str
         """
-        self.hostnames = set()
-        self.bugs = {}
-        self.jira = {}
-        self.testplatforms = []
+        self.hostnames: set[str] = set()
+        self.bugs: dict[str, str] = {}
+        self.jira: dict[str, str] = {}
+        self.testplatforms: list[str] = []
         self.products = []
         self.category = ""
         self.packager = ""
@@ -101,15 +109,19 @@ class TestReport(metaclass=ABCMeta):
             parsing the template
         """
 
-        self.openqa = {"auto": None, "kernel": []}
+        self.openqa: dict[str, Any] = {"auto": None, "kernel": []}
 
-    def _open_and_parse(self, path):
+    @property
+    @abstractmethod
+    def id(self) -> str: ...
+
+    def _open_and_parse(self, path: Path) -> None:
         metadata = path.parent / "metadata.json"
         try:
             tpl = path.read_text(errors="replace")
         except FileNotFoundError as e:
             args = list(e.args) + [e.filename]
-            e_new = _TemplateIOError(*args)
+            e_new = TemplateIOError(*args)
             e_new.__cause__ = e  # PEP 3134
             raise e_new
 
@@ -126,17 +138,17 @@ class TestReport(metaclass=ABCMeta):
         else:
             self._parse(tpl)
 
-    def read(self, path):
+    def read(self, path: Path) -> None:
         self._open_and_parse(path)
         self.path = path.resolve()
         self._update_repos_parse()
-        if self.config.chdir_to_template_dir:
+        if self.config.chdir_to_template_dir:  # type: ignore
             os.chdir(path.parent)
 
         self.copy_scripts()
 
     @abstractmethod
-    def _parser(self) -> Dict[str, Any]:
+    def _parser(self) -> dict[str, Any]:
         """
         :returns: L{MetadataParser}
         """
@@ -173,12 +185,12 @@ class TestReport(metaclass=ABCMeta):
 
         self._warn_missing_fields()
 
-    def _warn_missing_fields(self):
+    def _warn_missing_fields(self) -> None:
         missing = {x for x in self._attrs if not getattr(self, x)}
 
         if missing:
-            msg = "TestReport: missing fields: {0}"
-            logger.warning(msg.format(missing))
+            msg = "TestReport: missing fields: {}".format(missing)
+            logger.warning(msg)
 
     def get_package_list(self):
         ret = []
@@ -198,7 +210,7 @@ class TestReport(metaclass=ABCMeta):
         return registry[self._get_updater_id()]
 
     @abstractmethod
-    def _get_updater_id(self):
+    def _get_updater_id(self) -> str:
         """
         :return: str Identifier of adaptee to use from `mtui.updater`
         """
@@ -218,7 +230,7 @@ class TestReport(metaclass=ABCMeta):
     def get_downgrader(self):
         return self._get_doer(updater.Downgrader)
 
-    def list_update_commands(self, targets, display):
+    def list_update_commands(self, targets: HostsGroup, display) -> None:
         """
         :type  targets: dict(hostname = L{Target})
             where hostname = str
@@ -228,21 +240,20 @@ class TestReport(metaclass=ABCMeta):
             updater = self.get_updater()
         except IndexError:
             logger.warning("No refhosts connected")
-            return
         else:
             display("\n".join(updater(targets, self).commands))
             del updater
 
-    def perform_get(self, targets, remote):
-        local = self.report_wd("downloads", os.path.basename(remote), filepath=True)
+    def perform_get(self, targets: HostsGroup, remote: Path):
+        local = self.report_wd("downloads", remote.name, filepath=True)
 
-        targets.get(remote, local)
+        targets.sftp_get(remote, local)
 
-    def perform_prepare(self, targets, **kw):
+    def perform_prepare(self, targets: HostsGroup, **kw) -> None:
         preparer = self.get_preparer()
         preparer(targets, self.get_package_list(), self, **kw).run()
 
-    def perform_update(self, targets, params):
+    def perform_update(self, targets: HostsGroup, params: list[str]) -> None:
         """
         :type  targets: dict(hostname = L{Target})
             where hostname = str
@@ -266,17 +277,17 @@ class TestReport(metaclass=ABCMeta):
         downgrader = self.get_downgrader()
         downgrader(targets, self.get_package_list(), self).run()
 
-    def perform_install(self, targets, packages):
+    def perform_install(self, targets: HostsGroup, packages) -> None:
         targets.add_history(["install", packages])
 
         installer = self.get_installer()
         installer(targets, packages).run()
 
-    def perform_uninstall(self, targets, packages):
+    def perform_uninstall(self, targets: HostsGroup, packages) -> None:
         uninstaller = self.get_uninstaller()
         uninstaller(targets, packages).run()
 
-    def copy_scripts(self):
+    def copy_scripts(self) -> None:
         if not self.path:
             raise RuntimeError("Called while missing path")
 
@@ -290,7 +301,7 @@ class TestReport(metaclass=ABCMeta):
         self._copy_scripts(src, dst, ignore)
         self._ensure_executable("{0}/*/compare_*".format(dst))
 
-    def _copy_scripts(self, src, dst, ignore):
+    def _copy_scripts(self, src: Path, dst: Path, ignore: Callable) -> None:
         try:
             logger.debug("Copying scripts: {0} -> {1}".format(src, dst))
             shutil.copytree(src, dst, ignore=ignore)
@@ -311,7 +322,7 @@ class TestReport(metaclass=ABCMeta):
                 raise
 
     @staticmethod
-    def _ensure_executable(pattern):
+    def _ensure_executable(pattern) -> None:
         for i in glob.glob(pattern):
             # make sure the compare scripts (which run localy) are
             # executable
@@ -319,7 +330,9 @@ class TestReport(metaclass=ABCMeta):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
-    def connect_target(self, host):
+    def connect_target(
+        self, host
+    ) -> tuple[Target, str] | tuple[Literal[False], Literal[False]]:
         try:
             target = Target(
                 self.config,
@@ -330,21 +343,21 @@ class TestReport(metaclass=ABCMeta):
             target.connect()
             new_system = target.get_system()
         except KeyboardInterrupt:
-            logger.warning("Connection to {} canceled by user".format(host))
+            logger.warning("Connection to %s canceled by user", host)
             return False, False
         except Exception:
             logger.debug(format_exc())
-            msg = "failed to add host {0} to target list"
-            logger.warning(msg.format(host))
+            msg = f"failed to add host {host} to target list"
+            logger.warning(msg)
             return False, False
         else:
             return target, new_system
 
-    def connect_targets(self):
-        targets = {}
-        new_systems = {}
+    def connect_targets(self) -> None:
+        targets: dict[str, Target] = {}
+        new_systems: dict[str, str] = {}
         executor = concurrent.futures.ThreadPoolExecutor()
-        hosts = {host for host in self.hostnames if host not in self.targets}
+        hosts: set[str] = {host for host in self.hostnames if host not in self.targets}
 
         if hosts:
             logger.info("Adding %s" % hosts)
@@ -359,7 +372,8 @@ class TestReport(metaclass=ABCMeta):
             done, _ = concurrent.futures.wait(connections)
             for future in done:
                 host = connections[future]
-                targets[host], new_systems[host] = future.result()
+                # TODO: how to type annatate this or how to change it to be compactible with type hints?
+                targets[host], new_systems[host] = future.result()  # type: ignore
         except KeyboardInterrupt:
             for future in connections.keys():
                 future.cancel()
@@ -385,12 +399,10 @@ class TestReport(metaclass=ABCMeta):
             {host: target for host, target in targets.items() if target}
         )
 
-    def add_target(self, hostname) -> None:
+    def add_target(self, hostname: str) -> None:
         if hostname in self.targets:
             logger.warning(
-                "already connected to {0}. skipping.".format(
-                    self.targets[hostname].hostname
-                )
+                "already connected to %s, skipping.", self.targets[hostname].hostname
             )
             return
         try:
@@ -408,11 +420,11 @@ class TestReport(metaclass=ABCMeta):
             logger.warning("failed to add host {0} to target list".format(hostname))
             logger.debug(format_exc())
 
-    def refhosts_from_tp(self, testplatform):
+    def refhosts_from_tp(self, testplatform) -> None:
         try:
             refhosts = self.refhostsFactory(self.config)
         except RefhostsResolveFailed:
-            pass
+            return
 
         try:
             hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
@@ -429,7 +441,7 @@ class TestReport(metaclass=ABCMeta):
     def list_bugs(self, sink, arg):
         return sink(self.bugs, self.jira, arg)
 
-    def _show_yourself_data(self):
+    def _show_yourself_data(self) -> list[tuple[str, str]]:
         return (
             [
                 ("Category", self.category),
@@ -447,11 +459,11 @@ class TestReport(metaclass=ABCMeta):
             + [("Products", x) for x in self.products]
         )
 
-    def show_yourself(self, writer):
+    def show_yourself(self, writer) -> None:
         self._aligned_write(writer, self._show_yourself_data())
 
     @staticmethod
-    def _aligned_write(writer, data):
+    def _aligned_write(writer, data: Iterable[tuple[str, str]]) -> None:
         """
         :type data:  [(str, str)]
         :param data: (key, value)
@@ -459,19 +471,19 @@ class TestReport(metaclass=ABCMeta):
         for x in sorted(data):
             writer.write("{0:15}: {1}\n".format(*x))
 
-    def _testreport_url(self):
-        return "/".join([self.config.reports_url, str(self.id), "log"])
+    def _testreport_url(self) -> str:
+        return "/".join([self.config.reports_url, str(self.id), "log"])  # type: ignore
 
-    def _fancy_report_url(self):
-        return "/".join([self.config.fancy_reports_url, str(self.id), "log"])
+    def _fancy_report_url(self) -> str:
+        return "/".join([self.config.fancy_reports_url, str(self.id), "log"])  # type: ignore
 
-    def local_wd(self, *paths):
+    def local_wd(self, *paths) -> Path:
         """
         :return: str local working directory
         """
-        return self._wd(self.config.local_tempdir, str(self.id), *paths)
+        return self._wd(self.config.local_tempdir, str(self.id), *paths)  # type: ignore
 
-    def report_wd(self, *paths, **kw):
+    def report_wd(self, *paths, **kw) -> Path:
         """
         :return: str local working directory relative to the testreport
             checkout.
@@ -481,14 +493,14 @@ class TestReport(metaclass=ABCMeta):
         return self._wd(self.path.parent, *paths, **kw)
 
     @staticmethod
-    def _wd(*paths, **kwargs):
+    def _wd(*paths, **kwargs) -> Path:
         return ensure_dir_exists(*paths, **kwargs)
 
-    def target_wd(self, *paths):
+    def target_wd(self, *paths) -> Path:
         """
         :return: str remote working directory on SUT
         """
-        return self.config.target_tempdir.joinpath(str(self.id), *paths)
+        return self.config.target_tempdir.joinpath(str(self.id), *paths)  # type: ignore
 
     def scripts_wd(self, *paths):
         """
@@ -502,7 +514,7 @@ class TestReport(metaclass=ABCMeta):
     def __repr__(self):
         return "<{0}.{1} {2}>".format(self.__module__, self.__class__.__name__, self.id)
 
-    def run_scripts(self, s, targets):
+    def run_scripts(self, s, targets: HostsGroup) -> None:
         """
         :type s: L{Script} class
         """
@@ -516,14 +528,14 @@ class TestReport(metaclass=ABCMeta):
                     x = s(self, d / f)
                     x.run(targets)
 
-    def download_file(self, from_, into):
-        logger.info("Downloading {!s}".format(from_))
+    def download_file(self, from_, into) -> None:
+        logger.info("Downloading %s", from_)
         from contextlib import closing
 
         with open(into, "wb") as dst, closing(urlopen(from_)) as src:
             dst.writelines(src)
 
-    def list_versions(self, sink, targets, packages):
+    def list_versions(self, sink, targets: HostsGroup, packages):
         query = r"""
             for p in {!s}; do \
                 zypper -n search -s --match-exact -t package $p; \
@@ -551,11 +563,11 @@ class TestReport(metaclass=ABCMeta):
         for hn, t in list(targets.items()):
             by_host_pkg[hn] = {}
             for line in t.lastout().split("\n"):
-                match = re.search(r"(\S+)\s+(\S+)", line)
-                if not match:
+                if match := re.search(re_ver, line):
+                    pkg, ver = match.group(1), match.group(2)
+                    by_host_pkg[hn].setdefault(pkg, []).append(ver)
+                else:
                     continue
-                pkg, ver = match.group(1), match.group(2)
-                by_host_pkg[hn].setdefault(pkg, []).append(ver)
 
         # by_pkg_vers[package][(version, ...)] = [hostname, ...]
         by_pkg_vers = {}
@@ -571,7 +583,7 @@ class TestReport(metaclass=ABCMeta):
 
         return sink(targets, by_hosts_pkg)
 
-    def report_results(self, targetHosts=None) -> List[TargetMeta]:
+    def report_results(self, targetHosts=None) -> list[TargetMeta]:
         results = []
 
         if targetHosts is not None:
@@ -585,9 +597,9 @@ class TestReport(metaclass=ABCMeta):
         return results
 
     @abstractmethod
-    def _update_repos_parser(self):
+    def _update_repos_parser(self) -> dict[Product, str]:
         """Parse and store update repositories per product and arch"""
         pass
 
-    def _update_repos_parse(self):
+    def _update_repos_parse(self) -> None:
         self.update_repos = self._update_repos_parser()

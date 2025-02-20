@@ -1,25 +1,31 @@
-import re
 from logging import getLogger
+import re
+from typing import Any
 
 from ..types.rpmver import RPMVersion
-from .actions import ThreadedMethod, UpdateError, queue, spinner
+from .actions import UpdateError, queue, spinner
+from .basedoer import Doer
+from .hostgroup import HostsGroup
+
 
 logger = getLogger("mtui.target.downgrade")
 
+ver_re = re.compile(r"(.*) = (.*)")
 
-class Downgrade:
-    def __init__(self, targets, packages, testreport):
-        self.targets = targets
+
+class Downgrade(Doer):
+    def __init__(self, targets: HostsGroup, packages, testreport) -> None:
+        super().__init__(targets, testreport)
+
         self.packages = packages
-        self.testreport = testreport
+        self.commands: list[str] = []
+        self.commands_dict: dict = {}
+        self.install_command: str = ""
+        self.list_command: str = ""
+        self.pre_commands: list[str] = []
+        self.post_commands: list[str] = []
 
-        self.commands = {}
-        self.install_command = None
-        self.list_command = None
-        self.pre_commands = []
-        self.post_commands = []
-
-    def run(self):
+    def run(self) -> None:
         if hasattr(self, "kind") and self.kind == "transactional":
             self._run_transactional()
         else:
@@ -49,12 +55,12 @@ class Downgrade:
         finally:
             self.unlock_hosts()
 
-    def _run(self, kind=None):
+    def _run(self) -> None:
         versions = {}
         self.lock_hosts()
         try:
             for t in list(self.targets.values()):
-                queue.put([t.set_repo, ["remove", self.testreport]])
+                queue.put((t.set_repo, ["remove", self.testreport]))
 
             while queue.unfinished_tasks:
                 spinner()
@@ -64,20 +70,21 @@ class Downgrade:
             for t in list(self.targets.values()):
                 if t.lasterr():
                     logger.critical(
-                        "failed to downgrade host {!s}. stopping.\n# {!s}\n{!s}".format(
-                            t.hostname, t.lastin(), t.lasterr()
-                        )
+                        "failed to downgrade host %s. stopping.\n# %s\n%s",
+                        t.hostname,
+                        t.lastin(),
+                        t.lasterr(),
                     )
                     return
 
             self.targets.run(self.list_command)
 
-            for hn, t in list(self.targets.items()):
-                lines = t.lastout().split("\n")
-                release = {}
+            for hn, t in self.targets.items():
+                lines: list[str] = t.lastout().split("\n")
+                release: dict = {}
+
                 for line in lines:
-                    match = re.search("(.*) = (.*)", line)
-                    if match:
+                    if match := re.search(ver_re, line):
                         name = match.group(1)
                         version = match.group(2)
                         release.setdefault(name, []).append(version)
@@ -93,15 +100,16 @@ class Downgrade:
                 temp = self.targets.copy()
                 for hn in self.targets:
                     try:
+                        # self.install_command contains str with template for format ?, maybe swithch to Template type ?
                         command = self.install_command.format(
                             package, package, versions[hn][package]
                         )
-                        self.commands.update({hn: command})
+                        self.commands_dict.update({hn: command})
                     except KeyError:
                         del temp[hn]
-                temp.run(self.commands)
+                temp.run(self.commands_dict)
 
-                for t in list(self.targets.values()):
+                for t in self.targets.values():
                     self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
 
             for command in self.post_commands:
@@ -116,82 +124,34 @@ class Downgrade:
     def _check(self, target, stdin, stdout, stderr, exitcode):
         if "A ZYpp transaction is already in progress." in stderr:
             logger.critical(
-                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                    target.hostname, stdin, stdout, stderr
-                )
+                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
             )
             raise UpdateError(target.hostname, "update stack locked")
         if "System management is locked" in stderr:
             logger.critical(
-                f'{target.hostname}: command "{stdin}" failed:\nstdout:\n{stdout}\nstderr:\n{stderr}'
+                '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
+                target.hostname,
+                stdin,
+                stdout,
+                stderr,
+                exitcode,
             )
             raise UpdateError("update stack locked", target.hostname)
         if "(c): c" in stdout:
             logger.critical(
-                "{!s}: unresolved dependency problem. please resolve manually:\n{!s}".format(
-                    target.hostname, stdout
-                )
+                "%s: unresolved dependency problem. please resolve manually:\n%s",
+                target.hostname,
+                stdout,
             )
             raise UpdateError("Dependency Error", target.hostname)
         if exitcode == 104:
             logger.critical(
-                "{!s}: zypper returned with errorcode 104:\n{!s}".format(
-                    target.hostname, stderr
-                )
+                "%s: zypper returned with errorcode 104:\n%s", target.hostname, stderr
             )
             raise UpdateError("Unspecified Error", target.hostname)
         if exitcode == 106:
             logger.warning(
-                "{!s}: zypper returned with errocode 106:\n{!s}".format(
-                    target.hostname, stderr
-                )
+                "%s: zypper returned with errocode 106:\n%s", target.hostname, stderr
             )
 
         return self.check(target, stdin, stdout, stderr, exitcode)
-
-    def check(self, target, stdin, stdout, stderr, exitcode):
-        """stub. needs to be overwritten by inherited classes"""
-        return
-
-    def lock_hosts(self):
-        try:
-            skipped = False
-            for t in self.targets.values():
-                if t.is_locked() and not t._lock.is_mine():
-                    skipped = True
-                    logger.warning(
-                        "host {!s} is locked since {!s} by {!s}. skipping.".format(
-                            t.hostname, t._lock.time(), t._lock.locked_by()
-                        )
-                    )
-                    if t._lock.comment():
-                        logger.info(
-                            "{!s}'s comment: {!s}".format(
-                                t._lock.locked_by(), t._lock.comment()
-                            )
-                        )
-                else:
-                    t.lock()
-                    thread = ThreadedMethod(queue)
-                    thread.setDaemon(True)
-                    thread.start()
-
-            if skipped:
-                for t in self.targets.values():
-                    try:
-                        t.unlock()
-                    except AssertionError:
-                        pass
-                raise UpdateError("Hosts locked")
-        except BaseException:
-            raise
-        finally:
-            self.unlock_hosts()
-
-    def unlock_hosts(self):
-        for t in self.targets.values():
-            if t.is_locked():
-                try:
-                    t.unlock()
-                except AssertionError:
-                    pass

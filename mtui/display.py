@@ -1,22 +1,26 @@
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any, IO
 
-from .types.rpmver import RPMVersion
+from .target.hostgroup import HostsGroup
+from .types import RPMVersion
+from .types import System
 from .utils import green, red, yellow
 
 
 class CommandPromptDisplay:
-    def __init__(self, output):
+    def __init__(self, output: IO) -> None:
         self.output = output
 
-    def println(self, msg="", eol="\n"):
-        return self.output.write(msg + eol)
+    def println(self, msg: str = "", eol: str = "\n") -> None:
+        self.output.write(msg + eol)
 
-    def list_bugs(self, bugs, jira, url):
+    def list_bugs(self, bugs: dict[str, str], jira: dict[str, str], url: str) -> None:
         ids = sorted(bugs.keys())
         if ids == [""]:
             self.println("No bugs associated with Release Request.")
         else:
-            self.println(f'Buglist: {url}/buglist.cgi?bug_id={",".join(ids)}')
+            self.println(f"Buglist: {url}/buglist.cgi?bug_id={','.join(ids)}")
             for bug, summary in [(bug, bugs[bug]) for bug in ids]:
                 self.println()
                 self.println("Bug #{0:5}: {1}".format(bug, summary))
@@ -32,7 +36,7 @@ class CommandPromptDisplay:
                 self.println("Jira #{0:5}: {1}".format(issue, summary))
                 self.println(f"https://jira.suse.com/browse/{issue}")
 
-    def list_history(self, hostname, system, lines):
+    def list_history(self, hostname: str, system: System, lines: list[str]) -> None:
         self.println(f"history from {hostname} ({system}):")
         lines.reverse()
         for line in lines:
@@ -49,7 +53,9 @@ class CommandPromptDisplay:
             )
         self.println()
 
-    def list_host(self, hostname, system, state, exclusive):
+    def list_host(
+        self, hostname: str, system: System, state: str, exclusive: str
+    ) -> None:
         if exclusive:
             mode = "serial"
         else:
@@ -68,41 +74,38 @@ class CommandPromptDisplay:
             )
         )
 
-    def list_locks(self, hostname, system, lock):
-        system = "({!s})".format(system)
+    def list_locks(self, hostname: str, system: System, lock) -> None:
         if lock.is_locked():
-            lockedby = "me" if lock.is_mine() else lock.locked_by()
+            lockedby: str = "me" if lock.is_mine() else lock.locked_by()
 
             self.println(
                 eol="",
                 msg="{0:20} {1:20}: {2}".format(
                     hostname,
-                    system,
+                    str(system),
                     yellow("since {} by {}".format(lock.time(), lockedby)),
                 ),
             )
 
-            # TODO: walrus operator in python 3.8 .....
-            comment = lock.comment()
-            if comment:
-                self.println(" : {}".format(comment))
+            if comment := lock.comment():
+                self.println(f" : {comment}")
             else:
                 self.println()
         else:
             self.println(
-                "{0:20} {1:20}: {2}".format(hostname, system, green("not locked"))
+                "{0:20} {1:20}: {2}".format(hostname, str(system), green("not locked"))
             )
 
-    def list_sessions(self, hostname, system, stdout):
-        self.println("sessions on {} ({}):".format(hostname, system))
+    def list_sessions(self, hostname: str, system: System, stdout: str) -> None:
+        self.println(f"sessions on {hostname} ({system}):")
         self.println(stdout)
 
-    def list_timeout(self, hostname, system, timeout):
+    def list_timeout(self, hostname: str, system: System, timeout: int) -> None:
         self.println(
             "{0:20} {1:20}: {2}s".format(hostname, "({!s})".format(system), timeout)
         )
 
-    def list_versions(self, targets, hosts_pvs):
+    def list_versions(self, targets: HostsGroup, hosts_pvs) -> None:
         for hs, pvs in list(hosts_pvs.items()):
             if len(hosts_pvs) > 1:
                 self.println("version history from:")
@@ -118,13 +121,13 @@ class CommandPromptDisplay:
                     indent = indent + 1
                 self.println()
 
-    def list_products(self, hostname, system):
+    def list_products(self, hostname: str, system: System) -> None:
         self.println("{}: {}".format(green("Referenece host"), yellow(hostname)))
         for x in system.pretty():
             self.println(x)
         self.println()
 
-    def list_update_repos(self, repos, update_id):
+    def list_update_repos(self, repos, update_id) -> None:
         server_update = "http://download.suse.de/ibs/" + ":/".join(
             str(update_id).split(":")[0:-1]
         )
@@ -143,7 +146,9 @@ class CommandPromptDisplay:
             self.println("    {}".format(server_update + "/" + r))
 
     @staticmethod
-    def show_log(hostname, hostlog, sink):
+    def show_log(
+        hostname: str, hostlog: list[tuple[str, str, str, int, Any]], sink: Callable
+    ) -> None:
         sink("log from {!s}:".format(hostname))
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
             sink("{!s}:~> {!s} [{!s}]".format(hostname, cmdline, exitcode))

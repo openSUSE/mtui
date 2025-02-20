@@ -1,17 +1,20 @@
 from collections import UserDict
+from pathlib import Path
+from typing import Self
 
-from mtui.target.actions import FileDelete
-from mtui.target.actions import FileDownload
-from mtui.target.actions import FileUpload
-from mtui.target.actions import RunCommand
-from mtui.target.locks import TargetLockedError
+from .actions import FileDelete
+from .actions import FileDownload
+from .actions import FileUpload
+from .actions import RunCommand
+from .locks import TargetLockedError
+from . import Target
 
 from mtui.messages import HostIsNotConnectedError
 
 
 class HostsGroup(UserDict):
     """
-    Composite pattern for L{Target}
+    Composite pattern for Dict[hostname, Target]
 
     doesn't deal with Target state as that would require too much work
     to support properly. so
@@ -22,17 +25,19 @@ class HostsGroup(UserDict):
        command given from user (to ensure 1.)
     """
 
-    def __init__(self, hosts):
+    def __init__(self, hosts: list[Target]) -> None:
         """
         :param targets: list of L{Target}
         """
-        self.data = {h.hostname: h for h in hosts}
+        self.data: dict[str, Target] = {h.hostname: h for h in hosts}
 
-    def select(self, hosts=[], enabled=None):
+    def select(
+        self, hosts: list[str] = [], enabled: bool = False
+    ) -> Self | "HostsGroup":
         if hosts == []:
             if enabled:
                 return HostsGroup(
-                    (h for h in self.data.values() if h.state != "disabled")
+                    [h for h in self.data.values() if h.state != "disabled"]
                 )
             return self
 
@@ -48,14 +53,14 @@ class HostsGroup(UserDict):
             ]
         )
 
-    def unlock(self, *a, **kw):
+    def unlock(self, *a, **kw) -> None:
         for x in self.data.values():
             try:
                 x.unlock(*a, **kw)
             except TargetLockedError:
                 pass  # logged in Target#unlock
 
-    def lock(self, *a, **kw):
+    def lock(self, *a, **kw) -> None:
         for x in self.data.values():
             try:
                 x.lock(*a, **kw)
@@ -69,33 +74,33 @@ class HostsGroup(UserDict):
 
         return rs
 
-    def add_history(self, data):
+    def add_history(self, data) -> None:
         for tgt in self.data.values():
             tgt.add_history(data)
 
-    def names(self):
+    def names(self) -> list[str]:
         return list(self.data.keys())
 
-    def get(self, remote, local):
+    def sftp_get(self, remote: Path, local: Path) -> None:
         return FileDownload(self.data.values(), remote, local).run()
 
-    def put(self, local, remote):
+    def sftp_put(self, local: Path, remote: Path) -> None:
         return FileUpload(self.data.values(), local, remote).run()
 
-    def remove(self, path):
+    def sftp_remove(self, path: Path) -> None:
         return FileDelete(self.data.values(), path).run()
 
-    def run(self, cmd):
+    def run(self, cmd) -> None:
         return self._run(cmd)
 
-    def _run(self, cmd):
+    def _run(self, cmd) -> None:
         return RunCommand(self.data, cmd).run()
 
     def report_self(self, sink):
         for hn in sorted(self.data.keys()):
             self.data[hn].report_self(sink)
 
-    def report_history(self, sink, count, events):
+    def report_history(self, sink, count, events) -> None:
         if events:
             self._run(
                 "tac /var/log/mtui.log | grep -m {} {} | tac".format(
@@ -103,7 +108,7 @@ class HostsGroup(UserDict):
                 )
             )
         else:
-            self._run("tail -n {} /var/log/mtui.log".format(count))
+            self._run(f"tail -n {count} /var/log/mtui.log")
 
         for hn in sorted(self.data.keys()):
             self.data[hn].report_history(sink)
@@ -112,18 +117,18 @@ class HostsGroup(UserDict):
         for hn in sorted(self.data.keys()):
             self.data[hn].report_locks(sink)
 
-    def report_timeout(self, sink):
+    def report_timeout(self, sink) -> None:
         for hn in sorted(self.data.keys()):
             self.data[hn].report_timeout(sink)
 
-    def report_sessions(self, sink):
+    def report_sessions(self, sink) -> None:
         for hn in sorted(self.data.keys()):
             self.data[hn].report_sessions(sink)
 
-    def report_log(self, sink, arg):
+    def report_log(self, sink, arg) -> None:
         for hn in sorted(self.data.keys()):
             self.data[hn].report_log(sink, arg)
 
-    def report_products(self, sink):
+    def report_products(self, sink) -> None:
         for hn in sorted(self.data.keys()):
             self.data[hn].report_products(sink)

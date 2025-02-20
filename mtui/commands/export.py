@@ -1,5 +1,9 @@
-from logging import getLogger, DEBUG
+from logging import DEBUG, getLogger
 from pathlib import Path
+from typing import Type
+
+from mtui.argparse import ArgumentParser
+from mtui.export.base import BaseExport
 
 from . import Command
 from ..export import AutoExport, KernelExport, ManualExport
@@ -22,7 +26,7 @@ class Export(Command):
     command = "export"
 
     @classmethod
-    def _add_arguments(cls, parser):
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "-f",
             "--force",
@@ -34,19 +38,18 @@ class Export(Command):
         )
         cls._add_hosts_arg(parser)
 
-        return parser
-
     @requires_update
-    def __call__(self):
-        targets = self.parse_hosts().keys()
+    def __call__(self) -> None:
+        targets: list[str] = list(self.parse_hosts().keys())
         filename = (
             self.args.filename if self.args.filename else Path(self.metadata.path)
         )
-        exporter = {
+        exporters: dict[tuple[bool, bool], Type[BaseExport]] = {
             (True, False): AutoExport,
             (False, True): KernelExport,
             (False, False): ManualExport,
-        }[(self.config.auto, self.config.kernel)]
+        }
+        exporter = exporters[(self.config.auto, self.config.kernel)]
 
         if issubclass(exporter, ManualExport):
             results = self.metadata.report_results(
@@ -74,6 +77,6 @@ class Export(Command):
                 logger.error(f"While exporting template was thrown exception {e}")
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
-        clist = [("-f", "--force"), ("-t", "--target")]
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        clist: list[tuple[str, ...]] = [("-f", "--force"), ("-t", "--target")]
         return complete_choices_filelist(clist, line, text, state["hosts"].names())

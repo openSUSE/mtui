@@ -1,7 +1,8 @@
-from ..utils import check_eq
 from argparse import ArgumentTypeError
-
+from collections.abc import Callable
 from itertools import zip_longest
+
+from ..utils import check_eq
 
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):
@@ -9,56 +10,50 @@ class RequestReviewIDParseError(ValueError, ArgumentTypeError):
     # messages get shown to the users properly
     # by L{argparse.ArgumentParser._get_value}
 
-    def __init__(self, message):
-        super(RequestReviewIDParseError, self).__init__(
-            "OBS Request Review ID: " + message
-        )
+    def __init__(self, message) -> None:
+        super().__init__("OBS Request Review ID: " + message)
 
 
 class TooManyComponentsError(RequestReviewIDParseError):
     limit = 4
 
-    def __init__(self):
-        super(TooManyComponentsError, self).__init__(
-            "Too many components (> {0})".format(self.limit)
-        )
+    def __init__(self) -> None:
+        super().__init__("Too many components (> {0})".format(self.limit))
 
     @classmethod
-    def raise_if(cls, xs):
+    def raise_if(cls, xs) -> None:
         if len(xs) > cls.limit:
             raise cls()
 
 
 class InternalParseError(RequestReviewIDParseError):
-    def __init__(self, f, cnt):
-        super(InternalParseError, self).__init__(
-            "Internal error: f: {0!r} cnt: {1!r}".format(f, cnt)
-        )
+    def __init__(self, f, cnt) -> None:
+        super().__init__("Internal error: f: {0!r} cnt: {1!r}".format(f, cnt))
 
 
 class MissingComponent(RequestReviewIDParseError):
-    def __init__(self, index, expected):
-        super(MissingComponent, self).__init__(
-            "Missing {0}. component. Expected: {1!r}".format(index, expected)
+    def __init__(self, index, expected) -> None:
+        super().__init__(
+            "Missing {0}. component. Expected: {1}".format(index, expected)
         )
 
 
 class ComponentParseError(RequestReviewIDParseError):
-    def __init__(self, index, expected, got):
-        super(ComponentParseError, self).__init__(
-            "Failed to parse {0}. component. Expected {1!r}. Got: {2!r}".format(
+    def __init__(self, index, expected, got) -> None:
+        super().__init__(
+            "Failed to parse {0}. component. Expected {1}. Got: {2!r}".format(
                 index, expected, got
             )
         )
 
 
-class RequestReviewID(object):
-    def __init__(self, rrid):
+class RequestReviewID:
+    def __init__(self, rrid: str) -> None:
         """
         :type rrid: str
         :param rrid: fully qualified Request Review ID
         """
-        parsers = [
+        parsers: list[Callable[[str], str | int]] = [
             check_eq("SUSE", "openSUSE", "S"),
             check_eq("Maintenance", "M"),
             int,
@@ -66,13 +61,10 @@ class RequestReviewID(object):
         ]
 
         # filter empty entries
-        xs = [x for x in rrid.split(":") if x]
+        xs: list[str] = [x for x in rrid.split(":") if x]
         TooManyComponentsError.raise_if(xs)
         # construct [(parser, input, index), ...]
-        xs = zip_longest(parsers, xs, list(range(1, 5)))
-
-        # apply parsers to inputs, getting parsed values or raise
-        xs = [_apply_parser(*ys) for ys in xs]
+        xs = [_apply_parser(*ys) for ys in zip_longest(parsers, xs, list(range(1, 5)))]
 
         self.project, self.kind, self.maintenance_id, self.review_id = xs
 
@@ -82,16 +74,16 @@ class RequestReviewID(object):
         if self.kind == "M":
             self.kind = "Maintenance"
 
-    def __str__(self):
+    def __str__(self) -> str:
         return f"{self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}"
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash(str(self))
 
-    def __eq__(lhs, rhs):
+    def __eq__(lhs, rhs) -> bool:
         return str(lhs) == str(rhs)
 
-    def __ne__(lhs, rhs):
+    def __ne__(lhs, rhs) -> bool:
         return not lhs.__eq__(rhs)
 
 

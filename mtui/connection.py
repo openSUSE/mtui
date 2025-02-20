@@ -2,6 +2,7 @@
 # mtui ssh connection handling using paramiko.
 # almost all exceptions here are passed to the upper layer.
 #
+from __future__ import annotations
 
 import errno
 import getpass
@@ -15,8 +16,9 @@ import tty
 from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
-from typing import Union
-import paramiko  # type: ignore
+
+import paramiko
+from paramiko import Channel, SFTPClient, SFTPFile, SSHClient, SSHConfig
 
 from .messages import ReConnectFailed
 from .utils import termsize
@@ -32,13 +34,13 @@ if not sys.warnoptions:
 
 
 class CommandTimeout(Exception):
-    """remote command timeout exception
+    """remote command timeout exception.
 
     returns timed out remote command as __str__
 
     """
 
-    def __init__(self, command=None):
+    def __init__(self, command=None) -> None:
         self.command = command
 
     def __str__(self) -> str:
@@ -46,33 +48,32 @@ class CommandTimeout(Exception):
 
 
 class Connection:
-    """manage SSH and SFTP connections"""
+    """manage SSH and SFTP connections."""
 
     __slots__ = [
+        "client",
+        "command",
         "hostname",
         "port",
-        "timeout",
-        "client",
-        "stdout",
-        "stdin",
-        "command",
         "stderr",
+        "stdin",
+        "stdout",
+        "timeout",
     ]
 
-    def __init__(self, hostname: str, port: Union[int, str], timeout: int) -> None:
-        """opens SSH channel to specified host
+    def __init__(self, hostname: str, port: int | str, timeout: int) -> None:
+        """Opens SSH channel to specified host.
 
         Tries AuthKey Authentication and falls back to password mode in case of errors.
         If a connection can't be established (host not available, wrong password/key)
         exceptions are reraised from the ssh subsystem and need to be catched
         by the caller.
 
-        Keyword arguments:
+        Keyword Arguments:
         hostname -- host address to connect to
         timeout  -- remote command timeout on this connection
 
         """
-
         # uncomment to enable separate paramiko connection logging
 
         # paramiko.util.log_to_file("/tmp/paramiko.log")
@@ -81,44 +82,42 @@ class Connection:
 
         try:
             self.port = int(port)
-        except Exception:
+        except ValueError:
             self.port = 22
 
         self.timeout = timeout
 
-        self.client = paramiko.SSHClient()
+        self.client = SSHClient()
 
         self.load_keys()
 
         # uncomment to combine stderr and stdout channel. In most cases,
         # mtui expects a separate stderr channel. Changing this may be
         # harmfull to error checking code.
-
         # self.client.set_combine_stderr(True)
+
         self.connect()
 
     def __repr__(self) -> str:
-        return "<{0} object hostname={1} port={2}>".format(
-            self.__class__.__name__, self.hostname, self.port
-        )
+        return f"<{self.__class__.__name__} object hostname={self.hostname} port={self.port}>"
 
     def load_keys(self) -> None:
         self.client.load_system_host_keys()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    def connect(self):
-        """connect to the remote host using paramiko as ssh subsystem"""
-        cfg = paramiko.config.SSHConfig()
+    def connect(self) -> None:
+        """Connect to the remote host using paramiko as ssh subsystem."""
+        cfg = SSHConfig()
         try:
             with Path("~/.ssh/config").expanduser().open() as fd:
                 cfg.parse(fd)
-        except IOError as e:
+        except OSError as e:
             if e.errno != errno.ENOENT:
                 logger.warning(e)
         opts = cfg.lookup(self.hostname)
 
         try:
-            logger.debug("connecting to {!s}:{!s}".format(self.hostname, self.port))
+            logger.debug("connecting to %s:%s", self.hostname, self.port)
             # if this fails, the user most likely has none or an outdated
             # hostkey for the specified host. checking back with a manual
             # "ssh root@..." invocation helps in most cases.
@@ -143,9 +142,8 @@ class Connection:
             # other than ssh, mtui asks only once for a password. this could
             # be changed if there is demand for it.
             logger.warning(
-                "Authentication failed on {!s}: AuthKey missing. Make sure your system is set up correctly".format(
-                    self.hostname
-                )
+                "Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly",
+                self.hostname,
             )
             logger.warning("Trying manually, please enter the root password")
             password = getpass.getpass()
@@ -167,40 +165,37 @@ class Connection:
                         else None
                     ),
                 )
-            except paramiko.AuthenticationException as e:
+            except paramiko.AuthenticationException:
                 # if a wrong password was set, don't connect to the host and
                 # reraise the exception hoping it's catched somewhere in an
                 # upper layer.
-                logger.error(
-                    "Authentication failed on {!s}: wrong password".format(
-                        self.hostname
-                    )
+                logger.exception(
+                    "Authentication failed on %s: wrong password", self.hostname
                 )
-                raise e
-        except paramiko.SSHException as e:
+                raise
+        except paramiko.SSHException:
             # unspecified general SSHException. the host/sshd is probably not
             # available.
-            logger.error("SSHException while connecting to {!s}".format(self.hostname))
-            raise e
+            logger.exception("SSHException while connecting to %s", self.hostname)
+            raise
 
         except Exception as e:
             # general Exception
-            logger.debug("{!s}: {!s}".format(self.hostname, e))
-            raise e
+            logger.debug("%s: %s", self.hostname, e)
+            raise
 
     def reconnect(self) -> None:
-        """try to reconnect to the host
+        """Try to reconnect to the host.
 
         currently, there's no reconnection limit. needs to be implemented
         since the current implementation could deadlock.
 
         """
-
         if not self.is_active():
             logger.debug(
-                "lost connection to {!s}:{!s}, reconnecting".format(
-                    self.hostname, self.port
-                )
+                "lost connection to %s:%s, reconnecting",
+                self.hostname,
+                self.port,
             )
 
             # wait 10s and try to reconnect
@@ -209,8 +204,8 @@ class Connection:
 
         assert self.is_active()
 
-    def new_session(self):
-        """open new session on the channel
+    def new_session(self) -> Channel | None:
+        """Open new session on the channel.
 
         all remote commands are run on a seperate session to make sure
         that leftovers/session errors from the previous command do not
@@ -221,14 +216,12 @@ class Connection:
         session.exec_command(command)
         self.close_session(session)
         """
-
-        logger.debug(
-            "creating new session at {!s}:{!s}".format(self.hostname, self.port)
-        )
+        logger.debug("creating new session at %s:%s", self.hostname, self.port)
         try:
-            transport = self.client.get_transport()
-
-            transport.set_keepalive(30)
+            if transport := self.client.get_transport():
+                transport.set_keepalive(30)
+            else:
+                return None
             try:
                 # add NullHandler to paramiko to get rid of
                 # "paramiko: logging handler not found" messages
@@ -247,8 +240,8 @@ class Connection:
         return session
 
     @staticmethod
-    def close_session(session=None) -> None:
-        """close the current session"""
+    def close_session(session: Channel | None = None) -> None:
+        """Close the current session."""
         if session:
             try:
                 session.shutdown(2)
@@ -257,26 +250,26 @@ class Connection:
                 # pass all exceptions since the session is already closed or broken
                 pass
 
-    def __run_command(self, command):
-        """open new session and run command in it
+    def __run_command(self, command: str) -> Channel | None:
+        """Open new session and run command in it.
 
         parameter: command -> str
         result: Succes - session instance with running command
-                Fail - False
+                Fail - None
         """
-
         try:
-            session = self.new_session()
-            session.exec_command(command)
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            if "session" in locals():
-                if isinstance(session, paramiko.channel.Channel):
-                    self.close_session(session)
-            return False
+            if session := self.new_session():
+                session.exec_command(command)
+            else:
+                return None
+        except (paramiko.ChannelException, paramiko.SSHException):
+            if "session" in locals() and isinstance(session, Channel):
+                self.close_session(session)
+            return None
         return session
 
-    def run(self, command, lock=None):
-        """run command over SSH channel
+    def run(self, command: str, lock=None) -> int:
+        """Run command over SSH channel.
 
         Blocks until command terminates. returncode of issued command is returned.
         In case of errors, -1 is returned.
@@ -284,11 +277,11 @@ class Connection:
         If the connection hits the timeout limit, the user is asked to wait or
         cancel the current command.
 
-        Keyword arguments:
+        Keyword Arguments:
         command -- the command to run
         lock    -- lock object for write on stdout
-        """
 
+        """
         self.stdin = command
         self.stdout = ""
         self.stderr = ""
@@ -296,7 +289,6 @@ class Connection:
         stderr = b""
 
         session = self.__run_command(command)
-
         counter = 0
         while not session:
             if counter == RETRIES:
@@ -321,15 +313,12 @@ class Connection:
 
                 try:
                     if input(
-                        'command "{}" timed out on {}. wait? (Y/n) '.format(
-                            command, self.hostname
-                        )
+                        f'command "{command}" timed out on {self.hostname}. wait? (Y/n) ',
                     ).lower() not in ("no", "n", "ne", "nein"):
                         continue
-                    else:
-                        # if the user don't want to wait, raise CommandTimeout
-                        # and procceed
-                        raise CommandTimeout
+                    # if the user don't want to wait, raise CommandTimeout
+                    # and procceed
+                    raise CommandTimeout
                 finally:
                     # release lock to allow other command threads to write to
                     # stdout
@@ -366,38 +355,32 @@ class Connection:
         self.stderr = stderr.decode("utf-8")
         return exitcode
 
-    def __invoke_shell(self, width, height):
-        """
-        params: widh
+    def __invoke_shell(self, width: int, height: int) -> Channel | None:
+        """params: widh
         params: height
-        returns: session with open shell on pass else False
+        returns: session with open shell on pass else False.
         """
-
         try:
-            session = self.new_session()
-            session.get_pty("xterm", width, height)
-            session.invoke_shell()
-        except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            if "session" in locals():
-                if isinstance(session, paramiko.channel.Channel):
-                    self.close_session(session)
-            return False
+            if session := self.new_session():
+                session.get_pty("xterm", width, height)
+                session.invoke_shell()
+            else:
+                return None
+        except (paramiko.ChannelException, paramiko.SSHException):
+            if "session" in locals() and isinstance(session, Channel):
+                self.close_session(session)
+            return None
 
         return session
 
-    def shell(self):
-        """invoke remote shell
+    def shell(self) -> None:
+        """Invoke remote shell.
 
         Spawns a root shell on the target host.
         TTY attributes are re-set after leaving the remote shell.
-
-        Keyword arguments:
-        None
-
         """
         oldtty = termios.tcgetattr(sys.stdin)
 
-        session = self.new_session()
         width, height = termsize()
 
         session = self.__invoke_shell(width, height)
@@ -410,7 +393,7 @@ class Connection:
             tty.setcbreak(sys.stdin.fileno())
 
             while True:
-                r, w, e = select.select([session, sys.stdin], [], [])
+                r, _, _ = select.select([session, sys.stdin], [], [])
                 if session in r:
                     try:
                         x = session.recv(1024)
@@ -421,27 +404,26 @@ class Connection:
                     except socket.timeout:
                         pass
                 if sys.stdin in r:
-                    x = sys.stdin.read(1)
-                    if len(x) == 0:
+                    y: str = sys.stdin.read(1)
+                    if len(y) == 0:
                         break
-                    session.send(x)
+                    session.send(y.encode())
 
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
 
         self.close_session(session)
 
-    def __sftp_open(self):
+    def __sftp_open(self) -> SFTPClient | None:
         try:
             sftp = self.client.open_sftp()
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
-            if "sftp" in locals():
-                if isinstance(sftp, paramiko.sftp_client.SFTPClient):
-                    sftp.close()
-            return False
+            if "sftp" in locals() and isinstance(sftp, SFTPClient):
+                sftp.close()
+            return None
         return sftp
 
-    def __sftp_reconnect(self):
+    def __sftp_reconnect(self) -> SFTPClient:
         sftp = self.__sftp_open()
         counter = 0
         while not sftp:
@@ -452,24 +434,22 @@ class Connection:
             counter += 1
         return sftp
 
-    def put(self, local, remote):
-        """transfers a file to the remote host over SFTP
+    def sftp_put(self, local: Path, remote: Path) -> None:
+        """Transfers a file to the remote host over SFTP.
 
         File is made executable
 
-        Keyword arguments:
+        Keyword Arguments:
         local  -- local file name
         remote -- remote file name
 
         """
-        remote = str(remote)
-        local = str(local)
 
         path = ""
         sftp = self.__sftp_reconnect()
 
         # create remote base directory and copy the file to that directory
-        for subdir in remote.split("/")[:-1]:
+        for subdir in str(remote).split("/")[:-1]:
             path += subdir + "/"
             created = False
             while not created:
@@ -487,149 +467,142 @@ class Connection:
                     created = True
 
         logger.debug(
-            "transmitting {!s} to {!s}:{!s}:{!s}".format(
-                local, self.hostname, self.port, remote
-            )
+            "transmitting %s to %s:%s:%s",
+            local,
+            self.hostname,
+            self.port,
+            remote,
         )
-        sftp.put(local, remote)
+        # paramiko isn't prepared for proper pathlib objects
+        sftp.put(str(local), str(remote))
 
         # make file executable since it's probably a script which needs to be
         # run
-        sftp.chmod(remote, stat.S_IRWXG | stat.S_IRWXU)
+        sftp.chmod(str(remote), stat.S_IRWXG | stat.S_IRWXU)
 
         sftp.close()
 
-    def get(self, remote, local):
-        """transfers file from the remote host to the local host over SFTP
+    def sftp_get(self, remote: Path, local: Path) -> None:
+        """Transfers file from the remote host to the local host over SFTP.
 
         local base directory needs to exist
 
-        Keyword arguments:
+        Keyword Arguments:
         remote -- remote file name
         local  -- local file name
 
         """
-        remote = str(remote)
-        local = str(local)
         sftp = self.__sftp_reconnect()
 
         logger.debug(
-            "transmitting {!s}:{!s}:{!s} to {!s}".format(
-                self.hostname, self.port, remote, local
-            )
+            "transmitting %s:%s:%s to %s",
+            self.hostname,
+            self.port,
+            remote,
+            local,
         )
-        sftp.get(remote, local)
+        sftp.get(str(remote), local)
 
         sftp.close()
 
     # Similar to 'get' but handles folders.
-    def get_folder(self, remote_folder, local_folder):
-        remote_folder = str(remote_folder)
-        local_folder = str(local_folder)
+    def sftp_get_folder(self, remote_folder: Path, local_folder: Path) -> None:
         sftp = self.__sftp_reconnect()
         logger.debug(
-            "transmitting {!s}:{!s}:{!s} to {!s}".format(
-                self.hostname, self.port, remote_folder, local_folder
-            )
+            "transmitting %s:%s:%s to %s",
+            self.hostname,
+            self.port,
+            remote_folder,
+            local_folder,
         )
-        files = self.listdir(remote_folder)
-        for f in files:
+        files = self.sftp_listdir(remote_folder)
+        for file in files:
             sftp.get(
-                "{!s}/{!s}".format(remote_folder, f),
-                "{!s}{!s}.{!s}".format(local_folder, f, self.hostname),
+                f"{remote_folder}/{file}",
+                f"{local_folder}{file}.{self.hostname}",
             )
 
         sftp.close()
 
-    def listdir(self, path="."):
-        """get directory listing of the remote host
+    def sftp_listdir(self, path: Path = Path(".")) -> list[str]:
+        """Get directory listing of the remote host.
 
-        Keyword arguments:
+        Keyword Arguments:
         path   -- remote directory path to list
 
         """
-
-        path = str(path)
         logger.debug(
-            "getting {!s}:{!s}:{!s} listing".format(self.hostname, self.port, path)
+            f"getting {self.hostname!s}:{self.port!s}:{path!s} listing",
         )
         sftp = self.__sftp_reconnect()
 
-        listdir = sftp.listdir(path)
+        listdir = sftp.listdir(str(path))
         sftp.close()
         return listdir
 
-    # TODO: context manager
-    def open(self, filename, mode="r", bufsize=-1):
-        """open remote file for reading"""
-        str(filename)
-
-        logger.debug("{0} open({1}, {2})".format(repr(self), filename, mode))
+    def sftp_open(self, filename: Path, mode: str = "r", bufsize=-1) -> SFTPFile:
+        """Open remote file for reading."""
+        logger.debug("%s open(%s, %s)", repr(self), filename, mode)
         logger.debug("  -> self.client.open_sftp")
         sftp = self.__sftp_reconnect()
         logger.debug("  -> sftp.open")
+
         try:
-            ofile = sftp.open(filename, mode, bufsize)
+            ofile = sftp.open(str(filename), mode, bufsize)
         except BaseException:
             # It often happens to me lately that mtui seems to freeze at
             # doing sftp.open() so let's log any other exception here,
             # just in case it gets eaten by some caller in mtui
             # bnc#880934
             logger.debug(format_exc())
-            if "sftp" in locals():
-                if isinstance(sftp, paramiko.sftp_client.SFTPClient):
-                    sftp.close()
+            if "sftp" in locals() and isinstance(sftp, SFTPClient):
+                sftp.close()
             raise
+
         return ofile
 
-    def remove(self, path):
-        """delete remote file"""
-        path = str(path)
-        logger.debug(
-            "deleting file {!s}:{!s}:{!s}".format(self.hostname, self.port, path)
-        )
+    def sftp_remove(self, path: Path) -> None:
+        """Delete remote file."""
+        logger.debug("deleting file %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
 
         try:
-            sftp.remove(path)
+            sftp.remove(str(path))
         except IOError:
-            logger.error("Can't remove {} from {}".format(path, self.hostname))
+            logger.exception("Can't remove %s from %s", path, self.hostname)
 
         sftp.close()
 
-    def rmdir(self, path):
-        """delete remote directory"""
-        logger.debug(
-            "deleting dir {!s}:{!s}:{!s}".format(self.hostname, self.port, path)
-        )
+    def sftp_rmdir(self, path: Path) -> None:
+        """Delete remote directory."""
+        logger.debug("deleting dir %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
-        items = self.listdir(path)
+        items = self.sftp_listdir(path)
+
         for item in items:
             filename = path / item
-            self.remove(filename)
+            self.sftp_remove(filename)
+
         sftp.rmdir(str(path))
         sftp.close()
 
-    def readlink(self, path):
+    def sftp_readlink(self, path: Path) -> str | None:
         """Return the target of a symbolic link (shortcut)."""
-        logger.debug("read link {}:{}:{}".format(self.hostname, self.port, path))
-        path = str(path)
-
+        logger.debug("read link %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
-        link = sftp.readlink(path)
+        link = sftp.readlink(str(path))
         sftp.close()
         return link
 
     def is_active(self) -> bool:
-        return self.client._transport.is_active()
+        return self.client._transport.is_active()  # noqa
 
     def close(self) -> None:
-        """closes SSH channel to host and disconnects
+        """Closes SSH channel to host and disconnects.
 
-        Keyword arguments:
+        Keyword Arguments:
         None
 
         """
-
-        logger.debug("closing connection to {!s}:{!s}".format(self.hostname, self.port))
+        logger.debug("closing connection to %s:%s", self.hostname, self.port)
         self.client.close()

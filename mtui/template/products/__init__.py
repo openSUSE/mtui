@@ -8,6 +8,7 @@ from .misc import (
     normalize_caasp,
     normalize_manager,
     normalize_cloud,
+    normalize_osle,
 )
 
 
@@ -37,5 +38,7 @@ def normalize(x):
         x[0][0] = x[0][0].lower()
     if "SLE-WEBYAST" in x[0][0]:
         x[0][0] = "sle-11-WebYaST"
+    if "openSUSE-SLE" in x[0][1]:
+        return normalize_osle(x)
     # Cornercases ..
     return x

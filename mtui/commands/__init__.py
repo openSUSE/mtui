@@ -1,11 +1,13 @@
 import importlib
+from logging import getLogger
 from pathlib import Path
-from typing import List
 
-from mtui.commands._command import Command  # noqa W0611
+from ._command import Command as Command
+
+logger = getLogger("mtui.commands")
 
 _rootdir = Path(__file__).resolve().parent
-cmd_list: List[str] = []
+cmd_list: list[str] = []
 
 for pth in _rootdir.glob("*.py"):
     if pth.is_file():
@@ -17,8 +19,10 @@ for pth in _rootdir.glob("*.py"):
     if modname.startswith("_"):
         continue
     try:
+        logger.debug("loading command module %s", modname)
         module = importlib.import_module("." + modname, "mtui.commands")
     except BaseException:
+        logger.error("loading command module %s failed", modname)
         continue
 
     # register classes
