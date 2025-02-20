@@ -1,8 +1,10 @@
-from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
+from mtui.argparse import ArgumentParser
+
 from . import Command
+from ..messages import TestReportNotLoadedError
+from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 from ..utils import prompt_user
 from ..utils import complete_choices
-from ..messages import TestReportNotLoadedError
 
 
 class LoadTemplate(Command):
@@ -20,7 +22,7 @@ class LoadTemplate(Command):
     command = "load_template"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument(
             "-a",
@@ -86,7 +88,7 @@ class LoadTemplate(Command):
                 self.prompt.metadata.add_target(target)
 
     @staticmethod
-    def complete(_, text, line, begidx, endix):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices(
             [
                 ("-c", "--clean-hosts"),

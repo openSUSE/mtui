@@ -1,9 +1,10 @@
 import errno
-import subprocess
 from logging import getLogger
+import subprocess
 from time import sleep
 
 from mtui import messages
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.utils import complete_choices
 
@@ -18,7 +19,7 @@ class ReportBug(Command):
     command = "report-bug"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "-p",
             "--print-url",
@@ -26,7 +27,7 @@ class ReportBug(Command):
             action="store_true",
         )
 
-    def __call__(self):
+    def __call__(self) -> None:
         url = self.config.report_bug_url
 
         if self.args.print_url:
@@ -68,5 +69,5 @@ class ReportBug(Command):
             logger.debug(messages.UnexpectedlyFastCleanExitFromXdgOpen())
 
     @staticmethod
-    def complete(_, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices([("-p", "--print-url")], line, text)

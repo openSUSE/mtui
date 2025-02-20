@@ -21,7 +21,7 @@ class KernelOpenQA(OpenQA):
         )
 
     @staticmethod
-    def _parse_jobs(jobs):
+    def _parse_jobs(jobs) -> list[Test] | None:
         if jobs is None:
             return None
         return [
@@ -70,7 +70,7 @@ class KernelOpenQA(OpenQA):
         return self
 
     @staticmethod
-    def _result_matrix(testresults):
+    def _result_matrix(testresults) -> list[str]:
         matrix = []
         for test in testresults:
             text = None

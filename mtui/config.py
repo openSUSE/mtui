@@ -2,12 +2,14 @@
 # mtui config file parser and default values
 #
 
+from argparse import Namespace
 from collections.abc import Callable
 import configparser
 import getpass
 from logging import getLogger
 from os import getenv
 from pathlib import Path
+from typing import Any
 
 from mtui.messages import InvalidLocationError
 from mtui.refhost import RefhostsFactory, RefhostsResolveFailed
@@ -22,17 +24,17 @@ class InvalidOptionNameError(RuntimeError):
 class Config:
     """Read and store the variables from mtui config files"""
 
-    def __init__(self, path, refhosts=RefhostsFactory):
+    def __init__(self, path: Path | None, refhosts=RefhostsFactory) -> None:
         self.refhosts = refhosts
-        self._location = "default"
+        self.__location = "default"
 
         # FIXME: gotta read config overide from env instead of argv
         # because this crap is used as a singleton all over the
         # place
-        _pth = getenv("MTUI_CONF")
+
         if path:
             self.configfiles = [path]
-        elif _pth:
+        elif _pth := getenv("MTUI_CONF"):
             self.configfiles = [Path(_pth).expanduser()]
         else:
             self.configfiles = [Path("/etc/mtui.cfg"), Path("~/.mtuirc").expanduser()]
@@ -42,7 +44,7 @@ class Config:
         self._parse_config()
         self._list_terms()
 
-    def read(self):
+    def read(self) -> None:
         self.config = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         try:
             self.config.read(self.configfiles)
@@ -50,11 +52,11 @@ class Config:
             logger.error(e)
 
     @property
-    def location(self):
-        return self._location
+    def location(self) -> str:
+        return self.__location
 
     @location.setter
-    def location(self, x):
+    def location(self, x: str) -> None:
         try:
             self.refhosts(self).check_location_sanity(x)
         except InvalidLocationError as e:
@@ -64,31 +66,31 @@ class Config:
             logger.error("Can't read `refhosts.yml` file, no valid refhosts database")
             return
 
-        self._location = x
+        self.__location = x
 
-    def _parse_config(self):
+    def _parse_config(self) -> None:
         for datum in self.data:
             attr, inipath, default, fixup, getter = datum
 
             try:
                 val = self._get_option(inipath, getter)
             except BaseException:
-                if isinstance(default, Callable):
+                if callable(default):
                     val = default()
                 else:
                     val = default
 
-            setattr(self, attr, fixup(val))
-            logger.debug('config.{!s} set to "{!s}"'.format(attr, val))
+            setattr(self, str(attr), fixup(val))
+            logger.debug('config.%s set to "%s"', attr, val)
 
-    def _define_config_options(self):
-        def normalizer(x):
+    def _define_config_options(self) -> None:
+        def normalizer(x: Any) -> Any:
             return x
 
-        def expanduser(p):
+        def expanduser(p: Path | str) -> Path:
             return Path(p).expanduser()
 
-        data = [
+        data: list[tuple[Any, ...]] = [
             ("datadir", ("mtui", "datadir"), Path("/usr/share/mtui"), expanduser),
             (
                 "template_dir",
@@ -108,9 +110,21 @@ class Config:
             # indicated by
             # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
             ("connection_timeout", ("mtui", "connection_timeout"), 300, int),
-            ("svn_path", ("svn", "path"), "svn+ssh://svn@qam.suse.de/testreports"),
-            ("bugzilla_url", ("url", "bugzilla"), "https://bugzilla.suse.com"),
-            ("reports_url", ("url", "testreports"), "https://qam.suse.de/testreports"),
+            (
+                "svn_path",
+                ("svn", "path"),
+                "svn+ssh://svn@qam.suse.de/testreports",
+            ),
+            (
+                "bugzilla_url",
+                ("url", "bugzilla"),
+                "https://bugzilla.suse.com",
+            ),
+            (
+                "reports_url",
+                ("url", "testreports"),
+                "https://qam.suse.de/testreports",
+            ),
             (
                 "fancy_reports_url",
                 ("url", "fancy_reports"),
@@ -188,15 +202,16 @@ class Config:
         def add_normalizer(x):
             return x if len(x) > 3 else x + (normalizer,)
 
-        data = (add_normalizer(x) for x in data)
+        n_data = (add_normalizer(x) for x in data)
 
         getter = self.config.get
 
         def add_getter(x):
             return x if len(x) > 4 else x + (getter,)
 
-        data = [add_getter(x) for x in data]
-        self.data = data
+        self.data: list[tuple[str, tuple[str, ...], Any, Callable, Callable]] = [
+            add_getter(x) for x in n_data
+        ]
 
     def _has_option(self, opt):
         """
@@ -204,7 +219,7 @@ class Config:
         """
         return opt in (x[0] for x in self.data)
 
-    def set_option(self, opt, val):
+    def set_option(self, opt: str, val: Any) -> None:
         """
         :returns: None
         :raises: InvalidOptionNameError if opt is not valid option name
@@ -220,8 +235,8 @@ class Config:
 
         setattr(self, opt, val)
 
-    def _list_terms(self):
-        scripts = [x.name[5:-3] for x in self.datadir.glob("term.*.sh")]
+    def _list_terms(self) -> None:
+        scripts: list[str] = [x.name[5:-3] for x in self.datadir.glob("term.*.sh")]  # type: ignore
         self.termnames = scripts
 
     def _get_option(self, secopt, getter):
@@ -232,20 +247,17 @@ class Config:
         try:
             return getter(*secopt)
         except (configparser.NoSectionError, configparser.NoOptionError):
-            msg = "Config option {0}.{1} not found."
-            logger.debug(msg.format(*secopt))
+            msg = "Config option {0}.{1} not found.".format(*secopt)
+            logger.debug(msg)
             raise
         except Exception:
             msg = "Config option {0}.{1} extraction from {2} " + "failed."
             logger.error(msg.format(secopt + (self.configfiles,)))
             raise
 
-    def merge_args(self, args):
+    def merge_args(self, args: Namespace) -> None:
         """
         Merges argv config overrides into the config instance
-
-        :param args: parsed argv:
-        :type args: L{argparse.Namespace}
         """
 
         if args.location:

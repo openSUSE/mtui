@@ -1,11 +1,11 @@
-from typing import Dict, List, NamedTuple
+from typing import NamedTuple
 
-from .commandlog import CommandLog
-from .package import Package
+from . import CommandLog
+from . import Package
 
 
 class TargetMeta(NamedTuple):
     hostname: str
     system: str
-    packages: Dict[str, Package]
-    hostlog: List[CommandLog]
+    packages: dict[str, Package]
+    hostlog: list[CommandLog]

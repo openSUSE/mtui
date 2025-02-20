@@ -1,10 +1,10 @@
-import os.path
-import re
 from itertools import zip_longest
 from logging import getLogger
+import os.path
+from pathlib import Path
+import re
 
-from mtui.types.rpmver import RPMVersion
-
+from ..types import FileList, RPMVersion
 from .base import BaseExport
 
 logger = getLogger("mtui.export.manual")
@@ -13,7 +13,7 @@ logger = getLogger("mtui.export.manual")
 class ManualExport(BaseExport):
     """Manual workflow export"""
 
-    def get_logs(self, hosts, *args, **kwds):
+    def get_logs(self, hosts, *args, **kwds) -> list[Path]:
         filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs
         ilogs = zip_longest(hosts, map(self._host_installog_to_template, hosts))
         filenames = []
@@ -25,13 +25,14 @@ class ManualExport(BaseExport):
 
         return filenames
 
-    def _fillup_hosts_to_template(self):
+    def _fillup_hosts_to_template(self) -> None:
         # for each host/system of the mtui session, search for the correct location
         # in the template. disabled hosts are not excluded.
         # if the location was found, add the hostname.
         # if the location isn't found, it's considered that it doesn't exist.
         # in this case, a whole new host section including the systemname is added.
-        for host in self.results:
+        # --- self.results --- is injected from BaseExport.__init__ keyword argument
+        for host in self.results:  # type: ignore
             hostname = host.hostname
             systemtype = host.system
             # systemname/reference host string in the maintenance template
@@ -42,7 +43,7 @@ class ManualExport(BaseExport):
                 index = self.template.index(line)
             except ValueError:
                 # system line not found
-                logger.debug("host section %s not found, searching system" % hostname)
+                logger.debug("host section %s not found, searching system", hostname)
                 # systemname/reference host string in the maintenance template
                 # in case the hostname is not yet set
                 line = "{systemtype} (reference host: ?)\n"
@@ -54,7 +55,7 @@ class ManualExport(BaseExport):
                     # system line still not found (not with already set hostname, nor
                     # with not yet set hostname). create new one
                     logger.debug(
-                        "system section %s not found, creating new one" % systemtype
+                        "system section %s not found, creating new one", systemtype
                     )
                     # starting point, just above the hosts section
                     line = "Test results by product-arch:\n"
@@ -116,7 +117,7 @@ class ManualExport(BaseExport):
                     self.template.insert(index, "\n")
 
         # add package version log and script results for each host to the template
-        for host in self.results:
+        for host in self.results:  # type: ignore
             versions = {}
             hostname = host.hostname
             systemtype = host.system
@@ -159,7 +160,7 @@ class ManualExport(BaseExport):
                             if version is not None:
                                 self.template[index] = f"\t{name}-{version}\n"
                             else:
-                                self.templatet[index] = (
+                                self.template[index] = (
                                     f"\tpackage {name} is not installed\n"
                                 )
                         else:
@@ -202,7 +203,7 @@ class ManualExport(BaseExport):
             # temporary variable to avoid repeating the same script. We only want the
             # last result, so we store the previous position
             template_log = host.hostlog
-            scripts = {}
+            scripts: dict[str, str | int] = {}
             for cmdlog in template_log:
                 # search for check scripts in the xml and inspect return code
                 # return code values:   0 SUCCEEDED
@@ -240,7 +241,7 @@ class ManualExport(BaseExport):
                     scriptline = "\t{0:25}: {1}\n".format(scriptname, result)
 
                     if scriptname in scripts:
-                        self.template[scripts[scriptname]] = scriptline
+                        scripts[scriptname] = scriptline
                     else:
                         scripts[scriptname] = index
                         if scriptname in self.template[index]:
@@ -256,10 +257,10 @@ class ManualExport(BaseExport):
                 else:
                     self.template[index + 1] = "=> PASSED\n"
 
-    def _host_installog_to_template(self, target):
+    def _host_installog_to_template(self, target) -> list[str]:
         t = []
         try:
-            host_log = [host for host in self.results if host.hostname == target][0]
+            host_log = [host for host in self.results if host.hostname == target][0]  # type: ignore
         except IndexError:
             return []
 
@@ -271,8 +272,8 @@ class ManualExport(BaseExport):
                 t.append("# {!s}\n{!s}\n".format(cmd, cmd_log.stdout))
         return t
 
-    def install_results(self):
-        hosts = [h.hostname for h in self.results]
+    def install_results(self) -> None:
+        hosts = [h.hostname for h in self.results]  # type: ignore
         c_host = None
         tmp_template = []
         for line in self.template:
@@ -293,7 +294,7 @@ class ManualExport(BaseExport):
 
         self._fillup_hosts_to_template()
 
-    def run(self, hosts, *args, **kwds):
+    def run(self, hosts, *args, **kwds) -> list[str] | FileList:
         self.install_results()
         self.inject_openqa()
         filenames = self.get_logs(hosts)

@@ -2,6 +2,7 @@ from argparse import REMAINDER
 from logging import getLogger
 from subprocess import check_call
 
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 
 logger = getLogger("mtui.commands.lrun")
@@ -16,12 +17,12 @@ class LocalRun(Command):
     command = "lrun"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "command", nargs=REMAINDER, help="command to run on local shell"
         )
 
-    def __call__(self):
+    def __call__(self) -> None:
         if not self.args.command:
             logger.error("Missing argument")
             return

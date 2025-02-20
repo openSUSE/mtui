@@ -1,27 +1,28 @@
+from mtui.argparse import ArgumentParser
 from . import Command
 from .. import messages
-from ..types.rpmver import RPMVersion
+from ..types import RPMVersion
 from ..utils import blue, complete_choices, green, red, requires_update, yellow
 
 
 class ListPackages(Command):
     command = "list_packages"
 
-    state_map = {
+    state_map: dict[None | int, str] = {
         None: blue("not installed"),
         -1: yellow("update needed"),
         0: green("updated"),
         1: red("too recent"),
     }
 
-    def _vers2state(self, current, wanted):
+    def _vers2state(self, current, wanted) -> str:
         if not current:
             return self.state_map[None]
 
         return self.state_map[(current > wanted) - (current < wanted)]
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "-p",
             "--package",
@@ -42,13 +43,13 @@ class ListPackages(Command):
         cls._add_hosts_arg(parser)
 
     @requires_update
-    def _run_just_wanted(self):
+    def _run_just_wanted(self) -> None:
         for key in self.metadata.packages.keys():
             self.println(f"Packages for version {key}:")
             for xs in list(self.metadata.packages[key].items()):
                 self.printPVLN(*(xs + ("",)))
 
-    def __call__(self):
+    def __call__(self) -> None:
         if self.args.wanted:
             self._run_just_wanted()
             return
@@ -97,7 +98,7 @@ class ListPackages(Command):
         self.println(format_output.format(package, version, state))
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices(
             [("-p", "--package"), ("-t", "--target"), ("-w", "--wanted")],
             line,

@@ -3,14 +3,16 @@
 #
 import copy
 import errno
+from logging import getLogger
 import os
+from pathlib import Path
 import re
 import time
-from logging import getLogger
 from traceback import format_exc
 from urllib.request import urlopen
+from typing import Type
 
-from ruamel.yaml import YAML  # type: ignore
+from ruamel.yaml import YAML
 
 from . import messages
 from .utils import atomic_write_file
@@ -19,24 +21,24 @@ from .xdg import save_cache_path
 logger = getLogger("mtui.refhost")
 
 
-class Attributes(object):
+class Attributes:
     """
     Host attributes.
     This class has two purposes: to set the the attributes of a refhost and
     to be used as object for searching refhosts
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.arch = ""
         self.addons = []
         self.product = {}
 
-    def __str__(self):
+    def __str__(self) -> str:
         """
         Human readable output of the current attributes
         """
 
-        product = ""
+        product: str = ""
         if "name" in self.product:
             product = self.product["name"]
             if "version" in self.product:
@@ -48,7 +50,7 @@ class Attributes(object):
 
                     product += str(self.product["version"]["minor"])
 
-        addons = []
+        addons: list[str] = []
         for addon in sorted(self.addons, key=lambda addon: addon["name"]):
             serialization = addon["name"]
             if "version" in addon and "major" in addon["version"]:
@@ -66,14 +68,14 @@ class Attributes(object):
         return re.sub(r"^\s+$", "", representation)
 
     # Used in the tests
-    def __bool__(self):
+    def __bool__(self) -> bool:
         """
         :returns: True if attributes have been set on this object
         """
         return bool(str(self))
 
     @staticmethod
-    def from_testplatform(testplatform):
+    def from_testplatform(testplatform) -> list["Attributes"]:
         """
         Create a list of Attribute objects based on a testplaform string
 
@@ -132,10 +134,10 @@ class Attributes(object):
         return attributes_list
 
 
-class Refhosts(object):
+class Refhosts:
     _default_location = "default"
 
-    def __init__(self, hostmap, location=None):
+    def __init__(self, hostmap: Path, location: str | None = None) -> None:
         """
         load refhosts.yml file and pass it to the xml parser
 
@@ -154,24 +156,24 @@ class Refhosts(object):
 
         self._parse_refhosts(hostmap)
 
-    def _parse_refhosts(self, hostmap):
+    def _parse_refhosts(self, hostmap: Path) -> None:
         try:
-            with open(hostmap) as f:
+            with hostmap.open() as f:
                 self.data = YAML(typ="safe").load(f)
 
         except Exception as error:
             # nothing to do for us if we can't load the hosts
-            logger.error("failed to parse refhosts.yml: {!s}".format(error))
+            logger.error("failed to parse refhosts.yml: %s", error)
             raise
 
-    def search(self, attributes=None):
+    def search(self, attributes) -> list[str]:
         """
         Return hosts matching `attributes`
 
         :return: [str] - Every element is the name of a host
         """
 
-        results = []
+        results: list[str] = []
 
         for attribute in attributes:
             host = []
@@ -192,7 +194,7 @@ class Refhosts(object):
 
         return results
 
-    def is_candidate_match(self, candidate, attribute):
+    def is_candidate_match(self, candidate, attribute) -> bool:
         """
         Checks if the attributes contains all the info requested in
         candidate The candidate is a dictionary that represents a host in the
@@ -225,7 +227,7 @@ class Refhosts(object):
 
         return True
 
-    def _includes_simple_attributes(self, candidate, attribute):
+    def _includes_simple_attributes(self, candidate, attribute) -> bool:
         """
         Helper function for is_candidate_match
         Checks if all candidate data is present in the element.
@@ -259,7 +261,7 @@ class Refhosts(object):
 
         return True
 
-    def _includes_version(self, candidate, element):
+    def _includes_version(self, candidate, element) -> bool:
         """
         Helper function for _is_candidate_match.
         """
@@ -276,7 +278,7 @@ class Refhosts(object):
 
         return True
 
-    def _includes_addons_list(self, candidate_addons, element_addons):
+    def _includes_addons_list(self, candidate_addons, element_addons) -> bool:
         """
         Helper function for is_candidate_match.
         Checks if all the addons are present in the element addons
@@ -298,7 +300,7 @@ class Refhosts(object):
                     return False
         return True
 
-    def _location_hosts(self, location):
+    def _location_hosts(self, location: str):
         """
         :returns: List of <host> elements for `location`
 
@@ -306,14 +308,14 @@ class Refhosts(object):
         """
         return self.data[location]
 
-    def check_location_sanity(self, location):
+    def check_location_sanity(self, location) -> None:
         """
         :raises: L{messages.InvalidLocationError}
         """
         if location not in self.data:
             raise messages.InvalidLocationError(location, self.get_locations())
 
-    def get_locations(self):
+    def get_locations(self) -> set[str]:
         """
         Return available locations
 
@@ -327,27 +329,27 @@ class RefhostsResolveFailed(RuntimeError):
     pass
 
 
-class _RefhostsFactory(object):
+class _RefhostsFactory:
     # FIXME: split resolvers into separate classes
     # should help with the ammount of injected dependencies in each one
     # of the classes
 
-    _stat = None
+    # _stat = None
     """
     :type _stat: callable :: FilePath -> IO L{posix.stat_result}
     """
 
-    _urlopen = None
+    # _urlopen = None
     """
     :type urlopen: callable :: URI -> IO file-like
     """
-    _time_now = None
+    # _time_now = None
     """
     :type time_now: callable :: IO float
     :param time_now_getter: returns unix time
     """
 
-    _write_file = None
+    # _write_file = None
     """
     :type _write_file: callable :: str -> FilePath -> IO ()
     :param _write_file: atomically writes data into given file path
@@ -360,8 +362,8 @@ class _RefhostsFactory(object):
         urlopener,
         file_writer,
         cache_path,
-        refhosts_factory=Refhosts,
-    ):
+        refhosts_factory: Type[Refhosts] = Refhosts,
+    ) -> None:
         self._time_now = time_now_getter
         self._stat = statter
         self._urlopen = urlopener
@@ -389,11 +391,11 @@ class _RefhostsFactory(object):
         else:
             return resolver(config)
 
-    def refresh_https_cache_if_needed(self, path, config):
+    def refresh_https_cache_if_needed(self, path: Path, config) -> None:
         if self._is_https_cache_refresh_needed(path, config.refhosts_https_expiration):
             self.refresh_https_cache(path, config.refhosts_https_uri)
 
-    def _is_https_cache_refresh_needed(self, path, expiration):
+    def _is_https_cache_refresh_needed(self, path, expiration) -> bool:
         try:
             statinfo = self._stat(path)
         except OSError as e:
@@ -404,16 +406,16 @@ class _RefhostsFactory(object):
 
         return self._time_now() - statinfo.st_mtime > expiration
 
-    def refresh_https_cache(self, path, uri):
+    def refresh_https_cache(self, path, uri) -> None:
         self._write_file(self._urlopen(uri).read(), path)
 
-    def resolve_https(self, config):
+    def resolve_https(self, config) -> Refhosts:
         f = self.refhosts_cache_path
         self.refresh_https_cache_if_needed(f, config)
 
         return self.refhosts_factory(f, config.location)
 
-    def resolve_path(self, config):
+    def resolve_path(self, config) -> Refhosts:
         return self.refhosts_factory(config.refhosts_path, config.location)
 
 

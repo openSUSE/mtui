@@ -1,4 +1,4 @@
-from typing import Dict, NamedTuple
+from typing import NamedTuple
 
 
 class Test(NamedTuple):
@@ -6,4 +6,4 @@ class Test(NamedTuple):
     result: str
     test_id: int
     arch: str
-    modules: Dict[str, str]
+    modules: dict[str, str]

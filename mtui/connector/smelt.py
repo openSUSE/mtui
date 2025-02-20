@@ -1,13 +1,16 @@
-""" Module containing SMELT parsing and template fill code """
+"""Module containing SMELT parsing and template fill code"""
 
+from collections.abc import Collection
 from datetime import datetime
 from itertools import chain
 from json.decoder import JSONDecodeError
 from logging import getLogger
+from typing import Any
 
 import requests
 
 from ..utils import walk
+from ..types import RequestReviewID
 
 logger = getLogger("mtui.connector.smelt")
 
@@ -19,12 +22,14 @@ class SMELT:
     param rrid: RequestReviewID instance
     """
 
-    def __init__(self, rrid, apiurl="https://smelt.suse.de/graphql/"):
+    def __init__(
+        self, rrid: RequestReviewID, apiurl: str = "https://smelt.suse.de/graphql/"
+    ) -> None:
         self.rrid = rrid
         self.apiurl = apiurl
-        self.data = self._get_data()
+        self.data: Collection[Any] | None = self._get_data()
 
-    def _get_data(self):
+    def _get_data(self) -> Collection[Any] | None:
         query_incident = f"""{{
   incidents(incidentId: {self.rrid.maintenance_id} ) {{
     edges {{
@@ -89,7 +94,7 @@ class SMELT:
             return None
         return inc
 
-    def openqa_links(self):
+    def openqa_links(self) -> list[str] | None:
         """ " Get openQA links from comments in IBS .. copied to SMELT api:)"""
         links = self._comments(self.data)
         if not links:
@@ -102,16 +107,13 @@ class SMELT:
         logger.info("openQA jobs found")
         return links
 
-    def openqa_links_verbose(self):
+    def openqa_links_verbose(self) -> list[str]:
         links = self._comments(self.data)
-
         if not links:
-            logger.debug("None known openQA jobs")
-            return None
+            links = []
 
-        verbose_links = []
         second = False
-
+        verbose_links: list[str] = []
         for x in links:
             if second:
                 second = False
@@ -124,7 +126,7 @@ class SMELT:
         return verbose_links
 
     @staticmethod
-    def _comments(data):
+    def _comments(data) -> list[str] | None:
         if not data:
             return None
         if "comments" not in data:
@@ -153,21 +155,21 @@ class SMELT:
 
         return last["text"].split("\n")
 
-    def get_incident_name(self):
+    def get_incident_name(self) -> str | None:
         if not self:
             return None
-        return sorted([pkg["name"] for pkg in self.data["packages"]], key=len)[0]
+        return sorted([pkg["name"] for pkg in self.data["packages"]], key=len)[0]  # type: ignore
 
-    def get_version(self):
+    def get_version(self) -> str | None:
         """Usable only for kernel/live-patching updates, normal updates can have multiple products versions"""
 
         if not self:
             return None
         # take first repo ..
-        base = self.data["repositories"][0]["name"].split(":")[-2].split("-")
+        base = self.data["repositories"][0]["name"].split(":")[-2].split("-")  # type: ignore
         return f"{base[0]}-{base[1]}"
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         if (
             self.data
             == {

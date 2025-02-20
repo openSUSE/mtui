@@ -22,18 +22,18 @@ logger = getLogger("mtui.updater")
 
 
 class ZypperUpdate(Update):
-    def check(self, target, stdin, stdout, stderr, exitcode):
+    def check(self, target, stdin, stdout, stderr, exitcode) -> None:
         if "Error:" in stderr:
             logger.critical(
-                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                    target.hostname, stdin, stdout, stderr
-                )
+                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+                target.hostname,
+                stdin,
+                stdout,
+                stderr,
             )
             raise UpdateError("RPM Error", target.hostname)
         if "The following package is not supported by its vendor" in stdout:
-            logger.critical(
-                "{!s}: package support is uncertain:".format(target.hostname)
-            )
+            logger.critical("%s: package support is uncertain:", target.hostname)
             marker = "The following package is not supported by its vendor:\n"
             start = stdout.find(marker)
             end = stdout.find("\n\n", start)
@@ -41,12 +41,12 @@ class ZypperUpdate(Update):
 
 
 class ZypperOBSUpdate(ZypperUpdate):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
         repat = ":p={:d}"
-        repo = repat.format(self.testreport.rrid.maintenance_id)
+        repo: str = repat.format(self.testreport.rrid.maintenance_id)
 
-        self.commands = [
+        self.commands: list[str] = [
             r"""export LANG=""",
             r"""zypper -n lr -puU""",
             r"""zypper -n refresh""",
@@ -61,17 +61,20 @@ class ZypperOBSUpdate(ZypperUpdate):
         ]
 
 
+# its weird, but still our base classes are designed for zypper :(
+# TODO: broken, cant really work
 class RedHatUpdate(Update):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
-        self.commands = [
+        self.commands: list[str] = [
             "export LANG=",
             "yum repolist",
             "yum -y update {!s}".format(" ".join(self.packages)),
         ]
 
 
+# TODO deprecated
 class CaaSPUpdate(Update):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -101,11 +104,11 @@ Updater = DictWithInjections(
 
 
 class ZypperPrepare(Prepare):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
         parameter = ""
-        commands = []
+        commands: list[str] = []
 
         if self.force:
             parameter = "--force-resolution"
@@ -126,7 +129,7 @@ class ZypperPrepare(Prepare):
 
         self.commands = commands
 
-    def check(self, target, stdin, stdout, stderr, exitcode):
+    def check(self, target, stdin, stdout, stderr, exitcode) -> None:
         if "Error:" in stderr:
             logger.critical(
                 '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
@@ -137,11 +140,11 @@ class ZypperPrepare(Prepare):
 
 
 class RedHatPrepare(Prepare):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
         parameter = ""
-        commands = []
+        commands: list[str] = []
 
         if not self.testing:
             parameter = "--disablerepo=*testing*"
@@ -160,7 +163,7 @@ class RedHatPrepare(Prepare):
 
 
 class CaaSPPrepare(Prepare):
-    def run(self):
+    def run(self) -> None:
         pass
 
 
@@ -177,7 +180,7 @@ Preparer = DictWithInjections(
 
 
 class ZypperDowngrade(Downgrade):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
         self.list_command = r"""
@@ -195,13 +198,13 @@ class ZypperDowngrade(Downgrade):
 
 
 class RedHatDowngrade(Downgrade):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
         self.commands = ["yum -y downgrade {!s}".format(" ".join(self.packages))]
 
 
 class CaaSPDowngrade(Downgrade):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
         self.kind = "transactional"
         self.commands = [
@@ -222,12 +225,10 @@ Downgrader = DictWithInjections(
 
 
 class ZypperInstall(Install):
-    def __init__(self, *a, **kw):
+    def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
-        commands = []
-
-        commands.append("zypper -n in -y -l {!s}".format(" ".join(self.packages)))
+        commands: list[str] = [f"zypper -n in -y -l {' '.join(self.packages)}"]
 
         self.commands = commands
 
@@ -236,9 +237,7 @@ class RedHatInstall(Install):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
 
-        commands = []
-
-        commands.append("yum -y install {!s}".format(" ".join(self.packages)))
+        commands = ["yum -y install {!s}".format(" ".join(self.packages))]
 
         self.commands = commands
 

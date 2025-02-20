@@ -4,12 +4,17 @@ from shlex import quote
 from subprocess import check_call
 from traceback import format_exc
 
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.utils import complete_choices, requires_update
 
-osc_api = {"SUSE": "https://api.suse.de", "openSUSE": "https://api.opensuse.org"}
 
 logger = getLogger("mtui.command.osc")
+
+osc_api: dict[str, str] = {
+    "SUSE": "https://api.suse.de",
+    "openSUSE": "https://api.opensuse.org",
+}
 
 
 class OSCCommand(Command):
@@ -19,20 +24,20 @@ class OSCCommand(Command):
     _errorpl = ""
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "-g",
             "--group",
             nargs="?",
             action="append",
-            help="Group wanted to {}".format(cls.command),
+            help=f"Group wanted to {cls.command}",
         )
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
-        logger.info("{}: {}".format(self._infopl, reviewid))
-        cmd = "osc -A {} qam {}".format(osc_api[apiid], self.command)
+        logger.info("%s: %s", self._infopl, reviewid)
+        cmd = f"osc -A {osc_api[apiid]} qam {self.command}"
         group = " "
 
         if self.args.group:
@@ -48,7 +53,7 @@ class OSCCommand(Command):
             logger.debug(format_exc())
 
     @staticmethod
-    def complete(_, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices([("-g", "--group")], line, text)
 
 
@@ -93,7 +98,7 @@ class OSCReject(Command):
     command = "reject"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
         parser.add_argument(
             "-g",
             "--group",
@@ -125,7 +130,7 @@ class OSCReject(Command):
         )
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         apiid, _, _, reviewid = str(self.metadata.id).split(":")
         logger.info(f"Reject request: {reviewid}")
         cmd = f"osc -A {osc_api[apiid]} qam reject"
@@ -148,11 +153,11 @@ class OSCReject(Command):
         try:
             check_call(cmd, shell=True)
         except Exception as e:
-            logger.error("Reject failed: {!s}".format(e))
+            logger.error("Reject failed: %s", e)
             logger.debug(format_exc())
 
     @staticmethod
-    def complete(_, text, line, begidx, endidx):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices(
             [
                 ("-g", "--group"),
@@ -181,15 +186,15 @@ class OSCComment(Command):
     command = "comment"
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         comment = input("Comment: ")
         reviewid = str(self.metadata.id)
         apiid = self.metadata.id.project
         cmd = f"osc -A {osc_api[apiid]} qam {self.command} {reviewid}"
-        logger.debug(f"comment release request with: {cmd} {comment}")
+        logger.debug("comment release request with: %s %s", cmd, comment)
 
         try:
             check_call(cmd.split() + [comment])
         except Exception as e:
-            logger.error("Comment failed: {!s}".format(e))
+            logger.error("Comment failed: %s", e)
             logger.debug(format_exc())

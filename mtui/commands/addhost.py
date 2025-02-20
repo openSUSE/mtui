@@ -21,7 +21,7 @@ class AddHost(Command):
             help="address of the target host (should be the FQDN)",
         )
 
-    def __call__(self):
+    def __call__(self) -> None:
         if not self.args.target:
             for tp in self.metadata.testplatforms:
                 self.metadata.refhosts_from_tp(tp)
@@ -35,5 +35,5 @@ class AddHost(Command):
                 concurrent.futures.wait(connections)
 
     @staticmethod
-    def complete(_, text, line, begidx, endix):
+    def complete(state, text, line, begidx, endidx) -> list[str]:
         return complete_choices([("-t", "--target")], line, text)

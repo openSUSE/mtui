@@ -1,15 +1,17 @@
-import subprocess
-from abc import ABCMeta, abstractmethod
-from collections.abc import Callable
+from abc import ABC, abstractmethod
 from logging import getLogger
+from pathlib import Path
+import subprocess
 from traceback import format_exc
+from typing import Literal
 
-from mtui import messages
+from . import messages
+from .target.hostgroup import HostsGroup
 
 log = getLogger("mtui.script")
 
 
-class Script(metaclass=ABCMeta):
+class Script(ABC):
     """
     :type subdir: Path
     :param subdir: subdirectory in the L{TestReport.scripts_wd} where the
@@ -23,9 +25,9 @@ class Script(metaclass=ABCMeta):
 
     subdir: str = ""
 
-    def __init__(self, tr, path) -> None:
+    def __init__(self, tr, path: Path) -> None:
         """
-        :type path: str
+        :type path: Path
         :param path: absolute path to the script
         """
         self.path = path
@@ -41,7 +43,7 @@ class Script(metaclass=ABCMeta):
     def __str__(self) -> str:
         return "{0} script {1}".format(self.subdir, self.name)
 
-    def _result(self, cls, bname, t):
+    def _result(self, cls, bname, t) -> Path:
         return self.testreport.report_wd(
             *cls.result_parts(bname, t.hostname), filepath=True
         )
@@ -50,10 +52,10 @@ class Script(metaclass=ABCMeta):
     def _run(self, targets) -> None: ...
 
     @classmethod
-    def result_parts(cls, *basename):
+    def result_parts(cls, *basename) -> tuple[Literal["output/scripts"], str]:
         return ("output/scripts", ".".join((cls.subdir,) + basename))
 
-    def run(self, targets) -> None:
+    def run(self, targets: HostsGroup) -> None:
         """
         :type targets: [{HostsGroup}]
         """
@@ -62,17 +64,18 @@ class Script(metaclass=ABCMeta):
             self._run(targets)
         except KeyboardInterrupt:
             log.warning("skipping {0}".format(self))
-            return
 
 
 class PreScript(Script):
     subdir = "pre"
 
-    def _run(self, targets):
-        rname = self.testreport.target_wd("{!s}.{!s}".format(self.subdir, self.bname))
-        targets.put(self.path, rname)
+    def _run(self, targets: HostsGroup) -> None:
+        rname: Path = self.testreport.target_wd(
+            "{!s}.{!s}".format(self.subdir, self.bname)
+        )
+        targets.sftp_put(self.path, rname)
 
-        targets.put(
+        targets.sftp_put(
             self.testreport.report_wd("packages-list.txt", filepath=True),
             self.testreport.target_wd("package-list.txt"),
         )
@@ -87,7 +90,7 @@ class PreScript(Script):
         )
 
         for t in targets.values():
-            fname = self._result(type(self), self.bname, t)
+            fname: Path = self._result(type(self), self.bname, t)
             try:
                 with fname.open(mode="w") as f:
                     f.write(t.lastout())
@@ -103,21 +106,22 @@ class PostScript(PreScript):
 class CompareScript(Script):
     subdir = "compare"
 
-    def _run(self, targets):
+    def _run(self, targets: HostsGroup) -> None:
         for t in targets.values():
             self._run_single_target(t)
 
-    def _run_single_target(self, t):
+    def _run_single_target(self, t) -> None:
         bcheck = self.bname.replace("compare_", "check_")
         argv = [
-            (self.path),
-            self._result(PreScript, bcheck, t),
-            self._result(PostScript, bcheck, t),
+            str(x)
+            for x in (
+                self.path,
+                self._result(PreScript, bcheck, t),
+                self._result(PostScript, bcheck, t),
+            )
         ]
-        argv = [str(x) for x in argv]
 
-        log.debug("running {0}".format(argv))
-
+        log.debug("running %s", argv)
         try:
             ret = subprocess.run(
                 argv,
@@ -138,8 +142,8 @@ class CompareScript(Script):
         if ret.returncode == 2:
             logger, msg = log.critical, messages.CompareScriptCrashed
         else:
-            logger, msg = log.warning, messages.CompareScriptFailed
+            logger, msg = log.warning, messages.CompareScriptFailed  # type: ignore
 
-        assert isinstance(logger, Callable), "{0!r} not callable".format(logger)
+        assert callable(logger), "{0!r} not callable".format(logger)
 
         logger(msg(argv, ret.stdout, ret.stderr, ret.returncode))

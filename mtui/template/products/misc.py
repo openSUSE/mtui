@@ -32,3 +32,10 @@ def normalize_manager(x):
         x[0][0] = "sle-manager-tools"
         return x
     return x
+
+
+def normalize_osle(x):
+    x[0][0] = "leap"
+    x[0][1] = x[0][2]
+    x[0][2] = "x86_64"
+    return x

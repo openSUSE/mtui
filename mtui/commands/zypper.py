@@ -1,5 +1,6 @@
 from logging import getLogger
 
+from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.utils import complete_choices, requires_update
 
@@ -14,13 +15,13 @@ class Install(Command):
     command = "install"
 
     @classmethod
-    def _add_arguments(cls, parser) -> None:
-        parser.add_argument("package", nargs="+", help="package to install")
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        parser.add_argument("package", nargs="+", type=str, help="package to install")
 
         cls._add_hosts_arg(parser)
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         logger.info("Installing")
         packages = self.args.package
         targets = self.parse_hosts()
@@ -32,15 +33,17 @@ class Install(Command):
             return
         except Exception as e:
             logger.critical("failed to install packages")
-            logger.debug("{!s}".format(e))
+            logger.debug("%s", e)
             return
 
         logger.info("Done")
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
-        parameters = [("-t", "--target")]
-        packages = [(package,) for package in state["metadata"].get_package_list()]
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        parameters: list[tuple[str, ...]] = [("-t", "--target")]
+        packages: list[tuple[str, ...]] = [
+            (package,) for package in state["metadata"].get_package_list()
+        ]
 
         parameters += packages
 
@@ -55,16 +58,14 @@ class Uninstall(Command):
     command = "uninstall"
 
     @classmethod
-    def _add_arguments(cls, parser):
-        parser.add_argument("package", nargs="+", help="package to install")
-
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        parser.add_argument("package", nargs="+", type=str, help="package to install")
         cls._add_hosts_arg(parser)
-        return parser
 
     @requires_update
-    def __call__(self):
+    def __call__(self) -> None:
         logger.info("Removing")
-        packages = self.args.package
+        packages: list[str] = self.args.package
         targets = self.parse_hosts()
 
         try:
@@ -74,15 +75,17 @@ class Uninstall(Command):
             return
         except Exception as e:
             logger.critical("failed to install packages")
-            logger.debug("{!s}".format(e))
+            logger.debug("%s", e)
             return
 
         logger.info("Done")
 
     @staticmethod
-    def complete(state, text, line, begidx, endidx):
-        parameters = [("-t", "--target")]
-        packages = [(package,) for package in state["metadata"].get_package_list()]
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        parameters: list[tuple[str, ...]] = [("-t", "--target")]
+        packages: list[tuple[str, ...]] = [
+            (package,) for package in state["metadata"].get_package_list()
+        ]
 
         parameters += packages
 

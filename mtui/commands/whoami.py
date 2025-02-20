@@ -15,8 +15,8 @@ class Whoami(Command):
     # TODO: consolidate these into a SessionIdentity object
     command = "whoami"
 
-    def get_pid(self):
+    def get_pid(self) -> int:
         return os.getpid()
 
-    def __call__(self):
-        self.println(" ".join([self.config.session_user, str(self.get_pid())]))
+    def __call__(self) -> None:
+        self.println(f"User: {self.config.session_user}, app pid: {self.get_pid()}")

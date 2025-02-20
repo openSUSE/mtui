@@ -26,7 +26,7 @@ class HostLock(Command):
             "-c", "--comment", action="append", nargs=REMAINDER, help="lock comment"
         )
 
-    def __call__(self):
+    def __call__(self) -> None:
         targets = self.parse_hosts()
         comment = "" if not self.args.comment else " ".join(self.args.comment[0])
         targets.lock(comment)

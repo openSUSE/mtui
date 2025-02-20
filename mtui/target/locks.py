@@ -1,9 +1,13 @@
-import errno
-import os
 from datetime import datetime
+import errno
 from logging import getLogger
+import os
+from pathlib import Path
+from typing import Self
 
-from mtui.utils import timestamp
+from ..config import Config
+from ..connection import Connection
+from ..utils import timestamp
 
 logger = getLogger("mtui.target.locks")
 
@@ -13,55 +17,34 @@ class TargetLockedError(Exception):
 
 
 class RemoteLock:
-    """
-    Localy represent the state of remote lock
-    """
+    """Localy represent the state of remote lock"""
 
-    def __init__(self):
-        self.user = None
-        """
-    :param user: user owning the lock
-    :type user: str or None
-    """
-        self.timestamp = None
-        """
-    :param timestamp: timestamp when the lock was set
-    :type timestamp: str or None
-    """
-        self.pid = None
-        """
-    :param pid: pid of owning the lock
-    :type pid: int or None
-    """
-        self.comment = None
-        """
-    :param comment: comment why the lock was set
-    :type comment: str or None
-    """
+    def __init__(self) -> None:
+        self.user: str = ""
+        self.timestamp: str = ""
+        self.pid: int = 0
+        self.comment: str = ""
 
-    def to_lockfile(self):
+    def to_lockfile(self) -> str:
+        """:return: str representation of self to be written in the
+        lockfile
         """
-        :return: str representation of self to be written in the
-            lockfile
-        """
-        xs = [self.timestamp, self.user, str(self.pid)]
+        xs: list[str] = [self.timestamp, self.user, str(self.pid)]
         if self.comment:
             xs.append(self.comment)
         return ":".join(xs)
 
     def __str__(self) -> str:
         if self.comment:
-            comment = " ({!s})".format(self.comment)
+            comment = f" ({self.comment})"
         else:
             comment = ""
 
         return f"locked by {self.user}{comment}."
 
     @classmethod
-    def from_lockfile(cls, line):
-        """
-        :return: L{RemoteLock} instance
-        """
+    def from_lockfile(cls, line) -> Self:
+        """:return: L{RemoteLock} instance"""
         self = cls()
 
         if line == "":
@@ -73,7 +56,7 @@ class RemoteLock:
             raise ValueError("got weird format in lockfile")
 
         if len(line) < 4:
-            line += [None]
+            line += [""]
 
         self.timestamp = line[0]
         self.user = line[1]
@@ -84,21 +67,20 @@ class RemoteLock:
 
 
 class LockedTargets:
-    def __init__(self, targets):
+    def __init__(self, targets) -> None:
         self.targets = targets
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         for target in self.targets:
             target.lock()
 
-    def __exit__(self, type_, value, tb):
+    def __exit__(self, type_, value, tb) -> None:
         for target in self.targets:
             target.unlock()
 
 
 class TargetLock:
-    """
-    This class is not supposted to be used directly but via
+    """This class is not supposted to be used directly but via
     L{Target} methods
 
     If the lock has comment, it is considered to be an `exclusive`
@@ -111,11 +93,11 @@ class TargetLock:
     # Unfortunately, I don't see a way to do this without unreasonably
     # raising the logic complexity and usability
 
-    filename = "/var/lock/mtui.lock"
+    filename = Path("/var/lock/mtui.lock")
 
-    def __init__(self, connection, config):
+    def __init__(self, connection: Connection, config: Config) -> None:
         self.connection = connection
-        self.i_am_user = config.session_user
+        self.i_am_user = config.session_user  # noqa
         self.i_am_pid = os.getpid()
         """
     :type timestampFactory: callable
@@ -130,8 +112,8 @@ class TargetLock:
         self._lock = RemoteLock()  # make sure lock is reset.
 
         try:
-            lockfile = self.connection.open(self.filename)
-        except EnvironmentError as error:
+            lockfile = self.connection.sftp_open(self.filename)
+        except OSError as error:
             if error.errno != errno.ENOENT:
                 raise
             data = ""
@@ -142,8 +124,7 @@ class TargetLock:
         self._lock = RemoteLock.from_lockfile(data)
 
     def is_locked(self) -> bool:
-        """
-        :returns: bool True if target system is locked by someone else
+        """:returns: bool True if target system is locked by someone else
 
         If possible use `try: lock.lock(); ...` as this introduces race
         condition that's fundamentally impossible to remove.
@@ -151,11 +132,8 @@ class TargetLock:
         self.load()
         return bool(self._lock.user)
 
-    def lock(self, comment=None):
-        """
-        Locks the target system
-
-        :returns: None
+    def lock(self, comment: str = "") -> None:
+        """Locks the target system
         :raises TargetLockedError: if target is already locked.
         """
         if self.is_locked():
@@ -169,7 +147,7 @@ class TargetLock:
                 # setting a different comment may be desired.
                 raise TargetLockedError(self.locked_by_msg())
 
-        logger.debug("{!s}: setting lock".format(self.connection.hostname))
+        logger.debug("%s: setting lock", self.connection.hostname)
 
         rl = RemoteLock()
         rl.user = self.i_am_user
@@ -178,19 +156,17 @@ class TargetLock:
         rl.comment = comment
 
         try:
-            lockfile = self.connection.open(self.filename, "w+")
+            lockfile = self.connection.sftp_open(self.filename, "w+")
+            lockfile.write(rl.to_lockfile())
+            lockfile.close()
         except Exception as e:
-            logger.error("failed to open lockfile: {!s}".format(e))
+            logger.error("failed to open lockfile: %s", e)
             raise
 
-        lockfile.write(rl.to_lockfile())
-        lockfile.close()
         self._lock = rl
 
     def locked_by_msg(self) -> str:
-        """
-        :returns str: locked by message suitable for display to user
-        """
+        """:returns str: locked by message suitable for display to user"""
         self.load()
         return f"{self.connection.hostname} is {self._lock}"
 
@@ -205,11 +181,10 @@ class TargetLock:
     def time(self) -> str:
         self.load()
         time = datetime.fromtimestamp(float(self._lock.timestamp))
-        return time.strftime("%A, %d.%m.%Y %H:%M UTC")
+        return time.strftime(r"%A, %d.%m.%Y %H:%M UTC")
 
-    def unlock(self, force=False) -> None:
-        """
-        Unlocks target system
+    def unlock(self, force: bool = False) -> None:
+        """Unlocks target system
 
         :param force: bool if False (default) removes only locks owned
           by current user. If True removes locks owned by anyone
@@ -224,20 +199,18 @@ class TargetLock:
             raise TargetLockedError(self.locked_by_msg())
 
         try:
-            self.connection.remove(self.filename)
+            self.connection.sftp_remove(self.filename)
         except IOError as e:
             if e.errno == errno.ENOENT:
                 pass
         except Exception as e:
-            logger.error("failed to remove lockfile: {!s}".format(e))
+            logger.error("failed to remove lockfile: %s", e)
             raise
 
         self._lock = RemoteLock()
 
     def is_mine(self) -> bool:
-        """
-        :returns bool: True if the lock is owned by user running this
-        """
+        """:returns bool: True if the lock is owned by user running this"""
         if not self._lock.user:
             raise RuntimeError("not locked")
 

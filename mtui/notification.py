@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-# vim: et sw=2 sts=2
 #
 # mtui notifications, currently supporting python-notify only
 #
@@ -10,7 +8,9 @@ logger = getLogger("mtui.notifications")
 __impl = None
 
 
-def display(summary=None, text=None, icon="stock_dialog-info"):
+def display(
+    summary: str | None = None, text: str | None = None, icon: str = "stock_dialog-info"
+) -> None:
     global __impl
     if __impl is None:
         try:
@@ -19,15 +19,15 @@ def display(summary=None, text=None, icon="stock_dialog-info"):
             __impl = False
             logger.debug("pynotify not installed. notification disabled.")
         else:
-            if not __impl.init("mtui"):
+            if not __impl.init("mtui"):  # type: ignore
                 __impl = False
                 logger.debug("failed to initialize pynotify")
 
     if not __impl:
         return
 
-    logger.debug('displaying notify message "{!s}"'.format(text))
+    logger.debug('displaying notify message "%s"', text)
     try:
-        __impl.Notification(summary, text, icon).show()
+        __impl.Notification(summary, text, icon).show()  # type: ignore
     except Exception:
         logger.debug("failed to display notification")

@@ -1,7 +1,6 @@
 from mtui.utils import ensure_dir_exists
 from mtui.utils import chdir
 from mtui.utils import atomic_write_file
-from mtui.utils import SUTParse
 
 import os
 
@@ -17,7 +16,7 @@ def create_temp(tmpdir_factory):
     return tmpdir_factory.mktemp("utils")
 
 
-class TestEnsureDirExists(object):
+class TestEnsureDirExists:
     _callback_paths = []
 
     def test_create(self, create_temp):
