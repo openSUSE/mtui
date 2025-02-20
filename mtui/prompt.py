@@ -14,6 +14,7 @@ import mtui.notification as notification
 from . import commands, messages
 from .argparse import ArgsParseFailure
 from .template.nulltestreport import NullTestReport
+from .utils import get_short_rrid
 
 logger = getLogger("mtui.prompt")
 
@@ -220,16 +221,17 @@ class CommandPrompt(cmd.Cmd):
 
     def set_prompt(self, session=None):
         self.session = session
-        session = ":" + str(session) if session else ""
+        session = str(session) + "/" if session else ""
         mode = "mtui"
         if self.config.auto and not self.config.kernel:
             mode += "-auto"
         elif self.config.kernel:
             mode += "-kernel"
-        self.prompt = f"{mode}{session}> "
+        self.prompt = f"{session}{mode}> "
 
     def load_update(self, update, autoconnect):
         tr = update.make_testreport(self.config, autoconnect=autoconnect)
         self.metadata = tr
         self.targets = tr.targets
-        self.set_prompt(None)
+        short_rrid = get_short_rrid(str(update.id))
+        self.set_prompt(short_rrid)

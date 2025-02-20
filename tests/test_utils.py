@@ -2,6 +2,7 @@ from mtui.utils import ensure_dir_exists
 from mtui.utils import chdir
 from mtui.utils import atomic_write_file
 from mtui.utils import SUTParse
+from mtui.utils import get_short_rrid
 
 import os
 
@@ -82,3 +83,11 @@ def test_atomic_write(create_temp):
 
 def test_sutparse():
     pass
+
+
+def test_get_short_rrid():
+    id = "10010:200200"
+    arb_rrid = "SUSE:Maintenance:" + id
+    short_rrid = get_short_rrid(arb_rrid)
+
+    assert short_rrid == "S:M:" + id

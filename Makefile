@@ -9,6 +9,10 @@ only-test:
 checkstyle:
 	black --check ./
 
+.PHONY: tidy-diff
+tidy-diff:
+	black --diff ./
+
 .PHONY: tidy
 tidy:
 	black ./
