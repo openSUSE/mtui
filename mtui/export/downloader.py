@@ -1,4 +1,4 @@
-from collections.abc import Callable, Hashable
+from collections.abc import Callable
 import concurrent.futures
 from logging import getLogger
 import os.path
@@ -8,14 +8,6 @@ from urllib.request import urlretrieve
 from mtui.messages import ResultsMissingError
 
 logger = getLogger("mtui.export.downloader")
-
-
-class DownloaderDict(dict):
-    def __getitem__(self, item: Hashable) -> Callable[[str, dict, str, str, str], None]:
-        try:
-            return super().__getitem__(item)
-        except KeyError:
-            return _emptylog
 
 
 def _subdl(oqa_path: str, l_path: str, test: dict, errormode: str) -> None:
@@ -28,7 +20,7 @@ def _subdl(oqa_path: str, l_path: str, test: dict, errormode: str) -> None:
             raise ResultsMissingError(test["name"], test["arch"])
 
 
-def _emptylog(host, test, *args, **kwds):
+def _emptylog(host, test, *args, **kwds) -> None:
     logger.debug("No log to download for test: %s on %s", test["name"], host)
     pass
 
@@ -57,7 +49,10 @@ def _installlog(host, test, _, installlogsdir, errormode) -> None:
     _subdl(oqa_path, l_path, test, errormode)
 
 
-downloader = DownloaderDict({"install": _installlog, "ltp": _resultlog})
+downloader: dict[str, Callable[[str, dict, str, str, str], None]] = {
+    "install": _installlog,
+    "ltp": _resultlog,
+}
 
 
 def download_logs(oqa, resultsdir, installogsdir, errormode: str) -> None:
@@ -71,5 +66,5 @@ def download_logs(oqa, resultsdir, installogsdir, errormode: str) -> None:
     with concurrent.futures.ThreadPoolExecutor() as e:
         for host, name, test_id, arch in results_matrix:
             test = {"name": name, "test_id": test_id, "arch": arch}
-            dl = downloader[name.split("_")[0]]
+            dl = downloader.get(name.split("_")[0], _emptylog)
             e.submit(dl, host, test, resultsdir, installogsdir, errormode)
