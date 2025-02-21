@@ -29,7 +29,7 @@ class AutoOpenQA(OpenQA):
         )
 
     def _pretty_print(self, *args) -> list[str]:
-        jobs = args[1]
+        jobs = args[0]
         if not jobs:
             logger.debug("No job - no results")
             return []
