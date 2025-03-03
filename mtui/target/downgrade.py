@@ -1,9 +1,8 @@
 from logging import getLogger
 import re
-from typing import Any
 
 from ..types.rpmver import RPMVersion
-from .actions import UpdateError, queue, spinner
+from .actions import queue, spinner
 from .basedoer import Doer
 from .hostgroup import HostsGroup
 
@@ -110,7 +109,7 @@ class Downgrade(Doer):
                 temp.run(self.commands_dict)
 
                 for t in self.targets.values():
-                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
+                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())  # type: ignore
 
             for command in self.post_commands:
                 self.targets.run(command)
@@ -119,39 +118,3 @@ class Downgrade(Doer):
             raise
         finally:
             self.unlock_hosts()
-
-    # TODO: check if this work correctly -> maybe use re
-    def _check(self, target, stdin, stdout, stderr, exitcode):
-        if "A ZYpp transaction is already in progress." in stderr:
-            logger.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-            )
-            raise UpdateError(target.hostname, "update stack locked")
-        if "System management is locked" in stderr:
-            logger.critical(
-                '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr,
-                exitcode,
-            )
-            raise UpdateError("update stack locked", target.hostname)
-        if "(c): c" in stdout:
-            logger.critical(
-                "%s: unresolved dependency problem. please resolve manually:\n%s",
-                target.hostname,
-                stdout,
-            )
-            raise UpdateError("Dependency Error", target.hostname)
-        if exitcode == 104:
-            logger.critical(
-                "%s: zypper returned with errorcode 104:\n%s", target.hostname, stderr
-            )
-            raise UpdateError("Unspecified Error", target.hostname)
-        if exitcode == 106:
-            logger.warning(
-                "%s: zypper returned with errocode 106:\n%s", target.hostname, stderr
-            )
-
-        return self.check(target, stdin, stdout, stderr, exitcode)
