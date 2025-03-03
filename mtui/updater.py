@@ -4,6 +4,13 @@
 
 from logging import getLogger
 
+from .checks import (
+    EmptyCheck,
+    ZypperDowngradeCheck,
+    ZypperInstallCheck,
+    ZypperPrepareCheck,
+    ZypperUpdateCheck,
+)
 from .messages import (
     MissingDowngraderError,
     MissingInstallerError,
@@ -18,10 +25,11 @@ from .target.prepare import Prepare
 from .target.update import Update
 from .utils import DictWithInjections
 
+
 logger = getLogger("mtui.updater")
 
 
-class ZypperUpdate(Update):
+class ZypperUpdate(Update, ZypperUpdateCheck):
     def check(self, target, stdin, stdout, stderr, exitcode) -> None:
         if "Error:" in stderr:
             logger.critical(
@@ -63,7 +71,7 @@ class ZypperOBSUpdate(ZypperUpdate):
 
 # its weird, but still our base classes are designed for zypper :(
 # TODO: broken, cant really work
-class RedHatUpdate(Update):
+class RedHatUpdate(Update, EmptyCheck):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
@@ -75,7 +83,7 @@ class RedHatUpdate(Update):
 
 
 # TODO deprecated
-class CaaSPUpdate(Update):
+class CaaSPUpdate(Update, EmptyCheck):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.type = "transactional"
@@ -103,7 +111,7 @@ Updater = DictWithInjections(
 )
 
 
-class ZypperPrepare(Prepare):
+class ZypperPrepare(Prepare, ZypperPrepareCheck):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
@@ -139,7 +147,7 @@ class ZypperPrepare(Prepare):
             raise UpdateError("RPM Error", target.hostname)
 
 
-class RedHatPrepare(Prepare):
+class RedHatPrepare(Prepare, EmptyCheck):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
@@ -162,7 +170,7 @@ class RedHatPrepare(Prepare):
         self.commands = commands
 
 
-class CaaSPPrepare(Prepare):
+class CaaSPPrepare(Prepare, EmptyCheck):
     def run(self) -> None:
         pass
 
@@ -179,7 +187,7 @@ Preparer = DictWithInjections(
 )
 
 
-class ZypperDowngrade(Downgrade):
+class ZypperDowngrade(Downgrade, ZypperDowngradeCheck):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
@@ -197,13 +205,13 @@ class ZypperDowngrade(Downgrade):
         self.install_command = "rpm -q {!s} &>/dev/null && zypper -n in -C --force-resolution -y -l {!s}={!s}"
 
 
-class RedHatDowngrade(Downgrade):
+class RedHatDowngrade(Downgrade, EmptyCheck):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
         self.commands = ["yum -y downgrade {!s}".format(" ".join(self.packages))]
 
 
-class CaaSPDowngrade(Downgrade):
+class CaaSPDowngrade(Downgrade, EmptyCheck):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
         self.kind = "transactional"
@@ -224,16 +232,13 @@ Downgrader = DictWithInjections(
 )
 
 
-class ZypperInstall(Install):
+class ZypperInstall(Install, ZypperInstallCheck):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
-
-        commands: list[str] = [f"zypper -n in -y -l {' '.join(self.packages)}"]
-
-        self.commands = commands
+        self.commands: list[str] = [f"zypper -n in -y -l {' '.join(self.packages)}"]
 
 
-class RedHatInstall(Install):
+class RedHatInstall(Install, EmptyCheck):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
 
@@ -254,7 +259,7 @@ Installer = DictWithInjections(
 )
 
 
-class ZypperUninstall(Install):
+class ZypperUninstall(Install, ZypperInstallCheck):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
 
@@ -265,7 +270,7 @@ class ZypperUninstall(Install):
         self.commands = commands
 
 
-class RedHatUninstall(Install):
+class RedHatUninstall(Install, EmptyCheck):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
 

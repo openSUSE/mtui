@@ -1,6 +1,6 @@
 from logging import getLogger
 
-from .actions import UpdateError, queue, spinner
+from .actions import queue, spinner
 from .basedoer import Doer
 from .hostgroup import HostsGroup
 
@@ -22,7 +22,7 @@ class Prepare(Doer):
         self.testing = testing
         self.force = force
         self.installed_only = installed_only
-        self.commands = []
+        self.commands: list[str] = []
 
     def run(self) -> None:
         self.lock_hosts()
@@ -53,37 +53,8 @@ class Prepare(Doer):
                 self.targets.run(command)
 
                 for t in self.targets.values():
-                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())
+                    self._check(t, t.lastin(), t.lastout(), t.lasterr(), t.lastexit())  # type: ignore
         except BaseException:
             raise
         finally:
             self.unlock_hosts()
-
-    def _check(self, target, stdin, stdout, stderr, exitcode):
-        if "A ZYpp transaction is already in progress." in stderr:
-            logger.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr,
-            )
-            raise UpdateError(target.hostname, "update stack locked")
-        if "System management is locked" in stderr:
-            logger.critical(
-                '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-                target.hostname,
-                stdin,
-                stdout,
-                stderr,
-            )
-            raise UpdateError("update stack locked", target.hostname)
-        if "(c): c" in stdout:
-            logger.critical(
-                "%s: unresolved dependency problem. please resolve manually:\n%s",
-                target.hostname,
-                stdout,
-            )
-            raise UpdateError("Dependency Error", target.hostname)
-
-        return self.check(target, stdin, stdout, stderr, exitcode)

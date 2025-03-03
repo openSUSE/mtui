@@ -56,6 +56,3 @@ class Doer(ABC):
 
     @abstractmethod
     def run(self, *args, **kwds) -> None: ...
-
-    def check(self, target, stdin, stdout, stderr, exitcode) -> None:
-        pass
