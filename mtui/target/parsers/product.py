@@ -1,30 +1,28 @@
 import xml.etree.ElementTree as ET
 
+from paramiko import SFTPFile
 
-def parse_product(prod):
+
+def parse_product(prod: SFTPFile) -> tuple[str, str, str]:
     root = ET.fromstringlist(prod)
-    name = root.find("./name").text
-    arch = root.find("./arch").text
+    name: str = root.findtext("./name", "")
+    arch: str = root.findtext("./arch", "")
 
-    try:
-        version = root.find("./baseversion").text
+    if version := root.findtext("./baseversion"):
         sp = (
-            root.find("./patchlevel").text
-            if root.find("./patchlevel").text != "0"
+            root.findtext("./patchlevel", "")
+            if root.findtext("./patchlevel") != "0"
             else ""
         )
-        version += "-SP{}".format(sp) if sp else ""
-    except AttributeError:
-        version = root.find("./version").text
+        version += f"-SP{sp}" if sp else ""
+    else:
+        version = root.findtext("./version", "")
 
-    # CAASP uses ALL for update repos and there is only one supported version at time
-    if name == "CAASP":
-        version = ""
     return (name, version, arch)
 
 
-def parse_os_release(f):
-    osinfo = {
+def parse_os_release(f: SFTPFile) -> tuple[str, str, str]:
+    osinfo: dict[str, str] = {
         a.split("=")[0]: a.split("=")[1].rstrip("\n").translate({34: None})
         for a in f.readlines()
         if not (a.startswith("#") or a == "\n")
