@@ -43,8 +43,6 @@ class Doer(ABC):
                 raise UpdateError("Hosts locked")
         except BaseException:
             raise
-        finally:
-            self.unlock_hosts()
 
     def unlock_hosts(self) -> None:
         for t in self.targets.values():
