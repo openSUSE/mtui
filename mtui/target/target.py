@@ -34,12 +34,6 @@ class Target:
         lock=TargetLock,
         connection=Connection,
     ) -> None:
-        """
-        :type connect: bool
-        :param connect:
-            introduced in order to run unit tests witout
-            having the target automatically connect
-        """
 
         self.config = config
         self.host, _, self.port = hostname.partition(":")
@@ -51,15 +45,9 @@ class Target:
         self.Connection = connection
 
         self.state = state
-        """
-        :param state:
-        :type state: str either "enabled" or "disabled"
-        :deprecated:
-        """
         self.timeout = timeout
         self.exclusive = exclusive
-        self.connction = None
-
+        self.connection: Connection
         # helper for packages before system analysis
         self._pkgs = packages
 
@@ -77,10 +65,6 @@ class Target:
                 ret[key] = package
         return ret
 
-    def _parse_system(self) -> System:
-        logger.debug("get and parse target installed products")
-        return parse_system(self.connection)
-
     def connect(self) -> None:
         try:
             logger.info("connecting to %s", self.hostname)
@@ -94,16 +78,10 @@ class Target:
             logger.warning(self._lock.locked_by_msg())
 
         # get system
-        self.system = self._parse_system()
+        self.system = parse_system(self.connection)
 
         # parse packages
         self.packages = self._parse_packages()
-
-    def __lt__(self, other) -> bool:
-        return sorted([self.system, other.system])[0] == self.system
-
-    def __gt__(self, other) -> bool:
-        return sorted([self.system, other.system])[0] == other.system
 
     def __eq__(self, other) -> bool:
         return self.system == other.system
@@ -165,15 +143,15 @@ class Target:
         return packages
 
     def disable_repo(self, repo: str) -> None:
-        logger.debug("{}: disabling repo {}".format(self.hostname, repo))
-        self.run("zypper mr -d {}".format(repo))
+        logger.debug("%s: disabling repo %s", self.hostname, repo)
+        self.run(f"zypper mr -d {repo}")
 
     def enable_repo(self, repo: str) -> None:
-        logger.debug("{}: enabling repo {}".format(self.hostname, repo))
-        self.run("zypper mr -e {}".format(repo))
+        logger.debug("%s: enabling repo %s", self.hostname, repo)
+        self.run(f"zypper mr -e {repo}")
 
     def set_timeout(self, value: int) -> None:
-        logger.debug("{}: setting timeout to {}".format(self.hostname, value))
+        logger.debug("%s: setting timeout to %d", self.hostname, value)
         self.connection.timeout = value
 
     def get_timeout(self) -> int:
@@ -183,7 +161,7 @@ class Target:
         return str(self.system)
 
     def set_repo(self, operation, testreport) -> None:
-        logger.debug("%s: enabling %s repos", self.hostname, operation)
+        logger.debug("%s: changing %s repos", self.hostname, operation)
         testreport.set_repo(self, operation)
 
     def run_zypper(self, cmd, repos, rrid) -> None:
@@ -195,7 +173,7 @@ class Target:
                 product.name, product.version, rrid.maintenance_id
             )
 
-        def fullpath(path, rrid):
+        def fullpath(path, rrid) -> str:
             # TODO: confiruable download path?
             dl_path = "http://download.suse.de/ibs/"
             return dl_path + ":/".join(str(rrid).split(":")[:-1]) + "/" + path

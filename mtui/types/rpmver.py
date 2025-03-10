@@ -1,4 +1,4 @@
-"""Quering and comparing tags of RPM file names """
+"""Quering and comparing tags of RPM file names"""
 
 import rpm  # type: ignore
 
