@@ -506,20 +506,20 @@ class Connection:
         sftp.close()
 
     # Similar to 'get' but handles folders.
-    def sftp_get_folder(self, remote_folder: Path, local_folder: Path) -> None:
+    def sftp_get_folder(self, remote: Path, local: Path) -> None:
         sftp = self.__sftp_reconnect()
         logger.debug(
             "transmitting %s:%s:%s to %s",
             self.hostname,
             self.port,
-            remote_folder,
-            local_folder,
+            remote,
+            local,
         )
-        files = self.sftp_listdir(remote_folder)
+        files = self.sftp_listdir(remote)
         for file in files:
             sftp.get(
-                f"{remote_folder}/{file}",
-                f"{local_folder}{file}.{self.hostname}",
+                f"{remote}/{file}",
+                f"{local}{file}.{self.hostname}",
             )
 
         sftp.close()
