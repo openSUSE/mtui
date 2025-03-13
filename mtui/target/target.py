@@ -6,7 +6,7 @@
 import re
 from logging import getLogger
 from traceback import format_exc
-from typing import Any
+from typing import Any, Callable
 from pathlib import Path
 
 from .. import messages
@@ -45,7 +45,8 @@ class Target:
         self.Connection = connection
 
         self.state = state
-        self.timeout = timeout
+        # default timeout for target, used only on connecting/reconnecting Target
+        self._timeout = timeout
         self.exclusive = exclusive
         self.connection: Connection
         # helper for packages before system analysis
@@ -68,7 +69,7 @@ class Target:
     def connect(self) -> None:
         try:
             logger.info("connecting to %s", self.hostname)
-            self.connection = self.Connection(self.host, self.port, self.timeout)
+            self.connection = self.Connection(self.host, self.port, self._timeout)
         except Exception as e:
             logger.critical(messages.ConnectingTargetFailedMessage(self.hostname, e))
             raise e
@@ -153,12 +154,7 @@ class Target:
     def set_timeout(self, value: int) -> None:
         logger.debug("%s: setting timeout to %d", self.hostname, value)
         self.connection.timeout = value
-
-    def get_timeout(self) -> int:
-        return self.connection.timeout
-
-    def get_system(self):
-        return str(self.system)
+        self._timeout = value
 
     def set_repo(self, operation, testreport) -> None:
         logger.debug("%s: changing %s repos", self.hostname, operation)
@@ -350,7 +346,7 @@ class Target:
 
     def sftp_remove(self, path: Path) -> None:
         try:
-            self.connection.sfrp_remove(path)
+            self.connection.sftp_remove(path)
         except IOError as error:
             if error.errno == errno.ENOENT:
                 logger.debug("%s: path %s does not exist", self.hostname, path)
@@ -362,7 +358,6 @@ class Target:
                     logger.warning("unable to remove %s on %s", path, self.hostname)
 
     def close(self, action=None) -> None:
-        self.timeout = 15
         try:
             assert self.connection
 
@@ -384,25 +379,24 @@ class Target:
 
         if self.connection:
             self.connection.close()
-            self.connection = None
 
-    def report_self(self, sink):
-        return sink(self.hostname, self.system, self.state, self.exclusive)
+    def report_self(self, sink: Callable[[str, System, str, bool], None]) -> None:
+        sink(self.hostname, self.system, self.state, self.exclusive)
 
-    def report_history(self, sink):
-        return sink(self.hostname, self.system, self.lastout().split("\n"))
+    def report_history(self, sink: Callable[[str, System, list[str]], None]) -> None:
+        sink(self.hostname, self.system, self.lastout().split("\n"))
 
-    def report_locks(self, sink):
-        return sink(self.hostname, self.system, self._lock)
+    def report_locks(self, sink: Callable[[str, System, TargetLock], None]) -> None:
+        sink(self.hostname, self.system, self._lock)
 
-    def report_timeout(self, sink):
-        return sink(self.hostname, self.system, self.get_timeout())
+    def report_timeout(self, sink: Callable[[str, System, int], None]) -> None:
+        sink(self.hostname, self.system, self.connection.timeout)
 
-    def report_sessions(self, sink):
-        return sink(self.hostname, self.system, self.lastout())
+    def report_sessions(self, sink: Callable[[str, System, str], None]) -> None:
+        sink(self.hostname, self.system, self.lastout())
 
-    def report_log(self, sink, arg):
-        return sink(self.hostname, self.out, arg)
+    def report_log(self, sink: Callable, arg) -> None:
+        sink(self.hostname, self.out, arg)
 
-    def report_products(self, sink):
-        return sink(self.hostname, self.system)
+    def report_products(self, sink: Callable[[str, System], None]) -> None:
+        sink(self.hostname, self.system)

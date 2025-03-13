@@ -97,7 +97,7 @@ class TargetLock:
 
     def __init__(self, connection: Connection, config: Config) -> None:
         self.connection = connection
-        self.i_am_user = config.session_user  # noqa
+        self.i_am_user = config.session_user  # type: ignore
         self.i_am_pid = os.getpid()
         """
     :type timestampFactory: callable
