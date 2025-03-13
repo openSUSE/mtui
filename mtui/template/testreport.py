@@ -341,7 +341,7 @@ class TestReport(ABC):
                 timeout=self.config.connection_timeout,
             )
             target.connect()
-            new_system = target.get_system()
+            new_system = str(target.system)
         except KeyboardInterrupt:
             logger.warning("Connection to %s canceled by user", host)
             return False, False
@@ -410,7 +410,7 @@ class TestReport(ABC):
             self.targets[hostname].connect()
 
             if self:
-                self.systems[hostname] = self.targets[hostname].get_system()
+                self.systems[hostname] = str(self.targets[hostname].system)
 
         except Exception:
             if hostname in self.targets:

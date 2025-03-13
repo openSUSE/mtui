@@ -595,7 +595,7 @@ class Connection:
         return link
 
     def is_active(self) -> bool:
-        return self.client._transport.is_active()  # noqa
+        return self.client._transport.is_active()  # type: ignore
 
     def close(self) -> None:
         """Closes SSH channel to host and disconnects.
