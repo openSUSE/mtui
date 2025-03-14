@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from logging import getLogger
 
-from .actions import ThreadedMethod, UpdateError, queue
+from ..exceptions import UpdateError
+from .actions import ThreadedMethod, queue
 from .hostgroup import HostsGroup
 
 logger = getLogger("mtui.targer.baseaction")

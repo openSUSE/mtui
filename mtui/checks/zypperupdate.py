@@ -1,15 +1,14 @@
 from logging import getLogger
 
-from ..utils import yellow
+from ..exceptions import UpdateError
 from ..target import Target
-from ..target.actions import UpdateError
+from ..utils import yellow
 
 
 logger = getLogger("mtui.checks.zypperupdate")
 
 
 class ZypperUpdateCheck:
-
     def _check(self, target: Target, stdin, stdout, stderr, exitcode: int) -> None:
         if "zypper" in stdin and exitcode == 104:
             logger.critical(

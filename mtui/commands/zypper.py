@@ -74,7 +74,7 @@ class Uninstall(Command):
             logger.info("Uninstallation process aborted")
             return
         except Exception as e:
-            logger.critical("failed to install packages")
+            logger.critical("failed to uninstall packages")
             logger.debug("%s", e)
             return
 

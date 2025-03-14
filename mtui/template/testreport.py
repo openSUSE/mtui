@@ -18,9 +18,9 @@ from urllib.request import urlopen
 from .. import updater
 from ..config import Config
 from ..connector import SMELT
+from ..exceptions import UpdateError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
 from ..target import Target
-from ..target.actions import UpdateError
 from ..target.hostgroup import HostsGroup
 from ..template import TemplateIOError, TestReportAlreadyLoaded
 from ..types import Product, TargetMeta
@@ -221,12 +221,6 @@ class TestReport(ABC):
     def get_updater(self):
         return self._get_doer(updater.Updater)
 
-    def get_installer(self):
-        return self._get_doer(updater.Installer)
-
-    def get_uninstaller(self):
-        return self._get_doer(updater.Uninstaller)
-
     def get_downgrader(self):
         return self._get_doer(updater.Downgrader)
 
@@ -280,12 +274,11 @@ class TestReport(ABC):
     def perform_install(self, targets: HostsGroup, packages) -> None:
         targets.add_history(["install", packages])
 
-        installer = self.get_installer()
-        installer(targets, packages).run()
+        targets.perform_install(packages)
 
     def perform_uninstall(self, targets: HostsGroup, packages) -> None:
-        uninstaller = self.get_uninstaller()
-        uninstaller(targets, packages).run()
+        targets.add_history(["uninstall", packages])
+        targets.perform_uninstall(packages)
 
     def copy_scripts(self) -> None:
         if not self.path:

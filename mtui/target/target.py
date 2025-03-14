@@ -3,13 +3,17 @@
 # below the abstractions layer (like updating, preparing, etc.)
 #
 
-import re
 from logging import getLogger
+from pathlib import Path
+import re
+from string import Template
 from traceback import format_exc
 from typing import Any, Callable
-from pathlib import Path
 
+from . import TargetLock, TargetLockedError
 from .. import messages
+from ..actions import installer, uninstaller
+from ..checks.install import install_checks
 from ..connection import CommandTimeout, Connection, errno
 from ..target.parsers import parse_system
 from ..types.hostlog import HostLog
@@ -17,9 +21,12 @@ from ..types.package import Package
 from ..types.rpmver import RPMVersion
 from ..types.systems import System
 from ..utils import timestamp
-from . import TargetLock, TargetLockedError
 
 logger = getLogger("mtui.target")
+
+
+def _no_checks(*args) -> None:
+    return None
 
 
 class Target:
@@ -34,7 +41,6 @@ class Target:
         lock=TargetLock,
         connection=Connection,
     ) -> None:
-
         self.config = config
         self.host, _, self.port = hostname.partition(":")
         self.hostname = hostname
@@ -305,10 +311,7 @@ class Target:
         """
         return self._lock.is_locked()
 
-    def lock(self, comment: str | None = None) -> None:
-        """
-        :returns None:
-        """
+    def lock(self, comment: str = "") -> None:
         self._lock.lock(comment)
 
     def unlock(self, force: bool = False) -> None:
@@ -400,3 +403,15 @@ class Target:
 
     def report_products(self, sink: Callable[[str, System], None]) -> None:
         sink(self.hostname, self.system)
+
+    def get_installer(self) -> dict[str, Template]:
+        return installer[self.system.get_release()]
+
+    def get_installer_check(self) -> Callable:
+        return install_checks.get(self.system.get_release(), _no_checks)
+
+    def get_uninstaller(self) -> dict[str, Template]:
+        return uninstaller[self.system.get_release()]
+
+    def get_uninstaller_check(self) -> Callable:
+        return install_checks.get(self.system.get_release(), _no_checks)

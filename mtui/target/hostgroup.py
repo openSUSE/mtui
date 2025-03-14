@@ -1,15 +1,20 @@
 from collections import UserDict
+from logging import getLogger
 from pathlib import Path
 from typing import Self
 
+from . import Target
+from ..exceptions import UpdateError
+from ..messages import HostIsNotConnectedError
 from .actions import FileDelete
 from .actions import FileDownload
 from .actions import FileUpload
 from .actions import RunCommand
+from .actions import ThreadedMethod, queue
 from .locks import TargetLockedError
-from . import Target
 
-from mtui.messages import HostIsNotConnectedError
+
+logger = getLogger("mtui.target.hostgroup")
 
 
 class HostsGroup(UserDict):
@@ -95,6 +100,76 @@ class HostsGroup(UserDict):
 
     def _run(self, cmd) -> None:
         return RunCommand(self.data, cmd).run()
+
+    def update_lock(self) -> None:
+        try:
+            skipped = False
+            for t in self.data.values():
+                if t.is_locked() and not t._lock.is_mine():
+                    skipped = True
+                    logger.warning(
+                        "host %s is locked since %s by %s. skipping.",
+                        t.hostname,
+                        t._lock.time(),
+                        t._lock.locked_by(),
+                    )
+                    if t._lock.comment():
+                        logger.info(
+                            "%s's comment: %s", t._lock.locked_by(), t._lock.comment()
+                        )
+                else:
+                    t.lock()
+                    thread = ThreadedMethod(queue)
+                    thread.setDaemon(True)
+                    thread.start()
+
+            if skipped:
+                for t in self.data.values():
+                    try:
+                        t.unlock()
+                    except AssertionError:
+                        pass
+                raise UpdateError("Hosts locked")
+        except BaseException:
+            raise
+
+    def perform_install(self, packages) -> None:
+        commands = {
+            t.hostname: t.get_installer()["command"].substitute(
+                packages=" ".join(packages)
+            )
+            for t in self.data.values()
+        }
+        self.update_lock()
+        try:
+            self.run(commands)
+            for t in self.data.values():
+                t.get_installer_check()(
+                    t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
+                )
+        except BaseException:
+            raise
+        finally:
+            self.unlock()
+
+    def perform_uninstall(self, packages) -> None:
+        commands = {
+            t.hostname: t.get_uninstaller()["command"].substitute(
+                packages=" ".join(packages)
+            )
+            for t in self.data.values()
+        }
+        self.update_lock()
+        try:
+            self.run(commands)
+            for t in self.data.values():
+                t.get_uninstaller_check()(
+                    t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
+                )
+        except BaseException:
+            raise
+        finally:
+            self.unlock()
 
     def report_self(self, sink):
         for hn in sorted(self.data.keys()):

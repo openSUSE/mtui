@@ -7,20 +7,12 @@ from logging import getLogger
 from .checks import (
     EmptyCheck,
     ZypperDowngradeCheck,
-    ZypperInstallCheck,
     ZypperPrepareCheck,
     ZypperUpdateCheck,
 )
-from .messages import (
-    MissingDowngraderError,
-    MissingInstallerError,
-    MissingPreparerError,
-    MissingUninstallerError,
-    MissingUpdaterError,
-)
-from .target.actions import UpdateError
+from .exceptions import UpdateError
+from .messages import MissingDowngraderError, MissingPreparerError, MissingUpdaterError
 from .target.downgrade import Downgrade
-from .target.install import Install
 from .target.prepare import Prepare
 from .target.update import Update
 from .utils import DictWithInjections
@@ -229,65 +221,4 @@ Downgrader = DictWithInjections(
         "CAASP": CaaSPDowngrade,
     },
     key_error=MissingDowngraderError,
-)
-
-
-class ZypperInstall(Install, ZypperInstallCheck):
-    def __init__(self, *a, **kw) -> None:
-        super().__init__(*a, **kw)
-        self.commands: list[str] = [f"zypper -n in -y -l {' '.join(self.packages)}"]
-
-
-class RedHatInstall(Install, EmptyCheck):
-    def __init__(self, *a, **kw):
-        super().__init__(*a, **kw)
-
-        commands = ["yum -y install {!s}".format(" ".join(self.packages))]
-
-        self.commands = commands
-
-
-Installer = DictWithInjections(
-    {
-        "15": ZypperInstall,
-        "12": ZypperInstall,
-        "11": ZypperInstall,
-        "YUM": RedHatInstall,
-        "CAASP": ZypperInstall,
-    },
-    key_error=MissingInstallerError,
-)
-
-
-class ZypperUninstall(Install, ZypperInstallCheck):
-    def __init__(self, *a, **kw):
-        super().__init__(*a, **kw)
-
-        commands = []
-
-        commands.append("zypper -n rm {!s}".format(" ".join(self.packages)))
-
-        self.commands = commands
-
-
-class RedHatUninstall(Install, EmptyCheck):
-    def __init__(self, *a, **kw):
-        super().__init__(*a, **kw)
-
-        commands = []
-
-        commands.append("yum -y remove {!s}".format(" ".join(self.packages)))
-
-        self.commands = commands
-
-
-Uninstaller = DictWithInjections(
-    {
-        "15": ZypperUninstall,
-        "12": ZypperUninstall,
-        "11": ZypperUninstall,
-        "YUM": RedHatUninstall,
-        "CAASP": ZypperUninstall,
-    },
-    key_error=MissingUninstallerError,
 )
