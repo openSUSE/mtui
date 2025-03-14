@@ -15,19 +15,6 @@ from ..utils import prompt_user
 queue: Queue[tuple[Callable[..., None], list[Any]]] = Queue()
 
 
-class UpdateError(Exception):
-    def __init__(self, reason: str, host: str | None = None) -> None:
-        self.reason = reason
-        self.host = host
-
-    def __str__(self) -> str:
-        if self.host is None:
-            string = self.reason
-        else:
-            string = "{!s}: {!s}".format(self.host, self.reason)
-        return repr(string)
-
-
 class ThreadedMethod(threading.Thread):
     def __init__(self, queue: Queue[tuple[Callable[..., None], list[Any]]]) -> None:
         threading.Thread.__init__(self)

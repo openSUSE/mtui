@@ -1,7 +1,7 @@
 from logging import getLogger
 
+from ..exceptions import UpdateError
 from ..target import Target
-from ..target.actions import UpdateError
 
 logger = getLogger("mtui.checks.zypperprepare")
 
