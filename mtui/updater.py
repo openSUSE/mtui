@@ -4,16 +4,10 @@
 
 from logging import getLogger
 
-from .checks import (
-    EmptyCheck,
-    ZypperDowngradeCheck,
-    ZypperPrepareCheck,
-    ZypperUpdateCheck,
-)
+from .checks import EmptyCheck, ZypperDowngradeCheck, ZypperUpdateCheck
 from .exceptions import UpdateError
-from .messages import MissingDowngraderError, MissingPreparerError, MissingUpdaterError
+from .messages import MissingDowngraderError, MissingUpdaterError
 from .target.downgrade import Downgrade
-from .target.prepare import Prepare
 from .target.update import Update
 from .utils import DictWithInjections
 
@@ -100,82 +94,6 @@ Updater = DictWithInjections(
         "CAASP": CaaSPUpdate,
     },
     key_error=MissingUpdaterError,
-)
-
-
-class ZypperPrepare(Prepare, ZypperPrepareCheck):
-    def __init__(self, *a, **kw) -> None:
-        super().__init__(*a, **kw)
-
-        parameter = ""
-        commands: list[str] = []
-
-        if self.force:
-            parameter = "--force-resolution"
-
-        for package in self.packages:
-            if "branding-upstream" in package:
-                continue
-            if self.installed_only:
-                commands.append(
-                    "rpm -q {!s} &>/dev/null && zypper -n in -y -l {!s} {!s}".format(
-                        package, parameter, package
-                    )
-                )
-            else:
-                commands.append(
-                    "zypper -n in -y -l {!s} {!s}".format(parameter, package)
-                )
-
-        self.commands = commands
-
-    def check(self, target, stdin, stdout, stderr, exitcode) -> None:
-        if "Error:" in stderr:
-            logger.critical(
-                '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                    target.hostname, stdin, stdout, stderr
-                )
-            )
-            raise UpdateError("RPM Error", target.hostname)
-
-
-class RedHatPrepare(Prepare, EmptyCheck):
-    def __init__(self, *a, **kw) -> None:
-        super().__init__(*a, **kw)
-
-        parameter = ""
-        commands: list[str] = []
-
-        if not self.testing:
-            parameter = "--disablerepo=*testing*"
-
-        for package in self.packages:
-            if self.installed_only:
-                commands.append(
-                    "rpm -q {!s} &>/dev/null && yum -y {!s} install {!s}".format(
-                        package, parameter, package
-                    )
-                )
-            else:
-                commands.append("yum -y {!s} install {!s}".format(parameter, package))
-
-        self.commands = commands
-
-
-class CaaSPPrepare(Prepare, EmptyCheck):
-    def run(self) -> None:
-        pass
-
-
-Preparer = DictWithInjections(
-    {
-        "15": ZypperPrepare,
-        "12": ZypperPrepare,
-        "11": ZypperPrepare,
-        "YUM": RedHatPrepare,
-        "CAASP": CaaSPPrepare,
-    },
-    key_error=MissingPreparerError,
 )
 
 
