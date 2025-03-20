@@ -19,8 +19,7 @@ class ReloadProducts(Command):
     def __call__(self) -> None:
         targets = self.parse_hosts()
         for target in targets:
-            system = targets[target]._parse_system()
-            targets[target].system = system
+            targets[target].reload_system()
             logger.info("Reloaded products on refhost %s", target)
 
     @staticmethod

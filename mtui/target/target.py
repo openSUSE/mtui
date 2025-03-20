@@ -91,6 +91,9 @@ class Target:
         # parse packages
         self.packages = self._parse_packages()
 
+    def reload_system(self) -> None:
+        self.system = parse_system(self.connection)
+
     def __eq__(self, other) -> bool:
         return self.system == other.system
 
