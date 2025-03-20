@@ -12,8 +12,9 @@ from typing import Any, Callable
 
 from . import TargetLock, TargetLockedError
 from .. import messages
-from ..actions import installer, uninstaller
+from ..actions import installer, preparer, uninstaller
 from ..checks.install import install_checks
+from ..checks.prepare import prepare_checks
 from ..connection import CommandTimeout, Connection, errno
 from ..target.parsers import parse_system
 from ..types.hostlog import HostLog
@@ -415,3 +416,17 @@ class Target:
 
     def get_uninstaller_check(self) -> Callable:
         return install_checks.get(self.system.get_release(), _no_checks)
+
+    def get_preparer(
+        self, force: bool = False, testing: bool = False
+    ) -> dict[str, Template]:
+        return preparer[self.system.get_release()](force, testing)
+
+    def get_preparer_check(self) -> Callable:
+        return prepare_checks.get(self.system.get_release(), _no_checks)
+
+    def __repr__(self) -> str:
+        return f"<Target - {self.hostname}>"
+
+    def __str__(self) -> str:
+        return self.hostname

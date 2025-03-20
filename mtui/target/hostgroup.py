@@ -6,11 +6,15 @@ from typing import Self
 from . import Target
 from ..exceptions import UpdateError
 from ..messages import HostIsNotConnectedError
-from .actions import FileDelete
-from .actions import FileDownload
-from .actions import FileUpload
-from .actions import RunCommand
-from .actions import ThreadedMethod, queue
+from .actions import (
+    FileDelete,
+    FileDownload,
+    FileUpload,
+    RunCommand,
+    ThreadedMethod,
+    queue,
+    spinner,
+)
 from .locks import TargetLockedError
 
 
@@ -133,7 +137,7 @@ class HostsGroup(UserDict):
         except BaseException:
             raise
 
-    def perform_install(self, packages) -> None:
+    def perform_install(self, packages: list[str]) -> None:
         commands = {
             t.hostname: t.get_installer()["command"].substitute(
                 packages=" ".join(packages)
@@ -152,7 +156,7 @@ class HostsGroup(UserDict):
         finally:
             self.unlock()
 
-    def perform_uninstall(self, packages) -> None:
+    def perform_uninstall(self, packages: list[str]) -> None:
         commands = {
             t.hostname: t.get_uninstaller()["command"].substitute(
                 packages=" ".join(packages)
@@ -168,6 +172,50 @@ class HostsGroup(UserDict):
                 )
         except BaseException:
             raise
+        finally:
+            self.unlock()
+
+    def perform_prepare(self, packages: list[str], testreport, **kw):
+        operation = "add" if kw.get("testing", False) else "remove"
+        force = kw.get("force", False)
+        testing = kw.get("testing", False)
+        cmd = "installed_only" if kw.get("installed_only", False) else "command"
+
+        self.update_lock()
+
+        try:
+            for t in self.data.values():
+                queue.put((t.set_repo, [operation, testreport]))
+
+            while queue.unfinished_tasks:
+                spinner()
+
+            for t in self.data.values():
+                if t.lasterr():
+                    logger.critical(
+                        "Failed to prepare host %s/ Stopping..\n# %s\n%s",
+                        t.hostname,
+                        t.lastin(),
+                        t.lastout(),
+                    )
+                    return
+            for package in packages:
+                if "branding-upstream" in package:
+                    continue
+                commands = {
+                    t.hostname: t.get_preparer(force, testing)[cmd].substitute(
+                        package=package
+                    )
+                    for t in self.data.values()
+                }
+                self.run(commands)
+                for t in self.data.values():
+                    t.get_preparer_check()(
+                        t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
+                    )
+
+        except BaseException:
+            pass
         finally:
             self.unlock()
 

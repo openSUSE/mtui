@@ -215,9 +215,6 @@ class TestReport(ABC):
         :return: str Identifier of adaptee to use from `mtui.updater`
         """
 
-    def get_preparer(self):
-        return self._get_doer(updater.Preparer)
-
     def get_updater(self):
         return self._get_doer(updater.Updater)
 
@@ -244,8 +241,7 @@ class TestReport(ABC):
         targets.sftp_get(remote, local)
 
     def perform_prepare(self, targets: HostsGroup, **kw) -> None:
-        preparer = self.get_preparer()
-        preparer(targets, self.get_package_list(), self, **kw).run()
+        targets.perform_prepare(self.get_package_list(), self, **kw)
 
     def perform_update(self, targets: HostsGroup, params: list[str]) -> None:
         """
