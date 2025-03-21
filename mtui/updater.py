@@ -4,10 +4,9 @@
 
 from logging import getLogger
 
-from .checks import EmptyCheck, ZypperDowngradeCheck, ZypperUpdateCheck
+from .checks import EmptyCheck, ZypperUpdateCheck
 from .exceptions import UpdateError
-from .messages import MissingDowngraderError, MissingUpdaterError
-from .target.downgrade import Downgrade
+from .messages import MissingUpdaterError
 from .target.update import Update
 from .utils import DictWithInjections
 
@@ -94,49 +93,4 @@ Updater = DictWithInjections(
         "CAASP": CaaSPUpdate,
     },
     key_error=MissingUpdaterError,
-)
-
-
-class ZypperDowngrade(Downgrade, ZypperDowngradeCheck):
-    def __init__(self, *a, **kw) -> None:
-        super().__init__(*a, **kw)
-
-        self.list_command = r"""
-            for p in {!s}; do \
-              zypper -n se -s --match-exact -t package $p; \
-            done \
-            | grep -v "(System" \
-            | grep ^[iv] \
-            | sed "s, ,,g" \
-            | awk -F "|" '{{ print $2,"=",$4 }}'
-        """.format(
-            " ".join(self.packages)
-        )
-        self.install_command = "rpm -q {!s} &>/dev/null && zypper -n in -C --force-resolution -y -l {!s}={!s}"
-
-
-class RedHatDowngrade(Downgrade, EmptyCheck):
-    def __init__(self, *a, **kw) -> None:
-        super().__init__(*a, **kw)
-        self.commands = ["yum -y downgrade {!s}".format(" ".join(self.packages))]
-
-
-class CaaSPDowngrade(Downgrade, EmptyCheck):
-    def __init__(self, *a, **kw) -> None:
-        super().__init__(*a, **kw)
-        self.kind = "transactional"
-        self.commands = [
-            'transactional-update rollback $(transactional-update rollback | cut -d" " -f 4)'
-        ]
-
-
-Downgrader = DictWithInjections(
-    {
-        "15": ZypperDowngrade,
-        "12": ZypperDowngrade,
-        "11": ZypperDowngrade,
-        "YUM": RedHatDowngrade,
-        "CAASP": CaaSPDowngrade,
-    },
-    key_error=MissingDowngraderError,
 )

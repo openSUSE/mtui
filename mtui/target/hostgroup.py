@@ -1,7 +1,10 @@
 from collections import UserDict
 from logging import getLogger
 from pathlib import Path
+import re
 from typing import Self
+
+from mtui.types.rpmver import RPMVersion
 
 from . import Target
 from ..exceptions import UpdateError
@@ -175,7 +178,7 @@ class HostsGroup(UserDict):
         finally:
             self.unlock()
 
-    def perform_prepare(self, packages: list[str], testreport, **kw):
+    def perform_prepare(self, packages: list[str], testreport, **kw) -> None:
         operation = "add" if kw.get("testing", False) else "remove"
         force = kw.get("force", False)
         testing = kw.get("testing", False)
@@ -216,6 +219,68 @@ class HostsGroup(UserDict):
 
         except BaseException:
             pass
+        finally:
+            self.unlock()
+
+    def perform_downgrade(self, packages: list[str], testreport) -> None:
+        ver_re = re.compile(r"(.*) = (.*)")
+        versions: dict[str, dict[str, str]] = {}
+        self.update_lock()
+
+        try:
+            for t in self.data.values():
+                queue.put((t.set_repo, ["remove", testreport]))
+
+            while queue.unfinished_tasks:
+                spinner()
+
+            queue.join()
+
+            list_cmd = {
+                h: t.get_downgrader()["list_command"].safe_substitute(
+                    packages=" ".join(packages)
+                )
+                for h, t in self.data.items()
+                if "list_command" in t.get_downgrader()
+            }
+            self.run(list_cmd)
+
+            for hn, t in self.data.items():
+                lines: list[str] = t.lastout().split("\n")
+                release: dict[str, list[str]] = {}
+
+                for line in lines:
+                    if match := re.search(ver_re, line):
+                        name = match.group(1)
+                        version = match.group(2)
+                        release.setdefault(name, []).append(version)
+
+                for name in release:
+                    version = sorted(release[name], key=RPMVersion, reverse=True)[0]
+                    versions.setdefault(hn, dict()).update({name: version})
+
+            for package in packages:
+                cmd = {
+                    h: t.get_downgrader()["command"].safe_substitute(
+                        package=package, version=versions[h][package]
+                    )
+                    for h, t in self.data.items()
+                    if package in versions[h]
+                }
+                if cmd:
+                    self.run(cmd)
+
+                    for t in self.data.values():
+                        t.get_downgrader_check()(
+                            t.hostname,
+                            t.lastout(),
+                            t.lastin(),
+                            t.lasterr(),
+                            t.lastexit(),
+                        )
+
+        except BaseException:
+            raise
         finally:
             self.unlock()
 
