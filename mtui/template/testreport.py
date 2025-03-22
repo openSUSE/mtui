@@ -218,9 +218,6 @@ class TestReport(ABC):
     def get_updater(self):
         return self._get_doer(updater.Updater)
 
-    def get_downgrader(self):
-        return self._get_doer(updater.Downgrader)
-
     def list_update_commands(self, targets: HostsGroup, display) -> None:
         """
         :type  targets: dict(hostname = L{Target})
@@ -263,9 +260,7 @@ class TestReport(ABC):
         targets.add_history(
             ["downgrade", str(self.id), " ".join(self.get_package_list())]
         )
-
-        downgrader = self.get_downgrader()
-        downgrader(targets, self.get_package_list(), self).run()
+        targets.perform_downgrade(self.get_package_list(), self)
 
     def perform_install(self, targets: HostsGroup, packages) -> None:
         targets.add_history(["install", packages])

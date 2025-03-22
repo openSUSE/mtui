@@ -188,4 +188,4 @@ def spinner(lock: Optional[Lock] = None) -> None:
             if lock:
                 lock.release()
 
-        time.sleep(0.3)
+        time.sleep(0.1)
