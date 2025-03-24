@@ -2,7 +2,6 @@
 # mtui ssh connection handling using paramiko.
 # almost all exceptions here are passed to the upper layer.
 #
-from __future__ import annotations
 
 import errno
 import getpass
