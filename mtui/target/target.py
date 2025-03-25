@@ -12,10 +12,8 @@ from typing import Any, Callable
 
 from . import TargetLock, TargetLockedError
 from .. import messages
-from ..actions import installer, preparer, uninstaller, downgrader
-from ..checks.install import install_checks
-from ..checks.prepare import prepare_checks
-from ..checks.downgrade import downgrade_checks
+from ..actions import downgrader, installer, preparer, uninstaller, updater
+from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
 from ..connection import CommandTimeout, Connection, errno
 from ..target.parsers import parse_system
 from ..types.hostlog import HostLog
@@ -426,6 +424,12 @@ class Target:
 
     def get_downgrader_check(self) -> Callable:
         return downgrade_checks.get(self.system.get_release(), _no_checks)
+
+    def get_updater(self) -> dict[str, Template]:
+        return updater[self.system.get_release()]
+
+    def get_updater_check(self) -> Callable:
+        return update_checks.get(self.system.get_release(), _no_checks)
 
     def get_preparer(
         self, force: bool = False, testing: bool = False

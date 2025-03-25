@@ -4,11 +4,11 @@ from pathlib import Path
 import re
 from typing import Self
 
-from mtui.types.rpmver import RPMVersion
-
 from . import Target
 from ..exceptions import UpdateError
+from ..hooks import CompareScript, PostScript, PreScript
 from ..messages import HostIsNotConnectedError
+from ..types.rpmver import RPMVersion
 from .actions import (
     FileDelete,
     FileDownload,
@@ -283,6 +283,77 @@ class HostsGroup(UserDict):
             raise
         finally:
             self.unlock()
+
+    def perform_update(self, testreport, params: list[str]) -> None:
+        if "noprepare" not in params:
+            self.perform_prepare(testreport.get_package_list(), testreport)
+
+        for hn, t in self.data.items():
+            not_installed = []
+
+            t.query_versions()
+
+            for pkg in t.packages.keys():
+                required = t.packages[pkg].required
+                before = t.packages[pkg].current
+                t.packages[pkg].before = before
+
+                if not before:
+                    not_installed.append(pkg)
+                else:
+                    if RPMVersion(before) >= RPMVersion(required):
+                        logger.warning(
+                            "$s: package is too recent: %s (%s, target version is %s)",
+                            hn,
+                            pkg,
+                            before,
+                            required,
+                        )
+
+            if not_installed:
+                logger.warning("%s: these packages are missing: %s", hn, not_installed)
+
+        if "noscript" not in params and not testreport.config.auto:
+            testreport.run_scripts(PreScript, self.data)
+
+        self.update_lock()
+
+        for t in self.data.values():
+            queue.put((t.set_repo, ["add", testreport]))
+
+        while queue.unfinished_tasks:
+            spinner()
+
+        queue.join()
+
+        repa = f":p={testreport.rrid.maintenance_id}"
+        commands = {
+            hn: t.get_updater()["command"].safe_substitute(
+                repa=repa, packages=" ".join(testreport.get_package_list())
+            )
+            for hn, t in self.data.items()
+        }
+
+        try:
+
+            self.run(commands)
+            for t in self.data.values():
+                t.get_updater_check()(
+                    t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
+                )
+        except BaseException:
+            raise
+        finally:
+            self.unlock()
+
+        if "newpackage" in params:
+            self.perform_prepare(
+                testreport.get_package_list(), testreport, testing=True
+            )
+
+        if "noscript" not in params and not testreport.config.auto:
+            testreport.run_scripts(PostScript, self.data)
+            testreport.run_scripts(CompareScript, self.data)
 
     def report_self(self, sink):
         for hn in sorted(self.data.keys()):

@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from ..target.hostgroup import HostsGroup
 from ..types import Product
 from .testreport import TestReport
 
@@ -24,11 +25,10 @@ class NullTestReport(TestReport):
     def target_wd(self, *paths) -> Path:
         return self.config.target_tempdir.joinpath(*paths)  # type: ignore
 
-    def _get_updater_id(self) -> str:
-        return ""
-
     def _parser(self) -> dict[str, Any]:
         return {}
 
     def _update_repos_parser(self) -> dict[Product, str]:
         return {}
+
+    def list_update_commands(self, targets: HostsGroup, display) -> None: ...

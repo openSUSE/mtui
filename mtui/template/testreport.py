@@ -15,7 +15,6 @@ from traceback import format_exc
 from typing import Any, Literal
 from urllib.request import urlopen
 
-from .. import updater
 from ..config import Config
 from ..connector import SMELT
 from ..exceptions import UpdateError
@@ -202,35 +201,8 @@ class TestReport(ABC):
 
         return ret
 
-    def get_release(self):
-        # TODO ...Fix usability with multiple systems types
-        return [x for x in self.targets.values()][0].system.get_release()
-
-    def _get_doer(self, registry):
-        return registry[self._get_updater_id()]
-
     @abstractmethod
-    def _get_updater_id(self) -> str:
-        """
-        :return: str Identifier of adaptee to use from `mtui.updater`
-        """
-
-    def get_updater(self):
-        return self._get_doer(updater.Updater)
-
-    def list_update_commands(self, targets: HostsGroup, display) -> None:
-        """
-        :type  targets: dict(hostname = L{Target})
-            where hostname = str
-        :display: callable(str -> None)
-        """
-        try:
-            updater = self.get_updater()
-        except IndexError:
-            logger.warning("No refhosts connected")
-        else:
-            display("\n".join(updater(targets, self).commands))
-            del updater
+    def list_update_commands(self, targets: HostsGroup, display) -> None: ...
 
     def perform_get(self, targets: HostsGroup, remote: Path):
         local = self.report_wd("downloads", remote.name, filepath=True)
@@ -247,10 +219,8 @@ class TestReport(ABC):
         """
         targets.add_history(["update", str(self.id), " ".join(self.get_package_list())])
 
-        updater = self.get_updater()
-        logger.debug("chosen updater: {!r}".format(updater))
         try:
-            updater(targets, self).run(params)
+            targets.perform_update(self, params)
         except UpdateError as e:
             logger.error("Update failed: %s" % e)
             logger.warning("Error while updating. Rolling back changes")
