@@ -1,16 +1,17 @@
 from ..parsemeta import MetadataParser, ReducedMetadataParser
 from ..parsemetajson import JSONParser
 from ..target import Target
+from ..target.hostgroup import HostsGroup
 from ..template.repoparse import repoparse
 from ..template.testreport import TestReport
-from ..types import Product
+from ..types import Product, RequestReviewID
 
 
 class OBSTestReport(TestReport):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
-        self.rrid = ""
+        self.rrid: RequestReviewID
         self.rating = ""
 
         self._attrs += [
@@ -24,10 +25,7 @@ class OBSTestReport(TestReport):
 
     @property
     def id(self) -> str:
-        return self.rrid
-
-    def _get_updater_id(self):
-        return self.get_release()
+        return str(self.rrid)
 
     def _parser(self):
         parsers = {
@@ -43,7 +41,7 @@ class OBSTestReport(TestReport):
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
         return [
-            ("ReviewRequestID", self.rrid),
+            ("ReviewRequestID", str(self.rrid)),
             ("Rating", self.rating),
         ] + super()._show_yourself_data()
 
@@ -54,3 +52,11 @@ class OBSTestReport(TestReport):
             target.run_zypper("-n rr", self.update_repos, self.rrid)
         else:
             raise ValueError("Not supported repose operation {}".format(operation))
+
+    def list_update_commands(self, targets: HostsGroup, display) -> None:
+        packages = self.get_package_list()
+        repa = f":p={self.rrid.maintenance_id}"
+        for hn, t in targets.items():
+            display(
+                f"{hn} - commands: \n{t.get_updater()['command'].safe_substitute(repa=repa, packages=packages)}"
+            )

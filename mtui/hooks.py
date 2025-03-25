@@ -6,7 +6,6 @@ from traceback import format_exc
 from typing import Literal
 
 from . import messages
-from .target.hostgroup import HostsGroup
 
 log = getLogger("mtui.script")
 
@@ -55,7 +54,7 @@ class Script(ABC):
     def result_parts(cls, *basename) -> tuple[Literal["output/scripts"], str]:
         return ("output/scripts", ".".join((cls.subdir,) + basename))
 
-    def run(self, targets: HostsGroup) -> None:
+    def run(self, targets) -> None:
         """
         :type targets: [{HostsGroup}]
         """
@@ -69,7 +68,7 @@ class Script(ABC):
 class PreScript(Script):
     subdir = "pre"
 
-    def _run(self, targets: HostsGroup) -> None:
+    def _run(self, targets) -> None:
         rname: Path = self.testreport.target_wd(
             "{!s}.{!s}".format(self.subdir, self.bname)
         )
@@ -106,7 +105,7 @@ class PostScript(PreScript):
 class CompareScript(Script):
     subdir = "compare"
 
-    def _run(self, targets: HostsGroup) -> None:
+    def _run(self, targets) -> None:
         for t in targets.values():
             self._run_single_target(t)
 
