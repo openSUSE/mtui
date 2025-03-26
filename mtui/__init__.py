@@ -1,4 +1,4 @@
-from distutils.version import LooseVersion
+from looseversion import LooseVersion
 
 __version__ = "13.4.0"
 

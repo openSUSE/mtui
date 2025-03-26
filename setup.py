@@ -12,7 +12,14 @@ setup(
     url="http://www.suse.com",
     download_url="http://qam.suse.de/infrastructure/mtui/",
     version=str(loose_version),
-    install_requires=["paramiko", "pyxdg", "ruamel.yaml", "requests", "rpm"],
+    install_requires=[
+        "paramiko",
+        "pyxdg",
+        "ruamel.yaml",
+        "requests",
+        "rpm",
+        "looseversion",
+    ],
     include_package_data=True,
     # dependencies not on cheeseshop:
     # osc (http://en.opensuse.org/openSUSE:OSC)

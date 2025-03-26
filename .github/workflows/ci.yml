@@ -22,6 +22,7 @@ jobs:
             python3-pytest \
             python3-pytest-cov \
             python3-coverage \
+            python3-looseversion \
             black
       - name: Run tests + cov report
         run: python3 -m pytest -v --cov=./mtui --cov-report=xml --cov-report=term
