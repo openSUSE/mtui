@@ -314,7 +314,7 @@ class HostsGroup(UserDict):
                 logger.warning("%s: these packages are missing: %s", hn, not_installed)
 
         if "noscript" not in params and not testreport.config.auto:
-            testreport.run_scripts(PreScript, self.data)
+            testreport.run_scripts(PreScript, self)
 
         self.update_lock()
 
@@ -352,8 +352,8 @@ class HostsGroup(UserDict):
             )
 
         if "noscript" not in params and not testreport.config.auto:
-            testreport.run_scripts(PostScript, self.data)
-            testreport.run_scripts(CompareScript, self.data)
+            testreport.run_scripts(PostScript, self)
+            testreport.run_scripts(CompareScript, self)
 
     def report_self(self, sink):
         for hn in sorted(self.data.keys()):
