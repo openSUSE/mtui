@@ -3,9 +3,14 @@ from logging import getLogger
 from pathlib import Path
 import subprocess
 from traceback import format_exc
-from typing import Literal
+from typing import Literal, TYPE_CHECKING
 
 from . import messages
+
+if TYPE_CHECKING:
+    from .target import Target
+    from .target.hostgroup import HostsGroup
+
 
 log = getLogger("mtui.script")
 
@@ -35,40 +40,38 @@ class Script(ABC):
         self.testreport = tr
 
     def __repr__(self) -> str:
-        return "<{0}.{1} {2} for {3}>".format(
-            self.__module__, self.__class__.__name__, self.path, repr(self.testreport)
-        )
+        return f"<{self.__module__}.{self.__class__.__name__} {self.path} for {repr(self.testreport)}>"
 
     def __str__(self) -> str:
-        return "{0} script {1}".format(self.subdir, self.name)
+        return f"{self.subdir} script {self.name}"
 
-    def _result(self, cls, bname, t) -> Path:
+    def _result(self, cls, bname: str, t: Target) -> Path:
         return self.testreport.report_wd(
             *cls.result_parts(bname, t.hostname), filepath=True
         )
 
     @abstractmethod
-    def _run(self, targets) -> None: ...
+    def _run(self, targets: HostsGroup) -> None: ...
 
     @classmethod
     def result_parts(cls, *basename) -> tuple[Literal["output/scripts"], str]:
         return ("output/scripts", ".".join((cls.subdir,) + basename))
 
-    def run(self, targets) -> None:
+    def run(self, targets: HostsGroup) -> None:
         """
         :type targets: [{HostsGroup}]
         """
         try:
-            log.info("running {0}".format(self))
+            log.info(f"running {self}")
             self._run(targets)
         except KeyboardInterrupt:
-            log.warning("skipping {0}".format(self))
+            log.warning("skipping {self}")
 
 
 class PreScript(Script):
     subdir = "pre"
 
-    def _run(self, targets) -> None:
+    def _run(self, targets: HostsGroup) -> None:
         rname: Path = self.testreport.target_wd(
             "{!s}.{!s}".format(self.subdir, self.bname)
         )
@@ -105,11 +108,11 @@ class PostScript(PreScript):
 class CompareScript(Script):
     subdir = "compare"
 
-    def _run(self, targets) -> None:
+    def _run(self, targets: HostsGroup) -> None:
         for t in targets.values():
             self._run_single_target(t)
 
-    def _run_single_target(self, t) -> None:
+    def _run_single_target(self, t: Target) -> None:
         bcheck = self.bname.replace("compare_", "check_")
         argv = [
             str(x)
