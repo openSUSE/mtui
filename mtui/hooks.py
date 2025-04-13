@@ -10,6 +10,7 @@ from . import messages
 if TYPE_CHECKING:
     from .target import Target
     from .target.hostgroup import HostsGroup
+    from .template.testreport import TestReport
 
 
 log = getLogger("mtui.script")
@@ -29,7 +30,7 @@ class Script(ABC):
 
     subdir: str = ""
 
-    def __init__(self, tr, path: Path) -> None:
+    def __init__(self, tr: "TestReport", path: Path) -> None:
         """
         :type path: Path
         :param path: absolute path to the script
@@ -45,33 +46,33 @@ class Script(ABC):
     def __str__(self) -> str:
         return f"{self.subdir} script {self.name}"
 
-    def _result(self, cls, bname: str, t: Target) -> Path:
+    def _result(self, cls, bname: str, t: "Target") -> Path:
         return self.testreport.report_wd(
             *cls.result_parts(bname, t.hostname), filepath=True
         )
 
     @abstractmethod
-    def _run(self, targets: HostsGroup) -> None: ...
+    def _run(self, targets: "HostsGroup") -> None: ...
 
     @classmethod
     def result_parts(cls, *basename) -> tuple[Literal["output/scripts"], str]:
         return ("output/scripts", ".".join((cls.subdir,) + basename))
 
-    def run(self, targets: HostsGroup) -> None:
+    def run(self, targets: "HostsGroup") -> None:
         """
         :type targets: [{HostsGroup}]
         """
         try:
-            log.info(f"running {self}")
+            log.info("running %s", self)
             self._run(targets)
         except KeyboardInterrupt:
-            log.warning("skipping {self}")
+            log.warning("skipping %s", self)
 
 
 class PreScript(Script):
     subdir = "pre"
 
-    def _run(self, targets: HostsGroup) -> None:
+    def _run(self, targets: "HostsGroup") -> None:
         rname: Path = self.testreport.target_wd(
             "{!s}.{!s}".format(self.subdir, self.bname)
         )
@@ -108,11 +109,11 @@ class PostScript(PreScript):
 class CompareScript(Script):
     subdir = "compare"
 
-    def _run(self, targets: HostsGroup) -> None:
+    def _run(self, targets: "HostsGroup") -> None:
         for t in targets.values():
             self._run_single_target(t)
 
-    def _run_single_target(self, t: Target) -> None:
+    def _run_single_target(self, t: "Target") -> None:
         bcheck = self.bname.replace("compare_", "check_")
         argv = [
             str(x)
@@ -145,7 +146,5 @@ class CompareScript(Script):
             logger, msg = log.critical, messages.CompareScriptCrashed
         else:
             logger, msg = log.warning, messages.CompareScriptFailed  # type: ignore
-
-        assert callable(logger), "{0!r} not callable".format(logger)
 
         logger(msg(argv, ret.stdout, ret.stderr, ret.returncode))
