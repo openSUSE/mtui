@@ -16,7 +16,7 @@ class Terms(Command):
     If no termname is given, all available terminal scripts are shown.
     """
 
-    command: str  = "terms"
+    command: str = "terms"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:

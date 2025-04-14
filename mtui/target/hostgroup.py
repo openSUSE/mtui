@@ -335,7 +335,6 @@ class HostsGroup(UserDict):
         }
 
         try:
-
             self.run(commands)
             for t in self.data.values():
                 t.get_updater_check()(
