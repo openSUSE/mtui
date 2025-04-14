@@ -335,7 +335,6 @@ class HostsGroup(UserDict):
         }
 
         try:
-
             self.run(commands)
             for t in self.data.values():
                 t.get_updater_check()(
@@ -350,6 +349,31 @@ class HostsGroup(UserDict):
             self.perform_prepare(
                 testreport.get_package_list(), testreport, testing=True
             )
+
+        for hn, t in self.data.items():
+            t.query_versions()
+
+            for pkg in t.packages.keys():
+                before = t.packages[pkg].before
+                required = t.packages[pkg].required
+                after = t.packages[pkg].current
+
+                t.packages[pkg].after = after
+
+                if after and before:
+                    if RPMVersion(before) == RPMVersion(after):
+                        logger.warning(
+                            "%s: package was not updated: %s (%s)", hn, pkg, after
+                        )
+                if after:
+                    if RPMVersion(after) < RPMVersion(required):
+                        logger.warning(
+                            "%s: package does not match required version: %s (%s, required %s)",
+                            hn,
+                            pkg,
+                            after,
+                            required,
+                        )
 
         if "noscript" not in params and not testreport.config.auto:
             testreport.run_scripts(PostScript, self)
