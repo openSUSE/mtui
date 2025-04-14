@@ -1,7 +1,6 @@
 from logging import getLogger
 from subprocess import check_call
 from traceback import format_exc
-from typing import Any
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
@@ -17,7 +16,7 @@ class Terms(Command):
     If no termname is given, all available terminal scripts are shown.
     """
 
-    command = "terms"
+    command: str = "terms"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
