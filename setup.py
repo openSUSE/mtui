@@ -19,6 +19,7 @@ setup(
         "requests",
         "rpm",
         "looseversion",
+        "openqa-client",
     ],
     include_package_data=True,
     # dependencies not on cheeseshop:
