@@ -1,14 +1,15 @@
+import re
 from collections import UserDict
 from logging import getLogger
 from pathlib import Path
-import re
 from typing import Self
 
-from . import Target
 from ..exceptions import UpdateError
 from ..hooks import CompareScript, PostScript, PreScript
 from ..messages import HostIsNotConnectedError
+from ..types import Package
 from ..types.rpmver import RPMVersion
+from . import Target
 from .actions import (
     FileDelete,
     FileDownload,
@@ -20,11 +21,10 @@ from .actions import (
 )
 from .locks import TargetLockedError
 
-
 logger = getLogger("mtui.target.hostgroup")
 
 
-class HostsGroup(UserDict):
+class HostsGroup(UserDict[str, Target]):
     """
     Composite pattern for Dict[hostname, Target]
 
@@ -285,33 +285,62 @@ class HostsGroup(UserDict):
             self.unlock()
 
     def perform_update(self, testreport, params: list[str]) -> None:
+        def package_check(post: bool = False) -> None:
+            for hn, t in self.data.items():
+                not_installed: list[Package] = []
+
+                t.query_versions()
+
+                for pkg in t.packages.keys():
+                    before = None
+                    after = None
+                    if not post:
+                        required = t.packages[pkg].required
+                        before = t.packages[pkg].current
+                        t.packages[pkg].before = before
+                    else:
+                        before = t.packages[pkg].before
+                        required = t.packages[pkg].required
+                        after = t.packages[pkg].current
+
+                        t.packages[pkg].after = after
+
+                    if not before:
+                        not_installed.append(pkg)
+                    else:
+                        if RPMVersion(before) >= RPMVersion(required):
+                            logger.warning(
+                                "$s: package is too recent: %s (%s, target version is %s)",
+                                hn,
+                                pkg,
+                                before,
+                                required,
+                            )
+
+                    if after and before:
+                        if RPMVersion(before) == RPMVersion(after):
+                            logger.warning(
+                                "%s: package was not updated: %s (%s)", hn, pkg, after
+                            )
+                    if after:
+                        if RPMVersion(after) < RPMVersion(required):
+                            logger.warning(
+                                "%s: package does not match required version: %s (%s, required %s)",
+                                hn,
+                                pkg,
+                                after,
+                                required,
+                            )
+
+                if not_installed:
+                    logger.warning(
+                        "%s: these packages are missing: %s", hn, not_installed
+                    )
+
         if "noprepare" not in params:
             self.perform_prepare(testreport.get_package_list(), testreport)
 
-        for hn, t in self.data.items():
-            not_installed = []
-
-            t.query_versions()
-
-            for pkg in t.packages.keys():
-                required = t.packages[pkg].required
-                before = t.packages[pkg].current
-                t.packages[pkg].before = before
-
-                if not before:
-                    not_installed.append(pkg)
-                else:
-                    if RPMVersion(before) >= RPMVersion(required):
-                        logger.warning(
-                            "$s: package is too recent: %s (%s, target version is %s)",
-                            hn,
-                            pkg,
-                            before,
-                            required,
-                        )
-
-            if not_installed:
-                logger.warning("%s: these packages are missing: %s", hn, not_installed)
+        package_check()
 
         if "noscript" not in params and not testreport.config.auto:
             testreport.run_scripts(PreScript, self)
@@ -350,30 +379,7 @@ class HostsGroup(UserDict):
                 testreport.get_package_list(), testreport, testing=True
             )
 
-        for hn, t in self.data.items():
-            t.query_versions()
-
-            for pkg in t.packages.keys():
-                before = t.packages[pkg].before
-                required = t.packages[pkg].required
-                after = t.packages[pkg].current
-
-                t.packages[pkg].after = after
-
-                if after and before:
-                    if RPMVersion(before) == RPMVersion(after):
-                        logger.warning(
-                            "%s: package was not updated: %s (%s)", hn, pkg, after
-                        )
-                if after:
-                    if RPMVersion(after) < RPMVersion(required):
-                        logger.warning(
-                            "%s: package does not match required version: %s (%s, required %s)",
-                            hn,
-                            pkg,
-                            after,
-                            required,
-                        )
+        package_check(True)
 
         if "noscript" not in params and not testreport.config.auto:
             testreport.run_scripts(PostScript, self)
