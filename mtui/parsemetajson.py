@@ -1,4 +1,4 @@
-from .types.obs import RequestReviewID
+from .types import RequestReviewID
 
 
 class JSONParser:
@@ -17,6 +17,7 @@ class JSONParser:
         results.category = data.get("category")
         results.testplatforms = data.get("testplatform")
         results.products = data.get("products")
+        results.realid = data.get("id")
 
         packages = {}
         for prod, pkgvers in data.get("packages").items():

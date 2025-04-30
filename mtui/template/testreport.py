@@ -50,7 +50,7 @@ class TestReport(ABC):
 
     def __init__(self, config: Config, scripts_src_dir: Path | None = None) -> None:
         self.smelt: SMELT
-        self.config = config
+        self.config: Config = config
 
         self._scripts_src_dir: Path = (
             scripts_src_dir if scripts_src_dir else config.datadir.joinpath("scripts")  # type: ignore
@@ -423,7 +423,9 @@ class TestReport(ABC):
         :param data: (key, value)
         """
         for x in sorted(data):
-            writer.write("{0:15}: {1}\n".format(*x))
+            name, value = x
+            if value:
+                writer.write(f"{name:15}: {value}\n")
 
     def _testreport_url(self) -> str:
         return "/".join([self.config.reports_url, str(self.id), "log"])  # type: ignore
