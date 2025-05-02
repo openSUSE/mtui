@@ -37,7 +37,7 @@ class OBSTestReport(TestReport):
 
     def _update_repos_parser(self) -> dict[Product, str]:
         # TODO: exceptions handling
-        return repoparse(self.report_wd())
+        return repoparse(self.repository, self.report_wd())
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
         return [

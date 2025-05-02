@@ -1,5 +1,6 @@
-from pathlib import Path
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from os.path import join
 
 from ..types import Product
 from .products import normalize
@@ -18,6 +19,9 @@ def _xmlparse(xml):
     )
 
 
-def repoparse(path: Path) -> dict[Product, str]:
+def repoparse(repository: str, path: Path) -> dict[Product, str]:
     project = _xmlparse(_read_project(path))
-    return {Product(x[0], x[1], x[2]): y for x, y in map(normalize, project)}
+    return {
+        Product(x[0], x[1], x[2]): join(repository, y)
+        for x, y in map(normalize, project)
+    }
