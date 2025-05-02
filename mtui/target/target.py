@@ -3,24 +3,25 @@
 # below the abstractions layer (like updating, preparing, etc.)
 #
 
+import errno
+import re
 from logging import getLogger
 from pathlib import Path
-import re
 from string import Template
 from traceback import format_exc
-from typing import Any, Callable
+from typing import Any, Callable, final
 
-from . import TargetLock, TargetLockedError
 from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
-from ..connection import CommandTimeout, Connection, errno
+from ..connection import CommandTimeout, Connection
 from ..target.parsers import parse_system
 from ..types.hostlog import HostLog
 from ..types.package import Package
 from ..types.rpmver import RPMVersion
 from ..types.systems import System
 from ..utils import timestamp
+from . import TargetLock, TargetLockedError
 
 logger = getLogger("mtui.target")
 
@@ -29,6 +30,7 @@ def _no_checks(*args) -> None:
     return None
 
 
+@final
 class Target:
     def __init__(
         self,
@@ -116,7 +118,7 @@ class Target:
         elif self.state == "disabled":
             self.out.append(["", "", "", 0, 0])
 
-    def query_package_versions(self, packages) -> dict[str, RPMVersion]:
+    def query_package_versions(self, packages) -> dict[str, RPMVersion | None]:
         """
         :type packages: [str]
         :param packages: packages to query versions for
@@ -138,19 +140,19 @@ class Target:
                 )
             )
 
-        packages = {}
+        pkgs: dict[str, RPMVersion | None] = {}
         for line in self.lastout().splitlines():
             if match := re.search("package (.*) is not installed", line):
-                packages[match.group(1)] = None
+                pkgs[match.group(1)] = None
                 continue
             p, v = line.split()
             # Make sure that it shows to the user the highest version
-            if p in packages:
-                if RPMVersion(v) > packages[p]:
-                    packages[p] = RPMVersion(v)
+            if p in pkgs:
+                if RPMVersion(v) > pkgs[p]:
+                    pkgs[p] = RPMVersion(v)
             else:
-                packages[p] = RPMVersion(v)
-        return packages
+                pkgs[p] = RPMVersion(v)
+        return pkgs
 
     def disable_repo(self, repo: str) -> None:
         logger.debug("%s: disabling repo %s", self.hostname, repo)
@@ -174,17 +176,15 @@ class Target:
         ur = ((x, y) for x, y in repos.items() if x in self.system.flatten())
 
         def name(product, rrid) -> str:
-            return "issue-{}:{}:p={}".format(
-                product.name, product.version, rrid.maintenance_id
-            )
+            return f"issue-{product.name}:{product.version}:p={rrid.maintenance_id}"
 
         for x, y in ur:
             if "ar" in cmd:
                 logger.info("Adding repo %s on %s", y, self.hostname)
-                self.run("zypper {0} {1} {2} {1}".format(cmd, name(x, rrid), y))
+                self.run(f"zypper {cmd} {name(x, rrid)} {y} {name(x, rrid)}")
             elif "rr" in cmd:
                 logger.info("Removing repo %s on %s", y, self.hostname)
-                self.run("zypper {0} {1}".format(cmd, y))
+                self.run(f"zypper {cmd} {y}")
             else:
                 self.unlock(force=True)
                 raise ValueError
@@ -356,9 +356,7 @@ class Target:
 
     def close(self, action=None) -> None:
         try:
-            assert self.connection
-
-            if self.connection.is_active():
+            if self.connection and self.connection.is_active():
                 self.connection.timeout = 15
                 self.unlock()
         except Exception:

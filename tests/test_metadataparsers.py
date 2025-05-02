@@ -1,6 +1,6 @@
 from mtui.parsemeta import MetadataParser, ReducedMetadataParser
 from mtui.parsemetajson import JSONParser
-from mtui.types.obs import RequestReviewID
+from mtui.types import RequestReviewID
 
 
 class FakeTestreport:

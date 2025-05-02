@@ -1,13 +1,16 @@
+from typing import final
+
 from ..parsemeta import MetadataParser, ReducedMetadataParser
 from ..parsemetajson import JSONParser
-from ..repoparse import obsrepoparse
+from ..repoparse import slrepoparse
 from ..target import Target
 from ..target.hostgroup import HostsGroup
+from ..template.testreport import TestReport
 from ..types import Product, RequestReviewID
-from .testreport import TestReport
 
 
-class OBSTestReport(TestReport):
+@final
+class SLTestReport(TestReport):
     def __init__(self, *a, **kw) -> None:
         super().__init__(*a, **kw)
 
@@ -19,7 +22,7 @@ class OBSTestReport(TestReport):
 
     @property
     def _type(self) -> str:
-        return "OBS"
+        return "SLMicro"
 
     @property
     def id(self) -> str:
@@ -34,7 +37,7 @@ class OBSTestReport(TestReport):
         return parsers
 
     def _update_repos_parser(self) -> dict[Product, str]:
-        return obsrepoparse(self.repository, self.report_wd())
+        return slrepoparse(self.repository, self.products)
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
         return [

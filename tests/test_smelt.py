@@ -3,10 +3,9 @@ from pathlib import Path
 
 import responses
 
-from mtui.connector.smelt import SMELT
-from mtui.types.obs import RequestReviewID
 from mtui.config import Config
-
+from mtui.connector.smelt import SMELT
+from mtui.types import RequestReviewID
 
 _rootdir = Path(__file__).resolve().parent
 

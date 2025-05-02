@@ -1,23 +1,24 @@
-from collections.abc import Callable, Collection
-from contextlib import contextmanager
-from copy import deepcopy
 import fcntl
-from functools import wraps
-from itertools import chain
 import os
-from pathlib import Path
 import re
 import readline
-from shutil import move
 import struct
 import subprocess
 import tempfile
-from tempfile import mkstemp
 import termios
 import time
+from collections.abc import Callable, Collection
+from contextlib import contextmanager
+from copy import deepcopy
+from functools import wraps
+from itertools import chain
+from pathlib import Path
+from shutil import move
+from tempfile import mkstemp
 from typing import Any
 
-from mtui.messages import TestReportNotLoadedError
+from .exceptions import ComponentParseError, InternalParseError, MissingComponent
+from .messages import TestReportNotLoadedError
 
 
 def edit_text(text: str) -> str:
@@ -207,7 +208,7 @@ def complete_choices(
     choices = set(list(chain.from_iterable(synonyms)) + hostnames)
 
     ls = line.split(" ")
-    ls.pop(0)
+    _ = ls.pop(0)
 
     for line in ls:
         if len(line) >= 2 and line[0] == "-" and line[1] != "-":
@@ -273,13 +274,11 @@ class check_eq:
 
     def __call__(self, y: Any) -> Any:
         if y not in self.x:
-            raise ValueError("Expected: {0!r}, got: {1!r}".format(self.x, y))
+            raise ValueError(f"Expected: {self.x!r}, got: {y!r}")
         return y
 
     def __repr__(self) -> str:
-        return "<{0}.{1} {2!r}>".format(
-            self.__class__.__module__, self.__class__.__name__, self.x
-        )
+        return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
 
     def __str__(self) -> str:
         return f"{self.x!r}"
@@ -305,7 +304,10 @@ def ensure_dir_exists(*path, **kwargs) -> Path:
     :param on_create: Callable operation on created dir
     """
 
-    on_create: None | Callable = kwargs.get("on_create", None)
+    def empty(*args, **kwds) -> None:
+        pass
+
+    on_create: Callable = kwargs.get("on_create", empty)
     filepath: bool = kwargs.get("filepath", False)
 
     pt = Path().joinpath(*path)
@@ -313,8 +315,7 @@ def ensure_dir_exists(*path, **kwargs) -> Path:
 
     dirn.absolute().mkdir(parents=True, exist_ok=True)
 
-    if on_create:
-        on_create(path=dirn)
+    on_create(path=dirn)
 
     return pt
 
@@ -346,3 +347,18 @@ def walk(inc: Collection) -> Collection:
             if isinstance(inc[key], list | dict):
                 inc[key] = walk(inc[key])
     return inc
+
+
+def apply_parser(f, x, cnt):
+    if not f or not cnt:
+        raise InternalParseError(f, cnt)
+
+    if not x:
+        raise MissingComponent(cnt, f)
+
+    try:
+        return f(x)
+    except Exception as e:
+        new = ComponentParseError(cnt, f, x)
+        new.__cause__ = e
+        raise new
