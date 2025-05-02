@@ -128,10 +128,6 @@ class CommandPromptDisplay:
         self.println()
 
     def list_update_repos(self, repos, update_id) -> None:
-        server_update = "http://download.suse.de/ibs/" + ":/".join(
-            str(update_id).split(":")[0:-1]
-        )
-
         for p, r in repos.items():
             self.println(
                 "{}: {} - {}: {} - {}: {}".format(
@@ -143,7 +139,7 @@ class CommandPromptDisplay:
                     yellow(p.arch),
                 )
             )
-            self.println("    {}".format(server_update + "/" + r))
+            self.println(f"    {r}")
 
     @staticmethod
     def show_log(

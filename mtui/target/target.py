@@ -178,22 +178,13 @@ class Target:
                 product.name, product.version, rrid.maintenance_id
             )
 
-        def fullpath(path, rrid) -> str:
-            # TODO: confiruable download path?
-            dl_path = "http://download.suse.de/ibs/"
-            return dl_path + ":/".join(str(rrid).split(":")[:-1]) + "/" + path
-
         for x, y in ur:
             if "ar" in cmd:
                 logger.info("Adding repo %s on %s", y, self.hostname)
-                self.run(
-                    "zypper {0} {1} {2} {1}".format(
-                        cmd, name(x, rrid), fullpath(y, rrid)
-                    )
-                )
+                self.run("zypper {0} {1} {2} {1}".format(cmd, name(x, rrid), y))
             elif "rr" in cmd:
                 logger.info("Removing repo %s on %s", y, self.hostname)
-                self.run("zypper {0} {1}".format(cmd, fullpath(y, rrid)))
+                self.run("zypper {0} {1}".format(cmd, y))
             else:
                 self.unlock(force=True)
                 raise ValueError
