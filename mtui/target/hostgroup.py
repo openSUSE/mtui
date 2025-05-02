@@ -41,7 +41,7 @@ class HostsGroup(UserDict[str, Target]):
         """
         :param targets: list of L{Target}
         """
-        self.data: dict[str, Target] = {h.hostname: h for h in hosts}
+        super().__init__({h.hostname: h for h in hosts})
 
     def select(
         self, hosts: list[str] = [], enabled: bool = False
