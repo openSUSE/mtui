@@ -1,6 +1,6 @@
 import re
 
-from .types.obs import RequestReviewID
+from .types import RequestReviewID
 
 
 class ReducedMetadataParser:

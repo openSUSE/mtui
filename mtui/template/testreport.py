@@ -16,7 +16,6 @@ from typing import Any, Literal
 from urllib.request import urlopen
 
 from ..config import Config
-from ..connector import SMELT
 from ..exceptions import UpdateError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
 from ..target import Target
@@ -49,7 +48,6 @@ class TestReport(ABC):
         ...
 
     def __init__(self, config: Config, scripts_src_dir: Path | None = None) -> None:
-        self.smelt: SMELT
         self.config: Config = config
 
         self._scripts_src_dir: Path = (

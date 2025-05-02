@@ -1,7 +1,13 @@
-from mtui.types import obs
-
 from random import randint
+
 import pytest
+
+from mtui.exceptions import (
+    ComponentParseError,
+    MissingComponent,
+    TooManyComponentsError,
+)
+from mtui.types import RequestReviewID
 
 
 @pytest.fixture(scope="function")
@@ -21,7 +27,10 @@ def m_review_id():
         "S:M:{0}:{1}",
         "SUSE:M:{0}:{1}",
         "S:Maintenance:{0}:{1}",
-        "openSUSE:Maintenance:{0}:{1}",
+        "S:S:{0}",
+        "SUSE:S:{0}",
+        "SUSE:SLFO:{0}",
+        "S:SLFO:{0}",
     ],
 )
 def test_RRID_ok(r_review_id, m_review_id, rrid):
@@ -30,21 +39,20 @@ def test_RRID_ok(r_review_id, m_review_id, rrid):
     """
     rid = r_review_id
     mid = m_review_id
-    rrid = obs.RequestReviewID(rrid.format(mid, rid))
+    rrid = RequestReviewID(rrid.format(mid, rid))
 
-    assert rrid.review_id == rid
+    if rrid.kind != "SLFO":
+        assert rrid.review_id == rid
     assert rrid.maintenance_id == mid
 
 
-@pytest.mark.parametrize(
-    "missing", ["SUSE:Maintenance:1", "SUSE:Maintenance:", "SUSE:Maintenance", "SUSE:"]
-)
+@pytest.mark.parametrize("missing", ["SUSE:Maintenance", "SUSE:M", "SUSE"])
 def test_parse_rrid_mc(missing):
     """
     Test parse failure: missing component
     """
-    with pytest.raises(obs.MissingComponent):
-        obs.RequestReviewID(missing)
+    with pytest.raises(MissingComponent):
+        RequestReviewID(missing)
 
 
 @pytest.mark.parametrize(
@@ -61,23 +69,24 @@ def test_parse_rrid_cpe(cpe):
     """
     Test parse failure: componet parse errors
     """
-    with pytest.raises(obs.ComponentParseError):
-        obs.RequestReviewID(cpe)
+    with pytest.raises(ComponentParseError):
+        RequestReviewID(cpe)
 
 
 def test_parse_rrid_long():
-    with pytest.raises(obs.TooManyComponentsError):
-        obs.RequestReviewID("SUSE:Maintenance:1:2:3")
+    with pytest.raises(TooManyComponentsError):
+        RequestReviewID("SUSE:Maintenance:1:2:3")
 
 
 def test_str():
     rrid = "SUSE:Maintenance:1:2"
-    assert rrid == str(obs.RequestReviewID(rrid))
+    assert rrid == str(RequestReviewID(rrid))
 
 
 def test_cmp():
     rrid_1 = "SUSE:Maintenance:1:1"
+    rrid_1_1 = "S:M:1:1"
     rrid_2 = "SUSE:Maintenance:1:2"
 
-    assert obs.RequestReviewID(rrid_1) == obs.RequestReviewID(rrid_1)
-    assert obs.RequestReviewID(rrid_1) != obs.RequestReviewID(rrid_2)
+    assert RequestReviewID(rrid_1) == RequestReviewID(rrid_1_1)
+    assert RequestReviewID(rrid_1) != RequestReviewID(rrid_2)
