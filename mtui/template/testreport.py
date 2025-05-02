@@ -86,11 +86,11 @@ class TestReport(ABC):
         self.bugs: dict[str, str] = {}
         self.jira: dict[str, str] = {}
         self.testplatforms: list[str] = []
-        self.products = []
-        self.category = ""
-        self.packager = ""
-        self.reviewer = ""
-        self.repository = None
+        self.products: list[str] = []
+        self.category: str = ""
+        self.packager: str = ""
+        self.reviewer: str = ""
+        self.repository: str = ""
         self.packages = {}
 
         self._attrs = [
