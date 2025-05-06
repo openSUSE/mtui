@@ -3,14 +3,14 @@
 #
 import copy
 import errno
-from logging import getLogger
 import os
-from pathlib import Path
 import re
 import time
+from logging import getLogger
+from pathlib import Path
 from traceback import format_exc
+from typing import final
 from urllib.request import urlopen
-from typing import Type
 
 from ruamel.yaml import YAML
 
@@ -21,6 +21,7 @@ from .xdg import save_cache_path
 logger = getLogger("mtui.refhost")
 
 
+@final
 class Attributes:
     """
     Host attributes.
@@ -362,7 +363,7 @@ class _RefhostsFactory:
         urlopener,
         file_writer,
         cache_path,
-        refhosts_factory: Type[Refhosts] = Refhosts,
+        refhosts_factory: type[Refhosts] = Refhosts,
     ) -> None:
         self._time_now = time_now_getter
         self._stat = statter

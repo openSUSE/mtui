@@ -1,8 +1,10 @@
 import re
+from typing import final
 
 from .types import RequestReviewID
 
 
+@final
 class ReducedMetadataParser:
     hostnames = re.compile(r".* \(reference host: (\S+).*\)")
     jira = re.compile(r'Jira ([A-Z]+-\d+) \("(.*)"\):')
@@ -23,6 +25,7 @@ class ReducedMetadataParser:
             results.bugs[match.group(1)] = match.group(2)
 
 
+@final
 class MetadataParser:
     products = re.compile(r"Products: (.+)")
     category = re.compile(r"Category: (.+)")

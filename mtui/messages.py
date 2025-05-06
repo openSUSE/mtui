@@ -12,9 +12,8 @@ class UserMessage(BaseException, ABC):
     def __eq__(self, x: object) -> bool:
         return str(self) == str(x)
 
-    @classmethod
-    def __hash__(cls) -> int:  # type: ignore
-        return hash(cls)
+    def __hash__(self) -> int:  # type: ignore
+        return hash(self)
 
 
 class ErrorMessage(UserMessage, RuntimeError):
