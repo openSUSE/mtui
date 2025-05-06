@@ -2,7 +2,7 @@ import re
 from collections import UserDict
 from logging import getLogger
 from pathlib import Path
-from typing import Self
+from typing import Self, final
 
 from ..exceptions import UpdateError
 from ..hooks import CompareScript, PostScript, PreScript
@@ -24,6 +24,7 @@ from .locks import TargetLockedError
 logger = getLogger("mtui.target.hostgroup")
 
 
+@final
 class HostsGroup(UserDict[str, Target]):
     """
     Composite pattern for Dict[hostname, Target]
@@ -44,9 +45,9 @@ class HostsGroup(UserDict[str, Target]):
         super().__init__({h.hostname: h for h in hosts})
 
     def select(
-        self, hosts: list[str] = [], enabled: bool = False
+        self, hosts: list[str] | None = None, enabled: bool = False
     ) -> Self | "HostsGroup":
-        if hosts == []:
+        if not hosts:
             if enabled:
                 return HostsGroup(
                     [h for h in self.data.values() if h.state != "disabled"]
@@ -79,11 +80,12 @@ class HostsGroup(UserDict[str, Target]):
             except TargetLockedError:
                 pass
 
-    def query_versions(self, packages):
-        rs = []
+    def query_versions(
+        self, packages
+    ) -> list[tuple[Target, dict[str, RPMVersion | None]]]:
+        rs: list[tuple[Target, dict[str, RPMVersion | None]]] = []
         for x in self.data.values():
             rs.append((x, x.query_package_versions(packages)))
-
         return rs
 
     def add_history(self, data) -> None:
@@ -308,9 +310,9 @@ class HostsGroup(UserDict[str, Target]):
                     if not before:
                         not_installed.append(pkg)
                     else:
-                        if RPMVersion(before) >= RPMVersion(required):
+                        if before >= required:
                             logger.warning(
-                                "$s: package is too recent: %s (%s, target version is %s)",
+                                "%s: package is too recent: %s (%s, target version is %s)",
                                 hn,
                                 pkg,
                                 before,
@@ -318,12 +320,12 @@ class HostsGroup(UserDict[str, Target]):
                             )
 
                     if after and before:
-                        if RPMVersion(before) == RPMVersion(after):
+                        if before == after:
                             logger.warning(
                                 "%s: package was not updated: %s (%s)", hn, pkg, after
                             )
                     if after:
-                        if RPMVersion(after) < RPMVersion(required):
+                        if after < required:
                             logger.warning(
                                 "%s: package does not match required version: %s (%s, required %s)",
                                 hn,

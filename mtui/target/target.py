@@ -9,24 +9,23 @@ from logging import getLogger
 from pathlib import Path
 from string import Template
 from traceback import format_exc
-from typing import Any, Callable, final
+from typing import Any, Callable, Literal, final
 
 from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
+from ..config import Config
 from ..connection import CommandTimeout, Connection
 from ..target.parsers import parse_system
-from ..types.hostlog import HostLog
-from ..types.package import Package
+from ..types import HostLog, Package, System
 from ..types.rpmver import RPMVersion
-from ..types.systems import System
 from ..utils import timestamp
 from . import TargetLock, TargetLockedError
 
 logger = getLogger("mtui.target")
 
 
-def _no_checks(*args) -> None:
+def _no_checks(*args: tuple[Any]) -> None:
     return None
 
 
@@ -34,20 +33,20 @@ def _no_checks(*args) -> None:
 class Target:
     def __init__(
         self,
-        config,
+        config: Config,
         hostname: str,
-        packages=None,
-        state="enabled",
-        timeout=300,
+        packages: list[str] | None = None,
+        state: Literal["enabled", "disabled", "serial", "parallel"] = "enabled",
+        timeout: int = 300,
         exclusive: bool = False,
-        lock=TargetLock,
-        connection=Connection,
+        lock: type[TargetLock] = TargetLock,
+        connection: type[Connection] = Connection,
     ) -> None:
         self.config = config
         self.host, _, self.port = hostname.partition(":")
         self.hostname = hostname
         self.system: System
-        self.packages: dict[str, Any] = {}
+        self.packages: dict[str, RPMVersion | None] = {}
         self.out = HostLog()
         self.TargetLock = lock
         self.Connection = connection
@@ -118,7 +117,9 @@ class Target:
         elif self.state == "disabled":
             self.out.append(["", "", "", 0, 0])
 
-    def query_package_versions(self, packages) -> dict[str, RPMVersion | None]:
+    def query_package_versions(
+        self, packages: list[str]
+    ) -> dict[str, RPMVersion | None]:
         """
         :type packages: [str]
         :param packages: packages to query versions for
@@ -191,7 +192,7 @@ class Target:
 
         self.run("zypper -n ref")
 
-    def run(self, command, lock=None) -> None:
+    def run(self, command: str, lock=None) -> None:
         if self.state == "enabled":
             logger.debug('%s: running "%s"', self.hostname, command)
             time_before = timestamp()

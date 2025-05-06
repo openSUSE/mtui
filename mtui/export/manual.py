@@ -4,7 +4,7 @@ import os.path
 from pathlib import Path
 import re
 
-from ..types import FileList, RPMVersion
+from ..types import FileList
 from .base import BaseExport
 
 logger = getLogger("mtui.export.manual")
@@ -191,9 +191,7 @@ class ManualExport(BaseExport):
                     versions["after"][package] is not None
                     and versions["before"][package] is not None
                 ):
-                    if not RPMVersion(versions["before"][package]) < RPMVersion(
-                        versions["after"][package]
-                    ):
+                    if not versions["before"][package] < versions["after"][package]:
                         failed = True
             if failed:
                 logger.warning(
