@@ -48,9 +48,10 @@ class Downgrade(Command):
                     target.packages[package].before = target.packages[package].after
                     target.packages[package].after = target.packages[package].current
                     if (
-                        target.packages[package].before
+                        target.packages[package].after is not None
+                        and target.packages[package].before is not None
+                        and target.packages[package].before
                         == target.packages[package].after
-                        and target.packages[package].after is not None
                     ):
                         message = "downgrade not completed"
                         break

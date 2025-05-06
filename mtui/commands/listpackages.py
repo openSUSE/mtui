@@ -1,10 +1,12 @@
-from mtui.argparse import ArgumentParser
-from . import Command
+from typing import final
+
 from .. import messages
-from ..types import RPMVersion
+from ..argparse import ArgumentParser
 from ..utils import blue, complete_choices, green, red, requires_update, yellow
+from . import Command
 
 
+@final
 class ListPackages(Command):
     command = "list_packages"
 
@@ -63,19 +65,18 @@ class ListPackages(Command):
             raise messages.MissingPackagesError()
 
         for target, pvs in hosts.query_versions(pkgs):
-            self.println(
-                "packages on {0} ({1}):".format(target.hostname, target.system)
-            )
+            self.println(f"packages on {target.hostname} ({target.system}):")
             column_size = [30, 20]
             host_output = []
             for p, v in list(pvs.items()):
                 if self.metadata:
                     try:
-                        wanted = target.packages[p].required
+                        # if package p is in target.packages it alwas has set required --> from metadata
+                        wanted = target.packages[p].required  # type: ignore
                     except KeyError:
                         state = None
                     else:
-                        state = self._vers2state(v, RPMVersion(wanted))
+                        state = self._vers2state(v, wanted)
                 else:
                     state = "" if v else self.state_map[None]
 

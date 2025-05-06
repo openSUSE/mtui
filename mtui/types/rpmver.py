@@ -1,8 +1,11 @@
 """Quering and comparing tags of RPM file names"""
 
+from typing import final
+
 import rpm  # type: ignore
 
 
+@final
 class RPMVersion:
     """RPMVersion holds an rpm version-release string
 
@@ -38,35 +41,35 @@ class RPMVersion:
             self.ver = ver
             self.rel = "0"
 
-    def __lt__(self, other) -> bool:
+    def __lt__(self, other: "RPMVersion") -> bool:
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel)) < 0
         )
 
-    def __gt__(self, other) -> bool:
+    def __gt__(self, other: "RPMVersion") -> bool:
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel)) > 0
         )
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: "RPMVersion") -> bool:
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             == 0
         )
 
-    def __le__(self, other) -> bool:
+    def __le__(self, other: "RPMVersion") -> bool:
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             <= 0
         )
 
-    def __ge__(self, other) -> bool:
+    def __ge__(self, other: "RPMVersion") -> bool:
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             >= 0
         )
 
-    def __ne__(self, other) -> bool:
+    def __ne__(self, other: "RPMVersion") -> bool:
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             != 0
@@ -77,3 +80,6 @@ class RPMVersion:
         if self.rel != "0":
             s += "-" + str(self.rel)
         return s
+
+    def __repr__(self) -> str:
+        return f"<RPMVersion: {self}>"
