@@ -1,5 +1,7 @@
-from mtui.types.rpmver import RPMVersion
 import pytest
+
+pytest.importorskip("rpm", reason="The rpm module is required for testing RPMVersion functionality.")
+from mtui.types.rpmver import RPMVersion
 
 
 @pytest.mark.parametrize(
@@ -45,8 +47,12 @@ def test_version_ge(higher, lower):
     assert RPMVersion(higher) >= RPMVersion(lower)
 
 
-def test_version_ne():
-    assert RPMVersion("1-1.1") != RPMVersion("1-1.2")
+@pytest.mark.parametrize(
+    "version1,version2",
+    [("1-1.1", "1-1.2"), ("2.0", "2.1"), ("0.9.1", "0.9.2")]
+)
+def test_version_ne(version1, version2):
+    assert RPMVersion(version1) != RPMVersion(version2)
 
 
 def test_version_none():
