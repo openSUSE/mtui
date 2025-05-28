@@ -4,13 +4,14 @@
 #
 
 import errno
-import re
 from logging import getLogger
 from pathlib import Path
+import re
 from string import Template
 from traceback import format_exc
 from typing import Any, Callable, Literal, final
 
+from . import TargetLock, TargetLockedError
 from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
@@ -20,7 +21,6 @@ from ..target.parsers import parse_system
 from ..types import HostLog, Package, System
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
-from . import TargetLock, TargetLockedError
 
 logger = getLogger("mtui.target")
 
@@ -35,7 +35,7 @@ class Target:
         self,
         config: Config,
         hostname: str,
-        packages: list[str] | None = None,
+        packages: dict[str, dict[str, str]] | None = None,
         state: Literal["enabled", "disabled", "serial", "parallel"] = "enabled",
         timeout: int = 300,
         exclusive: bool = False,
@@ -46,7 +46,7 @@ class Target:
         self.host, _, self.port = hostname.partition(":")
         self.hostname = hostname
         self.system: System
-        self.packages: dict[str, RPMVersion | None] = {}
+        self.packages: dict[str, Package] = {}
         self.out = HostLog()
         self.TargetLock = lock
         self.Connection = connection
@@ -59,8 +59,8 @@ class Target:
         # helper for packages before system analysis
         self._pkgs = packages
 
-    def _parse_packages(self) -> dict[str, Any]:
-        ret = {}
+    def _parse_packages(self) -> dict[str, Package]:
+        ret: dict[str, Package] = {}
         base_version = self.system.get_base().version
         if self._pkgs:
             packages = self._pkgs.get(base_version, {})
@@ -90,6 +90,7 @@ class Target:
 
         # parse packages
         self.packages = self._parse_packages()
+        self.query_versions()
 
     def reload_system(self) -> None:
         self.system = parse_system(self.connection)
@@ -107,10 +108,7 @@ class Target:
         if self.state == "enabled":
             pvs = self.query_package_versions(packages)
             for p, v in pvs.items():
-                if v:
-                    self.packages[p].current = str(v)
-                else:
-                    self.packages[p].current = None
+                self.packages[p].current = v
         elif self.state == "dryrun":
             logger.info('dryrun: %s running "rpm -q %s"', self.hostname, packages)
             self.out.append(["rpm -q {}".format(packages), "dryrun\n", "", 0, 0])
