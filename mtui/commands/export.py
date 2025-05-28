@@ -1,6 +1,5 @@
 from logging import DEBUG, getLogger
 from pathlib import Path
-from typing import Type
 
 from mtui.argparse import ArgumentParser
 from mtui.export.base import BaseExport
@@ -31,7 +30,7 @@ class Export(Command):
             "-f",
             "--force",
             action="store_true",
-            help="force overwrite existing template",
+            help="force overwrite existing template and if openQA results are in log, download them again and rewrite old",
         )
         parser.add_argument(
             "filename", nargs="?", type=Path, help="output template file name"
@@ -44,7 +43,7 @@ class Export(Command):
         filename = (
             self.args.filename if self.args.filename else Path(self.metadata.path)
         )
-        exporters: dict[tuple[bool, bool], Type[BaseExport]] = {
+        exporters: dict[tuple[bool, bool], type[BaseExport]] = {
             (True, False): AutoExport,
             (False, True): KernelExport,
             (False, False): ManualExport,
