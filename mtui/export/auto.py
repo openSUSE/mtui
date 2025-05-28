@@ -47,6 +47,7 @@ class AutoExport(BaseExport):
         if (
             "Installation tests done in openQA with following results: PASSED\n"
             not in self.template
+            or self.force
         ):
             filenames = self.get_logs()
             self.installlogs_lines(filenames)
