@@ -293,24 +293,23 @@ class HostsGroup(UserDict[str, Target]):
 
                 t.query_versions()
 
-                for pkg in t.packages.keys():
+                for pkg in t.packages.values():
                     before = None
                     after = None
+                    required = pkg.required
                     if not post:
-                        required = t.packages[pkg].required
-                        before = t.packages[pkg].current
-                        t.packages[pkg].before = before
+                        before = pkg.current
+                        pkg.before = before
                     else:
-                        before = t.packages[pkg].before
-                        required = t.packages[pkg].required
-                        after = t.packages[pkg].current
+                        before = pkg.before
+                        after = pkg.current
 
-                        t.packages[pkg].after = after
+                        pkg.after = after
 
                     if not before:
                         not_installed.append(pkg)
                     else:
-                        if before >= required:
+                        if before >= required:  # type: ignore
                             logger.warning(
                                 "%s: package is too recent: %s (%s, target version is %s)",
                                 hn,
@@ -325,7 +324,7 @@ class HostsGroup(UserDict[str, Target]):
                                 "%s: package was not updated: %s (%s)", hn, pkg, after
                             )
                     if after:
-                        if after < required:
+                        if after < required:  # type: ignore
                             logger.warning(
                                 "%s: package does not match required version: %s (%s, required %s)",
                                 hn,
