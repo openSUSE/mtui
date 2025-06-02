@@ -17,8 +17,7 @@ The Maintenance Test Update Installer (MTUI) allows you to run shell
 commands on multiple hosts in parallel.
 
 In addition, MTUI provides convenience commands to help with maintenance
-update testing and integrating with other systems like Bugzilla,
-Testopia and test report templates.
+update testing and integrating with other systems like Bugzilla and test report templates.
 
 
 License
