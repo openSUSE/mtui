@@ -396,7 +396,8 @@ Refhost zypper installation logs are exported to subdir per refhost.
 
 .. option:: -f, --force
 
-  Force-overwrites the existing template.
+  Force overwrite existing template and if openQA results are in log,
+  download them again and replace older records.
 
 .. option:: filename
 
