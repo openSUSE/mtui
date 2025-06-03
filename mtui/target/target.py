@@ -89,6 +89,7 @@ class Target:
 
         # parse packages
         self.packages = self._parse_packages()
+        self.query_versions()
 
     def reload_system(self) -> None:
         self.system = parse_system(self.connection)
@@ -106,10 +107,7 @@ class Target:
         if self.state == "enabled":
             pvs = self.query_package_versions(packages)
             for p, v in pvs.items():
-                if v:
-                    self.packages[p].current = str(v)
-                else:
-                    self.packages[p].current = None
+                self.packages[p].current = str(v) if v else None
         elif self.state == "dryrun":
             logger.info('dryrun: %s running "rpm -q %s"', self.hostname, packages)
             self.out.append(["rpm -q {}".format(packages), "dryrun\n", "", 0, 0])

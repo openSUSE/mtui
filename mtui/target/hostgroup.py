@@ -303,7 +303,7 @@ class HostsGroup(UserDict):
                 else:
                     if RPMVersion(before) >= RPMVersion(required):
                         logger.warning(
-                            "$s: package is too recent: %s (%s, target version is %s)",
+                            "%s: package is too recent: %s (%s, target version is %s)",
                             hn,
                             pkg,
                             before,
