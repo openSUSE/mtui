@@ -284,6 +284,33 @@ class check_eq:
         return f"{self.x!r}"
 
 
+class check_type:
+    """
+    Usage: check_type(x)(y)
+    :return: y for y if x(y) otherwise raises
+    :raises: ValueError
+    """
+
+    def __init__(self, *x) -> None:
+        self.x: tuple[Any, ...] = x
+
+    def __call__(self, y: Any) -> Any:
+        for f in self.x:
+            try:
+                return f(y)
+            except ValueError:
+                err = True
+                pass
+        if err:
+            raise ValueError(f"Expected {self.x!r}, got: {y!r}")
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
+
+    def __str__(self) -> str:
+        return f"convertible to {self.x!r}"
+
+
 @contextmanager
 def chdir(newpath: Path):
     """Context manager for changing the current working directory"""

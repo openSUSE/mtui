@@ -27,10 +27,10 @@ def m_review_id():
         "S:M:{0}:{1}",
         "SUSE:M:{0}:{1}",
         "S:Maintenance:{0}:{1}",
-        "S:S:{0}",
-        "SUSE:S:{0}",
-        "SUSE:SLFO:{0}",
-        "S:SLFO:{0}",
+        "S:S:1.1:{0}",
+        "SUSE:S:1.1:{0}",
+        "SUSE:SLFO:1.1:{0}",
+        "S:SLFO:1.1:{0}",
     ],
 )
 def test_RRID_ok(r_review_id, m_review_id, rrid):

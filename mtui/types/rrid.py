@@ -2,7 +2,7 @@ from itertools import zip_longest
 from typing import Callable, final
 
 from ..exceptions import TooManyComponentsError
-from ..utils import apply_parser, check_eq
+from ..utils import apply_parser, check_eq, check_type
 
 
 @final
@@ -16,10 +16,9 @@ class RequestReviewID:
         parsers: list[Callable[[str], str | int]] = [
             check_eq("SUSE", "S"),
             check_eq("SLFO", "S", "Maintenance", "M"),
+            check_type(int, float),
             int,
         ]
-        if len(xs) == 4:
-            parsers.append(int)
 
         TooManyComponentsError.raise_if(xs, 4)
 
@@ -29,11 +28,7 @@ class RequestReviewID:
             apply_parser(*ys)
             for ys in zip_longest(parsers, xs, range(1, len(parsers) + 1))
         ]
-        if len(xs) == 4:
-            self.project, self.kind, self.maintenance_id, self.review_id = xs
-        else:
-            self.project, self.kind, self.maintenance_id = xs
-            self.review_id = self.maintenance_id
+        self.project, self.kind, self.maintenance_id, self.review_id = xs
 
         if self.project == "S":
             self.project = "SUSE"
@@ -43,9 +38,12 @@ class RequestReviewID:
         elif self.kind == "S":
             self.kind = "SLFO"
 
+        if self.kind == "SLFO":
+            self.maintenance_id = self.review_id
+
     def __str__(self) -> str:
         if self.kind == "SLFO":
-            return f"{self.project}:{self.kind}:{self.maintenance_id}"
+            return f"{self.project}:{self.kind}:1.1:{self.maintenance_id}"
         return f"{self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}"
 
     def __hash__(self) -> int:
