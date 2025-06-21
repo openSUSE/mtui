@@ -17,13 +17,11 @@ class RequestReviewID:
             check_eq("SUSE", "S"),
             check_eq("SLFO", "S", "Maintenance", "M"),
             check_type(int, str),
-            int,
+            check_type(int),
         ]
 
         TooManyComponentsError.raise_if(xs, 4)
 
-        # filter empty entries
-        # construct [(parser, input, index), ...]
         xs = [
             apply_parser(*ys)
             for ys in zip_longest(parsers, xs, range(1, len(parsers) + 1))
@@ -40,6 +38,9 @@ class RequestReviewID:
 
     def __str__(self) -> str:
         return f"{self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}"
+
+    def __repr__(self) -> str:
+        return f"<RRID - {self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}>"
 
     def __hash__(self) -> int:
         return hash(str(self))

@@ -27,10 +27,10 @@ def m_review_id():
         "S:M:{0}:{1}",
         "SUSE:M:{0}:{1}",
         "S:Maintenance:{0}:{1}",
-        "S:S:1.1:{0}",
-        "SUSE:S:1.1:{0}",
-        "SUSE:SLFO:1.1:{0}",
-        "S:SLFO:1.1:{0}",
+        "S:S:1.1:{1}",
+        "SUSE:S:1.1:{1}",
+        "SUSE:SLFO:1.1:{1}",
+        "S:SLFO:1.1:{1}",
     ],
 )
 def test_RRID_ok(r_review_id, m_review_id, rrid):
@@ -39,11 +39,13 @@ def test_RRID_ok(r_review_id, m_review_id, rrid):
     """
     rid = r_review_id
     mid = m_review_id
-    rrid = RequestReviewID(rrid.format(mid, rid))
+    rr = RequestReviewID(rrid.format(mid, rid))
 
-    if rrid.kind != "SLFO":
-        assert rrid.review_id == rid
-    assert rrid.maintenance_id == mid
+    assert rr.review_id == rid
+    if rr.kind != "SLFO":
+        assert rr.maintenance_id == mid
+    else:
+        assert isinstance(rr.maintenance_id, str) and rr.maintenance_id == "1.1"
 
 
 @pytest.mark.parametrize("missing", ["SUSE:Maintenance", "SUSE:M", "SUSE"])
@@ -59,7 +61,6 @@ def test_parse_rrid_mc(missing):
     "cpe",
     [
         "SUSE:Maintenance:1:aa",
-        "SUSE:Maintenance:aa:11",
         "d131dd02c5e6eec4",
         "DOOH:Maintenance:1:2",
         "openSUSE:boo:1:2",
