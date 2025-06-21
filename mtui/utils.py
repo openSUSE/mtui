@@ -15,7 +15,7 @@ from itertools import chain
 from pathlib import Path
 from shutil import move
 from tempfile import mkstemp
-from typing import Any
+from typing import Any, Sequence
 
 from .exceptions import ComponentParseError, InternalParseError, MissingComponent
 from .messages import TestReportNotLoadedError
@@ -270,7 +270,7 @@ class check_eq:
     """
 
     def __init__(self, *x) -> None:
-        self.x: tuple[Any, ...] = x
+        self.x: Sequence[Any] = x
 
     def __call__(self, y: Any) -> Any:
         if y not in self.x:
@@ -292,15 +292,17 @@ class check_type:
     """
 
     def __init__(self, *x) -> None:
-        self.x: tuple[Any, ...] = x
+        self.x: Sequence[Any] = x
 
     def __call__(self, y: Any) -> Any:
+        err = False
         for f in self.x:
+            err = False
             try:
                 return f(y)
             except ValueError:
                 err = True
-                pass
+
         if err:
             raise ValueError(f"Expected {self.x!r}, got: {y!r}")
 
@@ -331,7 +333,7 @@ def ensure_dir_exists(*path, **kwargs) -> Path:
     :param on_create: Callable operation on created dir
     """
 
-    def empty(*args, **kwds) -> None:
+    def empty(*args, **kwds) -> None:  # type: ignore
         pass
 
     on_create: Callable = kwargs.get("on_create", empty)

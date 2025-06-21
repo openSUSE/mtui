@@ -16,7 +16,7 @@ class RequestReviewID:
         parsers: list[Callable[[str], str | int]] = [
             check_eq("SUSE", "S"),
             check_eq("SLFO", "S", "Maintenance", "M"),
-            check_type(int, float),
+            check_type(int, str),
             int,
         ]
 
@@ -38,12 +38,7 @@ class RequestReviewID:
         elif self.kind == "S":
             self.kind = "SLFO"
 
-        if self.kind == "SLFO":
-            self.maintenance_id = self.review_id
-
     def __str__(self) -> str:
-        if self.kind == "SLFO":
-            return f"{self.project}:{self.kind}:1.1:{self.maintenance_id}"
         return f"{self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}"
 
     def __hash__(self) -> int:
