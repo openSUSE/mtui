@@ -17,12 +17,13 @@ class SLTestReport(TestReport):
         self.rrid: RequestReviewID
         self.rating = ""
         self.realid = ""
-
+        self.giteapr = ""
+        self.giteaprapi = ""
         self._attrs += ["rrid", "rating", "realid"]
 
     @property
     def _type(self) -> str:
-        return "SLMicro"
+        return "SLFO"
 
     @property
     def id(self) -> str:
@@ -44,6 +45,7 @@ class SLTestReport(TestReport):
             ("ReviewRequestID", str(self.rrid)),
             ("Rating", self.rating),
             ("Real ID", self.realid),
+            ("Gitea PR", self.giteapr),
         ] + super()._show_yourself_data()
 
     def set_repo(self, target: Target, operation: str) -> None:

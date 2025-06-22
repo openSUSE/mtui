@@ -18,6 +18,8 @@ class JSONParser:
         results.testplatforms = data.get("testplatform")
         results.products = data.get("products")
         results.realid = data.get("id")
+        results.giteapr = data.get("gitea_pr")
+        results.giteaprapi = data.get("gitea_pr_api")
 
         packages = {}
         for prod, pkgvers in data.get("packages").items():
