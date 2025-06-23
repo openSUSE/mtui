@@ -4,14 +4,13 @@
 #
 
 import errno
+import re
 from logging import getLogger
 from pathlib import Path
-import re
 from string import Template
 from traceback import format_exc
 from typing import Any, Callable, Literal, final
 
-from . import TargetLock, TargetLockedError
 from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
@@ -21,6 +20,7 @@ from ..target.parsers import parse_system
 from ..types import HostLog, Package, System
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
+from . import TargetLock, TargetLockedError
 
 logger = getLogger("mtui.target")
 
@@ -56,6 +56,7 @@ class Target:
         self._timeout = timeout
         self.exclusive = exclusive
         self.connection: Connection
+        self.transactional = False
         # helper for packages before system analysis
         self._pkgs = packages
 
@@ -86,14 +87,14 @@ class Target:
             logger.warning(self._lock.locked_by_msg())
 
         # get system
-        self.system = parse_system(self.connection)
+        self.system, self.transactional = parse_system(self.connection)
 
         # parse packages
         self.packages = self._parse_packages()
         self.query_versions()
 
     def reload_system(self) -> None:
-        self.system = parse_system(self.connection)
+        self.system, self.transactional = parse_system(self.connection)
 
     def __eq__(self, other) -> bool:
         return self.system == other.system
@@ -374,8 +375,8 @@ class Target:
         if self.connection:
             self.connection.close()
 
-    def report_self(self, sink: Callable[[str, System, str, bool], None]) -> None:
-        sink(self.hostname, self.system, self.state, self.exclusive)
+    def report_self(self, sink: Callable[[str, System, bool, str, bool], None]) -> None:
+        sink(self.hostname, self.system, self.transactional, self.state, self.exclusive)
 
     def report_history(self, sink: Callable[[str, System, list[str]], None]) -> None:
         sink(self.hostname, self.system, self.lastout().split("\n"))

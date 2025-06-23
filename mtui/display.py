@@ -54,7 +54,12 @@ class CommandPromptDisplay:
         self.println()
 
     def list_host(
-        self, hostname: str, system: System, state: str, exclusive: str
+        self,
+        hostname: str,
+        system: System,
+        transactional: bool,
+        state: str,
+        exclusive: str,
     ) -> None:
         if exclusive:
             mode = "serial"
@@ -68,10 +73,13 @@ class CommandPromptDisplay:
         else:
             state = red("Disabled")
 
+        if transactional:
+            trn = red("transactional")
+        else:
+            trn = green("standard     ")
+
         self.println(
-            "{0:20} {1:20}: {2} ({3})".format(
-                hostname, "({!s})".format(system), state, mode
-            )
+            f"{hostname:<20} ({system!s:<28}): {state:<8} - {trn:<15} - ({mode})"
         )
 
     def list_locks(self, hostname: str, system: System, lock) -> None:
