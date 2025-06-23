@@ -1,15 +1,16 @@
 from logging import getLogger
 from pathlib import Path
 
-from . import product
 from ...connection import Connection
 from ...types import Product
 from ...types.systems import System
+from . import product
 
 logger = getLogger("mtui.targer.parsers.system")
 
 
-def parse_system(connection: Connection) -> System:
+def parse_system(connection: Connection) -> tuple[System, bool]:
+    transactional = False
     files: list[str] = []
     try:
         files = [
@@ -29,8 +30,8 @@ def parse_system(connection: Connection) -> System:
                 name, version, arch = product.parse_os_release(f)
         except FileNotFoundError:
             # TODO: old RH systems have only /etc/redhat-release
-            return System(Product("rhel", "6", "x86_64"))
-        return System(Product(name, version, arch))
+            return (System(Product("rhel", "6", "x86_64")), False)
+        return (System(Product(name, version, arch)), False)
 
     if basefile := connection.sftp_readlink(Path("/etc/products.d/baseproduct")):
         files.remove(basefile)
@@ -50,4 +51,12 @@ def parse_system(connection: Connection) -> System:
     if base.name == "SLES_SAP" and base.version.startswith("12"):
         addons.add(Product("SLES", base.version, base.arch))
         addons.add(Product("sle-ha", base.version, base.arch))
-    return System(base, addons)
+
+    try:
+        _ = connection.sftp_open(Path("/usr/etc/transactional-update.conf"))
+        transactional = True
+        logger.info(f"Host: {connection.hostname} is transactional system")
+    except FileNotFoundError:
+        transactional = False
+
+    return (System(base, addons), transactional)
