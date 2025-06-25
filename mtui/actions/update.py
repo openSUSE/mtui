@@ -31,6 +31,11 @@ zypper -n lr | awk -F "|" '/$repa\>/ {{ print $2; }}' | while read r; do zypper 
 
 
 updater = DictWithInjections(
-    {"YUM": yum_update, "11": zypper_update, "12": zypper_update, "15": zypper_update},
+    {
+        ("YUM", False): yum_update,
+        ("11", False): zypper_update,
+        ("12", False): zypper_update,
+        ("15", False): zypper_update,
+    },
     key_error=MissingUpdaterError,
 )

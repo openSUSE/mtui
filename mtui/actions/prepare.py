@@ -29,10 +29,10 @@ def yum_prepare(force=False, testing=False) -> dict[str, Template]:
 
 preparer = DictWithInjections(
     {
-        "11": zypper_prepare,
-        "12": zypper_prepare,
-        "15": zypper_prepare,
-        "YUM": yum_prepare,
+        ("11", False): zypper_prepare,
+        ("12", False): zypper_prepare,
+        ("15", False): zypper_prepare,
+        ("YUM", False): yum_prepare,
     },
     key_error=MissingPreparerError,
 )
