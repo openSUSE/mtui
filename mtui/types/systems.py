@@ -25,8 +25,6 @@ class System:
         name: str = self.__base.name  # noqa 'base' is always Product
         if name == "SUSE-Manager-Server":
             return "15"
-        elif name == "CAASP":
-            return "CAASP"
         elif name == "rhel":
             return "YUM"
         elif name in (
@@ -44,6 +42,8 @@ class System:
             return "15"
         elif name == "sle-studioonsite":
             return "11"
+        elif name == "SL-Micro":
+            return "slmicro"
         raise UnknownSystemError(name)
 
     def __str__(self) -> str:
