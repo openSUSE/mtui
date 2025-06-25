@@ -10,10 +10,10 @@ yum_uninstall = {"command": Template("yum -y remove $packages")}
 
 uninstaller = DictWithInjections(
     {
-        "11": zypper_uninstall,
-        "12": zypper_uninstall,
-        "15": zypper_uninstall,
-        "YUM": yum_uninstall,
+        ("11", False): zypper_uninstall,
+        ("12", False): zypper_uninstall,
+        ("15", False): zypper_uninstall,
+        ("YUM", False): yum_uninstall,
     },
     key_error=MissingUninstallerError,
 )

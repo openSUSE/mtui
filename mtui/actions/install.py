@@ -10,10 +10,10 @@ yum_install = {"command": Template("yum -y install $packages")}
 
 installer = DictWithInjections(
     {
-        "11": zypper_install,
-        "12": zypper_install,
-        "15": zypper_install,
-        "YUM": yum_install,
+        ("11", False): zypper_install,
+        ("12", False): zypper_install,
+        ("15", False): zypper_install,
+        ("YUM", False): yum_install,
     },
     key_error=MissingInstallerError,
 )

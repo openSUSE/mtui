@@ -326,7 +326,7 @@ class Target:
                 return
 
             now = timestamp()
-            user: str = self.config.session_user
+            user: str = self.config.session_user  # type: ignore
             try:
                 historyfile.write("{}:{}:{}\n".format(now, user, ":".join(comment)))
                 historyfile.close()
@@ -397,36 +397,46 @@ class Target:
         sink(self.hostname, self.system)
 
     def get_installer(self) -> dict[str, Template]:
-        return installer[self.system.get_release()]
+        return installer[(self.system.get_release(), self.transactional)]
 
     def get_installer_check(self) -> Callable:
-        return install_checks.get(self.system.get_release(), _no_checks)
+        return install_checks.get(
+            (self.system.get_release(), self.transactional), _no_checks
+        )
 
     def get_uninstaller(self) -> dict[str, Template]:
-        return uninstaller[self.system.get_release()]
+        return uninstaller[(self.system.get_release(), self.transactional)]
 
     def get_uninstaller_check(self) -> Callable:
-        return install_checks.get(self.system.get_release(), _no_checks)
+        return install_checks.get(
+            (self.system.get_release(), self.transactional), _no_checks
+        )
 
     def get_downgrader(self) -> dict[str, Template]:
-        return downgrader[self.system.get_release()]
+        return downgrader[(self.system.get_release(), self.transactional)]
 
     def get_downgrader_check(self) -> Callable:
-        return downgrade_checks.get(self.system.get_release(), _no_checks)
+        return downgrade_checks.get(
+            (self.system.get_release(), self.transactional), _no_checks
+        )
 
     def get_updater(self) -> dict[str, Template]:
-        return updater[self.system.get_release()]
+        return updater[(self.system.get_release(), self.transactional)]
 
     def get_updater_check(self) -> Callable:
-        return update_checks.get(self.system.get_release(), _no_checks)
+        return update_checks.get(
+            (self.system.get_release(), self.transactional), _no_checks
+        )
 
     def get_preparer(
         self, force: bool = False, testing: bool = False
     ) -> dict[str, Template]:
-        return preparer[self.system.get_release()](force, testing)
+        return preparer[(self.system.get_release(), self.transactional)](force, testing)
 
     def get_preparer_check(self) -> Callable:
-        return prepare_checks.get(self.system.get_release(), _no_checks)
+        return prepare_checks.get(
+            (self.system.get_release(), self.transactional), _no_checks
+        )
 
     def __repr__(self) -> str:
         return f"<Target - {self.hostname}>"

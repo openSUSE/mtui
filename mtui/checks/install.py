@@ -63,8 +63,8 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("Unknown Error", hostname)
 
 
-install_checks: dict[str, Callable[[str, str, str, str, int], None]] = {
-    "11": zypper,
-    "12": zypper,
-    "15": zypper,
+install_checks: dict[tuple[str, bool], Callable[[str, str, str, str, int], None]] = {
+    ("11", False): zypper,
+    ("12", False): zypper,
+    ("15", False): zypper,
 }

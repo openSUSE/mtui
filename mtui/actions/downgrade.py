@@ -27,6 +27,11 @@ yum = {"command": Template("yum -y downgrade $package")}
 
 
 downgrader = DictWithInjections(
-    {"11": zypper(), "12": zypper(), "15": zypper(), "YUM": yum},
+    {
+        ("11", False): zypper(),
+        ("12", False): zypper(),
+        ("15", False): zypper(),
+        ("YUM", False): yum,
+    },
     key_error=MissingDowngraderError,
 )
