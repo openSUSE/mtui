@@ -75,7 +75,7 @@ class Uninstall(Command):
             return
         except Exception as e:
             logger.critical("failed to uninstall packages")
-            logger.debug("%s", e)
+            logger.error("Error - %s", e)
             return
 
         logger.info("Done")
