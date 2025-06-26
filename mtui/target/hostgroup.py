@@ -179,13 +179,25 @@ class HostsGroup(UserDict[str, Target]):
             )
             for t in self.data.values()
         }
+        reboot = {
+            t.hostname: t.get_uninstaller()["reboot"].substitute()
+            for t in self.data.values()
+            if t.transactional
+        }
         self.update_lock()
         try:
             self.run(commands)
+
             for t in self.data.values():
                 t.get_uninstaller_check()(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
+
+            if reboot:
+                logger.info("Rebooting transactional hosts %s", reboot.keys())
+                self.run(reboot)
+                for hn in reboot.keys():
+                    self.data[hn].connection.reconnect()
         except BaseException:
             raise
         finally:
