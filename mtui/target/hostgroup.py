@@ -252,6 +252,17 @@ class HostsGroup(UserDict[str, Target]):
         versions: dict[str, dict[str, str]] = {}
         self.update_lock()
 
+        reboot = {
+            t.hostname: t.get_downgrader()["reboot"].substitute()
+            for t in self.data.values()
+            if t.transactional
+        }
+        init_snapshot = {
+            t.hostname: t.get_downgrader()["init_snapshot"].substitute()
+            for t in self.data.values()
+            if t.transactional
+        }
+
         try:
             for t in self.data.values():
                 queue.put((t.set_repo, ["remove", testreport]))
@@ -284,6 +295,9 @@ class HostsGroup(UserDict[str, Target]):
                     version = sorted(release[name], key=RPMVersion, reverse=True)[0]
                     versions.setdefault(hn, dict()).update({name: version})
 
+            if init_snapshot:
+                self.run(init_snapshot)
+
             for package in packages:
                 cmd = {
                     h: t.get_downgrader()["command"].safe_substitute(
@@ -303,6 +317,12 @@ class HostsGroup(UserDict[str, Target]):
                             t.lasterr(),
                             t.lastexit(),
                         )
+
+            if reboot:
+                logger.info("Rebooting transactional hosts %s", reboot.keys())
+                self.run(reboot)
+                for hn in reboot.keys():
+                    self.data[hn].connection.reconnect()
 
         except BaseException:
             raise
