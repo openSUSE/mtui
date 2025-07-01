@@ -208,6 +208,20 @@ class HostsGroup(UserDict[str, Target]):
         force = kw.get("force", False)
         testing = kw.get("testing", False)
         cmd = "installed_only" if kw.get("installed_only", False) else "command"
+        pkgs = [p for p in packages if p != "branding-upstream"]
+        # big change, all packages prepared in one step, so we dont need reboot transactional systems too many times
+        commands = {
+            t.hostname: t.get_preparer(force, testing)[cmd].substitute(
+                package=" ".join(pkgs)
+            )
+            for t in self.data.values()
+        }
+
+        reboot = {
+            t.hostname: t.get_preparer()["reboot"].substitute()
+            for t in self.data.values()
+            if t.transactional
+        }
 
         self.update_lock()
 
@@ -227,20 +241,16 @@ class HostsGroup(UserDict[str, Target]):
                         t.lastout(),
                     )
                     return
-            for package in packages:
-                if "branding-upstream" in package:
-                    continue
-                commands = {
-                    t.hostname: t.get_preparer(force, testing)[cmd].substitute(
-                        package=package
-                    )
-                    for t in self.data.values()
-                }
-                self.run(commands)
-                for t in self.data.values():
-                    t.get_preparer_check()(
-                        t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
-                    )
+            self.run(commands)
+            for t in self.data.values():
+                t.get_preparer_check()(
+                    t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
+                )
+            if reboot:
+                logger.info("Rebooting transactional hosts %s", reboot.keys())
+                self.run(reboot)
+                for hn in reboot.keys():
+                    self.data[hn].connection.reconnect()
 
         except BaseException:
             pass
