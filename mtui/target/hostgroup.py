@@ -416,6 +416,11 @@ class HostsGroup(UserDict[str, Target]):
             )
             for hn, t in self.data.items()
         }
+        reboot = {
+            t.hostname: t.get_updater()["reboot"].substitute()
+            for t in self.data.values()
+            if t.transactional
+        }
 
         try:
             self.run(commands)
@@ -423,6 +428,11 @@ class HostsGroup(UserDict[str, Target]):
                 t.get_updater_check()(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
+            if reboot:
+                logger.info("Rebooting transactional hosts %s", reboot.keys())
+                self.run(reboot)
+                for hn in reboot.keys():
+                    self.data[hn].connection.reconnect()
         except BaseException:
             raise
         finally:
