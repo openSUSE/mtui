@@ -53,7 +53,7 @@ class OBSTestReport(TestReport):
 
     def list_update_commands(self, targets: HostsGroup, display) -> None:
         packages = self.get_package_list()
-        repa = f":p={self.rrid.maintenance_id}"
+        repa = f":p={self.rrid.maintenance_id}:{self.rrid.review_id}"
         for hn, t in targets.items():
             display(
                 f"{hn} - commands: \n{t.get_updater()['command'].safe_substitute(repa=repa, packages=packages)}"

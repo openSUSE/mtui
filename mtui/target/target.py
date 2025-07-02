@@ -176,7 +176,7 @@ class Target:
         ur = ((x, y) for x, y in repos.items() if x in self.system.flatten())
 
         def name(product, rrid) -> str:
-            return f"issue-{product.name}:{product.version}:p={rrid.maintenance_id}"
+            return f"issue-{product.name}:{product.version}:p={rrid.maintenance_id}:{rrid.review_id}"
 
         for x, y in ur:
             if "ar" in cmd:
