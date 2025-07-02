@@ -409,7 +409,7 @@ class HostsGroup(UserDict[str, Target]):
 
         queue.join()
 
-        repa = f":p={testreport.rrid.maintenance_id}"
+        repa = f":p={testreport.rrid.maintenance_id}:{testreport.rrid.review_id}"
         commands = {
             hn: t.get_updater()["command"].safe_substitute(
                 repa=repa, packages=" ".join(testreport.get_package_list())
