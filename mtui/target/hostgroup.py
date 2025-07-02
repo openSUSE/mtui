@@ -110,6 +110,13 @@ class HostsGroup(UserDict[str, Target]):
     def _run(self, cmd) -> None:
         return RunCommand(self.data, cmd).run()
 
+    def _reboot(self, reboot: dict[str, str]) -> None:
+        if reboot:
+            logger.info("Rebooting transactional hosts %s", reboot.keys())
+            self.run(reboot)
+            for hn in reboot.keys():
+                self.data[hn].connection.reconnect()
+
     def update_lock(self) -> None:
         try:
             skipped = False
@@ -161,11 +168,7 @@ class HostsGroup(UserDict[str, Target]):
                 t.get_installer_check()(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
-            if reboot:
-                logger.info("Rebooting transactional hosts %s", reboot.keys())
-                self.run(reboot)
-                for hn in reboot.keys():
-                    self.data[hn].connection.reconnect()
+            self._reboot(reboot)
 
         except BaseException:
             raise
@@ -192,12 +195,7 @@ class HostsGroup(UserDict[str, Target]):
                 t.get_uninstaller_check()(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
-
-            if reboot:
-                logger.info("Rebooting transactional hosts %s", reboot.keys())
-                self.run(reboot)
-                for hn in reboot.keys():
-                    self.data[hn].connection.reconnect()
+            self._reboot(reboot)
         except BaseException:
             raise
         finally:
@@ -246,11 +244,7 @@ class HostsGroup(UserDict[str, Target]):
                 t.get_preparer_check()(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
-            if reboot:
-                logger.info("Rebooting transactional hosts %s", reboot.keys())
-                self.run(reboot)
-                for hn in reboot.keys():
-                    self.data[hn].connection.reconnect()
+            self._reboot(reboot)
 
         except BaseException:
             pass
@@ -328,11 +322,7 @@ class HostsGroup(UserDict[str, Target]):
                             t.lastexit(),
                         )
 
-            if reboot:
-                logger.info("Rebooting transactional hosts %s", reboot.keys())
-                self.run(reboot)
-                for hn in reboot.keys():
-                    self.data[hn].connection.reconnect()
+            self._reboot(reboot)
 
         except BaseException:
             raise
@@ -428,11 +418,7 @@ class HostsGroup(UserDict[str, Target]):
                 t.get_updater_check()(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
-            if reboot:
-                logger.info("Rebooting transactional hosts %s", reboot.keys())
-                self.run(reboot)
-                for hn in reboot.keys():
-                    self.data[hn].connection.reconnect()
+            self._reboot(reboot)
         except BaseException:
             raise
         finally:
