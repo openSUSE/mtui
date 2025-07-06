@@ -25,7 +25,7 @@ from . import TargetLock, TargetLockedError
 logger = getLogger("mtui.target")
 
 
-def _no_checks(*args: tuple[Any]) -> None:
+def _no_checks(*args: tuple[Any, ...]) -> None:
     return None
 
 
@@ -110,8 +110,7 @@ class Target:
 
     def query_versions(self, packages=None) -> None:
         if packages is None:
-            packages = self.packages.keys()
-
+            packages = list(self.packages.keys())
         if self.state == "enabled":
             pvs = self.query_package_versions(packages)
             for p, v in pvs.items():
