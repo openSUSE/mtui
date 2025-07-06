@@ -64,7 +64,10 @@ class Target:
         ret: dict[str, Package] = {}
         base_version = self.system.get_base().version
         if self._pkgs:
-            packages = self._pkgs.get(base_version, {})
+            if "standard" in self._pkgs and len(self._pkgs) == 1:
+                packages = self._pkgs["standard"]
+            else:
+                packages = self._pkgs.get(base_version, {})
             if base_version.startswith("12"):
                 packages.update(self._pkgs.get("12", {}))
 
