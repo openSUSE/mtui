@@ -108,7 +108,7 @@ class CommandPrompt(cmd.Cmd):
         # only wheen mtui is started without param.
         self.prompt: str = "mtui-empty>"
 
-    def notify_user(self, msg: str, class_=None):
+    def notify_user(self, msg: str, class_=""):
         notification.display("MTUI", msg, class_)
 
     def println(self, msg="", eol="\n") -> None:

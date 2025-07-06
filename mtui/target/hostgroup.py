@@ -337,7 +337,6 @@ class HostsGroup(UserDict[str, Target]):
                 t.query_versions()
 
                 for pkg in t.packages.values():
-                    before = None
                     after = None
                     required = pkg.required
                     if not post:
