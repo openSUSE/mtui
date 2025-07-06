@@ -50,7 +50,7 @@ class SLTestReport(TestReport):
 
     def set_repo(self, target: Target, operation: str) -> None:
         if operation == "add":
-            target.run_zypper("-n ar -ckn", self.update_repos, self.rrid)
+            target.run_zypper("-n ar -cGkn", self.update_repos, self.rrid)
         elif operation == "remove":
             target.run_zypper("-n rr", self.update_repos, self.rrid)
         else:
