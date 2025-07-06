@@ -93,6 +93,9 @@ class Target:
         self.packages = self._parse_packages()
         self.query_versions()
 
+    def reconnect(self, retry, backoff) -> None:
+        self.connection.reconnect(retry, backoff)
+
     def reload_system(self) -> None:
         self.system, self.transactional = parse_system(self.connection)
 
