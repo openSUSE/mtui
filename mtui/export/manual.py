@@ -94,12 +94,6 @@ class ManualExport(BaseExport):
                     index += 1
                     self.template.insert(index, "--------------\n")
                     index += 1
-                    if systemtype.startswith("caasp"):
-                        self.template.insert(
-                            index,
-                            f"Please check the install logs for the transactional update on host {hostname}\n\n",
-                        )
-                        continue
                     self.template.insert(index, "before:\n")
                     index += 1
                     self.template.insert(index, "after:\n")
@@ -121,10 +115,6 @@ class ManualExport(BaseExport):
             versions = {}
             hostname = host.hostname
             systemtype = host.system
-
-            # Skip the caasp hosts
-            if systemtype.startswith("caasp"):
-                continue
 
             # search for system position which is already existing in the template
             # or was created in the previous step.
@@ -266,7 +256,7 @@ class ManualExport(BaseExport):
         t.append(f"log from {host_log.hostname}:\n")
         for cmd_log in host_log.hostlog:
             cmd = cmd_log.command
-            if cmd.startswith("zypper ") or cmd.startswith("transactional-update"):
+            if "zypper " in cmd or "transactional-update" in cmd:
                 t.append("# {!s}\n{!s}\n".format(cmd, cmd_log.stdout))
         return t
 
