@@ -115,7 +115,7 @@ class HostsGroup(UserDict[str, Target]):
             logger.info("Rebooting transactional hosts %s", reboot.keys())
             self.run(reboot)
             for hn in reboot.keys():
-                self.data[hn].connection.reconnect()
+                self.data[hn].reconnect(retry=5, backoff=True)
 
     def update_lock(self) -> None:
         try:

@@ -178,19 +178,26 @@ class Connection:
             logger.exception("SSHException while connecting to %s", self.hostname)
             raise
 
+        except OSError:
+            logger.error("No valid connection to %s:%s", self.hostname, self.port)
         except Exception as e:
             # general Exception
             logger.debug("%s: %s", self.hostname, e)
             raise
 
-    def reconnect(self) -> None:
+    def reconnect(
+        self, retry: int = 0, timeout: int = 10, backoff: bool = False
+    ) -> None:
         """Try to reconnect to the host.
 
         currently, there's no reconnection limit. needs to be implemented
         since the current implementation could deadlock.
 
         """
-        if not self.is_active():
+        count = 0
+        rtimeout = timeout
+        while not self.is_active() and count <= retry:
+            count += 1
             logger.debug(
                 "lost connection to %s:%s, reconnecting",
                 self.hostname,
@@ -198,7 +205,9 @@ class Connection:
             )
 
             # wait 10s and try to reconnect
-            select.select([], [], [], 10)
+            select.select([], [], [], rtimeout)
+            if backoff:
+                rtimeout = 2 * (timeout + 5 * count)
             self.connect()
 
         assert self.is_active()
