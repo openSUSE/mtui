@@ -40,4 +40,5 @@ downgrade_checks: dict[tuple[str, bool], Callable[[str, str, str, str, int], Non
     ("11", False): zypper,
     ("12", False): zypper,
     ("15", False): zypper,
+    ("16", False): zypper,
 }

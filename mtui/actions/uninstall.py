@@ -17,6 +17,7 @@ uninstaller = DictWithInjections(
         ("11", False): zypper_uninstall,
         ("12", False): zypper_uninstall,
         ("15", False): zypper_uninstall,
+        ("16", False): zypper_uninstall,
         ("YUM", False): yum_uninstall,
         ("slmicro", True): slmicro_uninstall,
     },

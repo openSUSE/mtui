@@ -49,6 +49,7 @@ updater = DictWithInjections(
         ("11", False): zypper_update,
         ("12", False): zypper_update,
         ("15", False): zypper_update,
+        ("16", False): zypper_update,
         ("slmicro", True): slm_update,
     },
     key_error=MissingUpdaterError,
