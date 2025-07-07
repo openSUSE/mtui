@@ -40,3 +40,10 @@ def slrepoparse(repository: str, products: list[str]) -> dict[Product, str]:
         x: join(repository, "images/repo", f"{x.name}-{x.version}-{x.arch}/")
         for x in chain.from_iterable(_parse_product(pd) for pd in products)
     }
+
+
+def gitrepoparse(repository: str, products: list[str]) -> dict[Product, str]:
+    return {
+        x: join(repository, "standard")
+        for x in chain.from_iterable(_parse_product(pd) for pd in products)
+    }

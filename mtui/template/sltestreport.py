@@ -2,7 +2,7 @@ from typing import final
 
 from ..parsemeta import MetadataParser, ReducedMetadataParser
 from ..parsemetajson import JSONParser
-from ..repoparse import slrepoparse
+from ..repoparse import gitrepoparse, slrepoparse
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..template.testreport import TestReport
@@ -38,7 +38,11 @@ class SLTestReport(TestReport):
         return parsers
 
     def _update_repos_parser(self) -> dict[Product, str]:
-        return slrepoparse(self.repository, self.products)
+        return (
+            slrepoparse(self.repository, self.products)
+            if self.rrid.maintenance_id == "1.1"
+            else gitrepoparse(self.repository, self.products)
+        )
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
         return [
@@ -50,7 +54,7 @@ class SLTestReport(TestReport):
 
     def set_repo(self, target: Target, operation: str) -> None:
         if operation == "add":
-            target.run_zypper("-n ar -cGkn", self.update_repos, self.rrid)
+            target.run_zypper("-n ar -cfGkn", self.update_repos, self.rrid)
         elif operation == "remove":
             target.run_zypper("-n rr", self.update_repos, self.rrid)
         else:
