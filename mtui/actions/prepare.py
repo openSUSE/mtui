@@ -43,6 +43,7 @@ preparer = DictWithInjections(
         ("11", False): zypper_prepare,
         ("12", False): zypper_prepare,
         ("15", False): zypper_prepare,
+        ("16", False): zypper_prepare,
         ("YUM", False): yum_prepare,
         ("slmicro", True): slm_prepare,
     },

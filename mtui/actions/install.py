@@ -17,6 +17,7 @@ installer = DictWithInjections(
         ("11", False): zypper_install,
         ("12", False): zypper_install,
         ("15", False): zypper_install,
+        ("16", False): zypper_install,
         ("YUM", False): yum_install,
         ("slmicro", True): slmicro_install,
     },

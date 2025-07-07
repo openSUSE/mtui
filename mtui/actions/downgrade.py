@@ -54,6 +54,7 @@ downgrader = DictWithInjections(
         ("11", False): zypper(),
         ("12", False): zypper(),
         ("15", False): zypper(),
+        ("16", False): zypper(),
         ("YUM", False): yum,
         ("slmicro", True): slmicro(),
     },
