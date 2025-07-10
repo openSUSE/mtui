@@ -47,3 +47,15 @@ def gitrepoparse(repository: str, products: list[str]) -> dict[Product, str]:
         x: join(repository, "standard")
         for x in chain.from_iterable(_parse_product(pd) for pd in products)
     }
+
+
+def reporepoparse(
+    repositories: frozenset[str], products: list[str]
+) -> dict[Product, str]:
+    return {
+        ps: repo
+        for pd in products
+        for ps in _parse_product(pd)
+        for repo in repositories
+        if f"{ps.name}-{ps.version}-{ps.arch}" in repo
+    }

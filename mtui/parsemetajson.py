@@ -25,4 +25,5 @@ class JSONParser:
         for prod, pkgvers in data.get("packages").items():
             pkgs = {pkg: ver for pkg, _, ver in (p.split() for p in pkgvers)}
             packages[prod] = pkgs
+        results.repositories = frozenset(data.get("repositories", []))
         results.packages = packages
