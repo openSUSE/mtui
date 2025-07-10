@@ -2,7 +2,7 @@ from typing import final
 
 from ..parsemeta import MetadataParser, ReducedMetadataParser
 from ..parsemetajson import JSONParser
-from ..repoparse import gitrepoparse, slrepoparse
+from ..repoparse import gitrepoparse, reporepoparse, slrepoparse
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..template.testreport import TestReport
@@ -19,6 +19,7 @@ class SLTestReport(TestReport):
         self.realid = ""
         self.giteapr = ""
         self.giteaprapi = ""
+        self.repositories: frozenset = frozenset()
         self._attrs += ["rrid", "rating", "realid"]
 
     @property
@@ -38,19 +39,24 @@ class SLTestReport(TestReport):
         return parsers
 
     def _update_repos_parser(self) -> dict[Product, str]:
-        return (
-            slrepoparse(self.repository, self.products)
-            if self.rrid.maintenance_id == "1.1"
-            else gitrepoparse(self.repository, self.products)
-        )
+        if self.repositories:
+            return reporepoparse(self.repositories, self.products)
+        elif self.rrid.maintenance_id == 1:
+            return slrepoparse(self.repository, self.products)
+
+        return gitrepoparse(self.repository, self.products)
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
-        return [
-            ("ReviewRequestID", str(self.rrid)),
-            ("Rating", self.rating),
-            ("Real ID", self.realid),
-            ("Gitea PR", self.giteapr),
-        ] + super()._show_yourself_data()
+        return (
+            [
+                ("ReviewRequestID", str(self.rrid)),
+                ("Rating", self.rating),
+                ("Real ID", self.realid),
+                ("Gitea PR", self.giteapr),
+            ]
+            + [("Repo", x) for x in self.repositories]
+            + super()._show_yourself_data()
+        )
 
     def set_repo(self, target: Target, operation: str) -> None:
         if operation == "add":
