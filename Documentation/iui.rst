@@ -601,14 +601,16 @@ template file. `-a` and `-k` options are mutually exclusive.
 .. option:: -a RequestReviewID
 
   Review request ID for the update in automode.
-  Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY``) or short
-  (``S:M:XXXX:YYYYYY``) format.
+  Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY`` |
+  ``SUSE:SLFO:XXXX:YYYY``) or short
+  (``S:M:XXXX:YYYYYY`` | ``S:S:XXXX:YYYY``) format.
 
 .. option:: -k RequestReviewID
 
   Review request ID for the update in kernel/livepatching mode.
-  Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY``) or short
-  (``S:M:XXXX:YYYYYY``) format.
+  Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY`` |
+  ``SUSE:SLFO:XXXX:YYYY``) or short
+  (``S:M:XXXX:YYYYYY`` | ``S:S:XXXX:YYYY``) format.
 
 
 list_metadata
