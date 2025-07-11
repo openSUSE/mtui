@@ -20,6 +20,10 @@ is the Incident ID and ``YYYYYY`` is the Request ID.
 
 ``RRID`` can also use the short format ``S:M:XXX:YYYY``.
 
+For SLE16+ and SL-Micro ``RRID`` is string in form ``SUSE:SFLO:XXXX:YYYY`` where ``XXXX``
+is branch and ``YYYY`` is pull request number in gitea. Can also use short format 
+``S:S:XXXX:YYYY``
+
 
 ``-k RRID, --kernel-review-id RRID``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -33,6 +37,9 @@ is the Incident ID and ``YYYYYY`` is the Request ID.
 
 ``RRID`` can also use the short format ``S:M:XXX:YYYY``.
 
+For SLE16+ and SL-Micro ``RRID`` is string in form ``SUSE:SFLO:XXXX:YYYY`` where ``XXXX``
+is branch and ``YYYY`` is pull request number in gitea. Can also use short format 
+``S:S:XXXX:YYYY``
 
 
 ``-c, --config file``
