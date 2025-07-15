@@ -41,7 +41,7 @@ class SLTestReport(TestReport):
     def _update_repos_parser(self) -> dict[Product, str]:
         if self.repositories:
             return reporepoparse(self.repositories, self.products)
-        elif self.rrid.maintenance_id == 1:
+        elif self.rrid.maintenance_id == "1.1":
             return slrepoparse(self.repository, self.products)
 
         return gitrepoparse(self.repository, self.products)
