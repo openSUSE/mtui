@@ -208,15 +208,14 @@ class HostsGroup(UserDict[str, Target]):
         cmd = "installed_only" if kw.get("installed_only", False) else "command"
         pkgs = [p for p in packages if p != "branding-upstream"]
         # big change, all packages prepared in one step, so we dont need reboot transactional systems too many times
-        commands = {
-            t.hostname: t.get_preparer(force, testing)[cmd].substitute(
-                package=" ".join(pkgs)
-            )
-            for t in self.data.values()
-        }
 
         reboot = {
             t.hostname: t.get_preparer()["reboot"].substitute()
+            for t in self.data.values()
+            if t.transactional
+        }
+        start = {
+            t.hostname: t.get_preparer()["start_command"].substitute()
             for t in self.data.values()
             if t.transactional
         }
@@ -229,6 +228,8 @@ class HostsGroup(UserDict[str, Target]):
 
             while queue.unfinished_tasks:
                 spinner()
+            if start:
+                self.run(start)
 
             for t in self.data.values():
                 if t.lasterr():
@@ -239,7 +240,16 @@ class HostsGroup(UserDict[str, Target]):
                         t.lastout(),
                     )
                     return
-            self.run(commands)
+            for pkg in pkgs:
+                command = {
+                    t.hostname: t.get_preparer(force, testing)[cmd].substitute(
+                        package=pkg
+                    )
+                    for t in self.data.values()
+                }
+
+                self.run(command)
+
             for t in self.data.values():
                 t.get_preparer_check()(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()

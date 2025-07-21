@@ -30,7 +30,10 @@ def yum_prepare(force: bool = False, testing: bool = False) -> dict[str, Templat
 def slm_prepare(force: bool = False, testing: bool = False) -> dict[str, Template]:
     parameter = "--force-resolution" if force else ""
     return {
-        "command": Template(f"transactional-update -n pkg in -l {parameter} $package"),
+        "start_command": Template("transactional-update run echo 'start operation'"),
+        "command": Template(
+            f"transactional-update -n -C pkg in -l {parameter} $package"
+        ),
         "installed_only": Template(
             f"if $(rpm -q $package &>/dev/null); then transactional-update -n pkg in -l {parameter} $package ; fi"
         ),
