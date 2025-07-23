@@ -5,7 +5,6 @@ from .sle15 import normalize_sle15
 from .misc import (
     normalize_rt,
     normalize_ses,
-    normalize_caasp,
     normalize_manager,
     normalize_cloud,
     normalize_osle,
@@ -26,8 +25,6 @@ def normalize(x):
     if x[0][1].startswith("15"):
         return normalize_sle15(x)
 
-    if x[0][0] == "SUSE-CAASP":
-        return normalize_caasp(x)
     if x[0][0] == "Storage":
         return normalize_ses(x)
     if "OpenStack-Cloud" in x[0][0]:
