@@ -1,10 +1,3 @@
-def normalize_caasp(x):
-    """Normalize CAASP"""
-    x[0][0] = "CAASP"
-    x[0][1] = ""
-    return x
-
-
 def normalize_ses(x):
     """Normalize SES"""
     x[0][0] = "ses"
