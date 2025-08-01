@@ -204,7 +204,6 @@ class Connection:
                 self.port,
             )
 
-            # wait 10s and try to reconnect
             select.select([], [], [], rtimeout)
             if backoff:
                 rtimeout = 2 * (timeout + 5 * count)
