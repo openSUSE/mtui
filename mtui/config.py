@@ -197,6 +197,7 @@ class Config:
             # process location last as that needs to access
             # RefhostsFactory which need access to parts of config.
             ("location", ("mtui", "location"), "default"),
+            ("gitea_token", ("gitea", "token"), getenv("GITEA_TOKEN", "")),
         ]
 
         def add_normalizer(x):
@@ -271,3 +272,6 @@ class Config:
 
         if args.smelt_api:
             self.smelt_api = args.smelt_api
+
+        if args.gitea_token:
+            self.gitea_token = args.gitea_token

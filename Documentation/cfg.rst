@@ -339,6 +339,18 @@ Prefix to the ``Testreport`` field value in ``list_metadata``
 command output.
 
 
+``gitea.token``
+~~~~~~~~~~~~~~~
+
+  | **type**
+  |     string
+  | **default**
+  |     `os.getenv('GITEA_TOKEN','')`__
+
+Gitea API access token, this config has higher prio than environment
+variable. Token must have full access to the issue API.
+
+
 Example
 =======
 
@@ -360,3 +372,6 @@ Example
 
   [openqa]
   openqa = https://openqa.suse.de
+
+  [gitea]
+  token = s3cr3t_token

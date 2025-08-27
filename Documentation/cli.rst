@@ -124,3 +124,12 @@ Prints MTUI version and exits.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Overrides the ``mtui.connection_timeout`` configuration.
+
+
+``-g string,  --gitea_token string``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Overrides the ``gitea.token`` configuration.
+
+``GITEA_TOKEN`` is secret token for gitea api access.
+Token must have full access to issue api.
