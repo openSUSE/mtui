@@ -61,6 +61,7 @@ def get_parser(sys) -> ArgumentParser:
         "-c", "--config", type=Path, default=None, help="Override default config path"
     )
     parser.add_argument("--smelt_api", type=str, help="SMELT graphQL API endpoint")
+    parser.add_argument("-g", "--gitea_token", type=str, help="Gitea Access Token")
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "-a",
