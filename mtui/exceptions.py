@@ -2,6 +2,8 @@ from argparse import ArgumentTypeError
 from collections.abc import Sequence
 from typing import Any
 
+from .connector.gitea import assignment
+
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):
     # Note: need to inherit ArgumentTypeError so the custom exception
@@ -52,3 +54,32 @@ class UpdateError(Exception):
         if self.host is None:
             return self.reason
         return "{!s}: {!s}".format(self.host, self.reason)
+
+
+class GiteaError(Exception):
+    pass
+
+
+class MissingGiteaToken(GiteaError):
+    pass
+
+
+class FailedGiteaCall(GiteaError):
+    pass
+
+
+class GiteaNoReview(GiteaError):
+    pass
+
+
+class GiteaAssignInvalid(GiteaError):
+    def __init__(self, assign_status: assignment, user: str):
+        self.assign_status = assign_status
+        self.user = user
+
+    def __str__(self) -> str:
+        if self.assign_status == assignment.ASSIGNED_OTHER:
+            return f"Gitea PR has assigned different user than {self.user}"
+        if self.assign_status == assignment.ASSIGNED_USER:
+            return f"Gitea PR has already assigned user: {self.user}"
+        return f"User {self.user} isnt assigned to Gitea PR"
