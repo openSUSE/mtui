@@ -15,7 +15,7 @@ class RequestReviewID:
         xs: list[str] = [x for x in rrid.split(":") if x]
         parsers: list[Callable[[str], str | int]] = [
             check_eq("SUSE", "S"),
-            check_eq("SLFO", "S", "Maintenance", "M"),
+            check_eq("SLFO", "S", "Maintenance", "M", "PI", "P"),
             check_type(int, str),
             check_type(int),
         ]
@@ -35,6 +35,8 @@ class RequestReviewID:
             self.kind = "Maintenance"
         elif self.kind == "S":
             self.kind = "SLFO"
+        elif self.kind == "P":
+            self.kind = "PI"
 
     def __str__(self) -> str:
         return f"{self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}"
