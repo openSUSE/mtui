@@ -4,7 +4,6 @@ from logging import getLogger
 from pathlib import Path
 from typing import Callable, final
 
-from . import RequestReviewID
 from ..config import Config
 from ..connector import SMELT
 from ..connector.openqa import AutoOpenQA, KernelOpenQA
@@ -16,8 +15,10 @@ from ..messages import (
 from ..template import TemplateIOError, testreport_svn_checkout
 from ..template.nulltestreport import NullTestReport
 from ..template.obstestreport import OBSTestReport
+from ..template.pitestreport import PITestReport
 from ..template.sltestreport import SLTestReport
 from ..template.testreport import TestReport
+from . import RequestReviewID
 
 logger = getLogger("mtui.types.updateid")
 
@@ -66,6 +67,8 @@ class UpdateID(ABC):
     def tr_factory(id_: RequestReviewID) -> type[TestReport]:
         if id_.kind == "SLFO":
             return SLTestReport
+        if id_.kind == "PI":
+            return PITestReport
         return OBSTestReport
 
 
@@ -91,7 +94,7 @@ class AutoOBSUpdateID(UpdateID):
         tr.openqa["auto"] = AutoOpenQA(
             config,
             config.openqa_instance,  # type: ignore
-            tr.smelt,
+            tr.smelt,  # type: ignore
             self.id,
         ).run()
 
@@ -135,19 +138,19 @@ class KernelOBSUpdateID(UpdateID):
 
         self._create_installogs_dir(config)
         self.create_results_dir(config)
-        tr.smelt = SMELT(self.id, config.smelt_api)
+        tr.smelt = SMELT(self.id, config.smelt_api)  # type: ignore
         tr.updateid = self  # type: ignore
         tr.openqa["auto"] = AutoOpenQA(
             config,
             config.openqa_instance,  # type: ignore
-            tr.smelt,
+            tr.smelt,  # type: ignore
             self.id,
         ).run()  # type: ignore
         kernel = KernelOpenQA(config, config.openqa_instance, tr.smelt, self.id).run()  # type: ignore
         baremetal = KernelOpenQA(
             config,
             config.openqa_instance_baremetal,  # type: ignore
-            tr.smelt,
+            tr.smelt,  # type: ignore
             self.id,  # type: ignore
         ).run()
         tr.openqa["kernel"] = [kernel, baremetal]
