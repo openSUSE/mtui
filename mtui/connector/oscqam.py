@@ -1,0 +1,117 @@
+from logging import getLogger
+from shlex import join as shlex_join
+from shlex import quote
+from subprocess import CalledProcessError, check_call
+
+from ..config import Config
+from ..types.rrid import RequestReviewID
+
+logger = getLogger("mtui.connector.oscqam")
+
+API = "https://api.suse.de"
+
+
+class OSC:
+    """A wrapper class for interacting with the `osc qam` command-line tool."""
+
+    def __init__(self, config: Config, rrid: RequestReviewID) -> None:
+        """
+        Initializes the OSC connector.
+
+        Args:
+            config: An instance of the application's Config class.
+            rrid: A RequestReviewID object representing the target review.
+        """
+        self.config = config
+        self.rrid = rrid
+
+    def __operation(
+        self,
+        operation: str,
+        groups: list[str],
+        reason: str = "",
+        message: str = "",
+        comment: str = "",
+    ) -> None:
+        """
+        Internal helper method to construct and execute `osc qam` commands safely.
+
+        This method builds the command as a list of arguments to prevent command
+        injection vulnerabilities, which can occur when using `shell=True` with
+        formatted strings.
+
+        Args:
+            operation: The `qam` subcommand to perform (e.g., 'approve', 'reject').
+            groups: A list of group names to apply the operation to.
+            reason: The reason for a rejection.
+            message: The message to include with the operation.
+            comment: A comment to add to the request.
+        """
+        # Start with the base command components that are always present.
+        base_cmd = ["osc", "-A", API, "qam", operation]
+
+        # Dynamically build the list of group arguments (e.g., ["-G", "group1", "-G", "group2"]).
+        group_args = []
+        for g in groups:
+            group_args.extend(["-G", g])
+
+        # Conditionally add optional arguments to the command list.
+        reason_args = ["-R", reason] if reason else []
+        message_args = ["-M", quote(message)] if message else []
+
+        # Add a specific workaround for 'PI' kinds which have a different RRID format
+        # that oscqam does not expect by default.
+        skip_args = ["--skip-template"] if self.rrid.kind == "PI" else []
+
+        rrid_args = [self.rrid.review_id]
+        comment_args = [quote(comment)] if comment else []
+
+        # Combine all parts into the final command list in the correct order.
+        command = (
+            base_cmd
+            + group_args
+            + rrid_args
+            + reason_args
+            + skip_args
+            + message_args
+            + comment_args
+        )
+
+        logger.info("Performing '%s' operation on %s", operation, str(self.rrid))
+
+        # For logging purposes, it's helpful to see the command as a single string.
+        # shlex_join (or shlex.join) safely quotes each argument.
+        logger.debug("Executing command: %s", shlex_join(command))
+
+        try:
+            check_call(command)
+
+        except CalledProcessError:
+            logger.error(
+                "'%s' operation failed. The command returned a non-zero exit code.",
+                operation,
+            )
+            logger.debug("Call stack trace:", stack_info=True)
+
+        except FileNotFoundError:
+            logger.error("'osc' command not found. Is it installed and in your PATH?")
+
+    def approve(self, group: list[str]) -> None:
+        """Approves a review request for one or more groups."""
+        self.__operation("approve", group)
+
+    def assign(self, group: list[str]) -> None:
+        """Assigns a review request to one or more groups."""
+        self.__operation("assign", group)
+
+    def unassign(self, group: list[str]) -> None:
+        """Unassigns a review request from one or more groups."""
+        self.__operation("unassign", group)
+
+    def comment(self, comment: str) -> None:
+        """Adds a comment to a review request."""
+        self.__operation("comment", [], comment=comment)
+
+    def reject(self, group: list[str], reason: str, message: str) -> None:
+        """Rejects a review request."""
+        self.__operation("reject", group, reason=reason, message=message)
