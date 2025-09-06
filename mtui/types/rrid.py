@@ -1,8 +1,78 @@
 from itertools import zip_longest
-from typing import Callable, final
+from typing import Any, Callable, Sequence, final
 
-from ..exceptions import TooManyComponentsError
-from ..utils import apply_parser, check_eq, check_type
+from ..exceptions import (
+    ComponentParseError,
+    InternalParseError,
+    MissingComponent,
+    TooManyComponentsError,
+)
+
+
+def apply_parser(f, x, cnt):
+    if not f or not cnt:
+        raise InternalParseError(f, cnt)
+
+    if not x:
+        raise MissingComponent(cnt, f)
+
+    try:
+        return f(x)
+    except Exception as e:
+        new = ComponentParseError(cnt, f, x)
+        new.__cause__ = e
+        raise new
+
+
+class check_eq:
+    """
+    Usage: check_eq(x)(y)
+    :return: y for y if (x == y) is True otherwise raises
+    :raises: ValueError
+    """
+
+    def __init__(self, *x) -> None:
+        self.x: Sequence[Any] = x
+
+    def __call__(self, y: Any) -> Any:
+        if y not in self.x:
+            raise ValueError(f"Expected: {self.x!r}, got: {y!r}")
+        return y
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
+
+    def __str__(self) -> str:
+        return f"{self.x!r}"
+
+
+class check_type:
+    """
+    Usage: check_type(x)(y)
+    :return: y for y if x(y) otherwise raises
+    :raises: ValueError
+    """
+
+    def __init__(self, *x) -> None:
+        self.x: Sequence[Any] = x
+
+    def __call__(self, y: Any) -> Any:
+        err = False
+        for f in self.x:
+            err = False
+            try:
+                return f(y)
+            except ValueError:
+                err = True
+
+        if err:
+            raise ValueError(f"Expected {self.x!r}, got: {y!r}")
+
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
+
+    def __str__(self) -> str:
+        return f"convertible to {self.x!r}"
 
 
 @final

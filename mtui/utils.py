@@ -15,9 +15,8 @@ from itertools import chain
 from pathlib import Path
 from shutil import move
 from tempfile import mkstemp
-from typing import Any, Sequence
+from typing import Any
 
-from .exceptions import ComponentParseError, InternalParseError, MissingComponent
 from .messages import TestReportNotLoadedError
 
 
@@ -262,57 +261,6 @@ def timestamp() -> str:
     return str(int(time.time()))
 
 
-class check_eq:
-    """
-    Usage: check_eq(x)(y)
-    :return: y for y if (x == y) is True otherwise raises
-    :raises: ValueError
-    """
-
-    def __init__(self, *x) -> None:
-        self.x: Sequence[Any] = x
-
-    def __call__(self, y: Any) -> Any:
-        if y not in self.x:
-            raise ValueError(f"Expected: {self.x!r}, got: {y!r}")
-        return y
-
-    def __repr__(self) -> str:
-        return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
-
-    def __str__(self) -> str:
-        return f"{self.x!r}"
-
-
-class check_type:
-    """
-    Usage: check_type(x)(y)
-    :return: y for y if x(y) otherwise raises
-    :raises: ValueError
-    """
-
-    def __init__(self, *x) -> None:
-        self.x: Sequence[Any] = x
-
-    def __call__(self, y: Any) -> Any:
-        err = False
-        for f in self.x:
-            err = False
-            try:
-                return f(y)
-            except ValueError:
-                err = True
-
-        if err:
-            raise ValueError(f"Expected {self.x!r}, got: {y!r}")
-
-    def __repr__(self) -> str:
-        return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
-
-    def __str__(self) -> str:
-        return f"convertible to {self.x!r}"
-
-
 @contextmanager
 def chdir(newpath: Path):
     """Context manager for changing the current working directory"""
@@ -376,18 +324,3 @@ def walk(inc: Collection) -> Collection:
             if isinstance(inc[key], list | dict):
                 inc[key] = walk(inc[key])
     return inc
-
-
-def apply_parser(f, x, cnt):
-    if not f or not cnt:
-        raise InternalParseError(f, cnt)
-
-    if not x:
-        raise MissingComponent(cnt, f)
-
-    try:
-        return f(x)
-    except Exception as e:
-        new = ComponentParseError(cnt, f, x)
-        new.__cause__ = e
-        raise new
