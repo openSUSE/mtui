@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     name: MTUI tests + lint + format
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses:  astral-sh/ruff-action@v3
         with:
           args: "--version"
@@ -34,6 +34,8 @@ jobs:
       - name: Run tests 
         run: python3 -m pytest -v --cov=./mtui --cov-report=xml --cov-report=term
       - name: Upload coverage to CodeCov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
+        env: 
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: coverage.xml
