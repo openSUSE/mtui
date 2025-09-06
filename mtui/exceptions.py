@@ -2,7 +2,7 @@ from argparse import ArgumentTypeError
 from collections.abc import Sequence
 from typing import Any
 
-from .connector.gitea import assignment
+from .types import assignment
 
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):

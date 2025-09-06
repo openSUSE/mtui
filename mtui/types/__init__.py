@@ -1,4 +1,5 @@
 from .commandlog import CommandLog
+from .enums import assignment, method
 from .filelist import FileList
 from .hostlog import HostLog
 from .package import Package
@@ -22,4 +23,6 @@ __all__ = [
     "TargetMeta",
     "Test",
     "URLs",
+    "assignment",
+    "method",
 ]
