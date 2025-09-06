@@ -11,8 +11,8 @@ from os import getenv
 from pathlib import Path
 from typing import Any
 
-from mtui.messages import InvalidLocationError
-from mtui.refhost import RefhostsFactory, RefhostsResolveFailed
+from .messages import InvalidLocationError
+from .refhost import RefhostsFactory, RefhostsResolveFailed
 
 logger = getLogger("mtui.config")
 
