@@ -1,7 +1,6 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from enum import Enum, StrEnum, auto
 from functools import total_ordering
 from logging import getLogger
 from typing import Any, final
@@ -13,6 +12,7 @@ from urllib3.exceptions import InsecureRequestWarning
 # The 'Config' object has dynamically generated attributes, so we must
 # ignore type checker warnings when accessing them.
 from ..config import Config
+from ..types import assignment, method
 from ..exceptions import (
     FailedGiteaCall,
     GiteaAssignInvalid,
@@ -24,23 +24,6 @@ logger = getLogger("mtui.connector.gitea")
 
 # Suppress insecure request warnings for unverified HTTPS requests.
 urllib3.disable_warnings(category=InsecureRequestWarning)
-
-
-class method(StrEnum):
-    """Enumeration for HTTP request methods."""
-
-    POST = auto()
-    GET = auto()
-    PATCH = auto()
-    DELETE = auto()
-
-
-class assignment(Enum):
-    """Enumeration for the assignment state of a PR for a specific user."""
-
-    ASSIGNED_USER = auto()
-    UNASSIGNED = auto()
-    ASSIGNED_OTHER = auto()
 
 
 @dataclass
