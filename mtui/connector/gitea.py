@@ -223,7 +223,7 @@ class Gitea:
             raise GiteaAssignInvalid(assign_state, a_user)
 
         logger.info("Approving PR as %s for group %s", a_user, self.group)
-        msg = f"@{self.group}-review: approve\n\nLGTM"
+        msg = f"@{self.group}-review: LGTM"
         self.__request(method.POST, self.prissues, json={"body": msg})
 
     def reject(
