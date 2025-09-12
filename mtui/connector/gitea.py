@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from functools import total_ordering
+from functools import cache, total_ordering
 from logging import getLogger
 from typing import Any, final
 
@@ -12,13 +12,13 @@ from urllib3.exceptions import InsecureRequestWarning
 # The 'Config' object has dynamically generated attributes, so we must
 # ignore type checker warnings when accessing them.
 from ..config import Config
-from ..types import assignment, method
 from ..exceptions import (
     FailedGiteaCall,
     GiteaAssignInvalid,
     GiteaNoReview,
     MissingGiteaToken,
 )
+from ..types import assignment, method
 
 logger = getLogger("mtui.connector.gitea")
 
@@ -157,6 +157,7 @@ class Gitea:
             return []
         return rsp.json()
 
+    @cache
     def __get_all_comments(self) -> list[Comment]:
         """Fetches and deserializes all comments on the pull request."""
         cmts = self.__request(method.GET, self.prissues)
@@ -207,6 +208,15 @@ class Gitea:
             return any(d.get("login") == f"{self.group}-review" for d in reviewers)
         return False
 
+    def __is_done(self) -> bool:
+        comments = sorted(self.__get_all_comments())
+
+        done = re.compile(f"@{self.group}-review: (LGTM|approved?|declined?)")
+        for c in comments:
+            if done.match(c.body):
+                return True
+        return False
+
     def approve(self, other: str | None = None) -> None:
         """
         Approves the PR by posting a comment, if currently assigned to the user.
@@ -221,6 +231,9 @@ class Gitea:
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.ASSIGNED_USER:
             raise GiteaAssignInvalid(assign_state, a_user)
+
+        if self.__is_done():
+            raise GiteaNoReview("PR was already approved/rejected")
 
         logger.info("Approving PR as %s for group %s", a_user, self.group)
         msg = f"@{self.group}-review: LGTM"
@@ -245,6 +258,9 @@ class Gitea:
         if assign_state != assignment.ASSIGNED_USER:
             raise GiteaAssignInvalid(assign_state, a_user)
 
+        if self.__is_done():
+            raise GiteaNoReview("PR was already approved/rejected")
+
         logger.info("Rejecting PR as %s for group %s", a_user, self.group)
         msg = f"@{self.group}-review: decline"
         if reason:
@@ -268,6 +284,9 @@ class Gitea:
         a_user = other if other else self.user
         if not self.__has_review() and not force:
             raise GiteaNoReview(f"There is no review for {self.group}-review")
+
+        if self.__is_done():
+            raise GiteaNoReview("PR was already approved/rejected")
 
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.UNASSIGNED:
