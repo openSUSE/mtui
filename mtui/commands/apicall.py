@@ -12,7 +12,7 @@ from ..utils import complete_choices, requires_update
 logger = getLogger("mtui.command.apicalls")
 
 
-class _Base(Command, ABC):
+class BaseApiCall(Command, ABC):
     """
     An abstract base class for commands that interact with backend APIs (OSC or Gitea).
 
@@ -49,7 +49,7 @@ class _Base(Command, ABC):
         that are not on the "1.1" maintenance track are managed via Gitea pull requests
         instead of the standard OSC review process.
         """
-        rrid = self.metadata.id
+        rrid = self.metadata.rrid
         return rrid.kind == "SLFO" and rrid.maintenance_id != "1.1"
 
     @requires_update
@@ -61,19 +61,19 @@ class _Base(Command, ABC):
         is loaded before this command logic is executed.
         """
         if self._is_gitea_workflow:
-            self.__gitea()
+            self.gitea()
         else:
-            self.__osc()
+            self.osc()
 
     @abstractmethod
-    def __osc(self) -> None:
+    def osc(self) -> None:
         # Must be implemented by subclasses to provide OSC-specific logic.
         # The OSC class handles its own exceptions internally, so no try/except
         # block is needed in the implementations.
         raise NotImplementedError
 
     @abstractmethod
-    def __gitea(self) -> None:
+    def gitea(self) -> None:
         # Must be implemented by subclasses to provide Gitea-specific logic.
         # The Gitea class raises GiteaError as part of its control flow,
         # so implementations should handle this exception.
@@ -86,17 +86,17 @@ class _Base(Command, ABC):
 
 
 @final
-class Approve(_Base):
+class Approve(BaseApiCall):
     """Command to approve a review request."""
 
     command = "approve"
 
-    def __osc(self) -> None:
-        logger.info("Approving request %s", self.metadata.id.review_id)
-        osc = OSC(self.config, self.metadata.id)
+    def osc(self) -> None:
+        logger.info("Approving request %s", self.metadata.rrid.review_id)
+        osc = OSC(self.config, self.metadata.rrid)
         osc.approve(self.args.group)
 
-    def __gitea(self) -> None:
+    def gitea(self) -> None:
         logger.info("Approving PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
@@ -108,7 +108,7 @@ class Approve(_Base):
 
 
 @final
-class Assign(_Base):
+class Assign(BaseApiCall):
     """Command to assign a review request to a user or group."""
 
     command = "assign"
@@ -124,12 +124,12 @@ class Assign(_Base):
             help="Force assign review to user in Gitea PR, even there isn't open group",
         )
 
-    def __osc(self) -> None:
-        logger.info("Assign request %s", self.metadata.id.review_id)
-        osc = OSC(self.config, self.metadata.id)
+    def osc(self) -> None:
+        logger.info("Assign request %s", self.metadata.rrid.review_id)
+        osc = OSC(self.config, self.metadata.rrid)
         osc.assign(self.args.group)
 
-    def __gitea(self) -> None:
+    def gitea(self) -> None:
         logger.info("Assign PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
@@ -146,17 +146,17 @@ class Assign(_Base):
 
 
 @final
-class Unassign(_Base):
+class Unassign(BaseApiCall):
     """Command to unassign a review request."""
 
     command = "unassign"
 
-    def __osc(self) -> None:
+    def osc(self) -> None:
         logger.info("Unassign request %s", self.metadata.id.review_id)
         osc = OSC(self.config, self.metadata.id)
         osc.unassign(self.args.group)
 
-    def __gitea(self) -> None:
+    def gitea(self) -> None:
         logger.info("Unassign PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
@@ -166,7 +166,7 @@ class Unassign(_Base):
 
 
 @final
-class Reject(_Base):
+class Reject(BaseApiCall):
     """Command to reject a review request with a reason and message."""
 
     command = "reject"
@@ -200,12 +200,12 @@ class Reject(_Base):
             + "Always as last of command, it takes remainder of command",
         )
 
-    def __osc(self) -> None:
-        logger.info("Reject request %s", self.metadata.id.review_id)
-        osc = OSC(self.config, self.metadata.id)
+    def osc(self) -> None:
+        logger.info("Reject request %s", self.metadata.rrid.review_id)
+        osc = OSC(self.config, self.metadata.rrid)
         osc.reject(self.args.group, self.args.reason, self.args.message)
 
-    def __gitea(self) -> None:
+    def gitea(self) -> None:
         logger.info("Reject PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
@@ -238,7 +238,7 @@ class Reject(_Base):
 
 
 @final
-class Comment(_Base):
+class Comment(BaseApiCall):
     """Command to add a comment to a review request."""
 
     command = "comment"
@@ -250,14 +250,14 @@ class Comment(_Base):
         # the --group and --user arguments.
         pass
 
-    def __osc(self) -> None:
+    def osc(self) -> None:
         # This command operates interactively, prompting the user directly
         # for the comment text when executed.
         comment = input("Comment: ")
-        osc = OSC(self.config, self.metadata.id)
+        osc = OSC(self.config, self.metadata.rrid)
         osc.comment(comment)
 
-    def __gitea(self) -> None:
+    def gitea(self) -> None:
         comment = input("Comment: ")
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
