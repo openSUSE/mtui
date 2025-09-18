@@ -52,8 +52,9 @@ class OSC:
 
         # Dynamically build the list of group arguments (e.g., ["-G", "group1", "-G", "group2"]).
         group_args = []
-        for g in groups:
-            group_args.extend(["-G", g])
+        if groups:
+            for g in groups:
+                group_args.extend(["-G", g])
 
         # Conditionally add optional arguments to the command list.
         reason_args = ["-R", reason] if reason else []
