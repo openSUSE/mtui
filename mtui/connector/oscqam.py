@@ -64,11 +64,12 @@ class OSC:
         # that oscqam does not expect by default.
         skip_args = ["--skip-template"] if self.rrid.kind == "PI" else []
 
-        rrid_args = [self.rrid.review_id]
+        # must be converted to str -> shlex.join accepts only str or bytestr
+        rrid_args = [str(self.rrid.review_id)]
         comment_args = [quote(comment)] if comment else []
 
         # Combine all parts into the final command list in the correct order.
-        command = (
+        command: list[str] = (
             base_cmd
             + group_args
             + rrid_args
