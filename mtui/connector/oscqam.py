@@ -1,3 +1,5 @@
+"""A wrapper for interacting with the `osc qam` command-line tool."""
+
 from logging import getLogger
 from shlex import join as shlex_join
 from shlex import quote
@@ -12,11 +14,10 @@ API = "https://api.suse.de"
 
 
 class OSC:
-    """A wrapper class for interacting with the `osc qam` command-line tool."""
+    """A wrapper for interacting with the `osc qam` command-line tool."""
 
     def __init__(self, config: Config, rrid: RequestReviewID) -> None:
-        """
-        Initializes the OSC connector.
+        """Initializes the OSC connector.
 
         Args:
             config: An instance of the application's Config class.
@@ -33,15 +34,13 @@ class OSC:
         message: str = "",
         comment: str = "",
     ) -> None:
-        """
-        Internal helper method to construct and execute `osc qam` commands safely.
+        """Constructs and executes `osc qam` commands safely.
 
-        This method builds the command as a list of arguments to prevent command
-        injection vulnerabilities, which can occur when using `shell=True` with
-        formatted strings.
+        This method builds the command as a list of arguments to
+        prevent command injection vulnerabilities.
 
         Args:
-            operation: The `qam` subcommand to perform (e.g., 'approve', 'reject').
+            operation: The `qam` subcommand to perform (e.g., 'approve').
             groups: A list of group names to apply the operation to.
             reason: The reason for a rejection.
             message: The message to include with the operation.
@@ -99,21 +98,43 @@ class OSC:
             logger.error("'osc' command not found. Is it installed and in your PATH?")
 
     def approve(self, group: list[str]) -> None:
-        """Approves a review request for one or more groups."""
+        """Approves a review request for one or more groups.
+
+        Args:
+            group: A list of group names to approve the request for.
+        """
         self.__operation("approve", group)
 
     def assign(self, group: list[str]) -> None:
-        """Assigns a review request to one or more groups."""
+        """Assigns a review request to one or more groups.
+
+        Args:
+            group: A list of group names to assign the request to.
+        """
         self.__operation("assign", group)
 
     def unassign(self, group: list[str]) -> None:
-        """Unassigns a review request from one or more groups."""
+        """Unassigns a review request from one or more groups.
+
+        Args:
+            group: A list of group names to unassign the request from.
+        """
         self.__operation("unassign", group)
 
     def comment(self, comment: str) -> None:
-        """Adds a comment to a review request."""
+        """Adds a comment to a review request.
+
+        Args:
+            comment: The comment to add.
+        """
         self.__operation("comment", [], comment=comment)
 
     def reject(self, group: list[str], reason: str, message: str) -> None:
-        """Rejects a review request."""
+        """Rejects a review request.
+
+        Args:
+            group: A list of group names to reject the request for.
+            reason: The reason for the rejection.
+            message: The rejection message.
+        """
         self.__operation("reject", group, reason=reason, message=message)

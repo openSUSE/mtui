@@ -1,3 +1,5 @@
+"""The `TestReport` abstract base class."""
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 import concurrent.futures
@@ -31,6 +33,8 @@ re_ver = re.compile(r"(\S+)\s+(\S+)")
 
 
 class TestReport(ABC):
+    """An abstract base class for all test report implementations."""
+
     # FIXME: the code around read() (_open_and_parse, _parse and factory
     # _factory_md5) is weird a lot.
     # Firstly, it might clear some things up to change the open/read
@@ -41,13 +45,16 @@ class TestReport(ABC):
     @property
     @abstractmethod
     def _type(self) -> str:
-        """
-        :return: str Short human readable description of the TestReport
-            type.
-        """
+        """Returns the type of the test report."""
         ...
 
     def __init__(self, config: Config, scripts_src_dir: Path | None = None) -> None:
+        """Initializes the `TestReport` object.
+
+        Args:
+            config: The application configuration.
+            scripts_src_dir: The source directory for scripts.
+        """
         self.config: Config = config
 
         self._scripts_src_dir: Path = (
@@ -110,9 +117,16 @@ class TestReport(ABC):
 
     @property
     @abstractmethod
-    def id(self) -> str: ...
+    def id(self) -> str:
+        """Returns the ID of the test report."""
+        ...
 
     def _open_and_parse(self, path: Path) -> None:
+        """Opens and parses a test report file.
+
+        Args:
+            path: The path to the test report file.
+        """
         metadata = path.parent / "metadata.json"
         try:
             tpl = path.read_text(errors="replace")
@@ -136,6 +150,11 @@ class TestReport(ABC):
             self._parse(tpl)
 
     def read(self, path: Path) -> None:
+        """Reads a test report file.
+
+        Args:
+            path: The path to the test report file.
+        """
         self._open_and_parse(path)
         self.path = path.resolve()
         self._update_repos_parse()
@@ -146,16 +165,13 @@ class TestReport(ABC):
 
     @abstractmethod
     def _parser(self) -> dict[str, Any]:
-        """
-        :returns: L{MetadataParser}
-        """
+        """An abstract method for getting the parser for the test report."""
 
     def _parse(self, tpl: str) -> None:
-        """
-        Parse qam testreport template into self attributes
+        """Parses a test report from a string.
 
-        :type tpl_: file like object
-        :param tpl_: opened template to read
+        Args:
+            tpl: The test report string to parse.
         """
 
         if self.path:
@@ -169,6 +185,12 @@ class TestReport(ABC):
         self._warn_missing_fields()
 
     def _parse_json(self, data, tpl: str) -> None:
+        """Parses a test report from a JSON object.
+
+        Args:
+            data: The JSON object to parse.
+            tpl: The test report string to parse.
+        """
         if self.path:
             raise TestReportAlreadyLoaded(self.path)
 
@@ -183,6 +205,7 @@ class TestReport(ABC):
         self._warn_missing_fields()
 
     def _warn_missing_fields(self) -> None:
+        """Warns about missing fields in the test report."""
         missing = {x for x in self._attrs if not getattr(self, x)}
 
         if missing:
@@ -190,6 +213,11 @@ class TestReport(ABC):
             logger.warning(msg)
 
     def get_package_list(self):
+        """Gets a list of all packages in the test report.
+
+        Returns:
+            A list of all packages in the test report.
+        """
         ret = []
         for key in self.packages:
             for k in self.packages[key].keys():
@@ -200,20 +228,36 @@ class TestReport(ABC):
         return ret
 
     @abstractmethod
-    def list_update_commands(self, targets: HostsGroup, display) -> None: ...
+    def list_update_commands(self, targets: HostsGroup, display) -> None:
+        """An abstract method for listing the update commands."""
+        ...
 
     def perform_get(self, targets: HostsGroup, remote: Path):
+        """Performs a `get` operation.
+
+        Args:
+            targets: The targets to perform the operation on.
+            remote: The remote path to get.
+        """
         local = self.report_wd("downloads", remote.name, filepath=True)
 
         targets.sftp_get(remote, local)
 
     def perform_prepare(self, targets: HostsGroup, **kw) -> None:
+        """Performs a `prepare` operation.
+
+        Args:
+            targets: The targets to perform the operation on.
+            **kw: Additional keyword arguments.
+        """
         targets.perform_prepare(self.get_package_list(), self, **kw)
 
     def perform_update(self, targets: HostsGroup, params: list[str]) -> None:
-        """
-        :type  targets: dict(hostname = L{Target})
-            where hostname = str
+        """Performs an `update` operation.
+
+        Args:
+            targets: The targets to perform the operation on.
+            params: A list of update parameters.
         """
         targets.add_history(["update", str(self.id), " ".join(self.get_package_list())])
 
@@ -225,21 +269,39 @@ class TestReport(ABC):
             self.perform_downgrade(targets)
 
     def perform_downgrade(self, targets):
+        """Performs a `downgrade` operation.
+
+        Args:
+            targets: The targets to perform the operation on.
+        """
         targets.add_history(
             ["downgrade", str(self.id), " ".join(self.get_package_list())]
         )
         targets.perform_downgrade(self.get_package_list(), self)
 
     def perform_install(self, targets: HostsGroup, packages) -> None:
+        """Performs an `install` operation.
+
+        Args:
+            targets: The targets to perform the operation on.
+            packages: The packages to install.
+        """
         targets.add_history(["install", packages])
 
         targets.perform_install(packages)
 
     def perform_uninstall(self, targets: HostsGroup, packages) -> None:
+        """Performs an `uninstall` operation.
+
+        Args:
+            targets: The targets to perform the operation on.
+            packages: The packages to uninstall.
+        """
         targets.add_history(["uninstall", packages])
         targets.perform_uninstall(packages)
 
     def copy_scripts(self) -> None:
+        """Copies the scripts to the test report directory."""
         if not self.path:
             raise RuntimeError("Called while missing path")
 
@@ -254,6 +316,13 @@ class TestReport(ABC):
         self._ensure_executable("{0}/*/compare_*".format(dst))
 
     def _copy_scripts(self, src: Path, dst: Path, ignore: Callable) -> None:
+        """A helper method for copying scripts.
+
+        Args:
+            src: The source directory.
+            dst: The destination directory.
+            ignore: A function that returns a set of files to ignore.
+        """
         try:
             logger.debug("Copying scripts: {0} -> {1}".format(src, dst))
             shutil.copytree(src, dst, ignore=ignore)
@@ -275,6 +344,11 @@ class TestReport(ABC):
 
     @staticmethod
     def _ensure_executable(pattern) -> None:
+        """Ensures that a file is executable.
+
+        Args:
+            pattern: A glob pattern for the files to make executable.
+        """
         for i in glob.glob(pattern):
             # make sure the compare scripts (which run localy) are
             # executable
@@ -285,6 +359,15 @@ class TestReport(ABC):
     def connect_target(
         self, host
     ) -> tuple[Target, str] | tuple[Literal[False], Literal[False]]:
+        """Connects to a single target.
+
+        Args:
+            host: The hostname of the target to connect to.
+
+        Returns:
+            A tuple containing the `Target` object and the system
+            string, or `(False, False)` if the connection fails.
+        """
         try:
             target = Target(
                 self.config,
@@ -306,6 +389,7 @@ class TestReport(ABC):
             return target, new_system
 
     def connect_targets(self) -> None:
+        """Connects to all targets."""
         targets: dict[str, Target] = {}
         new_systems: dict[str, str] = {}
         executor = concurrent.futures.ThreadPoolExecutor()
@@ -352,6 +436,11 @@ class TestReport(ABC):
         )
 
     def add_target(self, hostname: str) -> None:
+        """Adds a target to the test report.
+
+        Args:
+            hostname: The hostname of the target to add.
+        """
         if hostname in self.targets:
             logger.warning(
                 "already connected to %s, skipping.", self.targets[hostname].hostname
@@ -373,6 +462,11 @@ class TestReport(ABC):
             logger.debug(format_exc())
 
     def refhosts_from_tp(self, testplatform) -> None:
+        """Gets reference hosts from a test platform.
+
+        Args:
+            testplatform: The test platform to get reference hosts from.
+        """
         try:
             refhosts = self.refhostsFactory(self.config)
         except RefhostsResolveFailed:
@@ -391,9 +485,16 @@ class TestReport(ABC):
         self.hostnames.update(set(hostnames))
 
     def list_bugs(self, sink, arg):
+        """Lists the bugs for the test report.
+
+        Args:
+            sink: The function to use for listing the bugs.
+            arg: An additional argument to pass to the sink function.
+        """
         return sink(self.bugs, self.jira, arg)
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
+        """Returns a list of data to be displayed by `list_metadata`."""
         return (
             [
                 ("Category", self.category),
@@ -412,13 +513,20 @@ class TestReport(ABC):
         )
 
     def show_yourself(self, writer) -> None:
+        """Displays the metadata for the test report.
+
+        Args:
+            writer: The writer to write the metadata to.
+        """
         self._aligned_write(writer, self._show_yourself_data())
 
     @staticmethod
     def _aligned_write(writer, data: Iterable[tuple[str, str]]) -> None:
-        """
-        :type data:  [(str, str)]
-        :param data: (key, value)
+        """Writes aligned data to a writer.
+
+        Args:
+            writer: The writer to write the data to.
+            data: A list of key-value pairs to write.
         """
         for x in sorted(data):
             name, value = x
@@ -426,21 +534,33 @@ class TestReport(ABC):
                 writer.write(f"{name:15}: {value}\n")
 
     def _testreport_url(self) -> str:
+        """Returns the URL for the test report."""
         return "/".join([self.config.reports_url, str(self.id), "log"])  # type: ignore
 
     def _fancy_report_url(self) -> str:
+        """Returns the URL for the fancy test report."""
         return "/".join([self.config.fancy_reports_url, str(self.id), "log"])  # type: ignore
 
     def local_wd(self, *paths) -> Path:
-        """
-        :return: str local working directory
+        """Returns the local working directory.
+
+        Args:
+            *paths: The path components to join to the working directory.
+
+        Returns:
+            The path to the local working directory.
         """
         return self._wd(self.config.local_tempdir, str(self.id), *paths)  # type: ignore
 
     def report_wd(self, *paths, **kw) -> Path:
-        """
-        :return: str local working directory relative to the testreport
-            checkout.
+        """Returns the working directory relative to the test report checkout.
+
+        Args:
+            *paths: The path components to join to the working directory.
+            **kw: Additional keyword arguments.
+
+        Returns:
+            The path to the working directory.
         """
         assert self.path, "empty path"
 
@@ -448,29 +568,49 @@ class TestReport(ABC):
 
     @staticmethod
     def _wd(*paths, **kwargs) -> Path:
+        """A helper method for getting a working directory.
+
+        Args:
+            *paths: The path components to join to the working directory.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The path to the working directory.
+        """
         return ensure_dir_exists(*paths, **kwargs)
 
     def target_wd(self, *paths) -> Path:
-        """
-        :return: str remote working directory on SUT
+        """Returns the remote working directory on the SUT.
+
+        Args:
+            *paths: The path components to join to the working directory.
+
+        Returns:
+            The path to the remote working directory.
         """
         return self.config.target_tempdir.joinpath(str(self.id), *paths)  # type: ignore
 
     def scripts_wd(self, *paths):
-        """
-        :return: str path to the scripts dir joined with paths
+        """Returns the path to the scripts directory.
 
-        Note this method does not create the directories as needed
-        because that's handled by L{TestReport.copy_scripts}
+        Args:
+            *paths: The path components to join to the scripts directory.
+
+        Returns:
+            The path to the scripts directory.
         """
         return self.report_wd().joinpath(*["scripts"] + list(paths))
 
     def __repr__(self):
+        """Returns a string representation of the `TestReport` object."""
         return "<{0}.{1} {2}>".format(self.__module__, self.__class__.__name__, self.id)
 
     def run_scripts(self, s, targets: HostsGroup) -> None:
-        """
-        :type s: L{Script} class
+        """Runs the scripts for the test report.
+
+        Args:
+            s: The script class to run.
+            targets: The targets to run the scripts on.
         """
 
         d = self.scripts_wd(s.subdir)
@@ -483,6 +623,12 @@ class TestReport(ABC):
                     x.run(targets)
 
     def download_file(self, from_, into) -> None:
+        """Downloads a file.
+
+        Args:
+            from_: The URL to download the file from.
+            into: The path to save the downloaded file to.
+        """
         logger.info("Downloading %s", from_)
         from contextlib import closing
 
@@ -490,6 +636,13 @@ class TestReport(ABC):
             dst.writelines(src)
 
     def list_versions(self, sink, targets: HostsGroup, packages):
+        """Lists the available versions of packages.
+
+        Args:
+            sink: The function to use for listing the versions.
+            targets: The targets to list the versions for.
+            packages: The packages to list the versions for.
+        """
         query = r"""
             for p in {!s}; do \
                 zypper -n search -s --match-exact -t package $p; \
@@ -525,8 +678,8 @@ class TestReport(ABC):
 
         # by_pkg_vers[package][(version, ...)] = [hostname, ...]
         by_pkg_vers = {}
-        for hn, pvs in list(by_host_pkg.items()):
-            for pkg, vs in list(pvs.items()):
+        for pkg, pvs in list(by_host_pkg.items()):
+            for vs, hs in list(vshs.items()):
                 by_pkg_vers.setdefault(pkg, {}).setdefault(tuple(vs), []).append(hn)
 
         # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
@@ -538,6 +691,15 @@ class TestReport(ABC):
         return sink(targets, by_hosts_pkg)
 
     def report_results(self, targetHosts=None) -> list[TargetMeta]:
+        """Reports the results of the test report.
+
+        Args:
+            targetHosts: A list of target hosts to report results for.
+                If None, results are reported for all targets.
+
+        Returns:
+            A list of `TargetMeta` objects.
+        """
         results = []
 
         if targetHosts is not None:
@@ -552,8 +714,9 @@ class TestReport(ABC):
 
     @abstractmethod
     def _update_repos_parser(self) -> dict[Product, str]:
-        """Parse and store update repositories per product and arch"""
+        """An abstract method for parsing update repositories."""
         pass
 
     def _update_repos_parse(self) -> None:
+        """Parses the update repositories."""
         self.update_repos = self._update_repos_parser()

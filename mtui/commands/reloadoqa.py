@@ -1,3 +1,5 @@
+"""The `reload_openqa` command."""
+
 from logging import getLogger
 
 from ..connector.openqa import AutoOpenQA, KernelOpenQA
@@ -8,14 +10,13 @@ logger = getLogger("mtui.commands.reloadopenqa")
 
 
 class ReloadOpenQA(Command):
-    """
-    Reload's informations from openQA instances
-    """
+    """Reloads information from openQA instances."""
 
     command = "reload_openqa"
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `reload_openqa` command."""
         if self.config.kernel:
             if self.metadata.openqa["kernel"] == []:
                 logger.info("Getting data from kernel openQA")

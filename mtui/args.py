@@ -1,3 +1,5 @@
+"""Defines the command-line arguments for the mtui tool."""
+
 from argparse import FileType
 from pathlib import Path
 
@@ -9,6 +11,14 @@ from .utils import SUTParse
 
 
 def get_parser(sys) -> ArgumentParser:
+    """Creates and configures the argument parser for the application.
+
+    Args:
+        sys: The `sys` module, used for stdout/stderr.
+
+    Returns:
+        A configured `ArgumentParser` instance.
+    """
     parser = ArgumentParser(sys_=sys)
     parser.add_argument(
         "-l", "--location", type=str, help="override config mtui.location"

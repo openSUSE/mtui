@@ -1,10 +1,16 @@
+"""A set of classes for displaying messages to the user.
+
+This module defines a collection of classes for displaying various types
+of messages to the user, including errors, warnings, and informational
+messages. These classes are used throughout the application to provide
+consistent and informative feedback.
+"""
+
 from abc import ABC
 
 
 class UserMessage(BaseException, ABC):
-    """
-    Message to be displayed to the user
-    """
+    """An abstract base class for messages to be displayed to the user."""
 
     def __str__(self) -> str:
         return self.message  # type: ignore
@@ -17,36 +23,28 @@ class UserMessage(BaseException, ABC):
 
 
 class ErrorMessage(UserMessage, RuntimeError):
-    """
-    Program error message to be displayed to the user
-    """
+    """A program error message to be displayed to the user."""
 
 
 class UserError(UserMessage, RuntimeError):
-    """
-    Error, caused by improper usage of the program,
-    to be displayed to the user
-    """
+    """An error caused by improper usage of the program."""
 
 
 class DeprecationMessage(UserMessage):
+    """A message for deprecated features."""
+
     pass
 
 
 class NoRefhostsDefinedError(UserError, ValueError):
-    """
-    Thrown when user requests an operation without defined refhosts
-    """
+    """Raised when an operation is requested without defined refhosts."""
 
     def __init__(self) -> None:
         self.message: str = "No refhosts defined"
 
 
 class HostIsNotConnectedError(UserError, ValueError):
-    """
-    Thrown when user requests an operation to be performed on a host
-    that is not connected.
-    """
+    """Raised when an operation is requested on a disconnected host."""
 
     def __init__(self, host) -> None:
         self.host = host
@@ -54,6 +52,8 @@ class HostIsNotConnectedError(UserError, ValueError):
 
 
 class SystemCommandNotFoundError(ErrorMessage):
+    """Raised when a system command is not found."""
+
     _msg = "Command {0!r} not found"
 
     def __init__(self, command) -> None:
@@ -62,6 +62,8 @@ class SystemCommandNotFoundError(ErrorMessage):
 
 
 class SystemCommandError(ErrorMessage):
+    """Raised when a system command fails."""
+
     _message = "Command failed."
 
     def __init__(self, rc, command) -> None:
@@ -70,14 +72,19 @@ class SystemCommandError(ErrorMessage):
 
     @property
     def message(self):
+        """The error message."""
         return self._message + " rc = {0} Command: {1!r}".format(self.rc, self.command)
 
 
 class UnexpectedlyFastCleanExitFromXdgOpen(UserMessage):
+    """A message for when `xdg-open` exits suspiciously fast."""
+
     message = "xdg-open finished successfully but suspiciously too fast"
 
 
 class SvnCheckoutInterruptedError(ErrorMessage):
+    """Raised when an SVN checkout is interrupted."""
+
     _msg = "Svn checkout of {0!r} interrupted"
 
     def __init__(self, uri) -> None:
@@ -86,6 +93,8 @@ class SvnCheckoutInterruptedError(ErrorMessage):
 
 
 class SvnCheckoutFailed(ErrorMessage):
+    """Raised when an SVN checkout fails."""
+
     _msg = "Svn checkout of {0!r} Failed\n Please check {1!s}"
 
     def __init__(self, uri, f_url: str) -> None:
@@ -95,11 +104,15 @@ class SvnCheckoutFailed(ErrorMessage):
 
 
 class QadbReportCommentLengthWarning(UserMessage):
+    """A warning about comment length limitations."""
+
     def __str__(self) -> str:
         return "comment strings > 100 chars are truncated by remote_qa_db_report.pl"
 
 
 class ConnectingTargetFailedMessage(UserMessage):
+    """A message for when connecting to a target fails."""
+
     def __init__(self, hostname, reason) -> None:
         self.hostname = hostname
         self.reason = reason
@@ -112,6 +125,8 @@ class ConnectingTargetFailedMessage(UserMessage):
 
 
 class ConnectingToMessage(UserMessage):
+    """A message for when connecting to a target."""
+
     def __init__(self, hostname) -> None:
         self.hostname = hostname
 
@@ -120,16 +135,22 @@ class ConnectingToMessage(UserMessage):
 
 
 class MissingPackagesError(UserError):
+    """Raised when packages are missing."""
+
     def __str__(self) -> str:
         return "Missing packages: TestReport not loaded and no -p given."
 
 
 class TestReportNotLoadedError(UserError):
+    """Raised when a test report is not loaded."""
+
     def __str__(self) -> str:
         return "TestReport not loaded"
 
 
 class FailedToWriteScriptResult(UserMessage):
+    """A message for when writing a script result fails."""
+
     def __init__(self, path, reason) -> None:
         self.path = path
         self.reason = reason
@@ -141,6 +162,8 @@ class FailedToWriteScriptResult(UserMessage):
 
 
 class StartingCompareScriptError(UserMessage):
+    """A message for when starting a compare script fails."""
+
     def __init__(self, reason, argv) -> None:
         self.reason = reason
         self.argv = argv
@@ -152,6 +175,8 @@ class StartingCompareScriptError(UserMessage):
 
 
 class CompareScriptError(UserMessage):
+    """Base class for compare script errors."""
+
     def __init__(self, argv, stdout, stderr, rc) -> None:
         self.argv = argv
         self.stderr = stderr
@@ -163,6 +188,8 @@ class CompareScriptError(UserMessage):
 
 
 class CompareScriptFailed(CompareScriptError):
+    """A message for when a compare script fails."""
+
     def __str__(self) -> str:
         return "Compare script {0!r} failed: rc = {1} err:\n{2}".format(
             self.argv, self.rc, self.stderr
@@ -170,21 +197,28 @@ class CompareScriptFailed(CompareScriptError):
 
 
 class CompareScriptCrashed(CompareScriptError):
+    """A message for when a compare script crashes."""
+
     def __str__(self) -> str:
         return "Compare script {0!r} crashed:\n{1}".format(self.argv, self.stderr)
 
 
 class LocationChangedMessage(UserMessage):
+    """A message for when the location changes."""
+
     def __init__(self, old, new) -> None:
         self.old = old
         self.new = new
 
     @property
     def message(self):
+        """The message."""
         return "changed location from {0!r} to {1!r}".format(self.old, self.new)
 
 
 class PackageRevisionHasntChangedWarning(UserMessage):
+    """A warning for when a package revision has not changed."""
+
     _msg = (
         "Revision of package {0!r} hasn't changed, "
         + "it's most likely already updated. skipping."
@@ -195,35 +229,50 @@ class PackageRevisionHasntChangedWarning(UserMessage):
 
 
 class MissingDoerError(ErrorMessage):
+    """Base class for missing "doer" errors."""
+
     def __init__(self, release) -> None:
         self.release = release
 
     @property
     def message(self):
+        """The error message."""
         return "Missing {0} for {1}".format(self.name, self.release)
 
 
 class MissingPreparerError(MissingDoerError):
+    """Raised when a preparer is missing."""
+
     name = "Preparer"
 
 
 class MissingUpdaterError(MissingDoerError):
+    """Raised when an updater is missing."""
+
     name = "Updater"
 
 
 class MissingInstallerError(MissingDoerError):
+    """Raised when an installer is missing."""
+
     name = "Installer"
 
 
 class MissingUninstallerError(MissingDoerError):
+    """Raised when an uninstaller is missing."""
+
     name = "Uninstaller"
 
 
 class MissingDowngraderError(MissingDoerError):
+    """Raised when a downgrader is missing."""
+
     name = "Downgrader"
 
 
 class InvalidLocationError(UserError):
+    """Raised when an invalid location is specified."""
+
     _msg = "Invalid location {0!r}. Available locations: {1}"
 
     def __init__(self, requested, available) -> None:
@@ -234,6 +283,8 @@ class InvalidLocationError(UserError):
 
 
 class ReConnectFailed(ErrorMessage):
+    """Raised when a reconnect attempt fails."""
+
     _msg = "Failed to re-connect to {}"
 
     def __init__(self, host) -> None:
@@ -265,6 +316,8 @@ class ResultsMissingError(ErrorMessage):
 
 
 class SMELTError(ErrorMessage):
+    """SMELT related Errors"""
+
     def __init__(self) -> None:
         self.message = "Sommething wrong with SMELT connection"
 

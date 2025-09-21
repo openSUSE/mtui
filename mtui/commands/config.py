@@ -1,17 +1,18 @@
+"""The `config` command."""
+
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 
 
 class Config(Command):
-    """
-    Display and manipulate configuration in runtime.
-    """
+    """Displays and manipulates the configuration at runtime."""
 
     command = "config"
     _check_subparser = "func"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         sp = parser.add_subparsers()
 
         p_show = sp.add_parser("show", help="show config values", sys_=parser.sys)
@@ -24,9 +25,11 @@ class Config(Command):
         p_set.set_defaults(func="set")
 
     def __call__(self) -> None:
+        """Executes the appropriate subcommand (`show` or `set`)."""
         getattr(self, self.args.func)()
 
     def show(self):
+        """Displays the current configuration values."""
         attrs = self.args.attributes
         if not attrs:
             attrs = sorted(x[0] for x in self.config.data)
@@ -40,6 +43,7 @@ class Config(Command):
                 pass
 
     def set(self) -> None:
+        """Sets a configuration value."""
         attr = self.args.attribute
         val = self.args.value
 

@@ -1,3 +1,10 @@
+"""This package contains the command modules for mtui.
+
+Each module in this package defines a specific command that can be
+executed from the mtui command prompt. The modules are dynamically
+imported and registered as commands.
+"""
+
 import importlib
 from logging import getLogger
 from pathlib import Path

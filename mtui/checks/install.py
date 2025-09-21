@@ -1,3 +1,5 @@
+"""Defines checks to be performed after an install action."""
+
 from logging import getLogger
 from typing import Callable
 
@@ -7,6 +9,18 @@ logger = getLogger("mtui.checks.install")
 
 
 def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -> None:
+    """Checks the output of a `zypper` command for errors.
+
+    Args:
+        hostname: The hostname where the command was run.
+        stdout: The standard output of the command.
+        stdin: The standard input of the command.
+        stderr: The standard error of the command.
+        exitcode: The exit code of the command.
+
+    Raises:
+        UpdateError: If an error is found in the output.
+    """
     if exitcode in [0, 100, 101, 102, 103, 106]:
         return
     elif exitcode in (104, 4, 5, 8):
@@ -63,6 +77,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("Unknown Error", hostname)
 
 
+#: A dictionary that maps system configurations to install check functions.
 install_checks: dict[tuple[str, bool], Callable[[str, str, str, str, int], None]] = {
     ("11", False): zypper,
     ("12", False): zypper,

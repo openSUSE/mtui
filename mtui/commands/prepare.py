@@ -1,3 +1,5 @@
+"""The `prepare` command."""
+
 from logging import getLogger
 from traceback import format_exc
 
@@ -11,15 +13,18 @@ logger = getLogger("mtui.commands.prepare")
 
 
 class Prepare(Command):
-    """
-    Installs missing and update packages to last released version.
-    This is also run by the update procedure before applying the updates.
+    """Installs missing packages and updates existing packages.
+
+    This command installs missing packages and updates existing packages
+    to the last released version. It is also run by the update
+    procedure before applying the updates.
     """
 
     command = "prepare"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "-f",
             "--force",
@@ -45,6 +50,7 @@ class Prepare(Command):
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `prepare` command."""
         targets = self.parse_hosts()
         if not targets:
             raise NoRefhostsDefinedError
@@ -75,6 +81,7 @@ class Prepare(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [
                 ("-t", "--target"),

@@ -1,9 +1,19 @@
+"""Functions for parsing product and OS release information from files."""
+
 import xml.etree.ElementTree as ET
 
 from paramiko import SFTPFile
 
 
 def parse_product(prod: SFTPFile) -> tuple[str, str, str]:
+    """Parses a product file.
+
+    Args:
+        prod: An SFTPFile object representing the product file.
+
+    Returns:
+        A tuple containing the product name, version, and architecture.
+    """
     root = ET.fromstringlist(prod)
     name: str = root.findtext("./name", "")
     arch: str = root.findtext("./arch", "")
@@ -22,6 +32,14 @@ def parse_product(prod: SFTPFile) -> tuple[str, str, str]:
 
 
 def parse_os_release(f: SFTPFile) -> tuple[str, str, str]:
+    """Parses an os-release file.
+
+    Args:
+        f: An SFTPFile object representing the os-release file.
+
+    Returns:
+        A tuple containing the OS ID, version ID, and architecture.
+    """
     osinfo: dict[str, str] = {
         a.split("=")[0]: a.split("=")[1].rstrip("\n").translate({34: None})
         for a in f.readlines()

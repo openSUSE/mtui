@@ -1,3 +1,5 @@
+"""Defines the commands for preparing packages on different systems."""
+
 from string import Template
 
 from ..messages import MissingPreparerError
@@ -5,6 +7,15 @@ from ..utils import DictWithInjections
 
 
 def zypper_prepare(force: bool = False, testing: bool = False) -> dict[str, Template]:
+    """Returns a dictionary of command templates for preparing with zypper.
+
+    Args:
+        force: Whether to force the resolution of dependencies.
+        testing: Whether to include testing repositories.
+
+    Returns:
+        A dictionary of command templates.
+    """
     parameter = "--force-resolution" if force else ""
 
     return {
@@ -16,6 +27,15 @@ def zypper_prepare(force: bool = False, testing: bool = False) -> dict[str, Temp
 
 
 def yum_prepare(force: bool = False, testing: bool = False) -> dict[str, Template]:
+    """Returns a dictionary of command templates for preparing with yum.
+
+    Args:
+        force: Whether to force the resolution of dependencies.
+        testing: Whether to include testing repositories.
+
+    Returns:
+        A dictionary of command templates.
+    """
     # TODO: check adding repos to RH based distros and check how really it looks
     # also if needed expand detection and look into dnf packager
     parameter = "" if testing else "--disablerepo=*testing*"
@@ -28,6 +48,15 @@ def yum_prepare(force: bool = False, testing: bool = False) -> dict[str, Templat
 
 
 def slm_prepare(force: bool = False, testing: bool = False) -> dict[str, Template]:
+    """Returns a dictionary of command templates for preparing on slmicro.
+
+    Args:
+        force: Whether to force the resolution of dependencies.
+        testing: Whether to include testing repositories.
+
+    Returns:
+        A dictionary of command templates.
+    """
     parameter = "--force-resolution" if force else ""
     return {
         "start_command": Template("transactional-update run echo 'start operation'"),
@@ -41,6 +70,7 @@ def slm_prepare(force: bool = False, testing: bool = False) -> dict[str, Templat
     }
 
 
+#: A dictionary that maps system configurations to prepare commands.
 preparer = DictWithInjections(
     {
         ("11", False): zypper_prepare,

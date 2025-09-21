@@ -1,3 +1,5 @@
+"""The `put` and `get` commands for SFTP file transfers."""
+
 from glob import glob
 from logging import getLogger
 import os
@@ -11,22 +13,24 @@ logger = getLogger("mtui.command.sftp")
 
 
 class SFTPPut(Command):
-    """
-    Uploads files to all enabled hosts.
-    Multiple files can be selected with special patterns according to the rules
-    used by the Unix shell (i.e. *, ?, []). The complete filepath on the remote
-    hosts is shown after the upload.
+    """Uploads files to all enabled hosts.
+
+    Multiple files can be selected with special patterns according to the
+    rules used by the Unix shell (e.g., *, ?, []). The complete
+    filepath on the remote hosts is shown after the upload.
     """
 
     command = "put"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "filename", nargs=1, type=str, help="file to upload to all hosts"
         )
 
     def __call__(self) -> None:
+        """Executes the `put` command."""
         files: list[Path] = [Path(f) for f in glob(self.args.filename[0])]
         if not files:
             logger.error("File %s not found", self.args.filename[0])
@@ -55,26 +59,29 @@ class SFTPPut(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices_filelist([], line, text)
 
 
 class SFTPGet(Command):
-    """
-    Downloads a file from all enabled hosts.
-    Multiple files cannot be selected.
-    Files are saved in the ${TEMPLATE_DIR}/downloads/ subdirectory
-    with the hostname as file extension. If the argument ends with a slash '/',
-    it will be treated as a folder and all its contents will be downloaded.
+    """Downloads a file from all enabled hosts.
+
+    Multiple files cannot be selected. Files are saved in the
+    ${TEMPLATE_DIR}/downloads/ subdirectory with the hostname as a file
+    extension. If the argument ends with a slash '/', it will be
+    treated as a folder and all its contents will be downloaded.
     """
 
     command = "get"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "filename", nargs=1, type=Path, help="file to download from target hosts"
         )
 
     def __call__(self) -> None:
+        """Executes the `get` command."""
         self.metadata.perform_get(self.targets, self.args.filename[0])
         logger.info("downloaded %s", self.args.filename[0])

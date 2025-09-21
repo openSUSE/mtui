@@ -1,3 +1,5 @@
+"""The main entry point for the mtui application."""
+
 from argparse import Namespace
 import logging
 from subprocess import CalledProcessError
@@ -16,6 +18,14 @@ from .colorlog import create_logger
 
 
 def main() -> int:
+    """The main entry point for the mtui application.
+
+    This function handles command-line argument parsing, configuration
+    loading, and starting the command prompt.
+
+    Returns:
+        The exit code of the application.
+    """
     logger = create_logger("mtui")
 
     p = get_parser(sys)
@@ -35,6 +45,16 @@ def main() -> int:
 
 
 def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal[0, 1]:
+    """Initializes and runs the mtui command prompt.
+
+    Args:
+        config: The application configuration.
+        logger: The logger instance.
+        args: The parsed command-line arguments.
+
+    Returns:
+        0 on success, 1 on failure.
+    """
     if args.debug:
         logger.setLevel(level=logging.DEBUG)
 

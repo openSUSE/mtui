@@ -1,3 +1,5 @@
+"""The `edit` command."""
+
 from logging import getLogger
 from os import getenv
 from subprocess import check_call
@@ -11,24 +13,28 @@ logger = getLogger("mtui.command.edit")
 
 
 class Edit(Command):
-    """
-    Edit the testing template or local file. To edit template call
-    edit without parameters.
-    The evironment variable $EDITOR is processed to find the prefered
-    editor. If $EDITOR is empty, "vim" is set as default.
+    """Edits the testing template or a local file.
+
+    To edit the template, run the command without any parameters. The
+    environment variable $EDITOR is used to determine the preferred
+
+    editor. If $EDITOR is not set, "vim" is used by default.
     """
 
     command = "edit"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument("filename", nargs="?", type=str, help="file to edit")
 
     @requires_update
     def _template(self):
+        """Returns the path to the testing template."""
         return self.metadata.path
 
     def __call__(self) -> None:
+        """Executes the `edit` command."""
         path = self.args.filename if self.args.filename else self._template()
 
         editor = getenv("EDITOR", "vim")
@@ -42,4 +48,5 @@ class Edit(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices_filelist([], line, text)

@@ -21,6 +21,14 @@ from .messages import TestReportNotLoadedError
 
 
 def edit_text(text: str) -> str:
+    """Opens the user's default editor to edit the given text.
+
+    Args:
+        text: The initial text to be edited.
+
+    Returns:
+        The edited text.
+    """
     editor = os.getenv("EDITOR", "vim")
     tmpfile = tempfile.NamedTemporaryFile()
 
@@ -41,15 +49,47 @@ def edit_text(text: str) -> str:
 if os.getenv("COLOR", "always") == "always":
 
     def green(xs: str) -> str:
+        """Wraps a string in ANSI escape codes to make it green.
+
+        Args:
+            xs: The string to color.
+
+        Returns:
+            The colorized string.
+        """
         return "\033[1;32m{!s}\033[1;m\033[0m".format(xs)
 
     def red(xs: str) -> str:
+        """Wraps a string in ANSI escape codes to make it red.
+
+        Args:
+            xs: The string to color.
+
+        Returns:
+            The colorized string.
+        """
         return "\033[1;31m{!s}\033[1;m\033[0m".format(xs)
 
     def yellow(xs: str) -> str:
+        """Wraps a string in ANSI escape codes to make it yellow.
+
+        Args:
+            xs: The string to color.
+
+        Returns:
+            The colorized string.
+        """
         return "\033[1;33m{!s}\033[1;m\033[0m".format(xs)
 
     def blue(xs: str) -> str:
+        """Wraps a string in ANSI escape codes to make it blue.
+
+        Args:
+            xs: The string to color.
+
+        Returns:
+            The colorized string.
+        """
         return "\033[1;34m{!s}\033[1;m\033[0m".format(xs)
 
 else:
@@ -57,6 +97,16 @@ else:
 
 
 def prompt_user(text: str, options: Collection[str], interactive: bool = True) -> bool:
+    """Prompts the user with a question and waits for a response.
+
+    Args:
+        text: The prompt to display to the user.
+        options: A collection of strings that are considered "yes" answers.
+        interactive: If False, the prompt is printed but no input is requested.
+
+    Returns:
+        True if the user's response is in `options`, False otherwise.
+    """
     result = False
     response = ""
 
@@ -82,6 +132,11 @@ def prompt_user(text: str, options: Collection[str], interactive: bool = True) -
 
 
 def termsize() -> tuple[int, int]:
+    """Gets the size of the terminal.
+
+    Returns:
+        A tuple containing the width and height of the terminal.
+    """
     try:
         x = fcntl.ioctl(0, termios.TIOCGWINSZ, b"1234")
         height, width = struct.unpack("hh", x)
@@ -100,6 +155,14 @@ def termsize() -> tuple[int, int]:
 
 
 def filter_ansi(text: str) -> str:
+    """Removes ANSI escape codes from a string.
+
+    Args:
+        text: The string to filter.
+
+    Returns:
+        The string with ANSI escape codes removed.
+    """
     text = re.sub(chr(27), "", text)
     text = re.sub(r"\[[0-9;]*[mA]", "", text)
     text = re.sub(r"\[K", "", text)
@@ -108,6 +171,12 @@ def filter_ansi(text: str) -> str:
 
 
 def page(text: list[str], interactive: bool = True) -> None:
+    """Displays long text in a pager-like fashion.
+
+    Args:
+        text: A list of strings to display.
+        interactive: If False, the function does nothing.
+    """
     if not interactive:
         return None
 
@@ -148,6 +217,15 @@ def page(text: list[str], interactive: bool = True) -> None:
 
 
 def requires_update(fn: Callable) -> Callable:
+    """A decorator that checks if a test report is loaded before executing.
+
+    Args:
+        fn: The function to decorate.
+
+    Returns:
+        The decorated function.
+    """
+
     @wraps(fn)
     def wrap(self, *a, **kw) -> Any:
         if not self.metadata:
@@ -158,7 +236,17 @@ def requires_update(fn: Callable) -> Callable:
 
 
 class DictWithInjections(dict):
+    """A dictionary that allows for a custom error on key lookup failure."""
+
     def __init__(self, *args, **kw) -> None:
+        """Initializes the dictionary.
+
+        Args:
+            *args: Arguments to pass to the dict constructor.
+            **kw: Keyword arguments to pass to the dict constructor.
+                'key_error' is a special keyword argument that specifies
+                the exception to raise on a key error.
+        """
         self.key_error = kw.pop("key_error", KeyError)
 
         super().__init__(*args, **kw)
@@ -171,12 +259,24 @@ class DictWithInjections(dict):
 
 
 class SUTParse:
+    """Parses a comma-separated string of SUTs into a formatted string."""
+
     def __init__(self, args: str) -> None:
+        """Initializes the parser.
+
+        Args:
+            args: A comma-separated string of SUTs.
+        """
         suts = args.split(",")
         targets = ["-t {!s}".format(i) for i in suts]
         self.args = " ".join(targets)
 
     def print_args(self) -> str:
+        """Returns the formatted string of SUTs.
+
+        Returns:
+            The formatted string.
+        """
         return self.args
 
 
@@ -186,19 +286,17 @@ def complete_choices(
     text: str,
     hostnames: list[str] | None = None,
 ) -> list[str]:
-    """
-    :returns: [str] completion choices appropriate for given line and
-        text
+    """Provides command-line completion for choices.
 
-    :type synonyms: [[str]]
-    :param synonyms: each element of the list is a list of
-        synonymous arguments. Example: [("-a", "--all")]
+    Args:
+        synonyms: A list of tuples, where each tuple contains
+            synonymous arguments (e.g., `("-a", "--all")`).
+        line: The current command line string.
+        text: The text being completed.
+        hostnames: A list of hostnames to include in the completion choices.
 
-    :type hostnames: [str] or None
-    :param hostnames: hostnames to add to possible completions
-
-    :param line: line from L{cmd.Cmd} completion callback
-    :param text: text from L{cmd.Cmd} completion callback
+    Returns:
+        A list of possible completion strings.
     """
 
     if not hostnames:
@@ -237,6 +335,19 @@ def complete_choices_filelist(
     text: str,
     hostnames: list[str] | None = None,
 ) -> list[str]:
+    """Provides command-line completion for file paths.
+
+    Args:
+        synonyms: A list of tuples, where each tuple contains
+            synonymous arguments.
+        line: The current command line string.
+        text: The text being completed.
+        hostnames: A list of hostnames to include in the completion choices.
+
+    Returns:
+        A list of possible completion strings, including file and
+        directory names.
+    """
     dirname = ""
     filename = ""
 
@@ -257,13 +368,22 @@ def complete_choices_filelist(
 
 
 def timestamp() -> str:
+    """Gets the current time as a Unix timestamp string.
+
+    Returns:
+        The current time as a string.
+    """
     # remove fractional part
     return str(int(time.time()))
 
 
 @contextmanager
 def chdir(newpath: Path):
-    """Context manager for changing the current working directory"""
+    """A context manager for changing the current working directory.
+
+    Args:
+        newpath: The path to change to.
+    """
     storedpath = Path().cwd()
     os.chdir(newpath)
     yield
@@ -271,14 +391,17 @@ def chdir(newpath: Path):
 
 
 def ensure_dir_exists(*path, **kwargs) -> Path:
-    """
-    :returns: path with dirs created as needed.
-    :type path: Path
+    """Ensures that a directory exists, creating it if necessary.
 
-    :type filepath: bool
-    :param filepath: path is treated as directory if False, otherwise as
-        file and last component is not created as directory.
-    :param on_create: Callable operation on created dir
+    Args:
+        *path: The path components to join to form the directory path.
+        **kwargs:
+            filepath: If True, the last component of the path is treated
+                as a filename, and only its parent directory is created.
+            on_create: A callable to be executed on the created directory.
+
+    Returns:
+        The Path object for the created directory.
     """
 
     def empty(*args, **kwds) -> None:  # type: ignore
@@ -298,6 +421,12 @@ def ensure_dir_exists(*path, **kwargs) -> Path:
 
 
 def atomic_write_file(data: bytes | str, path: Path) -> None:
+    """Atomically writes data to a file.
+
+    Args:
+        data: The data to write, as bytes or a string.
+        path: The path to the file.
+    """
     if isinstance(data, bytes):
         data = data.decode("utf-8")
     fd, fname = mkstemp(dir=path.parent)
@@ -309,6 +438,18 @@ def atomic_write_file(data: bytes | str, path: Path) -> None:
 
 
 def walk(inc: Collection) -> Collection:
+    """Recursively walks through a nested data structure.
+
+    This function is designed to simplify nested data structures,
+    particularly those that resemble GraphQL responses with 'edges'
+    and 'node' keys.
+
+    Args:
+        inc: The collection (list or dict) to walk through.
+
+    Returns:
+        The modified collection.
+    """
     if isinstance(inc, list):
         for i, j in enumerate(inc):
             inc[i] = walk(j)

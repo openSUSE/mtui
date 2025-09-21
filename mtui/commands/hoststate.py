@@ -1,3 +1,5 @@
+"""The `set_host_state` command."""
+
 from logging import getLogger
 
 from mtui.commands import Command
@@ -7,26 +9,21 @@ logger = getLogger("mtui.command.hoststate")
 
 
 class HostState(Command):
-    """
-    Sets the host state to "Enabled", "Disabled" or "Dryrun".
-    A host set to "Enabled" runs all issued commands while a "Disabled" host
-    or a host set to "Dryrun" doesn't run any command on the host.
+    """Sets the state and execution mode of a host.
 
-    The difference between "Disabled" and "Dryrun" is that on "Dryrun"
-    hosts the issued commands are printed to the console while "Disabled"
-    doesn't print anything.
+    A host can be in one of the following states:
+    - "Enabled": Runs all issued commands.
+    - "Disabled": Does not run any commands.
+    - "Dryrun": Does not run any commands, but prints them to the console.
 
-    Additionally, the execution mode of each host could be set
-    to "parallel" (default) or "serial".
-
-    All commands which are designed to run in parallel are influenced
-    by this option (like to run command)
+    The execution mode can be either "parallel" (default) or "serial".
     """
 
     command = "set_host_state"
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "state",
             nargs=1,
@@ -35,6 +32,7 @@ class HostState(Command):
         cls._add_hosts_arg(parser)
 
     def __call__(self) -> None:
+        """Executes the `set_host_state` command."""
         targets = self.parse_hosts(enabled=False)
         state = self.args.state[0]
         if state in ["serial", "parallel"]:
@@ -52,6 +50,7 @@ class HostState(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):
+        """Provides tab completion for the command."""
         choices = [
             ("-t", "--target"),
             ("parallel", "serial", "dryrun", "enabled", "disabled"),

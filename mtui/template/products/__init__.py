@@ -1,3 +1,5 @@
+"""A collection of functions for normalizing product information."""
+
 from .sle11 import normalize_sle11
 from .sle12 import normalize_sle12
 from .sle15 import normalize_sle15
@@ -12,6 +14,14 @@ from .misc import (
 
 
 def normalize(x):
+    """Normalizes product information based on the product name and version.
+
+    Args:
+        x: A tuple containing the product information.
+
+    Returns:
+        The normalized product information.
+    """
     # SLERT must be before version based comparsion
     if x[0][0] == "SLE-RT":
         return normalize_rt(x)

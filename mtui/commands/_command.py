@@ -1,3 +1,5 @@
+"""The base class for all commands in mtui."""
+
 from abc import ABC, abstractmethod
 from argparse import Namespace, RawDescriptionHelpFormatter
 from logging import getLogger
@@ -10,6 +12,8 @@ logger = getLogger("mtui.commands.command")
 
 
 class Command(ABC):
+    """An abstract base class for all commands in mtui."""
+
     command: str
 
     __slots__ = [
@@ -33,13 +37,14 @@ class Command(ABC):
     """
 
     def __init__(self, args, config, sys, prompt) -> None:
-        """:type args: str
-        :param args: arguments remaidner for the command
+        """Initializes the command object.
 
-        :type hosts: L{mtui.target.HostGroup}
-        :param hosts: enabled hosts
+        Args:
+            args: The command-line arguments for the command.
+            config: The application configuration.
+            sys: The sys module.
+            prompt: The command prompt object.
         """
-
         self.args = args
         self.sys = sys
         self.config = config
@@ -50,6 +55,15 @@ class Command(ABC):
 
     @classmethod
     def parse_args(cls, args: str, sys) -> Namespace:
+        """Parses the command-line arguments for the command.
+
+        Args:
+            args: The command-line arguments to parse.
+            sys: The sys module.
+
+        Returns:
+            A namespace containing the parsed arguments.
+        """
         arg = [] if args == "" else args.split()
         p = cls.argparser(sys)
         pa = p.parse_args(arg)
@@ -61,10 +75,24 @@ class Command(ABC):
 
     # in reality abstract method which implemenatation is optional
     @classmethod
-    def _add_arguments(cls, parser: ArgumentParser) -> None: ...
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """A hook for adding arguments to the command's argument parser.
+
+        Args:
+            parser: The argument parser.
+        """
+        ...
 
     @classmethod
     def argparser(cls, sys) -> ArgumentParser:
+        """Returns the argument parser for the command.
+
+        Args:
+            sys: The sys module.
+
+        Returns:
+            The argument parser for the command.
+        """
         p = ArgumentParser(
             sys_=sys,
             prog=cls.command,
@@ -77,18 +105,31 @@ class Command(ABC):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
-        """:type state: dict(prompt instance states)
-        :returns: callable suitable for tab completion
+        """Provides tab completion for the command.
+
+        Args:
+            state: A dictionary of prompt instance states.
+            text: The text to complete.
+            line: The current input line.
+            begidx: The beginning index of the text to complete.
+            endidx: The ending index of the text to complete.
+
+        Returns:
+            A list of possible completions.
         """
 
         return []
 
     @abstractmethod
-    def __call__(self) -> None: ...
+    def __call__(self) -> None:
+        """An abstract method that is called when the command is executed."""
+        ...
 
     def println(self, xs: str = "") -> None:
-        """`print` replacement method for the outputs to be testable by
-        injecting `StringIO`
+        """A replacement for the `print` function that can be easily tested.
+
+        Args:
+            xs: The string to print.
         """
 
         self.sys.stdout.write(xs + "\n")
@@ -96,6 +137,11 @@ class Command(ABC):
 
     @classmethod
     def _add_hosts_arg(cls, parser: ArgumentParser) -> None:
+        """Adds the `-t`/`--target` argument to the argument parser.
+
+        Args:
+            parser: The argument parser.
+        """
         parser.add_argument(
             "-t",
             "--target",
@@ -107,13 +153,15 @@ class Command(ABC):
         )
 
     def parse_hosts(self, enabled: bool = True) -> HostsGroup:
-        """Parses self.args.hosts
-        returns HostsGroup with hosts, or connection error.
-        Handles decaprated 'all' alias
+        """Parses the `hosts` argument and returns a `HostsGroup` object.
 
-        By default all selects only enabled hosts
+        By default, this method selects only enabled hosts.
 
-        use in run(self) ... etc
+        Args:
+            enabled: Whether to select only enabled hosts.
+
+        Returns:
+            A `HostsGroup` object containing the selected hosts.
         """
         try:
             if self.args.hosts:
@@ -123,7 +171,7 @@ class Command(ABC):
         except HostIsNotConnectedError as e:
             if e.host == "all":
                 logger.error(e)
-                logger.info("Using all hosts. Warning option 'all' is decaprated")
+                logger.info("Using all hosts. Warning: option 'all' is deprecated")
 
                 targets = self.targets.select(enabled=enabled)
 

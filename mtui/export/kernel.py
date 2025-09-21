@@ -1,3 +1,5 @@
+"""An exporter for kernel jobs."""
+
 from datetime import datetime
 from logging import getLogger
 from pathlib import Path
@@ -12,9 +14,18 @@ logger = getLogger("mtui.export.kernel")
 
 
 class KernelExport(BaseExport):
-    """Exporter for kernel jobs"""
+    """An exporter for kernel jobs."""
 
     def get_logs(self, *args, **kwds) -> list[Path]:
+        """Gets the logs from openQA.
+
+        Args:
+            *args: Additional arguments (not used).
+            **kwds: Additional keyword arguments (not used).
+
+        Returns:
+            A list of paths to the log files.
+        """
         in_path = self.config.template_dir / str(self.rrid) / self.config.install_logs
         res_path = self.config.template_dir / str(self.rrid) / "results"
         ensure_dir_exists(res_path)
@@ -25,6 +36,7 @@ class KernelExport(BaseExport):
         return [fn.name for fn in in_path.glob("*.log")]
 
     def kernel_results(self) -> None:
+        """Adds kernel test results to the template."""
         line = self.template.index("regression tests:\n")
         try:
             line = self.template.index("(put your details here)\n", line)
@@ -60,6 +72,15 @@ class KernelExport(BaseExport):
         self.template.insert(line, "\n")
 
     def run(self, *args, **kwds) -> FileList | list[str]:
+        """Runs the exporter.
+
+        Args:
+            *args: Additional arguments (not used).
+            **kwds: Additional keyword arguments (not used).
+
+        Returns:
+            The exported template.
+        """
         self.install_results()
         self.inject_openqa()
         self.kernel_results()

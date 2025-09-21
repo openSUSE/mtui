@@ -1,4 +1,4 @@
-"""Quering and comparing tags of RPM file names"""
+"""A class for comparing RPM version strings."""
 
 from typing import final
 
@@ -7,11 +7,10 @@ import rpm  # type: ignore
 
 @final
 class RPMVersion:
-    """RPMVersion holds an rpm version-release string
+    """Holds an RPM version-release string for version comparison.
 
-    this is userd for rpm version arithmetics, like comparing
-    if a specific rpm version is lower or higher than another one
-
+    This class is used for RPM version arithmetic, such as comparing
+    if a specific RPM version is lower or higher than another one.
     """
 
     _arch_suffixes = [
@@ -28,6 +27,11 @@ class RPMVersion:
     """
 
     def __init__(self, ver: str) -> None:
+        """Initializes the `RPMVersion` object.
+
+        Args:
+            ver: The version string to parse.
+        """
         if not ver:
             raise ValueError
 
@@ -42,44 +46,52 @@ class RPMVersion:
             self.rel = "0"
 
     def __lt__(self, other: "RPMVersion") -> bool:
+        """Checks if this version is less than another."""
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel)) < 0
         )
 
     def __gt__(self, other: "RPMVersion") -> bool:
+        """Checks if this version is greater than another."""
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel)) > 0
         )
 
     def __eq__(self, other: "RPMVersion") -> bool:
+        """Checks if this version is equal to another."""
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             == 0
         )
 
     def __le__(self, other: "RPMVersion") -> bool:
+        """Checks if this version is less than or equal to another."""
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             <= 0
         )
 
     def __ge__(self, other: "RPMVersion") -> bool:
+        """Checks if this version is greater than or equal to another."""
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             >= 0
         )
 
     def __ne__(self, other: "RPMVersion") -> bool:
+        """Checks if this version is not equal to another."""
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             != 0
         )
 
     def __str__(self) -> str:
+        """Returns a string representation of the version."""
         s = str(self.ver)
         if self.rel != "0":
             s += "-" + str(self.rel)
         return s
 
     def __repr__(self) -> str:
+        """Returns a string representation of the `RPMVersion` object."""
         return f"<RPMVersion: {self}>"

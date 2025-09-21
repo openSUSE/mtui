@@ -1,8 +1,10 @@
+"""Enumerations for HTTP request methods and pull request assignment states."""
+
 from enum import Enum, StrEnum, auto
 
 
 class method(StrEnum):
-    """Enumeration for HTTP request methods."""
+    """An enumeration for HTTP request methods."""
 
     POST = auto()
     GET = auto()
@@ -11,7 +13,7 @@ class method(StrEnum):
 
 
 class assignment(Enum):
-    """Enumeration for the assignment state of a PR for a specific user."""
+    """An enumeration for the assignment state of a pull request."""
 
     ASSIGNED_USER = auto()
     UNASSIGNED = auto()

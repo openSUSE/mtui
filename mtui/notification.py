@@ -1,6 +1,5 @@
-#
-# mtui notifications, currently supporting python-notify only
-#
+"""A simple desktop notification system using pynotify."""
+
 from logging import getLogger
 
 logger = getLogger("mtui.notifications")
@@ -11,6 +10,13 @@ __impl = None
 def display(
     summary: str | None = None, text: str | None = None, icon: str = "stock_dialog-info"
 ) -> None:
+    """Displays a desktop notification.
+
+    Args:
+        summary: The summary text of the notification.
+        text: The body text of the notification.
+        icon: The icon to display in the notification.
+    """
     global __impl
     if __impl is None:
         try:

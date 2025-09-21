@@ -1,3 +1,5 @@
+"""The `list_packages` command."""
+
 from typing import final
 
 from .. import messages
@@ -8,6 +10,8 @@ from . import Command
 
 @final
 class ListPackages(Command):
+    """Lists packages and their versions on target hosts."""
+
     command = "list_packages"
 
     state_map: dict[None | int, str] = {
@@ -18,6 +22,15 @@ class ListPackages(Command):
     }
 
     def _vers2state(self, current, wanted) -> str:
+        """Converts package versions to a human-readable state.
+
+        Args:
+            current: The current package version.
+            wanted: The wanted package version.
+
+        Returns:
+            A string representing the state of the package.
+        """
         if not current:
             return self.state_map[None]
 
@@ -25,6 +38,7 @@ class ListPackages(Command):
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "-p",
             "--package",
@@ -46,12 +60,14 @@ class ListPackages(Command):
 
     @requires_update
     def _run_just_wanted(self) -> None:
+        """Prints the package versions wanted by the test report."""
         for key in self.metadata.packages.keys():
             self.println(f"Packages for version {key}:")
             for xs in list(self.metadata.packages[key].items()):
                 self.printPVLN(*(xs + ("",)))
 
     def __call__(self) -> None:
+        """Executes the `list_packages` command."""
         if self.args.wanted:
             self._run_just_wanted()
             return
@@ -96,10 +112,19 @@ class ListPackages(Command):
             self.println()
 
     def printPVLN(self, package, version, state, format_output="{0:30}: {1!s:20} {2}"):
+        """Prints a formatted line of package, version, and state.
+
+        Args:
+            package: The name of the package.
+            version: The version of the package.
+            state: The state of the package.
+            format_output: The format string to use.
+        """
         self.println(format_output.format(package, version, state))
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-p", "--package"), ("-t", "--target"), ("-w", "--wanted")],
             line,

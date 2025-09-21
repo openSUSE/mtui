@@ -1,3 +1,5 @@
+"""The `update` command."""
+
 from logging import getLogger
 from traceback import format_exc
 
@@ -11,19 +13,23 @@ logger = getLogger("mtui.command.update")
 
 
 class Update(Command):
-    """
-    Applies the testing update to the target hosts. While updating the
-    machines, the pre-, post- and compare scripts are run before and
-    after the update process.
-    If the update adds new packages to the channel, the "--newpackage" parameter
-    triggers the package installation right after the update.
-    To skip the preparation procedure, append "--noprepare" to the argument list.
+    """Applies the testing update to the target hosts.
+
+    While updating the machines, the pre-, post-, and compare scripts
+    are run before and after the update process.
+
+    If the update adds new packages to the channel, the "--newpackage"
+    parameter triggers the package installation right after the update.
+
+    To skip the preparation procedure, append "--noprepare" to the
+    argument list.
     """
 
     command = "update"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "--newpackage",
             action="store_const",
@@ -47,6 +53,7 @@ class Update(Command):
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `update` command."""
         logger.info("Updating")
 
         targets = self.parse_hosts()
@@ -83,6 +90,7 @@ class Update(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-t", "--target"), ("--noprepare",), ("--newpackage",), ("--noscript",)],
             line,

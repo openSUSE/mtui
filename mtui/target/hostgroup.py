@@ -1,3 +1,5 @@
+"""A composite pattern for managing a group of `Target` objects."""
+
 import re
 from collections import UserDict
 from logging import getLogger
@@ -26,27 +28,39 @@ logger = getLogger("mtui.target.hostgroup")
 
 @final
 class HostsGroup(UserDict[str, Target]):
-    """
-    Composite pattern for Dict[hostname, Target]
+    """A composite pattern for managing a group of `Target` objects.
 
-    doesn't deal with Target state as that would require too much work
-    to support properly. so
+    This class provides methods for performing actions on a group of
+    hosts, such as running commands, locking and unlocking, and
+    querying package versions.
 
-    1. All the given hosts are expected to be enabled.
-
-    2. Lifetime of the object should be the same as execution of one
-       command given from user (to ensure 1.)
+    Note:
+        All the given hosts are expected to be enabled. The lifetime
+        of the object should be the same as the execution of one
+        command given from the user.
     """
 
     def __init__(self, hosts: list[Target]) -> None:
-        """
-        :param targets: list of L{Target}
+        """Initializes the `HostsGroup` object.
+
+        Args:
+            hosts: A list of `Target` objects.
         """
         super().__init__({h.hostname: h for h in hosts})
 
     def select(
         self, hosts: list[str] | None = None, enabled: bool = False
     ) -> Self | "HostsGroup":
+        """Selects a subset of hosts from the group.
+
+        Args:
+            hosts: A list of hostnames to select. If None, all hosts
+                are selected.
+            enabled: Whether to select only enabled hosts.
+
+        Returns:
+            A new `HostsGroup` object containing the selected hosts.
+        """
         if not hosts:
             if enabled:
                 return HostsGroup(
@@ -67,6 +81,7 @@ class HostsGroup(UserDict[str, Target]):
         )
 
     def unlock(self, *a, **kw) -> None:
+        """Unlocks all hosts in the group."""
         for x in self.data.values():
             try:
                 x.unlock(*a, **kw)
@@ -74,6 +89,7 @@ class HostsGroup(UserDict[str, Target]):
                 pass  # logged in Target#unlock
 
     def lock(self, *a, **kw) -> None:
+        """Locks all hosts in the group."""
         for x in self.data.values():
             try:
                 x.lock(*a, **kw)
@@ -83,34 +99,81 @@ class HostsGroup(UserDict[str, Target]):
     def query_versions(
         self, packages
     ) -> list[tuple[Target, dict[str, RPMVersion | None]]]:
+        """Queries the package versions for all hosts in the group.
+
+        Args:
+            packages: A list of packages to query.
+
+        Returns:
+            A list of tuples, where each tuple contains a `Target`
+            object and a dictionary of package versions.
+        """
         rs: list[tuple[Target, dict[str, RPMVersion | None]]] = []
         for x in self.data.values():
             rs.append((x, x.query_package_versions(packages)))
         return rs
 
     def add_history(self, data) -> None:
+        """Adds a history entry to all hosts in the group.
+
+        Args:
+            data: The history entry to add.
+        """
         for tgt in self.data.values():
             tgt.add_history(data)
 
     def names(self) -> list[str]:
+        """Returns a list of all hostnames in the group."""
         return list(self.data.keys())
 
     def sftp_get(self, remote: Path, local: Path) -> None:
+        """Downloads a file from all hosts in the group.
+
+        Args:
+            remote: The remote path to the file to download.
+            local: The local path to save the downloaded file to.
+        """
         return FileDownload(self.data.values(), remote, local).run()
 
     def sftp_put(self, local: Path, remote: Path) -> None:
+        """Uploads a file to all hosts in the group.
+
+        Args:
+            local: The local path to the file to upload.
+            remote: The remote path to upload the file to.
+        """
         return FileUpload(self.data.values(), local, remote).run()
 
     def sftp_remove(self, path: Path) -> None:
+        """Deletes a file from all hosts in the group.
+
+        Args:
+            path: The path to the file to delete.
+        """
         return FileDelete(self.data.values(), path).run()
 
     def run(self, cmd) -> None:
+        """Runs a command on all hosts in the group.
+
+        Args:
+            cmd: The command to run.
+        """
         return self._run(cmd)
 
     def _run(self, cmd) -> None:
+        """A helper method for running a command.
+
+        Args:
+            cmd: The command to run.
+        """
         return RunCommand(self.data, cmd).run()
 
     def _reboot(self, reboot: dict[str, str]) -> None:
+        """Reboots all transactional hosts in the group.
+
+        Args:
+            reboot: A dictionary of reboot commands.
+        """
         if reboot:
             logger.info("Rebooting transactional hosts %s", reboot.keys())
             self.run(reboot)
@@ -118,6 +181,7 @@ class HostsGroup(UserDict[str, Target]):
                 self.data[hn].reconnect(retry=10, backoff=True)
 
     def update_lock(self) -> None:
+        """Locks all hosts in the group for an update."""
         try:
             skipped = False
             for t in self.data.values():
@@ -150,6 +214,11 @@ class HostsGroup(UserDict[str, Target]):
             raise
 
     def perform_install(self, packages: list[str]) -> None:
+        """Performs an installation on all hosts in the group.
+
+        Args:
+            packages: A list of packages to install.
+        """
         commands = {
             t.hostname: t.get_installer()["command"].substitute(
                 packages=" ".join(packages)
@@ -176,6 +245,11 @@ class HostsGroup(UserDict[str, Target]):
             self.unlock()
 
     def perform_uninstall(self, packages: list[str]) -> None:
+        """Performs an uninstallation on all hosts in the group.
+
+        Args:
+            packages: A list of packages to uninstall.
+        """
         commands = {
             t.hostname: t.get_uninstaller()["command"].substitute(
                 packages=" ".join(packages)
@@ -202,6 +276,13 @@ class HostsGroup(UserDict[str, Target]):
             self.unlock()
 
     def perform_prepare(self, packages: list[str], testreport, **kw) -> None:
+        """Performs a preparation on all hosts in the group.
+
+        Args:
+            packages: A list of packages to prepare.
+            testreport: The test report object.
+            **kw: Additional keyword arguments.
+        """
         operation = "add" if kw.get("testing", False) else "remove"
         force = kw.get("force", False)
         testing = kw.get("testing", False)
@@ -262,6 +343,12 @@ class HostsGroup(UserDict[str, Target]):
             self.unlock()
 
     def perform_downgrade(self, packages: list[str], testreport) -> None:
+        """Performs a downgrade on all hosts in the group.
+
+        Args:
+            packages: A list of packages to downgrade.
+            testreport: The test report object.
+        """
         ver_re = re.compile(r"(.*) = (.*)")
         versions: dict[str, dict[str, str]] = {}
         self.update_lock()
@@ -340,6 +427,13 @@ class HostsGroup(UserDict[str, Target]):
             self.unlock()
 
     def perform_update(self, testreport, params: list[str]) -> None:
+        """Performs an update on all hosts in the group.
+
+        Args:
+            testreport: The test report object.
+            params: A list of update parameters.
+        """
+
         def package_check(post: bool = False) -> None:
             for hn, t in self.data.items():
                 not_installed: list[Package] = []
@@ -445,10 +539,22 @@ class HostsGroup(UserDict[str, Target]):
             testreport.run_scripts(CompareScript, self)
 
     def report_self(self, sink):
+        """Reports the status of all hosts in the group.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_self(sink)
 
     def report_history(self, sink, count, events) -> None:
+        """Reports the history of all hosts in the group.
+
+        Args:
+            sink: The function to use for reporting.
+            count: The number of history entries to report.
+            events: A list of event types to filter by.
+        """
         if events:
             self._run(
                 "tac /var/log/mtui.log | grep -m {} {} | tac".format(
@@ -462,21 +568,47 @@ class HostsGroup(UserDict[str, Target]):
             self.data[hn].report_history(sink)
 
     def report_locks(self, sink):
+        """Reports the lock state of all hosts in the group.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_locks(sink)
 
     def report_timeout(self, sink) -> None:
+        """Reports the timeout of all hosts in the group.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_timeout(sink)
 
     def report_sessions(self, sink) -> None:
+        """Reports the sessions of all hosts in the group.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_sessions(sink)
 
     def report_log(self, sink, arg) -> None:
+        """Reports the log of all hosts in the group.
+
+        Args:
+            sink: The function to use for reporting.
+            arg: An additional argument to pass to the reporting function.
+        """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_log(sink, arg)
 
     def report_products(self, sink) -> None:
+        """Reports the products of all hosts in the group.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_products(sink)

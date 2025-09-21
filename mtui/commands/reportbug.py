@@ -1,3 +1,5 @@
+"""The `report-bug` command."""
+
 import errno
 from logging import getLogger
 import subprocess
@@ -12,14 +14,13 @@ logger = getLogger("mtui.commands.reportbug")
 
 
 class ReportBug(Command):
-    """
-    Open mtui bugzilla with fields common for all mtui bugs prefilled
-    """
+    """Opens the mtui bugzilla with some fields pre-filled."""
 
     command = "report-bug"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "-p",
             "--print-url",
@@ -28,6 +29,7 @@ class ReportBug(Command):
         )
 
     def __call__(self) -> None:
+        """Executes the `report-bug` command."""
         url = self.config.report_bug_url
 
         if self.args.print_url:
@@ -70,4 +72,5 @@ class ReportBug(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices([("-p", "--print-url")], line, text)

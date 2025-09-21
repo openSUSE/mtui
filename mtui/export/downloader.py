@@ -1,3 +1,5 @@
+"""Functions for downloading logs from openQA."""
+
 from collections.abc import Callable
 import concurrent.futures
 from logging import getLogger
@@ -11,6 +13,14 @@ logger = getLogger("mtui.export.downloader")
 
 
 def _subdl(oqa_path: str, l_path: str, test: dict, errormode: str) -> None:
+    """A helper function for downloading a single log file.
+
+    Args:
+        oqa_path: The path to the log file on the openQA server.
+        l_path: The local path to save the log file to.
+        test: A dictionary containing information about the test.
+        errormode: The error mode to use if the download fails.
+    """
     try:
         logger.info("Downloading log %s", oqa_path)
         urlretrieve(oqa_path, l_path)
@@ -21,11 +31,28 @@ def _subdl(oqa_path: str, l_path: str, test: dict, errormode: str) -> None:
 
 
 def _emptylog(host, test, *args, **kwds) -> None:
+    """A downloader function for tests that have no log to download.
+
+    Args:
+        host: The host of the openQA instance.
+        test: A dictionary containing information about the test.
+        *args: Additional arguments (not used).
+        **kwds: Additional keyword arguments (not used).
+    """
     logger.debug("No log to download for test: %s on %s", test["name"], host)
     pass
 
 
 def _resultlog(host, test, resultsdir, _, errormode) -> None:
+    """A downloader function for result logs.
+
+    Args:
+        host: The host of the openQA instance.
+        test: A dictionary containing information about the test.
+        resultsdir: The directory to save the results to.
+        _: An unused argument.
+        errormode: The error mode to use if the download fails.
+    """
     oqa_path = os.path.join(
         host, "tests", str(test["test_id"]), "file", "result_array.json"
     )
@@ -38,6 +65,15 @@ def _resultlog(host, test, resultsdir, _, errormode) -> None:
 
 
 def _installlog(host, test, _, installlogsdir, errormode) -> None:
+    """A downloader function for install logs.
+
+    Args:
+        host: The host of the openQA instance.
+        test: A dictionary containing information about the test.
+        _: An unused argument.
+        installlogsdir: The directory to save the install logs to.
+        errormode: The error mode to use if the download fails.
+    """
     oqa_path = os.path.join(
         host, "tests", str(test["test_id"]), "file", "update_kernel-zypper.log"
     )
@@ -49,6 +85,7 @@ def _installlog(host, test, _, installlogsdir, errormode) -> None:
     _subdl(oqa_path, l_path, test, errormode)
 
 
+#: A dictionary that maps log types to downloader functions.
 downloader: dict[str, Callable[[str, dict, str, str, str], None]] = {
     "install": _installlog,
     "ltp": _resultlog,
@@ -56,6 +93,14 @@ downloader: dict[str, Callable[[str, dict, str, str, str], None]] = {
 
 
 def download_logs(oqa, resultsdir, installogsdir, errormode: str) -> None:
+    """Downloads logs from openQA.
+
+    Args:
+        oqa: A list of openQA connector instances.
+        resultsdir: The directory to save the results to.
+        installogsdir: The directory to save the install logs to.
+        errormode: The error mode to use if a download fails.
+    """
     results_matrix: list[tuple[str, str, str, str]] = []
     for host in oqa:
         if host:

@@ -1,7 +1,4 @@
-#
-# target host management. this is right above the ssh/transmission layer and
-# below the abstractions layer (like updating, preparing, etc.)
-#
+"""The `Target` class, which represents a single target host."""
 
 import errno
 import re
@@ -31,6 +28,12 @@ def _no_checks(*args: tuple[Any, ...]) -> None:
 
 @final
 class Target:
+    """Represents a single target host.
+
+    This class provides methods for interacting with the host, such as
+    running commands, transferring files, and managing locks.
+    """
+
     def __init__(
         self,
         config: Config,
@@ -42,6 +45,18 @@ class Target:
         lock: type[TargetLock] = TargetLock,
         connection: type[Connection] = Connection,
     ) -> None:
+        """Initializes the `Target` object.
+
+        Args:
+            config: The application configuration.
+            hostname: The hostname of the target.
+            packages: A dictionary of packages for the target.
+            state: The initial state of the target.
+            timeout: The command timeout for the target.
+            exclusive: Whether the target is in exclusive mode.
+            lock: The lock class to use for the target.
+            connection: The connection class to use for the target.
+        """
         self.config = config
         self.host, _, self.port = hostname.partition(":")
         self.hostname = hostname
@@ -61,6 +76,11 @@ class Target:
         self._pkgs = packages
 
     def _parse_packages(self) -> dict[str, Package]:
+        """Parses the packages for the target host.
+
+        Returns:
+            A dictionary of `Package` objects.
+        """
         ret: dict[str, Package] = {}
         base_version = self.system.get_base().version
         if self._pkgs:
@@ -78,6 +98,7 @@ class Target:
         return ret
 
     def connect(self) -> None:
+        """Connects to the target host."""
         try:
             logger.info("connecting to %s", self.hostname)
             self.connection = self.Connection(self.host, self.port, self._timeout)
@@ -97,18 +118,33 @@ class Target:
         self.query_versions()
 
     def reconnect(self, retry, backoff) -> None:
+        """Reconnects to the target host.
+
+        Args:
+            retry: The number of times to retry the connection.
+            backoff: Whether to use exponential backoff for retries.
+        """
         self.connection.reconnect(retry, backoff)
 
     def reload_system(self) -> None:
+        """Reloads the system information for the target host."""
         self.system, self.transactional = parse_system(self.connection)
 
     def __eq__(self, other) -> bool:
+        """Checks if two `Target` objects are equal."""
         return self.system == other.system
 
     def __ne__(self, other) -> bool:
+        """Checks if two `Target` objects are not equal."""
         return self.system != other.system
 
     def query_versions(self, packages=None) -> None:
+        """Queries the package versions for the target host.
+
+        Args:
+            packages: A list of packages to query. If None, all packages
+                for the target are queried.
+        """
         if packages is None:
             packages = list(self.packages.keys())
         if self.state == "enabled":
@@ -124,13 +160,13 @@ class Target:
     def query_package_versions(
         self, packages: list[str]
     ) -> dict[str, RPMVersion | None]:
-        """
-        :type packages: [str]
-        :param packages: packages to query versions for
+        """Queries the versions of a list of packages.
 
-        :return: {package: RPMVersion or None}
-            where
-              package = str
+        Args:
+            packages: A list of packages to query.
+
+        Returns:
+            A dictionary mapping package names to `RPMVersion` objects.
         """
         if self.system.get_base().name != "ubuntu":
             self.run(
@@ -160,23 +196,51 @@ class Target:
         return pkgs
 
     def disable_repo(self, repo: str) -> None:
+        """Disables a repository on the target host.
+
+        Args:
+            repo: The name of the repository to disable.
+        """
         logger.debug("%s: disabling repo %s", self.hostname, repo)
         self.run(f"zypper mr -d {repo}")
 
     def enable_repo(self, repo: str) -> None:
+        """Enables a repository on the target host.
+
+        Args:
+            repo: The name of the repository to enable.
+        """
         logger.debug("%s: enabling repo %s", self.hostname, repo)
         self.run(f"zypper mr -e {repo}")
 
     def set_timeout(self, value: int) -> None:
+        """Sets the command timeout for the target host.
+
+        Args:
+            value: The timeout in seconds.
+        """
         logger.debug("%s: setting timeout to %d", self.hostname, value)
         self.connection.timeout = value
         self._timeout = value
 
     def set_repo(self, operation, testreport) -> None:
+        """Adds or removes a repository on the target host.
+
+        Args:
+            operation: The operation to perform ("add" or "remove").
+            testreport: The test report object.
+        """
         logger.debug("%s: changing %s repos", self.hostname, operation)
         testreport.set_repo(self, operation)
 
     def run_zypper(self, cmd, repos, rrid) -> None:
+        """Runs a `zypper` command on the target host.
+
+        Args:
+            cmd: The `zypper` command to run.
+            repos: A dictionary of repositories.
+            rrid: The RequestReviewID of the current update.
+        """
         # ur - generator returning tuple with product, repopart
         ur = ((x, y) for x, y in repos.items() if x in self.system.flatten())
 
@@ -197,6 +261,12 @@ class Target:
         self.run("zypper -n ref")
 
     def run(self, command: str, lock=None) -> None:
+        """Runs a command on the target host.
+
+        Args:
+            command: The command to run.
+            lock: An optional lock to use.
+        """
         if self.state == "enabled":
             logger.debug('%s: running "%s"', self.hostname, command)
             time_before = timestamp()
@@ -233,6 +303,7 @@ class Target:
             self.out.append(["", "", "", 0, 0])
 
     def shell(self) -> None:
+        """Spawns a shell on the target host."""
         logger.debug("%s: spawning shell", self.hostname)
 
         try:
@@ -242,6 +313,12 @@ class Target:
             logger.error("%s: failed to spawn shell", self.hostname)
 
     def sftp_put(self, local: Path, remote: Path) -> None:
+        """Uploads a file to the target host.
+
+        Args:
+            local: The local path to the file to upload.
+            remote: The remote path to upload the file to.
+        """
         if self.state == "enabled":
             logger.debug('%s: sending "%s"', self.hostname, local)
             try:
@@ -254,6 +331,12 @@ class Target:
             logger.info("dryrun: put {} {}:{}".format(local, self.hostname, remote))
 
     def sftp_get(self, remote: Path, local: Path) -> None:
+        """Downloads a file from the target host.
+
+        Args:
+            remote: The remote path to the file to download.
+            local: The local path to save the downloaded file to.
+        """
         if str(remote).endswith("/"):
             f = self.connection.sftp_get_folder
             s = "folder"
@@ -281,39 +364,72 @@ class Target:
             logger.info("dryrun: get %s %s:%s %s", self.hostname, s, remote, local)
 
     def lastin(self) -> str:
+        """Returns the last command that was run.
+
+        Returns:
+            The last command that was run.
+        """
         try:
             return self.out[-1][0]
         except BaseException:
             return ""
 
     def lastout(self) -> str:
+        """Returns the last stdout from a command.
+
+        Returns:
+            The last stdout from a command.
+        """
         try:
             return self.out[-1][1]
         except BaseException:
             return ""
 
     def lasterr(self) -> str:
+        """Returns the last stderr from a command.
+
+        Returns:
+            The last stderr from a command.
+        """
         try:
             return self.out[-1][2]
         except BaseException:
             return ""
 
     def lastexit(self) -> str:
+        """Returns the last exit code from a command.
+
+        Returns:
+            The last exit code from a command.
+        """
         try:
             return self.out[-1][3]
         except BaseException:
             return ""
 
     def is_locked(self) -> bool:
-        """
-        :returns bool: True if target is locked by someone else
+        """Checks if the target is locked.
+
+        Returns:
+            True if the target is locked, False otherwise.
         """
         return self._lock.is_locked()
 
     def lock(self, comment: str = "") -> None:
+        """Locks the target.
+
+        Args:
+            comment: An optional comment for the lock.
+        """
         self._lock.lock(comment)
 
     def unlock(self, force: bool = False) -> None:
+        """Unlocks the target.
+
+        Args:
+            force: If True, unlocks the target even if it is locked
+                by another user.
+        """
         try:
             self._lock.unlock(force)
         except TargetLockedError as e:
@@ -321,6 +437,11 @@ class Target:
             raise
 
     def add_history(self, comment: str) -> None:
+        """Adds a history entry to the target.
+
+        Args:
+            comment: The history entry to add.
+        """
         if self.state == "enabled":
             logger.debug("%s: adding history entry", self.hostname)
             try:
@@ -339,6 +460,14 @@ class Target:
                 pass
 
     def sftp_listdir(self, path: Path) -> list[str]:
+        """Lists the contents of a directory on the target.
+
+        Args:
+            path: The path to the directory to list.
+
+        Returns:
+            A list of filenames in the directory.
+        """
         try:
             return self.connection.sftp_listdir(path)
         except IOError as error:
@@ -347,6 +476,11 @@ class Target:
             return []
 
     def sftp_remove(self, path: Path) -> None:
+        """Deletes a file or directory on the target.
+
+        Args:
+            path: The path to the file or directory to delete.
+        """
         try:
             self.connection.sftp_remove(path)
         except IOError as error:
@@ -360,6 +494,12 @@ class Target:
                     logger.warning("unable to remove %s on %s", path, self.hostname)
 
     def close(self, action=None) -> None:
+        """Closes the connection to the target.
+
+        Args:
+            action: An optional action to perform before closing the
+                connection ("reboot" or "poweroff").
+        """
         try:
             if self.connection and self.connection.is_active():
                 self.connection.timeout = 15
@@ -381,54 +521,130 @@ class Target:
             self.connection.close()
 
     def report_self(self, sink: Callable[[str, System, bool, str, bool], None]) -> None:
+        """Reports the status of the target.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         sink(self.hostname, self.system, self.transactional, self.state, self.exclusive)
 
     def report_history(self, sink: Callable[[str, System, list[str]], None]) -> None:
+        """Reports the history of the target.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         sink(self.hostname, self.system, self.lastout().split("\n"))
 
     def report_locks(self, sink: Callable[[str, System, TargetLock], None]) -> None:
+        """Reports the lock state of the target.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         sink(self.hostname, self.system, self._lock)
 
     def report_timeout(self, sink: Callable[[str, System, int], None]) -> None:
+        """Reports the timeout of the target.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         sink(self.hostname, self.system, self.connection.timeout)
 
     def report_sessions(self, sink: Callable[[str, System, str], None]) -> None:
+        """Reports the sessions of the target.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         sink(self.hostname, self.system, self.lastout())
 
     def report_log(self, sink: Callable, arg) -> None:
+        """Reports the log of the target.
+
+        Args:
+            sink: The function to use for reporting.
+            arg: An additional argument to pass to the reporting function.
+        """
         sink(self.hostname, self.out, arg)
 
     def report_products(self, sink: Callable[[str, System], None]) -> None:
+        """Reports the products of the target.
+
+        Args:
+            sink: The function to use for reporting.
+        """
         sink(self.hostname, self.system)
 
     def get_installer(self) -> dict[str, Template]:
+        """Gets the installer for the target.
+
+        Returns:
+            A dictionary of installer command templates.
+        """
         return installer[(self.system.get_release(), self.transactional)]
 
     def get_installer_check(self) -> Callable:
+        """Gets the installer check function for the target.
+
+        Returns:
+            The installer check function.
+        """
         return install_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
         )
 
     def get_uninstaller(self) -> dict[str, Template]:
+        """Gets the uninstaller for the target.
+
+        Returns:
+            A dictionary of uninstaller command templates.
+        """
         return uninstaller[(self.system.get_release(), self.transactional)]
 
     def get_uninstaller_check(self) -> Callable:
+        """Gets the uninstaller check function for the target.
+
+        Returns:
+            The uninstaller check function.
+        """
         return install_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
         )
 
     def get_downgrader(self) -> dict[str, Template]:
+        """Gets the downgrader for the target.
+
+        Returns:
+            A dictionary of downgrader command templates.
+        """
         return downgrader[(self.system.get_release(), self.transactional)]
 
     def get_downgrader_check(self) -> Callable:
+        """Gets the downgrader check function for the target.
+
+        Returns:
+            The downgrader check function.
+        """
         return downgrade_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
         )
 
     def get_updater(self) -> dict[str, Template]:
+        """Gets the updater for the target.
+
+        Returns:
+            A dictionary of updater command templates.
+        """
         return updater[(self.system.get_release(), self.transactional)]
 
     def get_updater_check(self) -> Callable:
+        """Gets the updater check function for the target.
+
+        Returns:
+            The updater check function.
+        """
         return update_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
         )
@@ -436,15 +652,31 @@ class Target:
     def get_preparer(
         self, force: bool = False, testing: bool = False
     ) -> dict[str, Template]:
+        """Gets the preparer for the target.
+
+        Args:
+            force: Whether to force the preparation.
+            testing: Whether to include testing repositories.
+
+        Returns:
+            A dictionary of preparer command templates.
+        """
         return preparer[(self.system.get_release(), self.transactional)](force, testing)
 
     def get_preparer_check(self) -> Callable:
+        """Gets the preparer check function for the target.
+
+        Returns:
+            The preparer check function.
+        """
         return prepare_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
         )
 
     def __repr__(self) -> str:
+        """Returns a string representation of the `Target` object."""
         return f"<Target - {self.hostname}>"
 
     def __str__(self) -> str:
+        """Returns the hostname of the target."""
         return self.hostname

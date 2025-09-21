@@ -1,3 +1,5 @@
+"""The base class for all openQA connectors in mtui."""
+
 from abc import ABC, abstractmethod
 from logging import getLogger
 from typing import ClassVar, Self
@@ -12,9 +14,19 @@ logger = getLogger("mtui.connector.openqa")
 
 
 class OpenQA(ABC):
+    """An abstract base class for all openQA connectors in mtui."""
+
     kind: ClassVar[str] = "base"
 
     def __init__(self, config, host, smelt: SMELT, rrid: RequestReviewID) -> None:
+        """Initializes the openQA connector.
+
+        Args:
+            config: The application configuration.
+            host: The openQA instance host.
+            smelt: The SMELT connector instance.
+            rrid: The RequestReviewID of the current update.
+        """
         logger.debug("init openQA client")
         self.host = host
         self.config = config
@@ -29,6 +41,11 @@ class OpenQA(ABC):
         self.results: list[URLs] | list[Test] | None = None
 
     def _get_jobs(self):
+        """Gets jobs from the openQA instance.
+
+        Returns:
+            A list of jobs, or None if the request fails.
+        """
         logger.debug(f"Get data from openQA - {self.host}")
 
         try:
@@ -45,13 +62,18 @@ class OpenQA(ABC):
 
     @abstractmethod
     def _pretty_print(self, *args) -> list[str]:
+        """An abstract method for pretty-printing the results."""
         pass
 
     @abstractmethod
     def run(self) -> Self:
-        """Method to get processed result from openQA, can be used for refresh.
-        For example when is manually changed type of workflow"""
+        """An abstract method for getting the processed result from openQA.
+
+        This method can be used to refresh the results, for example,
+        when the workflow type is manually changed.
+        """
         pass
 
     def __bool__(self) -> bool:
+        """Returns `True` if the connector has results, `False` otherwise."""
         return bool(self.results)

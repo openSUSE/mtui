@@ -1,3 +1,5 @@
+"""A connector for the standard "auto" openQA workflow."""
+
 from logging import getLogger
 from os.path import join
 from typing import Self
@@ -9,9 +11,19 @@ logger = getLogger("mtui.connector.openqa.standard")
 
 
 class AutoOpenQA(OpenQA):
+    """A connector for the standard "auto" openQA workflow."""
+
     kind = "auto"
 
     def _has_passed_install_jobs(self, jobs) -> bool:
+        """Checks if all install jobs have passed.
+
+        Args:
+            jobs: A list of jobs to check.
+
+        Returns:
+            True if all install jobs have passed, False otherwise.
+        """
         if jobs is None:
             return False
 
@@ -29,6 +41,14 @@ class AutoOpenQA(OpenQA):
         )
 
     def _pretty_print(self, *args) -> list[str]:
+        """Pretty-prints the results of the openQA jobs.
+
+        Args:
+            *args: A list of jobs to print.
+
+        Returns:
+            A list of formatted strings representing the job results.
+        """
         jobs = args[0]
         if not jobs:
             logger.debug("No job - no results")
@@ -55,6 +75,14 @@ class AutoOpenQA(OpenQA):
         return ret
 
     def _get_logs_url(self, jobs) -> list[URLs] | None:
+        """Gets the URLs for the logs of the install jobs.
+
+        Args:
+            jobs: A list of jobs.
+
+        Returns:
+            A list of `URLs` objects, or None if there are no jobs.
+        """
         if not jobs:
             return None
         return [
@@ -75,6 +103,7 @@ class AutoOpenQA(OpenQA):
         ]
 
     def run(self) -> Self:
+        """Gets the processed result from openQA for the auto workflow."""
         jobs = self._get_jobs()
         if self._has_passed_install_jobs(jobs):
             self.results = self._get_logs_url(jobs)
@@ -85,4 +114,5 @@ class AutoOpenQA(OpenQA):
         return self
 
     def __bool__(self) -> bool:
+        """Returns `True` if the connector has results, `False` otherwise."""
         return bool(self.pp) or bool(self.results)
