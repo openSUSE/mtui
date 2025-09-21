@@ -1,3 +1,5 @@
+"""The `load_template` command."""
+
 from mtui.argparse import ArgumentParser
 
 from . import Command
@@ -8,21 +10,21 @@ from ..utils import complete_choices
 
 
 class LoadTemplate(Command):
-    """
-    Load QA Maintenance template by RRID identifier.
-    All changes and logs  from an already loaded template are lost
-    if not saved previously.
+    """Loads a QA Maintenance template by its RRID identifier.
 
-    Already connected hosts are kept and extended by the reference hosts
-    defined in the template file.
+    All changes and logs from an already loaded template are lost if
+    not saved previously.
 
-    This behaviour can be changed with -c/--clean-hosts paramater
+    Already connected hosts are kept and extended by the reference
+    hosts defined in the template file. This behavior can be changed
+    with the -c/--clean-hosts parameter.
     """
 
     command = "load_template"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument(
             "-a",
@@ -49,6 +51,7 @@ class LoadTemplate(Command):
         )
 
     def __call__(self):
+        """Executes the `load_template` command."""
         if self.metadata:
             msg = "Should i owerwrite already loaded session {}? (y/N) "
             if not prompt_user(
@@ -89,6 +92,7 @@ class LoadTemplate(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [
                 ("-c", "--clean-hosts"),

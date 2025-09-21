@@ -1,5 +1,15 @@
+"""A function for normalizing SLE 11 product information."""
+
+
 def normalize_sle11(x):
-    """Normalize SLE 11 Products"""
+    """Normalizes SLE 11 product information.
+
+    Args:
+        x: A tuple containing the product information.
+
+    Returns:
+        The normalized product information.
+    """
     if x[0][0] == "SLE-SDK":
         x[0][0] = "sle-sdk"
         return x

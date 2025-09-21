@@ -1,3 +1,12 @@
+"""Commands for interacting with backend APIs (OSC and Gitea).
+
+This module defines a set of commands for interacting with backend APIs
+like OSC and Gitea. It uses a base class `BaseApiCall` to handle the
+dispatch logic between the two backends, and then provides concrete
+implementations for `approve`, `assign`, `unassign`, `reject`, and
+`comment`.
+"""
+
 from abc import ABC, abstractmethod
 from argparse import REMAINDER
 from logging import getLogger
@@ -13,18 +22,11 @@ logger = getLogger("mtui.command.apicalls")
 
 
 class BaseApiCall(Command, ABC):
-    """
-    An abstract base class for commands that interact with backend APIs (OSC or Gitea).
-
-    This class provides the core dispatch logic to determine which backend to use
-    for a given review request. Subclasses must implement the backend-specific
-    methods `_osc` and `_gitea`.
-    """
+    """An abstract base class for commands that interact with backend APIs."""
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
-        # These are common arguments, but their applicability depends on the backend.
-        # Gitea workflow primarily uses the --user argument.
+        """Adds common arguments to the command's argument parser."""
         parser.add_argument(
             "-g",
             "--group",
@@ -42,24 +44,13 @@ class BaseApiCall(Command, ABC):
 
     @property
     def _is_gitea_workflow(self) -> bool:
-        """
-        Determines if the request should be handled by the Gitea API.
-
-        This encapsulates the business logic for routing. Requests of kind "SLFO"
-        that are not on the "1.1" maintenance track are managed via Gitea pull requests
-        instead of the standard OSC review process.
-        """
+        """Determines if the request should be handled by the Gitea API."""
         rrid = self.metadata.rrid
         return rrid.kind == "SLFO" and rrid.maintenance_id != "1.1"
 
     @requires_update
     def __call__(self) -> None:
-        """
-        Main entry point for the command. Acts as a router to the correct backend.
-
-        The `@requires_update` decorator ensures that the necessary metadata
-        is loaded before this command logic is executed.
-        """
+        """The main entry point for the command."""
         if self._is_gitea_workflow:
             self.gitea()
         else:
@@ -67,55 +58,51 @@ class BaseApiCall(Command, ABC):
 
     @abstractmethod
     def osc(self) -> None:
-        # Must be implemented by subclasses to provide OSC-specific logic.
-        # The OSC class handles its own exceptions internally, so no try/except
-        # block is needed in the implementations.
+        """Provides OSC-specific logic."""
         raise NotImplementedError
 
     @abstractmethod
     def gitea(self) -> None:
-        # Must be implemented by subclasses to provide Gitea-specific logic.
-        # The Gitea class raises GiteaError as part of its control flow,
-        # so implementations should handle this exception.
+        """Provides Gitea-specific logic."""
         raise NotImplementedError
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
-        # Provides shell command-line completion for common arguments.
+        """Provides tab completion for the command."""
         return complete_choices([("-g", "--group"), ("-u", "--user")], line, text)
 
 
 @final
 class Approve(BaseApiCall):
-    """Command to approve a review request."""
+    """A command to approve a review request."""
 
     command = "approve"
 
     def osc(self) -> None:
+        """Approves the request in OSC."""
         logger.info("Approving request %s", self.metadata.rrid.review_id)
         osc = OSC(self.config, self.metadata.rrid)
         osc.approve(self.args.group)
 
     def gitea(self) -> None:
+        """Approves the pull request in Gitea."""
         logger.info("Approving PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
             gitea.approve(self.args.user)
         except GiteaError as e:
-            # Gitea connector uses exceptions to signal API failures or
-            # permission issues (e.g., user is not an assigned reviewer).
             logger.error(e)
 
 
 @final
 class Assign(BaseApiCall):
-    """Command to assign a review request to a user or group."""
+    """A command to assign a review request to a user or group."""
 
     command = "assign"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
-        # Inherit the common arguments from the base class before adding new ones.
+        """Adds arguments to the command's argument parser."""
         super()._add_arguments(parser)
         parser.add_argument(
             "-f",
@@ -125,11 +112,13 @@ class Assign(BaseApiCall):
         )
 
     def osc(self) -> None:
+        """Assigns the request in OSC."""
         logger.info("Assign request %s", self.metadata.rrid.review_id)
         osc = OSC(self.config, self.metadata.rrid)
         osc.assign(self.args.group)
 
     def gitea(self) -> None:
+        """Assigns the pull request in Gitea."""
         logger.info("Assign PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
@@ -139,7 +128,7 @@ class Assign(BaseApiCall):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
-        # Provides shell completion for this command's specific arguments.
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-g", "--group"), ("-u", "--user"), ("-f", "--force")], line, text
         )
@@ -147,16 +136,18 @@ class Assign(BaseApiCall):
 
 @final
 class Unassign(BaseApiCall):
-    """Command to unassign a review request."""
+    """A command to unassign a review request."""
 
     command = "unassign"
 
     def osc(self) -> None:
+        """Unassigns the request in OSC."""
         logger.info("Unassign request %s", self.metadata.id.review_id)
         osc = OSC(self.config, self.metadata.id)
         osc.unassign(self.args.group)
 
     def gitea(self) -> None:
+        """Unassigns the pull request in Gitea."""
         logger.info("Unassign PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
@@ -167,12 +158,13 @@ class Unassign(BaseApiCall):
 
 @final
 class Reject(BaseApiCall):
-    """Command to reject a review request with a reason and message."""
+    """A command to reject a review request."""
 
     command = "reject"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         super()._add_arguments(parser)
         parser.add_argument(
             "-r",
@@ -193,19 +185,18 @@ class Reject(BaseApiCall):
             "-m",
             "--message",
             nargs=REMAINDER,
-            # `REMAINDER` is a special argparse value that consumes all
-            # subsequent command-line arguments. This allows the message
-            # to contain spaces without needing quotes.
             help="Message to use for rejection-comment."
             + "Always as last of command, it takes remainder of command",
         )
 
     def osc(self) -> None:
+        """Rejects the request in OSC."""
         logger.info("Reject request %s", self.metadata.rrid.review_id)
         osc = OSC(self.config, self.metadata.rrid)
         osc.reject(self.args.group, self.args.reason, self.args.message)
 
     def gitea(self) -> None:
+        """Rejects the pull request in Gitea."""
         logger.info("Reject PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
@@ -215,13 +206,13 @@ class Reject(BaseApiCall):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [
                 ("-g", "--group"),
                 ("-r", "--reason"),
                 ("-m", "--message"),
                 ("-u", "--user"),
-                # This tuple provides completion for the possible values of the --reason argument.
                 (
                     "admin",
                     "retracted",
@@ -239,25 +230,23 @@ class Reject(BaseApiCall):
 
 @final
 class Comment(BaseApiCall):
-    """Command to add a comment to a review request."""
+    """A command to add a comment to a review request."""
 
     command = "comment"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
-        # This command does not take any command-line arguments, so we
-        # override the base method with `pass` to prevent inheriting
-        # the --group and --user arguments.
+        """Adds arguments to the command's argument parser."""
         pass
 
     def osc(self) -> None:
-        # This command operates interactively, prompting the user directly
-        # for the comment text when executed.
+        """Adds a comment to the request in OSC."""
         comment = input("Comment: ")
         osc = OSC(self.config, self.metadata.rrid)
         osc.comment(comment)
 
     def gitea(self) -> None:
+        """Adds a comment to the pull request in Gitea."""
         comment = input("Comment: ")
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)

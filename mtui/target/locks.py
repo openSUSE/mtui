@@ -1,3 +1,5 @@
+"""Classes for managing locks on target hosts."""
+
 from datetime import datetime
 import errno
 from logging import getLogger
@@ -13,21 +15,26 @@ logger = getLogger("mtui.target.locks")
 
 
 class TargetLockedError(Exception):
+    """Exception raised when a target is locked."""
+
     pass
 
 
 class RemoteLock:
-    """Localy represent the state of remote lock"""
+    """Represents the state of a remote lock."""
 
     def __init__(self) -> None:
+        """Initializes the `RemoteLock` object."""
         self.user: str = ""
         self.timestamp: str = ""
         self.pid: int = 0
         self.comment: str = ""
 
     def to_lockfile(self) -> str:
-        """:return: str representation of self to be written in the
-        lockfile
+        """Returns a string representation of the lock for a lockfile.
+
+        Returns:
+            A string representation of the lock.
         """
         xs: list[str] = [self.timestamp, self.user, str(self.pid)]
         if self.comment:
@@ -35,6 +42,7 @@ class RemoteLock:
         return ":".join(xs)
 
     def __str__(self) -> str:
+        """Returns a human-readable string representation of the lock."""
         if self.comment:
             comment = f" ({self.comment})"
         else:
@@ -44,7 +52,14 @@ class RemoteLock:
 
     @classmethod
     def from_lockfile(cls, line) -> Self:
-        """:return: L{RemoteLock} instance"""
+        """Creates a `RemoteLock` instance from a lockfile line.
+
+        Args:
+            line: The line from the lockfile.
+
+        Returns:
+            A `RemoteLock` instance.
+        """
         self = cls()
 
         if line == "":
@@ -67,25 +82,35 @@ class RemoteLock:
 
 
 class LockedTargets:
+    """A context manager for locking a group of targets."""
+
     def __init__(self, targets) -> None:
+        """Initializes the `LockedTargets` context manager.
+
+        Args:
+            targets: A list of targets to lock.
+        """
         self.targets = targets
 
     def __enter__(self) -> None:
+        """Locks all targets in the group."""
         for target in self.targets:
             target.lock()
 
     def __exit__(self, type_, value, tb) -> None:
+        """Unlocks all targets in the group."""
         for target in self.targets:
             target.unlock()
 
 
 class TargetLock:
-    """This class is not supposted to be used directly but via
-    L{Target} methods
+    """Manages the lock for a single target.
 
-    If the lock has comment, it is considered to be an `exclusive`
-    lock. Only place that takes this into consideration is `run`
-    command.
+    This class is not intended to be used directly, but rather via
+    the methods of the `Target` class.
+
+    If the lock has a comment, it is considered to be an `exclusive`
+    lock. This is only taken into consideration by the `run` command.
     """
 
     # FIXME: use netstrings to ensure proper (de)serialization
@@ -96,6 +121,12 @@ class TargetLock:
     filename = Path("/var/lock/mtui.lock")
 
     def __init__(self, connection: Connection, config: Config) -> None:
+        """Initializes the `TargetLock` object.
+
+        Args:
+            connection: The connection to the target host.
+            config: The application configuration.
+        """
         self.connection = connection
         self.i_am_user = config.session_user  # type: ignore
         self.i_am_pid = os.getpid()
@@ -107,6 +138,7 @@ class TargetLock:
 
     # TODO: some cache needed
     def load(self) -> None:
+        """Loads the lock state from the remote host."""
         logger.debug(f"{self.connection.hostname}: getting mtui lock state")
 
         self._lock = RemoteLock()  # make sure lock is reset.
@@ -124,17 +156,22 @@ class TargetLock:
         self._lock = RemoteLock.from_lockfile(data)
 
     def is_locked(self) -> bool:
-        """:returns: bool True if target system is locked by someone else
+        """Checks if the target system is locked by someone else.
 
-        If possible use `try: lock.lock(); ...` as this introduces race
-        condition that's fundamentally impossible to remove.
+        Returns:
+            True if the target is locked, False otherwise.
         """
         self.load()
         return bool(self._lock.user)
 
     def lock(self, comment: str = "") -> None:
-        """Locks the target system
-        :raises TargetLockedError: if target is already locked.
+        """Locks the target system.
+
+        Args:
+            comment: An optional comment for the lock.
+
+        Raises:
+            TargetLockedError: If the target is already locked.
         """
         if self.is_locked():
             # NOTE: there is a slight race between between getting the
@@ -166,31 +203,47 @@ class TargetLock:
         self._lock = rl
 
     def locked_by_msg(self) -> str:
-        """:returns str: locked by message suitable for display to user"""
+        """Returns a "locked by" message suitable for display to the user.
+
+        Returns:
+            A "locked by" message.
+        """
         self.load()
         return f"{self.connection.hostname} is {self._lock}"
 
     def locked_by(self) -> str:
+        """Returns the user who locked the target.
+
+        Returns:
+            The user who locked the target.
+        """
         self.load()
         return self._lock.user
 
     def comment(self) -> str:
+        """Returns the comment for the lock.
+
+        Returns:
+            The comment for the lock.
+        """
         self.load()
         return self._lock.comment
 
     def time(self) -> str:
+        """Returns the time the lock was created.
+
+        Returns:
+            The time the lock was created.
+        """
         self.load()
         time = datetime.fromtimestamp(float(self._lock.timestamp))
         return time.strftime(r"%A, %d.%m.%Y %H:%M UTC")
 
     def unlock(self, force: bool = False) -> None:
-        """Unlocks target system
+        """Unlocks the target system.
 
-        :param force: bool if False (default) removes only locks owned
-          by current user. If True removes locks owned by anyone
-          Usefull when mtui crashes (and therefore you don't own your
-          locks anymore due to different pid) or someone elses mtui
-          hangs and you need to access the systems
+        Args:
+            force: If True, removes locks owned by anyone.
         """
         if not self.is_locked():
             return
@@ -210,7 +263,11 @@ class TargetLock:
         self._lock = RemoteLock()
 
     def is_mine(self) -> bool:
-        """:returns bool: True if the lock is owned by user running this"""
+        """Checks if the lock is owned by the current user.
+
+        Returns:
+            True if the lock is owned by the current user, False otherwise.
+        """
         if not self._lock.user:
             raise RuntimeError("not locked")
 

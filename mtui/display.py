@@ -1,3 +1,5 @@
+"""Handles the display of formatted output in the command prompt."""
+
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any, IO
@@ -9,13 +11,33 @@ from .utils import green, red, yellow
 
 
 class CommandPromptDisplay:
+    """Handles the display of formatted output in the command prompt."""
+
     def __init__(self, output: IO) -> None:
+        """Initializes the display object.
+
+        Args:
+            output: The output stream to write to.
+        """
         self.output = output
 
     def println(self, msg: str = "", eol: str = "\n") -> None:
+        """Prints a message to the output stream.
+
+        Args:
+            msg: The message to print.
+            eol: The end-of-line character to use.
+        """
         self.output.write(msg + eol)
 
     def list_bugs(self, bugs: dict[str, str], jira: dict[str, str], url: str) -> None:
+        """Displays a list of bugs and Jira issues.
+
+        Args:
+            bugs: A dictionary of bug IDs and summaries.
+            jira: A dictionary of Jira issue IDs and summaries.
+            url: The base URL for the bug tracker.
+        """
         ids = sorted(bugs.keys())
         if ids == [""]:
             self.println("No bugs associated with Release Request.")
@@ -37,6 +59,13 @@ class CommandPromptDisplay:
                 self.println(f"https://jira.suse.com/browse/{issue}")
 
     def list_history(self, hostname: str, system: System, lines: list[str]) -> None:
+        """Displays the command history for a host.
+
+        Args:
+            hostname: The name of the host.
+            system: The system information for the host.
+            lines: A list of history log lines.
+        """
         self.println(f"history from {hostname} ({system}):")
         lines.reverse()
         for line in lines:
@@ -61,6 +90,15 @@ class CommandPromptDisplay:
         state: str,
         exclusive: str,
     ) -> None:
+        """Displays the status of a host.
+
+        Args:
+            hostname: The name of the host.
+            system: The system information for the host.
+            transactional: Whether the host is transactional.
+            state: The state of the host (enabled, disabled, or dryrun).
+            exclusive: Whether the host is in exclusive mode.
+        """
         if exclusive:
             mode = "serial"
         else:
@@ -83,6 +121,13 @@ class CommandPromptDisplay:
         )
 
     def list_locks(self, hostname: str, system: System, lock) -> None:
+        """Displays the lock status of a host.
+
+        Args:
+            hostname: The name of the host.
+            system: The system information for the host.
+            lock: The lock object for the host.
+        """
         if lock.is_locked():
             lockedby: str = "me" if lock.is_mine() else lock.locked_by()
 
@@ -105,15 +150,35 @@ class CommandPromptDisplay:
             )
 
     def list_sessions(self, hostname: str, system: System, stdout: str) -> None:
+        """Displays the active sessions on a host.
+
+        Args:
+            hostname: The name of the host.
+            system: The system information for the host.
+            stdout: The output of the session listing command.
+        """
         self.println(f"sessions on {hostname} ({system}):")
         self.println(stdout)
 
     def list_timeout(self, hostname: str, system: System, timeout: int) -> None:
+        """Displays the command timeout for a host.
+
+        Args:
+            hostname: The name of the host.
+            system: The system information for the host.
+            timeout: The command timeout in seconds.
+        """
         self.println(
             "{0:20} {1:20}: {2}s".format(hostname, "({!s})".format(system), timeout)
         )
 
     def list_versions(self, targets: HostsGroup, hosts_pvs) -> None:
+        """Displays the version history of packages on a host.
+
+        Args:
+            targets: The group of target hosts.
+            hosts_pvs: A dictionary mapping hosts to package versions.
+        """
         for hs, pvs in list(hosts_pvs.items()):
             if len(hosts_pvs) > 1:
                 self.println("version history from:")
@@ -130,12 +195,24 @@ class CommandPromptDisplay:
                 self.println()
 
     def list_products(self, hostname: str, system: System) -> None:
+        """Displays the products of a reference host.
+
+        Args:
+            hostname: The name of the host.
+            system: The system information for the host.
+        """
         self.println("{}: {}".format(green("Referenece host"), yellow(hostname)))
         for x in system.pretty():
             self.println(x)
         self.println()
 
     def list_update_repos(self, repos, update_id) -> None:
+        """Displays the update repositories.
+
+        Args:
+            repos: A dictionary of repositories.
+            update_id: The ID of the update.
+        """
         for p, r in repos.items():
             self.println(
                 "{}: {} - {}: {} - {}: {}".format(
@@ -153,6 +230,13 @@ class CommandPromptDisplay:
     def show_log(
         hostname: str, hostlog: list[tuple[str, str, str, int, Any]], sink: Callable
     ) -> None:
+        """Displays the command log for a host.
+
+        Args:
+            hostname: The name of the host.
+            hostlog: A list of log entries.
+            sink: The function to use for printing the log.
+        """
         sink("log from {!s}:".format(hostname))
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
             sink("{!s}:~> {!s} [{!s}]".format(hostname, cmdline, exitcode))

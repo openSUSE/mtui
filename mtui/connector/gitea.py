@@ -1,3 +1,10 @@
+"""A client for managing Gitea pull requests via a comment-based workflow.
+
+This module defines the `Gitea` class, which provides methods to
+assign, unassign, approve, and reject a pull request by posting
+specially formatted comments.
+"""
+
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,23 +43,25 @@ class Comment:
     date: datetime
 
     def __eq__(self, other: object, /) -> bool:
+        """Checks if two comments are equal."""
         if not isinstance(other, Comment):
             return NotImplemented
         return self.date == other.date
 
     def __gt__(self, other: object, /) -> bool:
+        """Checks if this comment is greater than another."""
         if not isinstance(other, Comment):
             return NotImplemented
         return self.date > other.date
 
     def __repr__(self) -> str:
+        """Returns a string representation of the comment."""
         return f"<Comment: {self.serial}>"
 
 
 @final
 class Gitea:
-    """
-    A client for managing a Gitea Pull Request via a comment-based workflow.
+    """A client for managing a Gitea Pull Request via a comment-based workflow.
 
     This class provides methods to assign, unassign, approve, and reject a PR
     by posting specially formatted comments. It determines the current state
@@ -74,13 +83,12 @@ class Gitea:
     )
 
     def __init__(self, config: Config, giteaprapi: str, group: str = "qam-sle") -> None:
-        """
-        Initializes the Gitea API client.
+        """Initializes the Gitea API client.
 
         Args:
             config: The application configuration object.
             giteaprapi: The full Gitea API URL for the specific pull request.
-            group: The review group this instance is operating on behalf of (e.g., 'qam-sle').
+            group: The review group this instance is operating on behalf of.
 
         Raises:
             MissingGiteaToken: If the Gitea API token is not found in the config.
@@ -106,8 +114,7 @@ class Gitea:
         json: dict | None = None,
         verify: bool = False,
     ) -> Any:
-        """
-        A private wrapper for making requests to the Gitea API.
+        """A private wrapper for making requests to the Gitea API.
 
         Args:
             method: The HTTP method to use (GET, POST, etc.).
@@ -115,15 +122,13 @@ class Gitea:
             params: URL parameters for the request.
             data: Form data for the request body.
             json: JSON data for the request body.
-            verify: If True (default), verifies SSL certificates. Set to False only
-                    for development environments with self-signed certs.
+            verify: If True, verifies SSL certificates.
 
         Returns:
             The JSON response from the API.
 
         Raises:
-            FailedGiteaCall: If the API call fails due to a network error or an
-                             unsuccessful status code.
+            FailedGiteaCall: If the API call fails.
         """
         try:
             logger.debug("Requesting %s on %s", method, url)
@@ -167,18 +172,17 @@ class Gitea:
         ]
 
     def __check_assign(self, check_user: str | None = None) -> assignment:
-        """
-        Determines the current assignment state by parsing PR comments.
+        """Determines the current assignment state by parsing PR comments.
 
-        This method reads all comments, sorts them chronologically, and simulates
-        a state machine. The last valid assignment or unassignment comment for
-        the configured group determines the final state.
+        This method reads all comments, sorts them chronologically, and
+        simulates a state machine. The last valid assignment or unassignment
+        comment for the configured group determines the final state.
 
         Args:
             check_user: The user to check the assignment status for.
 
         Returns:
-            The assignment state (UNASSIGNED, ASSIGNED_USER, or ASSIGNED_OTHER).
+            The assignment state.
         """
         # Always reload comments to get the most up-to-date state.
         comments = sorted(self.__get_all_comments())
@@ -209,6 +213,7 @@ class Gitea:
         return False
 
     def __is_done(self) -> bool:
+        """Checks if the pull request has been approved or rejected."""
         comments = sorted(self.__get_all_comments())
 
         done = re.compile(f"@{self.group}-review: (LGTM|approved?|declined?)")
@@ -218,14 +223,14 @@ class Gitea:
         return False
 
     def approve(self, other: str | None = None) -> None:
-        """
-        Approves the PR by posting a comment, if currently assigned to the user.
+        """Approves the PR by posting a comment.
 
         Args:
             other: Username to act on behalf of. Defaults to the session user.
 
         Raises:
             GiteaAssignInvalid: If the PR is not assigned to the specified user.
+            GiteaNoReview: If the PR was already approved/rejected.
         """
         a_user = other if other else self.user
         assign_state = self.__check_assign(a_user)
@@ -242,16 +247,16 @@ class Gitea:
     def reject(
         self, reason: str = "", other: str | None = None, message: str = ""
     ) -> None:
-        """
-        Rejects the PR by posting a comment, if currently assigned to the user.
+        """Rejects the PR by posting a comment.
 
         Args:
             reason: An optional reason for the rejection.
             other: Username to act on behalf of. Defaults to the session user.
-            message: Message from user
+            message: Message from user.
 
         Raises:
             GiteaAssignInvalid: If the PR is not assigned to the specified user.
+            GiteaNoReview: If the PR was already approved/rejected.
         """
         a_user = other if other else self.user
         assign_state = self.__check_assign(a_user)
@@ -270,15 +275,14 @@ class Gitea:
         self.__request(method.POST, self.prissues, json={"body": msg})
 
     def assign(self, other: str | None = None, force: bool = False) -> None:
-        """
-        Assigns the PR to a user by posting an assignment comment.
+        """Assigns the PR to a user by posting an assignment comment.
 
         Args:
             other: Username to assign. Defaults to the session user.
             force: If True, bypasses the check for an existing review request.
 
         Raises:
-            GiteaNoReview: If a review wasn't already been requested and `force` is False.
+            GiteaNoReview: If a review has not been requested and `force` is False.
             GiteaAssignInvalid: If the PR is not in an unassigned state.
         """
         a_user = other if other else self.user
@@ -297,8 +301,7 @@ class Gitea:
         self.__request(method.POST, self.prissues, json={"body": msg})
 
     def unassign(self, other: str | None = None) -> None:
-        """
-        Unassigns a user from the PR by posting an unassignment comment.
+        """Unassigns a user from the PR by posting an unassignment comment.
 
         Args:
             other: The username to unassign. Defaults to the session user.
@@ -316,8 +319,7 @@ class Gitea:
         self.__request(method.POST, self.prissues, json={"body": msg})
 
     def comment(self, body: str) -> None:
-        """
-        Posts a generic comment to the pull request.
+        """Posts a generic comment to the pull request.
 
         Args:
             body: The text content of the comment.
@@ -326,4 +328,5 @@ class Gitea:
         self.__request(method.POST, self.prissues, json={"body": body})
 
     def __repr__(self) -> str:
+        """Returns a string representation of the Gitea object."""
         return f"<GiteaAPI: {self.pr}>"

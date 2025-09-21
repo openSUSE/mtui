@@ -1,3 +1,5 @@
+"""The `downgrade` command."""
+
 from logging import getLogger
 from traceback import format_exc
 
@@ -10,20 +12,22 @@ logger = getLogger("mtui.command.downgrade")
 
 
 class Downgrade(Command):
-    """
-    Downgrades all related packages to the last released version
+    """Downgrades all related packages to the last released version.
 
-    Warning: this can't work for new packages.
+    Warning:
+        This command cannot work for new packages.
     """
 
     command = "downgrade"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         cls._add_hosts_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `downgrade` command."""
         targets = self.parse_hosts()
         if not targets:
             raise NoRefhostsDefinedError
@@ -65,6 +69,7 @@ class Downgrade(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()
         )

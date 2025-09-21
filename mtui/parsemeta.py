@@ -1,3 +1,5 @@
+"""Parsers for extracting metadata from text."""
+
 import re
 from typing import final
 
@@ -6,12 +8,20 @@ from .types import RequestReviewID
 
 @final
 class ReducedMetadataParser:
+    """A parser for extracting a reduced set of metadata from text."""
+
     hostnames = re.compile(r".* \(reference host: (\S+).*\)")
     jira = re.compile(r'Jira ([A-Z]+-\d+) \("(.*)"\):')
     bugs = re.compile(r'Bug (\d+) \("(.*)"\):')
 
     @classmethod
     def parse(cls, results, line: str) -> None:
+        """Parses a line of text and extracts metadata.
+
+        Args:
+            results: An object to store the parsed results.
+            line: The line of text to parse.
+        """
         if match := re.search(cls.hostnames, line):
             if "?" not in match.group(1):
                 results.hostnames.add(match.group(1))
@@ -27,6 +37,8 @@ class ReducedMetadataParser:
 
 @final
 class MetadataParser:
+    """A parser for extracting a comprehensive set of metadata from text."""
+
     products = re.compile(r"Products: (.+)")
     category = re.compile(r"Category: (.+)")
     packager = re.compile(r"Packager: (.+)")
@@ -42,6 +54,12 @@ class MetadataParser:
 
     @classmethod
     def parse(cls, results, line: str) -> None:
+        """Parses a line of text and extracts metadata.
+
+        Args:
+            results: An object to store the parsed results.
+            line: The line of text to parse.
+        """
         if match := re.search(cls.products, line):
             results.products = match.group(1).replace("), ", ")|").split("|")
             return

@@ -1,3 +1,9 @@
+"""This package contains the type classes for mtui.
+
+Each module in this package defines a specific type that is used
+throughout the application.
+"""
+
 from .commandlog import CommandLog
 from .enums import assignment, method
 from .filelist import FileList

@@ -1,9 +1,19 @@
+"""A parser for extracting metadata from a JSON object."""
+
 from .types import RequestReviewID
 
 
 class JSONParser:
+    """A parser for extracting metadata from a JSON object."""
+
     @staticmethod
     def parse(results, data) -> None:
+        """Parses a JSON object and extracts metadata.
+
+        Args:
+            results: An object to store the parsed results.
+            data: The JSON object to parse.
+        """
         for i in data.get("jira"):
             results.jira[i] = "Description not available"
 

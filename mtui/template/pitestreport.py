@@ -1,3 +1,5 @@
+"""A `TestReport` implementation for PI test reports."""
+
 from typing import final
 
 from ..parsemeta import MetadataParser, ReducedMetadataParser
@@ -11,7 +13,10 @@ from ..types import Product, RequestReviewID
 
 @final
 class PITestReport(TestReport):
+    """A `TestReport` implementation for PI test reports."""
+
     def __init__(self, *a, **kw) -> None:
+        """Initializes the `PITestReport` object."""
         super().__init__(*a, **kw)
 
         self.rrid: RequestReviewID
@@ -22,13 +27,16 @@ class PITestReport(TestReport):
 
     @property
     def _type(self) -> str:
+        """Returns the type of the test report."""
         return "PI"
 
     @property
     def id(self) -> str:
+        """Returns the ID of the test report."""
         return str(self.rrid)
 
     def _parser(self):
+        """Returns a dictionary of parsers for the test report."""
         parsers = {
             "full": MetadataParser,
             "hosts": ReducedMetadataParser,
@@ -37,9 +45,11 @@ class PITestReport(TestReport):
         return parsers
 
     def _update_repos_parser(self) -> dict[Product, str]:
+        """Returns a dictionary of update repositories."""
         return reporepoparse(self.repositories, self.products)
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
+        """Returns a list of data to be displayed by `list_metadata`."""
         return (
             [
                 ("ReviewRequestID", str(self.rrid)),
@@ -51,6 +61,12 @@ class PITestReport(TestReport):
         )
 
     def set_repo(self, target: Target, operation: str) -> None:
+        """Adds or removes a repository on a target host.
+
+        Args:
+            target: The target host.
+            operation: The operation to perform ("add" or "remove").
+        """
         if operation == "add":
             target.run_zypper("-n ar -cfGkn", self.update_repos, self.rrid)
         elif operation == "remove":
@@ -59,6 +75,12 @@ class PITestReport(TestReport):
             raise ValueError("Not supported repose operation {}".format(operation))
 
     def list_update_commands(self, targets: HostsGroup, display) -> None:
+        """Lists the update commands for the target hosts.
+
+        Args:
+            targets: The target hosts.
+            display: The display function to use.
+        """
         packages = self.get_package_list()
         repa = f":p={self.rrid.maintenance_id}:{self.rrid.review_id}"
         for hn, t in targets.items():

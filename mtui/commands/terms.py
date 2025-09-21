@@ -1,3 +1,5 @@
+"""The `terms` command."""
+
 from logging import getLogger
 from subprocess import check_call
 from traceback import format_exc
@@ -10,22 +12,25 @@ logger = getLogger("mtui.command.terms")
 
 
 class Terms(Command):
-    """
-    Spawn terminal screens to all connected hosts.
-    This command does actually just run the available helper scripts.
-    If no termname is given, all available terminal scripts are shown.
+    """Spawns terminal screens to all connected hosts.
+
+    This command runs the available helper scripts to spawn terminal
+    screens. If no termname is given, all available terminal scripts
+    are shown.
     """
 
     command: str = "terms"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "termname", nargs="?", help="terminal emulator to spawn consoles on"
         )
         cls._add_hosts_arg(parser)
 
     def __call__(self) -> None:
+        """Executes the `terms` command."""
         dirname = self.config.datadir
         hosts = sorted(self.parse_hosts().names())
 
@@ -47,6 +52,7 @@ class Terms(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         t = ("-t", "--target")
         a = tuple()  # type: ignore
         for x in state["config"].termnames:

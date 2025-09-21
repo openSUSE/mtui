@@ -1,6 +1,8 @@
-#
-# mtui config file parser and default values
-#
+"""Handles the configuration for mtui.
+
+This module reads configuration files, sets default values, and allows for
+overriding configuration options with command-line arguments.
+"""
 
 from argparse import Namespace
 from collections.abc import Callable
@@ -18,13 +20,23 @@ logger = getLogger("mtui.config")
 
 
 class InvalidOptionNameError(RuntimeError):
+    """Exception raised when an invalid configuration option name is used."""
+
     pass
 
 
 class Config:
-    """Read and store the variables from mtui config files"""
+    """Read and store the variables from mtui config files."""
 
     def __init__(self, path: Path | None, refhosts=RefhostsFactory) -> None:
+        """Initializes the configuration object.
+
+        This method reads config files, and sets up options.
+
+        Args:
+            path: An optional path to a specific config file.
+            refhosts: The factory to use for creating refhosts.
+        """
         self.refhosts = refhosts
         self.__location = "default"
 
@@ -45,6 +57,7 @@ class Config:
         self._list_terms()
 
     def read(self) -> None:
+        """Reads the configuration files."""
         self.config = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
         try:
             self.config.read(self.configfiles)
@@ -53,10 +66,16 @@ class Config:
 
     @property
     def location(self) -> str:
+        """The location property."""
         return self.__location
 
     @location.setter
     def location(self, x: str) -> None:
+        """Sets the location property.
+
+        Args:
+            x: The new location.
+        """
         try:
             self.refhosts(self).check_location_sanity(x)
         except InvalidLocationError as e:
@@ -69,6 +88,7 @@ class Config:
         self.__location = x
 
     def _parse_config(self) -> None:
+        """Parses the configuration options from the config files."""
         for datum in self.data:
             attr, inipath, default, fixup, getter = datum
 
@@ -84,6 +104,8 @@ class Config:
             logger.debug('config.%s set to "%s"', attr, val)
 
     def _define_config_options(self) -> None:
+        """Defines all available configuration options."""
+
         def normalizer(x: Any) -> Any:
             return x
 
@@ -214,21 +236,30 @@ class Config:
             add_getter(x) for x in n_data
         ]
 
-    def _has_option(self, opt):
-        """
-        :return True: if opt is valid option name
+    def _has_option(self, opt: str) -> bool:
+        """Checks if a given option name is valid.
+
+        Args:
+            opt: The option name to check.
+
+        Returns:
+            True if the option name is valid, False otherwise.
         """
         return opt in (x[0] for x in self.data)
 
     def set_option(self, opt: str, val: Any) -> None:
-        """
-        :returns: None
-        :raises: InvalidOptionNameError if opt is not valid option name
+        """Sets a configuration option to a new value.
 
-        Warning: this method is not type safe. You need to take care to
+        Warning:
+            This method is not type safe. You need to take care to
             pass proper type as the value.
-            where by type safe is meant that the value is not passed
-            through normalizer defined for the option.
+
+        Args:
+            opt: The name of the option to set.
+            val: The new value for the option.
+
+        Raises:
+            InvalidOptionNameError: If opt is not a valid option name.
         """
         # FIXME: ^ remove warning (add type safety)
         if not self._has_option(opt):
@@ -237,13 +268,19 @@ class Config:
         setattr(self, opt, val)
 
     def _list_terms(self) -> None:
+        """Finds available terminal scripts."""
         scripts: list[str] = [x.name[5:-3] for x in self.datadir.glob("term.*.sh")]  # type: ignore
         self.termnames = scripts
 
     def _get_option(self, secopt, getter):
-        """
-        :type secopt: 2-tuple
-        :param secopt: (section, option)
+        """Gets an option from the configuration.
+
+        Args:
+            secopt: A tuple containing the section and option name.
+            getter: The function to use to get the option.
+
+        Returns:
+            The value of the option.
         """
         try:
             return getter(*secopt)
@@ -257,8 +294,10 @@ class Config:
             raise
 
     def merge_args(self, args: Namespace) -> None:
-        """
-        Merges argv config overrides into the config instance
+        """Merges command-line arguments into the configuration.
+
+        Args:
+            args: The parsed command-line arguments.
         """
 
         if args.location:

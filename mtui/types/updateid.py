@@ -1,3 +1,5 @@
+"""Classes for handling different types of update IDs."""
+
 from abc import ABC, abstractmethod
 from errno import ENOENT
 from logging import getLogger
@@ -24,6 +26,8 @@ logger = getLogger("mtui.types.updateid")
 
 
 class UpdateID(ABC):
+    """An abstract base class for all update ID classes."""
+
     def __init__(
         self,
         id_: RequestReviewID,
@@ -31,11 +35,26 @@ class UpdateID(ABC):
         testreport_factory: type[TestReport],
         testreport_svn_checkout: Callable[[Config, str, RequestReviewID], None],
     ) -> None:
+        """Initializes the `UpdateID` object.
+
+        Args:
+            id_: The `RequestReviewID` of the update.
+            testreport_factory: The factory for creating `TestReport` instances.
+            testreport_svn_checkout: The function for checking out test reports.
+        """
         self.id = id_
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
     def _checkout(self, config: Config) -> TestReport:
+        """Checks out a test report from version control.
+
+        Args:
+            config: The application configuration.
+
+        Returns:
+            A `TestReport` instance.
+        """
         tr = self.testreport_factory(config)
         trpath: Path = config.template_dir / str(self.id) / "log"
 
@@ -55,16 +74,31 @@ class UpdateID(ABC):
         return tr
 
     def _create_installogs_dir(self, config) -> None:
+        """Creates the install logs directory.
+
+        Args:
+            config: The application configuration.
+        """
         directory: Path = config.template_dir / str(self.id) / config.install_logs
         directory.mkdir(parents=False, exist_ok=True)
 
     @abstractmethod
     def make_testreport(
         self, config: Config, autoconnect: bool = True
-    ) -> TestReport: ...
+    ) -> TestReport:
+        """An abstract method for creating a `TestReport` instance."""
+        ...
 
     @staticmethod
     def tr_factory(id_: RequestReviewID) -> type[TestReport]:
+        """A factory function that returns the `TestReport` class for a given ID.
+
+        Args:
+            id_: The `RequestReviewID` of the update.
+
+        Returns:
+            The `TestReport` class for the given ID.
+        """
         if id_.kind == "SLFO":
             return SLTestReport
         if id_.kind == "PI":
@@ -74,14 +108,32 @@ class UpdateID(ABC):
 
 @final
 class AutoOBSUpdateID(UpdateID):
+    """An `UpdateID` implementation for automatic OBS updates."""
+
     kind = "auto"
 
     def __init__(self, rrid: str, *args, **kwds) -> None:
+        """Initializes the `AutoOBSUpdateID` object.
+
+        Args:
+            rrid: The Request Review ID string.
+            *args: Additional arguments.
+            **kwds: Additional keyword arguments.
+        """
         id_ = RequestReviewID(rrid)
 
         super().__init__(id_, self.tr_factory(id_), testreport_svn_checkout)
 
     def make_testreport(self, config: Config, autoconnect: bool = True) -> TestReport:
+        """Creates a `TestReport` instance for an automatic OBS update.
+
+        Args:
+            config: The application configuration.
+            autoconnect: Whether to automatically connect to hosts.
+
+        Returns:
+            A `TestReport` instance.
+        """
         try:
             tr = self._checkout(config)
         except TestReportNotLoadedError:
@@ -120,17 +172,40 @@ class AutoOBSUpdateID(UpdateID):
 
 @final
 class KernelOBSUpdateID(UpdateID):
+    """An `UpdateID` implementation for kernel OBS updates."""
+
     kind = "kernel"
 
     def __init__(self, rrid: str, *args, **kw) -> None:
+        """Initializes the `KernelOBSUpdateID` object.
+
+        Args:
+            rrid: The Request Review ID string.
+            *args: Additional arguments.
+            **kw: Additional keyword arguments.
+        """
         id_ = RequestReviewID(rrid)
         super().__init__(id_, self.tr_factory(id_), testreport_svn_checkout)
 
     def create_results_dir(self, config: Config) -> None:
+        """Creates the results directory.
+
+        Args:
+            config: The application configuration.
+        """
         directory: Path = config.template_dir / str(self.id) / "results"
         directory.mkdir(parents=False, exist_ok=True)
 
     def make_testreport(self, config: Config, autoconnect: bool = False) -> TestReport:
+        """Creates a `TestReport` instance for a kernel OBS update.
+
+        Args:
+            config: The application configuration.
+            autoconnect: Whether to automatically connect to hosts.
+
+        Returns:
+            A `TestReport` instance.
+        """
         try:
             tr = self._checkout(config)
         except TestReportNotLoadedError:

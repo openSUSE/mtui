@@ -1,3 +1,10 @@
+"""A system for running pre- and post-execution hook scripts.
+
+This module defines an abstract base class `Script` to define the
+interface for these scripts, with concrete implementations for
+`PreScript`, `PostScript`, and `CompareScript`.
+"""
+
 from abc import ABC, abstractmethod
 from logging import getLogger
 from pathlib import Path
@@ -17,23 +24,16 @@ log = getLogger("mtui.script")
 
 
 class Script(ABC):
-    """
-    :type subdir: Path
-    :param subdir: subdirectory in the L{TestReport.scripts_wd} where the
-          scripts are located.
-
-      Note: also used as a "type of the script" and can be shown to
-      the user.
-
-    FIXME: should be an abstract attribute
-    """
+    """An abstract base class for hook scripts."""
 
     subdir: str = ""
 
     def __init__(self, tr: "TestReport", path: Path) -> None:
-        """
-        :type path: Path
-        :param path: absolute path to the script
+        """Initializes the script object.
+
+        Args:
+            tr: The test report object.
+            path: The absolute path to the script.
         """
         self.path = path
         self.name = path.parent
@@ -47,20 +47,46 @@ class Script(ABC):
         return f"{self.subdir} script {self.name}"
 
     def _result(self, cls, bname: str, t: "Target") -> Path:
+        """Constructs the path to the result file for a script.
+
+        Args:
+            cls: The class of the script.
+            bname: The base name of the script.
+            t: The target host.
+
+        Returns:
+            The path to the result file.
+        """
         return self.testreport.report_wd(
             *cls.result_parts(bname, t.hostname), filepath=True
         )
 
     @abstractmethod
-    def _run(self, targets: "HostsGroup") -> None: ...
+    def _run(self, targets: "HostsGroup") -> None:
+        """An abstract method for running the script.
+
+        Args:
+            targets: The group of target hosts.
+        """
+        ...
 
     @classmethod
     def result_parts(cls, *basename) -> tuple[Literal["output/scripts"], str]:
+        """Returns the parts of the result path.
+
+        Args:
+            *basename: The base name of the result file.
+
+        Returns:
+            A tuple containing the parts of the result path.
+        """
         return ("output/scripts", ".".join((cls.subdir,) + basename))
 
     def run(self, targets: "HostsGroup") -> None:
-        """
-        :type targets: [{HostsGroup}]
+        """Runs the script.
+
+        Args:
+            targets: The group of target hosts.
         """
         try:
             log.info("running %s", self)
@@ -70,9 +96,16 @@ class Script(ABC):
 
 
 class PreScript(Script):
+    """A hook script that runs before the main execution."""
+
     subdir = "pre"
 
     def _run(self, targets: "HostsGroup") -> None:
+        """Runs the pre-execution script.
+
+        Args:
+            targets: The group of target hosts.
+        """
         rname: Path = self.testreport.target_wd(
             "{!s}.{!s}".format(self.subdir, self.bname)
         )
@@ -103,17 +136,31 @@ class PreScript(Script):
 
 
 class PostScript(PreScript):
+    """A hook script that runs after the main execution."""
+
     subdir = "post"
 
 
 class CompareScript(Script):
+    """A script that compares the results of pre- and post-execution scripts."""
+
     subdir = "compare"
 
     def _run(self, targets: "HostsGroup") -> None:
+        """Runs the compare script.
+
+        Args:
+            targets: The group of target hosts.
+        """
         for t in targets.values():
             self._run_single_target(t)
 
     def _run_single_target(self, t: "Target") -> None:
+        """Runs the compare script for a single target.
+
+        Args:
+            t: The target host.
+        """
         bcheck = self.bname.replace("compare_", "check_")
         argv = [
             str(x)

@@ -1,3 +1,5 @@
+"""The `install` and `uninstall` commands."""
+
 from logging import getLogger
 
 from mtui.argparse import ArgumentParser
@@ -8,20 +10,20 @@ logger = getLogger("mtui.command.zypper")
 
 
 class Install(Command):
-    """
-    Installs packages from the current active repositories.
-    """
+    """Installs packages from the current active repositories."""
 
     command = "install"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument("package", nargs="+", type=str, help="package to install")
 
         cls._add_hosts_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `install` command."""
         logger.info("Installing")
         packages = self.args.package
         targets = self.parse_hosts()
@@ -40,6 +42,7 @@ class Install(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         parameters: list[tuple[str, ...]] = [("-t", "--target")]
         packages: list[tuple[str, ...]] = [
             (package,) for package in state["metadata"].get_package_list()
@@ -51,19 +54,19 @@ class Install(Command):
 
 
 class Uninstall(Command):
-    """
-    Removes packages from system
-    """
+    """Removes packages from the system."""
 
     command = "uninstall"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument("package", nargs="+", type=str, help="package to install")
         cls._add_hosts_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `uninstall` command."""
         logger.info("Removing")
         packages: list[str] = self.args.package
         targets = self.parse_hosts()
@@ -82,6 +85,7 @@ class Uninstall(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         parameters: list[tuple[str, ...]] = [("-t", "--target")]
         packages: list[tuple[str, ...]] = [
             (package,) for package in state["metadata"].get_package_list()

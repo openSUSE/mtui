@@ -1,3 +1,5 @@
+"""The `export` command."""
+
 from logging import DEBUG, getLogger
 from pathlib import Path
 
@@ -13,19 +15,20 @@ logger = getLogger("mtui.commands.export")
 
 
 class Export(Command):
-    """
-    Exports the gathered update data to template file. This includes
-    the pre/post package versions and the update log. An output file could
-    be specified, if none is specified, the output is written to the
-    current testing template.
+    """Exports the gathered update data to a template file.
 
-    To export a specific updatelog, provide the hostname as parameter.
+    This includes the pre/post package versions and the update log.
+    An output file can be specified; if none is specified, the output
+    is written to the current testing template.
+
+    To export a specific updatelog, provide the hostname as a parameter.
     """
 
     command = "export"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "-f",
             "--force",
@@ -39,6 +42,7 @@ class Export(Command):
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `export` command."""
         targets: list[str] = list(self.parse_hosts().keys())
         filename = (
             self.args.filename if self.args.filename else Path(self.metadata.path)
@@ -77,5 +81,6 @@ class Export(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         clist: list[tuple[str, ...]] = [("-f", "--force"), ("-t", "--target")]
         return complete_choices_filelist(clist, line, text, state["hosts"].names())

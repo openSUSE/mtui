@@ -1,3 +1,5 @@
+"""A parser for the system information of a target host."""
+
 from logging import getLogger
 from pathlib import Path
 
@@ -10,6 +12,15 @@ logger = getLogger("mtui.targer.parsers.system")
 
 
 def parse_system(connection: Connection) -> tuple[System, bool]:
+    """Parses the system information of a target host.
+
+    Args:
+        connection: A `Connection` object for the target host.
+
+    Returns:
+        A tuple containing a `System` object and a boolean indicating
+        whether the system is transactional.
+    """
     transactional = False
     files: list[str] = []
     try:

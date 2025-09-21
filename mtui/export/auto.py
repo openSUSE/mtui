@@ -1,3 +1,5 @@
+"""An exporter for the automatic workflow."""
+
 from http.client import RemoteDisconnected
 from itertools import zip_longest
 from logging import getLogger
@@ -13,9 +15,18 @@ logger = getLogger("mtui.export.auto")
 
 
 class AutoExport(BaseExport):
-    """Export class for automatic worflow"""
+    """An exporter for the automatic workflow."""
 
     def get_logs(self, *args, **kwds) -> list[Path]:
+        """Gets the logs from openQA.
+
+        Args:
+            *args: Additional arguments (not used).
+            **kwds: Additional keyword arguments (not used).
+
+        Returns:
+            A list of paths to the log files.
+        """
         filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs
         ilogs = zip_longest(
             self.openqa["auto"].results,
@@ -32,6 +43,14 @@ class AutoExport(BaseExport):
 
     @staticmethod
     def _openqa_installog_to_template(url) -> list[str]:
+        """Converts an openQA install log to a template.
+
+        Args:
+            url: The URL of the log to convert.
+
+        Returns:
+            A list of strings representing the log content.
+        """
         # input is URLs instance
         try:
             with urlopen(url.url) as log:
@@ -42,6 +61,15 @@ class AutoExport(BaseExport):
             return []
 
     def run(self, *args, **kwds) -> FileList | list[str]:
+        """Runs the exporter.
+
+        Args:
+            *args: Additional arguments (not used).
+            **kwds: Additional keyword arguments (not used).
+
+        Returns:
+            The exported template.
+        """
         self.install_results()
         self.inject_openqa()
         if (

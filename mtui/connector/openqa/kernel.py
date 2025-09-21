@@ -1,3 +1,5 @@
+"""A connector for the kernel openQA workflow."""
+
 from logging import getLogger
 from typing import Self
 
@@ -8,10 +10,20 @@ logger = getLogger("mtui.connector.openqa.kernel")
 
 
 class KernelOpenQA(OpenQA):
+    """A connector for the kernel openQA workflow."""
+
     kind = "kernel"
 
     @staticmethod
     def _filter_jobs(jobs):
+        """Filters jobs to include only kernel-related jobs.
+
+        Args:
+            jobs: A list of jobs to filter.
+
+        Returns:
+            A generator of kernel-related jobs.
+        """
         if jobs is None:
             return None
         return (
@@ -22,6 +34,14 @@ class KernelOpenQA(OpenQA):
 
     @staticmethod
     def _parse_jobs(jobs) -> list[Test] | None:
+        """Parses the jobs and returns a list of `Test` objects.
+
+        Args:
+            jobs: A list of jobs to parse.
+
+        Returns:
+            A list of `Test` objects, or None if there are no jobs.
+        """
         if jobs is None:
             return None
         return [
@@ -52,6 +72,14 @@ class KernelOpenQA(OpenQA):
         ]
 
     def _pretty_print(self, *args) -> list[str]:
+        """Pretty-prints the results of the kernel tests.
+
+        Args:
+            *args: Additional arguments (not used).
+
+        Returns:
+            A list of formatted strings representing the test results.
+        """
         if not self:
             return []
         lines: list[str] = []
@@ -63,6 +91,7 @@ class KernelOpenQA(OpenQA):
         return lines
 
     def run(self) -> Self:
+        """Gets the processed result from openQA for the kernel workflow."""
         jobs = self._get_jobs()
         jobs = self._filter_jobs(jobs)
         self.results = self._parse_jobs(jobs)
@@ -71,6 +100,14 @@ class KernelOpenQA(OpenQA):
 
     @staticmethod
     def _result_matrix(testresults) -> list[str]:
+        """Formats the test results into a matrix for display.
+
+        Args:
+            testresults: A list of `Test` objects.
+
+        Returns:
+            A list of formatted strings representing the test results.
+        """
         matrix = []
         for test in testresults:
             text = None

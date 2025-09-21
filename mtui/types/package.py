@@ -1,3 +1,5 @@
+"""A class for representing a software package and its versions."""
+
 from typing import final
 
 from .rpmver import RPMVersion
@@ -5,6 +7,8 @@ from .rpmver import RPMVersion
 
 @final
 class Package:
+    """Represents a software package and its versions."""
+
     __slots__ = [
         "name",
         "_before",
@@ -14,6 +18,11 @@ class Package:
     ]
 
     def __init__(self, name: str) -> None:
+        """Initializes the `Package` object.
+
+        Args:
+            name: The name of the package.
+        """
         self.name: str = name
         self._before: str | RPMVersion | None = None
         self._after: str | RPMVersion | None = None
@@ -22,6 +31,7 @@ class Package:
 
     @property
     def before(self) -> str | RPMVersion | None:
+        """The version of the package before an update."""
         return self._before
 
     @before.setter
@@ -35,6 +45,7 @@ class Package:
 
     @property
     def after(self) -> str | RPMVersion | None:
+        """The version of the package after an update."""
         return self._after
 
     @after.setter
@@ -48,6 +59,7 @@ class Package:
 
     @property
     def required(self) -> str | RPMVersion | None:
+        """The required version of the package."""
         return self._required
 
     @required.setter
@@ -61,6 +73,7 @@ class Package:
 
     @property
     def current(self) -> str | RPMVersion | None:
+        """The current version of the package."""
         return self._current
 
     @current.setter
@@ -73,10 +86,13 @@ class Package:
             self._current = None
 
     def __str__(self) -> str:
+        """Returns the name of the package."""
         return self.name
 
     def __repr__(self) -> str:
+        """Returns a string representation of the `Package` object."""
         return f"<Package: {self.name}>"
 
     def __hash__(self) -> int:
+        """Returns the hash of the package name."""
         return hash(self.name)

@@ -1,80 +1,73 @@
+"""A collection of simple "list" commands."""
+
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.utils import complete_choices, page, requires_update
 
 
 class ListBugs(Command):
-    """
-    Lists related bugs and corresponding Bugzilla URLs.
-    """
+    """Lists related bugs and corresponding Bugzilla URLs."""
 
     command = "list_bugs"
 
     @requires_update
     def __call__(self):
+        """Executes the `list_bugs` command."""
         self.metadata.list_bugs(self.display.list_bugs, self.config.bugzilla_url)
 
 
 class ListLocks(Command):
-    """
-    Lists lock state of all connected hosts
-    """
+    """Lists the lock state of all connected hosts."""
 
     command = "list_locks"
 
     def __call__(self) -> None:
+        """Executes the `list_locks` command."""
         self.targets.select(enabled=True).report_locks(self.display.list_locks)
 
 
 class ListHosts(Command):
-    """
-    Lists all connected hosts including the system types and their
-    current state.
-
-    State could be "Enabled", "Disabled" or "Dryrun".
-    """
+    """Lists all connected hosts, including their system types and state."""
 
     command = "list_hosts"
 
     def __call__(self) -> None:
+        """Executes the `list_hosts` command."""
         self.targets.report_self(self.display.list_host)
 
 
 class ListTimeout(Command):
-    """
-    Prints the current timeout values per host in seconds.
-    """
+    """Prints the current timeout values per host in seconds."""
 
     command = "list_timeout"
 
     def __call__(self) -> None:
+        """Executes the `list_timeout` command."""
         self.targets.report_timeout(self.display.list_timeout)
 
 
 class ListUpdateCommands(Command):
-    """
-    List all commands which are invoked when applying updates on the
-    target hosts.
-    """
+    """Lists all commands invoked when applying updates on target hosts."""
 
     command = "list_update_commands"
 
     def __call__(self) -> None:
+        """Executes the `list_update_commands` command."""
         self.metadata.list_update_commands(self.targets, self.println)
 
 
 class ListSessions(Command):
-    """
-    Lists current active ssh sessions on target hosts.
-    """
+    """Lists current active SSH sessions on target hosts."""
 
     command = "list_sessions"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         cls._add_hosts_arg(parser)
 
     def __call__(self) -> None:
+        """Executes the `list_sessions` command."""
         targets = self.parse_hosts()
         cmd = r"ss -r  | sed -n 's/^[^:]*:ssh *\([^ ]*\):.*/\1/p' | sort -u"
 
@@ -87,37 +80,39 @@ class ListSessions(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()
         )
 
 
 class ListMetadata(Command):
-    """
-    Lists patchinfo metadata like ReviewRequestID or packager.
-    """
+    """Lists patchinfo metadata, such as ReviewRequestID or packager."""
 
     command = "list_metadata"
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `list_metadata` command."""
         self.metadata.show_yourself(self.sys.stdout)
 
 
 class ListLog(Command):
-    """
-    Prints the command protocol from the specified hosts.
-    This might be handy for the tester, as one can simply dump the command
-    history to the reproducer section of the template.
+    """Prints the command protocol from the specified hosts.
+
+    This can be useful for dumping the command history to the
+    reproducer section of a template.
     """
 
     command = "show_log"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         cls._add_hosts_arg(parser)
 
     def __call__(self) -> None:
+        """Executes the `show_log` command."""
         output: list[str] = []
         targets = self.parse_hosts()
         targets.report_log(self.display.show_log, output.append)
@@ -125,21 +120,24 @@ class ListLog(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()
         )
 
 
 class ListVersions(Command):
-    """
-    Prints available package versions in enabled repositories.
-    Uses `zypper search` command. And prints versions from oldest to newest.
+    """Prints available package versions in enabled repositories.
+
+    This command uses `zypper search` to find available versions and
+    prints them from oldest to newest.
     """
 
     command = "list_versions"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "-p",
             "--package",
@@ -152,6 +150,7 @@ class ListVersions(Command):
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `list_versions` command."""
         targets = self.parse_hosts()
         params: list[str] = self.args.package
 
@@ -159,6 +158,7 @@ class ListVersions(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-t", "--target"), ("-p", "--package")],
             line,
@@ -168,10 +168,10 @@ class ListVersions(Command):
 
 
 class ListHistory(Command):
-    """
-    Lists a history of mtui events on the target hosts like installing
-    or updating packages. Date, username and event is shown.
-    Events could be filtered with the event parameter.
+    """Lists a history of mtui events on the target hosts.
+
+    This command shows the date, username, and event for each entry in
+    the history. The events can be filtered by type.
     """
 
     command = "list_history"
@@ -180,6 +180,7 @@ class ListHistory(Command):
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "-e",
             "--event",
@@ -191,6 +192,7 @@ class ListHistory(Command):
         cls._add_hosts_arg(parser)
 
     def __call__(self) -> None:
+        """Executes the `list_history` command."""
         targets = self.parse_hosts(enabled=False)
         option = [f"{x}" for x in set(self.args.event) & self.filters]
 
@@ -202,6 +204,7 @@ class ListHistory(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         cstring = [
             ("-t", "--target"),
             ("-e", "--event"),

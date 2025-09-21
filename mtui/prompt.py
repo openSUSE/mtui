@@ -1,6 +1,9 @@
-#
-# mtui command line prompt
-#
+"""The main command prompt for the mtui application.
+
+This module defines the `CommandPrompt` class, which inherits from
+`cmd.Cmd` and provides the interactive shell for running commands. It
+handles command dispatching, tab completion, and history.
+"""
 
 import cmd
 from collections.abc import Callable
@@ -22,36 +25,61 @@ logger = getLogger("mtui.prompt")
 
 
 class QuitLoop(RuntimeError):
+    """Exception raised to exit the command loop."""
+
     pass
 
 
 class CmdQueue(list):
-    """
-    Prerun support.
+    """A list-like object that supports prerun commands.
 
-    Echos prompt with the command that's being popped (and about to be
-    executed
+    This class echoes the prompt with the command that's being popped
+    and is about to be executed.
     """
 
     def __init__(self, iterable, prompt, term) -> None:
+        """Initializes the command queue.
+
+        Args:
+            iterable: An iterable of commands.
+            prompt: The command prompt string.
+            term: The terminal object.
+        """
         self.prompt = prompt
         self.term = term
         list.__init__(self, iterable)
 
     def pop(self, i) -> Any:  # type: ignore
+        """Pops a command from the queue and echoes it to the terminal.
+
+        Args:
+            i: The index of the command to pop.
+
+        Returns:
+            The popped command.
+        """
         val = list.pop(self, i)
         self.echo_prompt(val)
         return val
 
     def echo_prompt(self, val) -> None:
+        """Echoes the prompt and a command to the terminal.
+
+        Args:
+            val: The command to echo.
+        """
         self.term.stdout.write("{0}{1}\n".format(self.prompt, val))
 
 
 class CommandAlreadyBoundError(RuntimeError):
+    """Raised when a command is already bound to the prompt."""
+
     pass
 
 
 class CommandPrompt(cmd.Cmd):
+    """The main command prompt for the mtui application."""
+
     # TODO: It's worth considering to remove the inherit of cmd.Cmd and
     # just copy some of it's needed functionality, because
     #
@@ -74,6 +102,14 @@ class CommandPrompt(cmd.Cmd):
     # would be great if it could replace the ssh layer as well.
 
     def __init__(self, config, log, sys, display_factory) -> None:
+        """Initializes the command prompt.
+
+        Args:
+            config: The application configuration.
+            log: The logger instance.
+            sys: The sys module.
+            display_factory: A factory for creating display objects.
+        """
         self.sys = sys
 
         super().__init__(stdout=self.sys.stdout, stdin=self.sys.stdin)
@@ -109,23 +145,46 @@ class CommandPrompt(cmd.Cmd):
         self.prompt: str = "mtui-empty>"
 
     def notify_user(self, msg: str, class_=""):
+        """Displays a desktop notification.
+
+        Args:
+            msg: The message to display.
+            class_: The notification class.
+        """
         notification.display("MTUI", msg, class_)
 
     def println(self, msg="", eol="\n") -> None:
+        """Prints a message to the output stream.
+
+        Args:
+            msg: The message to print.
+            eol: The end-of-line character.
+        """
         self.stdout.write(msg + eol)
 
     def _read_history(self) -> None:
+        """Reads the command history from a file."""
         try:
             readline.read_history_file("{!s}/.mtui_history".format(self.homedir))
         except IOError as e:
             logger.debug("failed to open history file: {!s}".format(e))
 
     def _add_subcommand(self, cmd: Type[Command]) -> None:
+        """Adds a subcommand to the prompt.
+
+        Args:
+            cmd: The command class to add.
+        """
         if cmd.command in self.commands:
             raise CommandAlreadyBoundError(cmd.command)
         self.commands[cmd.command] = cmd
 
     def set_cmdqueue(self, queue: list[str]) -> None:
+        """Sets the command queue for prerun commands.
+
+        Args:
+            queue: A list of commands to run.
+        """
         q = queue[:]
         if not self.interactive:
             q.append("quit")
@@ -133,9 +192,7 @@ class CommandPrompt(cmd.Cmd):
         self.cmdqueue = CmdQueue(q, self.prompt, self.sys)
 
     def cmdloop(self, intro=None) -> None:
-        """
-        Customized cmd.Cmd.cmdloop so it handles Ctrl-C and prerun
-        """
+        """Runs the main command loop."""
         while True:
             try:
                 super().cmdloop(intro=intro)
@@ -155,6 +212,15 @@ class CommandPrompt(cmd.Cmd):
                 logger.error(format_exc())
 
     def postcmd(self, stop: bool, line: str) -> bool:
+        """A hook that is called after a command is executed.
+
+        Args:
+            stop: Whether to stop the command loop.
+            line: The command that was executed.
+
+        Returns:
+            Whether to stop the command loop.
+        """
         if isinstance(self.metadata, NullTestReport):
             return stop
         else:
@@ -162,12 +228,14 @@ class CommandPrompt(cmd.Cmd):
             return stop
 
     def get_names(self) -> list[str]:
+        """Returns a list of all command names."""
         names = super().get_names()
         names += ["do_" + x for x in self.commands.keys()]
         names += ["help_" + x for x in self.commands.keys()]
         return names
 
     def __getattr__(self, x: str) -> Callable:
+        """Dynamically gets attributes for commands, help, and completion."""
         if x.startswith("help_"):
             y = x.replace("help_", "", 1)
             if y in self.commands:
@@ -218,9 +286,15 @@ class CommandPrompt(cmd.Cmd):
         raise AttributeError(str(x))
 
     def emptyline(self) -> bool:
+        """Called when an empty line is entered."""
         return False
 
     def set_prompt(self, session: str | None = None) -> None:
+        """Sets the command prompt string.
+
+        Args:
+            session: The current session name.
+        """
         self.session = session
         session = ":" + str(session) if session else ""
         mode = "mtui"
@@ -231,6 +305,12 @@ class CommandPrompt(cmd.Cmd):
         self.prompt = f"{mode}{session}> "
 
     def load_update(self, update, autoconnect: bool) -> None:
+        """Loads an update and sets the test report.
+
+        Args:
+            update: The update to load.
+            autoconnect: Whether to automatically connect to hosts.
+        """
         tr = update.make_testreport(self.config, autoconnect=autoconnect)
         self.metadata = tr
         self.targets = tr.targets

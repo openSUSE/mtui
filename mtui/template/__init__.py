@@ -1,3 +1,5 @@
+"""Helper classes and functions for working with test report templates."""
+
 from logging import getLogger
 from os.path import join
 import subprocess
@@ -10,24 +12,24 @@ logger = getLogger("mtui.template")
 
 
 class TemplateIOError(IOError):
-    """
-    New type to distinguish between IOErrors happening when reading the
-    template file which are recoverable and IOErrors happening somewhere
-    else in the process
-    """
+    """Exception raised for recoverable I/O errors when reading a template."""
 
     pass
 
 
 class TestReportAlreadyLoaded(RuntimeError):
+    """Exception raised when a test report is already loaded."""
+
     pass
 
 
 def testreport_svn_checkout(config, path: str, rrid: RequestReviewID) -> None:
-    """
-    param: path type: str - svn base path - not handled by pathlib
-    param: config type: instance of Config singleton
-    param: id type: str - RequestReviewID
+    """Checks out a test report template from SVN.
+
+    Args:
+        config: The application configuration.
+        path: The base path of the SVN repository.
+        rrid: The RequestReviewID of the test report.
     """
     ensure_dir_exists(
         config.template_dir,

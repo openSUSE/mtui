@@ -1,6 +1,10 @@
-#
-# managing and parsing of the refhosts.yml file
-#
+"""Manages and parses `refhosts.yml` files.
+
+This module provides classes for representing the attributes of a
+reference host, parsing and searching `refhosts.yml` files, and
+creating `Refhosts` instances from different sources.
+"""
+
 import copy
 import errno
 import os
@@ -23,21 +27,20 @@ logger = getLogger("mtui.refhost")
 
 @final
 class Attributes:
-    """
-    Host attributes.
-    This class has two purposes: to set the the attributes of a refhost and
-    to be used as object for searching refhosts
+    """Represents the attributes of a reference host.
+
+    This class is used to both define the attributes of a refhost and
+    to create objects for searching for refhosts.
     """
 
     def __init__(self) -> None:
+        """Initializes the Attributes object."""
         self.arch = ""
         self.addons = []
         self.product = {}
 
     def __str__(self) -> str:
-        """
-        Human readable output of the current attributes
-        """
+        """Returns a human-readable string representation of the attributes."""
 
         product: str = ""
         if "name" in self.product:
@@ -70,17 +73,18 @@ class Attributes:
 
     # Used in the tests
     def __bool__(self) -> bool:
-        """
-        :returns: True if attributes have been set on this object
-        """
+        """Returns True if any attributes have been set."""
         return bool(str(self))
 
     @staticmethod
     def from_testplatform(testplatform) -> list["Attributes"]:
-        """
-        Create a list of Attribute objects based on a testplaform string
+        """Creates a list of Attributes objects from a testplatform string.
 
-        :returns: list of Attributes
+        Args:
+            testplatform: The testplatform string to parse.
+
+        Returns:
+            A list of Attributes objects.
         """
         attributes_list = []
         # typical string:
@@ -136,17 +140,16 @@ class Attributes:
 
 
 class Refhosts:
+    """Manages and parses the `refhosts.yml` file."""
+
     _default_location = "default"
 
     def __init__(self, hostmap: Path, location: str | None = None) -> None:
-        """
-        load refhosts.yml file and pass it to the xml parser
+        """Initializes the Refhosts object.
 
-        Keyword arguments:
-        hostmap   -- path to the refhosts.yml file
-        location  -- location to load hosts from (nuremberg, beijing...)
-        attributes-- predefined search attributes
-
+        Args:
+            hostmap: The path to the `refhosts.yml` file.
+            location: The location to load hosts from.
         """
 
         # default refhosts location is 'default' which is basically fallback
@@ -158,6 +161,11 @@ class Refhosts:
         self._parse_refhosts(hostmap)
 
     def _parse_refhosts(self, hostmap: Path) -> None:
+        """Parses the `refhosts.yml` file.
+
+        Args:
+            hostmap: The path to the `refhosts.yml` file.
+        """
         try:
             with hostmap.open() as f:
                 self.data = YAML(typ="safe").load(f)
@@ -168,10 +176,13 @@ class Refhosts:
             raise
 
     def search(self, attributes) -> list[str]:
-        """
-        Return hosts matching `attributes`
+        """Searches for hosts that match a given set of attributes.
 
-        :return: [str] - Every element is the name of a host
+        Args:
+            attributes: A list of `Attributes` objects to search for.
+
+        Returns:
+            A list of hostnames that match the given attributes.
         """
 
         results: list[str] = []
@@ -196,13 +207,14 @@ class Refhosts:
         return results
 
     def is_candidate_match(self, candidate, attribute) -> bool:
-        """
-        Checks if the attributes contains all the info requested in
-        candidate The candidate is a dictionary that represents a host in the
-        refhosts
+        """Checks if a candidate host matches a given set of attributes.
 
-        :returns: True if the attributes contains the same candidate data.
-        False otherwise
+        Args:
+            candidate: A dictionary representing a host from `refhosts.yml`.
+            attribute: An `Attributes` object to match against.
+
+        Returns:
+            True if the candidate matches the attributes, False otherwise.
         """
         for key in vars(attribute):
             if getattr(attribute, key):
@@ -229,24 +241,14 @@ class Refhosts:
         return True
 
     def _includes_simple_attributes(self, candidate, attribute) -> bool:
-        """
-        Helper function for is_candidate_match
-        Checks if all candidate data is present in the element.
+        """Checks if a candidate's simple attributes match.
 
-        Example:
-        base=sles(major=12,minor=sp1);arch=[s390x,x86_64];addon=Web-Scripting(major=12,minor=)
-        this should search for any entries with web-scripting that has an unset minor version
+        Args:
+            candidate: The candidate's attributes.
+            attribute: The attributes to match against.
 
-        base=sles(major=12,minor=sp3);arch=[s390x,x86_64];addon=Web-Scripting(major=12,minor=foo)
-        this should search for any entries with web-scripting minor=foo
-
-        base=sles(major=12,minor=sp3);arch=[s390x,x86_64];addon=Web-Scripting(major=12)
-        this should search for any entries with web-scripting major=12 no matter which minor
-
-        Important: It's always one line per version.
-
-        :returns: True candidate data is present in the element. Returns
-        False otherwise
+        Returns:
+            True if the attributes match, False otherwise.
         """
 
         for k in attribute:
@@ -263,8 +265,14 @@ class Refhosts:
         return True
 
     def _includes_version(self, candidate, element) -> bool:
-        """
-        Helper function for _is_candidate_match.
+        """Checks if a candidate's version matches.
+
+        Args:
+            candidate: The candidate's version.
+            element: The version to match against.
+
+        Returns:
+            True if the versions match, False otherwise.
         """
         if "minor" in element and element["minor"] != "":
             if "minor" not in candidate or element["minor"] != candidate["minor"]:
@@ -280,12 +288,14 @@ class Refhosts:
         return True
 
     def _includes_addons_list(self, candidate_addons, element_addons) -> bool:
-        """
-        Helper function for is_candidate_match.
-        Checks if all the addons are present in the element addons
+        """Checks if a candidate's addons match.
 
-        :returns: True when all addons data is present in the elements.
-        False otherwise
+        Args:
+            candidate_addons: The candidate's addons.
+            element_addons: The addons to match against.
+
+        Returns:
+            True if the addons match, False otherwise.
         """
 
         element_addons_map = {addon["name"]: addon for addon in element_addons}
@@ -302,35 +312,47 @@ class Refhosts:
         return True
 
     def _location_hosts(self, location: str):
-        """
-        :returns: List of <host> elements for `location`
+        """Returns the hosts for a given location.
 
-        :type  location: string
+        Args:
+            location: The location to get hosts for.
+
+        Returns:
+            A list of host elements for the given location.
         """
         return self.data[location]
 
     def check_location_sanity(self, location) -> None:
-        """
-        :raises: L{messages.InvalidLocationError}
+        """Checks if a location is valid.
+
+        Args:
+            location: The location to check.
+
+        Raises:
+            messages.InvalidLocationError: If the location is not valid.
         """
         if location not in self.data:
             raise messages.InvalidLocationError(location, self.get_locations())
 
     def get_locations(self) -> set[str]:
-        """
-        Return available locations
+        """Returns a set of all available locations.
 
-        :returns: set of strings
+        Returns:
+            A set of location names.
         """
 
         return set(self.data.keys())
 
 
 class RefhostsResolveFailed(RuntimeError):
+    """Raised when a `refhosts.yml` file cannot be resolved."""
+
     pass
 
 
 class _RefhostsFactory:
+    """A factory for creating `Refhosts` instances."""
+
     # FIXME: split resolvers into separate classes
     # should help with the ammount of injected dependencies in each one
     # of the classes
@@ -365,6 +387,16 @@ class _RefhostsFactory:
         cache_path,
         refhosts_factory: type[Refhosts] = Refhosts,
     ) -> None:
+        """Initializes the factory.
+
+        Args:
+            time_now_getter: A function that returns the current time.
+            statter: A function that returns file stats.
+            urlopener: A function that opens a URL.
+            file_writer: A function that writes to a file.
+            cache_path: The path to the cache file.
+            refhosts_factory: The factory for creating `Refhosts` instances.
+        """
         self._time_now = time_now_getter
         self._stat = statter
         self._urlopen = urlopener
@@ -374,6 +406,14 @@ class _RefhostsFactory:
         self.refhosts_factory = refhosts_factory
 
     def __call__(self, config):
+        """Resolves and returns a `Refhosts` instance.
+
+        Args:
+            config: The application configuration.
+
+        Returns:
+            A `Refhosts` instance.
+        """
         for resolver in [x.strip() for x in config.refhosts_resolvers.split(",")]:
             try:
                 return self._resolve_one(resolver, config)
@@ -384,6 +424,15 @@ class _RefhostsFactory:
         raise RefhostsResolveFailed()
 
     def _resolve_one(self, name, config):
+        """Resolves a `Refhosts` instance from a single source.
+
+        Args:
+            name: The name of the resolver to use.
+            config: The application configuration.
+
+        Returns:
+            A `Refhosts` instance.
+        """
         try:
             resolver = getattr(self, "resolve_{0}".format(name))
         except AttributeError:
@@ -393,10 +442,25 @@ class _RefhostsFactory:
             return resolver(config)
 
     def refresh_https_cache_if_needed(self, path: Path, config) -> None:
+        """Refreshes the HTTPS cache if it is expired.
+
+        Args:
+            path: The path to the cache file.
+            config: The application configuration.
+        """
         if self._is_https_cache_refresh_needed(path, config.refhosts_https_expiration):
             self.refresh_https_cache(path, config.refhosts_https_uri)
 
     def _is_https_cache_refresh_needed(self, path, expiration) -> bool:
+        """Checks if the HTTPS cache needs to be refreshed.
+
+        Args:
+            path: The path to the cache file.
+            expiration: The expiration time in seconds.
+
+        Returns:
+            True if the cache needs to be refreshed, False otherwise.
+        """
         try:
             statinfo = self._stat(path)
         except OSError as e:
@@ -408,15 +472,37 @@ class _RefhostsFactory:
         return self._time_now() - statinfo.st_mtime > expiration
 
     def refresh_https_cache(self, path, uri) -> None:
+        """Refreshes the HTTPS cache.
+
+        Args:
+            path: The path to the cache file.
+            uri: The URI to fetch the cache from.
+        """
         self._write_file(self._urlopen(uri).read(), path)
 
     def resolve_https(self, config) -> Refhosts:
+        """Resolves a `Refhosts` instance from an HTTPS source.
+
+        Args:
+            config: The application configuration.
+
+        Returns:
+            A `Refhosts` instance.
+        """
         f = self.refhosts_cache_path
         self.refresh_https_cache_if_needed(f, config)
 
         return self.refhosts_factory(f, config.location)
 
     def resolve_path(self, config) -> Refhosts:
+        """Resolves a `Refhosts` instance from a local file path.
+
+        Args:
+            config: The application configuration.
+
+        Returns:
+            A `Refhosts` instance.
+        """
         return self.refhosts_factory(config.refhosts_path, config.location)
 
 

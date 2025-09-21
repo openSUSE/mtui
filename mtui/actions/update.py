@@ -1,8 +1,11 @@
+"""Defines the commands for updating packages on different systems."""
+
 from string import Template
 
 from ..messages import MissingUpdaterError
 from ..utils import DictWithInjections
 
+#: A dictionary of command templates for updating packages using yum.
 yum_update = {
     "command": Template(
         """
@@ -14,6 +17,7 @@ yum -y update $packages
 }
 
 
+#: A dictionary of command templates for updating packages using zypper.
 zypper_update = {
     "command": Template(
         r"""
@@ -29,6 +33,7 @@ zypper -n lr | awk -F "|" '/$repa\>/ {{ print $2; }}' | while read r; do zypper 
 }
 
 
+#: A dictionary of command templates for updating packages on slmicro.
 slm_update = {
     "command": Template(
         r"""
@@ -43,6 +48,7 @@ zypper -n lr | awk -F "|" '/$repa\>/ {{ print $2; }}' | while read r; do zypper 
     "reboot": Template("systemctl reboot"),
 }
 
+#: A dictionary that maps system configurations to update commands.
 updater = DictWithInjections(
     {
         ("YUM", False): yum_update,

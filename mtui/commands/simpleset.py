@@ -1,3 +1,5 @@
+"""A collection of simple "set" commands."""
+
 import logging
 
 from mtui import messages
@@ -11,9 +13,9 @@ logger = logging.getLogger("mtui.commands.simplesets")
 
 
 class SessionName(Command):
-    """
-    Set optional mtui session name as part of the prompt string.
-    This should help finding the corrent mtui session if multiple
+    """Sets the optional mtui session name as part of the prompt string.
+
+    This can help to identify the correct mtui session if multiple
     sessions are active.
     """
 
@@ -21,6 +23,7 @@ class SessionName(Command):
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "name",
             action="store",
@@ -31,25 +34,26 @@ class SessionName(Command):
         )
 
     def __call__(self) -> None:
+        """Executes the `set_session_name` command."""
         session = self.args.name if self.args.name else self.metadata.id
         self.prompt.session = session
         self.prompt.set_prompt(session)
 
 
 class SetLocation(Command):
-    """
-    Change current reference host location to another site.
-    """
+    """Changes the current reference host location to another site."""
 
     command = "set_location"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "site", action="store", type=str, nargs=1, help="location name"
         )
 
     def __call__(self) -> None:
+        """Executes the `set_location` command."""
         old: str = self.config.location
         new: str = self.args.site[0]
         self.config.location = new
@@ -57,6 +61,7 @@ class SetLocation(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         loc = RefhostsFactory(state["config"]).get_locations()
         locations = [[x for x in loc]]
 
@@ -64,20 +69,19 @@ class SetLocation(Command):
 
 
 class SetLogLevel(Command):
-    """
-    Changes the current MTUI loglevel "info" or "warning"  or "debug".
+    """Changes the current MTUI log level.
 
-    To enable debug messages, one can set the loglevel to "debug".
-    This could be handy for longer running commands as
-    the output is shown in realtime.
-    The "warning" loglevel prints just basic error or warning conditions.
-    Therefore it's not recommended to use the "warning" loglevel.
+    To enable debug messages, set the log level to "debug". This can
+    be useful for longer running commands, as the output is shown in
+    realtime. The "warning" log level only prints basic error or
+    warning conditions and is therefore not recommended.
     """
 
     command = "set_log_level"
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "level",
             action="store",
@@ -88,6 +92,7 @@ class SetLogLevel(Command):
         )
 
     def __call__(self) -> None:
+        """Executes the `set_log_level` command."""
         levels: dict[str, int] = {
             "error": logging.ERROR,
             "warning": logging.WARNING,
@@ -102,25 +107,26 @@ class SetLogLevel(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("warning",), ("info",), ("debug",), ("error",)], line, text
         )
 
 
 class SetTimeout(Command):
-    """
-    Changes the current execution timeout for a target host.
-    When the timeout limit was hit the user is asked to wait
-    for the current command to return or to proceed with the
-    next one.
-    The timeout value is set in seconds.
-    To disable the timeout set it to "0".
+    """Changes the current execution timeout for a target host.
+
+    When the timeout limit is hit, the user is asked to wait for the
+    current command to return or to proceed with the next one. The
+    timeout value is set in seconds. To disable the timeout, set it
+    to "0".
     """
 
     command = "set_timeout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "timeout",
             action="store",
@@ -132,6 +138,7 @@ class SetTimeout(Command):
         cls._add_hosts_arg(parser)
 
     def __call__(self) -> None:
+        """Executes the `set_timeout` command."""
         value: int = self.args.timeout[0]
         targets = self.parse_hosts()
 
@@ -141,26 +148,31 @@ class SetTimeout(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()
         )
 
 
 class SetWorkflow(Command):
-    """Sets workflow and reloads data from openQA\n
-    'auto' workflow will be automatically set to manual if openQA install tests
-    are missing or have failed state"""
+    """Sets the workflow and reloads data from openQA.
+
+    The 'auto' workflow will be automatically set to 'manual' if openQA
+    install tests are missing or have a failed state.
+    """
 
     command = "set_workflow"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "workflow", choices=["auto", "manual", "kernel"], help="desired workflow"
         )
 
     @requires_update
     def __call__(self) -> None:
+        """Executes the `set_workflow` command."""
         state: str = self.args.workflow
 
         if state == "kernel":
@@ -234,4 +246,5 @@ class SetWorkflow(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices([("auto",), ("manual",), ("kernel",)], line, text)

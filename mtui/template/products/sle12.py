@@ -1,5 +1,15 @@
+"""A function for normalizing SLE 12 product information."""
+
+
 def normalize_sle12(x):
-    """Normalize SLES/D 12SPx products"""
+    """Normalizes SLE 12 product information.
+
+    Args:
+        x: A tuple containing the product information.
+
+    Returns:
+        The normalized product information.
+    """
     if x[0][0] == "SLE-SERVER" and "LTSS-Extended-Security" in x[0][1]:
         x[0][0] = "SLES-LTSS-Extended-Security"
         x[0][1] = x[0][1].replace("-LTSS-Extended-Security", "")

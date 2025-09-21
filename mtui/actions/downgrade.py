@@ -1,3 +1,5 @@
+"""Defines the commands for downgrading packages on different systems."""
+
 from string import Template
 
 from ..messages import MissingDowngraderError
@@ -5,6 +7,11 @@ from ..utils import DictWithInjections
 
 
 def zypper() -> dict[str, Template]:
+    """Returns a dictionary of command templates for downgrading with zypper.
+
+    Returns:
+        A dictionary of command templates.
+    """
     list_command_template = r"""
 for p in $packages; do \
 zypper -n se -s --match-exact -t package $$p; \
@@ -24,6 +31,11 @@ done \
 
 
 def slmicro() -> dict[str, Template]:
+    """Returns a dictionary of command templates for downgrading on slmicro.
+
+    Returns:
+        A dictionary of command templates.
+    """
     list_command_template = r"""
 for p in $packages; do \
 zypper -n se -s --match-exact -t package $$p; \
@@ -46,9 +58,11 @@ done \
     }
 
 
+#: A dictionary of command templates for downgrading packages using yum.
 yum = {"command": Template("yum -y downgrade $package")}
 
 
+#: A dictionary that maps system configurations to downgrade commands.
 downgrader = DictWithInjections(
     {
         ("11", False): zypper(),

@@ -1,3 +1,5 @@
+"""The `run` command."""
+
 from argparse import REMAINDER
 from logging import getLogger
 
@@ -11,26 +13,32 @@ logger = getLogger("mtui.command.run")
 
 
 class Run(Command):
-    """
-    Runs a command on a specified host or on all enabled targets.
-    The command timeout is set to 5 minutes  which means, if there's no output
-    on stdout or stderr for 5 minutes, a timeout exception is thrown.
-    The commands are run in parallel on every target or in serial mode when
-    set with "set_host_state". After the call returned, the output (including
-    the return code) of each host is shown on the console. Please be aware that
-    no interactive commands can be run with this procedure.
+    """Runs a command on a specified host or on all enabled targets.
+
+    The command timeout is set to 5 minutes, which means that if there is
+    no output on stdout or stderr for 5 minutes, a timeout exception is
+    thrown.
+
+    The commands are run in parallel on every target or in serial mode
+    when set with "set_host_state". After the call returns, the output
+    (including the return code) of each host is shown on the console.
+
+    Note:
+        No interactive commands can be run with this procedure.
     """
 
     command = "run"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
         parser.add_argument(
             "command", nargs=REMAINDER, help="Command to run on refhost"
         )
         cls._add_hosts_arg(parser)
 
     def __call__(self) -> None:
+        """Executes the `run` command."""
         targets = self.parse_hosts()
         if not targets:
             raise NoRefhostsDefinedError
@@ -72,6 +80,7 @@ class Run(Command):
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
         return complete_choices(
             [("-t", "--target")], line, text, state["hosts"].names()
         )

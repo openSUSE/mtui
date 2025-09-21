@@ -1,3 +1,5 @@
+"""An exporter for the manual workflow."""
+
 from itertools import zip_longest
 from logging import getLogger
 import os.path
@@ -11,9 +13,19 @@ logger = getLogger("mtui.export.manual")
 
 
 class ManualExport(BaseExport):
-    """Manual workflow export"""
+    """An exporter for the manual workflow."""
 
     def get_logs(self, hosts, *args, **kwds) -> list[Path]:
+        """Gets the logs from the target hosts.
+
+        Args:
+            hosts: A list of hosts to get logs from.
+            *args: Additional arguments (not used).
+            **kwds: Additional keyword arguments (not used).
+
+        Returns:
+            A list of paths to the log files.
+        """
         filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs
         ilogs = zip_longest(hosts, map(self._host_installog_to_template, hosts))
         filenames = []
@@ -26,6 +38,7 @@ class ManualExport(BaseExport):
         return filenames
 
     def _fillup_hosts_to_template(self) -> None:
+        """Fills up the template with host information."""
         # for each host/system of the mtui session, search for the correct location
         # in the template. disabled hosts are not excluded.
         # if the location was found, add the hostname.
@@ -246,6 +259,14 @@ class ManualExport(BaseExport):
                     self.template[index + 1] = "=> PASSED\n"
 
     def _host_installog_to_template(self, target) -> list[str]:
+        """Converts a host's install log to a template.
+
+        Args:
+            target: The target host.
+
+        Returns:
+            A list of strings representing the log content.
+        """
         t = []
         try:
             host_log = [host for host in self.results if host.hostname == target][0]  # type: ignore
@@ -261,6 +282,7 @@ class ManualExport(BaseExport):
         return t
 
     def install_results(self) -> None:
+        """Adds installation results to the template."""
         hosts = [h.hostname for h in self.results]  # type: ignore
         c_host = None
         tmp_template = []
@@ -283,6 +305,16 @@ class ManualExport(BaseExport):
         self._fillup_hosts_to_template()
 
     def run(self, hosts, *args, **kwds) -> list[str] | FileList:
+        """Runs the exporter.
+
+        Args:
+            hosts: A list of hosts to export logs from.
+            *args: Additional arguments (not used).
+            **kwds: Additional keyword arguments (not used).
+
+        Returns:
+            The exported template.
+        """
         self.install_results()
         self.inject_openqa()
         filenames = self.get_logs(hosts)

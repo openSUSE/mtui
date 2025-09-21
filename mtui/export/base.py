@@ -1,3 +1,5 @@
+"""The base class for all exporters in mtui."""
+
 from abc import ABC, abstractmethod
 from logging import getLogger
 from pathlib import Path
@@ -11,8 +13,12 @@ logger = getLogger("mtui.export.base")
 
 
 class BaseExport(ABC):
-    """Base Export class, it modify 'template' in place (ugly sideeffect)
-    and downloads/exports all helper logs"""
+    """The base class for all exporters in mtui.
+
+    This class provides common functionality for writing to files,
+    deduplicating lines, adding system information, and injecting
+    openQA results.
+    """
 
     def __init__(
         self,
@@ -24,15 +30,17 @@ class BaseExport(ABC):
         interactive,
         **kwargs,
     ) -> None:
-        """param: config = Config()
-        param: xmllog = xml.minidom
-        param: openqa = testreport.openqa
-        param: template = FileList()
-        param: force = Bool()
-        param: rrid = testreport.id
-        param: interactive
-        """
+        """Initializes the exporter.
 
+        Args:
+            config: The application configuration.
+            openqa: The openQA connector instance.
+            template: The template to export to.
+            force: Whether to force overwriting existing files.
+            rrid: The RequestReviewID of the current update.
+            interactive: Whether to run in interactive mode.
+            **kwargs: Additional keyword arguments.
+        """
         self.config = config
         self.openqa = openqa
         self.template: FileList | list[str] = template[:]
@@ -43,6 +51,12 @@ class BaseExport(ABC):
             self.__setattr__(key, kwargs[key])
 
     def _writer(self, fn: Path, data) -> None:
+        """Writes data to a file.
+
+        Args:
+            fn: The path to the file to write to.
+            data: The data to write.
+        """
         to_write = "\n".join(data)
         if fn.exists() and not self.force:
             if to_write == fn.read_text():
@@ -65,6 +79,11 @@ class BaseExport(ABC):
             logger.error("Failed to write %s: %s", fn, e.strerror)
 
     def installlogs_lines(self, filenames) -> None:
+        """Adds install log links to the template.
+
+        Args:
+            filenames: A list of filenames to add.
+        """
         o = 0
         for line in self.template:
             if "HAS_UNTRACKED" in line:
@@ -93,7 +112,7 @@ class BaseExport(ABC):
             self.template.insert(index + 1, "\n")
 
     def dedup_lines(self) -> None:
-        """simple deduplication, start it as last"""
+        """Deduplicates lines in the template."""
         pr_line = None
         lines = []
         for c_line in self.template:
@@ -106,6 +125,7 @@ class BaseExport(ABC):
         self.template = lines
 
     def add_sysinfo(self) -> None:
+        """Adds system information to the template."""
         system_information = system_info(
             self.config.distro,
             self.config.distro_ver,
@@ -117,13 +137,16 @@ class BaseExport(ABC):
 
     @abstractmethod
     def get_logs(self, *args, **kwds) -> list[Path]:
+        """An abstract method for getting logs."""
         pass
 
     @abstractmethod
     def run(self, *args, **kwds) -> FileList | list[str]:
+        """An abstract method for running the exporter."""
         pass
 
     def inject_openqa(self) -> None:
+        """Injects openQA results into the template."""
         if not self.openqa["auto"]:
             return
 
@@ -162,6 +185,7 @@ class BaseExport(ABC):
         self.template.insert(index + 2, "\n")
 
     def install_results(self) -> None:
+        """Adds installation results to the template."""
         index = self.template.index("Test results by product-arch:\n", 0)
         self.template.insert(
             index + 3,

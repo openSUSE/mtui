@@ -1,7 +1,9 @@
-#
-# mtui ssh connection handling using paramiko.
-# almost all exceptions here are passed to the upper layer.
-#
+"""Handles SSH and SFTP connections using paramiko.
+
+This module provides the `Connection` class, which encapsulates the
+functionality for running commands, transferring files, and opening
+remote shells on a remote host.
+"""
 
 import errno
 import getpass
@@ -33,21 +35,23 @@ if not sys.warnoptions:
 
 
 class CommandTimeout(Exception):
-    """remote command timeout exception.
-
-    returns timed out remote command as __str__
-
-    """
+    """Exception raised when a remote command times out."""
 
     def __init__(self, command=None) -> None:
+        """Initializes the exception.
+
+        Args:
+            command: The command that timed out.
+        """
         self.command = command
 
     def __str__(self) -> str:
+        """Returns the timed out remote command as a string."""
         return repr(self.command)
 
 
 class Connection:
-    """manage SSH and SFTP connections."""
+    """Manages SSH and SFTP connections to a remote host."""
 
     __slots__ = [
         "client",
@@ -61,17 +65,15 @@ class Connection:
     ]
 
     def __init__(self, hostname: str, port: int | str, timeout: int) -> None:
-        """Opens SSH channel to specified host.
+        """Opens an SSH channel to the specified host.
 
-        Tries AuthKey Authentication and falls back to password mode in case of errors.
-        If a connection can't be established (host not available, wrong password/key)
-        exceptions are reraised from the ssh subsystem and need to be catched
-        by the caller.
+        This method tries to authenticate using SSH keys and falls back to
+        password authentication if key-based authentication fails.
 
-        Keyword Arguments:
-        hostname -- host address to connect to
-        timeout  -- remote command timeout on this connection
-
+        Args:
+            hostname: The hostname or IP address of the remote host.
+            port: The port number to connect to.
+            timeout: The timeout for remote commands.
         """
         # uncomment to enable separate paramiko connection logging
 
@@ -101,11 +103,12 @@ class Connection:
         return f"<{self.__class__.__name__} object hostname={self.hostname} port={self.port}>"
 
     def load_keys(self) -> None:
+        """Loads system host keys."""
         self.client.load_system_host_keys()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
     def connect(self) -> None:
-        """Connect to the remote host using paramiko as ssh subsystem."""
+        """Connects to the remote host using paramiko."""
         cfg = SSHConfig()
         try:
             with Path("~/.ssh/config").expanduser().open() as fd:
@@ -188,11 +191,12 @@ class Connection:
     def reconnect(
         self, retry: int = 0, timeout: int = 10, backoff: bool = False
     ) -> None:
-        """Try to reconnect to the host.
+        """Tries to reconnect to the host.
 
-        currently, there's no reconnection limit. needs to be implemented
-        since the current implementation could deadlock.
-
+        Args:
+            retry: The number of times to retry the connection.
+            timeout: The timeout for each connection attempt.
+            backoff: Whether to use exponential backoff for retries.
         """
         count = 0
         rtimeout = timeout
@@ -212,16 +216,14 @@ class Connection:
         assert self.is_active()
 
     def new_session(self) -> Channel | None:
-        """Open new session on the channel.
+        """Opens a new session on the channel.
 
-        all remote commands are run on a seperate session to make sure
-        that leftovers/session errors from the previous command do not
-        interfere with the current command.
+        All remote commands are run on a separate session to make sure
+        that leftovers from the previous command do not interfere with
+        the current command.
 
-
-        session = self.new_session()
-        session.exec_command(command)
-        self.close_session(session)
+        Returns:
+            A new session object, or None if a session could not be opened.
         """
         logger.debug("creating new session at %s:%s", self.hostname, self.port)
         try:
@@ -248,7 +250,11 @@ class Connection:
 
     @staticmethod
     def close_session(session: Channel | None = None) -> None:
-        """Close the current session."""
+        """Closes the current session.
+
+        Args:
+            session: The session to close.
+        """
         if session:
             try:
                 session.shutdown(2)
@@ -258,11 +264,13 @@ class Connection:
                 pass
 
     def __run_command(self, command: str) -> Channel | None:
-        """Open new session and run command in it.
+        """Opens a new session and runs a command in it.
 
-        parameter: command -> str
-        result: Succes - session instance with running command
-                Fail - None
+        Args:
+            command: The command to run.
+
+        Returns:
+            A session instance with the running command, or None on failure.
         """
         try:
             if session := self.new_session():
@@ -276,18 +284,17 @@ class Connection:
         return session
 
     def run(self, command: str, lock=None) -> int:
-        """Run command over SSH channel.
+        """Runs a command over the SSH channel.
 
-        Blocks until command terminates. returncode of issued command is returned.
-        In case of errors, -1 is returned.
+        This method blocks until the command terminates and returns the
+        exit code of the command. In case of errors, -1 is returned.
 
-        If the connection hits the timeout limit, the user is asked to wait or
-        cancel the current command.
+        Args:
+            command: The command to run.
+            lock: A lock object for writing to stdout.
 
-        Keyword Arguments:
-        command -- the command to run
-        lock    -- lock object for write on stdout
-
+        Returns:
+            The exit code of the command.
         """
         self.stdin = command
         self.stdout = ""
@@ -363,9 +370,14 @@ class Connection:
         return exitcode
 
     def __invoke_shell(self, width: int, height: int) -> Channel | None:
-        """params: widh
-        params: height
-        returns: session with open shell on pass else False.
+        """Invokes a shell on the remote host.
+
+        Args:
+            width: The width of the terminal.
+            height: The height of the terminal.
+
+        Returns:
+            A session with an open shell, or None on failure.
         """
         try:
             if session := self.new_session():
@@ -381,11 +393,7 @@ class Connection:
         return session
 
     def shell(self) -> None:
-        """Invoke remote shell.
-
-        Spawns a root shell on the target host.
-        TTY attributes are re-set after leaving the remote shell.
-        """
+        """Spawns a root shell on the target host."""
         oldtty = termios.tcgetattr(sys.stdin)
 
         width, height = termsize()
@@ -422,6 +430,11 @@ class Connection:
         self.close_session(session)
 
     def __sftp_open(self) -> SFTPClient | None:
+        """Opens an SFTP session.
+
+        Returns:
+            An SFTP client object, or None on failure.
+        """
         try:
             sftp = self.client.open_sftp()
         except (AttributeError, paramiko.ChannelException, paramiko.SSHException):
@@ -431,6 +444,11 @@ class Connection:
         return sftp
 
     def __sftp_reconnect(self) -> SFTPClient:
+        """Reconnects the SFTP session if it's not active.
+
+        Returns:
+            An active SFTP client object.
+        """
         sftp = self.__sftp_open()
         counter = 0
         while not sftp:
@@ -444,12 +462,11 @@ class Connection:
     def sftp_put(self, local: Path, remote: Path) -> None:
         """Transfers a file to the remote host over SFTP.
 
-        File is made executable
+        The file is made executable after transfer.
 
-        Keyword Arguments:
-        local  -- local file name
-        remote -- remote file name
-
+        Args:
+            local: The local file to transfer.
+            remote: The remote path to transfer the file to.
         """
 
         path = ""
@@ -490,14 +507,11 @@ class Connection:
         sftp.close()
 
     def sftp_get(self, remote: Path, local: Path) -> None:
-        """Transfers file from the remote host to the local host over SFTP.
+        """Transfers a file from the remote host to the local host.
 
-        local base directory needs to exist
-
-        Keyword Arguments:
-        remote -- remote file name
-        local  -- local file name
-
+        Args:
+            remote: The remote file to transfer.
+            local: The local path to transfer the file to.
         """
         sftp = self.__sftp_reconnect()
 
@@ -514,6 +528,12 @@ class Connection:
 
     # Similar to 'get' but handles folders.
     def sftp_get_folder(self, remote: Path, local: Path) -> None:
+        """Transfers a folder from the remote host to the local host.
+
+        Args:
+            remote: The remote folder to transfer.
+            local: The local path to transfer the folder to.
+        """
         sftp = self.__sftp_reconnect()
         logger.debug(
             "transmitting %s:%s:%s to %s",
@@ -532,11 +552,13 @@ class Connection:
         sftp.close()
 
     def sftp_listdir(self, path: Path = Path(".")) -> list[str]:
-        """Get directory listing of the remote host.
+        """Gets a directory listing of the remote host.
 
-        Keyword Arguments:
-        path   -- remote directory path to list
+        Args:
+            path: The remote directory path to list.
 
+        Returns:
+            A list of filenames in the directory.
         """
         logger.debug(
             f"getting {self.hostname!s}:{self.port!s}:{path!s} listing",
@@ -548,7 +570,16 @@ class Connection:
         return listdir
 
     def sftp_open(self, filename: Path, mode: str = "r", bufsize=-1) -> SFTPFile:
-        """Open remote file for reading."""
+        """Opens a remote file for reading.
+
+        Args:
+            filename: The remote file to open.
+            mode: The mode to open the file in.
+            bufsize: The buffer size.
+
+        Returns:
+            An SFTPFile object.
+        """
         logger.debug("%s open(%s, %s)", repr(self), filename, mode)
         logger.debug("  -> self.client.open_sftp")
         sftp = self.__sftp_reconnect()
@@ -569,7 +600,11 @@ class Connection:
         return ofile
 
     def sftp_remove(self, path: Path) -> None:
-        """Delete remote file."""
+        """Deletes a remote file.
+
+        Args:
+            path: The path to the remote file to delete.
+        """
         logger.debug("deleting file %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
 
@@ -581,7 +616,11 @@ class Connection:
         sftp.close()
 
     def sftp_rmdir(self, path: Path) -> None:
-        """Delete remote directory."""
+        """Deletes a remote directory.
+
+        Args:
+            path: The path to the remote directory to delete.
+        """
         logger.debug("deleting dir %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
         items = self.sftp_listdir(path)
@@ -594,7 +633,14 @@ class Connection:
         sftp.close()
 
     def sftp_readlink(self, path: Path) -> str | None:
-        """Return the target of a symbolic link (shortcut)."""
+        """Returns the target of a symbolic link.
+
+        Args:
+            path: The path to the symbolic link.
+
+        Returns:
+            The target of the symbolic link.
+        """
         logger.debug("read link %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
         link = sftp.readlink(str(path))
@@ -602,14 +648,14 @@ class Connection:
         return link
 
     def is_active(self) -> bool:
+        """Checks if the connection is active.
+
+        Returns:
+            True if the connection is active, False otherwise.
+        """
         return self.client._transport.is_active()  # type: ignore
 
     def close(self) -> None:
-        """Closes SSH channel to host and disconnects.
-
-        Keyword Arguments:
-        None
-
-        """
+        """Closes the SSH channel and disconnects."""
         logger.debug("closing connection to %s:%s", self.hostname, self.port)
         self.client.close()
