@@ -83,9 +83,7 @@ class UpdateID(ABC):
         directory.mkdir(parents=False, exist_ok=True)
 
     @abstractmethod
-    def make_testreport(
-        self, config: Config, autoconnect: bool = True
-    ) -> TestReport:
+    def make_testreport(self, config: Config, autoconnect: bool = True) -> TestReport:
         """An abstract method for creating a `TestReport` instance."""
         ...
 
