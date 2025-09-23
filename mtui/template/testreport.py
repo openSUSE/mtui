@@ -1,18 +1,18 @@
 """The `TestReport` abstract base class."""
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
 import concurrent.futures
-from errno import EEXIST, ENOENT
 import glob
-from json import loads
-from json.decoder import JSONDecodeError
-from logging import getLogger
 import os
-from pathlib import Path
 import re
 import shutil
 import stat
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
+from errno import EEXIST, ENOENT
+from json import loads
+from json.decoder import JSONDecodeError
+from logging import getLogger
+from pathlib import Path
 from traceback import format_exc
 from typing import Any, Literal
 from urllib.request import urlopen
@@ -666,8 +666,8 @@ class TestReport(ABC):
         #   input = *(line EOL)
 
         # by_host_pkg[hostname][package] = [version, ...]
-        by_host_pkg = {}
-        for hn, t in list(targets.items()):
+        by_host_pkg: dict[str, Any] = {}
+        for hn, t in targets.items():
             by_host_pkg[hn] = {}
             for line in t.lastout().split("\n"):
                 if match := re.search(re_ver, line):
@@ -677,15 +677,15 @@ class TestReport(ABC):
                     continue
 
         # by_pkg_vers[package][(version, ...)] = [hostname, ...]
-        by_pkg_vers = {}
-        for pkg, pvs in list(by_host_pkg.items()):
-            for vs, hs in list(vshs.items()):
+        by_pkg_vers: dict[str, Any] = {}
+        for hn, pvs in by_host_pkg.items():
+            for pkg, vs in pvs.items():
                 by_pkg_vers.setdefault(pkg, {}).setdefault(tuple(vs), []).append(hn)
 
         # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
-        by_hosts_pkg = {}
-        for pkg, vshs in list(by_pkg_vers.items()):
-            for vs, hs in list(vshs.items()):
+        by_hosts_pkg: dict[tuple[str, ...], Any] = {}
+        for pkg, vshs in by_pkg_vers.items():
+            for vs, hs in vshs.items():
                 by_hosts_pkg.setdefault(tuple(hs), []).append((pkg, vs))
 
         return sink(targets, by_hosts_pkg)
