@@ -1,20 +1,19 @@
 """The main entry point for the mtui application."""
 
-from argparse import Namespace
 import logging
-from subprocess import CalledProcessError
 import sys
+from argparse import Namespace
+from subprocess import CalledProcessError
 from typing import Literal
 
-from mtui.args import get_parser
-from mtui.config import Config
-from mtui.display import CommandPromptDisplay
-from mtui.messages import SvnCheckoutInterruptedError
-from mtui.prompt import CommandPrompt
-from mtui.systemcheck import detect_system
-
 from .argparse import ArgsParseFailure
+from .args import get_parser
 from .colorlog import create_logger
+from .config import Config
+from .display import CommandPromptDisplay
+from .messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
+from .prompt import CommandPrompt
+from .systemcheck import detect_system
 
 
 def main() -> int:
@@ -76,7 +75,11 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
             pass
         try:
             prompt.load_update(args.update, autoconnect=not bool(args.sut))
-        except (SvnCheckoutInterruptedError, CalledProcessError) as e:
+        except (
+            SvnCheckoutInterruptedError,
+            CalledProcessError,
+            MetadataNotLoadedError,
+        ) as e:
             logger.error(e)
             return 1
 

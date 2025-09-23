@@ -25,6 +25,7 @@ from ..target.hostgroup import HostsGroup
 from ..template import TemplateIOError, TestReportAlreadyLoaded
 from ..types import Product, TargetMeta
 from ..utils import ensure_dir_exists
+from ..messages import MetadataNotLoadedError
 
 logger = getLogger("mtui.template.testreport")
 
@@ -142,12 +143,11 @@ class TestReport(ABC):
             try:
                 data = loads(data)
             except JSONDecodeError:
-                data = None
-
-        if data:
-            self._parse_json(data, tpl)
+                raise MetadataNotLoadedError
         else:
-            self._parse(tpl)
+            raise MetadataNotLoadedError
+
+        self._parse_json(data, tpl)
 
     def read(self, path: Path) -> None:
         """Reads a test report file.
@@ -166,23 +166,6 @@ class TestReport(ABC):
     @abstractmethod
     def _parser(self) -> dict[str, Any]:
         """An abstract method for getting the parser for the test report."""
-
-    def _parse(self, tpl: str) -> None:
-        """Parses a test report from a string.
-
-        Args:
-            tpl: The test report string to parse.
-        """
-
-        if self.path:
-            raise TestReportAlreadyLoaded(self.path)
-
-        parser = self._parser()["full"]
-
-        for line in tpl.splitlines():
-            parser.parse(self, line)
-
-        self._warn_missing_fields()
 
     def _parse_json(self, data, tpl: str) -> None:
         """Parses a test report from a JSON object.

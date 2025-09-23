@@ -2,7 +2,7 @@
 
 from typing import final
 
-from ..parsemeta import MetadataParser, ReducedMetadataParser
+from ..parsemeta import ReducedMetadataParser
 from ..parsemetajson import JSONParser
 from ..repoparse import reporepoparse
 from ..target import Target
@@ -38,7 +38,6 @@ class PITestReport(TestReport):
     def _parser(self):
         """Returns a dictionary of parsers for the test report."""
         parsers = {
-            "full": MetadataParser,
             "hosts": ReducedMetadataParser,
             "json": JSONParser,
         }
