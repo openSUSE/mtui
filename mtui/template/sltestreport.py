@@ -2,7 +2,7 @@
 
 from typing import final
 
-from ..parsemeta import MetadataParser, ReducedMetadataParser
+from ..parsemeta import ReducedMetadataParser
 from ..parsemetajson import JSONParser
 from ..repoparse import gitrepoparse, reporepoparse, slrepoparse
 from ..target import Target
@@ -40,7 +40,6 @@ class SLTestReport(TestReport):
     def _parser(self):
         """Returns a dictionary of parsers for the test report."""
         parsers = {
-            "full": MetadataParser,
             "hosts": ReducedMetadataParser,
             "json": JSONParser,
         }

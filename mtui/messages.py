@@ -148,6 +148,13 @@ class TestReportNotLoadedError(UserError):
         return "TestReport not loaded"
 
 
+class MetadataNotLoadedError(UserError):
+    """Raised when a test report is not loaded."""
+
+    def __str__(self) -> str:
+        return "Metadata not found"
+
+
 class FailedToWriteScriptResult(UserMessage):
     """A message for when writing a script result fails."""
 
