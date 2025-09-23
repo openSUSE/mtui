@@ -61,7 +61,11 @@ class OSC:
 
         # Add a specific workaround for 'PI' kinds which have a different RRID format
         # that oscqam does not expect by default.
-        skip_args = ["--skip-template"] if self.rrid.kind == "PI" else []
+        skip_args = (
+            ["--skip-template"]
+            if (self.rrid.kind == "PI" and operation == "assign")
+            else []
+        )
 
         # must be converted to str -> shlex.join accepts only str or bytestr
         rrid_args = [str(self.rrid.review_id)]
