@@ -2,7 +2,10 @@
 
 from typing import final
 
-import rpm  # type: ignore
+try:
+    import rpm  # type: ignore
+except ImportError:
+    from version_utils import rpm
 
 
 @final
