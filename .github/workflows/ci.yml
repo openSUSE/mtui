@@ -3,9 +3,9 @@ name: ci
 # yamllint disable-line rule:truthy
 on: [push, pull_request]
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
-    name: MTUI tests + lint + format
+    name: MTUI lint + format
     steps:
       - uses: actions/checkout@v5
       - uses:  astral-sh/ruff-action@v3
@@ -15,23 +15,21 @@ jobs:
         run: ruff format --check --diff ./mtui
       - name: Check ruff lint
         run: ruff check --diff ./mtui
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            python3-openqa-client \
-            python3-paramiko \
-            python3-xdg \
-            python3-requests \
-            python3-responses \
-            python3-rpm \
-            python3-ruamel.yaml \
-            subversion \
-            python3-pytest \
-            python3-pytest-cov \
-            python3-coverage \
-            python3-looseversion \
-      - name: Run tests 
+  test:
+    runs-on: ubuntu-latest
+    name: MTUI tests + coverage
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+           cache: 'pip'
+           cache-dependency-path: 'requirements_ci.txt'
+      - run: pip3 install -r requirements_ci.txt
+      - name: Test run ${{ matrix.python-version }}
         run: python3 -m pytest -v --cov=./mtui --cov-report=xml --cov-report=term
       - name: Upload coverage to CodeCov
         uses: codecov/codecov-action@v5
@@ -39,3 +37,4 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
           files: coverage.xml
+        if: ${{ matrix.python-version == '3.13' }} 

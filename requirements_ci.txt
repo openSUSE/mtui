@@ -1,0 +1,13 @@
+paramiko
+version_utils
+pyxdg
+requests
+ruamel.yaml
+osc
+looseversion
+openqa-client
+
+pytest
+pytest-cov
+coverage
+responses
