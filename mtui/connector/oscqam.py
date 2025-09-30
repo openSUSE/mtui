@@ -63,7 +63,10 @@ class OSC:
         # that oscqam does not expect by default.
         skip_args = (
             ["--skip-template"]
-            if (self.rrid.kind == "PI" and operation in ("assign", "approve", "reject"))
+            if (
+                self.rrid.kind in ("PI", "SLFO")
+                and operation in ("assign", "approve", "reject")
+            )
             else []
         )
 
