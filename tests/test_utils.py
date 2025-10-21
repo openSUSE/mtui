@@ -79,5 +79,54 @@ def test_atomic_write(create_temp):
     atomic_write_file(data.encode(), Path(path) / "bytes")
 
 
+from mtui import utils
+
+
+def test_colors():
+    """
+    Test ANSI color utils
+    """
+    text = "some text"
+    assert utils.green(text) == "\033[1;32m{!s}\033[1;m\033[0m".format(text)
+    assert utils.red(text) == "\033[1;31m{!s}\033[1;m\033[0m".format(text)
+    assert utils.yellow(text) == "\033[1;33m{!s}\033[1;m\033[0m".format(text)
+    assert utils.blue(text) == "\033[1;34m{!s}\033[1;m\033[0m".format(text)
+
+
+def test_filter_ansi():
+    """
+    Test ANSI filter
+    """
+    text = "some text"
+    ansi_text = utils.green(text)
+    assert utils.filter_ansi(ansi_text) == text
+
+
+def test_timestamp():
+    """
+    Test timestamp
+    """
+    assert isinstance(int(utils.timestamp()), int)
+
+
+def test_walk():
+    """
+    Test walk
+    """
+    test_data = {
+        "edges": [
+            {
+                "node": {
+                    "a": 1,
+                    "b": 2,
+                }
+            }
+        ]
+    }
+    expected_data = [{"a": 1, "b": 2}]
+    assert utils.walk(test_data) == expected_data
+
+
 def test_sutparse():
-    pass
+    sut = utils.SUTParse("a,b,c")
+    assert sut.print_args() == "-t a -t b -t c"
