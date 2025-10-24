@@ -8,10 +8,8 @@ class MockRefhosts:
         pass
     def check_location_sanity(self, location):
         pass
-
-class MockRefhostsFactory:
     def __call__(self, config):
-        return MockRefhosts(config)
+        return self
 
 def test_default_config(tmpdir):
     """
@@ -19,7 +17,7 @@ def test_default_config(tmpdir):
     """
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("")
-    cfg = config.Config(config_file, refhosts=MockRefhostsFactory())
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
     assert cfg.location == "default"
     assert cfg.datadir == Path("/usr/share/mtui")
     assert cfg.connection_timeout == 300
@@ -35,7 +33,7 @@ def test_override_config(tmpdir):
         "datadir = /test/datadir\n"
         "connection_timeout = 600\n"
     )
-    cfg = config.Config(config_file, refhosts=MockRefhostsFactory())
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
     assert cfg.location == "test_location"
     assert cfg.datadir == Path("/test/datadir")
     assert cfg.connection_timeout == 600
@@ -46,7 +44,7 @@ def test_merge_args(tmpdir):
     """
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("")
-    cfg = config.Config(config_file, refhosts=MockRefhostsFactory())
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
     args = Namespace(
         location="cmd_location",
         template_dir="/cmd/template_dir",
