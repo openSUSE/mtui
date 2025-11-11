@@ -13,7 +13,7 @@ import time
 from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
-from typing import final
+from typing import Any, final
 from urllib.request import urlopen
 
 from ruamel.yaml import YAML
@@ -71,6 +71,9 @@ class Attributes:
         # make ' ' to be ''. Just to pass the tests :-)
         return re.sub(r"^\s+$", "", representation)
 
+    def __repr__(self) -> str:
+        return f"<Attributes: {str(self)}>"
+
     # Used in the tests
     def __bool__(self) -> bool:
         """Returns True if any attributes have been set."""
@@ -104,32 +107,31 @@ class Attributes:
             # --
             # The rest of elements contains a version
             if property_name == "arch":
-                capture = re.match(r"\[(.*)\]", content)
-                code_evaluation = "','".join(capture.group(1).split(","))
-                arch_list = eval("['{0}']".format(code_evaluation))
+                if capture := re.match(r"\[(.*)\]", content):
+                    code_evaluation = "','".join(capture.group(1).split(","))
+                    arch_list = eval("['{0}']".format(code_evaluation))
             elif property_name == "tags":
-                capture = re.match(r"\((.*)\)", content)
-                setattr(attribute, capture.group(1), {"enabled": True})
+                if capture := re.match(r"\((.*)\)", content):
+                    setattr(attribute, capture.group(1), {"enabled": True})
             else:
-                complex_property = {"version": {}}
-                capture = re.match(r"(.*)\((.*)\)", content)
-                complex_property["name"] = capture.group(1)
+                complex_property: dict[str, Any] = {"version": {}}
+                if capture := re.match(r"(.*)\((.*)\)", content):
+                    complex_property["name"] = capture.group(1)
+                    for element in capture.group(2).split(","):
+                        [key, value] = element.split("=")
+                        # Note: When the minor is '' then it's used to search for unset values
+                        # We want number as numbers not as strings
+                        try:
+                            complex_property["version"][key] = int(value)
+                        except ValueError:
+                            complex_property["version"][key] = value
 
-                for element in capture.group(2).split(","):
-                    [key, value] = element.split("=")
-                    # Note: When the minor is '' then it's used to search for unset values
-                    # We want number as numbers not as strings
-                    try:
-                        complex_property["version"][key] = int(value)
-                    except ValueError:
-                        complex_property["version"][key] = value
-
-                if property_name == "base":
-                    attribute.product = complex_property
-                elif property_name == "addon":
-                    attribute.addons.append(complex_property)
-                else:
-                    setattr(attribute, property_name, complex_property)
+                    if property_name == "base":
+                        attribute.product = complex_property
+                    elif property_name == "addon":
+                        attribute.addons.append(complex_property)
+                    else:
+                        setattr(attribute, property_name, complex_property)
 
         for arch in arch_list:
             attribute_copy = copy.copy(attribute)  # no need for deepcopy
@@ -184,7 +186,6 @@ class Refhosts:
         Returns:
             A list of hostnames that match the given attributes.
         """
-
         results: list[str] = []
 
         for attribute in attributes:
