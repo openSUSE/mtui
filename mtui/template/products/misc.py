@@ -27,24 +27,6 @@ def normalize_rt(x):
     return x
 
 
-def normalize_cloud(x):
-    """Normalizes OpenStack Cloud product information.
-
-    Args:
-        x: A tuple containing the product information.
-
-    Returns:
-        The normalized product information.
-    """
-    if x[0][0] == "OpenStack-Cloud":
-        x[0][0] = "suse-openstack-cloud"
-        return x
-    if x[0][0] == "OpenStack-Cloud-Magnum-Orchestration":
-        x[0][0] = "openstack-cloud-magnum-orchestration"
-        return x
-    return x
-
-
 def normalize_manager(x):
     """Normalizes SUSE Manager product information.
 

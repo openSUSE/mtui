@@ -1,16 +1,14 @@
 """A collection of functions for normalizing product information."""
 
+from .misc import (
+    normalize_manager,
+    normalize_osle,
+    normalize_rt,
+    normalize_ses,
+)
 from .sle11 import normalize_sle11
 from .sle12 import normalize_sle12
 from .sle15 import normalize_sle15
-
-from .misc import (
-    normalize_rt,
-    normalize_ses,
-    normalize_manager,
-    normalize_cloud,
-    normalize_osle,
-)
 
 
 def normalize(x):
@@ -37,14 +35,8 @@ def normalize(x):
 
     if x[0][0] == "Storage":
         return normalize_ses(x)
-    if "OpenStack-Cloud" in x[0][0]:
-        return normalize_cloud(x)
     if "SUSE-Manager" in x[0][0] or "SLE-Manager-Tools" in x[0][0]:
         return normalize_manager(x)
-    if "SLE-STUDIOONSITE" in x[0][0]:
-        x[0][0] = x[0][0].lower()
-    if "SLE-WEBYAST" in x[0][0]:
-        x[0][0] = "sle-11-WebYaST"
     if "openSUSE-SLE" in x[0][1]:
         return normalize_osle(x)
     # Cornercases ..
