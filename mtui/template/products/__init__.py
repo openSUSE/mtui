@@ -1,5 +1,6 @@
 """A collection of functions for normalizing product information."""
 
+from ...types import Product
 from .sle11 import normalize_sle11
 from .sle12 import normalize_sle12
 from .sle15 import normalize_sle15
@@ -11,6 +12,22 @@ from .misc import (
     normalize_cloud,
     normalize_osle,
 )
+
+
+def normalize_16(x: Product) -> Product:
+    """Normalizes product information based on the product name and version.
+
+    Args:
+        x: Product named tuple
+
+    Returns:
+        Normalized Product named tuple
+    """
+    if x.name == "SLES-SAP":
+        return Product("SLES_SAP", x.version, x.arch)
+    if x.name == "SLES-HA":
+        return Product("sle-ha", x.version, x.arch)
+    return x
 
 
 def normalize(x):

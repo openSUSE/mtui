@@ -65,7 +65,7 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
 
     # workaround for SLES_SAP 16.0x mismatch between products and repositories
     if base.name == "SLES_SAP" and base.version.startswith("16"):
-        addons.add(Product("SLES-SAP", base.version, base.arch))
+        addons.add(Product("sle-ha", base.version, base.arch))
 
     try:
         _ = connection.sftp_open(Path("/usr/etc/transactional-update.conf"))
