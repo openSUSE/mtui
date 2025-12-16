@@ -11,7 +11,7 @@ from itertools import chain
 from os.path import join
 from pathlib import Path
 
-from .template.products import normalize
+from .template.products import normalize, normalize_16
 from .types import Product
 
 
@@ -121,7 +121,7 @@ def reporepoparse(
         A dictionary mapping `Product` objects to repository URLs.
     """
     return {
-        ps: repo
+        normalize_16(ps): repo
         for pd in products
         for ps in _parse_product(pd)
         for repo in repositories
