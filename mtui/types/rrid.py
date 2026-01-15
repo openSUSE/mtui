@@ -3,12 +3,14 @@
 from itertools import zip_longest
 from typing import Any, Callable, Sequence, final
 
+
 def apply_parser(f, x, cnt):
     from ..exceptions import (
         ComponentParseError,
         InternalParseError,
         MissingComponent,
     )
+
     """A helper function that applies a parser to a value.
 
     Args:
@@ -146,6 +148,7 @@ class RequestReviewID:
         ]
 
         from ..exceptions import TooManyComponentsError
+
         TooManyComponentsError.raise_if(xs, 4)
 
         xs = [

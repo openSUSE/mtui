@@ -1,7 +1,7 @@
-import pytest
+from unittest.mock import MagicMock
+
 from mtui import parsemetajson
 
-from unittest.mock import MagicMock
 
 def test_json_parser_parse():
     """
@@ -24,10 +24,8 @@ def test_json_parser_parse():
         "id": "test_id",
         "gitea_pr": "test_gitea_pr",
         "gitea_pr_api": "test_gitea_pr_api",
-        "packages": {
-            "test_prod": ["test_pkg 1.0 1.0"]
-        },
-        "repositories": ["test_repo"]
+        "packages": {"test_prod": ["test_pkg 1.0 1.0"]},
+        "repositories": ["test_repo"],
     }
 
     parsemetajson.JSONParser.parse(results, data)

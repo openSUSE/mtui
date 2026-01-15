@@ -1,7 +1,7 @@
-import pytest
 from mtui import repoparse
 from mtui.types import Product
 from pathlib import Path
+
 
 def test_parse_product():
     """
@@ -11,13 +11,16 @@ def test_parse_product():
     assert Product("SLES", "15", "x86_64") in products
     assert Product("SLES", "15", "aarch64") in products
 
+
 def test_slrepoparse():
     """
     Test slrepoparse
     """
     repos = repoparse.slrepoparse("https://example.com", ["SLES 15 (x86_64)"])
     product = Product("SLES", "15", "x86_64")
+    # we except repos has product key with exact value
     assert repos[product] == "https://example.com/images/repo/SLES-15-x86_64/"
+
 
 def test_gitrepoparse():
     """
@@ -25,7 +28,9 @@ def test_gitrepoparse():
     """
     repos = repoparse.gitrepoparse("https://example.com", ["SLES 15 (x86_64)"])
     product = Product("SLES", "15", "x86_64")
+    # we except repos has product key with exact value
     assert repos[product] == "https://example.com/standard"
+
 
 def test_reporepoparse():
     """
@@ -34,8 +39,10 @@ def test_reporepoparse():
     repos = repoparse.reporepoparse(
         frozenset(["https://example.com/SLES-15-x86_64/"]), ["SLES 15 (x86_64)"]
     )
+    # we except repos has product key with exact value
     product = Product("SLES", "15", "x86_64")
     assert repos[product] == "https://example.com/SLES-15-x86_64/"
+
 
 def test_obsrepoparse(tmpdir):
     """
@@ -53,5 +60,6 @@ def test_obsrepoparse(tmpdir):
     path.joinpath("project.xml").write_text(project_xml)
 
     repos = repoparse.obsrepoparse("https://example.com", path)
+    # we except repos has product key with exact value
     product = Product("SLES", "15", "x86_64")
     assert repos[product] == "https://example.com/SLE-15-x86_64"

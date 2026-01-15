@@ -1,14 +1,16 @@
-import pytest
-from mtui import display
-
 from io import StringIO
+
+from mtui import display
 from mtui.types import System
+
 
 class MockSystem(System):
     def __init__(self, name):
         self.name = name
+
     def __str__(self):
         return self.name
+
 
 def test_println():
     """
@@ -18,6 +20,7 @@ def test_println():
     d = display.CommandPromptDisplay(output)
     d.println("test message")
     assert output.getvalue() == "test message\n"
+
 
 def test_list_bugs():
     """
@@ -33,6 +36,7 @@ def test_list_bugs():
     assert "Bug #123" in output_str
     assert "Jira #ABC-123" in output_str
 
+
 def test_list_history():
     """
     Test list_history
@@ -46,6 +50,7 @@ def test_list_history():
     assert "history from test_host" in output_str
     assert "test command" in output_str
 
+
 def test_list_host():
     """
     Test list_host
@@ -58,6 +63,7 @@ def test_list_host():
     assert "test_host" in output_str
     assert "Enabled" in output_str
 
+
 class MockLock:
     def __init__(self, locked, mine, by, time, comment):
         self._locked = locked
@@ -65,16 +71,22 @@ class MockLock:
         self._by = by
         self._time = time
         self._comment = comment
+
     def is_locked(self):
         return self._locked
+
     def is_mine(self):
         return self._mine
+
     def locked_by(self):
         return self._by
+
     def time(self):
         return self._time
+
     def comment(self):
         return self._comment
+
 
 def test_list_locks():
     """
@@ -89,6 +101,7 @@ def test_list_locks():
     assert "since now by me" in output_str
     assert "test comment" in output_str
 
+
 def test_list_sessions():
     """
     Test list_sessions
@@ -101,6 +114,7 @@ def test_list_sessions():
     assert "sessions on test_host" in output_str
     assert "test session" in output_str
 
+
 def test_list_timeout():
     """
     Test list_timeout
@@ -112,13 +126,16 @@ def test_list_timeout():
     output_str = output.getvalue()
     assert "600s" in output_str
 
+
 def test_show_log():
     """
     Test show_log
     """
     output = StringIO()
+
     def sink(msg):
         output.write(msg + "\n")
+
     display.CommandPromptDisplay.show_log(
         "test_host", [("cmd", "stdout", "stderr", 0, None)], sink
     )

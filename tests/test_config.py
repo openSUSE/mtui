@@ -1,15 +1,19 @@
-import pytest
-from mtui import config
-from pathlib import Path
 from argparse import Namespace
+from pathlib import Path
+
+from mtui import config
+
 
 class MockRefhosts:
     def __init__(self, config):
         pass
+
     def check_location_sanity(self, location):
         pass
+
     def __call__(self, config):
         return self
+
 
 def test_default_config(tmpdir):
     """
@@ -22,7 +26,8 @@ def test_default_config(tmpdir):
     assert cfg.datadir == Path("/usr/share/mtui")
     assert cfg.connection_timeout == 300
 
-def test_override_config(tmpdir):
+
+def test_override_default_config(tmpdir):
     """
     Test override config
     """
@@ -37,6 +42,7 @@ def test_override_config(tmpdir):
     assert cfg.location == "test_location"
     assert cfg.datadir == Path("/test/datadir")
     assert cfg.connection_timeout == 600
+
 
 def test_merge_args(tmpdir):
     """

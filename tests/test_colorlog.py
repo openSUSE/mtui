@@ -1,6 +1,5 @@
-import pytest
 from mtui import colorlog
-import logging
+
 
 def test_create_logger(capsys):
     """

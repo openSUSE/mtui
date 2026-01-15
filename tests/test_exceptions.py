@@ -1,5 +1,7 @@
 import pytest
+
 from mtui import exceptions
+
 
 def test_request_review_id_parse_error():
     """
@@ -17,7 +19,9 @@ def test_request_review_id_parse_error():
     with pytest.raises(exceptions.MissingComponent, match="Missing 1. component"):
         raise exceptions.MissingComponent(1, "expected")
 
-    with pytest.raises(exceptions.ComponentParseError, match="Failed to parse 2. component"):
+    with pytest.raises(
+        exceptions.ComponentParseError, match="Failed to parse 2. component"
+    ):
         raise exceptions.ComponentParseError(2, "expected", "got")
 
 

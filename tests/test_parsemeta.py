@@ -1,7 +1,7 @@
-import pytest
+from unittest.mock import MagicMock
+
 from mtui import parsemeta
 
-from unittest.mock import MagicMock
 
 def test_reduced_metadata_parser_parse():
     """
@@ -13,7 +13,9 @@ def test_reduced_metadata_parser_parse():
     results.bugs = {}
 
     # Test hostname parsing
-    parsemeta.ReducedMetadataParser.parse(results, "some text (reference host: test_host)")
+    parsemeta.ReducedMetadataParser.parse(
+        results, "some text (reference host: test_host)"
+    )
     assert "test_host" in results.hostnames
 
     # Test Jira issue parsing
