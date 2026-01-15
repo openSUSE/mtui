@@ -1,11 +1,13 @@
-import pytest
-from mtui import hooks
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+from mtui import hooks
+
 
 class MockTestReport:
     def __repr__(self):
         return "<MockTestReport>"
+
 
 def test_script_base():
     """
@@ -16,6 +18,7 @@ def test_script_base():
     script = hooks.PreScript(tr, path)
     assert "pre script" in str(script)
     assert "<MockTestReport>" in repr(script)
+
 
 def test_pre_script(monkeypatch):
     """
@@ -34,7 +37,8 @@ def test_pre_script(monkeypatch):
     targets.sftp_put.assert_any_call(path, "remote_path")
     targets.run.assert_called_once()
 
-@patch('subprocess.run')
+
+@patch("subprocess.run")
 def test_compare_script(mock_run):
     """
     Test CompareScript

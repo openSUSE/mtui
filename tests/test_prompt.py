@@ -1,6 +1,7 @@
-import pytest
-from mtui import prompt
 from unittest.mock import MagicMock
+
+from mtui import prompt
+
 
 def test_command_prompt_init():
     """
@@ -18,6 +19,7 @@ def test_command_prompt_init():
     assert p.sys == sys
     assert p.display == display_factory.return_value
 
+
 def test_set_prompt():
     """
     Test set_prompt
@@ -34,6 +36,7 @@ def test_set_prompt():
 
     assert p.prompt == "mtui:test_session> "
 
+
 def test_cmd_queue():
     """
     Test CmdQueue
@@ -45,6 +48,7 @@ def test_cmd_queue():
 
     assert cmd == "test_cmd"
     term.stdout.write.assert_called_with("mtui> test_cmd\n")
+
 
 def test_dispatching():
     """
@@ -65,20 +69,21 @@ def test_dispatching():
     p._add_subcommand(mock_command)
 
     # Test do_
-    do_method = getattr(p, 'do_test_command')
+    do_method = getattr(p, "do_test_command")
     do_method("test_args")
     mock_command.parse_args.assert_called_with("test_args", sys)
     mock_command.return_value.assert_called_once()
 
     # Test help_
-    help_method = getattr(p, 'help_test_command')
+    help_method = getattr(p, "help_test_command")
     help_method()
     mock_argparser.print_help.assert_called_once()
 
     # Test complete_
-    complete_method = getattr(p, 'complete_test_command')
+    complete_method = getattr(p, "complete_test_command")
     complete_method("text", "line", 0, 1)
     mock_command.complete.assert_called_once()
+
 
 def test_cmdloop_keyboard_interrupt(monkeypatch):
     """
@@ -92,12 +97,15 @@ def test_cmdloop_keyboard_interrupt(monkeypatch):
     p = prompt.CommandPrompt(config, log, sys, display_factory)
 
     # Raise KeyboardInterrupt on the first call, then QuitLoop
-    monkeypatch.setattr("cmd.Cmd.cmdloop", MagicMock(side_effect=[KeyboardInterrupt, prompt.QuitLoop]))
+    monkeypatch.setattr(
+        "cmd.Cmd.cmdloop", MagicMock(side_effect=[KeyboardInterrupt, prompt.QuitLoop])
+    )
 
     p.cmdloop()
 
     assert p.interactive is True
     assert p.cmdqueue == []
+
 
 def test_cmdloop_quit_loop(monkeypatch):
     """
@@ -112,4 +120,4 @@ def test_cmdloop_quit_loop(monkeypatch):
 
     monkeypatch.setattr("cmd.Cmd.cmdloop", MagicMock(side_effect=prompt.QuitLoop))
 
-    p.cmdloop() # Should exit cleanly
+    p.cmdloop()  # Should exit cleanly

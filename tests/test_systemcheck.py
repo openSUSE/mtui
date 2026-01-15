@@ -1,7 +1,7 @@
-import pytest
+from unittest.mock import mock_open
+
 from mtui import systemcheck
 
-from unittest.mock import mock_open
 
 def test_detect_system(monkeypatch):
     """
@@ -10,7 +10,7 @@ def test_detect_system(monkeypatch):
     mock_os_release = 'NAME="test_distro"\nVERSION_ID="test_verid"'
     mock_version = "Linux version test_kernel"
 
-    def mock_open_side_effect(path, mode='r', encoding='utf-8'):
+    def mock_open_side_effect(path, mode="r", encoding="utf-8"):
         if path == "/etc/os-release":
             return mock_open(read_data=mock_os_release).return_value
         elif path == "/proc/version":
