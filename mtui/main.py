@@ -93,9 +93,16 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
     prompt.interactive = not args.noninteractive
 
     if args.prerun:
-        prompt.set_cmdqueue(
-            [x.rstrip() for x in args.prerun.readlines() if not x.startswith("#")]
-        )
+        if args.prerun.is_file():
+            prompt.set_cmdqueue(
+                [
+                    x.rstrip()
+                    for x in args.prerun.read_text().splitlines()
+                    if not x.startswith("#")
+                ]
+            )
+        else:
+            logger.error("Prerun command file %s isn't file", str(args.prerun))
 
     prompt.cmdloop(intro="Maintenance Test Update Installer")
     return 0
