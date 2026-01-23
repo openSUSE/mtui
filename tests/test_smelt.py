@@ -48,6 +48,7 @@ def helper_smelt_instance(kind):
     return instance
 
 
+@responses.activate
 def test_nodata():
     x = SMELT(RequestReviewID("SUSE:Maintenance:1:1"))
     assert not x
