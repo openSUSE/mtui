@@ -30,7 +30,7 @@ def test_diffeerent_files(caplog, log_install) -> None:
     fn = log_install
     data = ["Non duplicate text of install log", "fake log"]
 
-    export = FakeExport("", "", [], False, "123", True)
+    export = FakeExport("", "", [], False, "123", False)
 
     export._writer(fn, data)
 

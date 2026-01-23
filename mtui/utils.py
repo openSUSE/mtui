@@ -128,7 +128,7 @@ def prompt_user(text: str, options: Collection[str], interactive: bool = True) -
                 # tests
                 readline.remove_history_item(hlen - 1)
 
-        return result
+    return result
 
 
 def termsize() -> tuple[int, int]:
