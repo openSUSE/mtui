@@ -1,6 +1,5 @@
 """Defines the command-line arguments for the mtui tool."""
 
-from argparse import FileType
 from pathlib import Path
 
 from mtui import __version__
@@ -37,7 +36,7 @@ def get_parser(sys) -> ArgumentParser:
     parser.add_argument(
         "-p",
         "--prerun",
-        type=FileType("r"),
+        type=Path,
         help="script with a set of MTUI commands to run at start",
     )
     parser.add_argument(
