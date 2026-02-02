@@ -1,9 +1,13 @@
 """The `set_repo` command."""
 
+from logging import getLogger
+
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.target.locks import LockedTargets
+from mtui.target.locks import LockedTargets, TargetLockedError
 from mtui.utils import complete_choices, requires_update
+
+logger = getLogger("mtui.command.setrepo")
 
 
 class SetRepo(Command):
@@ -40,10 +44,12 @@ class SetRepo(Command):
         """Executes the `set_repo` command."""
         operation = self.args.operation
         hosts = self.parse_hosts()
-
-        with LockedTargets([self.targets[x] for x in hosts]):
-            for t in [self.targets[x] for x in hosts]:
-                t.set_repo(operation, self.metadata)
+        try:
+            with LockedTargets([self.targets[x] for x in hosts]):
+                for t in [self.targets[x] for x in hosts]:
+                    t.set_repo(operation, self.metadata)
+        except TargetLockedError as err:
+            logger.error("Target locked %s", err)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
