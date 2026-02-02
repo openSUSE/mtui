@@ -6,7 +6,7 @@ multiple hosts in parallel, with a focus on maintenance update testing.
 
 from looseversion import LooseVersion
 
-__version__ = "16.0.3"
+__version__ = "16.0.4"
 
 # PEP396
 loose_version = LooseVersion(__version__)
