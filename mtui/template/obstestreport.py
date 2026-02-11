@@ -1,5 +1,7 @@
 """A `TestReport` implementation for OBS test reports."""
 
+from typing import final
+
 from ..parsemeta import ReducedMetadataParser
 from ..parsemetajson import JSONParser
 from ..repoparse import obsrepoparse
@@ -9,6 +11,7 @@ from ..types import Product, RequestReviewID
 from .testreport import TestReport
 
 
+@final
 class OBSTestReport(TestReport):
     """A `TestReport` implementation for OBS test reports."""
 
@@ -79,3 +82,6 @@ class OBSTestReport(TestReport):
             display(
                 f"{hn} - commands: \n{t.get_updater()['command'].safe_substitute(repa=repa, packages=packages)}"
             )
+
+    def check_hash(self) -> bool:
+        return True

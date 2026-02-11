@@ -30,6 +30,7 @@ class JSONParser:
         results.realid = data.get("id")
         results.giteapr = data.get("gitea_pr")
         results.giteaprapi = data.get("gitea_pr_api")
+        results.giteacohash = data.get("gitea_commit_hash")
 
         packages = {}
         for prod, pkgvers in data.get("packages").items():
