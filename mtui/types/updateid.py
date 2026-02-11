@@ -6,6 +6,8 @@ from logging import getLogger
 from pathlib import Path
 from typing import Callable, final
 
+from mtui.exceptions import FailedGiteaCall, InvalidGiteaHash, MissingGiteaToken
+
 from ..config import Config
 from ..connector import SMELT
 from ..connector.openqa import AutoOpenQA, KernelOpenQA
@@ -70,6 +72,10 @@ class UpdateID(ABC):
                 raise TestReportNotLoadedError
             else:
                 tr.read(trpath)
+        except (InvalidGiteaHash, MissingGiteaToken, FailedGiteaCall) as e:
+            logger.error(e)
+            logger.warning("TestReport ins't loaded")
+            raise TestReportNotLoadedError
 
         return tr
 

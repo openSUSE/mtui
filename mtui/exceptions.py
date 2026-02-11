@@ -112,7 +112,7 @@ class UpdateError(Exception):
         return "{!s}: {!s}".format(self.host, self.reason)
 
 
-class GiteaError(Exception):
+class GiteaError(BaseException):
     """Base exception for Gitea-related errors."""
 
     pass
@@ -134,6 +134,16 @@ class GiteaNoReview(GiteaError):
     """Raised when a Gitea pull request has no review."""
 
     pass
+
+
+class InvalidGiteaHash(GiteaError):
+    """Raised when Gitea has different hash than testreport metadata"""
+
+    def __init__(self, rrid):
+        self.id = rrid
+
+    def __str__(self) -> str:
+        return f"Testreport for {self.id} has different hash than GiteaPR"
 
 
 class GiteaAssignInvalid(GiteaError):

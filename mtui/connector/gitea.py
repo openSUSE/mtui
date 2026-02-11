@@ -8,7 +8,7 @@ specially formatted comments.
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from functools import cache, total_ordering
+from functools import total_ordering
 from logging import getLogger
 from typing import Any, final
 
@@ -57,6 +57,9 @@ class Comment:
     def __repr__(self) -> str:
         """Returns a string representation of the comment."""
         return f"<Comment: {self.serial}>"
+
+    def __str__(self) -> str:
+        return self.body
 
 
 @final
@@ -112,6 +115,7 @@ class Gitea:
         params: dict | None = None,
         data: dict | None = None,
         json: dict | None = None,
+        # TODO: enable control of verify from config
         verify: bool = False,
     ) -> Any:
         """A private wrapper for making requests to the Gitea API.
@@ -162,7 +166,6 @@ class Gitea:
             return []
         return rsp.json()
 
-    @cache
     def __get_all_comments(self) -> list[Comment]:
         """Fetches and deserializes all comments on the pull request."""
         cmts = self.__request(method.GET, self.prissues)
@@ -326,6 +329,10 @@ class Gitea:
         """
         logger.info("Posting a comment to Gitea PR")
         self.__request(method.POST, self.prissues, json={"body": body})
+
+    def get_hash(self) -> str:
+        data = self.__request(method.GET, self.pr)
+        return data["head"]["sha"]
 
     def __repr__(self) -> str:
         """Returns a string representation of the Gitea object."""

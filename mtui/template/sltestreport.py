@@ -1,7 +1,9 @@
 """A `TestReport` implementation for SUSE Linux test reports."""
 
+from logging import getLogger
 from typing import final
 
+from ..connector.gitea import Gitea
 from ..parsemeta import ReducedMetadataParser
 from ..parsemetajson import JSONParser
 from ..repoparse import gitrepoparse, reporepoparse, slrepoparse
@@ -9,6 +11,8 @@ from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..template.testreport import TestReport
 from ..types import Product, RequestReviewID
+
+logger = getLogger("mtui.template.sltestreport")
 
 
 @final
@@ -24,6 +28,7 @@ class SLTestReport(TestReport):
         self.realid = ""
         self.giteapr = ""
         self.giteaprapi = ""
+        self.giteacohash = ""
         self.repositories: frozenset = frozenset()
         self._attrs += ["rrid", "rating", "realid"]
 
@@ -36,6 +41,10 @@ class SLTestReport(TestReport):
     def id(self) -> str:
         """Returns the ID of the test report."""
         return str(self.rrid)
+
+    def check_hash(self) -> bool:
+        gitea = Gitea(self.config, self.giteaprapi)
+        return gitea.get_hash() == self.giteacohash
 
     def _parser(self):
         """Returns a dictionary of parsers for the test report."""

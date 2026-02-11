@@ -86,3 +86,6 @@ class PITestReport(TestReport):
             display(
                 f"{hn} - commands: \n{t.get_updater()['command'].safe_substitute(repa=repa, packages=packages)}"
             )
+
+    def check_hash(self) -> bool:
+        return True
