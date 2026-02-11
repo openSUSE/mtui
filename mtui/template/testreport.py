@@ -18,14 +18,14 @@ from typing import Any, Literal
 from urllib.request import urlopen
 
 from ..config import Config
-from ..exceptions import UpdateError
+from ..exceptions import InvalidGiteaHash, UpdateError
+from ..messages import MetadataNotLoadedError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..template import TemplateIOError, TestReportAlreadyLoaded
 from ..types import Product, TargetMeta
 from ..utils import ensure_dir_exists
-from ..messages import MetadataNotLoadedError
 
 logger = getLogger("mtui.template.testreport")
 
@@ -156,6 +156,8 @@ class TestReport(ABC):
             path: The path to the test report file.
         """
         self._open_and_parse(path)
+        if not self.check_hash():
+            raise InvalidGiteaHash(self.id)
         self.path = path.resolve()
         self._update_repos_parse()
         if self.config.chdir_to_template_dir:  # type: ignore
@@ -164,11 +166,20 @@ class TestReport(ABC):
         self.copy_scripts()
 
     @abstractmethod
+    def check_hash(self) -> bool:
+        """An abstract method for checking git hash of gitea based testreports,
+
+        return: bool
+                True if hash is same or if it isn't supported
+                False for different hashes
+        """
+
+    @abstractmethod
     def _parser(self) -> dict[str, Any]:
-        """An abstract method for getting the parser for the test report."""
+        """An abstract method for getting the parser for the testreport."""
 
     def _parse_json(self, data, tpl: str) -> None:
-        """Parses a test report from a JSON object.
+        """Parses a testreport from a JSON object.
 
         Args:
             data: The JSON object to parse.

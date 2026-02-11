@@ -1,13 +1,14 @@
 """A null object implementation of the `TestReport` class."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, final
 
 from ..target.hostgroup import HostsGroup
 from ..types import Product
 from .testreport import TestReport
 
 
+@final
 class NullTestReport(TestReport):
     """A null object implementation of the `TestReport` class.
 
@@ -55,3 +56,6 @@ class NullTestReport(TestReport):
     def list_update_commands(self, targets: HostsGroup, display) -> None:
         """Does nothing."""
         ...
+
+    def check_hash(self) -> bool:
+        return True

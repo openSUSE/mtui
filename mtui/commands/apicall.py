@@ -15,8 +15,8 @@ from typing import final
 from ..argparse import ArgumentParser
 from ..commands import Command
 from ..connector import OSC, Gitea
-from ..exceptions import GiteaError
-from ..utils import complete_choices, requires_update
+from ..exceptions import GiteaError, InvalidGiteaHash
+from ..utils import complete_choices, prompt_user, requires_update
 
 logger = getLogger("mtui.command.apicalls")
 
@@ -89,7 +89,21 @@ class Approve(BaseApiCall):
         logger.info("Approving PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
-            gitea.approve(self.args.user)
+            if self.metadata.check_hash() != self.metadata.giteacohash:
+                logger.error(
+                    "GiteaPR hash is different from testreport, plese reconsider approval"
+                )
+                if prompt_user(
+                    "Do you really want approve this update ?",
+                    ["Yes", "Y", "yes", "y", "Ja", "ja"],
+                    self.prompt.interactive,
+                ):
+                    gitea.approve(self.args.user)
+                else:
+                    raise InvalidGiteaHash(self.metadata.id)
+            else:
+                gitea.approve(self.args.user)
+
         except GiteaError as e:
             logger.error(e)
 
