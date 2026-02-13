@@ -200,7 +200,7 @@ class HostsGroup(UserDict[str, Target]):
                 else:
                     t.lock()
                     thread = ThreadedMethod(queue)
-                    thread.setDaemon(True)
+                    thread.daemon = True
                     thread.start()
 
             if skipped:
