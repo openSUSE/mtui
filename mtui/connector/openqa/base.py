@@ -4,11 +4,11 @@ from abc import ABC, abstractmethod
 from logging import getLogger
 from typing import ClassVar, Self
 
-from openqa_client.client import OpenQA_Client as oqa
 import openqa_client.exceptions
+from openqa_client.client import OpenQA_Client as oqa
 
-from .. import SMELT
 from ...types import RequestReviewID, Test, URLs
+from .. import SMELT
 
 logger = getLogger("mtui.connector.openqa")
 
@@ -35,7 +35,12 @@ class OpenQA(ABC):
         self.params["distri"] = config.openqa_install_distri
         self.params["scope"] = "relevant"
         self.params["latest"] = 1
-        self.params["build"] = f":{rrid.maintenance_id}:{smelt.get_incident_name()}"
+        # New format of build
+        prefix = "git" if rrid.kind == "SLFO" else "smelt"
+        self.params["build"] = (
+            f":{prefix}:{rrid.maintenance_id}:{smelt.get_incident_name()}"
+        )
+
         self.client = oqa(host)
         self.pp: list[str] = []
         self.results: list[URLs] | list[Test] | None = None
