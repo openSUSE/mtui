@@ -43,6 +43,10 @@ class SLTestReport(TestReport):
         return str(self.rrid)
 
     def check_hash(self) -> bool:
+        # "1.1" is still in IBS
+        if self.rrid.maintenance_id == "1.1":
+            return True
+
         gitea = Gitea(self.config, self.giteaprapi)
         return gitea.get_hash() == self.giteacohash
 
