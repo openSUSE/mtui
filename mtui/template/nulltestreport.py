@@ -57,5 +57,5 @@ class NullTestReport(TestReport):
         """Does nothing."""
         ...
 
-    def check_hash(self) -> bool:
-        return True
+    def check_hash(self) -> tuple[bool, str, str]:
+        return True, "", ""

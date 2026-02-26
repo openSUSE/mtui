@@ -42,13 +42,15 @@ class SLTestReport(TestReport):
         """Returns the ID of the test report."""
         return str(self.rrid)
 
-    def check_hash(self) -> bool:
+    def check_hash(self) -> tuple[bool, str, str]:
         # "1.1" is still in IBS
         if self.rrid.maintenance_id == "1.1":
-            return True
+            return True, "", ""
 
         gitea = Gitea(self.config, self.giteaprapi)
-        return gitea.get_hash() == self.giteacohash
+        old = self.giteacohash
+        new = gitea.get_hash()
+        return old == new, old, new
 
     def _parser(self):
         """Returns a dictionary of parsers for the test report."""

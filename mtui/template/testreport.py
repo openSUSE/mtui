@@ -156,8 +156,9 @@ class TestReport(ABC):
             path: The path to the test report file.
         """
         self._open_and_parse(path)
-        if not self.check_hash():
-            raise InvalidGiteaHash(self.id)
+        result = self.check_hash()
+        if not result[0]:
+            raise InvalidGiteaHash(self.id, result[1], result[2])
         self.path = path.resolve()
         self._update_repos_parse()
         if self.config.chdir_to_template_dir:  # type: ignore
@@ -166,7 +167,7 @@ class TestReport(ABC):
         self.copy_scripts()
 
     @abstractmethod
-    def check_hash(self) -> bool:
+    def check_hash(self) -> tuple[bool, str, str]:
         """An abstract method for checking git hash of gitea based testreports,
 
         return: bool
