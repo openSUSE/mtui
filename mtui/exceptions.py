@@ -2,9 +2,12 @@
 
 from argparse import ArgumentTypeError
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .types import assignment
+
+if TYPE_CHECKING:
+    from .types import RequestReviewID
 
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):
@@ -139,11 +142,13 @@ class GiteaNoReview(GiteaError):
 class InvalidGiteaHash(GiteaError):
     """Raised when Gitea has different hash than testreport metadata"""
 
-    def __init__(self, rrid):
+    def __init__(self, rrid: "RequestReviewID", old: str, new: str):
         self.id = rrid
+        self.old = old
+        self.new = new
 
     def __str__(self) -> str:
-        return f"Testreport for {self.id} has different hash than GiteaPR"
+        return f"Testreport for {self.id} has different hash than GiteaPR. Testreport: {self.old} - repo {self.new}"
 
 
 class GiteaAssignInvalid(GiteaError):

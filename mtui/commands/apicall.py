@@ -89,9 +89,12 @@ class Approve(BaseApiCall):
         logger.info("Approving PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
-            if self.metadata.check_hash() != self.metadata.giteacohash:
+            new_hash = self.metadata.check_hash()
+            if new_hash != self.metadata.giteacohash:
                 logger.error(
-                    "GiteaPR hash is different from testreport, plese reconsider approval"
+                    "GiteaPR hash is different from testreport, please reconsider approval\n Testreport %s ->repo %s",
+                    self.metadata.giteacohash,
+                    new_hash,
                 )
                 if prompt_user(
                     "Do you really want approve this update ?",
@@ -100,7 +103,9 @@ class Approve(BaseApiCall):
                 ):
                     gitea.approve(self.args.user)
                 else:
-                    raise InvalidGiteaHash(self.metadata.id)
+                    raise InvalidGiteaHash(
+                        self.metadata.id, self.metadata.giteacohash, new_hash
+                    )
             else:
                 gitea.approve(self.args.user)
 
