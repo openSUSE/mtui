@@ -71,7 +71,10 @@ class UpdateID(ABC):
                 logger.error(e)
                 raise TestReportNotLoadedError
             else:
-                tr.read(trpath)
+                try:
+                    tr.read(trpath)
+                except Exception as e:
+                    raise e
         except (InvalidGiteaHash, MissingGiteaToken, FailedGiteaCall) as e:
             logger.error(e)
             logger.warning("TestReport ins't loaded")
