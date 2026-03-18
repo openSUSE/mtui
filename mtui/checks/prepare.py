@@ -1,7 +1,7 @@
 """Defines checks to be performed after a prepare action."""
 
+from collections.abc import Callable
 from logging import getLogger
-from typing import Callable
 
 from ..exceptions import UpdateError
 
@@ -48,9 +48,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("Dependency Error", hostname)
     if "Error:" in stderr:
         logger.critical(
-            '{!s}: command "{!s}" failed:\nstdin:\n{!s}\nstderr:\n{!s}'.format(
-                hostname, stdin, stdout, stderr
-            )
+            f'{hostname!s}: command "{stdin!s}" failed:\nstdin:\n{stdout!s}\nstderr:\n{stderr!s}'
         )
         raise UpdateError("RPM Error", hostname)
 

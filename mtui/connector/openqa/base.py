@@ -56,7 +56,7 @@ class OpenQA(ABC):
         try:
             jobs = self.client.openqa_request("GET", "jobs", self.params)["jobs"]
         except openqa_client.exceptions.RequestError as e:
-            logger.debug("Openqa returned code: {!s}".format(e.args[2]))
+            logger.debug(f"Openqa returned code: {e.args[2]!s}")
             return None
         except openqa_client.exceptions.ConnectionError as e:
             logger.error(f"Cannont connect to openQA - {self.host}")
@@ -68,7 +68,6 @@ class OpenQA(ABC):
     @abstractmethod
     def _pretty_print(self, *args) -> list[str]:
         """An abstract method for pretty-printing the results."""
-        pass
 
     @abstractmethod
     def run(self) -> Self:
@@ -77,7 +76,6 @@ class OpenQA(ABC):
         This method can be used to refresh the results, for example,
         when the workflow type is manually changed.
         """
-        pass
 
     def __bool__(self) -> bool:
         """Returns `True` if the connector has results, `False` otherwise."""

@@ -69,18 +69,18 @@ def test_dispatching():
     p._add_subcommand(mock_command)
 
     # Test do_
-    do_method = getattr(p, "do_test_command")
+    do_method = p.do_test_command
     do_method("test_args")
     mock_command.parse_args.assert_called_with("test_args", sys)
     mock_command.return_value.assert_called_once()
 
     # Test help_
-    help_method = getattr(p, "help_test_command")
+    help_method = p.help_test_command
     help_method()
     mock_argparser.print_help.assert_called_once()
 
     # Test complete_
-    complete_method = getattr(p, "complete_test_command")
+    complete_method = p.complete_test_command
     complete_method("text", "line", 0, 1)
     mock_command.complete.assert_called_once()
 

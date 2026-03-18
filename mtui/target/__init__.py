@@ -8,5 +8,4 @@ managing locks on target hosts.
 from .locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
 from .target import Target
 
-
-__all__ = ["Target", "TargetLock", "RemoteLock", "TargetLockedError", "LockedTargets"]
+__all__ = ["LockedTargets", "RemoteLock", "Target", "TargetLock", "TargetLockedError"]

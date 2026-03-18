@@ -94,7 +94,7 @@ class SLTestReport(TestReport):
         elif operation == "remove":
             target.run_zypper("-n rr", self.update_repos, self.rrid)
         else:
-            raise ValueError("Not supported repose operation {}".format(operation))
+            raise ValueError(f"Not supported repose operation {operation}")
 
     def list_update_commands(self, targets: HostsGroup, display) -> None:
         """Lists the update commands for the target hosts.

@@ -10,11 +10,11 @@ class Package:
     """Represents a software package and its versions."""
 
     __slots__ = [
-        "name",
-        "_before",
         "_after",
-        "_required",
+        "_before",
         "_current",
+        "_required",
+        "name",
     ]
 
     def __init__(self, name: str) -> None:

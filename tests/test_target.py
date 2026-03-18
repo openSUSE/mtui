@@ -1,7 +1,6 @@
 """Tests for the mtui target module."""
 
-import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from mtui.target import Target
 
@@ -239,5 +238,5 @@ def test_target_equality():
     assert hasattr(target1, "__ne__")
 
     # We can verify the methods exist and are callable, even if they fail at runtime
-    assert callable(getattr(target1, "__eq__"))
-    assert callable(getattr(target1, "__ne__"))
+    assert callable(target1.__eq__)
+    assert callable(target1.__ne__)

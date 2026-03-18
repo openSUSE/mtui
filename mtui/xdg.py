@@ -1,7 +1,8 @@
 """A helper function for saving files in the user's cache directory."""
 
-from xdg.BaseDirectory import save_cache_path as x_save_cache_path  # type: ignore
 from pathlib import Path
+
+from xdg.BaseDirectory import save_cache_path as x_save_cache_path  # type: ignore
 
 app = "mtui"
 

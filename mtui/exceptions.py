@@ -2,7 +2,7 @@
 
 from argparse import ArgumentTypeError
 from collections.abc import Sequence
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .types import assignment
 
@@ -59,7 +59,7 @@ class InternalParseError(RequestReviewIDParseError):
             f: The function where the error occurred.
             cnt: The context of the error.
         """
-        super().__init__("Internal error: f: {0!r} cnt: {1!r}".format(f, cnt))
+        super().__init__(f"Internal error: f: {f!r} cnt: {cnt!r}")
 
 
 class MissingComponent(RequestReviewIDParseError):
@@ -72,9 +72,7 @@ class MissingComponent(RequestReviewIDParseError):
             index: The index of the missing component.
             expected: The expected component.
         """
-        super().__init__(
-            "Missing {0}. component. Expected: {1}".format(index, expected)
-        )
+        super().__init__(f"Missing {index}. component. Expected: {expected}")
 
 
 class ComponentParseError(RequestReviewIDParseError):
@@ -89,9 +87,7 @@ class ComponentParseError(RequestReviewIDParseError):
             got: The component that was received.
         """
         super().__init__(
-            "Failed to parse {0}. component. Expected {1}. Got: {2!r}".format(
-                index, expected, got
-            )
+            f"Failed to parse {index}. component. Expected {expected}. Got: {got!r}"
         )
 
 
@@ -112,31 +108,23 @@ class UpdateError(Exception):
         """Returns the string representation of the exception."""
         if self.host is None:
             return self.reason
-        return "{!s}: {!s}".format(self.host, self.reason)
+        return f"{self.host!s}: {self.reason!s}"
 
 
 class GiteaError(BaseException):
     """Base exception for Gitea-related errors."""
 
-    pass
-
 
 class MissingGiteaToken(GiteaError):
     """Raised when a Gitea token is missing."""
-
-    pass
 
 
 class FailedGiteaCall(GiteaError):
     """Raised when a call to the Gitea API fails."""
 
-    pass
-
 
 class GiteaNoReview(GiteaError):
     """Raised when a Gitea pull request has no review."""
-
-    pass
 
 
 class InvalidGiteaHash(GiteaError):

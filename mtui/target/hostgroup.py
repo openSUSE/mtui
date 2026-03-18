@@ -177,7 +177,7 @@ class HostsGroup(UserDict[str, Target]):
         if reboot:
             logger.info("Rebooting transactional hosts %s", reboot.keys())
             self.run(reboot)
-            for hn in reboot.keys():
+            for hn in reboot:
                 self.data[hn].reconnect(retry=10, backoff=True)
 
     def update_lock(self) -> None:
@@ -558,7 +558,7 @@ class HostsGroup(UserDict[str, Target]):
         if events:
             self._run(
                 "tac /var/log/mtui.log | grep -m {} {} | tac".format(
-                    count, " ".join([('-e ":{}"'.format(e)) for e in events])
+                    count, " ".join([(f'-e ":{e}"') for e in events])
                 )
             )
         else:

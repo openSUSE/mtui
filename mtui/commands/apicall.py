@@ -256,7 +256,6 @@ class Comment(BaseApiCall):
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
-        pass
 
     def osc(self) -> None:
         """Adds a comment to the request in OSC."""

@@ -2,11 +2,12 @@
 
 import errno
 import re
+from collections.abc import Callable
 from logging import getLogger
 from pathlib import Path
 from string import Template
 from traceback import format_exc
-from typing import Any, Callable, Literal, final
+from typing import Any, Literal, final
 
 from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
@@ -153,7 +154,7 @@ class Target:
                 self.packages[p].current = v
         elif self.state == "dryrun":
             logger.info('dryrun: %s running "rpm -q %s"', self.hostname, packages)
-            self.out.append(["rpm -q {}".format(packages), "dryrun\n", "", 0, 0])
+            self.out.append([f"rpm -q {packages}", "dryrun\n", "", 0, 0])
         elif self.state == "disabled":
             self.out.append(["", "", "", 0, 0])
 
@@ -189,8 +190,7 @@ class Target:
             p, v = line.split()
             # Make sure that it shows to the user the highest version
             if p in pkgs:
-                if RPMVersion(v) > pkgs[p]:
-                    pkgs[p] = RPMVersion(v)
+                pkgs[p] = max(pkgs[p], RPMVersion(v))
             else:
                 pkgs[p] = RPMVersion(v)
         return pkgs
@@ -323,12 +323,12 @@ class Target:
             logger.debug('%s: sending "%s"', self.hostname, local)
             try:
                 return self.connection.sftp_put(local, remote)
-            except EnvironmentError as error:
+            except OSError as error:
                 logger.error(
                     "%s: failed to send %s: %s", self.hostname, local, error.strerror
                 )
         elif self.state == "dryrun":
-            logger.info("dryrun: put {} {}:{}".format(local, self.hostname, remote))
+            logger.info(f"dryrun: put {local} {self.hostname}:{remote}")
 
     def sftp_get(self, remote: Path, local: Path) -> None:
         """Downloads a file from the target host.
@@ -352,7 +352,7 @@ class Target:
             )
             try:
                 f(remote, local)
-            except EnvironmentError as error:
+            except OSError as error:
                 logger.error(
                     "%s: failed to get %s %s: %s",
                     self.hostname,
@@ -470,7 +470,7 @@ class Target:
         """
         try:
             return self.connection.sftp_listdir(path)
-        except IOError as error:
+        except OSError as error:
             if error.errno == errno.ENOENT:
                 logger.debug("%s: directory %s does not exist", self.hostname, path)
             return []
@@ -483,14 +483,14 @@ class Target:
         """
         try:
             self.connection.sftp_remove(path)
-        except IOError as error:
+        except OSError as error:
             if error.errno == errno.ENOENT:
                 logger.debug("%s: path %s does not exist", self.hostname, path)
             else:
                 try:
                     # might be a directory
                     self.connection.sftp_rmdir(path)
-                except IOError:
+                except OSError:
                     logger.warning("unable to remove %s on %s", path, self.hostname)
 
     def close(self, action=None) -> None:

@@ -6,8 +6,6 @@ from . import Product
 class UnknownSystemError(ValueError):
     """Exception raised when the system is unknown."""
 
-    pass
-
 
 class System:
     """Represents the system information of a target host.
@@ -36,7 +34,7 @@ class System:
         Raises:
             UnknownSystemError: If the system is unknown.
         """
-        name: str = self.__base.name  # noqa 'base' is always Product
+        name: str = self.__base.name
         if name == "SUSE-Manager-Server":
             return "15"
         elif name == "rhel":
@@ -51,7 +49,7 @@ class System:
             "SLES_TERADATA",
             "SLE_RT",
         ):
-            return self.__base.version[:2]  # noqa base is always Product
+            return self.__base.version[:2]
         elif name == "openSUSE":
             return "15"
         elif name == "sle-studioonsite":
@@ -72,16 +70,12 @@ class System:
     def pretty(self) -> list[str]:
         """Returns a pretty-printed list of strings representing the system."""
         msg = [
-            "  Base product: {}-{}-{}".format(
-                self.__base.name,
-                self.__base.version,
-                self.__base.arch,
-            )
+            f"  Base product: {self.__base.name}-{self.__base.version}-{self.__base.arch}"
         ]
         if self.__addons:
             msg += ["  Installed Extensions and Modules:"]
             msg += [
-                "      Addon: {:<53} - version: {}".format(x.name, x.version)
+                f"      Addon: {x.name:<53} - version: {x.version}"
                 for x in self.__addons
             ]
         return msg

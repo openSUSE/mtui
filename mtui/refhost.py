@@ -72,7 +72,7 @@ class Attributes:
         return re.sub(r"^\s+$", "", representation)
 
     def __repr__(self) -> str:
-        return f"<Attributes: {str(self)}>"
+        return f"<Attributes: {self!s}>"
 
     # Used in the tests
     def __bool__(self) -> bool:
@@ -100,7 +100,7 @@ class Attributes:
             try:
                 property_name, content = pattern.split("=", 1)
             except ValueError:
-                logger.error('error when parsing line "{!s}"'.format(testplatform))
+                logger.error(f'error when parsing line "{testplatform!s}"')
                 continue
             # special case: arch
             # *- arch because is a list so it will create a list of several attributes
@@ -109,7 +109,7 @@ class Attributes:
             if property_name == "arch":
                 if capture := re.match(r"\[(.*)\]", content):
                     code_evaluation = "','".join(capture.group(1).split(","))
-                    arch_list = eval("['{0}']".format(code_evaluation))
+                    arch_list = eval(f"['{code_evaluation}']")
             elif property_name == "tags":
                 if capture := re.match(r"\((.*)\)", content):
                     setattr(attribute, capture.group(1), {"enabled": True})
@@ -348,8 +348,6 @@ class Refhosts:
 class RefhostsResolveFailed(RuntimeError):
     """Raised when a `refhosts.yml` file cannot be resolved."""
 
-    pass
-
 
 class _RefhostsFactory:
     """A factory for creating `Refhosts` instances."""
@@ -419,7 +417,7 @@ class _RefhostsFactory:
             try:
                 return self._resolve_one(resolver, config)
             except BaseException:
-                logger.warning("Refhosts: resolver {0} failed".format(resolver))
+                logger.warning(f"Refhosts: resolver {resolver} failed")
                 logger.debug(format_exc())
 
         raise RefhostsResolveFailed()
@@ -435,9 +433,9 @@ class _RefhostsFactory:
             A `Refhosts` instance.
         """
         try:
-            resolver = getattr(self, "resolve_{0}".format(name))
+            resolver = getattr(self, f"resolve_{name}")
         except AttributeError:
-            logger.warning("Refhosts: invalid resolver: {0}".format(name))
+            logger.warning(f"Refhosts: invalid resolver: {name}")
             raise
         else:
             return resolver(config)

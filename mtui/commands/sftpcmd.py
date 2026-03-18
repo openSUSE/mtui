@@ -1,8 +1,8 @@
 """The `put` and `get` commands for SFTP file transfers."""
 
+import os
 from glob import glob
 from logging import getLogger
-import os
 from pathlib import Path
 
 from mtui.argparse import ArgumentParser

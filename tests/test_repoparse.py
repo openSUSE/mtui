@@ -1,6 +1,7 @@
+from pathlib import Path
+
 from mtui import repoparse
 from mtui.types import Product
-from pathlib import Path
 
 
 def test_parse_product():

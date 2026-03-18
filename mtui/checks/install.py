@@ -1,7 +1,7 @@
 """Defines checks to be performed after an install action."""
 
+from collections.abc import Callable
 from logging import getLogger
-from typing import Callable
 
 from ..exceptions import UpdateError
 
@@ -32,16 +32,10 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
             stderr,
         )
         raise UpdateError("package not found", hostname)
-    elif "A ZYpp transaction is already in progress." in stderr:
-        logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-            hostname,
-            stdin,
-            stdout,
-            stderr,
-        )
-        raise UpdateError("update stack locked", hostname)
-    elif "System management is locked" in stderr:
+    elif (
+        "A ZYpp transaction is already in progress." in stderr
+        or "System management is locked" in stderr
+    ):
         logger.critical(
             '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
             hostname,

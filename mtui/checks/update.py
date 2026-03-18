@@ -1,7 +1,7 @@
 """Defines checks to be performed after an update action."""
 
+from collections.abc import Callable
 from logging import getLogger
-from typing import Callable
 
 from ..exceptions import UpdateError
 from ..utils import yellow

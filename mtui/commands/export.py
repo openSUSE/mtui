@@ -6,10 +6,10 @@ from pathlib import Path
 from mtui.argparse import ArgumentParser
 from mtui.export.base import BaseExport
 
-from . import Command
 from ..export import AutoExport, KernelExport, ManualExport
 from ..types.filelist import FileList
 from ..utils import complete_choices_filelist, requires_update
+from . import Command
 
 logger = getLogger("mtui.commands.export")
 

@@ -63,7 +63,7 @@ def get_parser(sys) -> ArgumentParser:
         "-V",
         "--version",
         action="version",
-        version="{}".format(__version__),
+        version=f"{__version__}",
         help="print version and exit",
     )
     parser.add_argument(

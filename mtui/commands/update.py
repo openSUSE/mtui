@@ -77,7 +77,7 @@ class Update(Command):
             logger.critical("failed to update target systems")
             logger.debug(format_exc())
             self.prompt.notify_user(
-                "updating {!s} failed".format(self.prompt.session), "stock_dialog-error"
+                f"updating {self.prompt.session!s} failed", "stock_dialog-error"
             )
             raise
 
@@ -85,7 +85,7 @@ class Update(Command):
             logger.info("update process canceled")
             return
 
-        self.prompt.notify_user("updating {!s} finished".format(self.prompt.session))
+        self.prompt.notify_user(f"updating {self.prompt.session!s} finished")
         logger.info("done")
 
     @staticmethod

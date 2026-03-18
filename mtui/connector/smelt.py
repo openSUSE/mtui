@@ -9,8 +9,8 @@ from typing import Any
 
 import requests
 
-from ..utils import walk
 from ..types import RequestReviewID
+from ..utils import walk
 
 logger = getLogger("mtui.connector.smelt")
 

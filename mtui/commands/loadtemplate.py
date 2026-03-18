@@ -2,11 +2,10 @@
 
 from mtui.argparse import ArgumentParser
 
-from . import Command
 from ..messages import TestReportNotLoadedError
 from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
-from ..utils import prompt_user
-from ..utils import complete_choices
+from ..utils import complete_choices, prompt_user
+from . import Command
 
 
 class LoadTemplate(Command):

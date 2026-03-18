@@ -11,4 +11,4 @@ from .prepare import preparer
 from .uninstall import uninstaller
 from .update import updater
 
-__all__ = ["installer", "uninstaller", "preparer", "downgrader", "updater"]
+__all__ = ["downgrader", "installer", "preparer", "uninstaller", "updater"]

@@ -1,10 +1,10 @@
 """An exporter for the manual workflow."""
 
+import os.path
+import re
 from itertools import zip_longest
 from logging import getLogger
-import os.path
 from pathlib import Path
-import re
 
 from ..types import FileList
 from .base import BaseExport
@@ -239,7 +239,7 @@ class ManualExport(BaseExport):
                         failed = True
                         result = "INTERNAL ERROR"
 
-                    scriptline = "\t{0:25}: {1}\n".format(scriptname, result)
+                    scriptline = f"\t{scriptname:25}: {result}\n"
 
                     if scriptname in scripts:
                         scripts[scriptname] = scriptline
@@ -278,7 +278,7 @@ class ManualExport(BaseExport):
         for cmd_log in host_log.hostlog:
             cmd = cmd_log.command
             if "zypper " in cmd or "transactional-update" in cmd:
-                t.append("# {!s}\n{!s}\n".format(cmd, cmd_log.stdout))
+                t.append(f"# {cmd!s}\n{cmd_log.stdout!s}\n")
         return t
 
     def install_results(self) -> None:

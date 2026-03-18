@@ -49,7 +49,7 @@ class ColorFormatter(logging.Formatter):
                 + COLOR_SEQ.format(30 + COLORS[levelname])
                 + levelname.lower()
                 + RESET_SEQ
-                + " [{!s}:{!s}]".format(module, function)
+                + f" [{module!s}:{function!s}]"
                 + RESET_SEQ
             )
         else:

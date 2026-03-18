@@ -1,5 +1,6 @@
-from mtui import xdg
 from pathlib import Path
+
+from mtui import xdg
 
 
 def test_save_cache_path(monkeypatch):

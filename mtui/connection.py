@@ -9,7 +9,6 @@ import errno
 import getpass
 import logging
 import select
-import socket
 import stat
 import sys
 import termios
@@ -359,7 +358,7 @@ class Connection:
                 if not buffer:
                     break
 
-            except socket.timeout:
+            except TimeoutError:
                 select.select([], [], [], 1)
         # save the exitcode of the last command and return it
         exitcode = session.recv_exit_status()
@@ -416,7 +415,7 @@ class Connection:
                             break
                         sys.stdout.write(x.decode())
                         sys.stdout.flush()
-                    except socket.timeout:
+                    except TimeoutError:
                         pass
                 if sys.stdin in r:
                     y: str = sys.stdin.read(1)
@@ -610,7 +609,7 @@ class Connection:
 
         try:
             sftp.remove(str(path))
-        except IOError:
+        except OSError:
             logger.exception("Can't remove %s from %s", path, self.hostname)
 
         sftp.close()

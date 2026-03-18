@@ -1,8 +1,8 @@
 """The `report-bug` command."""
 
 import errno
-from logging import getLogger
 import subprocess
+from logging import getLogger
 from time import sleep
 
 from mtui import messages

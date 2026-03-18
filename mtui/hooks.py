@@ -5,12 +5,12 @@ interface for these scripts, with concrete implementations for
 `PreScript`, `PostScript`, and `CompareScript`.
 """
 
+import subprocess
 from abc import ABC, abstractmethod
 from logging import getLogger
 from pathlib import Path
-import subprocess
 from traceback import format_exc
-from typing import Literal, TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from . import messages
 
@@ -41,7 +41,7 @@ class Script(ABC):
         self.testreport = tr
 
     def __repr__(self) -> str:
-        return f"<{self.__module__}.{self.__class__.__name__} {self.path} for {repr(self.testreport)}>"
+        return f"<{self.__module__}.{self.__class__.__name__} {self.path} for {self.testreport!r}>"
 
     def __str__(self) -> str:
         return f"{self.subdir} script {self.name}"
@@ -106,9 +106,7 @@ class PreScript(Script):
         Args:
             targets: The group of target hosts.
         """
-        rname: Path = self.testreport.target_wd(
-            "{!s}.{!s}".format(self.subdir, self.bname)
-        )
+        rname: Path = self.testreport.target_wd(f"{self.subdir!s}.{self.bname!s}")
         targets.sftp_put(self.path, rname)
 
         targets.sftp_put(
@@ -131,7 +129,7 @@ class PreScript(Script):
                 with fname.open(mode="w") as f:
                     f.write(t.lastout())
                     f.write(t.lasterr())
-            except IOError as e:
+            except OSError as e:
                 log.error(messages.FailedToWriteScriptResult(fname, e))
 
 
@@ -177,9 +175,9 @@ class CompareScript(Script):
                 argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                universal_newlines=True,
+                text=True,
             )
-        except EnvironmentError as e:
+        except OSError as e:
             t.out.append([" ".join(argv), "", "", 0x100, 0])
             log.critical(messages.StartingCompareScriptError(e, argv))
             log.debug(format_exc())

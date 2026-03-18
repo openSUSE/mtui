@@ -4,10 +4,10 @@ This module reads configuration files, sets default values, and allows for
 overriding configuration options with command-line arguments.
 """
 
-from argparse import Namespace
-from collections.abc import Callable
 import configparser
 import getpass
+from argparse import Namespace
+from collections.abc import Callable
 from logging import getLogger
 from os import getenv
 from pathlib import Path
@@ -21,8 +21,6 @@ logger = getLogger("mtui.config")
 
 class InvalidOptionNameError(RuntimeError):
     """Exception raised when an invalid configuration option name is used."""
-
-    pass
 
 
 class Config:

@@ -1,10 +1,10 @@
 """Functions for downloading logs from openQA."""
 
-from collections.abc import Callable
 import concurrent.futures
-from logging import getLogger
 import os.path
 import urllib.error
+from collections.abc import Callable
+from logging import getLogger
 from urllib.request import urlretrieve
 
 from mtui.messages import ResultsMissingError
@@ -40,7 +40,6 @@ def _emptylog(host, test, *args, **kwds) -> None:
         **kwds: Additional keyword arguments (not used).
     """
     logger.debug("No log to download for test: %s on %s", test["name"], host)
-    pass
 
 
 def _resultlog(host, test, resultsdir, _, errormode) -> None:

@@ -1,10 +1,11 @@
 """Classes for handling different types of update IDs."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from errno import ENOENT
 from logging import getLogger
 from pathlib import Path
-from typing import Callable, final
+from typing import final
 
 from mtui.exceptions import FailedGiteaCall, InvalidGiteaHash, MissingGiteaToken
 

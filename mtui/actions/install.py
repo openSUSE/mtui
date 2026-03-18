@@ -5,7 +5,6 @@ from string import Template
 from ..messages import MissingInstallerError
 from ..utils import DictWithInjections
 
-
 #: A dictionary of command templates for installing packages using zypper.
 zypper_install = {"command": Template("zypper -n in -y -l $packages")}
 

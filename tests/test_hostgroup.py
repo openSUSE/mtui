@@ -1,7 +1,6 @@
 """Tests for the mtui hostgroup module."""
 
-import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from mtui.target.hostgroup import HostsGroup
 
