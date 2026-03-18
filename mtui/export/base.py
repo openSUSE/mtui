@@ -60,9 +60,9 @@ class BaseExport(ABC):
         to_write = "\n".join(data)
         if fn.exists() and not self.force:
             if to_write == fn.read_text():
-                logger.info(f"Log {fn} exists and is same as export")  # noqa
+                logger.info(f"Log {fn} exists and is same as export")
                 return
-            logger.warning(f"file {fn} exists.")  # noqa
+            logger.warning(f"file {fn} exists.")
             if not prompt_user(
                 f"Should I overwrite {fn} (y/N) ",
                 ["y", "Y", "yes", "Yes", "YES"],
@@ -75,7 +75,7 @@ class BaseExport(ABC):
         try:
             with fn.open(mode="w", encoding="utf-8") as f:
                 f.write(to_write)
-        except IOError as e:
+        except OSError as e:
             logger.error("Failed to write %s: %s", fn, e.strerror)
 
     def installlogs_lines(self, filenames) -> None:
@@ -100,9 +100,7 @@ class BaseExport(ABC):
 
         add_empty_line = False
         for fn in filenames:
-            install_log = "{!s}/{!s}/{!s}/{!s}\n".format(
-                self.config.reports_url, self.rrid, self.config.install_logs, fn
-            )
+            install_log = f"{self.config.reports_url!s}/{self.rrid!s}/{self.config.install_logs!s}/{fn!s}\n"
             if install_log not in self.template[o:]:
                 index += 1
                 self.template.insert(index, install_log)
@@ -138,12 +136,10 @@ class BaseExport(ABC):
     @abstractmethod
     def get_logs(self, *args, **kwds) -> list[Path]:
         """An abstract method for getting logs."""
-        pass
 
     @abstractmethod
     def run(self, *args, **kwds) -> FileList | list[str]:
         """An abstract method for running the exporter."""
-        pass
 
     def inject_openqa(self) -> None:
         """Injects openQA results into the template."""

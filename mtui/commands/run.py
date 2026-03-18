@@ -60,9 +60,7 @@ class Run(Command):
 
                 for target in targets:
                     output.append(
-                        "{!s}:-> {!s} [{!s}]".format(
-                            target, targets[target].lastin(), targets[target].lastexit()
-                        )
+                        f"{target!s}:-> {targets[target].lastin()!s} [{targets[target].lastexit()!s}]"
                     )
                     for line in targets[target].lastout().split("\n"):
                         output.append(line)

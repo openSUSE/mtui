@@ -1,8 +1,8 @@
 """The `commit` command."""
 
+import subprocess
 from argparse import REMAINDER
 from logging import getLogger
-import subprocess
 from traceback import format_exc
 
 from mtui.commands import Command
@@ -38,7 +38,7 @@ class Commit(Command):
 
         try:
             subprocess.check_call(
-                "svn add --force {}".format(str(self.config.install_logs)).split(),
+                f"svn add --force {self.config.install_logs!s}".split(),
                 cwd=checkout,
             )
             if checkout.joinpath("results").exists():
@@ -51,10 +51,10 @@ class Commit(Command):
                     "svn add --force {}".format("checkers.log").split(),
                     cwd=checkout,
                 )
-            subprocess.check_call("svn up".split(), cwd=checkout)
-            subprocess.check_call("svn ci".split() + msg, cwd=checkout)
+            subprocess.check_call(["svn", "up"], cwd=checkout)
+            subprocess.check_call(["svn", "ci"] + msg, cwd=checkout)
 
-            logger.info("Testreport in: {}".format(self.metadata._fancy_report_url()))
+            logger.info(f"Testreport in: {self.metadata._fancy_report_url()}")
 
         except Exception:
             logger.error("committing template.failed")

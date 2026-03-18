@@ -29,7 +29,7 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
             for x in connection.sftp_listdir(Path("/etc/products.d"))
             if x != "qa.prod" and x.endswith(".prod")
         ]
-    except IOError:
+    except OSError:
         logger.debug("Not SUSE's system")
         suse = False
     else:

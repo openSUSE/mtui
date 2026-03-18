@@ -19,7 +19,7 @@ class Checkout(Command):
     def __call__(self) -> None:
         """Executes the `checkout` command."""
         try:
-            check_call("svn up".split(), cwd=self.metadata.report_wd())
+            check_call(["svn", "up"], cwd=self.metadata.report_wd())
         except Exception:
             logger.error("updating template failed")
             logger.debug(format_exc())

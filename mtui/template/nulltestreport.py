@@ -55,7 +55,6 @@ class NullTestReport(TestReport):
 
     def list_update_commands(self, targets: HostsGroup, display) -> None:
         """Does nothing."""
-        ...
 
     def check_hash(self) -> tuple[bool, str, str]:
         return True, "", ""

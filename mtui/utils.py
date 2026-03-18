@@ -57,7 +57,7 @@ if os.getenv("COLOR", "always") == "always":
         Returns:
             The colorized string.
         """
-        return "\033[1;32m{!s}\033[1;m\033[0m".format(xs)
+        return f"\033[1;32m{xs!s}\033[1;m\033[0m"
 
     def red(xs: str) -> str:
         """Wraps a string in ANSI escape codes to make it red.
@@ -68,7 +68,7 @@ if os.getenv("COLOR", "always") == "always":
         Returns:
             The colorized string.
         """
-        return "\033[1;31m{!s}\033[1;m\033[0m".format(xs)
+        return f"\033[1;31m{xs!s}\033[1;m\033[0m"
 
     def yellow(xs: str) -> str:
         """Wraps a string in ANSI escape codes to make it yellow.
@@ -79,7 +79,7 @@ if os.getenv("COLOR", "always") == "always":
         Returns:
             The colorized string.
         """
-        return "\033[1;33m{!s}\033[1;m\033[0m".format(xs)
+        return f"\033[1;33m{xs!s}\033[1;m\033[0m"
 
     def blue(xs: str) -> str:
         """Wraps a string in ANSI escape codes to make it blue.
@@ -90,7 +90,7 @@ if os.getenv("COLOR", "always") == "always":
         Returns:
             The colorized string.
         """
-        return "\033[1;34m{!s}\033[1;m\033[0m".format(xs)
+        return f"\033[1;34m{xs!s}\033[1;m\033[0m"
 
 else:
     green = red = yellow = blue = lambda xs: str(xs)
@@ -140,7 +140,7 @@ def termsize() -> tuple[int, int]:
     try:
         x = fcntl.ioctl(0, termios.TIOCGWINSZ, b"1234")
         height, width = struct.unpack("hh", x)
-    except IOError:
+    except OSError:
         # FIXME: remove this when you figure out how to simulate tty
         # this might work:
         # https://github.com/dagwieers/ansible/commit/7192eb30477f8987836c075eece6e530eb9b07f2
@@ -178,7 +178,7 @@ def page(text: list[str], interactive: bool = True) -> None:
         interactive: If False, the function does nothing.
     """
     if not interactive:
-        return None
+        return
 
     prompt = "Press Enter to continue... (q to quit)"
 
@@ -189,7 +189,7 @@ def page(text: list[str], interactive: bool = True) -> None:
     try:
         line = filter_ansi(text.pop().rstrip("\r\n"))
     except IndexError:
-        return None
+        return
 
     while True:
         linesleft = height - 1
@@ -210,10 +210,10 @@ def page(text: list[str], interactive: bool = True) -> None:
                 try:
                     line = filter_ansi(text.pop().rstrip("\r\n"))
                 except IndexError:
-                    return None
+                    return
 
         if prompt_user(prompt, ("q",)):
-            return None
+            return
 
 
 def requires_update(fn: Callable) -> Callable:
@@ -268,7 +268,7 @@ class SUTParse:
             args: A comma-separated string of SUTs.
         """
         suts = args.split(",")
-        targets = ["-t {!s}".format(i) for i in suts]
+        targets = [f"-t {i!s}" for i in suts]
         self.args = " ".join(targets)
 
     def print_args(self) -> str:

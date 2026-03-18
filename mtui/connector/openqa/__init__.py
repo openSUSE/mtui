@@ -4,7 +4,7 @@ Each module in this package defines a connector to a specific
 openQA workflow, such as the auto or kernel workflow.
 """
 
-from .standard import AutoOpenQA
 from .kernel import KernelOpenQA
+from .standard import AutoOpenQA
 
 __all__ = ["AutoOpenQA", "KernelOpenQA"]

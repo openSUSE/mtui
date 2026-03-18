@@ -1,9 +1,9 @@
 """Classes for managing locks on target hosts."""
 
-from datetime import datetime
 import errno
-from logging import getLogger
 import os
+from datetime import datetime
+from logging import getLogger
 from pathlib import Path
 from typing import Self
 
@@ -16,8 +16,6 @@ logger = getLogger("mtui.target.locks")
 
 class TargetLockedError(Exception):
     """Exception raised when a target is locked."""
-
-    pass
 
 
 class RemoteLock:
@@ -253,7 +251,7 @@ class TargetLock:
 
         try:
             self.connection.sftp_remove(self.filename)
-        except IOError as e:
+        except OSError as e:
             if e.errno == errno.ENOENT:
                 pass
         except Exception as e:

@@ -1,7 +1,7 @@
 """Defines checks to be performed after a downgrade action."""
 
+from collections.abc import Callable
 from logging import getLogger
-from typing import Callable
 
 from ..exceptions import UpdateError
 

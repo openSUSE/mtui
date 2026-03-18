@@ -1,5 +1,6 @@
-from mtui.types.rpmver import RPMVersion
 import pytest
+
+from mtui.types.rpmver import RPMVersion
 
 
 @pytest.mark.parametrize(

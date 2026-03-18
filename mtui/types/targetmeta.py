@@ -2,8 +2,7 @@
 
 from typing import NamedTuple
 
-from . import CommandLog
-from . import Package
+from . import CommandLog, Package
 
 
 class TargetMeta(NamedTuple):

@@ -4,8 +4,8 @@ import logging
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
-from mtui.main import main, run_mtui
 from mtui.argparse import ArgsParseFailure
+from mtui.main import main, run_mtui
 
 
 def test_main_args_parse_failure(monkeypatch):

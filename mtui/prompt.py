@@ -6,15 +6,15 @@ handles command dispatching, tab completion, and history.
 """
 
 import cmd
+import readline
+import subprocess
 from collections.abc import Callable
 from logging import getLogger
 from pathlib import Path
-import readline
-import subprocess
 from traceback import format_exc
-from typing import Any, Type
+from typing import Any
 
-import mtui.notification as notification
+from mtui import notification
 
 from . import commands, messages
 from .argparse import ArgsParseFailure
@@ -26,8 +26,6 @@ logger = getLogger("mtui.prompt")
 
 class QuitLoop(RuntimeError):
     """Exception raised to exit the command loop."""
-
-    pass
 
 
 class CmdQueue(list):
@@ -68,13 +66,11 @@ class CmdQueue(list):
         Args:
             val: The command to echo.
         """
-        self.term.stdout.write("{0}{1}\n".format(self.prompt, val))
+        self.term.stdout.write(f"{self.prompt}{val}\n")
 
 
 class CommandAlreadyBoundError(RuntimeError):
     """Raised when a command is already bound to the prompt."""
-
-    pass
 
 
 class CommandPrompt(cmd.Cmd):
@@ -130,7 +126,7 @@ class CommandPrompt(cmd.Cmd):
 
         self._read_history()
 
-        self.commands: dict[str, Type[Command]] = {}
+        self.commands: dict[str, type[Command]] = {}
 
         # register commands
         for x in commands.cmd_list:
@@ -165,11 +161,11 @@ class CommandPrompt(cmd.Cmd):
     def _read_history(self) -> None:
         """Reads the command history from a file."""
         try:
-            readline.read_history_file("{!s}/.mtui_history".format(self.homedir))
-        except IOError as e:
-            logger.debug("failed to open history file: {!s}".format(e))
+            readline.read_history_file(f"{self.homedir!s}/.mtui_history")
+        except OSError as e:
+            logger.debug(f"failed to open history file: {e!s}")
 
-    def _add_subcommand(self, cmd: Type[Command]) -> None:
+    def _add_subcommand(self, cmd: type[Command]) -> None:
         """Adds a subcommand to the prompt.
 
         Args:

@@ -5,7 +5,7 @@ used to export data to a template file.
 """
 
 from .auto import AutoExport
-from .manual import ManualExport
 from .kernel import KernelExport
+from .manual import ManualExport
 
-__all__ = ["AutoExport", "ManualExport", "KernelExport"]
+__all__ = ["AutoExport", "KernelExport", "ManualExport"]

@@ -1,8 +1,8 @@
 """Helper classes and functions for working with test report templates."""
 
+import subprocess
 from logging import getLogger
 from os.path import join
-import subprocess
 
 from ..messages import SvnCheckoutFailed, SvnCheckoutInterruptedError
 from ..types import RequestReviewID
@@ -14,13 +14,9 @@ logger = getLogger("mtui.template")
 class TemplateIOError(IOError):
     """Exception raised for recoverable I/O errors when reading a template."""
 
-    pass
-
 
 class TestReportAlreadyLoaded(RuntimeError):
     """Exception raised when a test report is already loaded."""
-
-    pass
 
 
 def testreport_svn_checkout(config, path: str, rrid: RequestReviewID) -> None:

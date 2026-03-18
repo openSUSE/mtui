@@ -33,8 +33,6 @@ class UserError(UserMessage, RuntimeError):
 class DeprecationMessage(UserMessage):
     """A message for deprecated features."""
 
-    pass
-
 
 class NoRefhostsDefinedError(UserError, ValueError):
     """Raised when an operation is requested without defined refhosts."""
@@ -48,7 +46,7 @@ class HostIsNotConnectedError(UserError, ValueError):
 
     def __init__(self, host) -> None:
         self.host = host
-        self.message = "Host {0!r} is not connected".format(host)
+        self.message = f"Host {host!r} is not connected"
 
 
 class SystemCommandNotFoundError(ErrorMessage):
@@ -73,7 +71,7 @@ class SystemCommandError(ErrorMessage):
     @property
     def message(self):
         """The error message."""
-        return self._message + " rc = {0} Command: {1!r}".format(self.rc, self.command)
+        return self._message + f" rc = {self.rc} Command: {self.command!r}"
 
 
 class UnexpectedlyFastCleanExitFromXdgOpen(UserMessage):
@@ -118,10 +116,10 @@ class ConnectingTargetFailedMessage(UserMessage):
         self.reason = reason
 
     def __str__(self) -> str:
-        return "connecting to {0} failed: {1}".format(self.hostname, self.reason)
+        return f"connecting to {self.hostname} failed: {self.reason}"
 
     def __repr__(self) -> str:
-        return "<{0} {1!r}:{2!r}>".format(self.__class__, self.hostname, self.reason)
+        return f"<{self.__class__} {self.hostname!r}:{self.reason!r}>"
 
 
 class ConnectingToMessage(UserMessage):
@@ -131,7 +129,7 @@ class ConnectingToMessage(UserMessage):
         self.hostname = hostname
 
     def __str__(self) -> str:
-        return "connecting to {0}".format(self.hostname)
+        return f"connecting to {self.hostname}"
 
 
 class MissingPackagesError(UserError):
@@ -163,9 +161,7 @@ class FailedToWriteScriptResult(UserMessage):
         self.reason = reason
 
     def __str__(self) -> str:
-        return "failed to write script output to {0}: {1}".format(
-            self.path, self.reason
-        )
+        return f"failed to write script output to {self.path}: {self.reason}"
 
 
 class StartingCompareScriptError(UserMessage):
@@ -176,9 +172,7 @@ class StartingCompareScriptError(UserMessage):
         self.argv = argv
 
     def __str__(self) -> str:
-        return "Starting compare script {0!r} failed: {1}".format(
-            self.argv, self.reason
-        )
+        return f"Starting compare script {self.argv!r} failed: {self.reason}"
 
 
 class CompareScriptError(UserMessage):
@@ -198,8 +192,8 @@ class CompareScriptFailed(CompareScriptError):
     """A message for when a compare script fails."""
 
     def __str__(self) -> str:
-        return "Compare script {0!r} failed: rc = {1} err:\n{2}".format(
-            self.argv, self.rc, self.stderr
+        return (
+            f"Compare script {self.argv!r} failed: rc = {self.rc} err:\n{self.stderr}"
         )
 
 
@@ -207,7 +201,7 @@ class CompareScriptCrashed(CompareScriptError):
     """A message for when a compare script crashes."""
 
     def __str__(self) -> str:
-        return "Compare script {0!r} crashed:\n{1}".format(self.argv, self.stderr)
+        return f"Compare script {self.argv!r} crashed:\n{self.stderr}"
 
 
 class LocationChangedMessage(UserMessage):
@@ -220,7 +214,7 @@ class LocationChangedMessage(UserMessage):
     @property
     def message(self):
         """The message."""
-        return "changed location from {0!r} to {1!r}".format(self.old, self.new)
+        return f"changed location from {self.old!r} to {self.new!r}"
 
 
 class PackageRevisionHasntChangedWarning(UserMessage):
@@ -244,7 +238,7 @@ class MissingDoerError(ErrorMessage):
     @property
     def message(self):
         """The error message."""
-        return "Missing {0} for {1}".format(self.name, self.release)
+        return f"Missing {self.name} for {self.release}"
 
 
 class MissingPreparerError(MissingDoerError):
@@ -303,7 +297,7 @@ class RepositoryError(ErrorMessage):
 
     def __init__(self, repo) -> None:
         self.repo = repo
-        self.message = "Repository empty {}".format(repo)
+        self.message = f"Repository empty {repo}"
 
 
 class openQAError(ErrorMessage):
@@ -334,4 +328,4 @@ class SVNError(ErrorMessage):
 
     def __init__(self, cmd) -> None:
         self.cmd = cmd
-        self.message: str = "SVN {} command failed".format(cmd)
+        self.message: str = f"SVN {cmd} command failed"

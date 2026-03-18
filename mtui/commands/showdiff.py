@@ -1,11 +1,10 @@
 """The `show_diff` and `analyze_diff` commands."""
 
-from logging import getLogger
 import re
+from logging import getLogger
 
 from mtui.commands import Command
 from mtui.utils import page, requires_update
-
 
 logger = getLogger("mtui.commands.showdiff")
 
@@ -32,8 +31,8 @@ class AnalyzeDiff(Command):
     @requires_update
     def __call__(self) -> None:
         """Executes the `analyze_diff` command."""
-        patchdef = re.compile(r"[+-]Patch(\d*):\s+(.*\.patch)$", flags=re.M)
-        patchapply = re.compile(r"[+-]%patch(\d+|)\s+(?:-p\d*|)", flags=re.M)
+        patchdef = re.compile(r"[+-]Patch(\d*):\s+(.*\.patch)$", flags=re.MULTILINE)
+        patchapply = re.compile(r"[+-]%patch(\d+|)\s+(?:-p\d*|)", flags=re.MULTILINE)
 
         diff = self.metadata.report_wd() / "source.diff"
         text = diff.read_text()

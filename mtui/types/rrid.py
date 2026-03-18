@@ -1,7 +1,8 @@
 """A class for parsing and representing OBS Request Review IDs."""
 
+from collections.abc import Callable, Sequence
 from itertools import zip_longest
-from typing import Any, Callable, Sequence, final
+from typing import Any, final
 
 
 def apply_parser(f, x, cnt):

@@ -204,7 +204,7 @@ class TestReport(ABC):
         missing = {x for x in self._attrs if not getattr(self, x)}
 
         if missing:
-            msg = "TestReport: missing fields: {}".format(missing)
+            msg = f"TestReport: missing fields: {missing}"
             logger.warning(msg)
 
     def get_package_list(self):
@@ -308,7 +308,7 @@ class TestReport(ABC):
         ignore = shutil.ignore_patterns("*.svn")
 
         self._copy_scripts(src, dst, ignore)
-        self._ensure_executable("{0}/*/compare_*".format(dst))
+        self._ensure_executable(f"{dst}/*/compare_*")
 
     def _copy_scripts(self, src: Path, dst: Path, ignore: Callable) -> None:
         """A helper method for copying scripts.
@@ -319,7 +319,7 @@ class TestReport(ABC):
             ignore: A function that returns a set of files to ignore.
         """
         try:
-            logger.debug("Copying scripts: {0} -> {1}".format(src, dst))
+            logger.debug(f"Copying scripts: {src} -> {dst}")
             shutil.copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
@@ -453,7 +453,7 @@ class TestReport(ABC):
                 del self.targets[hostname]
             if hostname in self.systems:
                 del self.systems[hostname]
-            logger.warning("failed to add host {0} to target list".format(hostname))
+            logger.warning(f"failed to add host {hostname} to target list")
             logger.debug(format_exc())
 
     def refhosts_from_tp(self, testplatform) -> None:
@@ -598,7 +598,7 @@ class TestReport(ABC):
 
     def __repr__(self):
         """Returns a string representation of the `TestReport` object."""
-        return "<{0}.{1} {2}>".format(self.__module__, self.__class__.__name__, self.id)
+        return f"<{self.__module__}.{self.__class__.__name__} {self.id}>"
 
     def run_scripts(self, s, targets: HostsGroup) -> None:
         """Runs the scripts for the test report.
@@ -710,7 +710,6 @@ class TestReport(ABC):
     @abstractmethod
     def _update_repos_parser(self) -> dict[Product, str]:
         """An abstract method for parsing update repositories."""
-        pass
 
     def _update_repos_parse(self) -> None:
         """Parses the update repositories."""

@@ -2,11 +2,10 @@
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, IO
+from typing import IO, Any
 
 from .target.hostgroup import HostsGroup
-from .types import RPMVersion
-from .types import System
+from .types import RPMVersion, System
 from .utils import green, red, yellow
 
 
@@ -45,7 +44,7 @@ class CommandPromptDisplay:
             self.println(f"Buglist: {url}/buglist.cgi?bug_id={','.join(ids)}")
             for bug, summary in [(bug, bugs[bug]) for bug in ids]:
                 self.println()
-                self.println("Bug #{0:5}: {1}".format(bug, summary))
+                self.println(f"Bug #{bug:5}: {summary}")
                 self.println(f"{url}/show_bug.cgi?id={bug}")
 
         ids = sorted(jira.keys())
@@ -55,7 +54,7 @@ class CommandPromptDisplay:
         else:
             for issue, summary in [(issue, jira[issue]) for issue in ids]:
                 self.println()
-                self.println("Jira #{0:5}: {1}".format(issue, summary))
+                self.println(f"Jira #{issue:5}: {summary}")
                 self.println(f"https://jira.suse.com/browse/{issue}")
 
     def list_history(self, hostname: str, system: System, lines: list[str]) -> None:
@@ -136,7 +135,7 @@ class CommandPromptDisplay:
                 msg="{0:20} {1:20}: {2}".format(
                     hostname,
                     str(system),
-                    yellow("since {} by {}".format(lock.time(), lockedby)),
+                    yellow(f"since {lock.time()} by {lockedby}"),
                 ),
             )
 
@@ -168,9 +167,7 @@ class CommandPromptDisplay:
             system: The system information for the host.
             timeout: The command timeout in seconds.
         """
-        self.println(
-            "{0:20} {1:20}: {2}s".format(hostname, "({!s})".format(system), timeout)
-        )
+        self.println("{0:20} {1:20}: {2}s".format(hostname, f"({system!s})", timeout))
 
     def list_versions(self, targets: HostsGroup, hosts_pvs) -> None:
         """Displays the version history of packages on a host.
@@ -183,14 +180,14 @@ class CommandPromptDisplay:
             if len(hosts_pvs) > 1:
                 self.println("version history from:")
                 for hn in hs:
-                    self.println("  {} ({})".format(hn, targets[hn].system))
+                    self.println(f"  {hn} ({targets[hn].system})")
                 self.println()
 
             for pkg, vers in pvs:
-                self.println("{}:".format(pkg))
+                self.println(f"{pkg}:")
                 indent = 0
                 for ver in sorted(vers, key=RPMVersion, reverse=True):
-                    self.println("  " * indent + "-> {}".format(ver))
+                    self.println("  " * indent + f"-> {ver}")
                     indent = indent + 1
                 self.println()
 
@@ -237,9 +234,9 @@ class CommandPromptDisplay:
             hostlog: A list of log entries.
             sink: The function to use for printing the log.
         """
-        sink("log from {!s}:".format(hostname))
+        sink(f"log from {hostname!s}:")
         for cmdline, stdout, stderr, exitcode, _ in hostlog:
-            sink("{!s}:~> {!s} [{!s}]".format(hostname, cmdline, exitcode))
+            sink(f"{hostname!s}:~> {cmdline!s} [{exitcode!s}]")
             sink("stdout:")
             for line in stdout.split("\n"):
                 sink(line)

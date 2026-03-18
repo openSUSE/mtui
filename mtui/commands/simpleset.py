@@ -103,7 +103,7 @@ class SetLogLevel(Command):
 
         self.prompt.log.setLevel(level=levels[new])
 
-        logger.info("Log level is set to {}".format(new))
+        logger.info(f"Log level is set to {new}")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

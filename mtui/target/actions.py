@@ -1,18 +1,17 @@
 """Classes for performing actions on groups of target hosts in parallel."""
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable
-from collections.abc import ValuesView
-from pathlib import Path
-from queue import Queue
 import sys
 import threading
-from threading import Lock
 import time
+from abc import ABC, abstractmethod
+from collections.abc import Callable, ValuesView
+from pathlib import Path
+from queue import Queue
+from threading import Lock
 from typing import Any, Optional
 
-from . import Target
 from ..utils import prompt_user
+from . import Target
 
 queue: Queue[tuple[Callable[..., None], list[Any]]] = Queue()
 
@@ -67,7 +66,7 @@ class ThreadedTargetGroup(ABC):
 
     def mk_threads(self) -> None:
         """Creates and starts a thread for each target."""
-        for _ in range(0, len(self.targets)):
+        for _ in range(len(self.targets)):
             self.mk_thread()
 
     def run(self) -> None:
@@ -83,7 +82,6 @@ class ThreadedTargetGroup(ABC):
     @abstractmethod
     def mk_cmd(self, *args, **kwds) -> tuple[Callable[..., None], list[Any]]:
         """An abstract method for creating a command to be executed."""
-        pass
 
     def setup_queue(self) -> None:
         """Sets up the queue with commands to be executed."""
@@ -219,9 +217,7 @@ class RunCommand:
 
             for target in serial:
                 prompt_user(
-                    "press Enter key to proceed with {!s}".format(
-                        serial[target].hostname
-                    ),
+                    f"press Enter key to proceed with {serial[target].hostname!s}",
                     "",
                 )
                 thread = ThreadedMethod(queue)
@@ -246,7 +242,7 @@ class RunCommand:
                     except Exception:
                         pass
                 try:
-                    thread.queue.task_done()  # noqa
+                    thread.queue.task_done()
                 except ValueError:
                     pass
 

@@ -34,7 +34,7 @@ class AutoExport(BaseExport):
         )
         filenames = []
         for i, y in ilogs:
-            fn = "{}_{}_{}.log".format(i.distri.lower(), i.version, i.arch)
+            fn = f"{i.distri.lower()}_{i.version}_{i.arch}.log"
             if y:
                 self._writer(filepath.joinpath(fn), y)
                 filenames.append(Path(fn))

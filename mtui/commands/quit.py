@@ -49,9 +49,7 @@ class Quit(Command):
             concurrent.futures.wait(targets, timeout=45)
 
         try:
-            readline.write_history_file(
-                "{!s}/.mtui_history".format(self.prompt.homedir)
-            )
+            readline.write_history_file(f"{self.prompt.homedir!s}/.mtui_history")
         except Exception:
             pass
 

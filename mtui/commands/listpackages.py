@@ -103,9 +103,7 @@ class ListPackages(Command):
 
                 host_output.append([p, v, state])
 
-            format_output = "{{0:{0}}}: {{1!s:{1}}} {{2}}".format(
-                column_size[0], column_size[1]
-            )
+            format_output = f"{{0:{column_size[0]}}}: {{1!s:{column_size[1]}}} {{2}}"
             for line in host_output:
                 self.printPVLN(line[0], line[1], line[2], format_output)
 

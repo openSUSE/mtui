@@ -28,8 +28,7 @@ class ArgumentParser(argparse.ArgumentParser):
             **kw: Keyword arguments to pass to the parent constructor.
         """
         self.sys = kw.get("sys_", sys)
-        if "sys_" in kw:
-            del kw["sys_"]
+        kw.pop("sys_", None)
 
         super().__init__(*a, **kw)
 

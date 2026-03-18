@@ -13,7 +13,7 @@ logger = getLogger("mtui.types.filelist")
 class FileList(UserList):
     """A list-like object that can be loaded from and saved to a file."""
 
-    __slots__ = ["_hash", "_file", "data"]
+    __slots__ = ["_file", "_hash", "data"]
 
     @classmethod
     def load(cls, path: Path | str, *args, **kwds) -> Self:
@@ -39,7 +39,6 @@ class FileList(UserList):
 
     def read(self) -> None:
         """Does nothing."""
-        pass
 
     def write(self) -> None:
         """Writes the `FileList` to a file."""

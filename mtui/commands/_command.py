@@ -81,7 +81,6 @@ class Command(ABC):
         Args:
             parser: The argument parser.
         """
-        ...
 
     @classmethod
     def argparser(cls, sys) -> ArgumentParser:

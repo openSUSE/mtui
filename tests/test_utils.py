@@ -1,13 +1,10 @@
-from mtui.utils import ensure_dir_exists
-from mtui.utils import chdir
-from mtui.utils import atomic_write_file
-
 import os
-
 from pathlib import Path
 from tempfile import mkdtemp
 
 import pytest
+
+from mtui.utils import atomic_write_file, chdir, ensure_dir_exists
 
 
 @pytest.fixture(scope="function")
@@ -87,10 +84,10 @@ def test_colors():
     Test ANSI color utils
     """
     text = "some text"
-    assert utils.green(text) == "\033[1;32m{!s}\033[1;m\033[0m".format(text)
-    assert utils.red(text) == "\033[1;31m{!s}\033[1;m\033[0m".format(text)
-    assert utils.yellow(text) == "\033[1;33m{!s}\033[1;m\033[0m".format(text)
-    assert utils.blue(text) == "\033[1;34m{!s}\033[1;m\033[0m".format(text)
+    assert utils.green(text) == f"\033[1;32m{text!s}\033[1;m\033[0m"
+    assert utils.red(text) == f"\033[1;31m{text!s}\033[1;m\033[0m"
+    assert utils.yellow(text) == f"\033[1;33m{text!s}\033[1;m\033[0m"
+    assert utils.blue(text) == f"\033[1;34m{text!s}\033[1;m\033[0m"
 
 
 def test_filter_ansi():
