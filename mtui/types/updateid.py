@@ -22,6 +22,7 @@ from ..template.obstestreport import OBSTestReport
 from ..template.pitestreport import PITestReport
 from ..template.sltestreport import SLTestReport
 from ..template.testreport import TestReport
+from ..utils import prompt_user
 from . import RequestReviewID
 
 logger = getLogger("mtui.types.updateid")
@@ -48,7 +49,7 @@ class UpdateID(ABC):
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def _checkout(self, config: Config) -> TestReport:
+    def _checkout(self, config: Config, interactive: bool) -> TestReport:
         """Checks out a test report from version control.
 
         Args:
@@ -75,10 +76,25 @@ class UpdateID(ABC):
                     tr.read(trpath)
                 except Exception as e:
                     raise e
-        except (InvalidGiteaHash, MissingGiteaToken, FailedGiteaCall) as e:
+        except (MissingGiteaToken, FailedGiteaCall) as e:
             logger.error(e)
             logger.warning("TestReport ins't loaded")
             raise TestReportNotLoadedError
+
+        except InvalidGiteaHash as e:
+            logger.error(e)
+            logger.info(
+                "TestReport has different hash than GiteaPR, please regenerate template"
+            )
+            logger.info(
+                "TestReport can be regenerated here: https://qam.suse.de/reports/%s/log",
+                self.id,
+            )
+            if not prompt_user(
+                "Force continue loading template ? [Y/N]: ", ["yes", "y"], interactive
+            ):
+                raise TestReportNotLoadedError
+            logger.warning("Template is loaded, but hash differs")
 
         return tr
 
@@ -92,7 +108,9 @@ class UpdateID(ABC):
         directory.mkdir(parents=False, exist_ok=True)
 
     @abstractmethod
-    def make_testreport(self, config: Config, autoconnect: bool = True) -> TestReport:
+    def make_testreport(
+        self, config: Config, autoconnect: bool = True, interactive: bool = True
+    ) -> TestReport:
         """An abstract method for creating a `TestReport` instance."""
         ...
 
@@ -131,7 +149,9 @@ class AutoOBSUpdateID(UpdateID):
 
         super().__init__(id_, self.tr_factory(id_), testreport_svn_checkout)
 
-    def make_testreport(self, config: Config, autoconnect: bool = True) -> TestReport:
+    def make_testreport(
+        self, config: Config, autoconnect: bool = True, interactive: bool = True
+    ) -> TestReport:
         """Creates a `TestReport` instance for an automatic OBS update.
 
         Args:
@@ -142,7 +162,7 @@ class AutoOBSUpdateID(UpdateID):
             A `TestReport` instance.
         """
         try:
-            tr = self._checkout(config)
+            tr = self._checkout(config, interactive)
         except TestReportNotLoadedError:
             return NullTestReport(config)
 
@@ -203,7 +223,9 @@ class KernelOBSUpdateID(UpdateID):
         directory: Path = config.template_dir / str(self.id) / "results"
         directory.mkdir(parents=False, exist_ok=True)
 
-    def make_testreport(self, config: Config, autoconnect: bool = False) -> TestReport:
+    def make_testreport(
+        self, config: Config, autoconnect: bool = False, interactive: bool = True
+    ) -> TestReport:
         """Creates a `TestReport` instance for a kernel OBS update.
 
         Args:
@@ -214,7 +236,7 @@ class KernelOBSUpdateID(UpdateID):
             A `TestReport` instance.
         """
         try:
-            tr = self._checkout(config)
+            tr = self._checkout(config, interactive)
         except TestReportNotLoadedError:
             return NullTestReport(config)
 
