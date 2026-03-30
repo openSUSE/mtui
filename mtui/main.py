@@ -64,6 +64,7 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
     config.distro, config.distro_ver, config.distro_kernel = detect_system()  # type: ignore
 
     prompt = CommandPrompt(config, logger, sys, CommandPromptDisplay)
+    prompt.interactive = not args.noninteractive
     if args.update:
         if args.update.kind == "kernel":
             config.kernel = True  # type: ignore
@@ -89,8 +90,6 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
                 prompt.do_add_host(x.print_args())
             except BaseException:
                 pass
-
-    prompt.interactive = not args.noninteractive
 
     if args.prerun:
         if args.prerun.is_file():
