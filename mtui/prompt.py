@@ -307,7 +307,7 @@ class CommandPrompt(cmd.Cmd):
             update: The update to load.
             autoconnect: Whether to automatically connect to hosts.
         """
-        tr = update.make_testreport(self.config, autoconnect=autoconnect)
+        tr = update.make_testreport(self.config, autoconnect, self.interactive)
         self.metadata = tr
         self.targets = tr.targets
         self.set_prompt(None)
