@@ -156,15 +156,16 @@ class TestReport(ABC):
             path: The path to the test report file.
         """
         self._open_and_parse(path)
-        result = self.check_hash()
-        if not result[0]:
-            raise InvalidGiteaHash(self.id, result[1], result[2])
         self.path = path.resolve()
         self._update_repos_parse()
         if self.config.chdir_to_template_dir:  # type: ignore
             os.chdir(path.parent)
 
         self.copy_scripts()
+
+        result = self.check_hash()
+        if not result[0]:
+            raise InvalidGiteaHash(self.id, result[1], result[2])
 
     @abstractmethod
     def check_hash(self) -> tuple[bool, str, str]:
