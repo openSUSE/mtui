@@ -34,6 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 keyring = ["keyring"]
 norpm = ["version_utils"]
+notify = ["notify"]
 
 [dependency-groups]
 dev = [
@@ -50,11 +51,21 @@ mtui = "mtui.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
+include = ["mtui*"]
 exclude = [
     "*.tests",
     "*.tests.*", 
     "tests.*",
     "tests"
+]
+
+[tool.setuptools.package-data]
+mtui = [
+    "terms/*",
+    "scripts/*",
+    "helper/*",
+    "Documentation/*",
+    "*.rst",
 ]
 
 [tool.setuptools.dynamic]
