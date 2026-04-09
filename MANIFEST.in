@@ -1,6 +1,7 @@
-include term*sh
+recursive-include terms term*sh
 recursive-include scripts *
 recursive-include helper *
 include Documentation/*
 include *.rst
 recursive-include tests *
+exclude dist
