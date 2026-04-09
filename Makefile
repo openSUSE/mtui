@@ -11,7 +11,7 @@ checkstyle:
 
 .PHONY: tidy
 tidy:
-	black ./
+	ruff format ./
 
 .PHONY: test-with-coverage
 test-with-coverage:
