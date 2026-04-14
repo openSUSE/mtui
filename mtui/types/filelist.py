@@ -15,6 +15,9 @@ class FileList(UserList):
 
     __slots__ = ["_file", "_hash", "data"]
 
+    _file: Path
+    _hash: int
+
     @classmethod
     def load(cls, path: Path | str, *args, **kwds) -> Self:
         """Loads a `FileList` from a file.

@@ -5,6 +5,7 @@ import re
 from itertools import zip_longest
 from logging import getLogger
 from pathlib import Path
+from typing import Any
 
 from ..types import FileList
 from .base import BaseExport
@@ -14,6 +15,9 @@ logger = getLogger("mtui.export.manual")
 
 class ManualExport(BaseExport):
     """An exporter for the manual workflow."""
+
+    # Injected via BaseExport.__init__(**kwargs)
+    results: Any
 
     def get_logs(self, hosts, *args, **kwds) -> list[Path]:
         """Gets the logs from the target hosts.
