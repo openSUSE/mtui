@@ -1,396 +1,337 @@
 """Tests for the mtui hostgroup module."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
+import pytest
+
+from mtui.exceptions import UpdateError
+from mtui.messages import HostIsNotConnectedError
 from mtui.target.hostgroup import HostsGroup
+from mtui.target.locks import TargetLockedError
+
+
+# --- Initialization and selection ---
 
 
 def test_hostgroup_init():
-    """Test HostsGroup initialization with various parameters."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+    """Test HostsGroup initialization creates correct mapping."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "host1.example.com"
+    t2.hostname = "host2.example.com"
 
-    # Set up hostnames for the mocks
-    mock_target1.hostname = "host1.example.com"
-    mock_target2.hostname = "host2.example.com"
+    hg = HostsGroup([t1, t2])
 
-    # Test basic initialization
-    hostgroup = HostsGroup([mock_target1, mock_target2])
+    assert len(hg) == 2
+    assert "host1.example.com" in hg
+    assert "host2.example.com" in hg
+    assert hg["host1.example.com"] is t1
 
-    assert isinstance(hostgroup, HostsGroup)
-    assert len(hostgroup) == 2
-    assert "host1.example.com" in hostgroup
-    assert "host2.example.com" in hostgroup
+
+def test_hostgroup_init_empty():
+    """Test HostsGroup initialization with empty list."""
+    hg = HostsGroup([])
+    assert len(hg) == 0
+    assert hg.names() == []
 
 
 def test_hostgroup_select_all():
-    """Test HostsGroup select method with no filtering."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+    """Test select() with no args returns self."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    hg = HostsGroup([t1])
 
-    # Set up hostnames
-    mock_target1.hostname = "host1.example.com"
-    mock_target2.hostname = "host2.example.com"
-
-    # Test select all hosts
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    # Select all hosts
-    selected = hostgroup.select()
-
-    assert isinstance(selected, HostsGroup)
-    assert len(selected) == 2
-    assert "host1.example.com" in selected
-    assert "host2.example.com" in selected
+    selected = hg.select()
+    assert selected is hg
 
 
 def test_hostgroup_select_enabled_only():
-    """Test HostsGroup select method with enabled hosts only."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+    """Test select(enabled=True) filters out disabled hosts."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "h1"
+    t2.hostname = "h2"
+    t1.state = "enabled"
+    t2.state = "disabled"
 
-    # Set up hostnames and states
-    mock_target1.hostname = "host1.example.com"
-    mock_target2.hostname = "host2.example.com"
-    mock_target1.state = "enabled"
-    mock_target2.state = "disabled"
+    hg = HostsGroup([t1, t2])
+    selected = hg.select(enabled=True)
 
-    # Test select only enabled hosts
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    selected = hostgroup.select(enabled=True)
-
-    assert isinstance(selected, HostsGroup)
     assert len(selected) == 1
-    assert "host1.example.com" in selected
-    assert "host2.example.com" not in selected
+    assert "h1" in selected
+    assert "h2" not in selected
 
 
 def test_hostgroup_select_by_hostname():
-    """Test HostsGroup select method with specific hostnames."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+    """Test select() with specific hostnames."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "h1"
+    t2.hostname = "h2"
 
-    # Set up hostnames
-    mock_target1.hostname = "host1.example.com"
-    mock_target2.hostname = "host2.example.com"
+    hg = HostsGroup([t1, t2])
+    selected = hg.select(["h1"])
 
-    # Test select specific hosts
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    selected = hostgroup.select(["host1.example.com"])
-
-    assert isinstance(selected, HostsGroup)
     assert len(selected) == 1
-    assert "host1.example.com" in selected
-    assert "host2.example.com" not in selected
+    assert "h1" in selected
 
 
-def test_hostgroup_unlock():
-    """Test HostsGroup unlock method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+def test_hostgroup_select_nonexistent_host_raises():
+    """Test select() with unknown hostname raises HostIsNotConnectedError."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    hg = HostsGroup([t1])
 
-    # Setup mocks
-    mock_target1.unlock.return_value = None
-    mock_target2.unlock.return_value = None
-
-    # Test unlock method
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    # Call unlock
-    hostgroup.unlock("test comment")
-
-    # Verify unlock was called on both targets
-    mock_target1.unlock.assert_called_once_with("test comment")
-    mock_target2.unlock.assert_called_once_with("test comment")
+    with pytest.raises(HostIsNotConnectedError):
+        hg.select(["unknown-host"])
 
 
-def test_hostgroup_lock():
-    """Test HostsGroup lock method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+def test_hostgroup_select_enabled_and_by_hostname():
+    """Test select() filtering by hostname AND enabled state."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "h1"
+    t2.hostname = "h2"
+    t1.state = "disabled"
+    t2.state = "enabled"
 
-    # Setup mocks
-    mock_target1.lock.return_value = None
-    mock_target2.lock.return_value = None
+    hg = HostsGroup([t1, t2])
+    selected = hg.select(["h1", "h2"], enabled=True)
 
-    # Test lock method
-    hostgroup = HostsGroup([mock_target1, mock_target2])
+    assert len(selected) == 1
+    assert "h2" in selected
 
-    # Call lock
-    hostgroup.lock("test comment")
 
-    # Verify lock was called on both targets
-    mock_target1.lock.assert_called_once_with("test comment")
-    mock_target2.lock.assert_called_once_with("test comment")
+# --- Lock/unlock delegation ---
+
+
+def test_hostgroup_unlock_delegates():
+    """Test unlock() calls unlock on every target."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "h1"
+    t2.hostname = "h2"
+
+    hg = HostsGroup([t1, t2])
+    hg.unlock("test_comment")
+
+    t1.unlock.assert_called_once_with("test_comment")
+    t2.unlock.assert_called_once_with("test_comment")
+
+
+def test_hostgroup_unlock_suppresses_target_locked_error():
+    """Test unlock() suppresses TargetLockedError from individual targets."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    t1.unlock.side_effect = TargetLockedError("locked by someone")
+
+    hg = HostsGroup([t1])
+    hg.unlock()  # should not raise
+
+
+def test_hostgroup_lock_delegates():
+    """Test lock() calls lock on every target."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "h1"
+    t2.hostname = "h2"
+
+    hg = HostsGroup([t1, t2])
+    hg.lock("comment")
+
+    t1.lock.assert_called_once_with("comment")
+    t2.lock.assert_called_once_with("comment")
+
+
+def test_hostgroup_lock_suppresses_target_locked_error():
+    """Test lock() suppresses TargetLockedError from individual targets."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    t1.lock.side_effect = TargetLockedError("locked")
+
+    hg = HostsGroup([t1])
+    hg.lock()  # should not raise
+
+
+# --- Query and history delegation ---
 
 
 def test_hostgroup_query_versions():
-    """Test HostsGroup query_versions method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+    """Test query_versions delegates to each target."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "h1"
+    t2.hostname = "h2"
+    t1.query_package_versions.return_value = {"pkg": "1.0"}
+    t2.query_package_versions.return_value = {"pkg": "2.0"}
 
-    # Setup mocks
-    mock_target1.query_package_versions.return_value = {"pkg1": "1.0"}
-    mock_target2.query_package_versions.return_value = {"pkg2": "2.0"}
+    hg = HostsGroup([t1, t2])
+    result = hg.query_versions(["pkg"])
 
-    # Test query_versions method
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    result = hostgroup.query_versions(["pkg1", "pkg2"])
-
-    # Verify the method returns correct structure
-    assert isinstance(result, list)
     assert len(result) == 2
-
-    # Verify query_package_versions was called on each target
-    mock_target1.query_package_versions.assert_called_once_with(["pkg1", "pkg2"])
-    mock_target2.query_package_versions.assert_called_once_with(["pkg1", "pkg2"])
+    t1.query_package_versions.assert_called_once_with(["pkg"])
+    t2.query_package_versions.assert_called_once_with(["pkg"])
 
 
 def test_hostgroup_add_history():
-    """Test HostsGroup add_history method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+    """Test add_history delegates to each target."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
 
-    # Setup mocks
-    mock_target1.add_history.return_value = None
-    mock_target2.add_history.return_value = None
+    hg = HostsGroup([t1])
+    hg.add_history("data")
 
-    # Test add_history method
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    # Call add_history
-    hostgroup.add_history("test history data")
-
-    # Verify add_history was called on both targets
-    mock_target1.add_history.assert_called_once_with("test history data")
-    mock_target2.add_history.assert_called_once_with("test history data")
+    t1.add_history.assert_called_once_with("data")
 
 
 def test_hostgroup_names():
-    """Test HostsGroup names method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+    """Test names() returns all hostnames."""
+    t1 = MagicMock()
+    t2 = MagicMock()
+    t1.hostname = "alpha"
+    t2.hostname = "beta"
 
-    # Set up hostnames
-    mock_target1.hostname = "host1.example.com"
-    mock_target2.hostname = "host2.example.com"
+    hg = HostsGroup([t1, t2])
+    names = hg.names()
 
-    # Test names method
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    result = hostgroup.names()
-
-    # Verify the method returns correct list
-    assert isinstance(result, list)
-    assert len(result) == 2
-    assert "host1.example.com" in result
-    assert "host2.example.com" in result
+    assert set(names) == {"alpha", "beta"}
 
 
-def test_hostgroup_update_lock():
-    """Test HostsGroup update_lock method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
-
-    # Setup mocks to avoid full execution
-    mock_target1.is_locked.return_value = False
-    mock_target2.is_locked.return_value = False
-
-    # Test update_lock method (this tests that the method exists and can be called)
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    # Call update_lock - should not raise exceptions
-    try:
-        hostgroup.update_lock()
-        assert True  # Method executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the method exists and can be called in a basic way
-        assert True
+# --- update_lock ---
 
 
-def test_hostgroup_perform_install():
-    """Test HostsGroup perform_install method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+@patch("mtui.target.hostgroup.ThreadedMethod")
+@patch("mtui.target.hostgroup.queue")
+def test_update_lock_locks_unlocked_hosts(mock_queue, mock_thread_cls):
+    """Test update_lock() locks hosts that are not locked."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    t1.is_locked.return_value = False
 
-    # Setup mocks to avoid full execution
-    mock_target1.get_installer.return_value = {
-        "command": MagicMock(),
-        "reboot": MagicMock(),
+    hg = HostsGroup([t1])
+    hg.update_lock()
+
+    t1.lock.assert_called_once()
+
+
+@patch("mtui.target.hostgroup.ThreadedMethod")
+@patch("mtui.target.hostgroup.queue")
+def test_update_lock_raises_when_locked_by_other(mock_queue, mock_thread_cls):
+    """Test update_lock() raises UpdateError when host is locked by another user."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    t1.is_locked.return_value = True
+
+    # Use configure_mock to set _lock since MagicMock has an internal _lock attribute
+    mock_lock = MagicMock()
+    mock_lock.is_mine.return_value = False
+    mock_lock.time.return_value = "Monday, 01.01.2024 12:00 UTC"
+    mock_lock.locked_by.return_value = "otheruser"
+    mock_lock.comment.return_value = ""
+    type(t1)._lock = PropertyMock(return_value=mock_lock)
+
+    hg = HostsGroup([t1])
+
+    with pytest.raises(UpdateError, match="Hosts locked"):
+        hg.update_lock()
+
+
+# --- perform_install ---
+
+
+@patch("mtui.target.hostgroup.ThreadedMethod")
+@patch("mtui.target.hostgroup.queue")
+@patch("mtui.target.hostgroup.RunCommand")
+def test_perform_install_runs_and_unlocks(mock_run, mock_queue, mock_thread):
+    """Test perform_install runs commands and always unlocks."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    t1.is_locked.return_value = False
+    t1.transactional = False
+    t1.get_installer.return_value = {
+        "command": MagicMock(substitute=MagicMock(return_value="zypper in pkg")),
+        "reboot": MagicMock(substitute=MagicMock(return_value="")),
     }
-    mock_target2.get_installer.return_value = {
-        "command": MagicMock(),
-        "reboot": MagicMock(),
-    }
+    t1.get_installer_check.return_value = MagicMock()
 
-    # Test perform_install method (this tests that the method exists and can be called)
-    hostgroup = HostsGroup([mock_target1, mock_target2])
+    hg = HostsGroup([t1])
+    hg.perform_install(["pkg"])
 
-    # Call perform_install - should not raise exceptions for basic execution
-    try:
-        hostgroup.perform_install(["pkg1", "pkg2"])
-        assert True  # Method executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the method exists and can be called in a basic way
-        assert True
+    # Verify unlock was called (cleanup always happens)
+    t1.unlock.assert_called()
 
 
-def test_hostgroup_perform_uninstall():
-    """Test HostsGroup perform_uninstall method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
-
-    # Setup mocks to avoid full execution
-    mock_target1.get_uninstaller.return_value = {
-        "command": MagicMock(),
-        "reboot": MagicMock(),
-    }
-    mock_target2.get_uninstaller.return_value = {
-        "command": MagicMock(),
-        "reboot": MagicMock(),
-    }
-
-    # Test perform_uninstall method (this tests that the method exists and can be called)
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    # Call perform_uninstall - should not raise exceptions for basic execution
-    try:
-        hostgroup.perform_uninstall(["pkg1", "pkg2"])
-        assert True  # Method executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the method exists and can be called in a basic way
-        assert True
-
-
-def test_hostgroup_perform_prepare():
-    """Test HostsGroup perform_prepare method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
-
-    # Setup mocks to avoid full execution
-    mock_target1.get_preparer.return_value = {
-        "start_command": MagicMock(),
-        "reboot": MagicMock(),
-    }
-    mock_target2.get_preparer.return_value = {
-        "start_command": MagicMock(),
-        "reboot": MagicMock(),
+@patch("mtui.target.hostgroup.ThreadedMethod")
+@patch("mtui.target.hostgroup.queue")
+@patch("mtui.target.hostgroup.RunCommand")
+def test_perform_install_unlocks_on_error(mock_run, mock_queue, mock_thread):
+    """Test perform_install unlocks even when commands raise."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    t1.is_locked.return_value = False
+    t1.transactional = False
+    t1.get_installer.return_value = {
+        "command": MagicMock(substitute=MagicMock(return_value="zypper in pkg")),
+        "reboot": MagicMock(substitute=MagicMock(return_value="")),
     }
 
-    # Test perform_prepare method (this tests that the method exists and can be called)
-    hostgroup = HostsGroup([mock_target1, mock_target2])
+    hg = HostsGroup([t1])
+    # Make run raise
+    mock_run.return_value.run.side_effect = RuntimeError("connection lost")
 
-    # Call perform_prepare - should not raise exceptions for basic execution
-    try:
-        hostgroup.perform_prepare(["pkg1", "pkg2"], "testreport")
-        assert True  # Method executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the method exists and can be called in a basic way
-        assert True
+    with pytest.raises(RuntimeError, match="connection lost"):
+        hg.perform_install(["pkg"])
+
+    # unlock must still be called
+    t1.unlock.assert_called()
 
 
-def test_hostgroup_perform_downgrade():
-    """Test HostsGroup perform_downgrade method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
-
-    # Setup mocks to avoid full execution
-    mock_target1.get_downgrader.return_value = {
-        "init_snapshot": MagicMock(),
-        "list_command": MagicMock(),
-        "command": MagicMock(),
-        "reboot": MagicMock(),
-    }
-    mock_target2.get_downgrader.return_value = {
-        "init_snapshot": MagicMock(),
-        "list_command": MagicMock(),
-        "command": MagicMock(),
-        "reboot": MagicMock(),
-    }
-
-    # Test perform_downgrade method (this tests that the method exists and can be called)
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    # Call perform_downgrade - should not raise exceptions for basic execution
-    try:
-        hostgroup.perform_downgrade(["pkg1", "pkg2"], "testreport")
-        assert True  # Method executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the method exists and can be called in a basic way
-        assert True
+# --- Report methods ---
 
 
-def test_hostgroup_perform_update():
-    """Test HostsGroup perform_update method."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+def test_report_self_delegates():
+    """Test report_self delegates to each target with a sink."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    sink = MagicMock()
 
-    # Setup mocks to avoid full execution
-    mock_target1.get_updater.return_value = {
-        "command": MagicMock(),
-        "reboot": MagicMock(),
-    }
-    mock_target2.get_updater.return_value = {
-        "command": MagicMock(),
-        "reboot": MagicMock(),
-    }
+    hg = HostsGroup([t1])
+    hg.report_self(sink)
 
-    # Test perform_update method (this tests that the method exists and can be called)
-    hostgroup = HostsGroup([mock_target1, mock_target2])
-
-    # Call perform_update - should not raise exceptions for basic execution
-    try:
-        hostgroup.perform_update("testreport", ["param1", "param2"])
-        assert True  # Method executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the method exists and can be called in a basic way
-        assert True
+    t1.report_self.assert_called_once_with(sink)
 
 
-def test_hostgroup_report_methods():
-    """Test HostsGroup report methods."""
-    # Create mock targets
-    mock_target1 = MagicMock()
-    mock_target2 = MagicMock()
+def test_report_locks_delegates():
+    """Test report_locks delegates to each target."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    sink = MagicMock()
 
-    # Test report methods (this tests that the methods exist and can be called)
-    hostgroup = HostsGroup([mock_target1, mock_target2])
+    hg = HostsGroup([t1])
+    hg.report_locks(sink)
 
-    # Call report methods - should not raise exceptions for basic execution
-    try:
-        hostgroup.report_self(lambda *args: None)
-        hostgroup.report_history(lambda *args: None, 10, ["event1"])
-        hostgroup.report_locks(lambda *args: None)
-        hostgroup.report_timeout(lambda *args: None)
-        hostgroup.report_sessions(lambda *args: None)
-        hostgroup.report_log(lambda *args: None, "arg")
-        hostgroup.report_products(lambda *args: None)
-        assert True  # All methods executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the methods exist and can be called in a basic way
-        assert True
+    t1.report_locks.assert_called_once_with(sink)
+
+
+def test_report_timeout_delegates():
+    """Test report_timeout delegates to each target."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    sink = MagicMock()
+
+    hg = HostsGroup([t1])
+    hg.report_timeout(sink)
+
+    t1.report_timeout.assert_called_once_with(sink)
+
+
+def test_report_products_delegates():
+    """Test report_products delegates to each target."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    sink = MagicMock()
+
+    hg = HostsGroup([t1])
+    hg.report_products(sink)
+
+    t1.report_products.assert_called_once_with(sink)

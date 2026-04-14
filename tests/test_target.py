@@ -2,29 +2,35 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from mtui.target import Target
+from mtui.types import HostLog, Package
+from mtui.types.rpmver import RPMVersion
+from mtui.types.systems import System
+from mtui.types.product import Product
 
 
-def test_target_init():
-    """Test Target initialization with various parameters."""
-    mock_config = MagicMock()
+# --- Initialization ---
 
-    # Test basic initialization
+
+def test_target_init_defaults(mock_config):
+    """Test Target initialization with default parameters."""
     target = Target(mock_config, "test-host.example.com")
 
-    assert target.config == mock_config
+    assert target.config is mock_config
     assert target.host == "test-host.example.com"
     assert target.hostname == "test-host.example.com"
+    assert target.port == ""
     assert target.state == "enabled"
     assert target._timeout == 300
     assert target.exclusive is False
+    assert target.transactional is False
+    assert target.packages == {}
 
 
-def test_target_init_with_port():
-    """Test Target initialization with port specified."""
-    mock_config = MagicMock()
-
-    # Test initialization with port
+def test_target_init_with_port(mock_config):
+    """Test Target initialization with port in hostname."""
     target = Target(mock_config, "test-host.example.com:2222")
 
     assert target.host == "test-host.example.com"
@@ -32,211 +38,361 @@ def test_target_init_with_port():
     assert target.hostname == "test-host.example.com:2222"
 
 
-def test_target_init_with_packages():
-    """Test Target initialization with packages."""
-    mock_config = MagicMock()
+def test_target_init_with_packages(mock_config):
+    """Test Target initialization with packages dict."""
+    packages = {"standard": {"bash": "5.1-1.2"}}
+    target = Target(mock_config, "host.example.com", packages)
 
-    # Test initialization with packages
-    packages = {"pkg1": {"version": "1.0"}}
-    target = Target(mock_config, "test-host.example.com", packages)
-
-    assert target.config == mock_config
-    assert target.host == "test-host.example.com"
     assert target._pkgs == packages
 
 
-def test_target_init_with_state():
+def test_target_init_with_state(mock_config):
     """Test Target initialization with different states."""
-    mock_config = MagicMock()
-
-    # Test initialization with different state
-    target = Target(mock_config, "test-host.example.com", state="disabled")
-
-    assert target.state == "disabled"
+    for state in ("enabled", "disabled", "serial", "parallel"):
+        target = Target(mock_config, "host.example.com", state=state)
+        assert target.state == state
 
 
-def test_target_init_with_timeout():
+def test_target_init_with_timeout(mock_config):
     """Test Target initialization with custom timeout."""
-    mock_config = MagicMock()
-
-    # Test initialization with custom timeout
-    target = Target(mock_config, "test-host.example.com", timeout=600)
-
+    target = Target(mock_config, "host.example.com", timeout=600)
     assert target._timeout == 600
 
 
-def test_target_init_with_exclusive():
+def test_target_init_with_exclusive(mock_config):
     """Test Target initialization with exclusive mode."""
-    mock_config = MagicMock()
-
-    # Test initialization with exclusive mode
-    target = Target(mock_config, "test-host.example.com", exclusive=True)
-
+    target = Target(mock_config, "host.example.com", exclusive=True)
     assert target.exclusive is True
 
 
-def test_target_init_with_custom_classes():
+def test_target_init_custom_classes(mock_config):
     """Test Target initialization with custom lock and connection classes."""
-    mock_config = MagicMock()
-
-    # Test initialization with custom classes
     mock_lock_class = MagicMock()
-    mock_connection_class = MagicMock()
+    mock_conn_class = MagicMock()
 
     target = Target(
         mock_config,
-        "test-host.example.com",
+        "host.example.com",
         lock=mock_lock_class,
-        connection=mock_connection_class,
+        connection=mock_conn_class,
     )
 
-    assert target.TargetLock == mock_lock_class
-    assert target.Connection == mock_connection_class
+    assert target.TargetLock is mock_lock_class
+    assert target.Connection is mock_conn_class
 
 
-def test_target_repr_str():
-    """Test Target __repr__ and __str__ methods."""
-    mock_config = MagicMock()
-
-    target = Target(mock_config, "test-host.example.com")
-
-    # Test string representations
-    repr_result = repr(target)
-    str_result = str(target)
-
-    assert "Target" in repr_result
-    assert "test-host.example.com" in repr_result
-    assert str_result == "test-host.example.com"
+# --- String representation ---
 
 
-def test_target_last_methods():
-    """Test Target last* methods."""
-    mock_config = MagicMock()
+def test_target_repr(mock_config):
+    """Test Target __repr__."""
+    target = Target(mock_config, "host.example.com")
+    assert "Target" in repr(target)
+    assert "host.example.com" in repr(target)
 
-    target = Target(mock_config, "test-host.example.com")
 
-    # Test methods that should return empty strings when no output
+def test_target_str(mock_config):
+    """Test Target __str__ returns hostname."""
+    target = Target(mock_config, "host.example.com")
+    assert str(target) == "host.example.com"
+
+
+# --- last* methods ---
+
+
+def test_last_methods_empty(mock_config):
+    """Test last* methods return empty strings when no output."""
+    target = Target(mock_config, "host.example.com")
     assert target.lastin() == ""
     assert target.lastout() == ""
     assert target.lasterr() == ""
     assert target.lastexit() == ""
 
 
-def test_target_lock_unlock():
-    """Test Target lock/unlock methods."""
-    mock_config = MagicMock()
+def test_last_methods_with_output(mock_config):
+    """Test last* methods after appending output."""
+    target = Target(mock_config, "host.example.com")
+    target.out = HostLog()
+    target.out.append(["ls -la", "file1\nfile2\n", "warning\n", 0, 5])
 
-    target = Target(mock_config, "test-host.example.com")
+    assert target.lastin() == "ls -la"
+    assert "file1" in target.lastout()
+    assert "warning" in target.lasterr()
+    assert target.lastexit() == 0
 
-    # Mock the lock to avoid complex setup
+
+# --- lock/unlock ---
+
+
+def test_target_lock_delegates(mock_config):
+    """Test lock() delegates to _lock."""
+    target = Target(mock_config, "host.example.com")
     target._lock = MagicMock()
 
-    # Test lock and unlock methods (should not raise exceptions)
     target.lock("test comment")
+    target._lock.lock.assert_called_once_with("test comment")
+
+
+def test_target_unlock_delegates(mock_config):
+    """Test unlock() delegates to _lock."""
+    target = Target(mock_config, "host.example.com")
+    target._lock = MagicMock()
+
     target.unlock()
-
-    # Should not raise an exception
-    assert True
+    target._lock.unlock.assert_called_once_with(False)
 
 
-def test_target_report_methods():
-    """Test Target report methods."""
-    mock_config = MagicMock()
+def test_target_unlock_with_force(mock_config):
+    """Test unlock(force=True) passes force flag."""
+    target = Target(mock_config, "host.example.com")
+    target._lock = MagicMock()
 
-    target = Target(mock_config, "test-host.example.com")
-
-    # Test report methods (should not raise exceptions)
-    # These methods typically call other functions with callbacks
-    try:
-        target.report_self(lambda *args: None)
-        target.report_history(lambda *args: None)
-        target.report_locks(lambda *args: None)
-        target.report_timeout(lambda *args: None)
-        target.report_sessions(lambda *args: None)
-        target.report_log(lambda *args: None, "arg")
-        target.report_products(lambda *args: None)
-        assert True  # All methods executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the methods exist and can be called in a basic way
-        assert True
+    target.unlock(force=True)
+    target._lock.unlock.assert_called_once_with(True)
 
 
-def test_target_getter_methods():
-    """Test Target getter methods."""
-    mock_config = MagicMock()
-
-    target = Target(mock_config, "test-host.example.com")
-
-    # Test various getter methods (should not raise exceptions)
-    # These methods typically return dictionaries or call other functions
-    try:
-        target.get_installer()
-        target.get_installer_check()
-        target.get_uninstaller()
-        target.get_uninstaller_check()
-        target.get_downgrader()
-        target.get_downgrader_check()
-        target.get_updater()
-        target.get_updater_check()
-        target.get_preparer()
-        target.get_preparer_check()
-        assert True  # All methods executed without exception
-    except Exception:
-        # If it raises an exception, that's fine - we just want to ensure
-        # the methods exist and can be called in a basic way
-        assert True
+# --- run() state machine ---
 
 
-def test_target_run():
-    """Test Target run method."""
-    mock_config = MagicMock()
+def test_run_enabled_executes_command(mock_config):
+    """Test run() in enabled state executes the command."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.connection.run.return_value = 0
+    target.connection.stdout = "output"
+    target.connection.stderr = ""
+    target.state = "enabled"
 
-    # Test run with different states
-    target = Target(mock_config, "test-host.example.com")
+    target.run("echo hello")
 
-    # Mock connection for basic call
+    target.connection.run.assert_called_once_with("echo hello", None)
+    assert target.lastout() == "output"
+
+
+def test_run_dryrun_does_not_execute(mock_config):
+    """Test run() in dryrun state does not execute command."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.state = "dryrun"
+
+    target.run("rm -rf /")
+
+    target.connection.run.assert_not_called()
+    assert "dryrun" in target.lastout()
+
+
+def test_run_disabled_does_not_execute(mock_config):
+    """Test run() in disabled state does not execute command."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.state = "disabled"
+
+    target.run("some command")
+
+    target.connection.run.assert_not_called()
+
+
+def test_run_handles_command_timeout(mock_config):
+    """Test run() catches CommandTimeout and sets exit code to -1."""
+    from mtui.connection import CommandTimeout
+
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.connection.run.side_effect = CommandTimeout("echo hello")
+    target.state = "enabled"
+
+    target.run("echo hello")
+
+    # Should not raise; exit code should be -1
+    assert target.lastexit() == -1
+
+
+def test_run_handles_generic_exception(mock_config):
+    """Test run() catches generic exceptions and sets exit code to -1."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.connection.run.side_effect = OSError("connection lost")
+    target.state = "enabled"
+
+    target.run("echo hello")
+
+    assert target.lastexit() == -1
+
+
+# --- reconnect ---
+
+
+def test_reconnect_delegates(mock_config):
+    """Test reconnect() delegates to connection."""
+    target = Target(mock_config, "host.example.com")
     target.connection = MagicMock()
 
-    # Test with enabled state (should run command)
-    target.state = "enabled"
-    target.run("test command")
-
-    # Should not raise an exception
-    assert True
-
-
-def test_target_reconnect():
-    """Test Target reconnect method."""
-    mock_config = MagicMock()
-
-    # Test reconnect with mocked connection
-    target = Target(mock_config, "test-host.example.com")
-
-    # Mock the connection to have a reconnect method
-    mock_connection = MagicMock()
-    target.connection = mock_connection
-
-    # Call reconnect
     target.reconnect(3, True)
 
-    # Verify reconnect was called on connection
-    mock_connection.reconnect.assert_called_once_with(3, True)
+    target.connection.reconnect.assert_called_once_with(3, True)
 
 
-def test_target_equality():
-    """Test Target equality methods."""
-    mock_config = MagicMock()
+# --- set_timeout ---
 
-    # Test equality operators - these will fail due to missing system attribute,
-    # but we can at least verify the methods exist and are callable
-    target1 = Target(mock_config, "test-host.example.com")
-    target2 = Target(mock_config, "test-host.example.com")
 
-    # These should work but may not be meaningful without proper system comparison
-    assert hasattr(target1, "__eq__")
-    assert hasattr(target1, "__ne__")
+def test_set_timeout(mock_config):
+    """Test set_timeout updates both connection and internal timeout."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
 
-    # We can verify the methods exist and are callable, even if they fail at runtime
-    assert callable(target1.__eq__)
-    assert callable(target1.__ne__)
+    target.set_timeout(600)
+
+    assert target._timeout == 600
+    assert target.connection.timeout == 600
+
+
+# --- close ---
+
+
+def test_close_unlocks_and_closes(mock_config):
+    """Test close() unlocks and closes the connection."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.connection.is_active.return_value = True
+    target._lock = MagicMock()
+
+    target.close()
+
+    target._lock.unlock.assert_called_once_with(False)
+    target.connection.close.assert_called_once()
+
+
+def test_close_with_reboot(mock_config):
+    """Test close() with reboot action."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.connection.is_active.return_value = True
+    target.connection.run.return_value = 0
+    target.connection.stdout = ""
+    target.connection.stderr = ""
+    target._lock = MagicMock()
+    target.state = "enabled"
+
+    target.close(action="reboot")
+
+    target.connection.close.assert_called_once()
+
+
+def test_close_handles_lost_connection(mock_config):
+    """Test close() handles lost connections gracefully."""
+    target = Target(mock_config, "host.example.com")
+    target.connection = MagicMock()
+    target.connection.is_active.side_effect = Exception("connection lost")
+
+    target.close()  # should not raise
+
+    target.connection.close.assert_called_once()
+
+
+# --- _parse_packages ---
+
+
+def test_parse_packages_standard(mock_config):
+    """Test _parse_packages with 'standard' key."""
+    target = Target(mock_config, "host.example.com")
+    target.system = MagicMock()
+    target.system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
+    target._pkgs = {"standard": {"bash": "5.1-1.2", "openssl": "3.0.8-1.2"}}
+
+    result = target._parse_packages()
+
+    assert "bash" in result
+    assert "openssl" in result
+    assert isinstance(result["bash"], Package)
+    assert result["bash"].required == RPMVersion("5.1-1.2")
+
+
+def test_parse_packages_by_version(mock_config):
+    """Test _parse_packages matches on base version."""
+    target = Target(mock_config, "host.example.com")
+    target.system = MagicMock()
+    target.system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
+    target._pkgs = {
+        "15-SP5": {"bash": "5.1-1.2"},
+        "12-SP5": {"bash": "4.3-1.0"},
+    }
+
+    result = target._parse_packages()
+
+    assert "bash" in result
+    assert result["bash"].required == RPMVersion("5.1-1.2")
+
+
+def test_parse_packages_none(mock_config):
+    """Test _parse_packages with no packages."""
+    target = Target(mock_config, "host.example.com")
+    target.system = MagicMock()
+    target.system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
+    target._pkgs = None
+
+    result = target._parse_packages()
+    assert result == {}
+
+
+# --- report methods with assertions ---
+
+
+def test_report_self_calls_sink(mock_target):
+    """Test report_self calls sink with correct args."""
+    sink = MagicMock()
+    mock_target.report_self(sink)
+
+    sink.assert_called_once_with(
+        mock_target.hostname,
+        mock_target.system,
+        mock_target.transactional,
+        mock_target.state,
+        mock_target.exclusive,
+    )
+
+
+def test_report_history_calls_sink(mock_target):
+    """Test report_history calls sink with correct args."""
+    sink = MagicMock()
+    # Need output to split
+    mock_target.out = HostLog()
+    mock_target.out.append(["cmd", "line1\nline2", "", 0, 0])
+
+    mock_target.report_history(sink)
+
+    sink.assert_called_once()
+    args = sink.call_args[0]
+    assert args[0] == mock_target.hostname
+
+
+def test_report_timeout_calls_sink(mock_target):
+    """Test report_timeout calls sink with timeout."""
+    sink = MagicMock()
+    mock_target.report_timeout(sink)
+
+    sink.assert_called_once()
+    args = sink.call_args[0]
+    assert args[0] == mock_target.hostname
+
+
+# --- sftp delegation ---
+
+
+def test_sftp_put_enabled(mock_target):
+    """Test sftp_put in enabled state delegates to connection."""
+    from pathlib import Path
+
+    mock_target.state = "enabled"
+    mock_target.sftp_put(Path("/local/file"), Path("/remote/file"))
+
+    mock_target.connection.sftp_put.assert_called_once()
+
+
+def test_sftp_put_dryrun(mock_target):
+    """Test sftp_put in dryrun state does not transfer."""
+    from pathlib import Path
+
+    mock_target.state = "dryrun"
+    mock_target.sftp_put(Path("/local/file"), Path("/remote/file"))
+
+    mock_target.connection.sftp_put.assert_not_called()
