@@ -13,7 +13,7 @@ def test_script_base():
     """Test Script base class."""
     tr = MockTestReport()
     path = Path("/tmp/pre_script.sh")
-    script = hooks.PreScript(tr, path)
+    script = hooks.PreScript(tr, path)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     assert "pre script" in str(script)
     assert "<MockTestReport>" in repr(script)
 
@@ -27,8 +27,8 @@ def test_pre_script(monkeypatch):
     targets = MagicMock()
 
     path = Path("/tmp/pre_script.sh")
-    script = hooks.PreScript(tr, path)
-    script._run(targets)
+    script = hooks.PreScript(tr, path)  # type: ignore[arg-type]
+    script._run(targets)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
     targets.sftp_put.assert_any_call(path, "remote_path")
     targets.run.assert_called_once()
@@ -44,7 +44,7 @@ def test_compare_script(mock_run):
     target.hostname = "test_host"
 
     path = Path("/tmp/compare_script.sh")
-    script = hooks.CompareScript(tr, path)
-    script._run_single_target(target)
+    script = hooks.CompareScript(tr, path)  # type: ignore[arg-type]
+    script._run_single_target(target)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
     mock_run.assert_called_once()

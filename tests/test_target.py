@@ -12,7 +12,7 @@ from mtui.types.rpmver import RPMVersion
 
 def test_target_init_defaults(mock_config):
     """Test Target initialization with default parameters."""
-    target = Target(mock_config, "test-host.example.com")
+    target = Target(mock_config, "test-host.example.com")  # type: ignore[arg-type]
 
     assert target.config is mock_config
     assert target.host == "test-host.example.com"
@@ -27,7 +27,7 @@ def test_target_init_defaults(mock_config):
 
 def test_target_init_with_port(mock_config):
     """Test Target initialization with port in hostname."""
-    target = Target(mock_config, "test-host.example.com:2222")
+    target = Target(mock_config, "test-host.example.com:2222")  # type: ignore[arg-type]
 
     assert target.host == "test-host.example.com"
     assert target.port == "2222"
@@ -37,7 +37,7 @@ def test_target_init_with_port(mock_config):
 def test_target_init_with_packages(mock_config):
     """Test Target initialization with packages dict."""
     packages = {"standard": {"bash": "5.1-1.2"}}
-    target = Target(mock_config, "host.example.com", packages)
+    target = Target(mock_config, "host.example.com", packages)  # type: ignore[arg-type]
 
     assert target._pkgs == packages
 
@@ -45,19 +45,19 @@ def test_target_init_with_packages(mock_config):
 def test_target_init_with_state(mock_config):
     """Test Target initialization with different states."""
     for state in ("enabled", "disabled", "serial", "parallel"):
-        target = Target(mock_config, "host.example.com", state=state)
+        target = Target(mock_config, "host.example.com", state=state)  # type: ignore[arg-type]
         assert target.state == state
 
 
 def test_target_init_with_timeout(mock_config):
     """Test Target initialization with custom timeout."""
-    target = Target(mock_config, "host.example.com", timeout=600)
+    target = Target(mock_config, "host.example.com", timeout=600)  # type: ignore[arg-type]
     assert target._timeout == 600
 
 
 def test_target_init_with_exclusive(mock_config):
     """Test Target initialization with exclusive mode."""
-    target = Target(mock_config, "host.example.com", exclusive=True)
+    target = Target(mock_config, "host.example.com", exclusive=True)  # type: ignore[arg-type]
     assert target.exclusive is True
 
 
@@ -66,11 +66,11 @@ def test_target_init_custom_classes(mock_config):
     mock_lock_class = MagicMock()
     mock_conn_class = MagicMock()
 
-    target = Target(
+    target = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        lock=mock_lock_class,
-        connection=mock_conn_class,
+        lock=mock_lock_class,  # ty: ignore[invalid-argument-type]
+        connection=mock_conn_class,  # ty: ignore[invalid-argument-type]
     )
 
     assert target.TargetLock is mock_lock_class
@@ -82,14 +82,14 @@ def test_target_init_custom_classes(mock_config):
 
 def test_target_repr(mock_config):
     """Test Target __repr__."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     assert "Target" in repr(target)
     assert "host.example.com" in repr(target)
 
 
 def test_target_str(mock_config):
     """Test Target __str__ returns hostname."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     assert str(target) == "host.example.com"
 
 
@@ -98,7 +98,7 @@ def test_target_str(mock_config):
 
 def test_last_methods_empty(mock_config):
     """Test last* methods return empty strings when no output."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     assert target.lastin() == ""
     assert target.lastout() == ""
     assert target.lasterr() == ""
@@ -107,7 +107,7 @@ def test_last_methods_empty(mock_config):
 
 def test_last_methods_with_output(mock_config):
     """Test last* methods after appending output."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.out = HostLog()
     target.out.append(["ls -la", "file1\nfile2\n", "warning\n", 0, 5])
 
@@ -122,7 +122,7 @@ def test_last_methods_with_output(mock_config):
 
 def test_target_lock_delegates(mock_config):
     """Test lock() delegates to _lock."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target._lock = MagicMock()
 
     target.lock("test comment")
@@ -131,7 +131,7 @@ def test_target_lock_delegates(mock_config):
 
 def test_target_unlock_delegates(mock_config):
     """Test unlock() delegates to _lock."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target._lock = MagicMock()
 
     target.unlock()
@@ -140,7 +140,7 @@ def test_target_unlock_delegates(mock_config):
 
 def test_target_unlock_with_force(mock_config):
     """Test unlock(force=True) passes force flag."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target._lock = MagicMock()
 
     target.unlock(force=True)
@@ -152,7 +152,7 @@ def test_target_unlock_with_force(mock_config):
 
 def test_run_enabled_executes_command(mock_config):
     """Test run() in enabled state executes the command."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.connection.run.return_value = 0
     target.connection.stdout = "output"
@@ -167,9 +167,9 @@ def test_run_enabled_executes_command(mock_config):
 
 def test_run_dryrun_does_not_execute(mock_config):
     """Test run() in dryrun state does not execute command."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
-    target.state = "dryrun"
+    target.state = "dryrun"  # ty: ignore[invalid-assignment]
 
     target.run("rm -rf /")
 
@@ -179,7 +179,7 @@ def test_run_dryrun_does_not_execute(mock_config):
 
 def test_run_disabled_does_not_execute(mock_config):
     """Test run() in disabled state does not execute command."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.state = "disabled"
 
@@ -192,7 +192,7 @@ def test_run_handles_command_timeout(mock_config):
     """Test run() catches CommandTimeoutError and sets exit code to -1."""
     from mtui.connection import CommandTimeoutError
 
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.connection.run.side_effect = CommandTimeoutError("echo hello")
     target.state = "enabled"
@@ -205,7 +205,7 @@ def test_run_handles_command_timeout(mock_config):
 
 def test_run_handles_generic_exception(mock_config):
     """Test run() catches generic exceptions and sets exit code to -1."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.connection.run.side_effect = OSError("connection lost")
     target.state = "enabled"
@@ -220,7 +220,7 @@ def test_run_handles_generic_exception(mock_config):
 
 def test_reconnect_delegates(mock_config):
     """Test reconnect() delegates to connection."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
 
     target.reconnect(3, True)
@@ -233,7 +233,7 @@ def test_reconnect_delegates(mock_config):
 
 def test_set_timeout(mock_config):
     """Test set_timeout updates both connection and internal timeout."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
 
     target.set_timeout(600)
@@ -247,7 +247,7 @@ def test_set_timeout(mock_config):
 
 def test_close_unlocks_and_closes(mock_config):
     """Test close() unlocks and closes the connection."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.connection.is_active.return_value = True
     target._lock = MagicMock()
@@ -260,7 +260,7 @@ def test_close_unlocks_and_closes(mock_config):
 
 def test_close_with_reboot(mock_config):
     """Test close() with reboot action."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.connection.is_active.return_value = True
     target.connection.run.return_value = 0
@@ -276,7 +276,7 @@ def test_close_with_reboot(mock_config):
 
 def test_close_handles_lost_connection(mock_config):
     """Test close() handles lost connections gracefully."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.connection.is_active.side_effect = Exception("connection lost")
 
@@ -290,7 +290,7 @@ def test_close_handles_lost_connection(mock_config):
 
 def test_parse_packages_standard(mock_config):
     """Test _parse_packages with 'standard' key."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.system = MagicMock()
     target.system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
     target._pkgs = {"standard": {"bash": "5.1-1.2", "openssl": "3.0.8-1.2"}}
@@ -305,7 +305,7 @@ def test_parse_packages_standard(mock_config):
 
 def test_parse_packages_by_version(mock_config):
     """Test _parse_packages matches on base version."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.system = MagicMock()
     target.system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
     target._pkgs = {
@@ -321,7 +321,7 @@ def test_parse_packages_by_version(mock_config):
 
 def test_parse_packages_none(mock_config):
     """Test _parse_packages with no packages."""
-    target = Target(mock_config, "host.example.com")
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.system = MagicMock()
     target.system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
     target._pkgs = None
