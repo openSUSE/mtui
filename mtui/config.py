@@ -13,6 +13,7 @@ from os import getenv
 from pathlib import Path
 from typing import Any
 
+from .datafiles import terms_path
 from .messages import InvalidLocationError
 from .refhost import RefhostsFactory, RefhostsResolveFailed
 
@@ -111,7 +112,6 @@ class Config:
             return Path(p).expanduser()
 
         data: list[tuple[Any, ...]] = [
-            ("datadir", ("mtui", "datadir"), Path("/usr/share/mtui"), expanduser),
             (
                 "template_dir",
                 ("mtui", "template_dir"),
@@ -267,7 +267,7 @@ class Config:
 
     def _list_terms(self) -> None:
         """Finds available terminal scripts."""
-        scripts: list[str] = [x.name[5:-3] for x in self.datadir.glob("term.*.sh")]  # type: ignore
+        scripts: list[str] = [x.name[5:-3] for x in terms_path().glob("term.*.sh")]
         self.termnames = scripts
 
     def _get_option(self, secopt, getter):

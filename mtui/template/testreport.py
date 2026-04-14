@@ -18,6 +18,7 @@ from typing import Any, Literal
 from urllib.request import urlopen
 
 from ..config import Config
+from ..datafiles import scripts_path
 from ..exceptions import InvalidGiteaHash, UpdateError
 from ..messages import MetadataNotLoadedError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
@@ -59,7 +60,7 @@ class TestReport(ABC):
         self.config: Config = config
 
         self._scripts_src_dir: Path = (
-            scripts_src_dir if scripts_src_dir else config.datadir.joinpath("scripts")  # type: ignore
+            scripts_src_dir if scripts_src_dir else scripts_path()
         )
 
         self.directory: Path = config.template_dir
