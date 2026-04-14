@@ -5,7 +5,13 @@ from typing import final
 try:
     import rpm  # type: ignore
 except ImportError:
-    from version_utils import rpm
+    try:
+        from version_utils import rpm
+    except ImportError:
+        raise ImportError(
+            "No RPM version comparison backend found. "
+            "Install mtui[rpm] or mtui[norpm] to provide one."
+        )
 
 
 @final
