@@ -28,11 +28,11 @@ class Quit(Command):
             help="reboot or poweroff refhosts",
         )
 
-    def _close_target(self, target: Target, args) -> None:
+    def _close_target(self, target: str, args) -> None:
         """Closes the connection to a single target host.
 
         Args:
-            target: The target host to close.
+            target: The hostname of the target host to close.
             args: A list of arguments to pass to the close method.
 
         """

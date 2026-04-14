@@ -137,7 +137,7 @@ class GiteaNoReviewError(GiteaError):
 class InvalidGiteaHashError(GiteaError):
     """Raised when Gitea has different hash than testreport metadata."""
 
-    def __init__(self, rrid: "RequestReviewID", old: str, new: str):
+    def __init__(self, rrid: "RequestReviewID | str", old: str, new: str):
         self.id = rrid
         self.old = old
         self.new = new
