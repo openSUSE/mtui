@@ -16,9 +16,7 @@ class MockRefhosts:
 
 
 def test_default_config(tmpdir):
-    """
-    Test default config
-    """
+    """Test default config."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("")
     cfg = config.Config(config_file, refhosts=MockRefhosts)
@@ -27,9 +25,7 @@ def test_default_config(tmpdir):
 
 
 def test_override_default_config(tmpdir):
-    """
-    Test override config
-    """
+    """Test override config."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text(
         "[mtui]\nlocation = test_location\nconnection_timeout = 600\n"
@@ -40,9 +36,7 @@ def test_override_default_config(tmpdir):
 
 
 def test_merge_args(tmpdir):
-    """
-    Test merge_args
-    """
+    """Test merge_args."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("")
     cfg = config.Config(config_file, refhosts=MockRefhosts)

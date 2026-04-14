@@ -13,9 +13,7 @@ class MockSystem(System):
 
 
 def test_println():
-    """
-    Test println
-    """
+    """Test println."""
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     d.println("test message")
@@ -23,9 +21,7 @@ def test_println():
 
 
 def test_list_bugs():
-    """
-    Test list_bugs
-    """
+    """Test list_bugs."""
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     bugs = {"123": "Test bug"}
@@ -38,9 +34,7 @@ def test_list_bugs():
 
 
 def test_list_history():
-    """
-    Test list_history
-    """
+    """Test list_history."""
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     system = MockSystem("test_system")
@@ -52,9 +46,7 @@ def test_list_history():
 
 
 def test_list_host():
-    """
-    Test list_host
-    """
+    """Test list_host."""
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     system = MockSystem("test_system")
@@ -89,9 +81,7 @@ class MockLock:
 
 
 def test_list_locks():
-    """
-    Test list_locks
-    """
+    """Test list_locks."""
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     system = MockSystem("test_system")
@@ -103,9 +93,7 @@ def test_list_locks():
 
 
 def test_list_sessions():
-    """
-    Test list_sessions
-    """
+    """Test list_sessions."""
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     system = MockSystem("test_system")
@@ -116,9 +104,7 @@ def test_list_sessions():
 
 
 def test_list_timeout():
-    """
-    Test list_timeout
-    """
+    """Test list_timeout."""
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     system = MockSystem("test_system")
@@ -128,9 +114,7 @@ def test_list_timeout():
 
 
 def test_show_log():
-    """
-    Test show_log
-    """
+    """Test show_log."""
     output = StringIO()
 
     def sink(msg):

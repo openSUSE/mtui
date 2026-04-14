@@ -91,9 +91,9 @@ class Attributes:
         """
         attributes_list = []
         # typical string:
-        # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11,minor=sp4)
+        # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11,minor=sp4)  # noqa: ERA001
         # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11,minor=)
-        # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11)
+        # base=sles(major=11,minor=sp4);arch=[i386,s390x,x86_64];addon=sdk(major=11)  # noqa: ERA001
         attribute = Attributes()
         arch_list = []
         for pattern in testplatform.split(";"):

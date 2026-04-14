@@ -2,9 +2,7 @@ from mtui import messages
 
 
 def test_messages():
-    """
-    Test all UserMessage subclasses
-    """
+    """Test all UserMessage subclasses."""
     # Test messages with arguments
     assert (
         str(messages.HostIsNotConnectedError("test_host"))

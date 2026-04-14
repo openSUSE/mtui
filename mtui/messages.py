@@ -293,7 +293,7 @@ class ReConnectFailed(ErrorMessage):
 
 
 class RepositoryError(ErrorMessage):
-    """failed to read IBS Repository"""
+    """failed to read IBS Repository."""
 
     def __init__(self, repo) -> None:
         self.repo = repo
@@ -301,14 +301,14 @@ class RepositoryError(ErrorMessage):
 
 
 class openQAError(ErrorMessage):
-    """openQA related Errors"""
+    """openQA related Errors."""
 
     def __init__(self) -> None:
         self.message = "Something wrong with openQA connection"
 
 
 class ResultsMissingError(ErrorMessage):
-    """missing results json file"""
+    """missing results json file."""
 
     def __init__(self, test, arch) -> None:
         self.test = test
@@ -317,14 +317,14 @@ class ResultsMissingError(ErrorMessage):
 
 
 class SMELTError(ErrorMessage):
-    """SMELT related Errors"""
+    """SMELT related Errors."""
 
     def __init__(self) -> None:
         self.message = "Sommething wrong with SMELT connection"
 
 
 class SVNError(ErrorMessage):
-    """SVN related Errors"""
+    """SVN related Errors."""
 
     def __init__(self, cmd) -> None:
         self.cmd = cmd

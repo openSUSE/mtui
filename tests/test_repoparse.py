@@ -5,18 +5,14 @@ from mtui.types import Product
 
 
 def test_parse_product():
-    """
-    Test _parse_product
-    """
+    """Test _parse_product."""
     products = repoparse._parse_product("SLES 15 (x86_64, aarch64)")
     assert Product("SLES", "15", "x86_64") in products
     assert Product("SLES", "15", "aarch64") in products
 
 
 def test_slrepoparse():
-    """
-    Test slrepoparse
-    """
+    """Test slrepoparse."""
     repos = repoparse.slrepoparse("https://example.com", ["SLES 15 (x86_64)"])
     product = Product("SLES", "15", "x86_64")
     # we except repos has product key with exact value
@@ -24,9 +20,7 @@ def test_slrepoparse():
 
 
 def test_gitrepoparse():
-    """
-    Test gitrepoparse
-    """
+    """Test gitrepoparse."""
     repos = repoparse.gitrepoparse("https://example.com", ["SLES 15 (x86_64)"])
     product = Product("SLES", "15", "x86_64")
     # we except repos has product key with exact value
@@ -34,9 +28,7 @@ def test_gitrepoparse():
 
 
 def test_reporepoparse():
-    """
-    Test reporepoparse
-    """
+    """Test reporepoparse."""
     repos = repoparse.reporepoparse(
         frozenset(["https://example.com/SLES-15-x86_64/"]), ["SLES 15 (x86_64)"]
     )
@@ -46,9 +38,7 @@ def test_reporepoparse():
 
 
 def test_obsrepoparse(tmpdir):
-    """
-    Test obsrepoparse
-    """
+    """Test obsrepoparse."""
     project_xml = """
     <project>
       <repository name="SLE-15-x86_64">

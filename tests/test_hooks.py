@@ -10,9 +10,7 @@ class MockTestReport:
 
 
 def test_script_base():
-    """
-    Test Script base class
-    """
+    """Test Script base class."""
     tr = MockTestReport()
     path = Path("/tmp/pre_script.sh")
     script = hooks.PreScript(tr, path)
@@ -21,9 +19,7 @@ def test_script_base():
 
 
 def test_pre_script(monkeypatch):
-    """
-    Test PreScript
-    """
+    """Test PreScript."""
     tr = MagicMock()
     tr.target_wd.return_value = "remote_path"
     tr.report_wd.return_value = "local_path"
@@ -40,9 +36,7 @@ def test_pre_script(monkeypatch):
 
 @patch("subprocess.run")
 def test_compare_script(mock_run):
-    """
-    Test CompareScript
-    """
+    """Test CompareScript."""
     tr = MagicMock()
     tr.report_wd.side_effect = lambda *args, **kwargs: Path("/".join(args))
 

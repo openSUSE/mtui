@@ -4,9 +4,7 @@ from mtui import exceptions
 
 
 def test_request_review_id_parse_error():
-    """
-    Test RequestReviewIDParseError and its subclasses
-    """
+    """Test RequestReviewIDParseError and its subclasses."""
     with pytest.raises(exceptions.RequestReviewIDParseError, match="test message"):
         raise exceptions.RequestReviewIDParseError("test message")
 
@@ -26,9 +24,7 @@ def test_request_review_id_parse_error():
 
 
 def test_update_error():
-    """
-    Test UpdateError
-    """
+    """Test UpdateError."""
     with pytest.raises(exceptions.UpdateError, match="test reason"):
         raise exceptions.UpdateError("test reason")
 
@@ -37,9 +33,7 @@ def test_update_error():
 
 
 def test_gitea_error():
-    """
-    Test GiteaError and its subclasses
-    """
+    """Test GiteaError and its subclasses."""
     from mtui.types import assignment
 
     with pytest.raises(exceptions.GiteaError):

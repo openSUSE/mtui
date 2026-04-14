@@ -11,7 +11,7 @@ from mtui.utils import atomic_write_file, chdir, ensure_dir_exists
 
 @pytest.fixture
 def create_temp(tmpdir_factory):
-    """simple tmpdir_factory wrapper"""
+    """simple tmpdir_factory wrapper."""
     return tmpdir_factory.mktemp("utils")
 
 
@@ -23,8 +23,7 @@ class TestEnsureDirExists:
         ensure_dir_exists(d)
 
     def test_create_exists(self, create_temp):
-        """
-        ensure_dir_exists is obviously supposed to be convergent so second
+        """ensure_dir_exists is obviously supposed to be convergent so second
         call should result in the same state. This test asserts mainly that
         OSError(EEXIST) is not raised on second call.
         """
@@ -79,9 +78,7 @@ def test_atomic_write(create_temp):
 
 
 def test_colors():
-    """
-    Test ANSI color utils
-    """
+    """Test ANSI color utils."""
     text = "some text"
     assert utils.green(text) == f"\033[1;32m{text!s}\033[1;m\033[0m"
     assert utils.red(text) == f"\033[1;31m{text!s}\033[1;m\033[0m"
@@ -90,25 +87,19 @@ def test_colors():
 
 
 def test_filter_ansi():
-    """
-    Test ANSI filter
-    """
+    """Test ANSI filter."""
     text = "some text"
     ansi_text = utils.green(text)
     assert utils.filter_ansi(ansi_text) == text
 
 
 def test_timestamp():
-    """
-    Test timestamp
-    """
+    """Test timestamp."""
     assert isinstance(int(utils.timestamp()), int)
 
 
 def test_walk():
-    """
-    Test walk
-    """
+    """Test walk."""
     test_data = {
         "edges": [
             {

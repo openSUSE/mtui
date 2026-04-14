@@ -2,9 +2,7 @@ from mtui import colorlog
 
 
 def test_create_logger(capsys):
-    """
-    Test create_logger
-    """
+    """Test create_logger."""
     logger = colorlog.create_logger("test_logger", "DEBUG")
     logger.info("test info message")
     logger.debug("test debug message")

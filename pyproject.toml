@@ -85,8 +85,13 @@ select = [
     "PLW1510",# subprocess.run without check
     "PLW1641",# __eq__ without __hash__
     "TRY400", # logging.error() in except (use logging.exception())
+    "D200",   # single-line docstrings should fit on one line
     "D202",   # no blank lines after function docstring
+    "D212",   # multi-line summary should start on first line
+    "D400",   # first line should end with a period
     "D413",   # missing blank line after last docstring section
+    "D415",   # first line should end with punctuation
+    "ERA001", # no commented-out code
     "PTH201", # Path(".") -> Path()
 ]
 ignore = [
