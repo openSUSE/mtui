@@ -6,7 +6,6 @@ from contextlib import suppress
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.target import Target
 from mtui.utils import complete_choices
 
 
