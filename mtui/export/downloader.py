@@ -26,7 +26,7 @@ def _subdl(oqa_path: str, l_path: str, test: dict, errormode: str) -> None:
         logger.info("Downloading log %s", oqa_path)
         urlretrieve(oqa_path, l_path)
     except urllib.error.HTTPError:
-        logger.exception("Download from %s failed", oqa_path)
+        logger.error("Download from %s failed", oqa_path)
         if errormode == "full":
             raise ResultsMissingError(test["name"], test["arch"]) from None
 

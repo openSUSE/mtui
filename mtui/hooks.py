@@ -136,7 +136,7 @@ class PreScript(Script):
                     f.write(t.lastout())
                     f.write(t.lasterr())
             except OSError as e:
-                log.exception(messages.FailedToWriteScriptResult(fname, e))
+                log.error(messages.FailedToWriteScriptResult(fname, e))
 
 
 class PostScript(PreScript):

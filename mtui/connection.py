@@ -176,7 +176,7 @@ class Connection:
             raise
 
         except OSError:
-            logger.exception("No valid connection to %s:%s", self.hostname, self.port)
+            logger.error("No valid connection to %s:%s", self.hostname, self.port)
         except Exception as e:
             # general Exception
             logger.debug("%s: %s", self.hostname, e)

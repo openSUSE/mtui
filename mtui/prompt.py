@@ -11,7 +11,6 @@ import subprocess
 from collections.abc import Callable
 from logging import getLogger
 from pathlib import Path
-from traceback import format_exc
 from typing import Any
 
 from mtui import notification
@@ -211,7 +210,7 @@ class CommandPrompt(cmd.Cmd):
             except (messages.UserMessage, subprocess.CalledProcessError) as e:
                 logger.exception(e)
             except Exception:
-                logger.exception(format_exc())
+                logger.exception("Unexpected error")
 
     def postcmd(self, stop: bool, line: str) -> bool:
         """A hook that is called after a command is executed.

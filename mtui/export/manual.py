@@ -87,7 +87,7 @@ class ManualExport(BaseExport):
                         except ValueError:
                             # no hostsection found and no starting point for insertion,
                             # bail out and try the next host
-                            logger.exception("update results section not found")
+                            logger.error("update results section not found")
                             break
 
                     # insert new package version log at position i.
@@ -150,7 +150,7 @@ class ManualExport(BaseExport):
                     try:
                         index = self.template.index(f"{state}:\n", index) + 1
                     except ValueError:
-                        logger.exception("%s packages section not found", state)
+                        logger.error("%s packages section not found", state)
                         continue
 
                 for package in host.packages.values():

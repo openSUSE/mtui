@@ -100,7 +100,7 @@ class Attributes:
             try:
                 property_name, content = pattern.split("=", 1)
             except ValueError:
-                logger.exception('error when parsing line "%s"', testplatform)
+                logger.error('error when parsing line "%s"', testplatform)
                 continue
             # special case: arch
             # *- arch because is a list so it will create a list of several attributes
@@ -174,7 +174,7 @@ class Refhosts:
 
         except Exception:
             # nothing to do for us if we can't load the hosts
-            logger.exception("failed to parse refhosts.yml")
+            logger.error("failed to parse refhosts.yml")
             raise
 
     def search(self, attributes) -> list[str]:

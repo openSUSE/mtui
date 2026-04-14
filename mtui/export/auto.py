@@ -59,7 +59,7 @@ class AutoExport(BaseExport):
                 t = log.readlines()
             return [x.decode() for x in t]
         except (RemoteDisconnected, HTTPError, URLError):
-            logger.exception("log %s failed to download", url.url)
+            logger.error("log %s failed to download", url.url)
             return []
 
     def run(self, *args, **kwds) -> FileList | list[str]:

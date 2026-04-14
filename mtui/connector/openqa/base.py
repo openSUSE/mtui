@@ -61,7 +61,7 @@ class OpenQA(ABC):
             logger.debug("Openqa returned code: %s", e.args[2])
             return None
         except openqa_client.exceptions.ConnectionError as e:
-            logger.exception("Cannont connect to openQA - %s", self.host)
+            logger.error("Cannont connect to openQA - %s", self.host)
             logger.debug("openqa_client returned: %s", e)
             return None
 

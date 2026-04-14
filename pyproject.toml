@@ -84,7 +84,7 @@ select = [
     "PLW0127",# self-assigning variable
     "PLW1510",# subprocess.run without check
     "PLW1641",# __eq__ without __hash__
-    "TRY400", # logging.error() in except (use logging.exception())
+
     "D200",   # single-line docstrings should fit on one line
     "D202",   # no blank lines after function docstring
     "D212",   # multi-line summary should start on first line

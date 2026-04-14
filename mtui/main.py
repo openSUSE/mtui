@@ -84,7 +84,7 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
             CalledProcessError,
             MetadataNotLoadedError,
         ) as e:
-            logger.exception(e)
+            logger.error(e)
             return 1
 
     if args.sut:
