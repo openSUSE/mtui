@@ -198,10 +198,12 @@ class Target:
                 continue
             p, v = line.split()
             # Make sure that it shows to the user the highest version
+            new_ver = RPMVersion(v)
             if p in pkgs:
-                pkgs[p] = max(pkgs[p], RPMVersion(v))
+                existing = pkgs[p]
+                pkgs[p] = max(existing, new_ver) if existing is not None else new_ver
             else:
-                pkgs[p] = RPMVersion(v)
+                pkgs[p] = new_ver
         return pkgs
 
     def disable_repo(self, repo: str) -> None:
