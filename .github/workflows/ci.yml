@@ -15,6 +15,14 @@ jobs:
         run: ruff format --check --diff ./mtui
       - name: Check ruff lint
         run: ruff check --diff ./mtui
+  typecheck:
+    runs-on: ubuntu-latest
+    name: MTUI typecheck
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v6
+      - name: Run ty check
+        run: uv run ty check
   test:
     runs-on: ubuntu-latest
     name: MTUI tests + coverage
