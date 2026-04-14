@@ -53,6 +53,7 @@ class check_eq:
 
         Args:
             *x: The expected values.
+
         """
         self.x: Sequence[Any] = x
 
@@ -68,6 +69,7 @@ class check_eq:
         Raises:
             ValueError: If the value is not equal to any of the
                 expected values.
+
         """
         if y not in self.x:
             raise ValueError(f"Expected: {self.x!r}, got: {y!r}")
@@ -94,6 +96,7 @@ class check_type:
 
         Args:
             *x: The expected types.
+
         """
         self.x: Sequence[Any] = x
 
@@ -109,6 +112,7 @@ class check_type:
         Raises:
             ValueError: If the value cannot be converted to any of the
                 expected types.
+
         """
         err = False
         for f in self.x:
@@ -139,6 +143,7 @@ class RequestReviewID:
 
         Args:
             rrid: The fully qualified Request Review ID string.
+
         """
         xs: list[str] = [x for x in rrid.split(":") if x]
         parsers: list[Callable[[str], str | int]] = [

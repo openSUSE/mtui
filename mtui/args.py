@@ -17,6 +17,7 @@ def get_parser(sys) -> ArgumentParser:
 
     Returns:
         A configured `ArgumentParser` instance.
+
     """
     parser = ArgumentParser(sys_=sys)
     parser.add_argument(

@@ -15,6 +15,7 @@ def zypper_prepare(force: bool = False, testing: bool = False) -> dict[str, Temp
 
     Returns:
         A dictionary of command templates.
+
     """
     parameter = "--force-resolution" if force else ""
 
@@ -35,6 +36,7 @@ def yum_prepare(force: bool = False, testing: bool = False) -> dict[str, Templat
 
     Returns:
         A dictionary of command templates.
+
     """
     # TODO: check adding repos to RH based distros and check how really it looks
     # also if needed expand detection and look into dnf packager
@@ -56,6 +58,7 @@ def slm_prepare(force: bool = False, testing: bool = False) -> dict[str, Templat
 
     Returns:
         A dictionary of command templates.
+
     """
     parameter = "--force-resolution" if force else ""
     return {

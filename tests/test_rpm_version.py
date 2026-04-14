@@ -4,7 +4,7 @@ from mtui.types.rpmver import RPMVersion
 
 
 @pytest.mark.parametrize(
-    "lower,higher",
+    ("lower", "higher"),
     [
         ("2014.104.0.0.2svn15878-21.19", "2015.104.0.0.2svn15878-21.12"),
         ("1.2.0-7.20", "1.2.0-7.30"),
@@ -16,7 +16,7 @@ def test_version_lt(lower, higher):
 
 
 @pytest.mark.parametrize(
-    "lower,higher",
+    ("lower", "higher"),
     [
         ("2014.104.0.0.2svn15878-21.19", "2015.104.0.0.2svn15878-21.12"),
         ("1.2.0-7.20", "1.2.0-7.30"),
@@ -33,14 +33,14 @@ def test_version_eq(version):
 
 
 @pytest.mark.parametrize(
-    "higher,lower", [("1.2-2", "1.2-2"), ("1.2.3-7.2", "1.2.3-7.2")]
+    ("higher", "lower"), [("1.2-2", "1.2-2"), ("1.2.3-7.2", "1.2.3-7.2")]
 )
 def test_version_le(higher, lower):
     assert RPMVersion(lower) <= RPMVersion(higher)
 
 
 @pytest.mark.parametrize(
-    "higher,lower", [("1.2-2", "1.2-2"), ("1.2.3-7.2", "1.2.3-7.2")]
+    ("higher", "lower"), [("1.2-2", "1.2-2"), ("1.2.3-7.2", "1.2.3-7.2")]
 )
 def test_version_ge(higher, lower):
     assert RPMVersion(higher) >= RPMVersion(lower)
@@ -51,12 +51,12 @@ def test_version_ne():
 
 
 def test_version_none():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # noqa: PT011
         RPMVersion(None)
 
 
 @pytest.mark.parametrize(
-    "version,s", [("1.2.3-7.3", "1.2.3-7.3"), ("2.3", "2.3"), ("0.8+1-0", "0.8+1")]
+    ("version", "s"), [("1.2.3-7.3", "1.2.3-7.3"), ("2.3", "2.3"), ("0.8+1-0", "0.8+1")]
 )
 def test_version_str(version, s):
     assert str(RPMVersion(version)) == s

@@ -22,6 +22,7 @@ class OSC:
         Args:
             config: An instance of the application's Config class.
             rrid: A RequestReviewID object representing the target review.
+
         """
         self.config = config
         self.rrid = rrid
@@ -45,6 +46,7 @@ class OSC:
             reason: The reason for a rejection.
             message: The message to include with the operation.
             comment: A comment to add to the request.
+
         """
         # Start with the base command components that are always present.
         base_cmd = ["osc", "-A", API, "qam", operation]
@@ -109,6 +111,7 @@ class OSC:
 
         Args:
             group: A list of group names to approve the request for.
+
         """
         self.__operation("approve", group)
 
@@ -117,6 +120,7 @@ class OSC:
 
         Args:
             group: A list of group names to assign the request to.
+
         """
         self.__operation("assign", group)
 
@@ -125,6 +129,7 @@ class OSC:
 
         Args:
             group: A list of group names to unassign the request from.
+
         """
         self.__operation("unassign", group)
 
@@ -133,6 +138,7 @@ class OSC:
 
         Args:
             comment: The comment to add.
+
         """
         self.__operation("comment", [], comment=comment)
 
@@ -143,5 +149,6 @@ class OSC:
             group: A list of group names to reject the request for.
             reason: The reason for the rejection.
             message: The rejection message.
+
         """
         self.__operation("reject", group, reason=reason, message=message)

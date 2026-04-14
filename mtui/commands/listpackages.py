@@ -30,6 +30,7 @@ class ListPackages(Command):
 
         Returns:
             A string representing the state of the package.
+
         """
         if not current:
             return self.state_map[None]
@@ -117,6 +118,7 @@ class ListPackages(Command):
             version: The version of the package.
             state: The state of the package.
             format_output: The format string to use.
+
         """
         self.println(format_output.format(package, version, state))
 

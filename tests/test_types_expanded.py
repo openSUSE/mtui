@@ -8,7 +8,6 @@ from mtui.types.rpmver import RPMVersion
 from mtui.types.systems import System, UnknownSystemError
 from mtui.types.urls import URLs
 
-
 # --- Product ---
 
 
@@ -87,7 +86,7 @@ class TestSystem:
         assert len(flat) == 2
 
     @pytest.mark.parametrize(
-        "name,expected",
+        ("name", "expected"),
         [
             ("SLES", "15"),
             ("SLED", "15"),
@@ -203,7 +202,7 @@ class TestHostLog:
     def test_append_wrong_count_raises(self):
         """Test appending with wrong number of items raises."""
         hl = HostLog()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="it need 5 args"):
             hl.append(["too", "few"])
 
     def test_append_bytes_conversion(self):

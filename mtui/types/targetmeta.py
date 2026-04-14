@@ -13,6 +13,7 @@ class TargetMeta(NamedTuple):
         system: The system information of the target.
         packages: A dictionary of packages for the target.
         hostlog: A list of command log entries for the target.
+
     """
 
     hostname: str

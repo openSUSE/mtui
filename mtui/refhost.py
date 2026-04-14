@@ -41,7 +41,6 @@ class Attributes:
 
     def __str__(self) -> str:
         """Returns a human-readable string representation of the attributes."""
-
         product: str = ""
         if "name" in self.product:
             product = self.product["name"]
@@ -88,6 +87,7 @@ class Attributes:
 
         Returns:
             A list of Attributes objects.
+
         """
         attributes_list = []
         # typical string:
@@ -151,8 +151,8 @@ class Refhosts:
         Args:
             hostmap: The path to the `refhosts.yml` file.
             location: The location to load hosts from.
-        """
 
+        """
         # default refhosts location is 'default' which is basically fallback
         if location is None:
             self.location = self._default_location
@@ -166,6 +166,7 @@ class Refhosts:
 
         Args:
             hostmap: The path to the `refhosts.yml` file.
+
         """
         try:
             with hostmap.open() as f:
@@ -184,6 +185,7 @@ class Refhosts:
 
         Returns:
             A list of hostnames that match the given attributes.
+
         """
         results: list[str] = []
 
@@ -215,12 +217,13 @@ class Refhosts:
 
         Returns:
             True if the candidate matches the attributes, False otherwise.
+
         """
         for key in vars(attribute):
             if getattr(attribute, key):
                 if key not in candidate:
                     return False
-                elif key == "addons":
+                if key == "addons":
                     if not self._includes_addons_list(
                         candidate[key], getattr(attribute, key)
                     ):
@@ -230,11 +233,10 @@ class Refhosts:
                 ):  # scalar options. Options that are non iterable
                     if getattr(attribute, key) != candidate[key]:
                         return False
-                else:
-                    if not self._includes_simple_attributes(
-                        candidate[key], getattr(attribute, key)
-                    ):
-                        return False
+                elif not self._includes_simple_attributes(
+                    candidate[key], getattr(attribute, key)
+                ):
+                    return False
 
         return True
 
@@ -247,12 +249,12 @@ class Refhosts:
 
         Returns:
             True if the attributes match, False otherwise.
-        """
 
+        """
         for k in attribute:
             if k not in candidate:
                 return False
-            elif k == "version":
+            if k == "version":
                 if not self._includes_version(
                     candidate["version"], attribute["version"]
                 ):
@@ -271,6 +273,7 @@ class Refhosts:
 
         Returns:
             True if the versions match, False otherwise.
+
         """
         if "minor" in element and element["minor"] != "":
             if "minor" not in candidate or element["minor"] != candidate["minor"]:
@@ -290,19 +293,18 @@ class Refhosts:
 
         Returns:
             True if the addons match, False otherwise.
-        """
 
+        """
         element_addons_map = {addon["name"]: addon for addon in element_addons}
         candidate_addons_map = {addon["name"]: addon for addon in candidate_addons}
 
         for addon in element_addons_map:
             if addon not in candidate_addons_map:
                 return False
-            else:
-                if not self._includes_simple_attributes(
-                    candidate_addons_map[addon], element_addons_map[addon]
-                ):
-                    return False
+            if not self._includes_simple_attributes(
+                candidate_addons_map[addon], element_addons_map[addon]
+            ):
+                return False
         return True
 
     def _location_hosts(self, location: str):
@@ -313,6 +315,7 @@ class Refhosts:
 
         Returns:
             A list of host elements for the given location.
+
         """
         return self.data[location]
 
@@ -324,6 +327,7 @@ class Refhosts:
 
         Raises:
             messages.InvalidLocationError: If the location is not valid.
+
         """
         if location not in self.data:
             raise messages.InvalidLocationError(location, self.get_locations())
@@ -333,8 +337,8 @@ class Refhosts:
 
         Returns:
             A set of location names.
-        """
 
+        """
         return set(self.data.keys())
 
 
@@ -367,6 +371,7 @@ class _RefhostsFactory:
             file_writer: A function that writes to a file.
             cache_path: The path to the cache file.
             refhosts_factory: The factory for creating `Refhosts` instances.
+
         """
         self._time_now = time_now_getter
         self._stat = statter
@@ -384,6 +389,7 @@ class _RefhostsFactory:
 
         Returns:
             A `Refhosts` instance.
+
         """
         for resolver in [x.strip() for x in config.refhosts_resolvers.split(",")]:
             try:
@@ -403,6 +409,7 @@ class _RefhostsFactory:
 
         Returns:
             A `Refhosts` instance.
+
         """
         try:
             resolver = getattr(self, f"resolve_{name}")
@@ -418,6 +425,7 @@ class _RefhostsFactory:
         Args:
             path: The path to the cache file.
             config: The application configuration.
+
         """
         if self._is_https_cache_refresh_needed(path, config.refhosts_https_expiration):
             self.refresh_https_cache(path, config.refhosts_https_uri)
@@ -431,14 +439,14 @@ class _RefhostsFactory:
 
         Returns:
             True if the cache needs to be refreshed, False otherwise.
+
         """
         try:
             statinfo = self._stat(path)
         except OSError as e:
             if e.errno == errno.ENOENT:
                 return True
-            else:
-                raise
+            raise
 
         return self._time_now() - statinfo.st_mtime > expiration
 
@@ -448,6 +456,7 @@ class _RefhostsFactory:
         Args:
             path: The path to the cache file.
             uri: The URI to fetch the cache from.
+
         """
         self._write_file(self._urlopen(uri).read(), path)
 
@@ -459,6 +468,7 @@ class _RefhostsFactory:
 
         Returns:
             A `Refhosts` instance.
+
         """
         f = self.refhosts_cache_path
         self.refresh_https_cache_if_needed(f, config)
@@ -473,6 +483,7 @@ class _RefhostsFactory:
 
         Returns:
             A `Refhosts` instance.
+
         """
         return self.refhosts_factory(config.refhosts_path, config.location)
 

@@ -35,6 +35,7 @@ class Config:
         Args:
             path: An optional path to a specific config file.
             refhosts: The factory to use for creating refhosts.
+
         """
         self.refhosts = refhosts
         self.__location = "default"
@@ -74,6 +75,7 @@ class Config:
 
         Args:
             x: The new location.
+
         """
         try:
             self.refhosts(self).check_location_sanity(x)
@@ -239,6 +241,7 @@ class Config:
 
         Returns:
             True if the option name is valid, False otherwise.
+
         """
         return opt in (x[0] for x in self.data)
 
@@ -255,6 +258,7 @@ class Config:
 
         Raises:
             InvalidOptionNameError: If opt is not a valid option name.
+
         """
         # FIXME: ^ remove warning (add type safety)
         if not self._has_option(opt):
@@ -276,11 +280,12 @@ class Config:
 
         Returns:
             The value of the option.
+
         """
         try:
             return getter(*secopt)
         except (configparser.NoSectionError, configparser.NoOptionError):
-            msg = "Config option {0}.{1} not found.".format(*secopt)
+            msg = "Config option {}.{} not found.".format(*secopt)
             logger.debug(msg)
             raise
         except Exception:
@@ -293,8 +298,8 @@ class Config:
 
         Args:
             args: The parsed command-line arguments.
-        """
 
+        """
         if args.location:
             self.location = args.location
 

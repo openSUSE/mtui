@@ -44,6 +44,7 @@ class Command(ABC):
             config: The application configuration.
             sys: The sys module.
             prompt: The command prompt object.
+
         """
         self.args = args
         self.sys = sys
@@ -63,6 +64,7 @@ class Command(ABC):
 
         Returns:
             A namespace containing the parsed arguments.
+
         """
         arg = [] if args == "" else args.split()
         p = cls.argparser(sys)
@@ -79,6 +81,7 @@ class Command(ABC):
 
         Args:
             parser: The argument parser.
+
         """
 
     @classmethod
@@ -90,6 +93,7 @@ class Command(ABC):
 
         Returns:
             The argument parser for the command.
+
         """
         p = ArgumentParser(
             sys_=sys,
@@ -114,8 +118,8 @@ class Command(ABC):
 
         Returns:
             A list of possible completions.
-        """
 
+        """
         return []
 
     @abstractmethod
@@ -128,8 +132,8 @@ class Command(ABC):
 
         Args:
             xs: The string to print.
-        """
 
+        """
         self.sys.stdout.write(xs + "\n")
         self.sys.stdout.flush()
 
@@ -139,6 +143,7 @@ class Command(ABC):
 
         Args:
             parser: The argument parser.
+
         """
         parser.add_argument(
             "-t",
@@ -160,6 +165,7 @@ class Command(ABC):
 
         Returns:
             A `HostsGroup` object containing the selected hosts.
+
         """
         try:
             if self.args.hosts:

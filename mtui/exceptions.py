@@ -22,6 +22,7 @@ class RequestReviewIDParseError(ValueError, ArgumentTypeError):
 
         Args:
             message: The error message.
+
         """
         super().__init__("OBS Request Review ID: " + message)
 
@@ -34,6 +35,7 @@ class TooManyComponentsError(RequestReviewIDParseError):
 
         Args:
             limit: The maximum number of components allowed.
+
         """
         super().__init__(f"Too many components (> {limit})")
 
@@ -44,6 +46,7 @@ class TooManyComponentsError(RequestReviewIDParseError):
         Args:
             xs: The sequence to check.
             limit: The maximum number of components allowed.
+
         """
         if len(xs) > limit:
             raise cls(limit)
@@ -58,6 +61,7 @@ class InternalParseError(RequestReviewIDParseError):
         Args:
             f: The function where the error occurred.
             cnt: The context of the error.
+
         """
         super().__init__(f"Internal error: f: {f!r} cnt: {cnt!r}")
 
@@ -71,6 +75,7 @@ class MissingComponent(RequestReviewIDParseError):
         Args:
             index: The index of the missing component.
             expected: The expected component.
+
         """
         super().__init__(f"Missing {index}. component. Expected: {expected}")
 
@@ -85,6 +90,7 @@ class ComponentParseError(RequestReviewIDParseError):
             index: The index of the component that failed to parse.
             expected: The expected component.
             got: The component that was received.
+
         """
         super().__init__(
             f"Failed to parse {index}. component. Expected {expected}. Got: {got!r}"
@@ -100,6 +106,7 @@ class UpdateError(Exception):
         Args:
             reason: The reason for the update error.
             host: The host where the error occurred.
+
         """
         self.reason: str = reason
         self.host: str | None = host
@@ -148,6 +155,7 @@ class GiteaAssignInvalid(GiteaError):
         Args:
             assign_status: The assignment status.
             user: The user involved in the assignment.
+
         """
         self.assign_status = assign_status
         self.user = user

@@ -20,6 +20,7 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
     Returns:
         A tuple containing a `System` object and a boolean indicating
         whether the system is transactional.
+
     """
     transactional = False
     files: list[str] = []

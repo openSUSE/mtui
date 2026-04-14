@@ -23,6 +23,7 @@ class AutoOpenQA(OpenQA):
 
         Returns:
             True if all install jobs have passed, False otherwise.
+
         """
         if jobs is None:
             return False
@@ -46,6 +47,7 @@ class AutoOpenQA(OpenQA):
 
         Returns:
             A list of formatted strings representing the job results.
+
         """
         jobs = args[0]
         if not jobs:
@@ -80,6 +82,7 @@ class AutoOpenQA(OpenQA):
 
         Returns:
             A list of `URLs` objects, or None if there are no jobs.
+
         """
         if not jobs:
             return None

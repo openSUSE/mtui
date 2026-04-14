@@ -13,6 +13,7 @@ def parse_product(prod: SFTPFile) -> tuple[str, str, str]:
 
     Returns:
         A tuple containing the product name, version, and architecture.
+
     """
     root = ET.fromstringlist(prod)
     name: str = root.findtext("./name", "")
@@ -39,6 +40,7 @@ def parse_os_release(f: SFTPFile) -> tuple[str, str, str]:
 
     Returns:
         A tuple containing the OS ID, version ID, and architecture.
+
     """
     osinfo: dict[str, str] = {
         a.split("=")[0]: a.split("=")[1].rstrip("\n").translate({34: None})

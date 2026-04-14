@@ -33,6 +33,7 @@ class RemoteLock:
 
         Returns:
             A string representation of the lock.
+
         """
         xs: list[str] = [self.timestamp, self.user, str(self.pid)]
         if self.comment:
@@ -54,6 +55,7 @@ class RemoteLock:
 
         Returns:
             A `RemoteLock` instance.
+
         """
         self = cls()
 
@@ -84,6 +86,7 @@ class LockedTargets:
 
         Args:
             targets: A list of targets to lock.
+
         """
         self.targets = targets
 
@@ -121,6 +124,7 @@ class TargetLock:
         Args:
             connection: The connection to the target host.
             config: The application configuration.
+
         """
         self.connection = connection
         self.i_am_user = config.session_user  # type: ignore
@@ -155,6 +159,7 @@ class TargetLock:
 
         Returns:
             True if the target is locked, False otherwise.
+
         """
         self.load()
         return bool(self._lock.user)
@@ -167,6 +172,7 @@ class TargetLock:
 
         Raises:
             TargetLockedError: If the target is already locked.
+
         """
         # NOTE: there is a slight race between getting the state of the
         # lock on target host and setting the lock.
@@ -200,6 +206,7 @@ class TargetLock:
 
         Returns:
             A "locked by" message.
+
         """
         self.load()
         return f"{self.connection.hostname} is {self._lock}"
@@ -209,6 +216,7 @@ class TargetLock:
 
         Returns:
             The user who locked the target.
+
         """
         self.load()
         return self._lock.user
@@ -218,6 +226,7 @@ class TargetLock:
 
         Returns:
             The comment for the lock.
+
         """
         self.load()
         return self._lock.comment
@@ -227,6 +236,7 @@ class TargetLock:
 
         Returns:
             The time the lock was created.
+
         """
         self.load()
         time = datetime.fromtimestamp(float(self._lock.timestamp))
@@ -237,6 +247,7 @@ class TargetLock:
 
         Args:
             force: If True, removes locks owned by anyone.
+
         """
         if not self.is_locked():
             return
@@ -260,6 +271,7 @@ class TargetLock:
 
         Returns:
             True if the lock is owned by the current user, False otherwise.
+
         """
         if not self._lock.user:
             raise RuntimeError("not locked")

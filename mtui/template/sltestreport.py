@@ -64,7 +64,7 @@ class SLTestReport(TestReport):
         """Returns a dictionary of update repositories."""
         if self.repositories:
             return reporepoparse(self.repositories, self.products)
-        elif self.rrid.maintenance_id == "1.1":
+        if self.rrid.maintenance_id == "1.1":
             return slrepoparse(self.repository, self.products)
 
         return gitrepoparse(self.repository, self.products)
@@ -88,6 +88,7 @@ class SLTestReport(TestReport):
         Args:
             target: The target host.
             operation: The operation to perform ("add" or "remove").
+
         """
         if operation == "add":
             target.run_zypper("-n ar -cfGkn", self.update_repos, self.rrid)
@@ -102,6 +103,7 @@ class SLTestReport(TestReport):
         Args:
             targets: The target hosts.
             display: The display function to use.
+
         """
         packages = self.get_package_list()
         repa = f":p={self.rrid.maintenance_id}:{self.rrid.review_id}"

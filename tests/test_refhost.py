@@ -3,7 +3,6 @@
 import re
 
 
-
 class TestArchListParsing:
     """Test that the refhost arch list parsing is safe (no eval)."""
 

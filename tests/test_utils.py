@@ -4,10 +4,11 @@ from tempfile import mkdtemp
 
 import pytest
 
+from mtui import utils
 from mtui.utils import atomic_write_file, chdir, ensure_dir_exists
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def create_temp(tmpdir_factory):
     """simple tmpdir_factory wrapper"""
     return tmpdir_factory.mktemp("utils")
@@ -41,10 +42,10 @@ class TestEnsureDirExists:
         try:
             ensure_dir_exists(Path(subdir) / "foo")
         except BaseException:
-            assert False
+            pytest.fail("ensure_dir_exists raised unexpectedly")
 
         os.chmod(subdir, 0)
-        with pytest.raises(OSError):
+        with pytest.raises(PermissionError):
             ensure_dir_exists(Path(subdir) / "bar")
 
     def test_on_create(self, create_temp):
@@ -74,9 +75,6 @@ def test_atomic_write(create_temp):
     data = "pokus"
     atomic_write_file(data, Path(path) / "string")
     atomic_write_file(data.encode(), Path(path) / "bytes")
-
-
-from mtui import utils
 
 
 def test_colors():

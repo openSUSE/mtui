@@ -42,6 +42,7 @@ class CmdQueue(list):
             iterable: An iterable of commands.
             prompt: The command prompt string.
             term: The terminal object.
+
         """
         self.prompt = prompt
         self.term = term
@@ -55,6 +56,7 @@ class CmdQueue(list):
 
         Returns:
             The popped command.
+
         """
         val = list.pop(self, i)
         self.echo_prompt(val)
@@ -65,6 +67,7 @@ class CmdQueue(list):
 
         Args:
             val: The command to echo.
+
         """
         self.term.stdout.write(f"{self.prompt}{val}\n")
 
@@ -105,6 +108,7 @@ class CommandPrompt(cmd.Cmd):
             log: The logger instance.
             sys: The sys module.
             display_factory: A factory for creating display objects.
+
         """
         self.sys = sys
 
@@ -145,6 +149,7 @@ class CommandPrompt(cmd.Cmd):
         Args:
             msg: The message to display.
             class_: The notification class.
+
         """
         notification.display("MTUI", msg, class_)
 
@@ -154,6 +159,7 @@ class CommandPrompt(cmd.Cmd):
         Args:
             msg: The message to print.
             eol: The end-of-line character.
+
         """
         self.stdout.write(msg + eol)
 
@@ -169,6 +175,7 @@ class CommandPrompt(cmd.Cmd):
 
         Args:
             cmd: The command class to add.
+
         """
         if cmd.command in self.commands:
             raise CommandAlreadyBoundError(cmd.command)
@@ -179,6 +186,7 @@ class CommandPrompt(cmd.Cmd):
 
         Args:
             queue: A list of commands to run.
+
         """
         q = queue[:]
         if not self.interactive:
@@ -215,12 +223,12 @@ class CommandPrompt(cmd.Cmd):
 
         Returns:
             Whether to stop the command loop.
+
         """
         if isinstance(self.metadata, NullTestReport):
             return stop
-        else:
-            self.set_prompt(session=self.__dict__.get("session", None))
-            return stop
+        self.set_prompt(session=self.__dict__.get("session", None))
+        return stop
 
     def get_names(self) -> list[str]:
         """Returns a list of all command names."""
@@ -289,6 +297,7 @@ class CommandPrompt(cmd.Cmd):
 
         Args:
             session: The current session name.
+
         """
         self.session = session
         session = ":" + str(session) if session else ""
@@ -305,6 +314,7 @@ class CommandPrompt(cmd.Cmd):
         Args:
             update: The update to load.
             autoconnect: Whether to automatically connect to hosts.
+
         """
         tr = update.make_testreport(self.config, autoconnect, self.interactive)
         self.metadata = tr

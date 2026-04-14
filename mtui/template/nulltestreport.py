@@ -42,6 +42,7 @@ class NullTestReport(TestReport):
 
         Returns:
             The path to the working directory.
+
         """
         return self.config.target_tempdir.joinpath(*paths)  # type: ignore
 

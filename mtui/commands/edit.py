@@ -35,7 +35,7 @@ class Edit(Command):
 
     def __call__(self) -> None:
         """Executes the `edit` command."""
-        path = self.args.filename if self.args.filename else self._template()
+        path = self.args.filename or self._template()
 
         editor = getenv("EDITOR", "vim")
 

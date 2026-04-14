@@ -20,6 +20,7 @@ class HostLock(Command):
     Enabled locks are automatically removed when exiting the session.
     To lock the run command on other sessions as well, it's necessary
     to set a comment.
+
     """
 
     command = "lock"

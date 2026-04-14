@@ -15,5 +15,6 @@ def save_cache_path(*args: str) -> Path:
 
     Returns:
         A `Path` object representing the full path to the file.
+
     """
     return Path(x_save_cache_path(app)).joinpath(*args)

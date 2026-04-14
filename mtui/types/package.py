@@ -22,6 +22,7 @@ class Package:
 
         Args:
             name: The name of the package.
+
         """
         self.name: str = name
         self._before: str | RPMVersion | None = None

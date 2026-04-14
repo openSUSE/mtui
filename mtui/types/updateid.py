@@ -45,6 +45,7 @@ class UpdateID(ABC):
             id_: The `RequestReviewID` of the update.
             testreport_factory: The factory for creating `TestReport` instances.
             testreport_svn_checkout: The function for checking out test reports.
+
         """
         self.id = id_
         self.testreport_factory = testreport_factory
@@ -58,6 +59,7 @@ class UpdateID(ABC):
 
         Returns:
             A `TestReport` instance.
+
         """
         tr = self.testreport_factory(config)
         trpath: Path = config.template_dir / str(self.id) / "log"
@@ -104,6 +106,7 @@ class UpdateID(ABC):
 
         Args:
             config: The application configuration.
+
         """
         directory: Path = config.template_dir / str(self.id) / config.install_logs
         directory.mkdir(parents=False, exist_ok=True)
@@ -124,6 +127,7 @@ class UpdateID(ABC):
 
         Returns:
             The `TestReport` class for the given ID.
+
         """
         if id_.kind == "SLFO":
             return SLTestReport
@@ -145,6 +149,7 @@ class AutoOBSUpdateID(UpdateID):
             rrid: The Request Review ID string.
             *args: Additional arguments.
             **kwds: Additional keyword arguments.
+
         """
         id_ = RequestReviewID(rrid)
 
@@ -161,6 +166,7 @@ class AutoOBSUpdateID(UpdateID):
 
         Returns:
             A `TestReport` instance.
+
         """
         try:
             tr = self._checkout(config, interactive)
@@ -211,6 +217,7 @@ class KernelOBSUpdateID(UpdateID):
             rrid: The Request Review ID string.
             *args: Additional arguments.
             **kw: Additional keyword arguments.
+
         """
         id_ = RequestReviewID(rrid)
         super().__init__(id_, self.tr_factory(id_), testreport_svn_checkout)
@@ -220,6 +227,7 @@ class KernelOBSUpdateID(UpdateID):
 
         Args:
             config: The application configuration.
+
         """
         directory: Path = config.template_dir / str(self.id) / "results"
         directory.mkdir(parents=False, exist_ok=True)
@@ -235,6 +243,7 @@ class KernelOBSUpdateID(UpdateID):
 
         Returns:
             A `TestReport` instance.
+
         """
         try:
             tr = self._checkout(config, interactive)

@@ -39,6 +39,7 @@ class HostsGroup(UserDict[str, Target]):
         All the given hosts are expected to be enabled. The lifetime
         of the object should be the same as the execution of one
         command given from the user.
+
     """
 
     def __init__(self, hosts: list[Target]) -> None:
@@ -46,6 +47,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             hosts: A list of `Target` objects.
+
         """
         super().__init__({h.hostname: h for h in hosts})
 
@@ -61,6 +63,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Returns:
             A new `HostsGroup` object containing the selected hosts.
+
         """
         if not hosts:
             if enabled:
@@ -104,6 +107,7 @@ class HostsGroup(UserDict[str, Target]):
         Returns:
             A list of tuples, where each tuple contains a `Target`
             object and a dictionary of package versions.
+
         """
         rs: list[tuple[Target, dict[str, RPMVersion | None]]] = []
         for x in self.data.values():
@@ -115,6 +119,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             data: The history entry to add.
+
         """
         for tgt in self.data.values():
             tgt.add_history(data)
@@ -129,6 +134,7 @@ class HostsGroup(UserDict[str, Target]):
         Args:
             remote: The remote path to the file to download.
             local: The local path to save the downloaded file to.
+
         """
         return FileDownload(self.data.values(), remote, local).run()
 
@@ -138,6 +144,7 @@ class HostsGroup(UserDict[str, Target]):
         Args:
             local: The local path to the file to upload.
             remote: The remote path to upload the file to.
+
         """
         return FileUpload(self.data.values(), local, remote).run()
 
@@ -146,6 +153,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             path: The path to the file to delete.
+
         """
         return FileDelete(self.data.values(), path).run()
 
@@ -154,6 +162,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             cmd: The command to run.
+
         """
         return self._run(cmd)
 
@@ -162,6 +171,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             cmd: The command to run.
+
         """
         return RunCommand(self.data, cmd).run()
 
@@ -170,6 +180,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             reboot: A dictionary of reboot commands.
+
         """
         if reboot:
             logger.info("Rebooting transactional hosts %s", reboot.keys())
@@ -210,6 +221,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             packages: A list of packages to install.
+
         """
         commands = {
             t.hostname: t.get_installer()["command"].substitute(
@@ -239,6 +251,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             packages: A list of packages to uninstall.
+
         """
         commands = {
             t.hostname: t.get_uninstaller()["command"].substitute(
@@ -270,6 +283,7 @@ class HostsGroup(UserDict[str, Target]):
             packages: A list of packages to prepare.
             testreport: The test report object.
             **kw: Additional keyword arguments.
+
         """
         operation = "add" if kw.get("testing", False) else "remove"
         force = kw.get("force", False)
@@ -336,6 +350,7 @@ class HostsGroup(UserDict[str, Target]):
         Args:
             packages: A list of packages to downgrade.
             testreport: The test report object.
+
         """
         ver_re = re.compile(r"(.*) = (.*)")
         versions: dict[str, dict[str, str]] = {}
@@ -418,6 +433,7 @@ class HostsGroup(UserDict[str, Target]):
         Args:
             testreport: The test report object.
             params: A list of update parameters.
+
         """
 
         def package_check(post: bool = False) -> None:
@@ -440,15 +456,14 @@ class HostsGroup(UserDict[str, Target]):
 
                     if not before:
                         not_installed.append(pkg)
-                    else:
-                        if before >= required:  # type: ignore
-                            logger.warning(
-                                "%s: package is too recent: %s (%s, target version is %s)",
-                                hn,
-                                pkg,
-                                before,
-                                required,
-                            )
+                    elif before >= required:  # type: ignore
+                        logger.warning(
+                            "%s: package is too recent: %s (%s, target version is %s)",
+                            hn,
+                            pkg,
+                            before,
+                            required,
+                        )
 
                     if after and before and before == after:
                         logger.warning(
@@ -525,6 +540,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             sink: The function to use for reporting.
+
         """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_self(sink)
@@ -536,6 +552,7 @@ class HostsGroup(UserDict[str, Target]):
             sink: The function to use for reporting.
             count: The number of history entries to report.
             events: A list of event types to filter by.
+
         """
         if events:
             self._run(
@@ -554,6 +571,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             sink: The function to use for reporting.
+
         """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_locks(sink)
@@ -563,6 +581,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             sink: The function to use for reporting.
+
         """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_timeout(sink)
@@ -572,6 +591,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             sink: The function to use for reporting.
+
         """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_sessions(sink)
@@ -582,6 +602,7 @@ class HostsGroup(UserDict[str, Target]):
         Args:
             sink: The function to use for reporting.
             arg: An additional argument to pass to the reporting function.
+
         """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_log(sink, arg)
@@ -591,6 +612,7 @@ class HostsGroup(UserDict[str, Target]):
 
         Args:
             sink: The function to use for reporting.
+
         """
         for hn in sorted(self.data.keys()):
             self.data[hn].report_products(sink)

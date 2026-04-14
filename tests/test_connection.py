@@ -63,7 +63,7 @@ def test_connection_init_auth_fallback(mock_ssh_client, mock_ssh_config, mock_pa
         None,  # second call succeeds
     ]
     with patch("getpass.getpass", return_value="password") as mock_getpass:
-        conn = Connection("test_host", 22, 300)
+        Connection("test_host", 22, 300)
 
         assert mock_getpass.call_count == 1
         assert mock_ssh_client.connect.call_count == 2
@@ -110,7 +110,9 @@ def test_run_command_timeout(mock_ssh_client, mock_ssh_config, mock_path):
     mock_session = MagicMock()
     mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
 
-    with patch("select.select", return_value=([], [], [])):
-        with patch("builtins.input", return_value="n"):
-            with pytest.raises(CommandTimeout):
-                conn.run("sleep 10")
+    with (
+        patch("select.select", return_value=([], [], [])),
+        patch("builtins.input", return_value="n"),
+        pytest.raises(CommandTimeout),
+    ):
+        conn.run("sleep 10")

@@ -57,6 +57,7 @@ class Target:
             exclusive: Whether the target is in exclusive mode.
             lock: The lock class to use for the target.
             connection: The connection class to use for the target.
+
         """
         self.config = config
         self.host, _, self.port = hostname.partition(":")
@@ -81,6 +82,7 @@ class Target:
 
         Returns:
             A dictionary of `Package` objects.
+
         """
         ret: dict[str, Package] = {}
         base_version = self.system.get_base().version
@@ -124,6 +126,7 @@ class Target:
         Args:
             retry: The number of times to retry the connection.
             backoff: Whether to use exponential backoff for retries.
+
         """
         self.connection.reconnect(retry, backoff)
 
@@ -145,6 +148,7 @@ class Target:
         Args:
             packages: A list of packages to query. If None, all packages
                 for the target are queried.
+
         """
         if packages is None:
             packages = list(self.packages.keys())
@@ -168,6 +172,7 @@ class Target:
 
         Returns:
             A dictionary mapping package names to `RPMVersion` objects.
+
         """
         if self.system.get_base().name != "ubuntu":
             self.run(
@@ -200,6 +205,7 @@ class Target:
 
         Args:
             repo: The name of the repository to disable.
+
         """
         logger.debug("%s: disabling repo %s", self.hostname, repo)
         self.run(f"zypper mr -d {repo}")
@@ -209,6 +215,7 @@ class Target:
 
         Args:
             repo: The name of the repository to enable.
+
         """
         logger.debug("%s: enabling repo %s", self.hostname, repo)
         self.run(f"zypper mr -e {repo}")
@@ -218,6 +225,7 @@ class Target:
 
         Args:
             value: The timeout in seconds.
+
         """
         logger.debug("%s: setting timeout to %d", self.hostname, value)
         self.connection.timeout = value
@@ -229,6 +237,7 @@ class Target:
         Args:
             operation: The operation to perform ("add" or "remove").
             testreport: The test report object.
+
         """
         logger.debug("%s: changing %s repos", self.hostname, operation)
         testreport.set_repo(self, operation)
@@ -240,6 +249,7 @@ class Target:
             cmd: The `zypper` command to run.
             repos: A dictionary of repositories.
             rrid: The RequestReviewID of the current update.
+
         """
         # ur - generator returning tuple with product, repopart
         ur = ((x, y) for x, y in repos.items() if x in self.system.flatten())
@@ -266,6 +276,7 @@ class Target:
         Args:
             command: The command to run.
             lock: An optional lock to use.
+
         """
         if self.state == "enabled":
             logger.debug('%s: running "%s"', self.hostname, command)
@@ -318,6 +329,7 @@ class Target:
         Args:
             local: The local path to the file to upload.
             remote: The remote path to upload the file to.
+
         """
         if self.state == "enabled":
             logger.debug('%s: sending "%s"', self.hostname, local)
@@ -336,6 +348,7 @@ class Target:
         Args:
             remote: The remote path to the file to download.
             local: The local path to save the downloaded file to.
+
         """
         if str(remote).endswith("/"):
             f = self.connection.sftp_get_folder
@@ -368,6 +381,7 @@ class Target:
 
         Returns:
             The last command that was run.
+
         """
         try:
             return self.out[-1][0]
@@ -379,6 +393,7 @@ class Target:
 
         Returns:
             The last stdout from a command.
+
         """
         try:
             return self.out[-1][1]
@@ -390,6 +405,7 @@ class Target:
 
         Returns:
             The last stderr from a command.
+
         """
         try:
             return self.out[-1][2]
@@ -401,6 +417,7 @@ class Target:
 
         Returns:
             The last exit code from a command.
+
         """
         try:
             return self.out[-1][3]
@@ -412,6 +429,7 @@ class Target:
 
         Returns:
             True if the target is locked, False otherwise.
+
         """
         return self._lock.is_locked()
 
@@ -420,6 +438,7 @@ class Target:
 
         Args:
             comment: An optional comment for the lock.
+
         """
         self._lock.lock(comment)
 
@@ -429,6 +448,7 @@ class Target:
         Args:
             force: If True, unlocks the target even if it is locked
                 by another user.
+
         """
         try:
             self._lock.unlock(force)
@@ -441,6 +461,7 @@ class Target:
 
         Args:
             comment: The history entry to add.
+
         """
         if self.state == "enabled":
             logger.debug("%s: adding history entry", self.hostname)
@@ -467,6 +488,7 @@ class Target:
 
         Returns:
             A list of filenames in the directory.
+
         """
         try:
             return self.connection.sftp_listdir(path)
@@ -480,6 +502,7 @@ class Target:
 
         Args:
             path: The path to the file or directory to delete.
+
         """
         try:
             self.connection.sftp_remove(path)
@@ -499,6 +522,7 @@ class Target:
         Args:
             action: An optional action to perform before closing the
                 connection ("reboot" or "poweroff").
+
         """
         try:
             if self.connection and self.connection.is_active():
@@ -525,6 +549,7 @@ class Target:
 
         Args:
             sink: The function to use for reporting.
+
         """
         sink(self.hostname, self.system, self.transactional, self.state, self.exclusive)
 
@@ -533,6 +558,7 @@ class Target:
 
         Args:
             sink: The function to use for reporting.
+
         """
         sink(self.hostname, self.system, self.lastout().split("\n"))
 
@@ -541,6 +567,7 @@ class Target:
 
         Args:
             sink: The function to use for reporting.
+
         """
         sink(self.hostname, self.system, self._lock)
 
@@ -549,6 +576,7 @@ class Target:
 
         Args:
             sink: The function to use for reporting.
+
         """
         sink(self.hostname, self.system, self.connection.timeout)
 
@@ -557,6 +585,7 @@ class Target:
 
         Args:
             sink: The function to use for reporting.
+
         """
         sink(self.hostname, self.system, self.lastout())
 
@@ -566,6 +595,7 @@ class Target:
         Args:
             sink: The function to use for reporting.
             arg: An additional argument to pass to the reporting function.
+
         """
         sink(self.hostname, self.out, arg)
 
@@ -574,6 +604,7 @@ class Target:
 
         Args:
             sink: The function to use for reporting.
+
         """
         sink(self.hostname, self.system)
 
@@ -582,6 +613,7 @@ class Target:
 
         Returns:
             A dictionary of installer command templates.
+
         """
         return installer[(self.system.get_release(), self.transactional)]
 
@@ -590,6 +622,7 @@ class Target:
 
         Returns:
             The installer check function.
+
         """
         return install_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
@@ -600,6 +633,7 @@ class Target:
 
         Returns:
             A dictionary of uninstaller command templates.
+
         """
         return uninstaller[(self.system.get_release(), self.transactional)]
 
@@ -608,6 +642,7 @@ class Target:
 
         Returns:
             The uninstaller check function.
+
         """
         return install_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
@@ -618,6 +653,7 @@ class Target:
 
         Returns:
             A dictionary of downgrader command templates.
+
         """
         return downgrader[(self.system.get_release(), self.transactional)]
 
@@ -626,6 +662,7 @@ class Target:
 
         Returns:
             The downgrader check function.
+
         """
         return downgrade_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
@@ -636,6 +673,7 @@ class Target:
 
         Returns:
             A dictionary of updater command templates.
+
         """
         return updater[(self.system.get_release(), self.transactional)]
 
@@ -644,6 +682,7 @@ class Target:
 
         Returns:
             The updater check function.
+
         """
         return update_checks.get(
             (self.system.get_release(), self.transactional), _no_checks
@@ -660,6 +699,7 @@ class Target:
 
         Returns:
             A dictionary of preparer command templates.
+
         """
         return preparer[(self.system.get_release(), self.transactional)](force, testing)
 
@@ -668,6 +708,7 @@ class Target:
 
         Returns:
             The preparer check function.
+
         """
         return prepare_checks.get(
             (self.system.get_release(), self.transactional), _no_checks

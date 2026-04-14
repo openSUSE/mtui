@@ -95,6 +95,7 @@ class Gitea:
 
         Raises:
             MissingGiteaToken: If the Gitea API token is not found in the config.
+
         """
         if not config.gitea_token:  # type: ignore
             raise MissingGiteaToken("Gitea API token is empty, can't access API")
@@ -133,6 +134,7 @@ class Gitea:
 
         Raises:
             FailedGiteaCall: If the API call fails.
+
         """
         try:
             logger.debug("Requesting %s on %s", method, url)
@@ -186,6 +188,7 @@ class Gitea:
 
         Returns:
             The assignment state.
+
         """
         # Always reload comments to get the most up-to-date state.
         comments = sorted(self.__get_all_comments())
@@ -231,8 +234,9 @@ class Gitea:
         Raises:
             GiteaAssignInvalid: If the PR is not assigned to the specified user.
             GiteaNoReview: If the PR was already approved/rejected.
+
         """
-        a_user = other if other else self.user
+        a_user = other or self.user
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.ASSIGNED_USER:
             raise GiteaAssignInvalid(assign_state, a_user)
@@ -257,8 +261,9 @@ class Gitea:
         Raises:
             GiteaAssignInvalid: If the PR is not assigned to the specified user.
             GiteaNoReview: If the PR was already approved/rejected.
+
         """
-        a_user = other if other else self.user
+        a_user = other or self.user
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.ASSIGNED_USER:
             raise GiteaAssignInvalid(assign_state, a_user)
@@ -284,8 +289,9 @@ class Gitea:
         Raises:
             GiteaNoReview: If a review has not been requested and `force` is False.
             GiteaAssignInvalid: If the PR is not in an unassigned state.
+
         """
-        a_user = other if other else self.user
+        a_user = other or self.user
         if not self.__has_review() and not force:
             raise GiteaNoReview(f"There is no review for {self.group}-review")
 
@@ -308,8 +314,9 @@ class Gitea:
 
         Raises:
             GiteaAssignInvalid: If the PR is not assigned to the specified user.
+
         """
-        a_user = other if other else self.user
+        a_user = other or self.user
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.ASSIGNED_USER:
             raise GiteaAssignInvalid(assign_state, a_user)
@@ -323,6 +330,7 @@ class Gitea:
 
         Args:
             body: The text content of the comment.
+
         """
         logger.info("Posting a comment to Gitea PR")
         self.__request(method.POST, self.prissues, json={"body": body})

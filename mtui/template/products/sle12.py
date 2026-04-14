@@ -9,6 +9,7 @@ def normalize_sle12(x):
 
     Returns:
         The normalized product information.
+
     """
     if x[0][0] == "SLE-SERVER" and "LTSS-Extended-Security" in x[0][1]:
         x[0][0] = "SLES-LTSS-Extended-Security"

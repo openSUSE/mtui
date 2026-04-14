@@ -16,7 +16,6 @@ def _package_data_path() -> Path:
     This is the root from which ``scripts/``, ``helper/``, and
     ``terms/`` subdirectories can be reached.
     """
-
     pkg = files("mtui")
 
     # importlib.resources.files() returns a Traversable; for packages

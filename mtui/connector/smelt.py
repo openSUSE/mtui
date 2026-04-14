@@ -30,6 +30,7 @@ class SMELT:
         Args:
             rrid: The RequestReviewID of the current update.
             apiurl: The URL of the SMELT GraphQL API.
+
         """
         self.rrid = rrid
         self.apiurl = apiurl
@@ -41,6 +42,7 @@ class SMELT:
         Returns:
             A collection of data from the SMELT API, or None if the
             request fails.
+
         """
         query_incident = f"""{{
   incidents(incidentId: {self.rrid.maintenance_id} ) {{
@@ -111,6 +113,7 @@ class SMELT:
 
         Returns:
             A list of openQA links, or None if no links are found.
+
         """
         links = self._comments(self.data)
         if not links:
@@ -128,6 +131,7 @@ class SMELT:
 
         Returns:
             A list of formatted strings representing the openQA links.
+
         """
         links = self._comments(self.data)
         if not links:
@@ -155,6 +159,7 @@ class SMELT:
 
         Returns:
             A list of comments, or None if no comments are found.
+
         """
         if not data:
             return None
@@ -189,6 +194,7 @@ class SMELT:
 
         Returns:
             The incident name, or None if it cannot be determined.
+
         """
         if not self:
             return None
@@ -202,8 +208,8 @@ class SMELT:
 
         Returns:
             The version string, or None if it cannot be determined.
-        """
 
+        """
         if not self:
             return None
         # take first repo ..

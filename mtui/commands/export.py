@@ -44,9 +44,7 @@ class Export(Command):
     def __call__(self) -> None:
         """Executes the `export` command."""
         targets: list[str] = list(self.parse_hosts().keys())
-        filename = (
-            self.args.filename if self.args.filename else Path(self.metadata.path)
-        )
+        filename = self.args.filename or Path(self.metadata.path)
         exporters: dict[tuple[bool, bool], type[BaseExport]] = {
             (True, False): AutoExport,
             (False, True): KernelExport,

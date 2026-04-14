@@ -6,8 +6,8 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
-from contextlib import suppress
 from collections.abc import Callable, ValuesView
+from contextlib import suppress
 from pathlib import Path
 from queue import Queue
 from threading import Lock
@@ -27,6 +27,7 @@ class ThreadedMethod(threading.Thread):
 
         Args:
             queue: The queue to get methods from.
+
         """
         threading.Thread.__init__(self)
         self.queue = queue
@@ -56,6 +57,7 @@ class ThreadedTargetGroup(ABC):
 
         Args:
             targets: A list of targets to perform actions on.
+
         """
         self.targets = targets
 
@@ -99,6 +101,7 @@ class FileDelete(ThreadedTargetGroup):
         Args:
             targets: A list of targets to delete the file from.
             path: The path to the file to delete.
+
         """
         super().__init__(targets)
         self.path = path
@@ -111,6 +114,7 @@ class FileDelete(ThreadedTargetGroup):
 
         Returns:
             A tuple containing the method to execute and its arguments.
+
         """
         return (t.sftp_remove, [self.path])
 
@@ -127,6 +131,7 @@ class FileUpload(ThreadedTargetGroup):
             targets: A list of targets to upload the file to.
             local: The local path to the file to upload.
             remote: The remote path to upload the file to.
+
         """
         super().__init__(targets)
         self.local = local
@@ -140,6 +145,7 @@ class FileUpload(ThreadedTargetGroup):
 
         Returns:
             A tuple containing the method to execute and its arguments.
+
         """
         return (t.sftp_put, [self.local, self.remote])
 
@@ -156,6 +162,7 @@ class FileDownload(ThreadedTargetGroup):
             targets: A list of targets to download the file from.
             remote: The remote path to the file to download.
             local: The local path to save the downloaded file to.
+
         """
         super().__init__(targets)
 
@@ -170,6 +177,7 @@ class FileDownload(ThreadedTargetGroup):
 
         Returns:
             A tuple containing the method to execute and its arguments.
+
         """
         return (t.sftp_get, [self.remote, self.local])
 
@@ -185,6 +193,7 @@ class RunCommand:
         Args:
             targets: A dictionary of targets to run the command on.
             command: The command to run.
+
         """
         self.targets = targets
         self.command = command
@@ -253,8 +262,8 @@ def spinner(lock: Lock | None = None) -> None:
 
     Args:
         lock: An optional lock to use when printing to the console.
-    """
 
+    """
     for pos in ["|", "/", "-", "\\"]:
         if lock:
             lock.acquire()

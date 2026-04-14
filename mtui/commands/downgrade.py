@@ -16,6 +16,7 @@ class Downgrade(Command):
 
     Warning:
         This command cannot work for new packages.
+
     """
 
     command = "downgrade"

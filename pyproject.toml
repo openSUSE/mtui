@@ -60,14 +60,27 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = [
-    "E",     # pycodestyle errors
-    "F",     # pyflakes
-    "PT",    # flake8-pytest-style
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "I",      # isort (import sorting)
+    "PT",     # flake8-pytest-style
     "B027",   # empty method in abstract class without @abstractmethod
     "RUF005", # use iterable unpacking instead of concatenation
     "SIM",    # flake8-simplify
-    "UP007",  # use X | Y for unions
+    "UP",     # pyupgrade (modernize syntax for py311+)
+    "FURB110",# if-exp instead of or-operator
+    "RET505", # superfluous else after return
+    "RET506", # superfluous else after raise
+    "RET507", # superfluous else after continue
+    "PLR5501",# collapsible else-if
+    "D202",   # no blank lines after function docstring
+    "D413",   # missing blank line after last docstring section
+    "PTH201", # Path(".") -> Path()
 ]
 ignore = [
-    "E501",  # line-too-long (handled by formatter)
+    "E501",   # line-too-long (handled by formatter)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108", "ARG", "SLF001"]
+"Documentation/conf.py" = ["INP001", "ERA001", "A001", "D"]

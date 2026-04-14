@@ -10,12 +10,12 @@ from mtui.exceptions import (
 from mtui.types import RequestReviewID
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def r_review_id():
     return randint(0, 9999)
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def m_review_id():
     return randint(0, 9999999)
 
@@ -45,7 +45,8 @@ def test_RRID_ok(r_review_id, m_review_id, rrid):
     if rr.kind != "SLFO":
         assert rr.maintenance_id == mid
     else:
-        assert isinstance(rr.maintenance_id, str) and rr.maintenance_id == "1.1"
+        assert isinstance(rr.maintenance_id, str)
+        assert rr.maintenance_id == "1.1"
 
 
 @pytest.mark.parametrize("missing", ["SUSE:Maintenance", "SUSE:M", "SUSE"])

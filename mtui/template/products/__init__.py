@@ -20,6 +20,7 @@ def normalize_16(x: Product) -> Product:
 
     Returns:
         Normalized Product named tuple
+
     """
     if x.name == "SLES-SAP":
         return Product("SLES_SAP", x.version, x.arch)
@@ -36,6 +37,7 @@ def normalize(x):
 
     Returns:
         The normalized product information.
+
     """
     # SLERT must be before version based comparsion
     if x[0][0] == "SLE-RT":

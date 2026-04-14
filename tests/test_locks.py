@@ -8,7 +8,6 @@ import pytest
 
 from mtui.target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
 
-
 # --- RemoteLock ---
 
 
@@ -279,7 +278,7 @@ class TestLockedTargets:
         """Test __exit__ unlocks targets even when exception occurs."""
         t1 = MagicMock()
 
-        with pytest.raises(ValueError), LockedTargets([t1]):
+        with pytest.raises(ValueError, match="test error"), LockedTargets([t1]):
             raise ValueError("test error")
 
         t1.unlock.assert_called_once()
