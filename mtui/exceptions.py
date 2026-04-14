@@ -66,7 +66,7 @@ class InternalParseError(RequestReviewIDParseError):
         super().__init__(f"Internal error: f: {f!r} cnt: {cnt!r}")
 
 
-class MissingComponent(RequestReviewIDParseError):
+class MissingComponentError(RequestReviewIDParseError):
     """Raised when a component of an OBS Request Review ID is missing."""
 
     def __init__(self, index, expected) -> None:
@@ -122,19 +122,19 @@ class GiteaError(BaseException):
     """Base exception for Gitea-related errors."""
 
 
-class MissingGiteaToken(GiteaError):
+class MissingGiteaTokenError(GiteaError):
     """Raised when a Gitea token is missing."""
 
 
-class FailedGiteaCall(GiteaError):
+class FailedGiteaCallError(GiteaError):
     """Raised when a call to the Gitea API fails."""
 
 
-class GiteaNoReview(GiteaError):
+class GiteaNoReviewError(GiteaError):
     """Raised when a Gitea pull request has no review."""
 
 
-class InvalidGiteaHash(GiteaError):
+class InvalidGiteaHashError(GiteaError):
     """Raised when Gitea has different hash than testreport metadata"""
 
     def __init__(self, rrid: "RequestReviewID", old: str, new: str):
@@ -146,7 +146,7 @@ class InvalidGiteaHash(GiteaError):
         return f"Testreport for {self.id} has different hash than GiteaPR. Testreport: {self.old} - repo {self.new}"
 
 
-class GiteaAssignInvalid(GiteaError):
+class GiteaAssignInvalidError(GiteaError):
     """Raised when there is an issue with Gitea pull request assignment."""
 
     def __init__(self, assign_status: assignment, user: str):

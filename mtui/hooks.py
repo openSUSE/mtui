@@ -196,8 +196,8 @@ class CompareScript(Script):
             return
 
         if ret.returncode == 2:
-            logger, msg = log.critical, messages.CompareScriptCrashed
+            logger, msg = log.critical, messages.CompareScriptCrashedError
         else:
-            logger, msg = log.warning, messages.CompareScriptFailed  # type: ignore
+            logger, msg = log.warning, messages.CompareScriptFailedError
 
         logger(msg(argv, ret.stdout, ret.stderr, ret.returncode))

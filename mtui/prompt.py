@@ -17,14 +17,14 @@ from typing import Any
 from mtui import notification
 
 from . import commands, messages
-from .argparse import ArgsParseFailure
+from .argparse import ArgsParseFailureError
 from .commands import Command
 from .template.nulltestreport import NullTestReport
 
 logger = getLogger("mtui.prompt")
 
 
-class QuitLoop(RuntimeError):
+class QuitLoopError(RuntimeError):
     """Exception raised to exit the command loop."""
 
 
@@ -48,7 +48,7 @@ class CmdQueue(list):
         self.term = term
         list.__init__(self, iterable)
 
-    def pop(self, i) -> Any:  # type: ignore
+    def pop(self, i) -> Any:
         """Pops a command from the queue and echoes it to the terminal.
 
         Args:
@@ -206,7 +206,7 @@ class CommandPrompt(cmd.Cmd):
                 self.cmdqueue = []
                 # make the new prompt to be printed on new line
                 self.println()
-            except QuitLoop:
+            except QuitLoopError:
                 return
             except (messages.UserMessage, subprocess.CalledProcessError) as e:
                 logger.exception(e)
@@ -256,7 +256,7 @@ class CommandPrompt(cmd.Cmd):
                 def do(arg) -> None:
                     try:
                         args = c.parse_args(arg, self.sys)
-                    except ArgsParseFailure:
+                    except ArgsParseFailureError:
                         return
                     c(args, self.config, self.sys, self)()
 

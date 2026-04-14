@@ -16,8 +16,8 @@ def test_request_review_id_parse_error():
     with pytest.raises(exceptions.InternalParseError, match="Internal error"):
         raise exceptions.InternalParseError("func", "context")
 
-    with pytest.raises(exceptions.MissingComponent, match="Missing 1. component"):
-        raise exceptions.MissingComponent(1, "expected")
+    with pytest.raises(exceptions.MissingComponentError, match="Missing 1. component"):
+        raise exceptions.MissingComponentError(1, "expected")
 
     with pytest.raises(
         exceptions.ComponentParseError, match="Failed to parse 2. component"
@@ -45,14 +45,14 @@ def test_gitea_error():
     with pytest.raises(exceptions.GiteaError):
         raise exceptions.GiteaError()
 
-    with pytest.raises(exceptions.MissingGiteaToken):
-        raise exceptions.MissingGiteaToken()
+    with pytest.raises(exceptions.MissingGiteaTokenError):
+        raise exceptions.MissingGiteaTokenError()
 
-    with pytest.raises(exceptions.FailedGiteaCall):
-        raise exceptions.FailedGiteaCall()
+    with pytest.raises(exceptions.FailedGiteaCallError):
+        raise exceptions.FailedGiteaCallError()
 
-    with pytest.raises(exceptions.GiteaNoReview):
-        raise exceptions.GiteaNoReview()
+    with pytest.raises(exceptions.GiteaNoReviewError):
+        raise exceptions.GiteaNoReviewError()
 
-    with pytest.raises(exceptions.GiteaAssignInvalid, match="different user"):
-        raise exceptions.GiteaAssignInvalid(assignment.ASSIGNED_OTHER, "test_user")
+    with pytest.raises(exceptions.GiteaAssignInvalidError, match="different user"):
+        raise exceptions.GiteaAssignInvalidError(assignment.ASSIGNED_OTHER, "test_user")

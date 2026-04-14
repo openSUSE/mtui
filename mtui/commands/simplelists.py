@@ -1,5 +1,7 @@
 """A collection of simple "list" commands."""
 
+from typing import ClassVar
+
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 from mtui.utils import complete_choices, page, requires_update
@@ -176,7 +178,13 @@ class ListHistory(Command):
 
     command = "list_history"
 
-    filters = {"connect", "disconnect", "install", "update", "downgrade"}
+    filters: ClassVar[set[str]] = {
+        "connect",
+        "disconnect",
+        "install",
+        "update",
+        "downgrade",
+    }
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:

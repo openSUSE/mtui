@@ -84,9 +84,13 @@ class System:
             ]
         return msg
 
+    def __hash__(self) -> int:
+        """Hashes the system by base and addons."""
+        return hash((self.__base, frozenset(self.__addons)))
+
     def __eq__(self, other) -> bool:
         """Checks if two `System` objects are equal."""
-        return self.__base == other.__base and self.__addons == self.__addons
+        return self.__base == other.__base and self.__addons == other.__addons
 
     def get_addons(self) -> set[Product]:
         """Gets the addons of the system.

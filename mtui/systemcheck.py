@@ -2,7 +2,7 @@
 
 import re
 
-from paramiko import __version__ as paramiko_version  # type: ignore
+from paramiko import __version__ as paramiko_version
 
 from mtui import __version__ as mtui_version
 

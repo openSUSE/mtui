@@ -4,7 +4,7 @@ import logging
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
-from mtui.argparse import ArgsParseFailure
+from mtui.argparse import ArgsParseFailureError
 from mtui.main import main, run_mtui
 
 
@@ -13,12 +13,12 @@ def test_main_args_parse_failure(monkeypatch):
     monkeypatch.setattr("sys.argv", ["mtui", "--invalid"])
 
     with patch("mtui.main.get_parser") as mock_get_parser:
-        # Mock parse_args to raise ArgsParseFailure
+        # Mock parse_args to raise ArgsParseFailureError
         mock_parser = MagicMock()
         mock_get_parser.return_value = mock_parser
 
         # Setup the exception to be raised
-        mock_parser.parse_args.side_effect = ArgsParseFailure(status=2)
+        mock_parser.parse_args.side_effect = ArgsParseFailureError(status=2)
 
         # Call main and check result
         result = main()

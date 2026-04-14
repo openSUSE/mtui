@@ -21,12 +21,12 @@ def display(
     global __impl
     if __impl is None:
         try:
-            import pynotify as __impl  # type: ignore
+            import pynotify as __impl
         except ImportError:
             __impl = False
             logger.debug("pynotify not installed. notification disabled.")
         else:
-            if not __impl.init("mtui"):  # type: ignore
+            if not __impl.init("mtui"):
                 __impl = False
                 logger.debug("failed to initialize pynotify")
 
@@ -35,6 +35,6 @@ def display(
 
     logger.debug('displaying notify message "%s"', text)
     try:
-        __impl.Notification(summary, text, icon).show()  # type: ignore
+        __impl.Notification(summary, text, icon).show()
     except Exception:
         logger.debug("failed to display notification")

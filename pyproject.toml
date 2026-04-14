@@ -65,11 +65,15 @@ select = [
     "I",      # isort (import sorting)
     "B",      # flake8-bugbear (bug detection)
     "G",      # flake8-logging-format
+    "N818",   # exception names should end in Error
+    "PGH003", # blanket type: ignore (require specific codes)
     "PT",     # flake8-pytest-style
     "C4",     # flake8-comprehensions
     "PERF",   # perflint (performance)
     "T20",    # flake8-print (no print statements)
     "RUF005", # use iterable unpacking instead of concatenation
+    "RUF012", # mutable class defaults need ClassVar
+    "SLF001", # private member access
     "SIM",    # flake8-simplify
     "UP",     # pyupgrade (modernize syntax for py311+)
     "FURB110",# if-exp instead of or-operator
@@ -79,6 +83,7 @@ select = [
     "PLR5501",# collapsible else-if
     "PLW0127",# self-assigning variable
     "PLW1510",# subprocess.run without check
+    "PLW1641",# __eq__ without __hash__
     "TRY400", # logging.error() in except (use logging.exception())
     "D202",   # no blank lines after function docstring
     "D413",   # missing blank line after last docstring section

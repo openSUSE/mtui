@@ -419,7 +419,7 @@ def ensure_dir_exists(*path, **kwargs) -> Path:
 
     """
 
-    def empty(*args, **kwds) -> None:  # type: ignore
+    def empty(*args, **kwds) -> None:
         pass
 
     on_create: Callable = kwargs.get("on_create", empty)

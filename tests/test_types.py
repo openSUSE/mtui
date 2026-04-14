@@ -4,7 +4,7 @@ import pytest
 
 from mtui.exceptions import (
     ComponentParseError,
-    MissingComponent,
+    MissingComponentError,
     TooManyComponentsError,
 )
 from mtui.types import RequestReviewID
@@ -54,7 +54,7 @@ def test_parse_rrid_mc(missing):
     """
     Test parse failure: missing component
     """
-    with pytest.raises(MissingComponent):
+    with pytest.raises(MissingComponentError):
         RequestReviewID(missing)
 
 

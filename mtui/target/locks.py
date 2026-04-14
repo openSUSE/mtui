@@ -127,7 +127,7 @@ class TargetLock:
 
         """
         self.connection = connection
-        self.i_am_user = config.session_user  # type: ignore
+        self.i_am_user = config.session_user
         self.i_am_pid = os.getpid()
         """
     :type timestampFactory: callable

@@ -9,7 +9,7 @@ def apply_parser(f, x, cnt):
     from ..exceptions import (
         ComponentParseError,
         InternalParseError,
-        MissingComponent,
+        MissingComponentError,
     )
 
     """A helper function that applies a parser to a value.
@@ -24,14 +24,14 @@ def apply_parser(f, x, cnt):
 
     Raises:
         InternalParseError: If the parser or count is not valid.
-        MissingComponent: If the value is missing.
+        MissingComponentError: If the value is missing.
         ComponentParseError: If the value cannot be parsed.
     """
     if not f or not cnt:
         raise InternalParseError(f, cnt)
 
     if not x:
-        raise MissingComponent(cnt, f)
+        raise MissingComponentError(cnt, f)
 
     try:
         return f(x)

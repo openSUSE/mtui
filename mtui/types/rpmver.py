@@ -1,9 +1,9 @@
 """A class for comparing RPM version strings."""
 
-from typing import final
+from typing import ClassVar, final
 
 try:
-    import rpm  # type: ignore
+    import rpm
 except ImportError:
     try:
         from version_utils import rpm
@@ -22,7 +22,7 @@ class RPMVersion:
     if a specific RPM version is lower or higher than another one.
     """
 
-    _arch_suffixes = [
+    _arch_suffixes: ClassVar[list[str]] = [
         "noarch",
         "x86_64",
         "s390x",
@@ -66,6 +66,10 @@ class RPMVersion:
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel)) > 0
         )
+
+    def __hash__(self) -> int:
+        """Hashes the version by version and release."""
+        return hash((self.ver, self.rel))
 
     def __eq__(self, other: "RPMVersion") -> bool:
         """Checks if this version is equal to another."""

@@ -15,7 +15,7 @@ from typing import final
 from ..argparse import ArgumentParser
 from ..commands import Command
 from ..connector import OSC, Gitea
-from ..exceptions import GiteaError, InvalidGiteaHash
+from ..exceptions import GiteaError, InvalidGiteaHashError
 from ..utils import complete_choices, prompt_user, requires_update
 
 logger = getLogger("mtui.command.apicalls")
@@ -103,7 +103,7 @@ class Approve(BaseApiCall):
                 ):
                     gitea.approve(self.args.user)
                 else:
-                    raise InvalidGiteaHash(
+                    raise InvalidGiteaHashError(
                         self.metadata.id, self.metadata.giteacohash, new_hash
                     )
             else:

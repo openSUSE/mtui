@@ -19,12 +19,12 @@ from urllib.request import urlopen
 
 from ..config import Config
 from ..datafiles import scripts_path
-from ..exceptions import InvalidGiteaHash, UpdateError
+from ..exceptions import InvalidGiteaHashError, UpdateError
 from ..messages import MetadataNotLoadedError
-from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailed
+from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
 from ..target import Target
 from ..target.hostgroup import HostsGroup
-from ..template import TemplateIOError, TestReportAlreadyLoaded
+from ..template import TemplateIOError, TestReportAlreadyLoadedError
 from ..types import Product, TargetMeta
 from ..utils import ensure_dir_exists
 
@@ -159,14 +159,14 @@ class TestReport(ABC):
         self._open_and_parse(path)
         self.path = path.resolve()
         self._update_repos_parse()
-        if self.config.chdir_to_template_dir:  # type: ignore
+        if self.config.chdir_to_template_dir:
             os.chdir(path.parent)
 
         self.copy_scripts()
 
         result = self.check_hash()
         if not result[0]:
-            raise InvalidGiteaHash(self.id, result[1], result[2])
+            raise InvalidGiteaHashError(self.id, result[1], result[2])
 
     @abstractmethod
     def check_hash(self) -> tuple[bool, str, str]:
@@ -190,7 +190,7 @@ class TestReport(ABC):
 
         """
         if self.path:
-            raise TestReportAlreadyLoaded(self.path)
+            raise TestReportAlreadyLoadedError(self.path)
 
         parser_json = self._parser()["json"]
         parser_hosts = self._parser()["hosts"]
@@ -415,7 +415,7 @@ class TestReport(ABC):
             for future in done:
                 host = connections[future]
                 # TODO: how to type annatate this or how to change it to be compactible with type hints?
-                targets[host], new_systems[host] = future.result()  # type: ignore
+                targets[host], new_systems[host] = future.result()
         except KeyboardInterrupt:
             for future in connections:
                 future.cancel()
@@ -477,7 +477,7 @@ class TestReport(ABC):
         """
         try:
             refhosts = self.refhostsFactory(self.config)
-        except RefhostsResolveFailed:
+        except RefhostsResolveFailedError:
             return
 
         try:
@@ -546,11 +546,11 @@ class TestReport(ABC):
 
     def _testreport_url(self) -> str:
         """Returns the URL for the test report."""
-        return "/".join([self.config.reports_url, str(self.id), "log"])  # type: ignore
+        return "/".join([self.config.reports_url, str(self.id), "log"])
 
-    def _fancy_report_url(self) -> str:
+    def fancy_report_url(self) -> str:
         """Returns the URL for the fancy test report."""
-        return "/".join([self.config.fancy_reports_url, str(self.id), "log"])  # type: ignore
+        return "/".join([self.config.fancy_reports_url, str(self.id), "log"])
 
     def local_wd(self, *paths) -> Path:
         """Returns the local working directory.
@@ -562,7 +562,7 @@ class TestReport(ABC):
             The path to the local working directory.
 
         """
-        return self._wd(self.config.local_tempdir, str(self.id), *paths)  # type: ignore
+        return self._wd(self.config.local_tempdir, str(self.id), *paths)
 
     def report_wd(self, *paths, **kw) -> Path:
         """Returns the working directory relative to the test report checkout.
@@ -603,7 +603,7 @@ class TestReport(ABC):
             The path to the remote working directory.
 
         """
-        return self.config.target_tempdir.joinpath(str(self.id), *paths)  # type: ignore
+        return self.config.target_tempdir.joinpath(str(self.id), *paths)
 
     def scripts_wd(self, *paths):
         """Returns the path to the scripts directory.

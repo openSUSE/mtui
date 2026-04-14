@@ -342,7 +342,7 @@ class Refhosts:
         return set(self.data.keys())
 
 
-class RefhostsResolveFailed(RuntimeError):
+class RefhostsResolveFailedError(RuntimeError):
     """Raised when a `refhosts.yml` file cannot be resolved."""
 
 
@@ -398,7 +398,7 @@ class _RefhostsFactory:
                 logger.warning("Refhosts: resolver %s failed", resolver)
                 logger.debug(format_exc())
 
-        raise RefhostsResolveFailed()
+        raise RefhostsResolveFailedError()
 
     def _resolve_one(self, name, config):
         """Resolves a `Refhosts` instance from a single source.

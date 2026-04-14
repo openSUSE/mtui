@@ -96,9 +96,10 @@ def test_cmdloop_keyboard_interrupt(monkeypatch):
 
     p = prompt.CommandPrompt(config, log, sys, display_factory)
 
-    # Raise KeyboardInterrupt on the first call, then QuitLoop
+    # Raise KeyboardInterrupt on the first call, then QuitLoopError
     monkeypatch.setattr(
-        "cmd.Cmd.cmdloop", MagicMock(side_effect=[KeyboardInterrupt, prompt.QuitLoop])
+        "cmd.Cmd.cmdloop",
+        MagicMock(side_effect=[KeyboardInterrupt, prompt.QuitLoopError]),
     )
 
     p.cmdloop()
@@ -109,7 +110,7 @@ def test_cmdloop_keyboard_interrupt(monkeypatch):
 
 def test_cmdloop_quit_loop(monkeypatch):
     """
-    Test that cmdloop handles QuitLoop
+    Test that cmdloop handles QuitLoopError
     """
     config = MagicMock()
     log = MagicMock()
@@ -118,6 +119,6 @@ def test_cmdloop_quit_loop(monkeypatch):
 
     p = prompt.CommandPrompt(config, log, sys, display_factory)
 
-    monkeypatch.setattr("cmd.Cmd.cmdloop", MagicMock(side_effect=prompt.QuitLoop))
+    monkeypatch.setattr("cmd.Cmd.cmdloop", MagicMock(side_effect=prompt.QuitLoopError))
 
     p.cmdloop()  # Should exit cleanly

@@ -44,7 +44,7 @@ class NullTestReport(TestReport):
             The path to the working directory.
 
         """
-        return self.config.target_tempdir.joinpath(*paths)  # type: ignore
+        return self.config.target_tempdir.joinpath(*paths)
 
     def _parser(self) -> dict[str, Any]:
         """Returns an empty dictionary."""

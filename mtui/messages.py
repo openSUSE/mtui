@@ -13,16 +13,16 @@ class UserMessage(BaseException, ABC):
     """An abstract base class for messages to be displayed to the user."""
 
     def __str__(self) -> str:
-        return self.message  # type: ignore
+        return self.message
 
     def __eq__(self, x: object) -> bool:
         return str(self) == str(x)
 
-    def __hash__(self) -> int:  # type: ignore
+    def __hash__(self) -> int:
         return hash(self)
 
 
-class ErrorMessage(UserMessage, RuntimeError):
+class ErrorMessage(UserMessage, RuntimeError):  # noqa: N818
     """A program error message to be displayed to the user."""
 
 
@@ -188,7 +188,7 @@ class CompareScriptError(UserMessage):
         raise NotImplementedError
 
 
-class CompareScriptFailed(CompareScriptError):
+class CompareScriptFailedError(CompareScriptError):
     """A message for when a compare script fails."""
 
     def __str__(self) -> str:
@@ -197,7 +197,7 @@ class CompareScriptFailed(CompareScriptError):
         )
 
 
-class CompareScriptCrashed(CompareScriptError):
+class CompareScriptCrashedError(CompareScriptError):
     """A message for when a compare script crashes."""
 
     def __str__(self) -> str:

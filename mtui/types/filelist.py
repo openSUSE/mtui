@@ -31,11 +31,11 @@ class FileList(UserList):
         if isinstance(path, str):
             path = Path(path)
         instance = super().__new__(cls, *args, **kwds)
-        instance._file = path  # type: ignore
+        instance._file = path
         with path.open(mode="r", encoding="utf-8", errors="replace") as text:
-            instance.data = text.readlines()  # type: ignore
+            instance.data = text.readlines()
 
-        instance._hash = hash("".join(instance.data))  # type: ignore
+        instance._hash = hash("".join(instance.data))
         return instance
 
     def read(self) -> None:
@@ -43,7 +43,7 @@ class FileList(UserList):
 
     def write(self) -> None:
         """Writes the `FileList` to a file."""
-        atomic_write_file("".join(self.data), self._file)  # type: ignore
+        atomic_write_file("".join(self.data), self._file)
 
     def __enter__(self, *args) -> Self:
         """Enters a context manager.
@@ -56,6 +56,6 @@ class FileList(UserList):
 
     def __exit__(self, *args) -> None:
         """Exits a context manager, writing the file if it has been modified."""
-        if self._hash != hash("".join(self.data)):  # type: ignore
-            logger.debug("Writing template to %s", self._file)  # type: ignore
+        if self._hash != hash("".join(self.data)):
+            logger.debug("Writing template to %s", self._file)
             self.write()

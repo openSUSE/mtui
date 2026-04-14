@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from xdg.BaseDirectory import save_cache_path as x_save_cache_path  # type: ignore
+from xdg.BaseDirectory import save_cache_path as x_save_cache_path
 
 app = "mtui"
 

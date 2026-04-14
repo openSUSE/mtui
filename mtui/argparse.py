@@ -4,7 +4,7 @@ import argparse
 import sys
 
 
-class ArgsParseFailure(RuntimeError):
+class ArgsParseFailureError(RuntimeError):
     """Exception raised when argument parsing fails."""
 
     def __init__(self, status: int = 0) -> None:
@@ -54,10 +54,10 @@ class ArgumentParser(argparse.ArgumentParser):
         """
         super().print_usage(self.sys.stdout)
 
-    def exit(self, status: int = 0, message: str | None = None) -> None:  # type: ignore
+    def exit(self, status: int = 0, message: str | None = None) -> None:
         """Overrides the default exit behavior to raise an exception.
 
-        This method raises an `ArgsParseFailure` exception instead of
+        This method raises an `ArgsParseFailureError` exception instead of
         calling `sys.exit`.
 
         Args:
@@ -68,4 +68,4 @@ class ArgumentParser(argparse.ArgumentParser):
         if message:
             self._print_message(message, self.sys.stderr)
 
-        raise ArgsParseFailure(status)
+        raise ArgsParseFailureError(status)

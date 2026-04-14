@@ -40,11 +40,11 @@ def test_messages():
         == "Starting compare script 'test_argv' failed: test_reason"
     )
     assert (
-        str(messages.CompareScriptFailed("test_argv", "stdout", "stderr", 1))
+        str(messages.CompareScriptFailedError("test_argv", "stdout", "stderr", 1))
         == "Compare script 'test_argv' failed: rc = 1 err:\nstderr"
     )
     assert (
-        str(messages.CompareScriptCrashed("test_argv", "stdout", "stderr", 1))
+        str(messages.CompareScriptCrashedError("test_argv", "stdout", "stderr", 1))
         == "Compare script 'test_argv' crashed:\nstderr"
     )
     assert (
