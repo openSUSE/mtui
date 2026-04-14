@@ -1,5 +1,7 @@
 """Classes for performing actions on groups of target hosts in parallel."""
 
+from __future__ import annotations
+
 import sys
 import threading
 import time
@@ -8,7 +10,7 @@ from collections.abc import Callable, ValuesView
 from pathlib import Path
 from queue import Queue
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
 
 from ..utils import prompt_user
 from . import Target
@@ -251,7 +253,7 @@ class RunCommand:
             raise
 
 
-def spinner(lock: Optional[Lock] = None) -> None:
+def spinner(lock: Lock | None = None) -> None:
     """A simple spinner to show that a process is running.
 
     Args:
