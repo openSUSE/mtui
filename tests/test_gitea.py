@@ -85,7 +85,7 @@ class TestGiteaInit:
     def test_init_constructs_urls(self, mock_config):
         """Test init constructs API URLs correctly."""
         api_url = "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1"
-        gitea = Gitea(mock_config, api_url)
+        gitea = Gitea(mock_config, api_url)  # type: ignore[arg-type]
 
         assert gitea.pr == api_url
         assert "issues/comments" in gitea.issues
@@ -96,7 +96,7 @@ class TestGiteaInit:
     def test_init_custom_group(self, mock_config):
         """Test init with custom group."""
         api_url = "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1"
-        gitea = Gitea(mock_config, api_url, group="qam-kernel")
+        gitea = Gitea(mock_config, api_url, group="qam-kernel")  # type: ignore[arg-type]
 
         assert gitea.group == "qam-kernel"
 
@@ -110,7 +110,7 @@ class TestGiteaOperations:
     @pytest.fixture
     def gitea(self, mock_config):
         api_url = "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1"
-        return Gitea(mock_config, api_url)
+        return Gitea(mock_config, api_url)  # type: ignore[arg-type]
 
     def _make_comment(self, serial, body, date="2024-01-01T00:00:00+00:00"):
         return {"id": serial, "body": body, "updated_at": date}
@@ -211,7 +211,7 @@ class TestGiteaOperations:
         body = responses.calls[0].request.body
         if isinstance(body, bytes):
             body = body.decode("utf-8")
-        assert "test comment body" in body
+        assert body is not None and "test comment body" in body
 
     @responses.activate
     def test_get_hash(self, gitea):
@@ -255,7 +255,7 @@ class TestAssignmentStateMachine:
     @pytest.fixture
     def gitea(self, mock_config):
         api_url = "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1"
-        return Gitea(mock_config, api_url)
+        return Gitea(mock_config, api_url)  # type: ignore[arg-type]
 
     @responses.activate
     def test_check_assign_no_comments_returns_unassigned(self, gitea):

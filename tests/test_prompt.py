@@ -58,7 +58,7 @@ def test_dispatching():
     mock_argparser = MagicMock()
     mock_command.argparser.return_value = mock_argparser
 
-    p._add_subcommand(mock_command)
+    p._add_subcommand(mock_command)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
     # Test do_
     do_method = p.do_test_command

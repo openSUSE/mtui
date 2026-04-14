@@ -81,7 +81,7 @@ def mock_target(mock_config, mock_connection, mock_system):
     """A Target-like mock with realistic attributes and methods."""
     from mtui.target import Target
 
-    target = Target(mock_config, "host1.example.com")
+    target = Target(mock_config, "host1.example.com")  # type: ignore[arg-type]
     target.connection = mock_connection
     target._lock = MagicMock()
     target._lock.is_locked.return_value = False
@@ -105,7 +105,7 @@ def mock_target_pair(mock_config, mock_system):
     from mtui.target import Target
 
     def make_target(hostname):
-        t = Target(mock_config, hostname)
+        t = Target(mock_config, hostname)  # type: ignore[arg-type]
         conn = MagicMock()
         conn.hostname = hostname
         conn.port = 22

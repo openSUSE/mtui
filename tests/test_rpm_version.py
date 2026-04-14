@@ -52,7 +52,7 @@ def test_version_ne():
 
 def test_version_none():
     with pytest.raises(ValueError):  # noqa: PT011
-        RPMVersion(None)
+        RPMVersion(None)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.parametrize(

@@ -17,7 +17,7 @@ def test_duplicate_found(caplog, log_install) -> None:
     fn = log_install
     data = fn.read_text().split("\n")
 
-    export = FakeExport("", "", [], False, "123", True)
+    export = FakeExport("", "", [], False, "123", True)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
     export._writer(fn, data)
 
@@ -30,7 +30,7 @@ def test_diffeerent_files(caplog, log_install) -> None:
     fn = log_install
     data = ["Non duplicate text of install log", "fake log"]
 
-    export = FakeExport("", "", [], False, "123", False)
+    export = FakeExport("", "", [], False, "123", False)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
     export._writer(fn, data)
 
