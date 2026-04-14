@@ -217,7 +217,7 @@ class TestReport(ABC):
         """
         ret = []
         for key in self.packages:
-            for k in self.packages[key].keys():
+            for k in self.packages[key]:
                 ret.append(k)
         # deduplicate list
         ret = list(set(ret))
@@ -408,7 +408,7 @@ class TestReport(ABC):
                 # TODO: how to type annatate this or how to change it to be compactible with type hints?
                 targets[host], new_systems[host] = future.result()  # type: ignore
         except KeyboardInterrupt:
-            for future in connections.keys():
+            for future in connections:
                 future.cancel()
             logger.debug("CTRL-C .. ...")
 

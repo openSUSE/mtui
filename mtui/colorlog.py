@@ -40,10 +40,7 @@ class ColorFormatter(logging.Formatter):
         if levelname == "DEBUG":
             caller = inspect.currentframe()
             frame, _, _, function, _, _ = inspect.getouterframes(caller)[9]
-            if mo := inspect.getmodule(frame):
-                module = mo.__name__
-            else:
-                module = "unknown"
+            module = mo.__name__ if (mo := inspect.getmodule(frame)) else "unknown"
             return (
                 "\033[2K"
                 + COLOR_SEQ.format(30 + COLORS[levelname])

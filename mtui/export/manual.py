@@ -190,14 +190,14 @@ class ManualExport(BaseExport):
             # if the package versions were not updated or one of the testscripts
             # failed, set the result to FAILED, otherwise to PASSED
             failed = False
-            for package in versions["before"].keys():
+            for package in versions["before"]:
                 # check if the packages have a higher version after the update
                 if (
                     versions["after"][package] is not None
                     and versions["before"][package] is not None
+                    and not versions["before"][package] < versions["after"][package]
                 ):
-                    if not versions["before"][package] < versions["after"][package]:
-                        failed = True
+                    failed = True
             if failed:
                 logger.warning(
                     f"installation test result on {hostname} set to FAILED as some packages were not updated. please override manually."

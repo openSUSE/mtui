@@ -20,10 +20,9 @@ class ReducedMetadataParser:
             results: An object to store the parsed results.
             line: The line of text to parse.
         """
-        if match := re.search(cls.hostnames, line):
-            if "?" not in match.group(1):
-                results.hostnames.add(match.group(1))
-                return
+        if (match := re.search(cls.hostnames, line)) and "?" not in match.group(1):
+            results.hostnames.add(match.group(1))
+            return
 
         if match := re.search(cls.jira, line):
             results.jira[match.group(1)] = match.group(2)

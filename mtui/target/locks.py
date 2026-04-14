@@ -41,10 +41,7 @@ class RemoteLock:
 
     def __str__(self) -> str:
         """Returns a human-readable string representation of the lock."""
-        if self.comment:
-            comment = f" ({self.comment})"
-        else:
-            comment = ""
+        comment = f" ({self.comment})" if self.comment else ""
 
         return f"locked by {self.user}{comment}."
 
@@ -171,16 +168,14 @@ class TargetLock:
         Raises:
             TargetLockedError: If the target is already locked.
         """
-        if self.is_locked():
-            # NOTE: there is a slight race between between getting the
-            # state of the lock on target host and setting the lock.
-            # However, that has always been here afaik.
-            # TODO: test if using sftpclient.mkdir can be used to make
-            # the locking really atomic.
-            if not self.is_mine():
-                # NOTE: let the code pass through if is_mine() as
-                # setting a different comment may be desired.
-                raise TargetLockedError(self.locked_by_msg())
+        # NOTE: there is a slight race between getting the state of the
+        # lock on target host and setting the lock.
+        # TODO: test if using sftpclient.mkdir can be used to make
+        # the locking really atomic.
+        # NOTE: let the code pass through if is_mine() as
+        # setting a different comment may be desired.
+        if self.is_locked() and not self.is_mine():
+            raise TargetLockedError(self.locked_by_msg())
 
         logger.debug("%s: setting lock", self.connection.hostname)
 
@@ -271,8 +266,6 @@ class TargetLock:
 
         if self._lock.user != self.i_am_user:
             return False
-        if self._lock.pid != self.i_am_pid:
-            # NOTE: checking pid handles the case where one user is
-            # running multiple mtui instances against the same hosts
-            return False
-        return True
+        # NOTE: checking pid handles the case where one user is
+        # running multiple mtui instances against the same hosts
+        return self._lock.pid == self.i_am_pid

@@ -30,7 +30,7 @@ def edit_text(text: str) -> str:
         The edited text.
     """
     editor = os.getenv("EDITOR", "vim")
-    tmpfile = tempfile.NamedTemporaryFile()
+    tmpfile = tempfile.NamedTemporaryFile()  # noqa: SIM115
 
     with open(tmpfile.name, "w") as tmp:
         tmp.write(text)
@@ -308,12 +308,11 @@ def complete_choices(
     _ = ls.pop(0)
 
     for line in ls:
-        if len(line) >= 2 and line[0] == "-" and line[1] != "-":
-            if len(line) > 2:
-                for c in list(line[1:]):
-                    ls.append("-" + c)
+        if len(line) >= 2 and line[0] == "-" and line[1] != "-" and len(line) > 2:
+            for c in list(line[1:]):
+                ls.append("-" + c)
 
-                continue
+            continue
 
         for s in synonyms:
             if line in s:

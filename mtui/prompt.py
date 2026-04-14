@@ -225,8 +225,8 @@ class CommandPrompt(cmd.Cmd):
     def get_names(self) -> list[str]:
         """Returns a list of all command names."""
         names = super().get_names()
-        names += ["do_" + x for x in self.commands.keys()]
-        names += ["help_" + x for x in self.commands.keys()]
+        names += ["do_" + x for x in self.commands]
+        names += ["help_" + x for x in self.commands]
         return names
 
     def __getattr__(self, x: str) -> Callable:

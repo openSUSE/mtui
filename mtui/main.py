@@ -3,6 +3,7 @@
 import logging
 import sys
 from argparse import Namespace
+from contextlib import suppress
 from subprocess import CalledProcessError
 from typing import Literal
 
@@ -86,10 +87,8 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
 
     if args.sut:
         for x in args.sut:
-            try:
+            with suppress(BaseException):
                 prompt.do_add_host(x.print_args())
-            except BaseException:
-                pass
 
     if args.prerun:
         if args.prerun.is_file():

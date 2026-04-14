@@ -30,7 +30,7 @@ class Shell(Command):
 
         logger.debug("Starting shell")
 
-        for target in targets.keys():
+        for target in targets:
             targets[target].shell()
 
     @staticmethod

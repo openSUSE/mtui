@@ -2,6 +2,7 @@
 
 import re
 from collections import UserDict
+from contextlib import suppress
 from logging import getLogger
 from pathlib import Path
 from typing import Self, final
@@ -83,18 +84,14 @@ class HostsGroup(UserDict[str, Target]):
     def unlock(self, *a, **kw) -> None:
         """Unlocks all hosts in the group."""
         for x in self.data.values():
-            try:
+            with suppress(TargetLockedError):
                 x.unlock(*a, **kw)
-            except TargetLockedError:
-                pass  # logged in Target#unlock
 
     def lock(self, *a, **kw) -> None:
         """Locks all hosts in the group."""
         for x in self.data.values():
-            try:
+            with suppress(TargetLockedError):
                 x.lock(*a, **kw)
-            except TargetLockedError:
-                pass
 
     def query_versions(
         self, packages
@@ -204,10 +201,8 @@ class HostsGroup(UserDict[str, Target]):
 
         if skipped:
             for t in self.data.values():
-                try:
+                with suppress(Exception):
                     t.unlock()
-                except Exception:
-                    pass
             raise UpdateError("Hosts locked")
 
     def perform_install(self, packages: list[str]) -> None:
@@ -455,20 +450,18 @@ class HostsGroup(UserDict[str, Target]):
                                 required,
                             )
 
-                    if after and before:
-                        if before == after:
-                            logger.warning(
-                                "%s: package was not updated: %s (%s)", hn, pkg, after
-                            )
-                    if after:
-                        if after < required:  # type: ignore
-                            logger.warning(
-                                "%s: package does not match required version: %s (%s, required %s)",
-                                hn,
-                                pkg,
-                                after,
-                                required,
-                            )
+                    if after and before and before == after:
+                        logger.warning(
+                            "%s: package was not updated: %s (%s)", hn, pkg, after
+                        )
+                    if after and after < required:  # type: ignore
+                        logger.warning(
+                            "%s: package does not match required version: %s (%s, required %s)",
+                            hn,
+                            pkg,
+                            after,
+                            required,
+                        )
 
                 if not_installed:
                     logger.warning(

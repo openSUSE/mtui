@@ -98,10 +98,7 @@ class CommandPromptDisplay:
             state: The state of the host (enabled, disabled, or dryrun).
             exclusive: Whether the host is in exclusive mode.
         """
-        if exclusive:
-            mode = "serial"
-        else:
-            mode = "parallel"
+        mode = "serial" if exclusive else "parallel"
 
         if state == "enabled":
             state = green("Enabled")
@@ -110,10 +107,7 @@ class CommandPromptDisplay:
         else:
             state = red("Disabled")
 
-        if transactional:
-            trn = red("transactional")
-        else:
-            trn = green("standard     ")
+        trn = red("transactional") if transactional else green("standard     ")
 
         self.println(
             f"{hostname:<20} ({system!s:<28}): {state:<8} - {trn:<15} - ({mode})"
