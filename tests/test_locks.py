@@ -2,7 +2,7 @@
 
 import errno
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -279,8 +279,7 @@ class TestLockedTargets:
         """Test __exit__ unlocks targets even when exception occurs."""
         t1 = MagicMock()
 
-        with pytest.raises(ValueError):
-            with LockedTargets([t1]):
-                raise ValueError("test error")
+        with pytest.raises(ValueError), LockedTargets([t1]):
+            raise ValueError("test error")
 
         t1.unlock.assert_called_once()

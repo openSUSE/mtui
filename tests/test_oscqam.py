@@ -1,6 +1,6 @@
 """Tests for the mtui connector oscqam module."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

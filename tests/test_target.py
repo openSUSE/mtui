@@ -2,12 +2,10 @@
 
 from unittest.mock import MagicMock
 
-import pytest
 
 from mtui.target import Target
 from mtui.types import HostLog, Package
 from mtui.types.rpmver import RPMVersion
-from mtui.types.systems import System
 from mtui.types.product import Product
 
 
