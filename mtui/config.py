@@ -94,10 +94,7 @@ class Config:
             try:
                 val = self._get_option(inipath, getter)
             except BaseException:
-                if callable(default):
-                    val = default()
-                else:
-                    val = default
+                val = default() if callable(default) else default
 
             setattr(self, str(attr), fixup(val))
             logger.debug('config.%s set to "%s"', attr, val)

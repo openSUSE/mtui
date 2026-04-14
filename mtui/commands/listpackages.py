@@ -61,7 +61,7 @@ class ListPackages(Command):
     @requires_update
     def _run_just_wanted(self) -> None:
         """Prints the package versions wanted by the test report."""
-        for key in self.metadata.packages.keys():
+        for key in self.metadata.packages:
             self.println(f"Packages for version {key}:")
             for xs in list(self.metadata.packages[key].items()):
                 self.printPVLN(*((*xs, "")))

@@ -28,9 +28,7 @@ class AutoOpenQA(OpenQA):
             return False
 
         def normalize(x: str) -> bool:
-            if x == "passed" or x == "softfailed":
-                return True
-            return False
+            return bool(x == "passed" or x == "softfailed")
 
         # get all specified test results and return False if any
         # test FAILS or is Incomplete etc.

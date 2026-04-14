@@ -1,5 +1,7 @@
 """The `config` command."""
 
+from contextlib import suppress
+
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
 
@@ -37,10 +39,8 @@ class Config(Command):
         max_attr_len = len(max(attrs, key=len))
         for i in attrs:
             fmt = "{0:<" + str(max_attr_len) + "} = {1!r}"
-            try:
+            with suppress(AttributeError):
                 self.println(fmt.format(i, getattr(self.config, i)))
-            except AttributeError:
-                pass
 
     def set(self) -> None:
         """Sets a configuration value."""
@@ -57,13 +57,7 @@ class Config(Command):
             else:
                 typ = str
 
-        if typ is bool:
-            if val == "True":
-                val = True
-            else:
-                val = False
-        else:
-            val = typ(val)
+        val = (val == "True") if typ is bool else typ(val)
 
         setattr(self.config, attr, val)
         self.println(f"option: {attr} set to value : {val}")

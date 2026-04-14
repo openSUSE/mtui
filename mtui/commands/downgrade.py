@@ -48,7 +48,7 @@ class Downgrade(Command):
         for target in targets.values():
             target.query_versions()
             if message == "done":
-                for package in target.packages.keys():
+                for package in target.packages:
                     target.packages[package].before = target.packages[package].after
                     target.packages[package].after = target.packages[package].current
                     if (

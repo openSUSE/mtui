@@ -65,6 +65,7 @@ select = [
     "PT",    # flake8-pytest-style
     "B027",   # empty method in abstract class without @abstractmethod
     "RUF005", # use iterable unpacking instead of concatenation
+    "SIM",    # flake8-simplify
     "UP007",  # use X | Y for unions
 ]
 ignore = [

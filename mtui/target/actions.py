@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from abc import ABC, abstractmethod
+from contextlib import suppress
 from collections.abc import Callable, ValuesView
 from pathlib import Path
 from queue import Queue
@@ -43,10 +44,8 @@ class ThreadedMethod(threading.Thread):
             except BaseException:
                 raise
             finally:
-                try:
+                with suppress(ValueError):
                     self.queue.task_done()
-                except ValueError:
-                    pass  # already removed by ctrl+c
 
 
 class ThreadedTargetGroup(ABC):
@@ -239,14 +238,10 @@ class RunCommand:
                     spinner(lock)
             except KeyboardInterrupt:
                 for target in self.targets:
-                    try:
+                    with suppress(Exception):
                         self.targets[target].connection.close_session()
-                    except Exception:
-                        pass
-                try:
+                with suppress(ValueError):
                     thread.queue.task_done()
-                except ValueError:
-                    pass
 
             queue.join()
             print()

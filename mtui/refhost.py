@@ -225,10 +225,8 @@ class Refhosts:
                         candidate[key], getattr(attribute, key)
                     ):
                         return False
-                elif (
-                    isinstance(candidate[key], str)
-                    or isinstance(candidate[key], int)
-                    or isinstance(candidate[key], bool)
+                elif isinstance(
+                    candidate[key], (str, int, bool)
                 ):  # scalar options. Options that are non iterable
                     if getattr(attribute, key) != candidate[key]:
                         return False
@@ -277,15 +275,11 @@ class Refhosts:
         if "minor" in element and element["minor"] != "":
             if "minor" not in candidate or element["minor"] != candidate["minor"]:
                 return False
-        elif "minor" in element and element["minor"] == "":
-            if "minor" in candidate:
-                return False
-
-        # major is mandatory
-        if element["major"] != candidate["major"]:
+        elif "minor" in element and element["minor"] == "" and "minor" in candidate:
             return False
 
-        return True
+        # major is mandatory
+        return element["major"] == candidate["major"]
 
     def _includes_addons_list(self, candidate_addons, element_addons) -> bool:
         """Checks if a candidate's addons match.

@@ -220,10 +220,7 @@ class Gitea:
         comments = sorted(self.__get_all_comments())
 
         done = re.compile(f"@{self.group}-review: (LGTM|approved?|declined?)")
-        for c in comments:
-            if done.match(c.body):
-                return True
-        return False
+        return any(done.match(c.body) for c in comments)
 
     def approve(self, other: str | None = None) -> None:
         """Approves the PR by posting a comment.

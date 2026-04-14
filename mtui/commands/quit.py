@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import readline
+from contextlib import suppress
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
@@ -48,10 +49,8 @@ class Quit(Command):
             ]
             concurrent.futures.wait(targets, timeout=45)
 
-        try:
+        with suppress(Exception):
             readline.write_history_file(f"{self.prompt.homedir!s}/.mtui_history")
-        except Exception:
-            pass
 
         self.sys.exit(0)
 
