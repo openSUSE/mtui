@@ -30,7 +30,9 @@ RETRIES: int = 5
 if not sys.warnoptions:
     import warnings
 
-    warnings.simplefilter("ignore")
+    # Suppress only paramiko/cryptography deprecation warnings, not all warnings
+    warnings.filterwarnings("ignore", module="paramiko")
+    warnings.filterwarnings("ignore", module="cryptography")
 
 
 class CommandTimeout(Exception):
@@ -212,7 +214,10 @@ class Connection:
                 rtimeout = 2 * (timeout + 5 * count)
             self.connect()
 
-        assert self.is_active()
+        if not self.is_active():
+            raise ConnectionError(
+                f"Failed to reconnect to {self.hostname}:{self.port} after {count} retries"
+            )
 
     def new_session(self) -> Channel | None:
         """Opens a new session on the channel.
@@ -235,7 +240,7 @@ class Connection:
                 # "paramiko: logging handler not found" messages
                 sshlog = logging.getLogger(transport.get_log_channel())
                 sshlog.addHandler(logging.NullHandler())
-            except BaseException:
+            except Exception:
                 pass
             session = transport.open_session()
 
@@ -258,7 +263,7 @@ class Connection:
             try:
                 session.shutdown(2)
                 session.close()
-            except BaseException:
+            except Exception:
                 # pass all exceptions since the session is already closed or broken
                 pass
 
@@ -317,7 +322,10 @@ class Connection:
             # wait for data to be transmitted. if the timeout is hit,
             # ask the user on how to procceed
             if select.select([session], [], [], self.timeout) == ([], [], []):
-                assert session
+                if not session:
+                    raise ConnectionError(
+                        f"Session lost during command execution on {self.hostname}"
+                    )
 
                 # writing on stdout needs locking as all run threads could
                 # write at the same time to stdout
@@ -514,16 +522,17 @@ class Connection:
         """
         sftp = self.__sftp_reconnect()
 
-        logger.debug(
-            "transmitting %s:%s:%s to %s",
-            self.hostname,
-            self.port,
-            remote,
-            local,
-        )
-        sftp.get(str(remote), local)
-
-        sftp.close()
+        try:
+            logger.debug(
+                "transmitting %s:%s:%s to %s",
+                self.hostname,
+                self.port,
+                remote,
+                local,
+            )
+            sftp.get(str(remote), local)
+        finally:
+            sftp.close()
 
     # Similar to 'get' but handles folders.
     def sftp_get_folder(self, remote: Path, local: Path) -> None:
@@ -534,21 +543,22 @@ class Connection:
             local: The local path to transfer the folder to.
         """
         sftp = self.__sftp_reconnect()
-        logger.debug(
-            "transmitting %s:%s:%s to %s",
-            self.hostname,
-            self.port,
-            remote,
-            local,
-        )
-        files = self.sftp_listdir(remote)
-        for file in files:
-            sftp.get(
-                f"{remote}/{file}",
-                f"{local}{file}.{self.hostname}",
+        try:
+            logger.debug(
+                "transmitting %s:%s:%s to %s",
+                self.hostname,
+                self.port,
+                remote,
+                local,
             )
-
-        sftp.close()
+            files = self.sftp_listdir(remote)
+            for file in files:
+                sftp.get(
+                    f"{remote}/{file}",
+                    f"{local}{file}.{self.hostname}",
+                )
+        finally:
+            sftp.close()
 
     def sftp_listdir(self, path: Path = Path(".")) -> list[str]:
         """Gets a directory listing of the remote host.
@@ -564,8 +574,10 @@ class Connection:
         )
         sftp = self.__sftp_reconnect()
 
-        listdir = sftp.listdir(str(path))
-        sftp.close()
+        try:
+            listdir = sftp.listdir(str(path))
+        finally:
+            sftp.close()
         return listdir
 
     def sftp_open(self, filename: Path, mode: str = "r", bufsize=-1) -> SFTPFile:
@@ -611,8 +623,8 @@ class Connection:
             sftp.remove(str(path))
         except OSError:
             logger.exception("Can't remove %s from %s", path, self.hostname)
-
-        sftp.close()
+        finally:
+            sftp.close()
 
     def sftp_rmdir(self, path: Path) -> None:
         """Deletes a remote directory.
@@ -622,14 +634,16 @@ class Connection:
         """
         logger.debug("deleting dir %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
-        items = self.sftp_listdir(path)
+        try:
+            items = self.sftp_listdir(path)
 
-        for item in items:
-            filename = path / item
-            self.sftp_remove(filename)
+            for item in items:
+                filename = path / item
+                self.sftp_remove(filename)
 
-        sftp.rmdir(str(path))
-        sftp.close()
+            sftp.rmdir(str(path))
+        finally:
+            sftp.close()
 
     def sftp_readlink(self, path: Path) -> str | None:
         """Returns the target of a symbolic link.
@@ -642,8 +656,10 @@ class Connection:
         """
         logger.debug("read link %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
-        link = sftp.readlink(str(path))
-        sftp.close()
+        try:
+            link = sftp.readlink(str(path))
+        finally:
+            sftp.close()
         return link
 
     def is_active(self) -> bool:
