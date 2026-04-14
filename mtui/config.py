@@ -15,7 +15,7 @@ from typing import Any
 
 from .datafiles import terms_path
 from .messages import InvalidLocationError
-from .refhost import RefhostsFactory, RefhostsResolveFailed
+from .refhost import RefhostsFactory, RefhostsResolveFailedError
 
 logger = getLogger("mtui.config")
 
@@ -82,7 +82,7 @@ class Config:
         except InvalidLocationError as e:
             logger.exception(e)
             return
-        except RefhostsResolveFailed:
+        except RefhostsResolveFailedError:
             logger.exception(
                 "Can't read `refhosts.yml` file, no valid refhosts database"
             )

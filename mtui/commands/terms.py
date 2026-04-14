@@ -52,7 +52,7 @@ class Terms(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         t = ("-t", "--target")
-        a = ()  # type: ignore
+        a = ()
         for x in state["config"].termnames:
             a += (x,)
 

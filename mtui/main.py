@@ -7,7 +7,7 @@ from contextlib import suppress
 from subprocess import CalledProcessError
 from typing import Literal
 
-from .argparse import ArgsParseFailure
+from .argparse import ArgsParseFailureError
 from .args import get_parser
 from .colorlog import create_logger
 from .config import Config
@@ -32,7 +32,7 @@ def main() -> int:
     p = get_parser(sys)
     try:
         args = p.parse_args(sys.argv[1:])
-    except ArgsParseFailure as e:
+    except ArgsParseFailureError as e:
         return e.status
 
     if args.noninteractive and not args.prerun:
@@ -61,20 +61,20 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
         logger.setLevel(level=logging.DEBUG)
 
     config.merge_args(args)
-    config.kernel = False  # type: ignore
-    config.auto = False  # type: ignore
+    config.kernel = False
+    config.auto = False
 
-    config.distro, config.distro_ver, config.distro_kernel = detect_system()  # type: ignore
+    config.distro, config.distro_ver, config.distro_kernel = detect_system()
 
     prompt = CommandPrompt(config, logger, sys, CommandPromptDisplay)
     prompt.interactive = not args.noninteractive
     if args.update:
         if args.update.kind == "kernel":
-            config.kernel = True  # type: ignore
-            config.auto = False  # type: ignore
+            config.kernel = True
+            config.auto = False
         elif args.update.kind == "auto":
-            config.auto = True  # type: ignore
-            config.kernel = False  # type: ignore
+            config.auto = True
+            config.kernel = False
         else:
             pass
         try:

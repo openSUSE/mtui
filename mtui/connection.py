@@ -35,7 +35,7 @@ if not sys.warnoptions:
     warnings.filterwarnings("ignore", module="cryptography")
 
 
-class CommandTimeout(Exception):
+class CommandTimeoutError(Exception):
     """Exception raised when a remote command times out."""
 
     def __init__(self, command=None) -> None:
@@ -335,9 +335,9 @@ class Connection:
                         f'command "{command}" timed out on {self.hostname}. wait? (Y/n) ',
                     ).lower() not in ("no", "n", "ne", "nein"):
                         continue
-                    # if the user don't want to wait, raise CommandTimeout
+                    # if the user don't want to wait, raise CommandTimeoutError
                     # and procceed
-                    raise CommandTimeout
+                    raise CommandTimeoutError
                 finally:
                     # release lock to allow other command threads to write to
                     # stdout
@@ -680,7 +680,7 @@ class Connection:
             True if the connection is active, False otherwise.
 
         """
-        return self.client._transport.is_active()  # type: ignore
+        return self.client._transport.is_active()  # noqa: SLF001
 
     def close(self) -> None:
         """Closes the SSH channel and disconnects."""

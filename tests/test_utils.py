@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from tempfile import mkdtemp
+from typing import ClassVar
 
 import pytest
 
@@ -15,7 +16,7 @@ def create_temp(tmpdir_factory):
 
 
 class TestEnsureDirExists:
-    _callback_paths = []
+    _callback_paths: ClassVar[list] = []
 
     def test_create(self, create_temp):
         d = self.mkpath(create_temp, "a")

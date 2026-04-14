@@ -7,7 +7,11 @@ from logging import getLogger
 from pathlib import Path
 from typing import final
 
-from mtui.exceptions import FailedGiteaCall, InvalidGiteaHash, MissingGiteaToken
+from mtui.exceptions import (
+    FailedGiteaCallError,
+    InvalidGiteaHashError,
+    MissingGiteaTokenError,
+)
 
 from ..config import Config
 from ..connector import SMELT
@@ -70,7 +74,7 @@ class UpdateID(ABC):
             if e.errno != ENOENT:
                 raise
             try:
-                self._vcs_checkout(config, config.svn_path, self.id)  # type: ignore
+                self._vcs_checkout(config, config.svn_path, self.id)
             except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
                 logger.exception("SVN checkout failed")
                 raise TestReportNotLoadedError from e
@@ -79,12 +83,12 @@ class UpdateID(ABC):
                     tr.read(trpath)
                 except Exception as e:
                     raise e
-        except (MissingGiteaToken, FailedGiteaCall):
+        except (MissingGiteaTokenError, FailedGiteaCallError):
             logger.exception("Gitea error")
             logger.warning("TestReport ins't loaded")
             raise TestReportNotLoadedError from None
 
-        except InvalidGiteaHash:
+        except InvalidGiteaHashError:
             logger.exception("Invalid Gitea hash")
             logger.info(
                 "TestReport has different hash than GiteaPR, please regenerate template"
@@ -174,20 +178,20 @@ class AutoOBSUpdateID(UpdateID):
             return NullTestReport(config)
 
         self._create_installogs_dir(config)
-        tr.smelt = SMELT(self.id, config.smelt_api)  # type: ignore
+        tr.smelt = SMELT(self.id, config.smelt_api)
 
         logger.info("Getting data from openQA")
         tr.openqa["auto"] = AutoOpenQA(
             config,
-            config.openqa_instance,  # type: ignore
-            tr.smelt,  # type: ignore
+            config.openqa_instance,
+            tr.smelt,
             self.id,
         ).run()
 
         if tr.openqa["auto"].results is None:
             logger.warning("No install jobs or install jobs failed")
             logger.info("Switch mode to manual")
-            tr.config.auto = False  # type: ignore
+            tr.config.auto = False
 
             if autoconnect:
                 logger.info("Connect refhosts from testreport")
@@ -200,7 +204,7 @@ class AutoOBSUpdateID(UpdateID):
                 logger.info("Connect refhosts from TestPlatform")
                 tr.connect_targets()
 
-        tr.updateid = self  # type: ignore
+        tr.updateid = self
         return tr
 
 
@@ -252,20 +256,20 @@ class KernelOBSUpdateID(UpdateID):
 
         self._create_installogs_dir(config)
         self.create_results_dir(config)
-        tr.smelt = SMELT(self.id, config.smelt_api)  # type: ignore
-        tr.updateid = self  # type: ignore
+        tr.smelt = SMELT(self.id, config.smelt_api)
+        tr.updateid = self
         tr.openqa["auto"] = AutoOpenQA(
             config,
-            config.openqa_instance,  # type: ignore
-            tr.smelt,  # type: ignore
+            config.openqa_instance,
+            tr.smelt,
             self.id,
-        ).run()  # type: ignore
-        kernel = KernelOpenQA(config, config.openqa_instance, tr.smelt, self.id).run()  # type: ignore
+        ).run()
+        kernel = KernelOpenQA(config, config.openqa_instance, tr.smelt, self.id).run()
         baremetal = KernelOpenQA(
             config,
-            config.openqa_instance_baremetal,  # type: ignore
-            tr.smelt,  # type: ignore
-            self.id,  # type: ignore
+            config.openqa_instance_baremetal,
+            tr.smelt,
+            self.id,
         ).run()
         tr.openqa["kernel"] = [kernel, baremetal]
 

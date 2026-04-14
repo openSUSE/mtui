@@ -46,7 +46,7 @@ class ManualExport(BaseExport):
         # if the location isn't found, it's considered that it doesn't exist.
         # in this case, a whole new host section including the systemname is added.
         # --- self.results --- is injected from BaseExport.__init__ keyword argument
-        for host in self.results:  # type: ignore
+        for host in self.results:
             hostname = host.hostname
             systemtype = host.system
             # systemname/reference host string in the maintenance template
@@ -127,7 +127,7 @@ class ManualExport(BaseExport):
                     self.template.insert(index, "\n")
 
         # add package version log and script results for each host to the template
-        for host in self.results:  # type: ignore
+        for host in self.results:
             versions = {}
             hostname = host.hostname
             systemtype = host.system
@@ -273,7 +273,7 @@ class ManualExport(BaseExport):
         """
         t = []
         try:
-            host_log = [host for host in self.results if host.hostname == target][0]  # type: ignore
+            host_log = [host for host in self.results if host.hostname == target][0]
         except IndexError:
             return []
 
@@ -287,7 +287,7 @@ class ManualExport(BaseExport):
 
     def install_results(self) -> None:
         """Adds installation results to the template."""
-        hosts = [h.hostname for h in self.results]  # type: ignore
+        hosts = [h.hostname for h in self.results]
         c_host = None
         tmp_template = []
         for line in self.template:

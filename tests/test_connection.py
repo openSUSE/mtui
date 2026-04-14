@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import paramiko
 import pytest
 
-from mtui.connection import CommandTimeout, Connection
+from mtui.connection import CommandTimeoutError, Connection
 
 
 @pytest.fixture
@@ -113,6 +113,6 @@ def test_run_command_timeout(mock_ssh_client, mock_ssh_config, mock_path):
     with (
         patch("select.select", return_value=([], [], [])),
         patch("builtins.input", return_value="n"),
-        pytest.raises(CommandTimeout),
+        pytest.raises(CommandTimeoutError),
     ):
         conn.run("sleep 10")

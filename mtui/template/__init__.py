@@ -15,7 +15,7 @@ class TemplateIOError(IOError):
     """Exception raised for recoverable I/O errors when reading a template."""
 
 
-class TestReportAlreadyLoaded(RuntimeError):
+class TestReportAlreadyLoadedError(RuntimeError):
     """Exception raised when a test report is already loaded."""
 
 

@@ -20,10 +20,10 @@ from urllib3.exceptions import InsecureRequestWarning
 # ignore type checker warnings when accessing them.
 from ..config import Config
 from ..exceptions import (
-    FailedGiteaCall,
-    GiteaAssignInvalid,
-    GiteaNoReview,
-    MissingGiteaToken,
+    FailedGiteaCallError,
+    GiteaAssignInvalidError,
+    GiteaNoReviewError,
+    MissingGiteaTokenError,
 )
 from ..types import assignment, method
 
@@ -47,6 +47,10 @@ class Comment:
         if not isinstance(other, Comment):
             return NotImplemented
         return self.date == other.date
+
+    def __hash__(self) -> int:
+        """Hashes the comment by serial."""
+        return hash(self.serial)
 
     def __gt__(self, other: object, /) -> bool:
         """Checks if this comment is greater than another."""
@@ -94,13 +98,13 @@ class Gitea:
             group: The review group this instance is operating on behalf of.
 
         Raises:
-            MissingGiteaToken: If the Gitea API token is not found in the config.
+            MissingGiteaTokenError: If the Gitea API token is not found in the config.
 
         """
-        if not config.gitea_token:  # type: ignore
-            raise MissingGiteaToken("Gitea API token is empty, can't access API")
+        if not config.gitea_token:
+            raise MissingGiteaTokenError("Gitea API token is empty, can't access API")
 
-        self.user: str = config.session_user  # type: ignore
+        self.user: str = config.session_user
         self.headers = {"Authorization": f"token {config.gitea_token}"}
         self.group = group
 
@@ -133,7 +137,7 @@ class Gitea:
             The JSON response from the API.
 
         Raises:
-            FailedGiteaCall: If the API call fails.
+            FailedGiteaCallError: If the API call fails.
 
         """
         try:
@@ -149,7 +153,7 @@ class Gitea:
             )
         except requests.exceptions.RequestException as e:
             logger.exception("API call to Gitea failed: %s", e)
-            raise FailedGiteaCall(f"{method} - {url}") from e
+            raise FailedGiteaCallError(f"{method} - {url}") from e
 
         if not rsp.ok:
             logger.warning(
@@ -161,7 +165,9 @@ class Gitea:
                     logger.debug("Gitea error message: %s", msg)
             except requests.exceptions.JSONDecodeError:
                 logger.debug("No JSON error message in response.")
-            raise FailedGiteaCall(f"{method} - {url} returned status {rsp.status_code}")
+            raise FailedGiteaCallError(
+                f"{method} - {url} returned status {rsp.status_code}"
+            )
 
         # For 204 No Content, there is no body to decode.
         if rsp.status_code == 204:
@@ -232,17 +238,17 @@ class Gitea:
             other: Username to act on behalf of. Defaults to the session user.
 
         Raises:
-            GiteaAssignInvalid: If the PR is not assigned to the specified user.
-            GiteaNoReview: If the PR was already approved/rejected.
+            GiteaAssignInvalidError: If the PR is not assigned to the specified user.
+            GiteaNoReviewError: If the PR was already approved/rejected.
 
         """
         a_user = other or self.user
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.ASSIGNED_USER:
-            raise GiteaAssignInvalid(assign_state, a_user)
+            raise GiteaAssignInvalidError(assign_state, a_user)
 
         if self.__is_done():
-            raise GiteaNoReview("PR was already approved/rejected")
+            raise GiteaNoReviewError("PR was already approved/rejected")
 
         logger.info("Approving PR as %s for group %s", a_user, self.group)
         msg = f"@{self.group}-review: LGTM"
@@ -259,17 +265,17 @@ class Gitea:
             message: Message from user.
 
         Raises:
-            GiteaAssignInvalid: If the PR is not assigned to the specified user.
-            GiteaNoReview: If the PR was already approved/rejected.
+            GiteaAssignInvalidError: If the PR is not assigned to the specified user.
+            GiteaNoReviewError: If the PR was already approved/rejected.
 
         """
         a_user = other or self.user
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.ASSIGNED_USER:
-            raise GiteaAssignInvalid(assign_state, a_user)
+            raise GiteaAssignInvalidError(assign_state, a_user)
 
         if self.__is_done():
-            raise GiteaNoReview("PR was already approved/rejected")
+            raise GiteaNoReviewError("PR was already approved/rejected")
 
         logger.info("Rejecting PR as %s for group %s", a_user, self.group)
         msg = f"@{self.group}-review: decline"
@@ -287,20 +293,20 @@ class Gitea:
             force: If True, bypasses the check for an existing review request.
 
         Raises:
-            GiteaNoReview: If a review has not been requested and `force` is False.
-            GiteaAssignInvalid: If the PR is not in an unassigned state.
+            GiteaNoReviewError: If a review has not been requested and `force` is False.
+            GiteaAssignInvalidError: If the PR is not in an unassigned state.
 
         """
         a_user = other or self.user
         if not self.__has_review() and not force:
-            raise GiteaNoReview(f"There is no review for {self.group}-review")
+            raise GiteaNoReviewError(f"There is no review for {self.group}-review")
 
         if self.__is_done():
-            raise GiteaNoReview("PR was already approved/rejected")
+            raise GiteaNoReviewError("PR was already approved/rejected")
 
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.UNASSIGNED:
-            raise GiteaAssignInvalid(assign_state, a_user)
+            raise GiteaAssignInvalidError(assign_state, a_user)
 
         logger.info("Assigning PR to %s for group %s", a_user, self.group)
         msg = self.ASSIGN_TEMPLATE % (a_user, self.group)
@@ -313,13 +319,13 @@ class Gitea:
             other: The username to unassign. Defaults to the session user.
 
         Raises:
-            GiteaAssignInvalid: If the PR is not assigned to the specified user.
+            GiteaAssignInvalidError: If the PR is not assigned to the specified user.
 
         """
         a_user = other or self.user
         assign_state = self.__check_assign(a_user)
         if assign_state != assignment.ASSIGNED_USER:
-            raise GiteaAssignInvalid(assign_state, a_user)
+            raise GiteaAssignInvalidError(assign_state, a_user)
 
         logger.info("Unassigning user %s for group %s", a_user, self.group)
         msg = self.UNASSIGN_TEMPLATE % (a_user, self.group)

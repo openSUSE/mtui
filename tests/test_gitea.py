@@ -8,10 +8,10 @@ import responses
 
 from mtui.connector.gitea import Comment, Gitea
 from mtui.exceptions import (
-    FailedGiteaCall,
-    GiteaAssignInvalid,
-    GiteaNoReview,
-    MissingGiteaToken,
+    FailedGiteaCallError,
+    GiteaAssignInvalidError,
+    GiteaNoReviewError,
+    MissingGiteaTokenError,
 )
 from mtui.types import assignment
 
@@ -75,11 +75,11 @@ class TestComment:
 
 class TestGiteaInit:
     def test_missing_token_raises(self):
-        """Test init raises MissingGiteaToken when token is empty."""
+        """Test init raises MissingGiteaTokenError when token is empty."""
         config = MagicMock()
         config.gitea_token = ""
 
-        with pytest.raises(MissingGiteaToken):
+        with pytest.raises(MissingGiteaTokenError):
             Gitea(config, "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1")
 
     def test_init_constructs_urls(self, mock_config):
@@ -158,7 +158,7 @@ class TestGiteaOperations:
 
     @responses.activate
     def test_assign_no_review_raises(self, gitea):
-        """Test assign raises GiteaNoReview when no review exists."""
+        """Test assign raises GiteaNoReviewError when no review exists."""
         responses.add(
             responses.GET,
             gitea.pr,
@@ -166,12 +166,12 @@ class TestGiteaOperations:
             status=200,
         )
 
-        with pytest.raises(GiteaNoReview):
+        with pytest.raises(GiteaNoReviewError):
             gitea.assign()
 
     @responses.activate
     def test_unassign_when_not_assigned_raises(self, gitea):
-        """Test unassign raises GiteaAssignInvalid when not assigned."""
+        """Test unassign raises GiteaAssignInvalidError when not assigned."""
         responses.add(
             responses.GET,
             gitea.prissues,
@@ -179,12 +179,12 @@ class TestGiteaOperations:
             status=200,
         )
 
-        with pytest.raises(GiteaAssignInvalid):
+        with pytest.raises(GiteaAssignInvalidError):
             gitea.unassign()
 
     @responses.activate
     def test_approve_when_not_assigned_raises(self, gitea):
-        """Test approve raises GiteaAssignInvalid when not assigned."""
+        """Test approve raises GiteaAssignInvalidError when not assigned."""
         responses.add(
             responses.GET,
             gitea.prissues,
@@ -192,7 +192,7 @@ class TestGiteaOperations:
             status=200,
         )
 
-        with pytest.raises(GiteaAssignInvalid):
+        with pytest.raises(GiteaAssignInvalidError):
             gitea.approve()
 
     @responses.activate
@@ -228,7 +228,7 @@ class TestGiteaOperations:
 
     @responses.activate
     def test_request_failure_raises_failed_gitea_call(self, gitea):
-        """Test API call failures raise FailedGiteaCall."""
+        """Test API call failures raise FailedGiteaCallError."""
         responses.add(
             responses.GET,
             gitea.pr,
@@ -236,7 +236,7 @@ class TestGiteaOperations:
             status=404,
         )
 
-        with pytest.raises(FailedGiteaCall):
+        with pytest.raises(FailedGiteaCallError):
             gitea.get_hash()
 
     def test_repr(self, gitea):

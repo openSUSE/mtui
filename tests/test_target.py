@@ -189,12 +189,12 @@ def test_run_disabled_does_not_execute(mock_config):
 
 
 def test_run_handles_command_timeout(mock_config):
-    """Test run() catches CommandTimeout and sets exit code to -1."""
-    from mtui.connection import CommandTimeout
+    """Test run() catches CommandTimeoutError and sets exit code to -1."""
+    from mtui.connection import CommandTimeoutError
 
     target = Target(mock_config, "host.example.com")
     target.connection = MagicMock()
-    target.connection.run.side_effect = CommandTimeout("echo hello")
+    target.connection.run.side_effect = CommandTimeoutError("echo hello")
     target.state = "enabled"
 
     target.run("echo hello")

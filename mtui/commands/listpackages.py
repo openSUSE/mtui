@@ -1,6 +1,6 @@
 """The `list_packages` command."""
 
-from typing import final
+from typing import ClassVar, final
 
 from .. import messages
 from ..argparse import ArgumentParser
@@ -14,7 +14,7 @@ class ListPackages(Command):
 
     command = "list_packages"
 
-    state_map: dict[None | int, str] = {
+    state_map: ClassVar[dict[None | int, str]] = {
         None: blue("not installed"),
         -1: yellow("update needed"),
         0: green("updated"),
@@ -89,7 +89,7 @@ class ListPackages(Command):
                 if self.metadata:
                     try:
                         # if package p is in target.packages it alwas has set required --> from metadata
-                        wanted = target.packages[p].required  # type: ignore
+                        wanted = target.packages[p].required
                     except KeyError:
                         state = None
                     else:

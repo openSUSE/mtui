@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from mtui import args
-from mtui.argparse import ArgsParseFailure
+from mtui.argparse import ArgsParseFailureError
 
 
 def test_get_parser():
@@ -15,10 +15,10 @@ def test_get_parser():
     assert parser is not None
 
     # Check for help argument
-    with pytest.raises(ArgsParseFailure):
+    with pytest.raises(ArgsParseFailureError):
         parser.parse_args(["-h"])
 
-    with pytest.raises(ArgsParseFailure):
+    with pytest.raises(ArgsParseFailureError):
         parser.parse_args(["--help"])
 
 
@@ -99,5 +99,5 @@ def test_get_parser_args():
     assert str(parsed_args.update.id) == "SUSE:Maintenance:2:2"
 
     # Test mutually exclusive group
-    with pytest.raises(ArgsParseFailure):
+    with pytest.raises(ArgsParseFailureError):
         parser.parse_args(["-a", "SUSE:Maintenance:1:1", "-k", "SUSE:Maintenance:2:2"])

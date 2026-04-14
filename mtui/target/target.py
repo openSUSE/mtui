@@ -13,7 +13,7 @@ from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
 from ..config import Config
-from ..connection import CommandTimeout, Connection
+from ..connection import CommandTimeoutError, Connection
 from ..target.parsers import parse_system
 from ..types import HostLog, Package, System
 from ..types.rpmver import RPMVersion
@@ -137,6 +137,10 @@ class Target:
     def __eq__(self, other) -> bool:
         """Checks if two `Target` objects are equal."""
         return self.system == other.system
+
+    def __hash__(self) -> int:
+        """Hashes the target by hostname."""
+        return hash(self.hostname)
 
     def __ne__(self, other) -> bool:
         """Checks if two `Target` objects are not equal."""
@@ -283,7 +287,7 @@ class Target:
             time_before = timestamp()
             try:
                 exitcode = self.connection.run(command, lock)
-            except CommandTimeout:
+            except CommandTimeoutError:
                 logger.critical('%s: command "%s" timed out', self.hostname, command)
                 exitcode = -1
             except AssertionError:
@@ -472,7 +476,7 @@ class Target:
                 return
 
             now = timestamp()
-            user: str = self.config.session_user  # type: ignore
+            user: str = self.config.session_user
             try:
                 historyfile.write("{}:{}:{}\n".format(now, user, ":".join(comment)))
                 historyfile.close()

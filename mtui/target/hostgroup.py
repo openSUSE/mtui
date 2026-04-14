@@ -192,17 +192,19 @@ class HostsGroup(UserDict[str, Target]):
         """Locks all hosts in the group for an update."""
         skipped = False
         for t in self.data.values():
-            if t.is_locked() and not t._lock.is_mine():
+            if t.is_locked() and not t._lock.is_mine():  # noqa: SLF001
                 skipped = True
                 logger.warning(
                     "host %s is locked since %s by %s. skipping.",
                     t.hostname,
-                    t._lock.time(),
-                    t._lock.locked_by(),
+                    t._lock.time(),  # noqa: SLF001
+                    t._lock.locked_by(),  # noqa: SLF001
                 )
-                if t._lock.comment():
+                if t._lock.comment():  # noqa: SLF001
                     logger.info(
-                        "%s's comment: %s", t._lock.locked_by(), t._lock.comment()
+                        "%s's comment: %s",
+                        t._lock.locked_by(),  # noqa: SLF001
+                        t._lock.comment(),  # noqa: SLF001
                     )
             else:
                 t.lock()
@@ -456,7 +458,7 @@ class HostsGroup(UserDict[str, Target]):
 
                     if not before:
                         not_installed.append(pkg)
-                    elif before >= required:  # type: ignore
+                    elif before >= required:
                         logger.warning(
                             "%s: package is too recent: %s (%s, target version is %s)",
                             hn,
@@ -469,7 +471,7 @@ class HostsGroup(UserDict[str, Target]):
                         logger.warning(
                             "%s: package was not updated: %s (%s)", hn, pkg, after
                         )
-                    if after and after < required:  # type: ignore
+                    if after and after < required:
                         logger.warning(
                             "%s: package does not match required version: %s (%s, required %s)",
                             hn,

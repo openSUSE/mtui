@@ -200,7 +200,7 @@ class SMELT:
         """
         if not self:
             return None
-        return sorted([pkg["name"] for pkg in self.data["packages"]], key=len)[0]  # type: ignore
+        return sorted([pkg["name"] for pkg in self.data["packages"]], key=len)[0]
 
     def get_version(self) -> str | None:
         """Gets the version from the SMELT data.
@@ -215,7 +215,7 @@ class SMELT:
         if not self:
             return None
         # take first repo ..
-        base = self.data["repositories"][0]["name"].split(":")[-2].split("-")  # type: ignore
+        base = self.data["repositories"][0]["name"].split(":")[-2].split("-")
         return f"{base[0]}-{base[1]}"
 
     def __bool__(self) -> bool:
