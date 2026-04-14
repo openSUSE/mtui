@@ -1,35 +1,32 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "mtui"
-dynamic = ["version"]
 description = "Maintenance Test Update Installer"
 readme = "README.rst"
-authors = [
-    {name = "Christian Kornacker", email = "ckornacker@suse.de"}
-]
-maintainers = [
-    {name = "SUSE QA Maintenance", email = "qa-maintenance@suse.de"}
-]
 license = "GPL-2.0-only"
-keywords = ["SUSE", "Maintenance", "update", "testing"]
+authors = [{ name = "Christian Kornacker", email = "ckornacker@suse.de" }]
+maintainers = [
+  { name = "SUSE QA Maintenance", email = "qa-maintenance@suse.de" }
+]
+keywords = ["Maintenance", "SUSE", "testing", "update"]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Operating System :: POSIX :: Linux",
-    "Environment :: Console"
+  "Environment :: Console",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11"
 ]
 dependencies = [
-    "paramiko",
-    "pyxdg",
-    "ruamel.yaml",
-    "requests",
-    "rpm",
-    "looseversion",
-    "openqa-client"
+  "looseversion",
+  "openqa-client",
+  "paramiko",
+  "pyxdg",
+  "requests",
+  "rpm",
+  "ruamel.yaml"
 ]
+dynamic = ["version"]
+
+[project.scripts]
+mtui = "mtui.main:main"
 
 [project.optional-dependencies]
 keyring = ["keyring"]
@@ -37,36 +34,25 @@ norpm = ["version_utils"]
 notify = ["notify"]
 
 [dependency-groups]
-dev = [
-    "pytest",
-    "pytest-cov",
-    "coverage",
-    "responses",
-    "ruff",
-    "ty"
-]
+dev = ["coverage", "pytest", "pytest-cov", "responses", "ruff", "ty"]
 
-[project.scripts]
-mtui = "mtui.main:main"
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["mtui*"]
-exclude = [
-    "*.tests",
-    "*.tests.*", 
-    "tests.*",
-    "tests"
-]
+exclude = ["*.tests", "*.tests.*", "tests.*", "tests"]
 
 [tool.setuptools.package-data]
 mtui = [
-    "terms/*",
-    "scripts/*",
-    "helper/*",
-    "Documentation/*",
-    "*.rst",
+  "terms/*",
+  "scripts/*",
+  "helper/*",
+  "Documentation/*",
+  "*.rst",
 ]
 
 [tool.setuptools.dynamic]
-version = {attr = "mtui.__version__"}
+version = { attr = "mtui.__version__" }
