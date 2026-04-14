@@ -39,7 +39,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         marker = "Additional rpm output:"
         start = stdout.find(marker) + len(marker)
         end = stdout.find("Retrieving", start)
-        print(stdout[start:end].replace("warning", yellow("warning")))
+        print(stdout[start:end].replace("warning", yellow("warning")))  # noqa: T201
     if "A ZYpp transaction is already in progress." in stderr:
         logger.critical(
             '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
@@ -79,7 +79,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         marker = "The following package is not supported by its vendor:\n"
         start = stdout.find(marker)
         end = stdout.find("\n\n", start)
-        print(stdout[start:end])
+        print(stdout[start:end])  # noqa: T201
 
 
 #: A dictionary that maps system configurations to update check functions.

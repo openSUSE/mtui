@@ -49,7 +49,7 @@ class SetRepo(Command):
                 for t in [self.targets[x] for x in hosts]:
                     t.set_repo(operation, self.metadata)
         except TargetLockedError as err:
-            logger.error("Target locked %s", err)
+            logger.exception("Target locked %s", err)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

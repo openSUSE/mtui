@@ -37,8 +37,7 @@ def apply_parser(f, x, cnt):
         return f(x)
     except Exception as e:
         new = ComponentParseError(cnt, f, x)
-        new.__cause__ = e
-        raise new
+        raise new from e
 
 
 class check_eq:

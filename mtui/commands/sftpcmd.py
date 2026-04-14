@@ -43,8 +43,9 @@ class SFTPPut(Command):
             elif file.is_dir():
                 # Path.walk is from 3.12
                 for root, _, folder_files in os.walk(file):
-                    for folder_file in folder_files:
-                        transversed_files.append(Path(root) / folder_file)
+                    transversed_files.extend(
+                        Path(root) / folder_file for folder_file in folder_files
+                    )
             else:
                 logger.warning("Filename %s isn't file", file)
                 continue

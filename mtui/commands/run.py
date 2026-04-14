@@ -63,15 +63,13 @@ class Run(Command):
                     output.append(
                         f"{target!s}:-> {targets[target].lastin()!s} [{targets[target].lastexit()!s}]"
                     )
-                    for line in targets[target].lastout().split("\n"):
-                        output.append(line)
+                    output.extend(targets[target].lastout().split("\n"))
                     if targets[target].lasterr():
                         output.append("stderr:")
-                        for line in targets[target].lasterr().split("\n"):
-                            output.append(line)
+                        output.extend(targets[target].lasterr().split("\n"))
 
         except TargetLockedError as e:
-            logger.error("Target %s", e)
+            logger.exception("Target %s", e)
             return
 
         page(output, self.prompt.interactive)

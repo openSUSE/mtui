@@ -71,7 +71,7 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
     try:
         _ = connection.sftp_open(Path("/usr/etc/transactional-update.conf"))
         transactional = True
-        logger.info(f"Host: {connection.hostname} is transactional system")
+        logger.info("Host: %s is transactional system", connection.hostname)
     except FileNotFoundError:
         transactional = False
 

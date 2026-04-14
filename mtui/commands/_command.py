@@ -174,7 +174,7 @@ class Command(ABC):
                 targets = self.targets.select(enabled=enabled)
         except HostIsNotConnectedError as e:
             if e.host == "all":
-                logger.error(e)
+                logger.exception(e)
                 logger.info("Using all hosts. Warning: option 'all' is deprecated")
 
                 targets = self.targets.select(enabled=enabled)

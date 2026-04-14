@@ -14,7 +14,7 @@ class System:
     used for pretty-printing and for correct update handling.
     """
 
-    def __init__(self, base: Product, addons: set[Product] = set()) -> None:
+    def __init__(self, base: Product, addons: set[Product] | None = None) -> None:
         """Initializes the `System` object.
 
         Args:
@@ -23,6 +23,8 @@ class System:
 
         """
         # TODO: check for correctness of base and addons types
+        if addons is None:
+            addons = set()
         self.__base = base
         self.__addons = addons
 

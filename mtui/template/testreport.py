@@ -135,8 +135,7 @@ class TestReport(ABC):
         except FileNotFoundError as e:
             args = [*list(e.args), e.filename]
             e_new = TemplateIOError(*args)
-            e_new.__cause__ = e  # PEP 3134
-            raise e_new
+            raise e_new from e
 
         data = None
         if metadata.exists() and metadata.is_file():
@@ -144,7 +143,7 @@ class TestReport(ABC):
             try:
                 data = loads(data)
             except JSONDecodeError:
-                raise MetadataNotLoadedError
+                raise MetadataNotLoadedError from None
         else:
             raise MetadataNotLoadedError
 
@@ -220,8 +219,7 @@ class TestReport(ABC):
         """
         ret = []
         for key in self.packages:
-            for k in self.packages[key]:
-                ret.append(k)
+            ret.extend(self.packages[key])
         # deduplicate list
         ret = list(set(ret))
 
@@ -266,8 +264,8 @@ class TestReport(ABC):
 
         try:
             targets.perform_update(self, params)
-        except UpdateError as e:
-            logger.error("Update failed: %s", e)
+        except UpdateError:
+            logger.exception("Update failed")
             logger.warning("Error while updating. Rolling back changes")
             self.perform_downgrade(targets)
 
@@ -331,7 +329,7 @@ class TestReport(ABC):
 
         """
         try:
-            logger.debug(f"Copying scripts: {src} -> {dst}")
+            logger.debug("Copying scripts: %s -> %s", src, dst)
             shutil.copytree(src, dst, ignore=ignore)
         except OSError as e:
             # this should not happen but was already noticed once or
@@ -340,9 +338,8 @@ class TestReport(ABC):
             msg = "Copy scripts {0} -> {1} failed. reason:"
             msg = msg.format(src, dst)
             if e.errno == ENOENT:
-                logger.error(msg)
-                logger.error(str(e))
-                logger.error("copy scripts manually")
+                logger.exception(msg)
+                logger.exception("copy scripts manually")
                 logger.debug(format_exc())
             elif e.errno == EEXIST:
                 logger.info("Scripts are in place")
@@ -468,7 +465,7 @@ class TestReport(ABC):
                 del self.targets[hostname]
             if hostname in self.systems:
                 del self.systems[hostname]
-            logger.warning(f"failed to add host {hostname} to target list")
+            logger.warning("failed to add host %s to target list", hostname)
             logger.debug(format_exc())
 
     def refhosts_from_tp(self, testplatform) -> None:
@@ -729,8 +726,9 @@ class TestReport(ABC):
         else:
             targets = self.targets.values()
 
-        for t in targets:
-            results.append(TargetMeta(t.hostname, str(t.system), t.packages, t.out))
+        results.extend(
+            TargetMeta(t.hostname, str(t.system), t.packages, t.out) for t in targets
+        )
 
         return results
 

@@ -51,7 +51,7 @@ class KernelExport(BaseExport):
                     + 1
                 )
             except ValueError:
-                line = line = self.template.index("regression tests:\n") + 1
+                line = self.template.index("regression tests:\n") + 1
 
             e_line = self.template.index("build log review:\n")
             del self.template[line:e_line]

@@ -87,7 +87,7 @@ class ManualExport(BaseExport):
                         except ValueError:
                             # no hostsection found and no starting point for insertion,
                             # bail out and try the next host
-                            logger.error("update results section not found")
+                            logger.exception("update results section not found")
                             break
 
                     # insert new package version log at position i.
@@ -140,7 +140,7 @@ class ManualExport(BaseExport):
             except ValueError:
                 # host section not found (this should really not happen)
                 # proceed with the next one.
-                logger.warning(f"host section {hostname} not found")
+                logger.warning("host section %s not found", hostname)
                 continue
             for state in ["before", "after"]:
                 versions[state] = {}
@@ -150,7 +150,7 @@ class ManualExport(BaseExport):
                     try:
                         index = self.template.index(f"{state}:\n", index) + 1
                     except ValueError:
-                        logger.error(f"{state} packages section not found")
+                        logger.exception("%s packages section not found", state)
                         continue
 
                 for package in host.packages.values():
@@ -200,7 +200,8 @@ class ManualExport(BaseExport):
                     failed = True
             if failed:
                 logger.warning(
-                    f"installation test result on {hostname} set to FAILED as some packages were not updated. please override manually."
+                    "installation test result on %s set to FAILED as some packages were not updated. please override manually.",
+                    hostname,
                 )
 
             # temporary variable to avoid repeating the same script. We only want the

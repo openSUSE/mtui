@@ -138,7 +138,7 @@ class TargetLock:
     # TODO: some cache needed
     def load(self) -> None:
         """Loads the lock state from the remote host."""
-        logger.debug(f"{self.connection.hostname}: getting mtui lock state")
+        logger.debug("%s: getting mtui lock state", self.connection.hostname)
 
         self._lock = RemoteLock()  # make sure lock is reset.
 
@@ -195,8 +195,8 @@ class TargetLock:
             lockfile = self.connection.sftp_open(self.filename, "w+")
             lockfile.write(rl.to_lockfile())
             lockfile.close()
-        except Exception as e:
-            logger.error("failed to open lockfile: %s", e)
+        except Exception:
+            logger.exception("failed to open lockfile")
             raise
 
         self._lock = rl
@@ -260,8 +260,8 @@ class TargetLock:
         except OSError as e:
             if e.errno == errno.ENOENT:
                 pass
-        except Exception as e:
-            logger.error("failed to remove lockfile: %s", e)
+        except Exception:
+            logger.exception("failed to remove lockfile")
             raise
 
         self._lock = RemoteLock()

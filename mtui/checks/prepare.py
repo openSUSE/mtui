@@ -49,7 +49,11 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("Dependency Error", hostname)
     if "Error:" in stderr:
         logger.critical(
-            f'{hostname!s}: command "{stdin!s}" failed:\nstdin:\n{stdout!s}\nstderr:\n{stderr!s}'
+            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            hostname,
+            stdin,
+            stdout,
+            stderr,
         )
         raise UpdateError("RPM Error", hostname)
 

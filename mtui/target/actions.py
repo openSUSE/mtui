@@ -241,7 +241,7 @@ class RunCommand:
                 queue.join()
 
         except KeyboardInterrupt:
-            print("stopping command queue, please wait.")
+            print("stopping command queue, please wait.")  # noqa: T201
             try:
                 while queue.unfinished_tasks:
                     spinner(lock)
@@ -253,7 +253,7 @@ class RunCommand:
                     thread.queue.task_done()
 
             queue.join()
-            print()
+            print()  # noqa: T201
             raise
 
 

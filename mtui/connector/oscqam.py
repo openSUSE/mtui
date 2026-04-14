@@ -97,14 +97,16 @@ class OSC:
             check_call(command)
 
         except CalledProcessError:
-            logger.error(
+            logger.exception(
                 "'%s' operation failed. The command returned a non-zero exit code.",
                 operation,
             )
             logger.debug("Call stack trace:", stack_info=True)
 
         except FileNotFoundError:
-            logger.error("'osc' command not found. Is it installed and in your PATH?")
+            logger.exception(
+                "'osc' command not found. Is it installed and in your PATH?"
+            )
 
     def approve(self, group: list[str]) -> None:
         """Approves a review request for one or more groups.
