@@ -355,27 +355,6 @@ class _RefhostsFactory:
     # should help with the ammount of injected dependencies in each one
     # of the classes
 
-    # _stat = None
-    """
-    :type _stat: callable :: FilePath -> IO L{posix.stat_result}
-    """
-
-    # _urlopen = None
-    """
-    :type urlopen: callable :: URI -> IO file-like
-    """
-    # _time_now = None
-    """
-    :type time_now: callable :: IO float
-    :param time_now_getter: returns unix time
-    """
-
-    # _write_file = None
-    """
-    :type _write_file: callable :: str -> FilePath -> IO ()
-    :param _write_file: atomically writes data into given file path
-    """
-
     def __init__(
         self,
         time_now_getter,
