@@ -212,4 +212,8 @@ class SMELT:
 
     def __bool__(self) -> bool:
         """Returns `True` if the connector has data, `False` otherwise."""
-        return not (self.data == {"requestSet": [], "packages": [], "repositories": [], "comments": []} or not self.data)
+        return not (
+            self.data
+            == {"requestSet": [], "packages": [], "repositories": [], "comments": []}
+            or not self.data
+        )
