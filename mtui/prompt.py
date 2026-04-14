@@ -47,7 +47,7 @@ class CmdQueue(list):
         self.term = term
         list.__init__(self, iterable)
 
-    def pop(self, i) -> Any:
+    def pop(self, i=-1, /) -> Any:  # type: ignore[override]
         """Pops a command from the queue and echoes it to the terminal.
 
         Args:

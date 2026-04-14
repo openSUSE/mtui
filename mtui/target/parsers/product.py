@@ -15,7 +15,7 @@ def parse_product(prod: SFTPFile) -> tuple[str, str, str]:
         A tuple containing the product name, version, and architecture.
 
     """
-    root = ET.fromstringlist(prod)
+    root = ET.fromstringlist(prod)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]  # SFTPFile is file-like
     name: str = root.findtext("./name", "")
     arch: str = root.findtext("./arch", "")
 

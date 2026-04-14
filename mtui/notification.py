@@ -21,7 +21,7 @@ def display(
     global __impl
     if __impl is None:
         try:
-            import pynotify as __impl
+            import pynotify as __impl  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
         except ImportError:
             __impl = False
             logger.debug("pynotify not installed. notification disabled.")

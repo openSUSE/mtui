@@ -680,7 +680,10 @@ class Connection:
             True if the connection is active, False otherwise.
 
         """
-        return self.client._transport.is_active()  # noqa: SLF001
+        transport = self.client._transport  # noqa: SLF001
+        if transport is None:
+            return False
+        return transport.is_active()
 
     def close(self) -> None:
         """Closes the SSH channel and disconnects."""

@@ -35,9 +35,9 @@ class HostLog(list):
 
         """
         # there is awfull exceptation *args will expand into one  variable
-        if len(args) == 1 and isinstance(*args, list | tuple | set):
-            if len(*args) != 5:
-                raise ValueError(f"it need 5 args, got {len(*args)}")
+        if len(args) == 1 and isinstance(args[0], list | tuple | set):
+            if len(args[0]) != 5:
+                raise ValueError(f"it need 5 args, got {len(args[0])}")
             items = args[0]
             command = to_string(items[0])
             stdout = to_string(items[1])
@@ -72,14 +72,14 @@ class HostLog(list):
             *args: The command log entry to insert.
 
         """
-        if len(args) == 1 and isinstance(*args, list | tuple | set):
-            if len(*args) != 5:
-                raise ValueError(f"it need 5 args, got {len(*args)}")
-            command = to_string(*args[0])
-            stdout = to_string(*args[1])
-            stderr = to_string(*args[2])
-            exitcode = int(*args[3])
-            runtime = int(*args[4])
+        if len(args) == 1 and isinstance(args[0], list | tuple | set):
+            if len(args[0]) != 5:
+                raise ValueError(f"it need 5 args, got {len(args[0])}")
+            command = to_string(args[0][0])
+            stdout = to_string(args[0][1])
+            stderr = to_string(args[0][2])
+            exitcode = int(args[0][3])
+            runtime = int(args[0][4])
         else:
             if len(args) != 5:
                 raise ValueError(f"it need 5 args, got {len(*args)}")

@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from typing import NoReturn
 
 
 class ArgsParseFailureError(RuntimeError):
@@ -54,7 +55,7 @@ class ArgumentParser(argparse.ArgumentParser):
         """
         super().print_usage(self.sys.stdout)
 
-    def exit(self, status: int = 0, message: str | None = None) -> None:
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
         """Overrides the default exit behavior to raise an exception.
 
         This method raises an `ArgsParseFailureError` exception instead of
