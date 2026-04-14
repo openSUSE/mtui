@@ -69,7 +69,7 @@ class Run(Command):
                         output.extend(targets[target].lasterr().split("\n"))
 
         except TargetLockedError as e:
-            logger.exception("Target %s", e)
+            logger.error("Target %s", e)
             return
 
         page(output, self.prompt.interactive)

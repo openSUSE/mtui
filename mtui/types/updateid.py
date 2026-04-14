@@ -76,7 +76,7 @@ class UpdateID(ABC):
             try:
                 self._vcs_checkout(config, config.svn_path, self.id)
             except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
-                logger.exception("SVN checkout failed")
+                logger.error("SVN checkout failed")
                 raise TestReportNotLoadedError from e
             else:
                 try:
@@ -84,12 +84,12 @@ class UpdateID(ABC):
                 except Exception as e:
                     raise e
         except (MissingGiteaTokenError, FailedGiteaCallError):
-            logger.exception("Gitea error")
+            logger.error("Gitea error")
             logger.warning("TestReport ins't loaded")
             raise TestReportNotLoadedError from None
 
         except InvalidGiteaHashError:
-            logger.exception("Invalid Gitea hash")
+            logger.error("Invalid Gitea hash")
             logger.info(
                 "TestReport has different hash than GiteaPR, please regenerate template"
             )

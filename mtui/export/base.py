@@ -78,7 +78,7 @@ class BaseExport(ABC):
             with fn.open(mode="w", encoding="utf-8") as f:
                 f.write(to_write)
         except OSError:
-            logger.exception("Failed to write %s", fn)
+            logger.error("Failed to write %s", fn)
 
     def installlogs_lines(self, filenames) -> None:
         """Adds install log links to the template.

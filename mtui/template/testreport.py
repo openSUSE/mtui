@@ -265,7 +265,7 @@ class TestReport(ABC):
         try:
             targets.perform_update(self, params)
         except UpdateError:
-            logger.exception("Update failed")
+            logger.error("Update failed")
             logger.warning("Error while updating. Rolling back changes")
             self.perform_downgrade(targets)
 
@@ -338,8 +338,8 @@ class TestReport(ABC):
             msg = "Copy scripts {0} -> {1} failed. reason:"
             msg = msg.format(src, dst)
             if e.errno == ENOENT:
-                logger.exception(msg)
-                logger.exception("copy scripts manually")
+                logger.error(msg)
+                logger.error("copy scripts manually")
                 logger.debug(format_exc())
             elif e.errno == EEXIST:
                 logger.info("Scripts are in place")

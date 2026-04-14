@@ -296,9 +296,7 @@ class Target:
                 return
             except Exception:
                 # failed to run command
-                logger.exception(
-                    '%s: failed to run command "%s"', self.hostname, command
-                )
+                logger.error('%s: failed to run command "%s"', self.hostname, command)
                 exitcode = -1
 
             time_after = timestamp()
@@ -327,7 +325,7 @@ class Target:
             self.connection.shell()
         except Exception:
             # failed to spawn shell
-            logger.exception("%s: failed to spawn shell", self.hostname)
+            logger.error("%s: failed to spawn shell", self.hostname)
 
     def sftp_put(self, local: Path, remote: Path) -> None:
         """Uploads a file to the target host.
@@ -342,7 +340,7 @@ class Target:
             try:
                 return self.connection.sftp_put(local, remote)
             except OSError:
-                logger.exception("%s: failed to send %s", self.hostname, local)
+                logger.error("%s: failed to send %s", self.hostname, local)
         elif self.state == "dryrun":
             logger.info("dryrun: put %s %s:%s", local, self.hostname, remote)
 
@@ -370,7 +368,7 @@ class Target:
             try:
                 f(remote, local)
             except OSError:
-                logger.exception(
+                logger.error(
                     "%s: failed to get %s %s",
                     self.hostname,
                     s,
@@ -472,7 +470,7 @@ class Target:
                 filename = Path("/var/log/mtui.log")
                 historyfile = self.connection.sftp_open(filename, "a+")
             except Exception:
-                logger.exception("failed to open history file")
+                logger.error("failed to open history file")
                 return
 
             now = timestamp()

@@ -196,7 +196,7 @@ class TargetLock:
             lockfile.write(rl.to_lockfile())
             lockfile.close()
         except Exception:
-            logger.exception("failed to open lockfile")
+            logger.error("failed to open lockfile")
             raise
 
         self._lock = rl
@@ -261,7 +261,7 @@ class TargetLock:
             if e.errno == errno.ENOENT:
                 pass
         except Exception:
-            logger.exception("failed to remove lockfile")
+            logger.error("failed to remove lockfile")
             raise
 
         self._lock = RemoteLock()
