@@ -49,11 +49,7 @@ class OBSTestReport(TestReport):
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
         """Returns a list of data to be displayed by `list_metadata`."""
-        return [
-            ("ReviewRequestID", str(self.rrid)),
-            ("Rating", self.rating),
-            ("Real ID", self.realid),
-        ] + super()._show_yourself_data()
+        return [("ReviewRequestID", str(self.rrid)), ("Rating", self.rating), ("Real ID", self.realid), *super()._show_yourself_data()]
 
     def set_repo(self, target: Target, operation: str) -> None:
         """Adds or removes a repository on a target host.

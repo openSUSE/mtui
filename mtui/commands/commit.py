@@ -34,7 +34,7 @@ class Commit(Command):
 
         msg = []
         if self.args.msg:
-            msg = ["-m"] + ['"' + " ".join(self.args.msg[0]) + '"']
+            msg = ["-m", '"' + " ".join(self.args.msg[0]) + '"']
 
         try:
             subprocess.check_call(
@@ -52,7 +52,7 @@ class Commit(Command):
                     cwd=checkout,
                 )
             subprocess.check_call(["svn", "up"], cwd=checkout)
-            subprocess.check_call(["svn", "ci"] + msg, cwd=checkout)
+            subprocess.check_call(["svn", "ci", *msg], cwd=checkout)
 
             logger.info(f"Testreport in: {self.metadata._fancy_report_url()}")
 

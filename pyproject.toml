@@ -63,7 +63,8 @@ select = [
     "E",     # pycodestyle errors
     "F",     # pyflakes
     "PT",    # flake8-pytest-style
-    "UP007", # use X | Y for unions
+    "RUF005", # use iterable unpacking instead of concatenation
+    "UP007",  # use X | Y for unions
 ]
 ignore = [
     "E501",  # line-too-long (handled by formatter)

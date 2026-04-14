@@ -221,14 +221,14 @@ class Config:
         ]
 
         def add_normalizer(x):
-            return x if len(x) > 3 else x + (normalizer,)
+            return x if len(x) > 3 else (*x, normalizer)
 
         n_data = (add_normalizer(x) for x in data)
 
         getter = self.config.get
 
         def add_getter(x):
-            return x if len(x) > 4 else x + (getter,)
+            return x if len(x) > 4 else (*x, getter)
 
         self.data: list[tuple[str, tuple[str, ...], Any, Callable, Callable]] = [
             add_getter(x) for x in n_data
@@ -288,7 +288,7 @@ class Config:
             raise
         except Exception:
             msg = "Config option {0}.{1} extraction from {2} " + "failed."
-            logger.error(msg.format(secopt + (self.configfiles,)))
+            logger.error(msg.format((*secopt, self.configfiles)))
             raise
 
     def merge_args(self, args: Namespace) -> None:

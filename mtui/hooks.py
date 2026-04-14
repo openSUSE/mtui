@@ -80,7 +80,7 @@ class Script(ABC):
         Returns:
             A tuple containing the parts of the result path.
         """
-        return ("output/scripts", ".".join((cls.subdir,) + basename))
+        return ("output/scripts", ".".join((cls.subdir, *basename)))
 
     def run(self, targets: "HostsGroup") -> None:
         """Runs the script.
