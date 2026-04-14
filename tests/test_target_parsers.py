@@ -1,12 +1,9 @@
 """Tests for the mtui target parsers modules."""
 
-import io
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from mtui.target.parsers.product import parse_os_release, parse_product
-from mtui.types import Product
 
 
 # --- parse_product ---

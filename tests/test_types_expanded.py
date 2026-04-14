@@ -2,7 +2,7 @@
 
 import pytest
 
-from mtui.types import CommandLog, HostLog, Package, Product
+from mtui.types import HostLog, Package, Product
 from mtui.types.enums import assignment, method
 from mtui.types.rpmver import RPMVersion
 from mtui.types.systems import System, UnknownSystemError

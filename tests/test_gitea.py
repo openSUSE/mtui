@@ -1,7 +1,7 @@
 """Tests for the mtui connector gitea module."""
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import responses
@@ -13,7 +13,7 @@ from mtui.exceptions import (
     GiteaNoReview,
     MissingGiteaToken,
 )
-from mtui.types import assignment, method
+from mtui.types import assignment
 
 
 # --- Comment dataclass ---
