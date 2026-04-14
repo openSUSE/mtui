@@ -34,9 +34,7 @@ def m_review_id():
     ],
 )
 def test_RRID_ok(r_review_id, m_review_id, rrid):
-    """
-    Test correct RRID is parsed successfully
-    """
+    """Test correct RRID is parsed successfully."""
     rid = r_review_id
     mid = m_review_id
     rr = RequestReviewID(rrid.format(mid, rid))
@@ -51,9 +49,7 @@ def test_RRID_ok(r_review_id, m_review_id, rrid):
 
 @pytest.mark.parametrize("missing", ["SUSE:Maintenance", "SUSE:M", "SUSE"])
 def test_parse_rrid_mc(missing):
-    """
-    Test parse failure: missing component
-    """
+    """Test parse failure: missing component."""
     with pytest.raises(MissingComponentError):
         RequestReviewID(missing)
 
@@ -68,9 +64,7 @@ def test_parse_rrid_mc(missing):
     ],
 )
 def test_parse_rrid_cpe(cpe):
-    """
-    Test parse failure: componet parse errors
-    """
+    """Test parse failure: componet parse errors."""
     with pytest.raises(ComponentParseError):
         RequestReviewID(cpe)
 

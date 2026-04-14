@@ -4,9 +4,7 @@ from mtui import prompt
 
 
 def test_command_prompt_init():
-    """
-    Test CommandPrompt initialization
-    """
+    """Test CommandPrompt initialization."""
     config = MagicMock()
     log = MagicMock()
     sys = MagicMock()
@@ -21,9 +19,7 @@ def test_command_prompt_init():
 
 
 def test_set_prompt():
-    """
-    Test set_prompt
-    """
+    """Test set_prompt."""
     config = MagicMock()
     config.auto = False
     config.kernel = False
@@ -38,9 +34,7 @@ def test_set_prompt():
 
 
 def test_cmd_queue():
-    """
-    Test CmdQueue
-    """
+    """Test CmdQueue."""
     term = MagicMock()
     queue = prompt.CmdQueue(["test_cmd"], "mtui> ", term)
 
@@ -51,9 +45,7 @@ def test_cmd_queue():
 
 
 def test_dispatching():
-    """
-    Test command, help, and completion dispatching
-    """
+    """Test command, help, and completion dispatching."""
     config = MagicMock()
     log = MagicMock()
     sys = MagicMock()
@@ -86,9 +78,7 @@ def test_dispatching():
 
 
 def test_cmdloop_keyboard_interrupt(monkeypatch):
-    """
-    Test that cmdloop handles KeyboardInterrupt
-    """
+    """Test that cmdloop handles KeyboardInterrupt."""
     config = MagicMock()
     log = MagicMock()
     sys = MagicMock()
@@ -109,9 +99,7 @@ def test_cmdloop_keyboard_interrupt(monkeypatch):
 
 
 def test_cmdloop_quit_loop(monkeypatch):
-    """
-    Test that cmdloop handles QuitLoopError
-    """
+    """Test that cmdloop handles QuitLoopError."""
     config = MagicMock()
     log = MagicMock()
     sys = MagicMock()

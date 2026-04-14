@@ -4,9 +4,7 @@ from mtui import parsemetajson
 
 
 def test_json_parser_parse():
-    """
-    Test JSONParser.parse
-    """
+    """Test JSONParser.parse."""
     results = MagicMock()
     results.jira = {}
     results.bugs = {}

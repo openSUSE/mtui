@@ -100,7 +100,7 @@ class ManualExport(BaseExport):
                     #
                     # => PASSED/FAILED
                     #
-                    # comment: (none)
+                    # comment: (none)  # noqa: ERA001
                     #
                     self.template.insert(index, "\n")
                     index += 1
@@ -215,7 +215,7 @@ class ManualExport(BaseExport):
                 #                       2 INTERNAL ERROR
                 #                       3 NOT RUN
                 try:
-                    # name == command, exitcode == exitcode
+                    # name == command, exitcode == exitcode  # noqa: ERA001
                     name = cmdlog.command
                     exitcode = cmdlog.exitcode
 

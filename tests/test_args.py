@@ -8,9 +8,7 @@ from mtui.argparse import ArgsParseFailureError
 
 
 def test_get_parser():
-    """
-    Test get_parser
-    """
+    """Test get_parser."""
     parser = args.get_parser(sys)
     assert parser is not None
 
@@ -23,9 +21,7 @@ def test_get_parser():
 
 
 def test_get_parser_args():
-    """
-    Test get_parser with arguments
-    """
+    """Test get_parser with arguments."""
     parser = args.get_parser(sys)
 
     # Test short arguments

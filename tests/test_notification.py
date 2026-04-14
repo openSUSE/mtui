@@ -5,9 +5,7 @@ from mtui import notification
 
 
 def test_display_success(monkeypatch):
-    """
-    Test display when pynotify is available and works.
-    """
+    """Test display when pynotify is available and works."""
     mock_pynotify = MagicMock()
     # Bypass the import/init logic by setting __impl directly
     monkeypatch.setattr(notification, "__impl", mock_pynotify)
@@ -21,9 +19,7 @@ def test_display_success(monkeypatch):
 
 
 def test_display_import_error(monkeypatch):
-    """
-    Test display when pynotify is not installed.
-    """
+    """Test display when pynotify is not installed."""
     # Reset state to ensure the import logic is triggered
     monkeypatch.setattr(notification, "__impl", None)
     # Make the import fail
@@ -34,9 +30,7 @@ def test_display_import_error(monkeypatch):
 
 
 def test_display_init_fails(monkeypatch):
-    """
-    Test display when pynotify is installed but fails to initialize.
-    """
+    """Test display when pynotify is installed but fails to initialize."""
     # Reset state to ensure the import logic is triggered
     monkeypatch.setattr(notification, "__impl", None)
 

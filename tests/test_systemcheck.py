@@ -4,9 +4,7 @@ from mtui import systemcheck
 
 
 def test_detect_system(monkeypatch):
-    """
-    Test detect_system
-    """
+    """Test detect_system."""
     mock_os_release = 'NAME="test_distro"\nVERSION_ID="test_verid"'
     mock_version = "Linux version test_kernel"
 

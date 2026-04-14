@@ -4,9 +4,7 @@ from mtui import parsemeta
 
 
 def test_reduced_metadata_parser_parse():
-    """
-    Test ReducedMetadataParser.parse
-    """
+    """Test ReducedMetadataParser.parse."""
     results = MagicMock()
     results.hostnames = set()
     results.jira = {}

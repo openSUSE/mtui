@@ -170,7 +170,7 @@ class TestReport(ABC):
 
     @abstractmethod
     def check_hash(self) -> tuple[bool, str, str]:
-        """An abstract method for checking git hash of gitea based testreports,
+        """An abstract method for checking git hash of gitea based testreports,.
 
         return: bool
                 True if hash is same or if it isn't supported
@@ -683,7 +683,7 @@ class TestReport(ABC):
         #   line = PKKGNAME +SP PKGVER
         #   input = *(line EOL)
 
-        # by_host_pkg[hostname][package] = [version, ...]
+        # by_host_pkg[hostname][package] = [version, ...]  # noqa: ERA001
         by_host_pkg: dict[str, Any] = {}
         for hn, t in targets.items():
             by_host_pkg[hn] = {}
@@ -694,13 +694,13 @@ class TestReport(ABC):
                 else:
                     continue
 
-        # by_pkg_vers[package][(version, ...)] = [hostname, ...]
+        # by_pkg_vers[package][(version, ...)] = [hostname, ...]  # noqa: ERA001
         by_pkg_vers: dict[str, Any] = {}
         for hn, pvs in by_host_pkg.items():
             for pkg, vs in pvs.items():
                 by_pkg_vers.setdefault(pkg, {}).setdefault(tuple(vs), []).append(hn)
 
-        # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]
+        # by_hosts_pkg[(hostname, ...)] = [(package, (version, ...)), ...]  # noqa: ERA001
         by_hosts_pkg: dict[tuple[str, ...], Any] = {}
         for pkg, vshs in by_pkg_vers.items():
             for vs, hs in vshs.items():
