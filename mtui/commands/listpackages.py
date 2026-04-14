@@ -64,7 +64,7 @@ class ListPackages(Command):
         for key in self.metadata.packages.keys():
             self.println(f"Packages for version {key}:")
             for xs in list(self.metadata.packages[key].items()):
-                self.printPVLN(*(xs + ("",)))
+                self.printPVLN(*((*xs, "")))
 
     def __call__(self) -> None:
         """Executes the `list_packages` command."""

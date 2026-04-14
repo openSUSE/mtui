@@ -39,7 +39,7 @@ class Terms(Command):
                 filename = "term." + self.args.termname + ".sh"
                 path = terms_path() / filename
                 try:
-                    check_call([path] + hosts)
+                    check_call([path, *hosts])
                 except Exception:
                     logger.error("running %s failed", filename)
                     logger.debug(format_exc())

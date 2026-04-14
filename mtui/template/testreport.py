@@ -133,7 +133,7 @@ class TestReport(ABC):
         try:
             tpl = path.read_text(errors="replace")
         except FileNotFoundError as e:
-            args = list(e.args) + [e.filename]
+            args = [*list(e.args), e.filename]
             e_new = TemplateIOError(*args)
             e_new.__cause__ = e  # PEP 3134
             raise e_new
@@ -596,7 +596,7 @@ class TestReport(ABC):
         Returns:
             The path to the scripts directory.
         """
-        return self.report_wd().joinpath(*["scripts"] + list(paths))
+        return self.report_wd().joinpath(*["scripts", *list(paths)])
 
     def __repr__(self):
         """Returns a string representation of the `TestReport` object."""
