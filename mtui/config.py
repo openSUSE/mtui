@@ -27,6 +27,40 @@ class InvalidOptionNameError(RuntimeError):
 class Config:
     """Read and store the variables from mtui config files."""
 
+    # -- Attributes set dynamically by _parse_config() via setattr() --
+    template_dir: Path
+    local_tempdir: Path
+    session_user: str
+    install_logs: Path
+    connection_timeout: int
+    svn_path: str
+    bugzilla_url: str
+    reports_url: str
+    fancy_reports_url: str
+    smelt_api: str
+    target_tempdir: Path
+    chdir_to_template_dir: bool
+    refhosts_resolvers: str
+    refhosts_https_uri: str
+    refhosts_https_expiration: int
+    refhosts_path: Path
+    use_keyring: bool
+    report_bug_url: str
+    openqa_instance: str
+    openqa_instance_baremetal: str
+    openqa_install_distri: str
+    openqa_install_logs: str
+    openqa_kernel_install_logs: str
+    threshold: int
+    gitea_token: str
+
+    # -- Attributes set externally in main.py --
+    kernel: bool
+    auto: bool
+    distro: str
+    distro_ver: str
+    distro_kernel: str
+
     def __init__(self, path: Path | None, refhosts=RefhostsFactory) -> None:
         """Initializes the configuration object.
 
