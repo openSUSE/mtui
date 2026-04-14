@@ -12,6 +12,8 @@ from abc import ABC
 class UserMessage(BaseException, ABC):
     """An abstract base class for messages to be displayed to the user."""
 
+    message: str
+
     def __str__(self) -> str:
         return self.message
 
@@ -231,6 +233,8 @@ class PackageRevisionHasntChangedWarning(UserMessage):
 
 class MissingDoerError(ErrorMessage):
     """Base class for missing "doer" errors."""
+
+    name: str  # Set by subclasses as a class variable
 
     def __init__(self, release) -> None:
         self.release = release

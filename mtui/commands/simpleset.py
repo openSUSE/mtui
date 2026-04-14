@@ -63,7 +63,7 @@ class SetLocation(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         loc = RefhostsFactory(state["config"]).get_locations()
-        locations = [list(loc)]
+        locations = [tuple(loc)]
 
         return complete_choices(locations, line, text)
 
