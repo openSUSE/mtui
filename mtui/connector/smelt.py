@@ -1,6 +1,5 @@
 """A connector for the SMELT GraphQL API."""
 
-from collections.abc import Collection
 from datetime import datetime
 from itertools import chain
 from json.decoder import JSONDecodeError
@@ -34,9 +33,9 @@ class SMELT:
         """
         self.rrid = rrid
         self.apiurl = apiurl
-        self.data: Collection[Any] | None = self._get_data()
+        self.data: dict[str, Any] | None = self._get_data()
 
-    def _get_data(self) -> Collection[Any] | None:
+    def _get_data(self) -> dict[str, Any] | None:
         """Gets data from the SMELT API.
 
         Returns:
@@ -106,7 +105,7 @@ class SMELT:
         except Exception as e:
             logger.debug("Problem %s during normalize incident", e)
             return None
-        return inc
+        return inc  # type: ignore[return-value]  # ty: ignore[invalid-return-type]  # walk returns dict|list, narrowed to dict at runtime
 
     def openqa_links(self) -> list[str] | None:
         """Gets openQA links from comments in IBS.
@@ -198,9 +197,10 @@ class SMELT:
             The incident name, or None if it cannot be determined.
 
         """
-        if not self:
+        if not self or not self.data:
             return None
-        return sorted([pkg["name"] for pkg in self.data["packages"]], key=len)[0]
+        names = sorted([pkg["name"] for pkg in self.data["packages"]], key=len)
+        return str(names[0])
 
     def get_version(self) -> str | None:
         """Gets the version from the SMELT data.
@@ -212,7 +212,7 @@ class SMELT:
             The version string, or None if it cannot be determined.
 
         """
-        if not self:
+        if not self or not self.data:
             return None
         # take first repo ..
         base = self.data["repositories"][0]["name"].split(":")[-2].split("-")

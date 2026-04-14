@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import termios
 import time
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from contextlib import contextmanager
 from copy import deepcopy
 from functools import wraps
@@ -293,7 +293,7 @@ class SUTParse:
 
 
 def complete_choices(
-    synonyms: list[tuple[str, ...]],
+    synonyms: Sequence[tuple[str, ...]],
     line: str,
     text: str,
     hostnames: list[str] | None = None,
@@ -453,7 +453,7 @@ def atomic_write_file(data: bytes | str, path: Path) -> None:
     move(fname, path)
 
 
-def walk(inc: Collection) -> Collection:
+def walk(inc: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
     """Recursively walks through a nested data structure.
 
     This function is designed to simplify nested data structures,
@@ -469,7 +469,8 @@ def walk(inc: Collection) -> Collection:
     """
     if isinstance(inc, list):
         for i, j in enumerate(inc):
-            inc[i] = walk(j)
+            if isinstance(j, list | dict):
+                inc[i] = walk(j)
     if isinstance(inc, dict):
         if len(inc) == 1:
             if "edges" in inc:
