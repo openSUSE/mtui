@@ -76,10 +76,6 @@ class Connection:
             port: The port number to connect to.
             timeout: The timeout for remote commands.
         """
-        # uncomment to enable separate paramiko connection logging
-
-        # paramiko.util.log_to_file("/tmp/paramiko.log")
-
         self.hostname = hostname
 
         try:
@@ -92,11 +88,6 @@ class Connection:
         self.client = SSHClient()
 
         self.load_keys()
-
-        # uncomment to combine stderr and stdout channel. In most cases,
-        # mtui expects a separate stderr channel. Changing this may be
-        # harmfull to error checking code.
-        # self.client.set_combine_stderr(True)
 
         self.connect()
 
