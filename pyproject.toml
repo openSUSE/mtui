@@ -57,47 +57,14 @@ version = { attr = "mtui.__version__" }
 
 [tool.ruff]
 target-version = "py311"
-line-length = 88
 
 [tool.ruff.lint]
 select = [
-    "E",    # pycodestyle errors
-    "F",    # pyflakes
-    "B",    # flake8-bugbear
-    "SIM",  # flake8-simplify
-    "UP",   # pyupgrade
-    "S",    # flake8-bandit (security)
-    "PT",   # flake8-pytest-style
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "PT",    # flake8-pytest-style
+    "UP007", # use X | Y for unions
 ]
 ignore = [
-    "E501",  # line-too-long (many pre-existing, handled by formatter)
-    "B005",  # strip-with-multi-characters (pre-existing)
-    "B006",  # mutable-argument-default (pre-existing)
-    "B027",  # empty-method-in-abstract-base-class (intentional optional hooks)
-    "B904",  # raise-without-from-inside-except (pre-existing, fix incrementally)
-    "S101",  # assert (used in production code intentionally in some places)
-    "S108",  # hardcoded-temp-file (pre-existing /tmp usage)
-    "S110",  # try-except-pass (pre-existing, fix incrementally)
-    "S112",  # try-except-continue (pre-existing, fix incrementally)
-    "S113",  # request-without-timeout (pre-existing, fix incrementally)
-    "S310",  # suspicious-url-open-usage (pre-existing urlopen usage)
-    "S501",  # request-with-no-cert-validation (pre-existing verify=False)
-    "S602",  # subprocess-call-with-shell-equals-true (pre-existing)
-    "S603",  # subprocess-without-shell-check (false positives with check_call)
-    "S607",  # start-process-with-partial-path (osc is intentionally found via PATH)
-    "SIM101", # duplicate-isinstance-call (pre-existing)
-    "SIM102", # collapsible-if (pre-existing, stylistic)
-    "SIM103", # needless-bool (pre-existing, stylistic)
-    "SIM105", # suppressible-exception (pre-existing, stylistic)
-    "SIM108", # if-else-block-instead-of-if-exp (pre-existing, stylistic)
-    "SIM110", # reimplemented-builtin (pre-existing)
-    "SIM115", # open-file-with-context-handler (pre-existing)
-    "SIM118", # in-dict-keys (pre-existing, stylistic)
-    "UP015", # redundant-open-modes (keep explicit modes for clarity)
-    "UP022", # replace-stdout-stderr (pre-existing)
-    "UP030", # format-literals (pre-existing, fix incrementally)
-    "UP031", # printf-string-formatting (pre-existing, fix incrementally)
+    "E501",  # line-too-long (handled by formatter)
 ]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]  # allow assert in tests
