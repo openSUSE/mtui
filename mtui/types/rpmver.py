@@ -6,7 +6,7 @@ try:
     import rpm  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
 except ImportError:
     try:
-        from version_utils import rpm  # type: ignore[import-not-found]
+        from version_utils import rpm  # type: ignore[import-not-found]  # noqa: I001  # ty: ignore[unresolved-import]
     except ImportError:
         raise ImportError(
             "No RPM version comparison backend found. "
