@@ -63,6 +63,7 @@ select = [
     "E",     # pycodestyle errors
     "F",     # pyflakes
     "PT",    # flake8-pytest-style
+    "B027",   # empty method in abstract class without @abstractmethod
     "RUF005", # use iterable unpacking instead of concatenation
     "UP007",  # use X | Y for unions
 ]

@@ -73,8 +73,7 @@ class Command(ABC):
 
         return pa
 
-    # in reality abstract method which implemenatation is optional
-    @classmethod
+    @classmethod  # noqa: B027 - intentional optional hook
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """A hook for adding arguments to the command's argument parser.
 
