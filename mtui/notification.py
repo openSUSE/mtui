@@ -16,6 +16,7 @@ def display(
         summary: The summary text of the notification.
         text: The body text of the notification.
         icon: The icon to display in the notification.
+
     """
     global __impl
     if __impl is None:

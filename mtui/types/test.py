@@ -12,6 +12,7 @@ class Test(NamedTuple):
         test_id: The ID of the test.
         arch: The architecture of the test.
         modules: A dictionary of modules for the test.
+
     """
 
     name: str

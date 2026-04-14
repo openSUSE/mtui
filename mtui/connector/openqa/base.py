@@ -26,6 +26,7 @@ class OpenQA(ABC):
             host: The openQA instance host.
             smelt: The SMELT connector instance.
             rrid: The RequestReviewID of the current update.
+
         """
         logger.debug("init openQA client")
         self.host = host
@@ -50,6 +51,7 @@ class OpenQA(ABC):
 
         Returns:
             A list of jobs, or None if the request fails.
+
         """
         logger.debug(f"Get data from openQA - {self.host}")
 

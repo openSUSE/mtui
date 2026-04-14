@@ -25,6 +25,7 @@ class ManualExport(BaseExport):
 
         Returns:
             A list of paths to the log files.
+
         """
         filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs
         ilogs = zip_longest(hosts, map(self._host_installog_to_template, hosts))
@@ -168,13 +169,12 @@ class ManualExport(BaseExport):
                                 self.template[index] = (
                                     f"\tpackage {name} is not installed\n"
                                 )
+                        elif version is not None:
+                            self.template.insert(index, f"\t{name}-{version}\n")
                         else:
-                            if version is not None:
-                                self.template.insert(index, f"\t{name}-{version}\n")
-                            else:
-                                self.template.insert(
-                                    index, f"\tpackage {name} is not installed\n"
-                                )
+                            self.template.insert(
+                                index, f"\tpackage {name} is not installed\n"
+                            )
                         index += 1
                     except Exception:
                         pass
@@ -268,6 +268,7 @@ class ManualExport(BaseExport):
 
         Returns:
             A list of strings representing the log content.
+
         """
         t = []
         try:
@@ -316,6 +317,7 @@ class ManualExport(BaseExport):
 
         Returns:
             The exported template.
+
         """
         self.install_results()
         self.inject_openqa()

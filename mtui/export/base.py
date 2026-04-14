@@ -40,6 +40,7 @@ class BaseExport(ABC):
             rrid: The RequestReviewID of the current update.
             interactive: Whether to run in interactive mode.
             **kwargs: Additional keyword arguments.
+
         """
         self.config = config
         self.openqa = openqa
@@ -56,6 +57,7 @@ class BaseExport(ABC):
         Args:
             fn: The path to the file to write to.
             data: The data to write.
+
         """
         to_write = "\n".join(data)
         if fn.exists() and not self.force:
@@ -83,6 +85,7 @@ class BaseExport(ABC):
 
         Args:
             filenames: A list of filenames to add.
+
         """
         o = 0
         for line in self.template:

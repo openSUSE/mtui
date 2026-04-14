@@ -23,6 +23,7 @@ def _read_project(path: Path) -> ET.Element:
 
     Returns:
         An XML element representing the project.
+
     """
     xml = path.joinpath("project.xml").read_text()
     return ET.fromstringlist(xml)
@@ -36,6 +37,7 @@ def _xmlparse(xml):
 
     Returns:
         A generator of repository information.
+
     """
     return (
         (x.find("releasetarget").attrib["project"].split(":")[-3:], x.attrib["name"])
@@ -53,6 +55,7 @@ def obsrepoparse(repository: str, path: Path) -> dict[Product, str]:
 
     Returns:
         A dictionary mapping `Product` objects to repository URLs.
+
     """
     project = _xmlparse(_read_project(path))
     return {
@@ -69,6 +72,7 @@ def _parse_product(product: str) -> list[Product]:
 
     Returns:
         A list of `Product` objects.
+
     """
     b, a = product.split(" (")
     arch: list[str] = a.rstrip(")").split(", ")
@@ -85,6 +89,7 @@ def slrepoparse(repository: str, products: list[str]) -> dict[Product, str]:
 
     Returns:
         A dictionary mapping `Product` objects to repository URLs.
+
     """
     return {
         x: join(repository, "images/repo", f"{x.name}-{x.version}-{x.arch}/")
@@ -101,6 +106,7 @@ def gitrepoparse(repository: str, products: list[str]) -> dict[Product, str]:
 
     Returns:
         A dictionary mapping `Product` objects to repository URLs.
+
     """
     return {
         x: join(repository, "standard")
@@ -119,6 +125,7 @@ def reporepoparse(
 
     Returns:
         A dictionary mapping `Product` objects to repository URLs.
+
     """
     return {
         normalize_16(ps): repo

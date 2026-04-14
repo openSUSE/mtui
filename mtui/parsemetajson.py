@@ -13,6 +13,7 @@ class JSONParser:
         Args:
             results: An object to store the parsed results.
             data: The JSON object to parse.
+
         """
         for i in data.get("jira"):
             results.jira[i] = "Description not available"

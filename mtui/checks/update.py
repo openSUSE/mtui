@@ -21,6 +21,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
 
     Raises:
         UpdateError: If an error is found in the output.
+
     """
     if "zypper" in stdin and exitcode == 104:
         logger.critical(

@@ -19,6 +19,7 @@ class ReducedMetadataParser:
         Args:
             results: An object to store the parsed results.
             line: The line of text to parse.
+
         """
         if (match := re.search(cls.hostnames, line)) and "?" not in match.group(1):
             results.hostnames.add(match.group(1))

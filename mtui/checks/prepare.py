@@ -20,6 +20,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
 
     Raises:
         UpdateError: If an error is found in the output.
+
     """
     if "A ZYpp transaction is already in progress." in stderr:
         logger.critical(

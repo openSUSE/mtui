@@ -34,6 +34,7 @@ class Script(ABC):
         Args:
             tr: The test report object.
             path: The absolute path to the script.
+
         """
         self.path = path
         self.name = path.parent
@@ -56,6 +57,7 @@ class Script(ABC):
 
         Returns:
             The path to the result file.
+
         """
         return self.testreport.report_wd(
             *cls.result_parts(bname, t.hostname), filepath=True
@@ -67,6 +69,7 @@ class Script(ABC):
 
         Args:
             targets: The group of target hosts.
+
         """
         ...
 
@@ -79,6 +82,7 @@ class Script(ABC):
 
         Returns:
             A tuple containing the parts of the result path.
+
         """
         return ("output/scripts", ".".join((cls.subdir, *basename)))
 
@@ -87,6 +91,7 @@ class Script(ABC):
 
         Args:
             targets: The group of target hosts.
+
         """
         try:
             log.info("running %s", self)
@@ -105,6 +110,7 @@ class PreScript(Script):
 
         Args:
             targets: The group of target hosts.
+
         """
         rname: Path = self.testreport.target_wd(f"{self.subdir!s}.{self.bname!s}")
         targets.sftp_put(self.path, rname)
@@ -149,6 +155,7 @@ class CompareScript(Script):
 
         Args:
             targets: The group of target hosts.
+
         """
         for t in targets.values():
             self._run_single_target(t)
@@ -158,6 +165,7 @@ class CompareScript(Script):
 
         Args:
             t: The target host.
+
         """
         bcheck = self.bname.replace("compare_", "check_")
         argv = [
@@ -173,8 +181,7 @@ class CompareScript(Script):
         try:
             ret = subprocess.run(
                 argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
             )
         except OSError as e:

@@ -12,6 +12,7 @@ class ArgsParseFailure(RuntimeError):
 
         Args:
             status: The exit status code.
+
         """
         self.status = status
         super().__init__()
@@ -26,6 +27,7 @@ class ArgumentParser(argparse.ArgumentParser):
         Args:
             *a: Arguments to pass to the parent constructor.
             **kw: Keyword arguments to pass to the parent constructor.
+
         """
         self.sys = kw.get("sys_", sys)
         kw.pop("sys_", None)
@@ -37,6 +39,7 @@ class ArgumentParser(argparse.ArgumentParser):
 
         Args:
             file: This argument is ignored.
+
         """
         # also takes care of default _HelpAction calling
         # print_help
@@ -47,6 +50,7 @@ class ArgumentParser(argparse.ArgumentParser):
 
         Args:
             file: This argument is ignored.
+
         """
         super().print_usage(self.sys.stdout)
 
@@ -59,6 +63,7 @@ class ArgumentParser(argparse.ArgumentParser):
         Args:
             status: The exit status code.
             message: The error message to print.
+
         """
         if message:
             self._print_message(message, self.sys.stderr)

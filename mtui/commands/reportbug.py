@@ -44,8 +44,7 @@ class ReportBug(Command):
         except OSError as e:
             if e.errno == errno.ENOENT:
                 raise messages.SystemCommandNotFoundError(args[0])
-            else:
-                raise
+            raise
 
         # xdg-open starts the appropriate command and waits for it
         # to exit.

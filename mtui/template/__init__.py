@@ -26,6 +26,7 @@ def testreport_svn_checkout(config, path: str, rrid: RequestReviewID) -> None:
         config: The application configuration.
         path: The base path of the SVN repository.
         rrid: The RequestReviewID of the test report.
+
     """
     ensure_dir_exists(
         config.template_dir,

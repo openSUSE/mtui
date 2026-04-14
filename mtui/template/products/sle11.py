@@ -9,6 +9,7 @@ def normalize_sle11(x):
 
     Returns:
         The normalized product information.
+
     """
     if x[0][0] == "SLE-SDK":
         x[0][0] = "sle-sdk"

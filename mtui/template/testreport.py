@@ -56,12 +56,11 @@ class TestReport(ABC):
         Args:
             config: The application configuration.
             scripts_src_dir: The source directory for scripts.
+
         """
         self.config: Config = config
 
-        self._scripts_src_dir: Path = (
-            scripts_src_dir if scripts_src_dir else scripts_path()
-        )
+        self._scripts_src_dir: Path = scripts_src_dir or scripts_path()
 
         self.directory: Path = config.template_dir
 
@@ -128,6 +127,7 @@ class TestReport(ABC):
 
         Args:
             path: The path to the test report file.
+
         """
         metadata = path.parent / "metadata.json"
         try:
@@ -155,6 +155,7 @@ class TestReport(ABC):
 
         Args:
             path: The path to the test report file.
+
         """
         self._open_and_parse(path)
         self.path = path.resolve()
@@ -187,6 +188,7 @@ class TestReport(ABC):
         Args:
             data: The JSON object to parse.
             tpl: The test report string to parse.
+
         """
         if self.path:
             raise TestReportAlreadyLoaded(self.path)
@@ -214,6 +216,7 @@ class TestReport(ABC):
 
         Returns:
             A list of all packages in the test report.
+
         """
         ret = []
         for key in self.packages:
@@ -235,6 +238,7 @@ class TestReport(ABC):
         Args:
             targets: The targets to perform the operation on.
             remote: The remote path to get.
+
         """
         local = self.report_wd("downloads", remote.name, filepath=True)
 
@@ -246,6 +250,7 @@ class TestReport(ABC):
         Args:
             targets: The targets to perform the operation on.
             **kw: Additional keyword arguments.
+
         """
         targets.perform_prepare(self.get_package_list(), self, **kw)
 
@@ -255,13 +260,14 @@ class TestReport(ABC):
         Args:
             targets: The targets to perform the operation on.
             params: A list of update parameters.
+
         """
         targets.add_history(["update", str(self.id), " ".join(self.get_package_list())])
 
         try:
             targets.perform_update(self, params)
         except UpdateError as e:
-            logger.error("Update failed: %s" % e)
+            logger.error("Update failed: %s", e)
             logger.warning("Error while updating. Rolling back changes")
             self.perform_downgrade(targets)
 
@@ -270,6 +276,7 @@ class TestReport(ABC):
 
         Args:
             targets: The targets to perform the operation on.
+
         """
         targets.add_history(
             ["downgrade", str(self.id), " ".join(self.get_package_list())]
@@ -282,6 +289,7 @@ class TestReport(ABC):
         Args:
             targets: The targets to perform the operation on.
             packages: The packages to install.
+
         """
         targets.add_history(["install", packages])
 
@@ -293,6 +301,7 @@ class TestReport(ABC):
         Args:
             targets: The targets to perform the operation on.
             packages: The packages to uninstall.
+
         """
         targets.add_history(["uninstall", packages])
         targets.perform_uninstall(packages)
@@ -319,6 +328,7 @@ class TestReport(ABC):
             src: The source directory.
             dst: The destination directory.
             ignore: A function that returns a set of files to ignore.
+
         """
         try:
             logger.debug(f"Copying scripts: {src} -> {dst}")
@@ -345,6 +355,7 @@ class TestReport(ABC):
 
         Args:
             pattern: A glob pattern for the files to make executable.
+
         """
         for i in glob.glob(pattern):
             # make sure the compare scripts (which run localy) are
@@ -364,6 +375,7 @@ class TestReport(ABC):
         Returns:
             A tuple containing the `Target` object and the system
             string, or `(False, False)` if the connection fails.
+
         """
         try:
             target = Target(
@@ -393,7 +405,7 @@ class TestReport(ABC):
         hosts: set[str] = {host for host in self.hostnames if host not in self.targets}
 
         if hosts:
-            logger.info("Adding %s" % hosts)
+            logger.info("Adding %s", hosts)
         else:
             logger.info("No refhosts to add")
 
@@ -437,6 +449,7 @@ class TestReport(ABC):
 
         Args:
             hostname: The hostname of the target to add.
+
         """
         if hostname in self.targets:
             logger.warning(
@@ -463,6 +476,7 @@ class TestReport(ABC):
 
         Args:
             testplatform: The test platform to get reference hosts from.
+
         """
         try:
             refhosts = self.refhostsFactory(self.config)
@@ -487,6 +501,7 @@ class TestReport(ABC):
         Args:
             sink: The function to use for listing the bugs.
             arg: An additional argument to pass to the sink function.
+
         """
         return sink(self.bugs, self.jira, arg)
 
@@ -514,6 +529,7 @@ class TestReport(ABC):
 
         Args:
             writer: The writer to write the metadata to.
+
         """
         self._aligned_write(writer, self._show_yourself_data())
 
@@ -524,6 +540,7 @@ class TestReport(ABC):
         Args:
             writer: The writer to write the data to.
             data: A list of key-value pairs to write.
+
         """
         for x in sorted(data):
             name, value = x
@@ -546,6 +563,7 @@ class TestReport(ABC):
 
         Returns:
             The path to the local working directory.
+
         """
         return self._wd(self.config.local_tempdir, str(self.id), *paths)  # type: ignore
 
@@ -558,6 +576,7 @@ class TestReport(ABC):
 
         Returns:
             The path to the working directory.
+
         """
         assert self.path, "empty path"
 
@@ -573,6 +592,7 @@ class TestReport(ABC):
 
         Returns:
             The path to the working directory.
+
         """
         return ensure_dir_exists(*paths, **kwargs)
 
@@ -584,6 +604,7 @@ class TestReport(ABC):
 
         Returns:
             The path to the remote working directory.
+
         """
         return self.config.target_tempdir.joinpath(str(self.id), *paths)  # type: ignore
 
@@ -595,6 +616,7 @@ class TestReport(ABC):
 
         Returns:
             The path to the scripts directory.
+
         """
         return self.report_wd().joinpath(*["scripts", *list(paths)])
 
@@ -608,8 +630,8 @@ class TestReport(ABC):
         Args:
             s: The script class to run.
             targets: The targets to run the scripts on.
-        """
 
+        """
         d = self.scripts_wd(s.subdir)
 
         # os.walk returns path as string and list of string with filenames
@@ -625,6 +647,7 @@ class TestReport(ABC):
         Args:
             from_: The URL to download the file from.
             into: The path to save the downloaded file to.
+
         """
         logger.info("Downloading %s", from_)
         from contextlib import closing
@@ -639,6 +662,7 @@ class TestReport(ABC):
             sink: The function to use for listing the versions.
             targets: The targets to list the versions for.
             packages: The packages to list the versions for.
+
         """
         query = r"""
             for p in {!s}; do \
@@ -696,6 +720,7 @@ class TestReport(ABC):
 
         Returns:
             A list of `TargetMeta` objects.
+
         """
         results = []
 

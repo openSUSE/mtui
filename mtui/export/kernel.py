@@ -25,6 +25,7 @@ class KernelExport(BaseExport):
 
         Returns:
             A list of paths to the log files.
+
         """
         in_path = self.config.template_dir / str(self.rrid) / self.config.install_logs
         res_path = self.config.template_dir / str(self.rrid) / "results"
@@ -80,6 +81,7 @@ class KernelExport(BaseExport):
 
         Returns:
             The exported template.
+
         """
         self.install_results()
         self.inject_openqa()

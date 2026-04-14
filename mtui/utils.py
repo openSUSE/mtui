@@ -28,6 +28,7 @@ def edit_text(text: str) -> str:
 
     Returns:
         The edited text.
+
     """
     editor = os.getenv("EDITOR", "vim")
     tmpfile = tempfile.NamedTemporaryFile()  # noqa: SIM115
@@ -37,7 +38,7 @@ def edit_text(text: str) -> str:
 
     subprocess.check_call((editor, tmpfile.name))
 
-    with open(tmpfile.name, "r") as tmp:
+    with open(tmpfile.name) as tmp:
         text = tmp.read().strip("\n")
         text = text.replace("'", '"')
 
@@ -56,6 +57,7 @@ if os.getenv("COLOR", "always") == "always":
 
         Returns:
             The colorized string.
+
         """
         return f"\033[1;32m{xs!s}\033[1;m\033[0m"
 
@@ -67,6 +69,7 @@ if os.getenv("COLOR", "always") == "always":
 
         Returns:
             The colorized string.
+
         """
         return f"\033[1;31m{xs!s}\033[1;m\033[0m"
 
@@ -78,6 +81,7 @@ if os.getenv("COLOR", "always") == "always":
 
         Returns:
             The colorized string.
+
         """
         return f"\033[1;33m{xs!s}\033[1;m\033[0m"
 
@@ -89,6 +93,7 @@ if os.getenv("COLOR", "always") == "always":
 
         Returns:
             The colorized string.
+
         """
         return f"\033[1;34m{xs!s}\033[1;m\033[0m"
 
@@ -106,6 +111,7 @@ def prompt_user(text: str, options: Collection[str], interactive: bool = True) -
 
     Returns:
         True if the user's response is in `options`, False otherwise.
+
     """
     result = False
     response = ""
@@ -136,6 +142,7 @@ def termsize() -> tuple[int, int]:
 
     Returns:
         A tuple containing the width and height of the terminal.
+
     """
     try:
         x = fcntl.ioctl(0, termios.TIOCGWINSZ, b"1234")
@@ -162,6 +169,7 @@ def filter_ansi(text: str) -> str:
 
     Returns:
         The string with ANSI escape codes removed.
+
     """
     text = re.sub(chr(27), "", text)
     text = re.sub(r"\[[0-9;]*[mA]", "", text)
@@ -176,6 +184,7 @@ def page(text: list[str], interactive: bool = True) -> None:
     Args:
         text: A list of strings to display.
         interactive: If False, the function does nothing.
+
     """
     if not interactive:
         return
@@ -206,11 +215,10 @@ def page(text: list[str], interactive: bool = True) -> None:
             if linelist:
                 line = "".join(linelist)
                 continue
-            else:
-                try:
-                    line = filter_ansi(text.pop().rstrip("\r\n"))
-                except IndexError:
-                    return
+            try:
+                line = filter_ansi(text.pop().rstrip("\r\n"))
+            except IndexError:
+                return
 
         if prompt_user(prompt, ("q",)):
             return
@@ -224,6 +232,7 @@ def requires_update(fn: Callable) -> Callable:
 
     Returns:
         The decorated function.
+
     """
 
     @wraps(fn)
@@ -246,6 +255,7 @@ class DictWithInjections(dict):
             **kw: Keyword arguments to pass to the dict constructor.
                 'key_error' is a special keyword argument that specifies
                 the exception to raise on a key error.
+
         """
         self.key_error = kw.pop("key_error", KeyError)
 
@@ -266,6 +276,7 @@ class SUTParse:
 
         Args:
             args: A comma-separated string of SUTs.
+
         """
         suts = args.split(",")
         targets = [f"-t {i!s}" for i in suts]
@@ -276,6 +287,7 @@ class SUTParse:
 
         Returns:
             The formatted string.
+
         """
         return self.args
 
@@ -297,8 +309,8 @@ def complete_choices(
 
     Returns:
         A list of possible completion strings.
-    """
 
+    """
     if not hostnames:
         hostnames = []
 
@@ -346,6 +358,7 @@ def complete_choices_filelist(
     Returns:
         A list of possible completion strings, including file and
         directory names.
+
     """
     dirname = ""
     filename = ""
@@ -371,6 +384,7 @@ def timestamp() -> str:
 
     Returns:
         The current time as a string.
+
     """
     # remove fractional part
     return str(int(time.time()))
@@ -382,6 +396,7 @@ def chdir(newpath: Path):
 
     Args:
         newpath: The path to change to.
+
     """
     storedpath = Path().cwd()
     os.chdir(newpath)
@@ -401,6 +416,7 @@ def ensure_dir_exists(*path, **kwargs) -> Path:
 
     Returns:
         The Path object for the created directory.
+
     """
 
     def empty(*args, **kwds) -> None:  # type: ignore
@@ -425,6 +441,7 @@ def atomic_write_file(data: bytes | str, path: Path) -> None:
     Args:
         data: The data to write, as bytes or a string.
         path: The path to the file.
+
     """
     if isinstance(data, bytes):
         data = data.decode("utf-8")
@@ -448,6 +465,7 @@ def walk(inc: Collection) -> Collection:
 
     Returns:
         The modified collection.
+
     """
     if isinstance(inc, list):
         for i, j in enumerate(inc):
@@ -456,7 +474,7 @@ def walk(inc: Collection) -> Collection:
         if len(inc) == 1:
             if "edges" in inc:
                 return walk(inc["edges"])
-            elif "node" in inc:
+            if "node" in inc:
                 tmp = deepcopy(inc["node"])
                 del inc["node"]
                 inc.update(tmp)

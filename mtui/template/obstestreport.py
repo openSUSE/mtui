@@ -62,6 +62,7 @@ class OBSTestReport(TestReport):
         Args:
             target: The target host.
             operation: The operation to perform ("add" or "remove").
+
         """
         if operation == "add":
             target.run_zypper("-n ar -ckn", self.update_repos, self.rrid)
@@ -76,6 +77,7 @@ class OBSTestReport(TestReport):
         Args:
             targets: The target hosts.
             display: The display function to use.
+
         """
         packages = self.get_package_list()
         repa = f":p={self.rrid.maintenance_id}:{self.rrid.review_id}"

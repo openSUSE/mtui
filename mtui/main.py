@@ -25,6 +25,7 @@ def main() -> int:
 
     Returns:
         The exit code of the application.
+
     """
     logger = create_logger("mtui")
 
@@ -54,6 +55,7 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
 
     Returns:
         0 on success, 1 on failure.
+
     """
     if args.debug:
         logger.setLevel(level=logging.DEBUG)

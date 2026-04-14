@@ -20,6 +20,7 @@ def _subdl(oqa_path: str, l_path: str, test: dict, errormode: str) -> None:
         l_path: The local path to save the log file to.
         test: A dictionary containing information about the test.
         errormode: The error mode to use if the download fails.
+
     """
     try:
         logger.info("Downloading log %s", oqa_path)
@@ -38,6 +39,7 @@ def _emptylog(host, test, *args, **kwds) -> None:
         test: A dictionary containing information about the test.
         *args: Additional arguments (not used).
         **kwds: Additional keyword arguments (not used).
+
     """
     logger.debug("No log to download for test: %s on %s", test["name"], host)
 
@@ -51,6 +53,7 @@ def _resultlog(host, test, resultsdir, _, errormode) -> None:
         resultsdir: The directory to save the results to.
         _: An unused argument.
         errormode: The error mode to use if the download fails.
+
     """
     oqa_path = os.path.join(
         host, "tests", str(test["test_id"]), "file", "result_array.json"
@@ -72,6 +75,7 @@ def _installlog(host, test, _, installlogsdir, errormode) -> None:
         _: An unused argument.
         installlogsdir: The directory to save the install logs to.
         errormode: The error mode to use if the download fails.
+
     """
     oqa_path = os.path.join(
         host, "tests", str(test["test_id"]), "file", "update_kernel-zypper.log"
@@ -99,6 +103,7 @@ def download_logs(oqa, resultsdir, installogsdir, errormode: str) -> None:
         resultsdir: The directory to save the results to.
         installogsdir: The directory to save the install logs to.
         errormode: The error mode to use if a download fails.
+
     """
     results_matrix: list[tuple[str, str, str, str]] = []
     for host in oqa:

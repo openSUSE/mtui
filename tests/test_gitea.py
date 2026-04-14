@@ -15,7 +15,6 @@ from mtui.exceptions import (
 )
 from mtui.types import assignment
 
-
 # --- Comment dataclass ---
 
 

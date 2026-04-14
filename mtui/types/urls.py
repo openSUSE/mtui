@@ -11,6 +11,7 @@ class URLs(NamedTuple):
         arch: The architecture.
         version: The version.
         url: The URL.
+
     """
 
     distri: str

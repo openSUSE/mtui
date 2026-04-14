@@ -11,11 +11,11 @@ def to_string(item: str | bytes) -> str:
 
     Returns:
         The converted string.
+
     """
     if isinstance(item, bytes):
         return item.decode()
-    else:
-        return item
+    return item
 
 
 class HostLog(list):
@@ -32,6 +32,7 @@ class HostLog(list):
 
         Args:
             *args: The command log entry to append.
+
         """
         # there is awfull exceptation *args will expand into one  variable
         if len(args) == 1 and isinstance(*args, list | tuple | set):
@@ -69,6 +70,7 @@ class HostLog(list):
         Args:
             pos: The position to insert the entry at.
             *args: The command log entry to insert.
+
         """
         if len(args) == 1 and isinstance(*args, list | tuple | set):
             if len(*args) != 5:

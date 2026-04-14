@@ -40,6 +40,7 @@ class RPMVersion:
 
         Args:
             ver: The version string to parse.
+
         """
         if not ver:
             raise ValueError

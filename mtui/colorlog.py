@@ -25,6 +25,7 @@ class ColorFormatter(logging.Formatter):
 
         Args:
             msg: The format string to use.
+
         """
         logging.Formatter.__init__(self, msg)
 
@@ -36,6 +37,7 @@ class ColorFormatter(logging.Formatter):
 
         Returns:
             The colorized log level name.
+
         """
         if levelname == "DEBUG":
             caller = inspect.currentframe()
@@ -49,13 +51,12 @@ class ColorFormatter(logging.Formatter):
                 + f" [{module!s}:{function!s}]"
                 + RESET_SEQ
             )
-        else:
-            return (
-                "\033[2K"
-                + COLOR_SEQ.format(30 + COLORS[levelname])
-                + levelname.lower()
-                + RESET_SEQ
-            )
+        return (
+            "\033[2K"
+            + COLOR_SEQ.format(30 + COLORS[levelname])
+            + levelname.lower()
+            + RESET_SEQ
+        )
 
     def format(self, record: logging.LogRecord) -> str:
         """Formats the log record.
@@ -65,6 +66,7 @@ class ColorFormatter(logging.Formatter):
 
         Returns:
             The formatted log record as a string.
+
         """
         record.message = record.getMessage()
         if self._fmt and self._fmt.find("%(levelname)") >= 0:
@@ -82,6 +84,7 @@ def create_logger(name: str, level: str = "INFO") -> logging.Logger:
 
     Returns:
         A configured `logging.Logger` instance.
+
     """
     out = logging.getLogger(name) if name else logging.getLogger()
     out.setLevel(level)

@@ -26,6 +26,7 @@ class AutoExport(BaseExport):
 
         Returns:
             A list of paths to the log files.
+
         """
         filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs
         ilogs = zip_longest(
@@ -50,6 +51,7 @@ class AutoExport(BaseExport):
 
         Returns:
             A list of strings representing the log content.
+
         """
         # input is URLs instance
         try:
@@ -69,6 +71,7 @@ class AutoExport(BaseExport):
 
         Returns:
             The exported template.
+
         """
         self.install_results()
         self.inject_openqa()

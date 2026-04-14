@@ -35,7 +35,7 @@ class SessionName(Command):
 
     def __call__(self) -> None:
         """Executes the `set_session_name` command."""
-        session = self.args.name if self.args.name else self.metadata.id
+        session = self.args.name or self.metadata.id
         self.prompt.session = session
         self.prompt.set_prompt(session)
 
@@ -182,67 +182,63 @@ class SetWorkflow(Command):
                 for oq in self.metadata.openqa["kernel"]:
                     oq.run()
                 return
-            else:
-                logger.info("Setting workflow to '%s'", state)
-                self.config.auto = False
-                self.config.kernel = True
-                self.metadata.openqa["auto"] = AutoOpenQA(
+            logger.info("Setting workflow to '%s'", state)
+            self.config.auto = False
+            self.config.kernel = True
+            self.metadata.openqa["auto"] = AutoOpenQA(
+                self.config,
+                self.config.openqa_instance,
+                self.metadata.smelt,
+                self.metadata.id,
+            ).run()
+            self.metadata.openqa["kernel"] = []
+            self.metadata.openqa["kernel"].append(
+                KernelOpenQA(
                     self.config,
                     self.config.openqa_instance,
                     self.metadata.smelt,
                     self.metadata.id,
                 ).run()
-                self.metadata.openqa["kernel"] = []
-                self.metadata.openqa["kernel"].append(
-                    KernelOpenQA(
-                        self.config,
-                        self.config.openqa_instance,
-                        self.metadata.smelt,
-                        self.metadata.id,
-                    ).run()
-                )
-                self.metadata.openqa["kernel"].append(
-                    KernelOpenQA(
-                        self.config,
-                        self.config.openqa_instance_baremetal,
-                        self.metadata.smelt,
-                        self.metadata.id,
-                    ).run()
-                )
-                return
-        elif state == "auto":
+            )
+            self.metadata.openqa["kernel"].append(
+                KernelOpenQA(
+                    self.config,
+                    self.config.openqa_instance_baremetal,
+                    self.metadata.smelt,
+                    self.metadata.id,
+                ).run()
+            )
+            return
+        if state == "auto":
             if self.config.auto:
                 logger.info("Desired workflow %s is same as current", state)
                 self.metadata.openqa["auto"].run()
                 return
-            else:
-                logger.info("Setting workflow to '%s'", state)
-                self.config.auto = True
-                self.config.kernel = False
-                self.metadata.openqa["auto"] = AutoOpenQA(
-                    self.config,
-                    self.config.openqa_instance,
-                    self.metadata.smelt,
-                    self.metadata.id,
-                ).run()
-                self.metadata.openqa["kernel"] = []
-                if self.metadata.openqa["auto"].results is None:
-                    logger.warning("No install jobs or install jobs failed")
-                    logger.info("Switch mode to manual")
-                    self.config.auto = False
-                return
-        else:
-            if not self.config.auto and not self.config.kernel:
-                logger.info("Desired workflow %s is same as current", state)
-                self.metadata.openqa["auto"].run()
-                return
-            else:
-                logger.info("Setting workflow to '%s'", state)
+            logger.info("Setting workflow to '%s'", state)
+            self.config.auto = True
+            self.config.kernel = False
+            self.metadata.openqa["auto"] = AutoOpenQA(
+                self.config,
+                self.config.openqa_instance,
+                self.metadata.smelt,
+                self.metadata.id,
+            ).run()
+            self.metadata.openqa["kernel"] = []
+            if self.metadata.openqa["auto"].results is None:
+                logger.warning("No install jobs or install jobs failed")
+                logger.info("Switch mode to manual")
                 self.config.auto = False
-                self.config.kernel = False
-                self.metadata.openqa["auto"].run()
-                self.metadata.openqa["kernel"] = []
-                return
+            return
+        if not self.config.auto and not self.config.kernel:
+            logger.info("Desired workflow %s is same as current", state)
+            self.metadata.openqa["auto"].run()
+            return
+        logger.info("Setting workflow to '%s'", state)
+        self.config.auto = False
+        self.config.kernel = False
+        self.metadata.openqa["auto"].run()
+        self.metadata.openqa["kernel"] = []
+        return
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

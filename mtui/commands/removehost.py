@@ -13,6 +13,7 @@ class RemoveHost(Command):
     Warning:
         The host log is purged as well. If no parameters are provided,
         this command removes all hosts.
+
     """
 
     command = "remove_host"
@@ -27,6 +28,7 @@ class RemoveHost(Command):
 
         Args:
             target: The target host to remove.
+
         """
         self.targets[target].close()
         self.targets.pop(target)

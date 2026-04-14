@@ -10,6 +10,7 @@ class Product(NamedTuple):
         name: The name of the product.
         version: The version of the product.
         arch: The architecture of the product.
+
     """
 
     name: str

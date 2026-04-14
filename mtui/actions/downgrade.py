@@ -11,6 +11,7 @@ def zypper() -> dict[str, Template]:
 
     Returns:
         A dictionary of command templates.
+
     """
     list_command_template = r"""
 for p in $packages; do \
@@ -35,6 +36,7 @@ def slmicro() -> dict[str, Template]:
 
     Returns:
         A dictionary of command templates.
+
     """
     list_command_template = r"""
 for p in $packages; do \

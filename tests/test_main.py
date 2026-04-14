@@ -60,7 +60,6 @@ def test_main_noninteractive_without_prerun(monkeypatch, caplog):
 
 def test_run_mtui_with_debug():
     """Test run_mtui with debug flag."""
-
     mock_config = MagicMock()
     mock_logger = MagicMock()
 

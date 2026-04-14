@@ -9,7 +9,6 @@ from mtui.messages import HostIsNotConnectedError
 from mtui.target.hostgroup import HostsGroup
 from mtui.target.locks import TargetLockedError
 
-
 # --- Initialization and selection ---
 
 

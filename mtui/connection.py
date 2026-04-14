@@ -43,6 +43,7 @@ class CommandTimeout(Exception):
 
         Args:
             command: The command that timed out.
+
         """
         self.command = command
 
@@ -75,6 +76,7 @@ class Connection:
             hostname: The hostname or IP address of the remote host.
             port: The port number to connect to.
             timeout: The timeout for remote commands.
+
         """
         self.hostname = hostname
 
@@ -189,6 +191,7 @@ class Connection:
             retry: The number of times to retry the connection.
             timeout: The timeout for each connection attempt.
             backoff: Whether to use exponential backoff for retries.
+
         """
         count = 0
         rtimeout = timeout
@@ -219,6 +222,7 @@ class Connection:
 
         Returns:
             A new session object, or None if a session could not be opened.
+
         """
         logger.debug("creating new session at %s:%s", self.hostname, self.port)
         try:
@@ -249,6 +253,7 @@ class Connection:
 
         Args:
             session: The session to close.
+
         """
         if session:
             try:
@@ -266,6 +271,7 @@ class Connection:
 
         Returns:
             A session instance with the running command, or None on failure.
+
         """
         try:
             if session := self.new_session():
@@ -290,6 +296,7 @@ class Connection:
 
         Returns:
             The exit code of the command.
+
         """
         self.stdin = command
         self.stdout = ""
@@ -376,6 +383,7 @@ class Connection:
 
         Returns:
             A session with an open shell, or None on failure.
+
         """
         try:
             if session := self.new_session():
@@ -432,6 +440,7 @@ class Connection:
 
         Returns:
             An SFTP client object, or None on failure.
+
         """
         try:
             sftp = self.client.open_sftp()
@@ -446,6 +455,7 @@ class Connection:
 
         Returns:
             An active SFTP client object.
+
         """
         sftp = self.__sftp_open()
         counter = 0
@@ -465,8 +475,8 @@ class Connection:
         Args:
             local: The local file to transfer.
             remote: The remote path to transfer the file to.
-        """
 
+        """
         path = ""
         sftp = self.__sftp_reconnect()
 
@@ -510,6 +520,7 @@ class Connection:
         Args:
             remote: The remote file to transfer.
             local: The local path to transfer the file to.
+
         """
         sftp = self.__sftp_reconnect()
 
@@ -532,6 +543,7 @@ class Connection:
         Args:
             remote: The remote folder to transfer.
             local: The local path to transfer the folder to.
+
         """
         sftp = self.__sftp_reconnect()
         try:
@@ -551,7 +563,7 @@ class Connection:
         finally:
             sftp.close()
 
-    def sftp_listdir(self, path: Path = Path(".")) -> list[str]:
+    def sftp_listdir(self, path: Path = Path()) -> list[str]:
         """Gets a directory listing of the remote host.
 
         Args:
@@ -559,6 +571,7 @@ class Connection:
 
         Returns:
             A list of filenames in the directory.
+
         """
         logger.debug(
             f"getting {self.hostname!s}:{self.port!s}:{path!s} listing",
@@ -581,6 +594,7 @@ class Connection:
 
         Returns:
             An SFTPFile object.
+
         """
         logger.debug("%s open(%s, %s)", repr(self), filename, mode)
         logger.debug("  -> self.client.open_sftp")
@@ -606,6 +620,7 @@ class Connection:
 
         Args:
             path: The path to the remote file to delete.
+
         """
         logger.debug("deleting file %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
@@ -622,6 +637,7 @@ class Connection:
 
         Args:
             path: The path to the remote directory to delete.
+
         """
         logger.debug("deleting dir %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
@@ -644,6 +660,7 @@ class Connection:
 
         Returns:
             The target of the symbolic link.
+
         """
         logger.debug("read link %s:%s:%s", self.hostname, self.port, path)
         sftp = self.__sftp_reconnect()
@@ -658,6 +675,7 @@ class Connection:
 
         Returns:
             True if the connection is active, False otherwise.
+
         """
         return self.client._transport.is_active()  # type: ignore
 

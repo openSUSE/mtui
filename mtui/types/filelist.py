@@ -26,6 +26,7 @@ class FileList(UserList):
 
         Returns:
             A `FileList` instance.
+
         """
         if isinstance(path, str):
             path = Path(path)
@@ -49,6 +50,7 @@ class FileList(UserList):
 
         Returns:
             The `FileList` instance.
+
         """
         return self
 

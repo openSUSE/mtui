@@ -20,10 +20,11 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
 
     Raises:
         UpdateError: If an error is found in the output.
+
     """
     if exitcode in [0, 100, 101, 102, 103, 106]:
         return
-    elif exitcode in (104, 4, 5, 8):
+    if exitcode in (104, 4, 5, 8):
         logger.critical(
             '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
             hostname,
@@ -32,7 +33,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
             stderr,
         )
         raise UpdateError("package not found", hostname)
-    elif (
+    if (
         "A ZYpp transaction is already in progress." in stderr
         or "System management is locked" in stderr
     ):
@@ -44,7 +45,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
             stderr,
         )
         raise UpdateError("update stack locked", hostname)
-    elif "Error:" in stderr:
+    if "Error:" in stderr:
         logger.critical(
             '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
             hostname,
@@ -53,22 +54,21 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
             stderr,
         )
         raise UpdateError("RPM Error", hostname)
-    elif "(c): c" in stdout:
+    if "(c): c" in stdout:
         logger.critical(
             "%s: unresolved dependency problem. please resolve manually:\n%s",
             hostname,
             stdout,
         )
         raise UpdateError("Dependency Error", hostname)
-    else:
-        logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-            hostname,
-            stdin,
-            stdout,
-            stderr,
-        )
-        raise UpdateError("Unknown Error", hostname)
+    logger.critical(
+        '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+        hostname,
+        stdin,
+        stdout,
+        stderr,
+    )
+    raise UpdateError("Unknown Error", hostname)
 
 
 #: A dictionary that maps system configurations to install check functions.

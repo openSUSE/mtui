@@ -17,6 +17,7 @@ class CommandPromptDisplay:
 
         Args:
             output: The output stream to write to.
+
         """
         self.output = output
 
@@ -26,6 +27,7 @@ class CommandPromptDisplay:
         Args:
             msg: The message to print.
             eol: The end-of-line character to use.
+
         """
         self.output.write(msg + eol)
 
@@ -36,6 +38,7 @@ class CommandPromptDisplay:
             bugs: A dictionary of bug IDs and summaries.
             jira: A dictionary of Jira issue IDs and summaries.
             url: The base URL for the bug tracker.
+
         """
         ids = sorted(bugs.keys())
         if ids == [""]:
@@ -64,6 +67,7 @@ class CommandPromptDisplay:
             hostname: The name of the host.
             system: The system information for the host.
             lines: A list of history log lines.
+
         """
         self.println(f"history from {hostname} ({system}):")
         lines.reverse()
@@ -97,6 +101,7 @@ class CommandPromptDisplay:
             transactional: Whether the host is transactional.
             state: The state of the host (enabled, disabled, or dryrun).
             exclusive: Whether the host is in exclusive mode.
+
         """
         mode = "serial" if exclusive else "parallel"
 
@@ -120,13 +125,14 @@ class CommandPromptDisplay:
             hostname: The name of the host.
             system: The system information for the host.
             lock: The lock object for the host.
+
         """
         if lock.is_locked():
             lockedby: str = "me" if lock.is_mine() else lock.locked_by()
 
             self.println(
                 eol="",
-                msg="{0:20} {1:20}: {2}".format(
+                msg="{:20} {:20}: {}".format(
                     hostname,
                     str(system),
                     yellow(f"since {lock.time()} by {lockedby}"),
@@ -139,7 +145,7 @@ class CommandPromptDisplay:
                 self.println()
         else:
             self.println(
-                "{0:20} {1:20}: {2}".format(hostname, str(system), green("not locked"))
+                "{:20} {:20}: {}".format(hostname, str(system), green("not locked"))
             )
 
     def list_sessions(self, hostname: str, system: System, stdout: str) -> None:
@@ -149,6 +155,7 @@ class CommandPromptDisplay:
             hostname: The name of the host.
             system: The system information for the host.
             stdout: The output of the session listing command.
+
         """
         self.println(f"sessions on {hostname} ({system}):")
         self.println(stdout)
@@ -160,8 +167,9 @@ class CommandPromptDisplay:
             hostname: The name of the host.
             system: The system information for the host.
             timeout: The command timeout in seconds.
+
         """
-        self.println("{0:20} {1:20}: {2}s".format(hostname, f"({system!s})", timeout))
+        self.println("{:20} {:20}: {}s".format(hostname, f"({system!s})", timeout))
 
     def list_versions(self, targets: HostsGroup, hosts_pvs) -> None:
         """Displays the version history of packages on a host.
@@ -169,6 +177,7 @@ class CommandPromptDisplay:
         Args:
             targets: The group of target hosts.
             hosts_pvs: A dictionary mapping hosts to package versions.
+
         """
         for hs, pvs in list(hosts_pvs.items()):
             if len(hosts_pvs) > 1:
@@ -191,6 +200,7 @@ class CommandPromptDisplay:
         Args:
             hostname: The name of the host.
             system: The system information for the host.
+
         """
         self.println("{}: {}".format(green("Referenece host"), yellow(hostname)))
         for x in system.pretty():
@@ -203,6 +213,7 @@ class CommandPromptDisplay:
         Args:
             repos: A dictionary of repositories.
             update_id: The ID of the update.
+
         """
         for p, r in repos.items():
             self.println(
@@ -227,6 +238,7 @@ class CommandPromptDisplay:
             hostname: The name of the host.
             hostlog: A list of log entries.
             sink: The function to use for printing the log.
+
         """
         sink(f"log from {hostname!s}:")
         for cmdline, stdout, stderr, exitcode, _ in hostlog:

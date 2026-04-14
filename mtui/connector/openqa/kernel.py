@@ -23,6 +23,7 @@ class KernelOpenQA(OpenQA):
 
         Returns:
             A generator of kernel-related jobs.
+
         """
         if jobs is None:
             return None
@@ -41,6 +42,7 @@ class KernelOpenQA(OpenQA):
 
         Returns:
             A list of `Test` objects, or None if there are no jobs.
+
         """
         if jobs is None:
             return None
@@ -79,6 +81,7 @@ class KernelOpenQA(OpenQA):
 
         Returns:
             A list of formatted strings representing the test results.
+
         """
         if not self:
             return []
@@ -107,6 +110,7 @@ class KernelOpenQA(OpenQA):
 
         Returns:
             A list of formatted strings representing the test results.
+
         """
         matrix = []
         for test in testresults:

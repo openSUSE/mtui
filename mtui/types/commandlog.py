@@ -12,6 +12,7 @@ class CommandLog(NamedTuple):
         stderr: The standard error of the command.
         exitcode: The exit code of the command.
         runtime: The runtime of the command in seconds.
+
     """
 
     command: str

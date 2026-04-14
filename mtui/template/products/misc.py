@@ -9,6 +9,7 @@ def normalize_ses(x):
 
     Returns:
         The normalized product information.
+
     """
     x[0][0] = "ses"
     return x
@@ -22,6 +23,7 @@ def normalize_rt(x):
 
     Returns:
         The normalized product information.
+
     """
     x[0][0] = "SUSE-Linux-Enterprise-RT"
     return x
@@ -35,6 +37,7 @@ def normalize_manager(x):
 
     Returns:
         The normalized product information.
+
     """
     if x[0][0] == "SLE-Manager-Tools":
         x[0][0] = "sle-manager-tools"
@@ -50,6 +53,7 @@ def normalize_osle(x):
 
     Returns:
         The normalized product information.
+
     """
     x[0][0] = "leap"
     x[0][1] = x[0][2]

@@ -20,6 +20,7 @@ class System:
         Args:
             base: The base product of the system.
             addons: A set of addons for the system.
+
         """
         # TODO: check for correctness of base and addons types
         self.__base = base
@@ -33,13 +34,14 @@ class System:
 
         Raises:
             UnknownSystemError: If the system is unknown.
+
         """
         name: str = self.__base.name
         if name == "SUSE-Manager-Server":
             return "15"
-        elif name == "rhel":
+        if name == "rhel":
             return "YUM"
-        elif name in (
+        if name in (
             "SLES",
             "SLED",
             "SUSE_SLES",
@@ -50,11 +52,11 @@ class System:
             "SLE_RT",
         ):
             return self.__base.version[:2]
-        elif name == "openSUSE":
+        if name == "openSUSE":
             return "15"
-        elif name == "sle-studioonsite":
+        if name == "sle-studioonsite":
             return "11"
-        elif name == "SL-Micro":
+        if name == "SL-Micro":
             return "slmicro"
         raise UnknownSystemError(name)
 
@@ -89,6 +91,7 @@ class System:
 
         Returns:
             A set of `Product` objects representing the addons.
+
         """
         return self.__addons
 
@@ -97,6 +100,7 @@ class System:
 
         Returns:
             A `Product` object representing the base product.
+
         """
         return self.__base
 
@@ -105,6 +109,7 @@ class System:
 
         Returns:
             A set of `Product` objects representing all products in the system.
+
         """
         flat = {self.__base}
         flat.update(self.__addons)

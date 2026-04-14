@@ -34,6 +34,7 @@ class Quit(Command):
         Args:
             target: The target host to close.
             args: A list of arguments to pass to the close method.
+
         """
         self.targets[target].close(*args)
         self.targets.pop(target)

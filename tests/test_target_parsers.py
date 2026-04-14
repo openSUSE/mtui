@@ -2,9 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-
 from mtui.target.parsers.product import parse_os_release, parse_product
-
 
 # --- parse_product ---
 
@@ -134,8 +132,6 @@ class TestParseSystem:
         # Mock the SFTP file open as context manager
         base_file = MagicMock()
         addon_file = MagicMock()
-        transactional_check = MagicMock()
-
         # sftp_open calls sequence:
         # 1. base product file
         # 2. addon product file
