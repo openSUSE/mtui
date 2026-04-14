@@ -120,7 +120,6 @@ class CommandPrompt(cmd.Cmd):
         self.homedir = Path("~").expanduser()
         self.config = config
         self.log = log
-        self.datadir = self.config.datadir
 
         readline.set_completer_delims(r'`!@#$%^&*()=+[{]}\|;",<>? ')
 

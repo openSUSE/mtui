@@ -6,6 +6,7 @@ from traceback import format_exc
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
+from mtui.datafiles import terms_path
 from mtui.utils import complete_choices
 
 logger = getLogger("mtui.command.terms")
@@ -31,13 +32,12 @@ class Terms(Command):
 
     def __call__(self) -> None:
         """Executes the `terms` command."""
-        dirname = self.config.datadir
         hosts = sorted(self.parse_hosts().names())
 
         if self.args.termname:
             if self.args.termname in self.config.termnames:
                 filename = "term." + self.args.termname + ".sh"
-                path = dirname / filename
+                path = terms_path() / filename
                 try:
                     check_call([path] + hosts)
                 except Exception:

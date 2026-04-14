@@ -47,11 +47,9 @@ exclude = ["*.tests", "*.tests.*", "tests.*", "tests"]
 
 [tool.setuptools.package-data]
 mtui = [
-  "terms/*",
-  "scripts/*",
+  "scripts/**/*",
   "helper/*",
-  "Documentation/*",
-  "*.rst",
+  "terms/*.sh",
 ]
 
 [tool.setuptools.dynamic]

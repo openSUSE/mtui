@@ -23,7 +23,6 @@ def test_default_config(tmpdir):
     config_file.write_text("")
     cfg = config.Config(config_file, refhosts=MockRefhosts)
     assert cfg.location == "default"
-    assert cfg.datadir == Path("/usr/share/mtui")
     assert cfg.connection_timeout == 300
 
 
@@ -33,14 +32,10 @@ def test_override_default_config(tmpdir):
     """
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text(
-        "[mtui]\n"
-        "location = test_location\n"
-        "datadir = /test/datadir\n"
-        "connection_timeout = 600\n"
+        "[mtui]\nlocation = test_location\nconnection_timeout = 600\n"
     )
     cfg = config.Config(config_file, refhosts=MockRefhosts)
     assert cfg.location == "test_location"
-    assert cfg.datadir == Path("/test/datadir")
     assert cfg.connection_timeout == 600
 
 

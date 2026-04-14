@@ -55,17 +55,6 @@ command to return or to proceed with the next one.
 To disable the timeout set it to ``0``.
 
 
-``mtui.datadir``
-~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     pathname
-  | **default**
-  |     the MTUI source code directory
-
-MTUI expects testing scripts to be found in this directory.
-
-
 ``mtui.location``
 ~~~~~~~~~~~~~~~~~
 
@@ -360,7 +349,6 @@ Example
   user = <your username>
   location = <your location>
   template_dir = /path/to/where/you/want/to/store/test-reports
-  datadir = /usr/share/mtui
 
   [refhosts]
   resolvers = https
