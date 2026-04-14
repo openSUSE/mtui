@@ -44,6 +44,10 @@ class TestReport(ABC):
 
     refhostsFactory = RefhostsFactory
 
+    # -- Attributes set dynamically by UpdateID subclasses --
+    smelt: Any
+    updateid: Any
+
     @property
     @abstractmethod
     def _type(self) -> str:
