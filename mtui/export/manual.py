@@ -59,11 +59,13 @@ class ManualExport(BaseExport):
                 logger.debug("host section %s not found, searching system", hostname)
                 # systemname/reference host string in the maintenance template
                 # in case the hostname is not yet set
-                line = "{systemtype} (reference host: ?)\n"
+                line = f"{systemtype} (reference host: ?)\n"
                 try:
                     # trying again with a not yet set hostname
                     index = self.template.index(line)
-                    self.template[index] = "{systemtype} (reference host: {hostname})\n"
+                    self.template[index] = (
+                        f"{systemtype} (reference host: {hostname})\n"
+                    )
                 except ValueError:
                     # system line still not found (not with already set hostname, nor
                     # with not yet set hostname). create new one

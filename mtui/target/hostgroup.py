@@ -182,36 +182,33 @@ class HostsGroup(UserDict[str, Target]):
 
     def update_lock(self) -> None:
         """Locks all hosts in the group for an update."""
-        try:
-            skipped = False
-            for t in self.data.values():
-                if t.is_locked() and not t._lock.is_mine():
-                    skipped = True
-                    logger.warning(
-                        "host %s is locked since %s by %s. skipping.",
-                        t.hostname,
-                        t._lock.time(),
-                        t._lock.locked_by(),
+        skipped = False
+        for t in self.data.values():
+            if t.is_locked() and not t._lock.is_mine():
+                skipped = True
+                logger.warning(
+                    "host %s is locked since %s by %s. skipping.",
+                    t.hostname,
+                    t._lock.time(),
+                    t._lock.locked_by(),
+                )
+                if t._lock.comment():
+                    logger.info(
+                        "%s's comment: %s", t._lock.locked_by(), t._lock.comment()
                     )
-                    if t._lock.comment():
-                        logger.info(
-                            "%s's comment: %s", t._lock.locked_by(), t._lock.comment()
-                        )
-                else:
-                    t.lock()
-                    thread = ThreadedMethod(queue)
-                    thread.daemon = True
-                    thread.start()
+            else:
+                t.lock()
+                thread = ThreadedMethod(queue)
+                thread.daemon = True
+                thread.start()
 
-            if skipped:
-                for t in self.data.values():
-                    try:
-                        t.unlock()
-                    except AssertionError:
-                        pass
-                raise UpdateError("Hosts locked")
-        except BaseException:
-            raise
+        if skipped:
+            for t in self.data.values():
+                try:
+                    t.unlock()
+                except Exception:
+                    pass
+            raise UpdateError("Hosts locked")
 
     def perform_install(self, packages: list[str]) -> None:
         """Performs an installation on all hosts in the group.
@@ -239,8 +236,6 @@ class HostsGroup(UserDict[str, Target]):
                 )
             self._reboot(reboot)
 
-        except BaseException:
-            raise
         finally:
             self.unlock()
 
@@ -270,8 +265,6 @@ class HostsGroup(UserDict[str, Target]):
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
             self._reboot(reboot)
-        except BaseException:
-            raise
         finally:
             self.unlock()
 
@@ -337,8 +330,8 @@ class HostsGroup(UserDict[str, Target]):
                 )
             self._reboot(reboot)
 
-        except BaseException:
-            pass
+        except Exception:
+            logger.error("Error during prepare operation", exc_info=True)
         finally:
             self.unlock()
 
@@ -421,8 +414,6 @@ class HostsGroup(UserDict[str, Target]):
 
             self._reboot(reboot)
 
-        except BaseException:
-            raise
         finally:
             self.unlock()
 
@@ -522,8 +513,6 @@ class HostsGroup(UserDict[str, Target]):
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
             self._reboot(reboot)
-        except BaseException:
-            raise
         finally:
             self.unlock()
 

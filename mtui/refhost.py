@@ -108,8 +108,7 @@ class Attributes:
             # The rest of elements contains a version
             if property_name == "arch":
                 if capture := re.match(r"\[(.*)\]", content):
-                    code_evaluation = "','".join(capture.group(1).split(","))
-                    arch_list = eval(f"['{code_evaluation}']")
+                    arch_list = [x.strip() for x in capture.group(1).split(",")]
             elif property_name == "tags":
                 if capture := re.match(r"\((.*)\)", content):
                     setattr(attribute, capture.group(1), {"enabled": True})
