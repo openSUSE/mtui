@@ -62,9 +62,9 @@ class BaseExport(ABC):
         to_write = "\n".join(data)
         if fn.exists() and not self.force:
             if to_write == fn.read_text():
-                logger.info(f"Log {fn} exists and is same as export")
+                logger.info("Log %s exists and is same as export", fn)
                 return
-            logger.warning(f"file {fn} exists.")
+            logger.warning("file %s exists.", fn)
             if not prompt_user(
                 f"Should I overwrite {fn} (y/N) ",
                 ["y", "Y", "yes", "Yes", "YES"],
@@ -77,8 +77,8 @@ class BaseExport(ABC):
         try:
             with fn.open(mode="w", encoding="utf-8") as f:
                 f.write(to_write)
-        except OSError as e:
-            logger.error("Failed to write %s: %s", fn, e.strerror)
+        except OSError:
+            logger.exception("Failed to write %s", fn)
 
     def installlogs_lines(self, filenames) -> None:
         """Adds install log links to the template.

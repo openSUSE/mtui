@@ -21,7 +21,7 @@ def test_duplicate_found(caplog, log_install) -> None:
 
     export._writer(fn, data)
 
-    assert caplog.records[0].msg == f"Log {fn} exists and is same as export"
+    assert caplog.records[0].message == f"Log {fn} exists and is same as export"
 
 
 def test_diffeerent_files(caplog, log_install) -> None:
@@ -34,5 +34,5 @@ def test_diffeerent_files(caplog, log_install) -> None:
 
     export._writer(fn, data)
 
-    assert caplog.records[0].msg == f"file {fn} exists."
-    assert caplog.records[1].msg.startswith("exporting log to")
+    assert caplog.records[0].message == f"file {fn} exists."
+    assert caplog.records[1].message.startswith("exporting log to")

@@ -53,16 +53,16 @@ class OpenQA(ABC):
             A list of jobs, or None if the request fails.
 
         """
-        logger.debug(f"Get data from openQA - {self.host}")
+        logger.debug("Get data from openQA - %s", self.host)
 
         try:
             jobs = self.client.openqa_request("GET", "jobs", self.params)["jobs"]
         except openqa_client.exceptions.RequestError as e:
-            logger.debug(f"Openqa returned code: {e.args[2]!s}")
+            logger.debug("Openqa returned code: %s", e.args[2])
             return None
         except openqa_client.exceptions.ConnectionError as e:
-            logger.error(f"Cannont connect to openQA - {self.host}")
-            logger.debug(f"openqa_client returned: {e}")
+            logger.exception("Cannont connect to openQA - %s", self.host)
+            logger.debug("openqa_client returned: %s", e)
             return None
 
         return jobs

@@ -40,7 +40,7 @@ def testreport_svn_checkout(config, path: str, rrid: RequestReviewID) -> None:
         try:
             subprocess.check_call(["svn", "co", uri])
         except KeyboardInterrupt:
-            raise SvnCheckoutInterruptedError(uri)
+            raise SvnCheckoutInterruptedError(uri) from None
         except subprocess.CalledProcessError:
             f_url = join(config.fancy_reports_url, str(rrid))
-            raise SvnCheckoutFailed(uri, f_url)
+            raise SvnCheckoutFailed(uri, f_url) from None

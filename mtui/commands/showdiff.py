@@ -54,9 +54,9 @@ class AnalyzeDiff(Command):
         if spec_apply == [x[0] for x in spec_patches]:
             logger.warning(
                 "Patches changes found in spec files arent same as application"
-                + "of patches\n It can be false warning if is used %autosetup"
-                + "macro or other \n more complicated way to apply patches ,eg"
-                + " kernel packages\n"
+                "of patches\n It can be false warning if is used %autosetup"
+                "macro or other \n more complicated way to apply patches ,eg"
+                " kernel packages\n"
             )
 
         changes_patches = []

@@ -100,7 +100,7 @@ class Attributes:
             try:
                 property_name, content = pattern.split("=", 1)
             except ValueError:
-                logger.error(f'error when parsing line "{testplatform!s}"')
+                logger.exception('error when parsing line "%s"', testplatform)
                 continue
             # special case: arch
             # *- arch because is a list so it will create a list of several attributes
@@ -172,9 +172,9 @@ class Refhosts:
             with hostmap.open() as f:
                 self.data = YAML(typ="safe").load(f)
 
-        except Exception as error:
+        except Exception:
             # nothing to do for us if we can't load the hosts
-            logger.error("failed to parse refhosts.yml: %s", error)
+            logger.exception("failed to parse refhosts.yml")
             raise
 
     def search(self, attributes) -> list[str]:
@@ -395,7 +395,7 @@ class _RefhostsFactory:
             try:
                 return self._resolve_one(resolver, config)
             except BaseException:
-                logger.warning(f"Refhosts: resolver {resolver} failed")
+                logger.warning("Refhosts: resolver %s failed", resolver)
                 logger.debug(format_exc())
 
         raise RefhostsResolveFailed()
@@ -414,7 +414,7 @@ class _RefhostsFactory:
         try:
             resolver = getattr(self, f"resolve_{name}")
         except AttributeError:
-            logger.warning(f"Refhosts: invalid resolver: {name}")
+            logger.warning("Refhosts: invalid resolver: %s", name)
             raise
         else:
             return resolver(config)

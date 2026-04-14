@@ -117,7 +117,7 @@ def prompt_user(text: str, options: Collection[str], interactive: bool = True) -
     response = ""
 
     if not interactive:
-        print(text)
+        print(text)  # noqa: T201
         return False
 
     try:
@@ -208,7 +208,7 @@ def page(text: list[str], interactive: bool = True) -> None:
                 linelist = [""]
             lines2print = min(len(linelist), linesleft)
             for i in range(lines2print):
-                print(linelist[i])
+                print(linelist[i])  # noqa: T201
             linesleft -= lines2print
             linelist = linelist[lines2print:]
 
@@ -265,7 +265,7 @@ class DictWithInjections(dict):
         try:
             return super().__getitem__(x)
         except KeyError:
-            raise self.key_error(x)
+            raise self.key_error(x) from None
 
 
 class SUTParse:

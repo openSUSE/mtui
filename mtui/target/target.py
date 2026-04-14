@@ -292,7 +292,9 @@ class Target:
                 return
             except Exception:
                 # failed to run command
-                logger.error('%s: failed to run command "%s"', self.hostname, command)
+                logger.exception(
+                    '%s: failed to run command "%s"', self.hostname, command
+                )
                 exitcode = -1
 
             time_after = timestamp()
@@ -321,7 +323,7 @@ class Target:
             self.connection.shell()
         except Exception:
             # failed to spawn shell
-            logger.error("%s: failed to spawn shell", self.hostname)
+            logger.exception("%s: failed to spawn shell", self.hostname)
 
     def sftp_put(self, local: Path, remote: Path) -> None:
         """Uploads a file to the target host.
@@ -335,12 +337,10 @@ class Target:
             logger.debug('%s: sending "%s"', self.hostname, local)
             try:
                 return self.connection.sftp_put(local, remote)
-            except OSError as error:
-                logger.error(
-                    "%s: failed to send %s: %s", self.hostname, local, error.strerror
-                )
+            except OSError:
+                logger.exception("%s: failed to send %s", self.hostname, local)
         elif self.state == "dryrun":
-            logger.info(f"dryrun: put {local} {self.hostname}:{remote}")
+            logger.info("dryrun: put %s %s:%s", local, self.hostname, remote)
 
     def sftp_get(self, remote: Path, local: Path) -> None:
         """Downloads a file from the target host.
@@ -365,13 +365,12 @@ class Target:
             )
             try:
                 f(remote, local)
-            except OSError as error:
-                logger.error(
-                    "%s: failed to get %s %s: %s",
+            except OSError:
+                logger.exception(
+                    "%s: failed to get %s %s",
                     self.hostname,
                     s,
                     remote,
-                    error.strerror,
                 )
         elif self.state == "dryrun":
             logger.info("dryrun: get %s %s:%s %s", self.hostname, s, remote, local)
@@ -468,8 +467,8 @@ class Target:
             try:
                 filename = Path("/var/log/mtui.log")
                 historyfile = self.connection.sftp_open(filename, "a+")
-            except Exception as error:
-                logger.error("failed to open history file: %s", error)
+            except Exception:
+                logger.exception("failed to open history file")
                 return
 
             now = timestamp()

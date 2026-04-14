@@ -168,7 +168,7 @@ class CommandPrompt(cmd.Cmd):
         try:
             readline.read_history_file(f"{self.homedir!s}/.mtui_history")
         except OSError as e:
-            logger.debug(f"failed to open history file: {e!s}")
+            logger.debug("failed to open history file: %s", e)
 
     def _add_subcommand(self, cmd: type[Command]) -> None:
         """Adds a subcommand to the prompt.
@@ -209,10 +209,9 @@ class CommandPrompt(cmd.Cmd):
             except QuitLoop:
                 return
             except (messages.UserMessage, subprocess.CalledProcessError) as e:
-                logger.error(e)
-                logger.debug(format_exc())
+                logger.exception(e)
             except Exception:
-                logger.error(format_exc())
+                logger.exception(format_exc())
 
     def postcmd(self, stop: bool, line: str) -> bool:
         """A hook that is called after a command is executed.
@@ -280,8 +279,7 @@ class CommandPrompt(cmd.Cmd):
                             **kw,
                         )
                     except Exception as e:
-                        logger.error(e)
-                        logger.debug(format_exc())
+                        logger.exception(e)
                         raise e
 
                 return complete

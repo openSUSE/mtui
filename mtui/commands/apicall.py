@@ -110,7 +110,7 @@ class Approve(BaseApiCall):
                 gitea.approve(self.args.user)
 
         except GiteaError as e:
-            logger.error(e)
+            logger.exception(e)
 
 
 @final
@@ -143,7 +143,7 @@ class Assign(BaseApiCall):
             gitea = Gitea(self.config, self.metadata.giteaprapi)
             gitea.assign(self.args.user, self.args.force)
         except GiteaError as e:
-            logger.error(e)
+            logger.exception(e)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
@@ -172,7 +172,7 @@ class Unassign(BaseApiCall):
             gitea = Gitea(self.config, self.metadata.giteaprapi)
             gitea.unassign(self.args.user)
         except GiteaError as e:
-            logger.error(e)
+            logger.exception(e)
 
 
 @final
@@ -221,7 +221,7 @@ class Reject(BaseApiCall):
             gitea = Gitea(self.config, self.metadata.giteaprapi)
             gitea.reject(self.args.reason, self.args.user, self.args.message)
         except GiteaError as e:
-            logger.error(e)
+            logger.exception(e)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
@@ -270,4 +270,4 @@ class Comment(BaseApiCall):
             gitea = Gitea(self.config, self.metadata.giteaprapi)
             gitea.comment(comment)
         except GiteaError as e:
-            logger.error(e)
+            logger.exception(e)

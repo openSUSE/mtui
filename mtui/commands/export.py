@@ -1,6 +1,6 @@
 """The `export` command."""
 
-from logging import DEBUG, getLogger
+from logging import getLogger
 from pathlib import Path
 
 from mtui.argparse import ArgumentParser
@@ -72,10 +72,8 @@ class Export(Command):
                 ).run(targets)
                 text.clear()
                 text.extend(template)
-            except Exception as e:
-                if logger.getEffectiveLevel() == DEBUG:
-                    logger.exception("traceback of export")
-                logger.error(f"While exporting template was thrown exception {e}")
+            except Exception:
+                logger.exception("While exporting template was thrown exception")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

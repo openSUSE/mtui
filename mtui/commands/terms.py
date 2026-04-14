@@ -2,7 +2,6 @@
 
 from logging import getLogger
 from subprocess import check_call
-from traceback import format_exc
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
@@ -41,8 +40,7 @@ class Terms(Command):
                 try:
                     check_call([path, *hosts])
                 except Exception:
-                    logger.error("running %s failed", filename)
-                    logger.debug(format_exc())
+                    logger.exception("running %s failed", filename)
             else:
                 logger.error("Term script not found")
                 logger.info("Aviable term scripts: %s", " ".join(self.config.termnames))
@@ -54,7 +52,7 @@ class Terms(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         t = ("-t", "--target")
-        a = tuple()  # type: ignore
+        a = ()  # type: ignore
         for x in state["config"].termnames:
             a += (x,)
 

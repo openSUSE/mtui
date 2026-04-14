@@ -148,8 +148,8 @@ class Gitea:
                 verify=verify,
             )
         except requests.exceptions.RequestException as e:
-            logger.error("API call to Gitea failed: %s", e, exc_info=True)
-            raise FailedGiteaCall(f"{method} - {url}")
+            logger.exception("API call to Gitea failed: %s", e)
+            raise FailedGiteaCall(f"{method} - {url}") from e
 
         if not rsp.ok:
             logger.warning(

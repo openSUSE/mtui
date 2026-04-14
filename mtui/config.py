@@ -62,7 +62,7 @@ class Config:
         try:
             self.config.read(self.configfiles)
         except configparser.Error as e:
-            logger.error(e)
+            logger.exception(e)
 
     @property
     def location(self) -> str:
@@ -80,10 +80,12 @@ class Config:
         try:
             self.refhosts(self).check_location_sanity(x)
         except InvalidLocationError as e:
-            logger.error(e)
+            logger.exception(e)
             return
         except RefhostsResolveFailed:
-            logger.error("Can't read `refhosts.yml` file, no valid refhosts database")
+            logger.exception(
+                "Can't read `refhosts.yml` file, no valid refhosts database"
+            )
             return
 
         self.__location = x
@@ -290,7 +292,7 @@ class Config:
             raise
         except Exception:
             msg = "Config option {0}.{1} extraction from {2} " + "failed."
-            logger.error(msg.format((*secopt, self.configfiles)))
+            logger.exception(msg.format((*secopt, self.configfiles)))
             raise
 
     def merge_args(self, args: Namespace) -> None:

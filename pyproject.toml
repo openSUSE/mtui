@@ -63,8 +63,12 @@ select = [
     "E",      # pycodestyle errors
     "F",      # pyflakes
     "I",      # isort (import sorting)
+    "B",      # flake8-bugbear (bug detection)
+    "G",      # flake8-logging-format
     "PT",     # flake8-pytest-style
-    "B027",   # empty method in abstract class without @abstractmethod
+    "C4",     # flake8-comprehensions
+    "PERF",   # perflint (performance)
+    "T20",    # flake8-print (no print statements)
     "RUF005", # use iterable unpacking instead of concatenation
     "SIM",    # flake8-simplify
     "UP",     # pyupgrade (modernize syntax for py311+)
@@ -73,6 +77,9 @@ select = [
     "RET506", # superfluous else after raise
     "RET507", # superfluous else after continue
     "PLR5501",# collapsible else-if
+    "PLW0127",# self-assigning variable
+    "PLW1510",# subprocess.run without check
+    "TRY400", # logging.error() in except (use logging.exception())
     "D202",   # no blank lines after function docstring
     "D413",   # missing blank line after last docstring section
     "PTH201", # Path(".") -> Path()

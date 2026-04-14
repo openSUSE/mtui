@@ -3,7 +3,6 @@
 from logging import getLogger
 from os import getenv
 from subprocess import check_call
-from traceback import format_exc
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
@@ -43,8 +42,7 @@ class Edit(Command):
             logger.debug("call %s on %s", editor, path)
             check_call([editor, path])
         except Exception:
-            logger.error("failed to run %s", editor)
-            logger.debug(format_exc())
+            logger.exception("failed to run %s", editor)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

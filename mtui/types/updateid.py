@@ -72,20 +72,20 @@ class UpdateID(ABC):
             try:
                 self._vcs_checkout(config, config.svn_path, self.id)  # type: ignore
             except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
-                logger.error(e)
-                raise TestReportNotLoadedError
+                logger.exception("SVN checkout failed")
+                raise TestReportNotLoadedError from e
             else:
                 try:
                     tr.read(trpath)
                 except Exception as e:
                     raise e
-        except (MissingGiteaToken, FailedGiteaCall) as e:
-            logger.error(e)
+        except (MissingGiteaToken, FailedGiteaCall):
+            logger.exception("Gitea error")
             logger.warning("TestReport ins't loaded")
-            raise TestReportNotLoadedError
+            raise TestReportNotLoadedError from None
 
-        except InvalidGiteaHash as e:
-            logger.error(e)
+        except InvalidGiteaHash:
+            logger.exception("Invalid Gitea hash")
             logger.info(
                 "TestReport has different hash than GiteaPR, please regenerate template"
             )
@@ -96,7 +96,7 @@ class UpdateID(ABC):
             if not prompt_user(
                 "Force continue loading template ? [Y/N]: ", ["yes", "y"], interactive
             ):
-                raise TestReportNotLoadedError
+                raise TestReportNotLoadedError from None
             logger.warning("Template is loaded, but hash differs")
 
         return tr

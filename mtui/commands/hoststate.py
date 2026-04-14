@@ -41,11 +41,11 @@ class HostState(Command):
             elif state == "parallel":
                 exclusive = False
             for target in targets:
-                logger.info(f"Setting host {target} mode to {state}")
+                logger.info("Setting host %s mode to %s", target, state)
                 targets[target].exclusive = exclusive
         else:
             for target in targets:
-                logger.info(f"Setting host {target} state to {state}")
+                logger.info("Setting host %s state to %s", target, state)
                 targets[target].state = state
 
     @staticmethod

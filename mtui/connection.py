@@ -176,7 +176,7 @@ class Connection:
             raise
 
         except OSError:
-            logger.error("No valid connection to %s:%s", self.hostname, self.port)
+            logger.exception("No valid connection to %s:%s", self.hostname, self.port)
         except Exception as e:
             # general Exception
             logger.debug("%s: %s", self.hostname, e)
@@ -574,7 +574,10 @@ class Connection:
 
         """
         logger.debug(
-            f"getting {self.hostname!s}:{self.port!s}:{path!s} listing",
+            "getting %s:%s:%s listing",
+            self.hostname,
+            self.port,
+            path,
         )
         sftp = self.__sftp_reconnect()
 

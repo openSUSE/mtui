@@ -109,9 +109,9 @@ class HostsGroup(UserDict[str, Target]):
             object and a dictionary of package versions.
 
         """
-        rs: list[tuple[Target, dict[str, RPMVersion | None]]] = []
-        for x in self.data.values():
-            rs.append((x, x.query_package_versions(packages)))
+        rs: list[tuple[Target, dict[str, RPMVersion | None]]] = [
+            (x, x.query_package_versions(packages)) for x in self.data.values()
+        ]
         return rs
 
     def add_history(self, data) -> None:
@@ -340,7 +340,7 @@ class HostsGroup(UserDict[str, Target]):
             self._reboot(reboot)
 
         except Exception:
-            logger.error("Error during prepare operation", exc_info=True)
+            logger.exception("Error during prepare operation")
         finally:
             self.unlock()
 
@@ -397,7 +397,7 @@ class HostsGroup(UserDict[str, Target]):
 
                 for name in release:
                     version = sorted(release[name], key=RPMVersion, reverse=True)[0]
-                    versions.setdefault(hn, dict()).update({name: version})
+                    versions.setdefault(hn, {}).update({name: version})
 
             if init_snapshot:
                 self.run(init_snapshot)

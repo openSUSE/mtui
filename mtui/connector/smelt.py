@@ -97,14 +97,14 @@ class SMELT:
                 self.apiurl, params={"query": query_incident}, verify=False
             ).json()
         except (requests.exceptions.ConnectionError, JSONDecodeError) as e:
-            logger.debug(f"Problem {e} during retrriving incident")
+            logger.debug("Problem %s during retrriving incident", e)
             return None
         if not inc:
             return None
         try:
             inc = walk(inc["data"]["incidents"]["edges"][0]["node"])
         except Exception as e:
-            logger.debug(f"Problem {e} during normalize incident")
+            logger.debug("Problem %s during normalize incident", e)
             return None
         return inc
 
@@ -121,7 +121,9 @@ class SMELT:
             return None
 
         links = [
-            z.rstrip(")__").split("(")[-1] for z in links if z.startswith("__Group")
+            z.rstrip(")__").split("(")[-1]  # noqa: B005 - strips individual chars ')' and '_'
+            for z in links
+            if z.startswith("__Group")
         ]
         logger.info("openQA jobs found")
         return links

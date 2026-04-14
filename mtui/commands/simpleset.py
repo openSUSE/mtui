@@ -63,7 +63,7 @@ class SetLocation(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         loc = RefhostsFactory(state["config"]).get_locations()
-        locations = [[x for x in loc]]
+        locations = [list(loc)]
 
         return complete_choices(locations, line, text)
 
@@ -103,7 +103,7 @@ class SetLogLevel(Command):
 
         self.prompt.log.setLevel(level=levels[new])
 
-        logger.info(f"Log level is set to {new}")
+        logger.info("Log level is set to %s", new)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

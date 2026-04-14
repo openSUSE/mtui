@@ -11,7 +11,7 @@ except ImportError:
         raise ImportError(
             "No RPM version comparison backend found. "
             "Install mtui[rpm] or mtui[norpm] to provide one."
-        )
+        ) from None
 
 
 @final

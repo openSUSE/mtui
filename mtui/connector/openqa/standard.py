@@ -68,8 +68,10 @@ class AutoOpenQA(OpenQA):
             ]
             if failed_modules:
                 ret.append("    Failed modules:\n")
-                for mod in failed_modules:
-                    ret.append("      Module: {} in category {} failed\n".format(*mod))
+                ret.extend(
+                    "      Module: {} in category {} failed\n".format(*mod)
+                    for mod in failed_modules
+                )
                 ret.append("\n")
 
         return ret

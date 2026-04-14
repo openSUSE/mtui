@@ -2,7 +2,6 @@
 
 from logging import getLogger
 from subprocess import check_call
-from traceback import format_exc
 
 from mtui.commands import Command
 from mtui.utils import requires_update
@@ -21,5 +20,4 @@ class Checkout(Command):
         try:
             check_call(["svn", "up"], cwd=self.metadata.report_wd())
         except Exception:
-            logger.error("updating template failed")
-            logger.debug(format_exc())
+            logger.exception("updating template failed")
