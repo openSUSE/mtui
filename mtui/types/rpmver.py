@@ -3,10 +3,10 @@
 from typing import ClassVar, final
 
 try:
-    import rpm
+    import rpm  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
 except ImportError:
     try:
-        from version_utils import rpm
+        from version_utils import rpm  # type: ignore[import-not-found]
     except ImportError:
         raise ImportError(
             "No RPM version comparison backend found. "
@@ -71,8 +71,10 @@ class RPMVersion:
         """Hashes the version by version and release."""
         return hash((self.ver, self.rel))
 
-    def __eq__(self, other: "RPMVersion") -> bool:
+    def __eq__(self, other: object) -> bool:
         """Checks if this version is equal to another."""
+        if not isinstance(other, RPMVersion):
+            return NotImplemented
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             == 0
@@ -92,8 +94,10 @@ class RPMVersion:
             >= 0
         )
 
-    def __ne__(self, other: "RPMVersion") -> bool:
+    def __ne__(self, other: object) -> bool:
         """Checks if this version is not equal to another."""
+        if not isinstance(other, RPMVersion):
+            return NotImplemented
         return (
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel))
             != 0

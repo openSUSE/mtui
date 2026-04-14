@@ -458,7 +458,11 @@ class HostsGroup(UserDict[str, Target]):
 
                     if not before:
                         not_installed.append(pkg)
-                    elif before >= required:
+                    elif (
+                        isinstance(before, RPMVersion)
+                        and isinstance(required, RPMVersion)
+                        and before >= required
+                    ):
                         logger.warning(
                             "%s: package is too recent: %s (%s, target version is %s)",
                             hn,
@@ -471,7 +475,11 @@ class HostsGroup(UserDict[str, Target]):
                         logger.warning(
                             "%s: package was not updated: %s (%s)", hn, pkg, after
                         )
-                    if after and after < required:
+                    if (
+                        isinstance(after, RPMVersion)
+                        and isinstance(required, RPMVersion)
+                        and after < required
+                    ):
                         logger.warning(
                             "%s: package does not match required version: %s (%s, required %s)",
                             hn,
