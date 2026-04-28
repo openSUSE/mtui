@@ -96,7 +96,9 @@ class DashboardAutoOpenQA:
 
     kind = "auto"
 
-    def __init__(self, config, host: str, incident: QEMIncident, rrid: RequestReviewID) -> None:
+    def __init__(
+        self, config, host: str, incident: QEMIncident, rrid: RequestReviewID
+    ) -> None:
         self.config = config
         self.host = host
         self.incident = incident
@@ -131,7 +133,9 @@ class DashboardAutoOpenQA:
         return jobs
 
     @staticmethod
-    def _normalize_job(job: dict[str, Any], source: str, setting: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_job(
+        job: dict[str, Any], source: str, setting: dict[str, Any]
+    ) -> dict[str, Any]:
         settings = setting.get("settings") or {}
         normalized = {
             "id": job.get("job_id"),
