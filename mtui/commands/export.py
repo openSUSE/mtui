@@ -4,6 +4,7 @@ from logging import getLogger
 from pathlib import Path
 
 from mtui.argparse import ArgumentParser
+from mtui.connector.qem_dashboard import DashboardAutoOpenQA
 from mtui.export.base import BaseExport
 
 from ..export import AutoExport, KernelExport, ManualExport
@@ -51,6 +52,13 @@ class Export(Command):
             (False, False): ManualExport,
         }
         exporter = exporters[(self.config.auto, self.config.kernel)]
+        if issubclass(exporter, ManualExport) and not self.metadata.openqa["auto"]:
+            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
+                self.config,
+                self.config.openqa_instance,
+                self.metadata.incident,
+                self.metadata.rrid,
+            ).run()
 
         if issubclass(exporter, ManualExport):
             results = self.metadata.report_results(
