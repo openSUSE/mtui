@@ -43,7 +43,7 @@ def mock_config():
     config.session_user = "testuser"
     config.connection_timeout = 300
     config.template_dir = Path("/tmp/templates")
-    config.smelt_api = "https://smelt.example.com/graphql"
+    config.qem_dashboard_api = "https://dashboard.example.com/api"
     config.gitea_token = "test-token-123"
     config.location = "nuremberg"
     config.auto = False

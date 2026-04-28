@@ -105,4 +105,3 @@ def test_messages():
     assert str(messages.TestReportNotLoadedError()) == "TestReport not loaded"
     assert str(messages.MetadataNotLoadedError()) == "Metadata not found"
     assert str(messages.openQAError()) == "Something wrong with openQA connection"
-    assert str(messages.SMELTError()) == "Sommething wrong with SMELT connection"

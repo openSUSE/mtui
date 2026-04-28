@@ -320,13 +320,6 @@ class ResultsMissingError(ErrorMessage):
         self.message = f"Test: {test} on arch: {arch} missing results.json file. Please restart it."
 
 
-class SMELTError(ErrorMessage):
-    """SMELT related Errors."""
-
-    def __init__(self) -> None:
-        self.message = "Sommething wrong with SMELT connection"
-
-
 class SVNError(ErrorMessage):
     """SVN related Errors."""
 

@@ -44,12 +44,11 @@ def test_merge_args(tmpdir):
         location="cmd_location",
         template_dir="/cmd/template_dir",
         connection_timeout=1200,
-        smelt_api="https://cmd/smelt_api",
         gitea_token="cmd_gitea_token",
     )
     cfg.merge_args(args)
     assert cfg.location == "cmd_location"
     assert cfg.template_dir == "/cmd/template_dir"
     assert cfg.connection_timeout == 1200
-    assert cfg.smelt_api == "https://cmd/smelt_api"
+    assert cfg.qem_dashboard_api == "http://dashboard.qam.suse.de/api"
     assert cfg.gitea_token == "cmd_gitea_token"

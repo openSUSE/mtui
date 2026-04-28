@@ -2,7 +2,8 @@
 
 from logging import getLogger
 
-from ..connector.openqa import AutoOpenQA, KernelOpenQA
+from ..connector.openqa import KernelOpenQA
+from ..connector.qem_dashboard import DashboardAutoOpenQA
 from ..utils import requires_update
 from . import Command
 
@@ -24,16 +25,16 @@ class ReloadOpenQA(Command):
                     KernelOpenQA(
                         self.config,
                         self.config.openqa_instance,
-                        self.metadata.smelt,
-                        self.metadata.id,
+                        self.metadata.incident,
+                        self.metadata.rrid,
                     ).run()
                 )
                 self.metadata.openqa["baremetal"].append(
                     KernelOpenQA(
                         self.config,
                         self.config.openqa_instance_baremetal,
-                        self.metadata.smelt,
-                        self.metadata.id,
+                        self.metadata.incident,
+                        self.metadata.rrid,
                     ).run()
                 )
             else:
@@ -42,13 +43,13 @@ class ReloadOpenQA(Command):
                     oqa.run()
 
         if self.metadata.openqa["auto"] is None:
-            logger.info("Getting data from openQA")
-            self.metadata.openqa["auto"] = AutoOpenQA(
+            logger.info("Getting data from QEM Dashboard")
+            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
-                self.metadata.smelt,
-                self.metadata.id,
+                self.metadata.incident,
+                self.metadata.rrid,
             ).run()
         else:
-            logger.info("Refreshing data from openQA")
+            logger.info("Refreshing data from QEM Dashboard")
             self.metadata.openqa["auto"].run()

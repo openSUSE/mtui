@@ -8,19 +8,19 @@ from mtui.connector.openqa.standard import AutoOpenQA
 
 
 @pytest.fixture
-def mock_smelt():
-    """Create a mock SMELT connector."""
-    smelt = MagicMock()
-    smelt.get_incident_name.return_value = "bash"
-    return smelt
+def mock_incident():
+    """Create a mock incident metadata provider."""
+    incident = MagicMock()
+    incident.get_incident_name.return_value = "bash"
+    return incident
 
 
 @pytest.fixture
-def auto_oqa(mock_config, mock_rrid, mock_smelt):
+def auto_oqa(mock_config, mock_rrid, mock_incident):
     """Create an AutoOpenQA instance with mocked dependencies."""
     with patch("mtui.connector.openqa.base.oqa"):
         oqa = AutoOpenQA(
-            mock_config, "https://openqa.example.com", mock_smelt, mock_rrid
+            mock_config, "https://openqa.example.com", mock_incident, mock_rrid
         )
     return oqa
 

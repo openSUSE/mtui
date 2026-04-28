@@ -8,7 +8,6 @@ import openqa_client.exceptions
 from openqa_client.client import OpenQA_Client as oqa
 
 from ...types import RequestReviewID, Test, URLs
-from .. import SMELT
 
 logger = getLogger("mtui.connector.openqa")
 
@@ -18,20 +17,20 @@ class OpenQA(ABC):
 
     kind: ClassVar[str] = "base"
 
-    def __init__(self, config, host, smelt: SMELT, rrid: RequestReviewID) -> None:
+    def __init__(self, config, host, incident, rrid: RequestReviewID) -> None:
         """Initializes the openQA connector.
 
         Args:
             config: The application configuration.
             host: The openQA instance host.
-            smelt: The SMELT connector instance.
+            incident: The incident metadata provider.
             rrid: The RequestReviewID of the current update.
 
         """
         logger.debug("init openQA client")
         self.host = host
         self.config = config
-        self.smelt = smelt
+        self.incident = incident
         self.params: dict[str, str | int] = {}
         self.params["distri"] = config.openqa_install_distri
         self.params["scope"] = "relevant"
@@ -39,7 +38,7 @@ class OpenQA(ABC):
         # New format of build
         prefix = "git" if rrid.kind == "SLFO" else "smelt"
         self.params["build"] = (
-            f":{prefix}:{rrid.maintenance_id}:{smelt.get_incident_name()}"
+            f":{prefix}:{rrid.maintenance_id}:{incident.get_incident_name()}"
         )
 
         self.client = oqa(host)
