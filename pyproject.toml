@@ -1,7 +1,7 @@
 [project]
 name = "mtui"
 description = "Maintenance Test Update Installer"
-readme = "README.rst"
+readme = "README.md"
 license = "GPL-2.0-only"
 authors = [{ name = "Christian Kornacker", email = "ckornacker@suse.de" }]
 maintainers = [
