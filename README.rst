@@ -1,17 +1,12 @@
-.. MTUI documentation master file, created by
-   sphinx-quickstart on Wed Nov 26 18:12:29 2014.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
-
 .. image:: https://github.com/openSUSE/mtui/actions/workflows/ci.yml/badge.svg
  :target: https://github.com/openSUSE/mtui/actions/workflows/ci.yml
 
 .. image:: https://codecov.io/github/openSUSE/mtui/branch/main/graph/badge.svg?token=60D3XUROAF
  :target: https://codecov.io/github/openSUSE/mtui
 
-################################
-Welcome to MTUI's documentation!
-################################
+####
+MTUI
+####
 
 The Maintenance Test Update Installer (MTUI) allows you to run shell
 commands on multiple hosts in parallel.

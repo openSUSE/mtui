@@ -127,7 +127,7 @@ Overrides the ``mtui.connection_timeout`` configuration.
 
 
 ``-g string,  --gitea_token string``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Overrides the ``gitea.token`` configuration.
 

@@ -34,11 +34,68 @@ notify = ["notify"]
 rpm = ["rpm"]
 
 [dependency-groups]
-dev = ["coverage", "pytest", "pytest-cov", "responses", "ruff", "ty"]
+dev = [
+  "coverage",
+  "pytest",
+  "pytest-cov",
+  "responses",
+  "ruff",
+  "ty",
+]
+doc = [
+  "sphinx>=9.0.4",
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+  "E",  # pycodestyle errors
+  "F",  # pyflakes
+  "I",  # isort (import sorting)
+  "B",  # flake8-bugbear (bug detection)
+  "G",  # flake8-logging-format
+  "N818",  # exception names should end in Error
+  "PGH003",  # blanket type: ignore (require specific codes)
+  "PT",  # flake8-pytest-style
+  "C4",  # flake8-comprehensions
+  "PERF",  # perflint (performance)
+  "T20",  # flake8-print (no print statements)
+  "RUF005",  # use iterable unpacking instead of concatenation
+  "RUF012",  # mutable class defaults need ClassVar
+  "SLF001",  # private member access
+  "SIM",  # flake8-simplify
+  "UP",  # pyupgrade (modernize syntax for py311+)
+  "FURB110",  # if-exp instead of or-operator
+  "RET505",  # superfluous else after return
+  "RET506",  # superfluous else after raise
+  "RET507",  # superfluous else after continue
+  "PLR5501",  # collapsible else-if
+  "PLW0127",  # self-assigning variable
+  "PLW1510",  # subprocess.run without check
+  "PLW1641",  # __eq__ without __hash__
+
+  "D200",  # single-line docstrings should fit on one line
+  "D202",  # no blank lines after function docstring
+  "D212",  # multi-line summary should start on first line
+  "D400",  # first line should end with a period
+  "D413",  # missing blank line after last docstring section
+  "D415",  # first line should end with punctuation
+  "ERA001",  # no commented-out code
+  "PTH201",  # Path(".") -> Path()
+]
+ignore = [
+  "E501",  # line-too-long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108", "ARG", "SLF001"]
+"Documentation/conf.py" = ["INP001", "ERA001", "A001", "D"]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -54,50 +111,3 @@ mtui = [
 
 [tool.setuptools.dynamic]
 version = { attr = "mtui.__version__" }
-
-[tool.ruff]
-target-version = "py311"
-
-[tool.ruff.lint]
-select = [
-    "E",      # pycodestyle errors
-    "F",      # pyflakes
-    "I",      # isort (import sorting)
-    "B",      # flake8-bugbear (bug detection)
-    "G",      # flake8-logging-format
-    "N818",   # exception names should end in Error
-    "PGH003", # blanket type: ignore (require specific codes)
-    "PT",     # flake8-pytest-style
-    "C4",     # flake8-comprehensions
-    "PERF",   # perflint (performance)
-    "T20",    # flake8-print (no print statements)
-    "RUF005", # use iterable unpacking instead of concatenation
-    "RUF012", # mutable class defaults need ClassVar
-    "SLF001", # private member access
-    "SIM",    # flake8-simplify
-    "UP",     # pyupgrade (modernize syntax for py311+)
-    "FURB110",# if-exp instead of or-operator
-    "RET505", # superfluous else after return
-    "RET506", # superfluous else after raise
-    "RET507", # superfluous else after continue
-    "PLR5501",# collapsible else-if
-    "PLW0127",# self-assigning variable
-    "PLW1510",# subprocess.run without check
-    "PLW1641",# __eq__ without __hash__
-
-    "D200",   # single-line docstrings should fit on one line
-    "D202",   # no blank lines after function docstring
-    "D212",   # multi-line summary should start on first line
-    "D400",   # first line should end with a period
-    "D413",   # missing blank line after last docstring section
-    "D415",   # first line should end with punctuation
-    "ERA001", # no commented-out code
-    "PTH201", # Path(".") -> Path()
-]
-ignore = [
-    "E501",   # line-too-long (handled by formatter)
-]
-
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S108", "ARG", "SLF001"]
-"Documentation/conf.py" = ["INP001", "ERA001", "A001", "D"]
