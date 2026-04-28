@@ -54,6 +54,7 @@ class AutoOpenQA(OpenQA):
             logger.debug("No job - no results")
             return []
         ret: list[str] = []
+        ret.append("\n")
         ret.append("Results from openQA incidents jobs:\n")
         ret.append("===================================\n")
         ret.append("\n")
