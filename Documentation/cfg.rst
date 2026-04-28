@@ -336,6 +336,8 @@ command output.
   | **default**
   |     `os.getenv('GITEA_TOKEN','')`__
 
+.. __: https://docs.python.org/3/library/os.html#os.getenv
+
 Gitea API access token, this config has higher prio than environment
 variable. Token must have full access to the issue API.
 
