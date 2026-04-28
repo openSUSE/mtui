@@ -112,3 +112,5 @@ Sessionx.vim
 tags
 # Persistent undo
 [._]*.un~
+# dev env artifacts
+default.profraw
