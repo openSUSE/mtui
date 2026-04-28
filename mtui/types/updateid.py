@@ -14,8 +14,8 @@ from mtui.exceptions import (
 )
 
 from ..config import Config
-from ..connector import SMELT
-from ..connector.openqa import AutoOpenQA, KernelOpenQA
+from ..connector.openqa import KernelOpenQA
+from ..connector.qem_dashboard import DashboardAutoOpenQA, QEMIncident
 from ..messages import (
     SvnCheckoutFailed,
     SvnCheckoutInterruptedError,
@@ -178,13 +178,13 @@ class AutoOBSUpdateID(UpdateID):
             return NullTestReport(config)
 
         self._create_installogs_dir(config)
-        tr.smelt = SMELT(self.id, config.smelt_api)
+        tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
 
-        logger.info("Getting data from openQA")
-        tr.openqa["auto"] = AutoOpenQA(
+        logger.info("Getting data from QEM Dashboard")
+        tr.openqa["auto"] = DashboardAutoOpenQA(
             config,
             config.openqa_instance,
-            tr.smelt,
+            tr.incident,
             self.id,
         ).run()
 
@@ -256,19 +256,19 @@ class KernelOBSUpdateID(UpdateID):
 
         self._create_installogs_dir(config)
         self.create_results_dir(config)
-        tr.smelt = SMELT(self.id, config.smelt_api)
+        tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
         tr.updateid = self
-        tr.openqa["auto"] = AutoOpenQA(
+        tr.openqa["auto"] = DashboardAutoOpenQA(
             config,
             config.openqa_instance,
-            tr.smelt,
+            tr.incident,
             self.id,
         ).run()
-        kernel = KernelOpenQA(config, config.openqa_instance, tr.smelt, self.id).run()
+        kernel = KernelOpenQA(config, config.openqa_instance, tr.incident, self.id).run()
         baremetal = KernelOpenQA(
             config,
             config.openqa_instance_baremetal,
-            tr.smelt,
+            tr.incident,
             self.id,
         ).run()
         tr.openqa["kernel"] = [kernel, baremetal]

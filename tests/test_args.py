@@ -39,8 +39,6 @@ def test_get_parser_args():
             "-d",
             "-c",
             "/test/config",
-            "--smelt_api",
-            "https://test/smelt_api",
             "-g",
             "test_gitea_token",
             "-a",
@@ -55,7 +53,6 @@ def test_get_parser_args():
     assert parsed_args.noninteractive is True
     assert parsed_args.debug is True
     assert parsed_args.config == Path("/test/config")
-    assert parsed_args.smelt_api == "https://test/smelt_api"
     assert parsed_args.gitea_token == "test_gitea_token"
     assert str(parsed_args.update.id) == "SUSE:Maintenance:1:1"
 
@@ -74,8 +71,6 @@ def test_get_parser_args():
             "--debug",
             "--config",
             "/test/config_long",
-            "--smelt_api",
-            "https://test/smelt_api_long",
             "--gitea_token",
             "test_gitea_token_long",
             "--kernel-review-id",
@@ -90,7 +85,6 @@ def test_get_parser_args():
     assert parsed_args.noninteractive is True
     assert parsed_args.debug is True
     assert parsed_args.config == Path("/test/config_long")
-    assert parsed_args.smelt_api == "https://test/smelt_api_long"
     assert parsed_args.gitea_token == "test_gitea_token_long"
     assert str(parsed_args.update.id) == "SUSE:Maintenance:2:2"
 

@@ -45,7 +45,7 @@ class TestReport(ABC):
     refhostsFactory = RefhostsFactory
 
     # -- Attributes set dynamically by UpdateID subclasses --
-    smelt: Any
+    incident: Any
     updateid: Any
 
     @property

@@ -37,7 +37,7 @@ class Config:
     bugzilla_url: str
     reports_url: str
     fancy_reports_url: str
-    smelt_api: str
+    qem_dashboard_api: str
     target_tempdir: Path
     chdir_to_template_dir: bool
     refhosts_resolvers: str
@@ -184,9 +184,9 @@ class Config:
                 "https://qam.suse.de/reports",
             ),
             (
-                "smelt_api",
-                ("smelt", "endpoint"),
-                "https://smelt.suse.de/graphql/",
+                "qem_dashboard_api",
+                ("qem_dashboard", "api"),
+                "http://dashboard.qam.suse.de/api",
             ),
             ("target_tempdir", ("target", "tempdir"), Path("/tmp"), Path),
             (
@@ -342,9 +342,6 @@ class Config:
 
         if args.connection_timeout:
             self.connection_timeout = args.connection_timeout
-
-        if args.smelt_api:
-            self.smelt_api = args.smelt_api
 
         if args.gitea_token:
             self.gitea_token = args.gitea_token

@@ -106,14 +106,6 @@ Cumulatively overrides default refhosts given in the test report.
 Overrides the ``mtui.template_dir`` configuration.
 
 
-``--smelt_api SMELT_API``
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Overrides the ``mtui.smelt_api`` configuration.
-
-``SMELT_API`` is SMELT2 graphQL endpoint address
-
-
 ``-V, --version``
 ~~~~~~~~~~~~~~~~~
 

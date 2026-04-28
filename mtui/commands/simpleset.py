@@ -5,7 +5,8 @@ import logging
 from mtui import messages
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.connector.openqa import AutoOpenQA, KernelOpenQA
+from mtui.connector.openqa import KernelOpenQA
+from mtui.connector.qem_dashboard import DashboardAutoOpenQA
 from mtui.refhost import RefhostsFactory
 from mtui.utils import complete_choices, requires_update
 
@@ -185,27 +186,27 @@ class SetWorkflow(Command):
             logger.info("Setting workflow to '%s'", state)
             self.config.auto = False
             self.config.kernel = True
-            self.metadata.openqa["auto"] = AutoOpenQA(
+            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
-                self.metadata.smelt,
-                self.metadata.id,
+                self.metadata.incident,
+                self.metadata.rrid,
             ).run()
             self.metadata.openqa["kernel"] = []
             self.metadata.openqa["kernel"].append(
                 KernelOpenQA(
                     self.config,
                     self.config.openqa_instance,
-                    self.metadata.smelt,
-                    self.metadata.id,
+                    self.metadata.incident,
+                    self.metadata.rrid,
                 ).run()
             )
             self.metadata.openqa["kernel"].append(
                 KernelOpenQA(
                     self.config,
                     self.config.openqa_instance_baremetal,
-                    self.metadata.smelt,
-                    self.metadata.id,
+                    self.metadata.incident,
+                    self.metadata.rrid,
                 ).run()
             )
             return
@@ -217,11 +218,11 @@ class SetWorkflow(Command):
             logger.info("Setting workflow to '%s'", state)
             self.config.auto = True
             self.config.kernel = False
-            self.metadata.openqa["auto"] = AutoOpenQA(
+            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
-                self.metadata.smelt,
-                self.metadata.id,
+                self.metadata.incident,
+                self.metadata.rrid,
             ).run()
             self.metadata.openqa["kernel"] = []
             if self.metadata.openqa["auto"].results is None:

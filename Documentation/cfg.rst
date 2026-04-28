@@ -181,6 +181,18 @@ URL of openqa instance
 URL of baremetal openqa instance
 
 
+``qem_dashboard.api``
+~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     URL
+  | **default**
+  |     http://dashboard.qam.suse.de/api
+
+URL of the QEM Dashboard API used for incident, aggregate, and auto openQA job discovery.
+Kernel workflow still uses openQA directly.
+
+
 ``openqa.distri``
 ~~~~~~~~~~~~~~~~~
 
