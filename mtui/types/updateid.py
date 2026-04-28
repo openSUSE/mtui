@@ -264,7 +264,9 @@ class KernelOBSUpdateID(UpdateID):
             tr.incident,
             self.id,
         ).run()
-        kernel = KernelOpenQA(config, config.openqa_instance, tr.incident, self.id).run()
+        kernel = KernelOpenQA(
+            config, config.openqa_instance, tr.incident, self.id
+        ).run()
         baremetal = KernelOpenQA(
             config,
             config.openqa_instance_baremetal,
