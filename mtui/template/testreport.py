@@ -712,7 +712,9 @@ class TestReport(ABC):
 
         return sink(targets, by_hosts_pkg)
 
-    def report_results(self, targetHosts=None) -> list[TargetMeta]:
+    def report_results(
+        self, targetHosts: list[Target] | None = None
+    ) -> list[TargetMeta]:
         """Reports the results of the test report.
 
         Args:
@@ -723,12 +725,9 @@ class TestReport(ABC):
             A list of `TargetMeta` objects.
 
         """
-        results = []
+        results: list[TargetMeta] = []
 
-        if targetHosts is not None:
-            targets = list(targetHosts)
-        else:
-            targets = self.targets.values()
+        targets = targetHosts or self.targets.values()
 
         results.extend(
             TargetMeta(t.hostname, str(t.system), t.packages, t.out) for t in targets
