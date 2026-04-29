@@ -52,8 +52,8 @@ class Export(Command):
             (False, False): ManualExport,
         }
         exporter = exporters[(self.config.auto, self.config.kernel)]
-        if issubclass(exporter, ManualExport) and not self.metadata.openqa["auto"]:
-            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
+        if issubclass(exporter, ManualExport) and not self.metadata.openqa.auto:
+            self.metadata.openqa.auto = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
                 self.metadata.incident,

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from mtui.commands.export import Export
 from mtui.export.base import BaseExport
-from mtui.types import FileList, RequestReviewID
+from mtui.types import FileList, OpenQAResults, RequestReviewID
 
 
 class ExportProbe(BaseExport):
@@ -31,7 +31,7 @@ def test_inject_openqa_replaces_dashboard_results(mock_config):
 
     exporter = ExportProbe(
         mock_config,
-        {"auto": openqa},
+        OpenQAResults(auto=openqa),
         template,
         False,
         "SUSE:Maintenance:1:1",
@@ -51,7 +51,7 @@ def test_manual_export_loads_dashboard_results_before_export(mock_config, tmp_pa
     prompt.metadata.id = "SUSE:Maintenance:12358:199773"
     prompt.metadata.rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
     prompt.metadata.incident = MagicMock()
-    prompt.metadata.openqa = {"auto": None, "kernel": []}
+    prompt.metadata.openqa = OpenQAResults()
     prompt.metadata.path = filename
     prompt.metadata.report_results.return_value = []
     prompt.display = MagicMock()

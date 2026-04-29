@@ -19,9 +19,9 @@ class ReloadOpenQA(Command):
     def __call__(self) -> None:
         """Executes the `reload_openqa` command."""
         if self.config.kernel:
-            if self.metadata.openqa["kernel"] == []:
+            if self.metadata.openqa.kernel == []:
                 logger.info("Getting data from kernel openQA")
-                self.metadata.openqa["kernel"].append(
+                self.metadata.openqa.kernel.append(
                     KernelOpenQA(
                         self.config,
                         self.config.openqa_instance,
@@ -29,7 +29,7 @@ class ReloadOpenQA(Command):
                         self.metadata.rrid,
                     ).run()
                 )
-                self.metadata.openqa["baremetal"].append(
+                self.metadata.openqa.kernel.append(
                     KernelOpenQA(
                         self.config,
                         self.config.openqa_instance_baremetal,
@@ -39,12 +39,12 @@ class ReloadOpenQA(Command):
                 )
             else:
                 logger.info("Refreshing data from kernel openQA")
-                for oqa in self.metadata.openqa["kernel"]:
+                for oqa in self.metadata.openqa.kernel:
                     oqa.run()
 
-        if self.metadata.openqa["auto"] is None:
+        if self.metadata.openqa.auto is None:
             logger.info("Getting data from QEM Dashboard")
-            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
+            self.metadata.openqa.auto = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
                 self.metadata.incident,
@@ -52,4 +52,4 @@ class ReloadOpenQA(Command):
             ).run()
         else:
             logger.info("Refreshing data from QEM Dashboard")
-            self.metadata.openqa["auto"].run()
+            self.metadata.openqa.auto.run()

@@ -25,7 +25,7 @@ from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..template import TemplateIOError, TestReportAlreadyLoadedError
-from ..types import Product, TargetMeta
+from ..types import OpenQAResults, Product, TargetMeta
 from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
@@ -118,7 +118,7 @@ class TestReport(ABC):
             parsing the template
         """
 
-        self.openqa: dict[str, Any] = {"auto": None, "kernel": []}
+        self.openqa: OpenQAResults = OpenQAResults()
 
     @property
     @abstractmethod
