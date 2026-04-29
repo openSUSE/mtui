@@ -8,6 +8,7 @@ from .commandlog import CommandLog
 from .enums import assignment, method
 from .filelist import FileList
 from .hostlog import HostLog
+from .oqaresults import OpenQAResult, OpenQAResults
 from .package import Package
 from .product import Product
 from .rpmver import RPMVersion
@@ -21,6 +22,8 @@ __all__ = [
     "CommandLog",
     "FileList",
     "HostLog",
+    "OpenQAResult",
+    "OpenQAResults",
     "Package",
     "Product",
     "RPMVersion",
