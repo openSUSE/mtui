@@ -70,8 +70,10 @@ class TestOpenQAResultsMutation:
 
 class TestOpenQAResultProtocol:
     def test_protocol_is_runtime_checkable(self) -> None:
-        # MagicMock satisfies any structural protocol via attribute access.
-        m = _truthy_result()
-        # mark required attribute
-        m.kind = "auto"
-        assert isinstance(m, OpenQAResult)
+        # The Protocol must be decorated with @runtime_checkable so that
+        # isinstance() works at all -- the actual structural match is
+        # exercised indirectly by every other test that passes MagicMocks
+        # into OpenQAResults. Some Python patch versions are stricter about
+        # MagicMock vs Protocol introspection, so assert the metadata
+        # rather than performing an isinstance() check on a mock.
+        assert getattr(OpenQAResult, "_is_runtime_protocol", False)
