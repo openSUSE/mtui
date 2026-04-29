@@ -29,9 +29,12 @@ class AutoExport(BaseExport):
 
         """
         filepath = self.config.template_dir / str(self.rrid) / self.config.install_logs
+        auto = self.openqa.auto
+        if auto is None:
+            return []
         ilogs = zip_longest(
-            self.openqa["auto"].results,
-            map(self._openqa_installog_to_template, self.openqa["auto"].results),
+            auto.results,
+            map(self._openqa_installog_to_template, auto.results),
         )
         filenames = []
         for i, y in ilogs:

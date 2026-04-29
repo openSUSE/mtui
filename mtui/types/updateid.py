@@ -181,14 +181,14 @@ class AutoOBSUpdateID(UpdateID):
         tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
 
         logger.info("Getting data from QEM Dashboard")
-        tr.openqa["auto"] = DashboardAutoOpenQA(
+        tr.openqa.auto = DashboardAutoOpenQA(
             config,
             config.openqa_instance,
             tr.incident,
             self.id,
         ).run()
 
-        if tr.openqa["auto"].results is None:
+        if tr.openqa.auto.results is None:
             logger.warning("No install jobs or install jobs failed")
             logger.info("Switch mode to manual")
             tr.config.auto = False
@@ -258,7 +258,7 @@ class KernelOBSUpdateID(UpdateID):
         self.create_results_dir(config)
         tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
         tr.updateid = self
-        tr.openqa["auto"] = DashboardAutoOpenQA(
+        tr.openqa.auto = DashboardAutoOpenQA(
             config,
             config.openqa_instance,
             tr.incident,
@@ -273,6 +273,6 @@ class KernelOBSUpdateID(UpdateID):
             tr.incident,
             self.id,
         ).run()
-        tr.openqa["kernel"] = [kernel, baremetal]
+        tr.openqa.kernel = [kernel, baremetal]
 
         return tr

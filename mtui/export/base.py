@@ -7,7 +7,7 @@ from pathlib import Path
 from mtui.systemcheck import system_info
 from mtui.utils import prompt_user, timestamp
 
-from ..types import FileList
+from ..types import FileList, OpenQAResults
 
 logger = getLogger("mtui.export.base")
 
@@ -43,7 +43,7 @@ class BaseExport(ABC):
 
         """
         self.config = config
-        self.openqa = openqa
+        self.openqa: OpenQAResults = openqa
         self.template: FileList | list[str] = template[:]
         self.force = force
         self.rrid = rrid
@@ -146,10 +146,10 @@ class BaseExport(ABC):
 
     def inject_openqa(self) -> None:
         """Injects openQA results into the template."""
-        if not self.openqa["auto"]:
+        if not self.openqa.auto:
             return
 
-        openqa = self.openqa["auto"].pp
+        openqa = self.openqa.auto.pp
         if not openqa:
             return
 

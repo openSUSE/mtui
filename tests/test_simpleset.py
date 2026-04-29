@@ -2,7 +2,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.simpleset import SetWorkflow
-from mtui.types import RequestReviewID
+from mtui.types import OpenQAResults, RequestReviewID
 
 
 def test_set_workflow_auto_uses_rrid(mock_config):
@@ -10,7 +10,7 @@ def test_set_workflow_auto_uses_rrid(mock_config):
     prompt.metadata.id = "SUSE:Maintenance:12358:199773"
     prompt.metadata.rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
     prompt.metadata.incident = MagicMock()
-    prompt.metadata.openqa = {"auto": None, "kernel": []}
+    prompt.metadata.openqa = OpenQAResults()
     prompt.display = MagicMock()
     prompt.targets = MagicMock()
 

@@ -30,7 +30,7 @@ class KernelExport(BaseExport):
         in_path = self.config.template_dir / str(self.rrid) / self.config.install_logs
         res_path = self.config.template_dir / str(self.rrid) / "results"
         ensure_dir_exists(res_path)
-        oqa = (result for result in self.openqa["kernel"])
+        oqa = (result for result in self.openqa.kernel)
         # TODO: configurable errormode
         download_logs(oqa, res_path, in_path, "tolerant")
 
@@ -62,7 +62,7 @@ class KernelExport(BaseExport):
         self.template.insert(line + 3, "\n")
         line += 4
 
-        for results in self.openqa["kernel"]:
+        for results in self.openqa.kernel:
             if results:
                 for r in results.pp:
                     self.template.insert(line, r)

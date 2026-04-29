@@ -179,21 +179,21 @@ class SetWorkflow(Command):
         if state == "kernel":
             if self.config.kernel:
                 logger.info("Desired workflow %s is same as current", state)
-                self.metadata.openqa["auto"].run()
-                for oq in self.metadata.openqa["kernel"]:
+                self.metadata.openqa.auto.run()
+                for oq in self.metadata.openqa.kernel:
                     oq.run()
                 return
             logger.info("Setting workflow to '%s'", state)
             self.config.auto = False
             self.config.kernel = True
-            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
+            self.metadata.openqa.auto = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
                 self.metadata.incident,
                 self.metadata.rrid,
             ).run()
-            self.metadata.openqa["kernel"] = []
-            self.metadata.openqa["kernel"].append(
+            self.metadata.openqa.kernel = []
+            self.metadata.openqa.kernel.append(
                 KernelOpenQA(
                     self.config,
                     self.config.openqa_instance,
@@ -201,7 +201,7 @@ class SetWorkflow(Command):
                     self.metadata.rrid,
                 ).run()
             )
-            self.metadata.openqa["kernel"].append(
+            self.metadata.openqa.kernel.append(
                 KernelOpenQA(
                     self.config,
                     self.config.openqa_instance_baremetal,
@@ -213,32 +213,32 @@ class SetWorkflow(Command):
         if state == "auto":
             if self.config.auto:
                 logger.info("Desired workflow %s is same as current", state)
-                self.metadata.openqa["auto"].run()
+                self.metadata.openqa.auto.run()
                 return
             logger.info("Setting workflow to '%s'", state)
             self.config.auto = True
             self.config.kernel = False
-            self.metadata.openqa["auto"] = DashboardAutoOpenQA(
+            self.metadata.openqa.auto = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
                 self.metadata.incident,
                 self.metadata.rrid,
             ).run()
-            self.metadata.openqa["kernel"] = []
-            if self.metadata.openqa["auto"].results is None:
+            self.metadata.openqa.kernel = []
+            if self.metadata.openqa.auto.results is None:
                 logger.warning("No install jobs or install jobs failed")
                 logger.info("Switch mode to manual")
                 self.config.auto = False
             return
         if not self.config.auto and not self.config.kernel:
             logger.info("Desired workflow %s is same as current", state)
-            self.metadata.openqa["auto"].run()
+            self.metadata.openqa.auto.run()
             return
         logger.info("Setting workflow to '%s'", state)
         self.config.auto = False
         self.config.kernel = False
-        self.metadata.openqa["auto"].run()
-        self.metadata.openqa["kernel"] = []
+        self.metadata.openqa.auto.run()
+        self.metadata.openqa.kernel = []
         return
 
     @staticmethod
