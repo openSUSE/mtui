@@ -307,18 +307,6 @@ class Refhosts:
                 return False
         return True
 
-    def _location_hosts(self, location: str):
-        """Returns the hosts for a given location.
-
-        Args:
-            location: The location to get hosts for.
-
-        Returns:
-            A list of host elements for the given location.
-
-        """
-        return self.data[location]
-
     def check_location_sanity(self, location) -> None:
         """Checks if a location is valid.
 
