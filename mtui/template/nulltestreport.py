@@ -15,11 +15,6 @@ class NullTestReport(TestReport):
     This class is used when no test report is loaded.
     """
 
-    @property
-    def _type(self) -> str:
-        """Returns the type of the test report."""
-        return "No"
-
     def __init__(self, *a, **kw) -> None:
         """Initializes the `NullTestReport` object."""
         super().__init__(*a, **kw)

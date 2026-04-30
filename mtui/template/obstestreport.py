@@ -26,11 +26,6 @@ class OBSTestReport(TestReport):
         self._attrs += ["rrid", "rating", "realid"]
 
     @property
-    def _type(self) -> str:
-        """Returns the type of the test report."""
-        return "OBS"
-
-    @property
     def id(self) -> str:
         """Returns the ID of the test report."""
         return str(self.rrid)
