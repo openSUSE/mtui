@@ -20,10 +20,6 @@ from .refhost import RefhostsFactory, RefhostsResolveFailedError
 logger = getLogger("mtui.config")
 
 
-class InvalidOptionNameError(RuntimeError):
-    """Exception raised when an invalid configuration option name is used."""
-
-
 class Config:
     """Read and store the variables from mtui config files."""
 
@@ -266,39 +262,6 @@ class Config:
         self.data: list[tuple[str, tuple[str, ...], Any, Callable, Callable]] = [
             add_getter(x) for x in n_data
         ]
-
-    def _has_option(self, opt: str) -> bool:
-        """Checks if a given option name is valid.
-
-        Args:
-            opt: The option name to check.
-
-        Returns:
-            True if the option name is valid, False otherwise.
-
-        """
-        return opt in (x[0] for x in self.data)
-
-    def set_option(self, opt: str, val: Any) -> None:
-        """Sets a configuration option to a new value.
-
-        Warning:
-            This method is not type safe. You need to take care to
-            pass proper type as the value.
-
-        Args:
-            opt: The name of the option to set.
-            val: The new value for the option.
-
-        Raises:
-            InvalidOptionNameError: If opt is not a valid option name.
-
-        """
-        # FIXME: ^ remove warning (add type safety)
-        if not self._has_option(opt):
-            raise InvalidOptionNameError()
-
-        setattr(self, opt, val)
 
     def _list_terms(self) -> None:
         """Finds available terminal scripts."""
