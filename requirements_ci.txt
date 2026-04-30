@@ -4,7 +4,6 @@ pyxdg
 requests
 ruamel.yaml
 osc
-looseversion
 openqa-client
 
 pytest
