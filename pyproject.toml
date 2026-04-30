@@ -18,7 +18,6 @@ classifiers = [
   "Programming Language :: Python :: 3.14"
 ]
 dependencies = [
-  "looseversion",
   "openqa-client",
   "paramiko",
   "pyxdg",
