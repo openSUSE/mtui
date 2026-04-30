@@ -204,7 +204,6 @@ class AutoOBSUpdateID(UpdateID):
                 logger.info("Connect refhosts from TestPlatform")
                 tr.connect_targets()
 
-        tr.updateid = self
         return tr
 
 
@@ -257,7 +256,6 @@ class KernelOBSUpdateID(UpdateID):
         self._create_installogs_dir(config)
         self.create_results_dir(config)
         tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
-        tr.updateid = self
         tr.openqa.auto = DashboardAutoOpenQA(
             config,
             config.openqa_instance,

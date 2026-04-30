@@ -15,7 +15,6 @@ from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
 from typing import Any, Literal
-from urllib.request import urlopen
 
 from ..config import Config
 from ..datafiles import scripts_path
@@ -46,13 +45,6 @@ class TestReport(ABC):
 
     # -- Attributes set dynamically by UpdateID subclasses --
     incident: Any
-    updateid: Any
-
-    @property
-    @abstractmethod
-    def _type(self) -> str:
-        """Returns the type of the test report."""
-        ...
 
     def __init__(self, config: Config, scripts_src_dir: Path | None = None) -> None:
         """Initializes the `TestReport` object.
@@ -556,18 +548,6 @@ class TestReport(ABC):
         """Returns the URL for the fancy test report."""
         return "/".join([self.config.fancy_reports_url, str(self.id), "log"])
 
-    def local_wd(self, *paths) -> Path:
-        """Returns the local working directory.
-
-        Args:
-            *paths: The path components to join to the working directory.
-
-        Returns:
-            The path to the local working directory.
-
-        """
-        return self._wd(self.config.local_tempdir, str(self.id), *paths)
-
     def report_wd(self, *paths, **kw) -> Path:
         """Returns the working directory relative to the test report checkout.
 
@@ -641,20 +621,6 @@ class TestReport(ABC):
                 for f in filelist:
                     x = s(self, d / f)
                     x.run(targets)
-
-    def download_file(self, from_, into) -> None:
-        """Downloads a file.
-
-        Args:
-            from_: The URL to download the file from.
-            into: The path to save the downloaded file to.
-
-        """
-        logger.info("Downloading %s", from_)
-        from contextlib import closing
-
-        with open(into, "wb") as dst, closing(urlopen(from_)) as src:
-            dst.writelines(src)
 
     def list_versions(self, sink, targets: HostsGroup, packages):
         """Lists the available versions of packages.
