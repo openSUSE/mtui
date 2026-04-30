@@ -99,13 +99,6 @@ class SvnCheckoutFailed(ErrorMessage):
         self.message = self._msg.format(uri, f_url)
 
 
-class QadbReportCommentLengthWarning(UserMessage):
-    """A warning about comment length limitations."""
-
-    def __str__(self) -> str:
-        return "comment strings > 100 chars are truncated by remote_qa_db_report.pl"
-
-
 class ConnectingTargetFailedMessage(UserMessage):
     """A message for when connecting to a target fails."""
 
@@ -118,16 +111,6 @@ class ConnectingTargetFailedMessage(UserMessage):
 
     def __repr__(self) -> str:
         return f"<{self.__class__} {self.hostname!r}:{self.reason!r}>"
-
-
-class ConnectingToMessage(UserMessage):
-    """A message for when connecting to a target."""
-
-    def __init__(self, hostname) -> None:
-        self.hostname = hostname
-
-    def __str__(self) -> str:
-        return f"connecting to {self.hostname}"
 
 
 class MissingPackagesError(UserError):
@@ -215,18 +198,6 @@ class LocationChangedMessage(UserMessage):
         return f"changed location from {self.old!r} to {self.new!r}"
 
 
-class PackageRevisionHasntChangedWarning(UserMessage):
-    """A warning for when a package revision has not changed."""
-
-    _msg = (
-        "Revision of package {0!r} hasn't changed, "
-        + "it's most likely already updated. skipping."
-    )
-
-    def __init__(self, package) -> None:
-        self.message = self._msg.format(package)
-
-
 class MissingDoerError(ErrorMessage):
     """Base class for missing "doer" errors."""
 
@@ -292,21 +263,6 @@ class ReConnectFailed(ErrorMessage):
         self.message = self._msg.format(host)
 
 
-class RepositoryError(ErrorMessage):
-    """failed to read IBS Repository."""
-
-    def __init__(self, repo) -> None:
-        self.repo = repo
-        self.message = f"Repository empty {repo}"
-
-
-class openQAError(ErrorMessage):
-    """openQA related Errors."""
-
-    def __init__(self) -> None:
-        self.message = "Something wrong with openQA connection"
-
-
 class ResultsMissingError(ErrorMessage):
     """missing results json file."""
 
@@ -314,11 +270,3 @@ class ResultsMissingError(ErrorMessage):
         self.test = test
         self.arch = arch
         self.message = f"Test: {test} on arch: {arch} missing results.json file. Please restart it."
-
-
-class SVNError(ErrorMessage):
-    """SVN related Errors."""
-
-    def __init__(self, cmd) -> None:
-        self.cmd = cmd
-        self.message: str = f"SVN {cmd} command failed"
