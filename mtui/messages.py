@@ -32,10 +32,6 @@ class UserError(UserMessage, RuntimeError):
     """An error caused by improper usage of the program."""
 
 
-class DeprecationMessage(UserMessage):
-    """A message for deprecated features."""
-
-
 class NoRefhostsDefinedError(UserError, ValueError):
     """Raised when an operation is requested without defined refhosts."""
 

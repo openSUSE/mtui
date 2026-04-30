@@ -12,4 +12,4 @@ class Showrepos(Command):
     @requires_update
     def __call__(self) -> None:
         """Executes the `show_update_repos` command."""
-        self.display.list_update_repos(self.metadata.update_repos, self.metadata.id)
+        self.display.list_update_repos(self.metadata.update_repos)
