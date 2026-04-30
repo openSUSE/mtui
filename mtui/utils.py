@@ -3,8 +3,6 @@ import os
 import re
 import readline
 import struct
-import subprocess
-import tempfile
 import termios
 import time
 from collections.abc import Callable, Collection, Sequence
@@ -18,34 +16,6 @@ from tempfile import mkstemp
 from typing import Any
 
 from .messages import TestReportNotLoadedError
-
-
-def edit_text(text: str) -> str:
-    """Opens the user's default editor to edit the given text.
-
-    Args:
-        text: The initial text to be edited.
-
-    Returns:
-        The edited text.
-
-    """
-    editor = os.getenv("EDITOR", "vim")
-    tmpfile = tempfile.NamedTemporaryFile()  # noqa: SIM115
-
-    with open(tmpfile.name, "w") as tmp:
-        tmp.write(text)
-
-    subprocess.check_call((editor, tmpfile.name))
-
-    with open(tmpfile.name) as tmp:
-        text = tmp.read().strip("\n")
-        text = text.replace("'", '"')
-
-    del tmpfile
-
-    return text
-
 
 if os.getenv("COLOR", "always") == "always":
 

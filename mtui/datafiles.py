@@ -1,7 +1,7 @@
 """Locate package data files bundled with mtui.
 
-Uses importlib.resources to find scripts, helper files, and terminal
-launcher scripts that are shipped inside the mtui package.
+Uses importlib.resources to find scripts and terminal launcher scripts
+that are shipped inside the mtui package.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from pathlib import Path
 def _package_data_path() -> Path:
     """Return the filesystem path to the mtui package directory.
 
-    This is the root from which ``scripts/``, ``helper/``, and
-    ``terms/`` subdirectories can be reached.
+    This is the root from which ``scripts/`` and ``terms/`` subdirectories
+    can be reached.
     """
     pkg = files("mtui")
 
@@ -28,11 +28,6 @@ def _package_data_path() -> Path:
 def scripts_path() -> Path:
     """Return the path to the ``scripts/`` data directory."""
     return _package_data_path() / "scripts"
-
-
-def helper_path() -> Path:
-    """Return the path to the ``helper/`` data directory."""
-    return _package_data_path() / "helper"
 
 
 def terms_path() -> Path:
