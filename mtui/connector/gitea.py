@@ -110,7 +110,6 @@ class Gitea:
 
         # Construct the necessary API endpoints from the base PR URL.
         self.pr = giteaprapi
-        self.issues = "/".join(giteaprapi.split("/")[:-2]) + "/issues/comments"
         self.prissues = giteaprapi.replace("pulls", "issues") + "/comments"
 
     def __request(

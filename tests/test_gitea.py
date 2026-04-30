@@ -88,7 +88,6 @@ class TestGiteaInit:
         gitea = Gitea(mock_config, api_url)  # type: ignore[arg-type]
 
         assert gitea.pr == api_url
-        assert "issues/comments" in gitea.issues
         assert "issues" in gitea.prissues
         assert gitea.user == "testuser"
         assert gitea.group == "qam-sle"
