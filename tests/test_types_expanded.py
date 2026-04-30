@@ -221,8 +221,6 @@ class TestEnums:
         """Test method enum values."""
         assert method.GET == "get"
         assert method.POST == "post"
-        assert method.PATCH == "patch"
-        assert method.DELETE == "delete"
 
     def test_assignment_enum(self):
         """Test assignment enum has expected members."""

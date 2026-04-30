@@ -8,8 +8,6 @@ class method(StrEnum):
 
     POST = auto()
     GET = auto()
-    PATCH = auto()
-    DELETE = auto()
 
 
 class assignment(Enum):
