@@ -3,7 +3,10 @@
 import inspect
 import logging
 
-(BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE) = list(range(8))
+# ANSI color offsets (added to 30 to form the foreground color escape code).
+# Positions matter: only RED..BLUE are referenced, but the indexes determine
+# the resulting ANSI code (e.g. 30 + 1 = 31 = red).
+(_, RED, GREEN, YELLOW, BLUE, *_) = list(range(8))
 
 RESET_SEQ = "\033[0m"
 COLOR_SEQ = "\033[1;{}m"
