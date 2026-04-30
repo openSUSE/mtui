@@ -206,26 +206,6 @@ class Target:
                 pkgs[p] = new_ver
         return pkgs
 
-    def disable_repo(self, repo: str) -> None:
-        """Disables a repository on the target host.
-
-        Args:
-            repo: The name of the repository to disable.
-
-        """
-        logger.debug("%s: disabling repo %s", self.hostname, repo)
-        self.run(f"zypper mr -d {repo}")
-
-    def enable_repo(self, repo: str) -> None:
-        """Enables a repository on the target host.
-
-        Args:
-            repo: The name of the repository to enable.
-
-        """
-        logger.debug("%s: enabling repo %s", self.hostname, repo)
-        self.run(f"zypper mr -e {repo}")
-
     def set_timeout(self, value: int) -> None:
         """Sets the command timeout for the target host.
 
