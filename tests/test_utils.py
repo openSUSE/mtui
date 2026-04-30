@@ -98,22 +98,6 @@ def test_timestamp():
     assert isinstance(int(utils.timestamp()), int)
 
 
-def test_walk():
-    """Test walk."""
-    test_data = {
-        "edges": [
-            {
-                "node": {
-                    "a": 1,
-                    "b": 2,
-                }
-            }
-        ]
-    }
-    expected_data = [{"a": 1, "b": 2}]
-    assert utils.walk(test_data) == expected_data
-
-
 def test_sutparse():
     sut = utils.SUTParse("a,b,c")
     assert sut.print_args() == "-t a -t b -t c"

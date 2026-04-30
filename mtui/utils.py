@@ -7,7 +7,6 @@ import termios
 import time
 from collections.abc import Callable, Collection, Sequence
 from contextlib import contextmanager
-from copy import deepcopy
 from functools import wraps
 from itertools import chain
 from pathlib import Path
@@ -421,35 +420,3 @@ def atomic_write_file(data: bytes | str, path: Path) -> None:
         f.write(data)
 
     move(fname, path)
-
-
-def walk(inc: dict[str, Any] | list[Any]) -> dict[str, Any] | list[Any]:
-    """Recursively walks through a nested data structure.
-
-    This function is designed to simplify nested data structures,
-    particularly those that resemble GraphQL responses with 'edges'
-    and 'node' keys.
-
-    Args:
-        inc: The collection (list or dict) to walk through.
-
-    Returns:
-        The modified collection.
-
-    """
-    if isinstance(inc, list):
-        for i, j in enumerate(inc):
-            if isinstance(j, list | dict):
-                inc[i] = walk(j)
-    if isinstance(inc, dict):
-        if len(inc) == 1:
-            if "edges" in inc:
-                return walk(inc["edges"])
-            if "node" in inc:
-                tmp = deepcopy(inc["node"])
-                del inc["node"]
-                inc.update(tmp)
-        for key in inc:
-            if isinstance(inc[key], list | dict):
-                inc[key] = walk(inc[key])
-    return inc
