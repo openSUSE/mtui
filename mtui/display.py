@@ -207,12 +207,11 @@ class CommandPromptDisplay:
             self.println(x)
         self.println()
 
-    def list_update_repos(self, repos, update_id) -> None:
+    def list_update_repos(self, repos) -> None:
         """Displays the update repositories.
 
         Args:
             repos: A dictionary of repositories.
-            update_id: The ID of the update.
 
         """
         for p, r in repos.items():
