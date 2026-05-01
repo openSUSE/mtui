@@ -52,6 +52,15 @@ doc = [
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "slow: tests that take noticeably longer to run",
+  "integration: tests that exercise multiple components together",
+  "network: tests that perform real network I/O",
+]
+
 [tool.ruff]
 target-version = "py311"
 
