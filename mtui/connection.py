@@ -52,10 +52,34 @@ class CommandTimeoutError(Exception):
         return repr(self.command)
 
 
+_HOST_KEY_POLICIES: dict[str, type[paramiko.MissingHostKeyPolicy]] = {
+    "auto_add": paramiko.AutoAddPolicy,
+    "warn": paramiko.WarningPolicy,
+    "reject": paramiko.RejectPolicy,
+}
+
+
+def policy_from_config(name: str) -> paramiko.MissingHostKeyPolicy:
+    """Map an ``ssh_strict_host_key_checking`` config value to a paramiko policy.
+
+    Unknown values fall back to ``AutoAddPolicy`` (preserving the legacy
+    behaviour) and emit a warning so misconfigurations are visible.
+    """
+    cls = _HOST_KEY_POLICIES.get(name)
+    if cls is None:
+        logger.warning(
+            "unknown ssh_strict_host_key_checking=%r; falling back to auto_add",
+            name,
+        )
+        cls = paramiko.AutoAddPolicy
+    return cls()
+
+
 class Connection:
     """Manages SSH and SFTP connections to a remote host."""
 
     __slots__ = [
+        "_policy",
         "client",
         "command",
         "hostname",
@@ -66,7 +90,13 @@ class Connection:
         "timeout",
     ]
 
-    def __init__(self, hostname: str, port: int | str, timeout: int) -> None:
+    def __init__(
+        self,
+        hostname: str,
+        port: int | str,
+        timeout: int,
+        missing_host_key_policy: paramiko.MissingHostKeyPolicy | None = None,
+    ) -> None:
         """Opens an SSH channel to the specified host.
 
         This method tries to authenticate using SSH keys and falls back to
@@ -76,6 +106,9 @@ class Connection:
             hostname: The hostname or IP address of the remote host.
             port: The port number to connect to.
             timeout: The timeout for remote commands.
+            missing_host_key_policy: paramiko policy applied to unknown
+                host keys. ``None`` (the default) preserves the legacy
+                behaviour of ``AutoAddPolicy``.
 
         """
         self.hostname = hostname
@@ -93,6 +126,7 @@ class Connection:
         self.timeout = timeout
 
         self.client = SSHClient()
+        self._policy = missing_host_key_policy
 
         self.load_keys()
 
@@ -102,9 +136,10 @@ class Connection:
         return f"<{self.__class__.__name__} object hostname={self.hostname} port={self.port}>"
 
     def load_keys(self) -> None:
-        """Loads system host keys."""
+        """Loads system host keys and applies the missing-key policy."""
         self.client.load_system_host_keys()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        policy = self._policy if self._policy is not None else paramiko.AutoAddPolicy()
+        self.client.set_missing_host_key_policy(policy)
 
     def connect(self) -> None:
         """Connects to the remote host using paramiko."""

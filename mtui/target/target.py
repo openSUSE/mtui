@@ -13,7 +13,7 @@ from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
 from ..config import Config
-from ..connection import CommandTimeoutError, Connection
+from ..connection import CommandTimeoutError, Connection, policy_from_config
 from ..target.parsers import parse_system
 from ..types import HostLog, Package, System
 from ..types.rpmver import RPMVersion
@@ -104,7 +104,15 @@ class Target:
         """Connects to the target host."""
         try:
             logger.info("connecting to %s", self.hostname)
-            self.connection = self.Connection(self.host, self.port, self._timeout)
+            policy_name = getattr(
+                self.config, "ssh_strict_host_key_checking", "auto_add"
+            )
+            self.connection = self.Connection(
+                self.host,
+                self.port,
+                self._timeout,
+                missing_host_key_policy=policy_from_config(policy_name),
+            )
         except Exception as e:
             logger.critical(messages.ConnectingTargetFailedMessage(self.hostname, e))
             raise e
