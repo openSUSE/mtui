@@ -23,7 +23,6 @@ def test_qem_incident_metadata():
 
     assert incident
     assert incident.get_incident_name() == "kernel-ec2"
-    assert incident.get_version() == "12-SP2"
 
 
 @responses.activate

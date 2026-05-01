@@ -73,20 +73,6 @@ class QEMIncident:
             return None
         return str(sorted(packages, key=len)[0])
 
-    def get_version(self) -> str | None:
-        """Best-effort version derived from the first dashboard channel."""
-        if not self.data:
-            return None
-        channels = self.data.get("channels") or []
-        if not channels:
-            return None
-        parts = str(channels[0]).split(":")[-2].split("-")
-        if len(parts) < 2:
-            return None
-        if parts[0] in ("SLE", "SLES") and len(parts) > 2:
-            return f"{parts[1]}-{parts[2]}"
-        return f"{parts[0]}-{parts[1]}"
-
     def __bool__(self) -> bool:
         return bool(self.data)
 
