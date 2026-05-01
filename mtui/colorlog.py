@@ -43,9 +43,12 @@ class ColorFormatter(logging.Formatter):
 
         """
         if levelname == "DEBUG":
-            caller = inspect.currentframe()
-            frame, _, _, function, _, _ = inspect.getouterframes(caller)[9]
-            module = mo.__name__ if (mo := inspect.getmodule(frame)) else "unknown"
+            frame_info = self._find_caller_frame()
+            if frame_info is None:
+                module, function = "unknown", "unknown"
+            else:
+                frame, function = frame_info
+                module = mo.__name__ if (mo := inspect.getmodule(frame)) else "unknown"
             return (
                 "\033[2K"
                 + COLOR_SEQ.format(30 + COLORS[levelname])
@@ -60,6 +63,26 @@ class ColorFormatter(logging.Formatter):
             + levelname.lower()
             + RESET_SEQ
         )
+
+    @staticmethod
+    def _find_caller_frame() -> tuple[object, str] | None:
+        """Walks the stack until the first frame outside the logging machinery.
+
+        Returns:
+            A `(frame, function_name)` tuple for the first caller whose
+            module is not `logging`, `mtui.colorlog`, or `contextlib`,
+            or `None` if no such frame exists.
+
+        """
+        skip_modules = {"logging", "mtui.colorlog", "contextlib"}
+        for frame_info in inspect.getouterframes(inspect.currentframe()):
+            module = inspect.getmodule(frame_info.frame)
+            module_name = module.__name__ if module else ""
+            top_level = module_name.partition(".")[0]
+            if module_name in skip_modules or top_level == "logging":
+                continue
+            return frame_info.frame, frame_info.function
+        return None
 
     def format(self, record: logging.LogRecord) -> str:
         """Formats the log record.
