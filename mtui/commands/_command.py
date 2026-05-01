@@ -1,5 +1,6 @@
 """The base class for all commands in mtui."""
 
+import shlex
 from abc import ABC, abstractmethod
 from argparse import Namespace, RawDescriptionHelpFormatter
 from logging import getLogger
@@ -66,7 +67,7 @@ class Command(ABC):
             A namespace containing the parsed arguments.
 
         """
-        arg = [] if args == "" else args.split()
+        arg = shlex.split(args)
         p = cls.argparser(sys)
         pa = p.parse_args(arg)
 
