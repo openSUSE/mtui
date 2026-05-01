@@ -378,7 +378,7 @@ class Target:
         """
         try:
             return self.out[-1][0]
-        except BaseException:
+        except IndexError:
             return ""
 
     def lastout(self) -> str:
@@ -390,7 +390,7 @@ class Target:
         """
         try:
             return self.out[-1][1]
-        except BaseException:
+        except IndexError:
             return ""
 
     def lasterr(self) -> str:
@@ -402,7 +402,7 @@ class Target:
         """
         try:
             return self.out[-1][2]
-        except BaseException:
+        except IndexError:
             return ""
 
     def lastexit(self) -> str:
@@ -414,7 +414,7 @@ class Target:
         """
         try:
             return self.out[-1][3]
-        except BaseException:
+        except IndexError:
             return ""
 
     def is_locked(self) -> bool:

@@ -125,7 +125,10 @@ class Config:
 
             try:
                 val = self._get_option(inipath, getter)
-            except BaseException:
+            except Exception:
+                logger.debug(
+                    "config option %s not in INI; using default", attr, exc_info=True
+                )
                 val = default() if callable(default) else default
 
             setattr(self, str(attr), fixup(val))

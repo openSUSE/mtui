@@ -28,8 +28,8 @@ for pth in _rootdir.glob("*.py"):
     try:
         logger.debug("loading command module %s", modname)
         module = importlib.import_module("." + modname, "mtui.commands")
-    except BaseException:
-        logger.error("loading command module %s failed", modname)
+    except Exception:
+        logger.exception("loading command module %s failed", modname)
         continue
 
     # register classes

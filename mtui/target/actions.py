@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, ValuesView
 from contextlib import suppress
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from threading import Lock
 from typing import Any
 
@@ -37,13 +37,11 @@ class ThreadedMethod(threading.Thread):
         while True:
             try:
                 (method, parameter) = self.queue.get(timeout=10)
-            except BaseException:
+            except Empty:
                 return
 
             try:
                 method(*parameter)
-            except BaseException:
-                raise
             finally:
                 with suppress(ValueError):
                     self.queue.task_done()

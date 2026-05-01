@@ -382,7 +382,7 @@ class _RefhostsFactory:
         for resolver in [x.strip() for x in config.refhosts_resolvers.split(",")]:
             try:
                 return self._resolve_one(resolver, config)
-            except BaseException:
+            except Exception:
                 logger.warning("Refhosts: resolver %s failed", resolver)
                 logger.debug(format_exc())
 
