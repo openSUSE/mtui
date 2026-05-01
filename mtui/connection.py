@@ -83,6 +83,11 @@ class Connection:
         try:
             self.port = int(port)
         except ValueError:
+            logger.warning(
+                "invalid SSH port %r for %s; falling back to 22",
+                port,
+                hostname,
+            )
             self.port = 22
 
         self.timeout = timeout
