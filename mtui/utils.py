@@ -6,7 +6,7 @@ import struct
 import termios
 import time
 from collections.abc import Callable, Collection, Sequence
-from contextlib import contextmanager
+from contextlib import chdir as chdir  # noqa: PLC0414  # re-exported for callers
 from functools import wraps
 from itertools import chain
 from pathlib import Path
@@ -357,20 +357,6 @@ def timestamp() -> str:
     """
     # remove fractional part
     return str(int(time.time()))
-
-
-@contextmanager
-def chdir(newpath: Path):
-    """A context manager for changing the current working directory.
-
-    Args:
-        newpath: The path to change to.
-
-    """
-    storedpath = Path().cwd()
-    os.chdir(newpath)
-    yield
-    os.chdir(storedpath)
 
 
 def ensure_dir_exists(*path, **kwargs) -> Path:
