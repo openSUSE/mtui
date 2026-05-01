@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import paramiko
 import pytest
 
-from mtui.connection import CommandTimeoutError, Connection
+from mtui.connection import CommandTimeoutError, Connection, policy_from_config
 
 
 @pytest.fixture
@@ -132,3 +132,54 @@ def test_connection_invalid_port_warns_and_falls_back(
         "invalid SSH port" in rec.message and "not-a-number" in rec.message
         for rec in caplog.records
     )
+
+
+# --- ssh_strict_host_key_checking host-key policy mapping ---
+
+
+@pytest.mark.parametrize(
+    ("name", "expected_cls"),
+    [
+        ("auto_add", paramiko.AutoAddPolicy),
+        ("warn", paramiko.WarningPolicy),
+        ("reject", paramiko.RejectPolicy),
+    ],
+)
+def test_policy_from_config_known(name, expected_cls):
+    """Known config values map to the matching paramiko policy class."""
+    policy = policy_from_config(name)
+    assert isinstance(policy, expected_cls)
+
+
+def test_policy_from_config_unknown_falls_back_with_warning(caplog):
+    """Unknown config values warn and fall back to AutoAddPolicy."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="mtui.connection"):
+        policy = policy_from_config("garbage")
+
+    assert isinstance(policy, paramiko.AutoAddPolicy)
+    assert any(
+        "unknown ssh_strict_host_key_checking" in rec.message
+        and "garbage" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_connection_default_policy_is_auto_add(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """No explicit policy passed -> Connection still uses AutoAddPolicy."""
+    Connection("test_host", 22, 300)
+
+    args, _ = mock_ssh_client.set_missing_host_key_policy.call_args
+    assert isinstance(args[0], paramiko.AutoAddPolicy)
+
+
+def test_connection_uses_provided_policy(mock_ssh_client, mock_ssh_config, mock_path):
+    """Explicit policy is forwarded to the paramiko client."""
+    policy = paramiko.RejectPolicy()
+    Connection("test_host", 22, 300, missing_host_key_policy=policy)
+
+    args, _ = mock_ssh_client.set_missing_host_key_policy.call_args
+    assert args[0] is policy

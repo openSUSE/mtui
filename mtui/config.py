@@ -49,6 +49,7 @@ class Config:
     openqa_kernel_install_logs: str
     threshold: int
     gitea_token: str
+    ssh_strict_host_key_checking: str
 
     # -- Attributes set externally in main.py --
     kernel: bool
@@ -250,6 +251,12 @@ class Config:
             # RefhostsFactory which need access to parts of config.
             ("location", ("mtui", "location"), "default"),
             ("gitea_token", ("gitea", "token"), getenv("GITEA_TOKEN", "")),
+            (
+                "ssh_strict_host_key_checking",
+                ("connection", "ssh_strict_host_key_checking"),
+                "auto_add",
+                str,
+            ),
         ]
 
         def add_normalizer(x):

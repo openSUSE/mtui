@@ -52,3 +52,19 @@ def test_merge_args(tmpdir):
     assert cfg.connection_timeout == 1200
     assert cfg.qem_dashboard_api == "http://dashboard.qam.suse.de/api"
     assert cfg.gitea_token == "cmd_gitea_token"
+
+
+def test_ssh_strict_host_key_checking_default(tmpdir):
+    """Default value preserves backward-compatible auto-add behaviour."""
+    config_file = Path(tmpdir.join("test.cfg"))
+    config_file.write_text("")
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    assert cfg.ssh_strict_host_key_checking == "auto_add"
+
+
+def test_ssh_strict_host_key_checking_override(tmpdir):
+    """[connection] section in INI overrides the default."""
+    config_file = Path(tmpdir.join("test.cfg"))
+    config_file.write_text("[connection]\nssh_strict_host_key_checking = reject\n")
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    assert cfg.ssh_strict_host_key_checking == "reject"
