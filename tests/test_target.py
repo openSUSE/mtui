@@ -392,3 +392,48 @@ def test_sftp_put_dryrun(mock_target):
     mock_target.sftp_put(Path("/local/file"), Path("/remote/file"))
 
     mock_target.connection.sftp_put.assert_not_called()
+
+
+# --- __eq__ / __hash__ contract (regression for hostname/system mismatch) ---
+
+
+def test_target_eq_same_hostname_different_system(mock_config):
+    """Targets with the same hostname must be equal regardless of system.
+
+    Regression: previously __eq__ compared self.system while __hash__
+    used hostname, breaking the data-model contract.
+    """
+    t1 = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+    t2 = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+    t1.system = MagicMock()
+    t2.system = MagicMock()  # different system instance
+
+    assert t1 == t2
+    assert hash(t1) == hash(t2)
+
+
+def test_target_eq_different_hostname(mock_config):
+    """Targets with different hostnames must be unequal."""
+    t1 = Target(mock_config, "host1.example.com")  # type: ignore[arg-type]
+    t2 = Target(mock_config, "host2.example.com")  # type: ignore[arg-type]
+
+    assert t1 != t2
+    assert hash(t1) != hash(t2)
+
+
+def test_target_eq_non_target_returns_notimplemented(mock_config):
+    """Comparing Target to a non-Target must defer to the other side."""
+    t = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+
+    # __eq__ should return NotImplemented; the public `==` falls back to
+    # identity comparison and yields False.
+    assert t.__eq__("host.example.com") is NotImplemented
+    assert (t == "host.example.com") is False
+
+
+def test_target_set_dedup_by_hostname(mock_config):
+    """Two Target objects with the same hostname collapse in a set."""
+    t1 = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+    t2 = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+
+    assert len({t1, t2}) == 1
