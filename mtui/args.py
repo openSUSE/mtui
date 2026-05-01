@@ -31,8 +31,8 @@ def get_parser(sys) -> ArgumentParser:
         "--sut",
         type=SUTParse,
         action="append",
-        help="cumulatively override default hosts from template \n"
-        "format: hostname,hostname2",
+        help="cumulatively override default hosts from template "
+        "(format: hostname,hostname2)",
     )
     parser.add_argument(
         "-p",
@@ -77,7 +77,7 @@ def get_parser(sys) -> ArgumentParser:
         "--auto-review-id",
         metavar="RequestReviewID",
         type=AutoOBSUpdateID,
-        help="OBS request review id\nexample: SUSE:Maintenance:1:1",
+        help="OBS request review id (example: SUSE:Maintenance:1:1)",
         dest="update",
     )
     group.add_argument(
@@ -85,7 +85,7 @@ def get_parser(sys) -> ArgumentParser:
         "--kernel-review-id",
         metavar="RequestReviewID",
         type=KernelOBSUpdateID,
-        help="OBS kernel/live-patch request review id\nexample: SUSE:Maintenance:1:1",
+        help="OBS kernel/live-patch request review id (example: SUSE:Maintenance:1:1)",
         dest="update",
     )
 
