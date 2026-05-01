@@ -236,13 +236,22 @@ class Connection:
                 sshlog = logging.getLogger(transport.get_log_channel())
                 sshlog.addHandler(logging.NullHandler())
             except Exception:
-                pass
+                logger.debug(
+                    "failed to attach NullHandler to paramiko log channel",
+                    exc_info=True,
+                )
             session = transport.open_session()
 
             # disable blocking and timeout to use the session in async mode
             session.setblocking(0)
             session.settimeout(0)
         except Exception:
+            logger.debug(
+                "failed to open new session on %s:%s",
+                self.hostname,
+                self.port,
+                exc_info=True,
+            )
             session = None
 
         return session
@@ -260,8 +269,12 @@ class Connection:
                 session.shutdown(2)
                 session.close()
             except Exception:
-                # pass all exceptions since the session is already closed or broken
-                pass
+                # session is already closed or broken; nothing to do beyond
+                # leaving a debug breadcrumb for diagnosis.
+                logger.debug(
+                    "ignoring error while closing already-broken session",
+                    exc_info=True,
+                )
 
     def __run_command(self, command: str) -> Channel | None:
         """Opens a new session and runs a command in it.
@@ -496,6 +509,12 @@ class Connection:
                     created = False
                     sftp = self.__sftp_reconnect()
                 except Exception:
+                    # Most commonly: directory already exists (sftp.mkdir
+                    # raises OSError on EEXIST). Treat as success but leave
+                    # a breadcrumb so unexpected failures are diagnosable.
+                    logger.debug(
+                        "sftp mkdir %s treated as success", path, exc_info=True
+                    )
                     created = True
 
         logger.debug(

@@ -259,7 +259,13 @@ class TargetLock:
             self.connection.sftp_remove(self.filename)
         except OSError as e:
             if e.errno == errno.ENOENT:
-                pass
+                logger.debug("lockfile %s already gone", self.filename)
+            else:
+                logger.debug(
+                    "ignoring OSError while removing lockfile %s",
+                    self.filename,
+                    exc_info=True,
+                )
         except Exception:
             logger.error("failed to remove lockfile")
             raise
