@@ -3,7 +3,6 @@
 import logging
 import sys
 from argparse import Namespace
-from contextlib import suppress
 from subprocess import CalledProcessError
 from typing import Literal
 
@@ -89,8 +88,10 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
 
     if args.sut:
         for x in args.sut:
-            with suppress(BaseException):
+            try:
                 prompt.do_add_host(x.print_args())
+            except ArgsParseFailureError as e:
+                logger.error("failed to add host %s: %s", x, e)
 
     if args.prerun:
         if args.prerun.is_file():
