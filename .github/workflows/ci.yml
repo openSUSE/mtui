@@ -34,6 +34,7 @@ jobs:
       - name: Set up python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
+           python-version: ${{ matrix.python-version }}
            cache: 'pip'
            cache-dependency-path: 'requirements_ci.txt'
       - run: pip3 install -r requirements_ci.txt
