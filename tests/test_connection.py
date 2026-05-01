@@ -116,3 +116,19 @@ def test_run_command_timeout(mock_ssh_client, mock_ssh_config, mock_path):
         pytest.raises(CommandTimeoutError),
     ):
         conn.run("sleep 10")
+
+
+def test_connection_invalid_port_warns_and_falls_back(
+    mock_ssh_client, mock_ssh_config, mock_path, caplog
+):
+    """Invalid SSH port string should log a warning and fall back to 22."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="mtui.connection"):
+        conn = Connection("test_host", "not-a-number", 300)
+
+    assert conn.port == 22
+    assert any(
+        "invalid SSH port" in rec.message and "not-a-number" in rec.message
+        for rec in caplog.records
+    )
