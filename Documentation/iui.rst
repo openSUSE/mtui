@@ -248,26 +248,6 @@ Unlocks given targets. Unlocks all if used without arguments.
   Force unlock - removes locks set by other users or sessions.
 
 
-EOF
-+++
-
-::
-
-    EOF [reboot | poweroff]
-
-Reboots or shuts down the refhosts.
-
-**Options:**
-
-.. option:: reboot
-
-  Reboots the refhosts.
-
-.. option:: poweroff
-
-  Shuts down the refhosts.
-
-
 Update Management
 *****************
 
@@ -531,52 +511,6 @@ Prints the command protocol from the specified hosts. This might be
 handy for the tester, as one can simply dump the command history
 to the reproducer section of the template.
 
-testsuite_run
-+++++++++++++
-
-::
-
-    testsuite_run [-t HOST] testsuite
-
-Runs a ctcs2 testsuite and saves logs to ``/var/log/qa/RRID`` on the target
-hosts. Results can be submitted with the `testsuite_submit`_ command.
-
-**Options:**
-
-.. option:: testsuite
-
-  Command to execute.
-
-
-testsuite_submit
-++++++++++++++++
-
-::
-
-    testsuite_submit [-t HOST] testsuite
-
-Submits the ctcs2 testsuite results to http://qadb.suse.de.
-The comment field is populated with some attributes like RRID or
-testsuite name, but can also be edited before the results get submitted.
-Submitting results to qadb requires the rd-qa NIS password.
-
-**Options:**
-
-.. option:: testsuite
-
-  Command executed by `testsuite_run`_.
-
-
-testsuite_list
-++++++++++++++
-
-::
-
-    testsuite_list [-t HOST]
-
-Lists available testsuites on the target hosts.
-
-
 Metadata Commands
 *****************
 
@@ -708,24 +642,24 @@ list_sessions
 Lists current active ssh sessions on target hosts.
 
 
-analyze-diff
+analyze_diff
 ++++++++++++
 
 ::
 
     analyze_diff
 
-Check source diff file for patches and prints them to user
+Check source diff file for patches and prints them to user.
 
 
-show-diff
+show_diff
 +++++++++
 
 ::
 
     show_diff
 
-Prints source.diff with pager to user
+Prints source.diff with pager to user.
 
 
 
@@ -821,7 +755,10 @@ exit, quit, EOF
 Disconnects from all hosts and exits the program.
 The tester is asked to save the XML log when exiting MTUI.
 
-.. tip:: Ctrl+D works too.
+``exit`` and ``EOF`` are aliases of ``quit``: ``exit`` is the friendly
+synonym, while ``EOF`` is the handler invoked by readline when stdin
+reaches end-of-file (typically pressing ``Ctrl-D`` at an empty prompt).
+All three accept the same optional ``reboot`` / ``poweroff`` argument.
 
 **Options:**
 
@@ -964,6 +901,19 @@ option is required.
 
   Message/comment to use for the rejection. Should be always given as the last
   part of the command.
+
+
+comment
++++++++
+
+::
+
+    comment
+
+Adds a comment to the currently loaded review request via OSC. The
+command takes no arguments; it prompts interactively for the comment
+text on stdin (``Comment:``). The comment is posted against the RRID
+of the loaded test report template.
 
 
 Other Commands
