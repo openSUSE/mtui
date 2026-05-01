@@ -134,17 +134,27 @@ class Target:
         """Reloads the system information for the target host."""
         self.system, self.transactional = parse_system(self.connection)
 
-    def __eq__(self, other) -> bool:
-        """Checks if two `Target` objects are equal."""
-        return self.system == other.system
+    def __eq__(self, other: object) -> bool:
+        """Checks if two `Target` objects are equal.
+
+        Equality is keyed on ``hostname`` so the contract matches
+        ``__hash__``. Comparing against a non-``Target`` returns
+        ``NotImplemented`` per the Python data model.
+        """
+        if not isinstance(other, Target):
+            return NotImplemented
+        return self.hostname == other.hostname
 
     def __hash__(self) -> int:
         """Hashes the target by hostname."""
         return hash(self.hostname)
 
-    def __ne__(self, other) -> bool:
+    def __ne__(self, other: object) -> bool:
         """Checks if two `Target` objects are not equal."""
-        return self.system != other.system
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return NotImplemented  # type: ignore[return-value]
+        return not result
 
     def query_versions(self, packages=None) -> None:
         """Queries the package versions for the target host.
