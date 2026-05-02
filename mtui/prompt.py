@@ -9,7 +9,7 @@ import cmd
 import readline
 import subprocess
 from collections.abc import Callable
-from logging import getLogger
+from logging import DEBUG, getLogger
 from pathlib import Path
 from typing import Any
 
@@ -208,9 +208,15 @@ class CommandPrompt(cmd.Cmd):
             except QuitLoopError:
                 return
             except (messages.UserMessage, subprocess.CalledProcessError) as e:
-                logger.exception(e)
-            except Exception:
-                logger.exception("Unexpected error")
+                if logger.isEnabledFor(DEBUG):
+                    logger.exception(e)
+                else:
+                    logger.error(e)
+            except Exception as e:
+                if logger.isEnabledFor(DEBUG):
+                    logger.exception("Unexpected error")
+                else:
+                    logger.error("Unexpected error: %s", e)
 
     def postcmd(self, stop: bool, line: str) -> bool:
         """A hook that is called after a command is executed.
