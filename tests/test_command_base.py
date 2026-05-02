@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from mtui.argparse import ArgsParseFailureError
 from mtui.commands._command import Command
 from mtui.messages import HostIsNotConnectedError
 from mtui.target.hostgroup import HostsGroup
@@ -63,6 +64,24 @@ class TestParseArgs:
         sys = MagicMock()
         result = ConcreteCommandWithHosts.parse_args("", sys)
         assert result.hosts is None
+
+    def test_invalid_shlex_raises_argsparsefailure(self):
+        """Stray backslash must surface as ArgsParseFailureError, not ValueError."""
+        sys = MagicMock()
+        with pytest.raises(ArgsParseFailureError):
+            ConcreteCommand.parse_args("foo\\", sys)
+
+    def test_invalid_shlex_unbalanced_quote(self):
+        """Unbalanced quote must surface as ArgsParseFailureError."""
+        sys = MagicMock()
+        with pytest.raises(ArgsParseFailureError):
+            ConcreteCommand.parse_args('foo "bar', sys)
+
+    def test_quoted_args_preserved(self):
+        """Quoted arguments containing whitespace stay together (the original commit's intent)."""
+        sys = MagicMock()
+        result = ConcreteCommand.parse_args('"my name"', sys)
+        assert result.name == "my name"
 
 
 # --- argparser ---

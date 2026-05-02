@@ -67,8 +67,11 @@ class Command(ABC):
             A namespace containing the parsed arguments.
 
         """
-        arg = shlex.split(args)
         p = cls.argparser(sys)
+        try:
+            arg = shlex.split(args)
+        except ValueError as e:
+            p.error(f"invalid syntax: {e}")
         pa = p.parse_args(arg)
 
         if cls._check_subparser and not hasattr(pa, cls._check_subparser):
