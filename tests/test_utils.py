@@ -79,18 +79,32 @@ def test_atomic_write(create_temp):
 
 def test_colors():
     """Test ANSI color utils."""
-    text = "some text"
-    assert utils.green(text) == f"\033[1;32m{text!s}\033[1;m\033[0m"
-    assert utils.red(text) == f"\033[1;31m{text!s}\033[1;m\033[0m"
-    assert utils.yellow(text) == f"\033[1;33m{text!s}\033[1;m\033[0m"
-    assert utils.blue(text) == f"\033[1;34m{text!s}\033[1;m\033[0m"
+    from mtui import colorctl
+
+    saved = colorctl.get_mode()
+    colorctl.set_mode("always")
+    try:
+        text = "some text"
+        assert utils.green(text) == f"\033[1;32m{text!s}\033[1;m\033[0m"
+        assert utils.red(text) == f"\033[1;31m{text!s}\033[1;m\033[0m"
+        assert utils.yellow(text) == f"\033[1;33m{text!s}\033[1;m\033[0m"
+        assert utils.blue(text) == f"\033[1;34m{text!s}\033[1;m\033[0m"
+    finally:
+        colorctl.set_mode(saved)
 
 
 def test_filter_ansi():
     """Test ANSI filter."""
-    text = "some text"
-    ansi_text = utils.green(text)
-    assert utils.filter_ansi(ansi_text) == text
+    from mtui import colorctl
+
+    saved = colorctl.get_mode()
+    colorctl.set_mode("always")
+    try:
+        text = "some text"
+        ansi_text = utils.green(text)
+        assert utils.filter_ansi(ansi_text) == text
+    finally:
+        colorctl.set_mode(saved)
 
 
 def test_timestamp():
