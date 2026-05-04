@@ -1,5 +1,7 @@
 """Defines the command-line arguments for the mtui tool."""
 
+import argparse
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from mtui import __version__
@@ -7,6 +9,49 @@ from mtui import __version__
 from .argparse import ArgumentParser
 from .types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 from .utils import SUTParse
+
+
+def _dep_version(name: str) -> str:
+    """Return the installed version of ``name`` or ``"unknown"``."""
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "unknown"
+
+
+class _VerboseVersionAction(argparse.Action):
+    """``--version`` action printing mtui + key dependency versions."""
+
+    def __init__(  # noqa: D401, ANN001
+        self,
+        option_strings,
+        dest=argparse.SUPPRESS,
+        default=argparse.SUPPRESS,
+        help=None,  # noqa: A002
+    ):
+        super().__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            nargs=0,
+            help=help,
+        )
+
+    def __call__(self, parser, namespace, values, option_string=None):  # noqa: ANN001, D401
+        import sys as _sys
+
+        py = ".".join(str(p) for p in _sys.version_info[:3])
+        lines = [
+            f"mtui {__version__}",
+            f"Python {py}",
+            f"paramiko {_dep_version('paramiko')}",
+            f"openqa-client {_dep_version('openqa_client')}",
+        ]
+        # ArgumentParser stores the (potentially mocked) sys module so
+        # tests / non-default invocations can capture output. Write to
+        # the same stream the rest of the parser uses.
+        parser.sys.stdout.write("\n".join(lines) + "\n")
+        parser.exit(0)
 
 
 def get_parser(sys) -> ArgumentParser:
@@ -63,9 +108,8 @@ def get_parser(sys) -> ArgumentParser:
     parser.add_argument(
         "-V",
         "--version",
-        action="version",
-        version=f"{__version__}",
-        help="print version and exit",
+        action=_VerboseVersionAction,
+        help="print mtui, Python, paramiko and openqa-client versions, then exit",
     )
     parser.add_argument(
         "-c", "--config", type=Path, default=None, help="Override default config path"

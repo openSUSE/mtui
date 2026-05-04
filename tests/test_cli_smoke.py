@@ -59,7 +59,7 @@ def test_cli_help_exits_zero(mtui_argv):
 
 @pytest.mark.integration
 def test_cli_version_exits_zero(mtui_argv):
-    """``mtui -V`` exits 0 and prints a non-empty version string."""
+    """``mtui -V`` exits 0 and prints mtui + interpreter + dep versions."""
     result = subprocess.run(
         [*mtui_argv, "-V"],
         capture_output=True,
@@ -68,4 +68,12 @@ def test_cli_version_exits_zero(mtui_argv):
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip(), "version output should be non-empty"
+    out = result.stdout
+    assert out.strip(), "version output should be non-empty"
+    # All four expected lines must be present, in order.
+    lines = out.strip().splitlines()
+    assert len(lines) >= 4, out
+    assert lines[0].startswith("mtui ")
+    assert lines[1].startswith("Python ")
+    assert lines[2].startswith("paramiko ")
+    assert lines[3].startswith("openqa-client ")
