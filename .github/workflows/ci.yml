@@ -8,7 +8,7 @@ jobs:
     name: MTUI lint + format
     steps:
       - uses: actions/checkout@v6
-      - uses:  astral-sh/ruff-action@v3
+      - uses: astral-sh/ruff-action@v4.0.0
         with:
           args: "--version"
       - name: Check ruff style 
@@ -20,7 +20,11 @@ jobs:
     name: MTUI typecheck
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync --extra norpm --group dev
       - name: Run ty check
         run: uv run ty check
   test:
@@ -31,15 +35,15 @@ jobs:
         python-version: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v6
-      - name: Set up python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
         with:
-           python-version: ${{ matrix.python-version }}
-           cache: 'pip'
-           cache-dependency-path: 'requirements_ci.txt'
-      - run: pip3 install -r requirements_ci.txt
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync --extra norpm --group dev
       - name: Test run ${{ matrix.python-version }}
-        run: python3 -m pytest -v --cov=./mtui --cov-report=xml --cov-report=term --junitxml=junit.xml -o junit_family=legacy
+        run: uv run pytest -v --cov=./mtui --cov-report=xml --cov-report=term --junitxml=junit.xml -o junit_family=legacy
       - name: Upload coverage to CodeCov
         uses: codecov/codecov-action@v5
         if: ${{ matrix.python-version == '3.13' }} 
