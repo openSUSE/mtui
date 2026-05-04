@@ -1,0 +1,23 @@
+---
+# Run: pre-commit install (once per checkout) and the hooks below
+# fire on every git commit. Run pre-commit run --all-files to
+# sweep the whole tree.
+#
+# Versions are pinned to match the resolved versions in uv.lock so
+# local hooks and CI agree. Bump alongside the dev dependency group.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff-format
+      - id: ruff-check
+        args: [--fix]
+
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty type check
+        entry: uv run ty check
+        language: system
+        types: [python]
+        pass_filenames: false
