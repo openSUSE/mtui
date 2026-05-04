@@ -35,6 +35,7 @@ keyring = ["keyring"]
 norpm = ["version_utils"]
 notify = ["notify"]
 rpm = ["rpm"]
+completion = ["argcomplete>=3.0"]
 
 [dependency-groups]
 dev = [

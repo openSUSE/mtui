@@ -4,6 +4,11 @@ import argparse
 import sys
 from typing import NoReturn
 
+try:  # optional 'completion' extra
+    import argcomplete as _argcomplete  # ty: ignore[unresolved-import]
+except ImportError:  # pragma: no cover - exercised only without the extra
+    _argcomplete = None
+
 
 class ArgsParseFailureError(RuntimeError):
     """Exception raised when argument parsing fails."""
@@ -54,6 +59,17 @@ class ArgumentParser(argparse.ArgumentParser):
 
         """
         super().print_usage(self.sys.stdout)
+
+    def parse_args(self, args=None, namespace=None):  # noqa: D401, ANN001
+        """Run argcomplete (if installed) before delegating to argparse.
+
+        ``argcomplete.autocomplete`` is a no-op unless the special
+        ``_ARGCOMPLETE`` environment variable is set by the calling
+        shell, so it is safe to call unconditionally.
+        """
+        if _argcomplete is not None:
+            _argcomplete.autocomplete(self)
+        return super().parse_args(args=args, namespace=namespace)
 
     def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
         """Overrides the default exit behavior to raise an exception.
