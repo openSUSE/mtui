@@ -17,6 +17,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14"
 ]
+requires-python = ">=3.11"
 dependencies = [
   "openqa-client",
   "paramiko",
@@ -107,6 +108,24 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108", "ARG", "SLF001"]
 "Documentation/conf.py" = ["INP001", "ERA001", "A001", "D"]
+
+[tool.ty.environment]
+# Pin to the lowest version we support so we catch features that
+# would only work on newer interpreters; the CI matrix exercises
+# 3.11-3.14 separately.
+python-version = "3.11"
+
+[tool.ty.terminal]
+# Promote warnings to errors so 'ty check' is a hard gate.
+error-on-warning = true
+
+# Strict-mode opt-in for well-typed surfaces. Keep the default rule
+# set for the rest of mtui until the Phase 5 refactors land.
+[[tool.ty.overrides]]
+include = ["mtui/types/**", "mtui/connector/**"]
+
+[tool.ty.overrides.rules]
+all = "error"
 
 [tool.setuptools.packages.find]
 where = ["."]
