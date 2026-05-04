@@ -89,6 +89,36 @@ MTUI bugs are reported via this URL. Used by the `report-bug`_ MTUI command.
 .. _report-bug: http://qam.suse.de/projects/mtui/latest/iui.html#report-bug
 
 
+``mtui.ssh_strict_host_key_checking``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     enum: ``auto_add``, ``warn``, ``reject``
+  | **default**
+  |     ``auto_add``
+
+Selects the paramiko `MissingHostKeyPolicy
+<https://docs.paramiko.org/en/stable/api/client.html#paramiko.client.MissingHostKeyPolicy>`_
+used when MTUI connects to an SSH host whose key is not yet in the
+local ``known_hosts`` file.
+
+``auto_add``
+    Silently add the host key to ``known_hosts`` and proceed
+    (paramiko's ``AutoAddPolicy``). This is the historical MTUI default
+    and is preserved for backward compatibility.
+
+``warn``
+    Log a warning and proceed without storing the key
+    (``WarningPolicy``). Subsequent connections will warn again.
+
+``reject``
+    Refuse the connection (``RejectPolicy``); the SSH operation fails
+    with a ``SSHException``.
+
+Unknown values are reported with a warning and fall back to the default
+``auto_add`` behaviour.
+
+
 ``mtui.tempdir``
 ~~~~~~~~~~~~~~~~
 
