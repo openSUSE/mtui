@@ -2,7 +2,7 @@ pull_request_rules:
   - name: automatic merge
     conditions:
       - and: &base_checks
-        - base=master
+        - base=main
         - -label~=^acceptance-tests-needed|not-ready
         # wait explicitly for one of the final checks to show up to be on the
         # safe side even in case of checks not reporting back at all
@@ -25,7 +25,7 @@ pull_request_rules:
       - and:
         # mergify config checks needs at least two rules in "and" so we repeat
         # one from the base checks
-        - base=master
+        - base=main
         - "label=merge-fast"
     actions: *merge
   - name: ask to resolve conflict
