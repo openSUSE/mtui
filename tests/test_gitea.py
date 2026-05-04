@@ -210,7 +210,8 @@ class TestGiteaOperations:
         body = responses.calls[0].request.body
         if isinstance(body, bytes):
             body = body.decode("utf-8")
-        assert body is not None and "test comment body" in body
+        assert body is not None
+        assert "test comment body" in body
 
     @responses.activate
     def test_get_hash(self, gitea):

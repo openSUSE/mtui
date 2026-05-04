@@ -23,6 +23,7 @@ def _invoke_args() -> list[str] | None:
         capture_output=True,
         text=True,
         timeout=15,
+        check=False,
     )
     if probe.returncode == 0:
         return [sys.executable, "-m", "mtui"]
@@ -50,6 +51,7 @@ def test_cli_help_exits_zero(mtui_argv):
         capture_output=True,
         text=True,
         timeout=15,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "usage:" in result.stdout.lower()
@@ -63,6 +65,7 @@ def test_cli_version_exits_zero(mtui_argv):
         capture_output=True,
         text=True,
         timeout=15,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip(), "version output should be non-empty"
