@@ -14,60 +14,52 @@ from shutil import move
 from tempfile import mkstemp
 from typing import Any
 
+from .colorctl import colors_enabled
 from .messages import TestReportNotLoadedError
 
-if os.getenv("COLOR", "always") == "always":
 
-    def green(xs: str) -> str:
-        """Wraps a string in ANSI escape codes to make it green.
+def green(xs: str) -> str:
+    """Wraps a string in ANSI escape codes to make it green.
 
-        Args:
-            xs: The string to color.
+    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
+    the input unchanged when colour is disabled.
+    """
+    if not colors_enabled():
+        return str(xs)
+    return f"\033[1;32m{xs!s}\033[1;m\033[0m"
 
-        Returns:
-            The colorized string.
 
-        """
-        return f"\033[1;32m{xs!s}\033[1;m\033[0m"
+def red(xs: str) -> str:
+    """Wraps a string in ANSI escape codes to make it red.
 
-    def red(xs: str) -> str:
-        """Wraps a string in ANSI escape codes to make it red.
+    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
+    the input unchanged when colour is disabled.
+    """
+    if not colors_enabled():
+        return str(xs)
+    return f"\033[1;31m{xs!s}\033[1;m\033[0m"
 
-        Args:
-            xs: The string to color.
 
-        Returns:
-            The colorized string.
+def yellow(xs: str) -> str:
+    """Wraps a string in ANSI escape codes to make it yellow.
 
-        """
-        return f"\033[1;31m{xs!s}\033[1;m\033[0m"
+    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
+    the input unchanged when colour is disabled.
+    """
+    if not colors_enabled():
+        return str(xs)
+    return f"\033[1;33m{xs!s}\033[1;m\033[0m"
 
-    def yellow(xs: str) -> str:
-        """Wraps a string in ANSI escape codes to make it yellow.
 
-        Args:
-            xs: The string to color.
+def blue(xs: str) -> str:
+    """Wraps a string in ANSI escape codes to make it blue.
 
-        Returns:
-            The colorized string.
-
-        """
-        return f"\033[1;33m{xs!s}\033[1;m\033[0m"
-
-    def blue(xs: str) -> str:
-        """Wraps a string in ANSI escape codes to make it blue.
-
-        Args:
-            xs: The string to color.
-
-        Returns:
-            The colorized string.
-
-        """
-        return f"\033[1;34m{xs!s}\033[1;m\033[0m"
-
-else:
-    green = red = yellow = blue = lambda xs: str(xs)
+    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
+    the input unchanged when colour is disabled.
+    """
+    if not colors_enabled():
+        return str(xs)
+    return f"\033[1;34m{xs!s}\033[1;m\033[0m"
 
 
 def prompt_user(text: str, options: Collection[str], interactive: bool = True) -> bool:

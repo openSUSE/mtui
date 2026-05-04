@@ -3,6 +3,8 @@
 import inspect
 import logging
 
+from .colorctl import colors_enabled
+
 # ANSI color offsets (added to 30 to form the foreground color escape code).
 # Positions matter: only RED..BLUE are referenced, but the indexes determine
 # the resulting ANSI code (e.g. 30 + 1 = 31 = red).
@@ -35,11 +37,16 @@ class ColorFormatter(logging.Formatter):
     def formatColor(self, levelname: str) -> str:
         """Formats the log level name with ANSI color codes.
 
+        Honours the runtime colour mode (see :mod:`mtui.colorctl`):
+        when colour is disabled the level name is returned in its
+        plain lowercased form, with the DEBUG-only module/function
+        suffix preserved.
+
         Args:
             levelname: The name of the log level (e.g., 'INFO', 'DEBUG').
 
         Returns:
-            The colorized log level name.
+            The (optionally colorized) log level name.
 
         """
         if levelname == "DEBUG":
@@ -49,14 +56,19 @@ class ColorFormatter(logging.Formatter):
             else:
                 frame, function = frame_info
                 module = mo.__name__ if (mo := inspect.getmodule(frame)) else "unknown"
+            suffix = f" [{module!s}:{function!s}]"
+            if not colors_enabled():
+                return levelname.lower() + suffix
             return (
                 "\033[2K"
                 + COLOR_SEQ.format(30 + COLORS[levelname])
                 + levelname.lower()
                 + RESET_SEQ
-                + f" [{module!s}:{function!s}]"
+                + suffix
                 + RESET_SEQ
             )
+        if not colors_enabled():
+            return levelname.lower()
         return (
             "\033[2K"
             + COLOR_SEQ.format(30 + COLORS[levelname])

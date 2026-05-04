@@ -8,6 +8,7 @@ from typing import Literal
 
 from .argparse import ArgsParseFailureError
 from .args import get_parser
+from .colorctl import set_mode as set_color_mode
 from .colorlog import create_logger
 from .config import Config
 from .display import CommandPromptDisplay
@@ -33,6 +34,8 @@ def main() -> int:
         args = p.parse_args(sys.argv[1:])
     except ArgsParseFailureError as e:
         return e.status
+
+    set_color_mode(args.color)
 
     if args.noninteractive and not args.prerun:
         logger.error("--noninteractive makes no sense without --prerun")

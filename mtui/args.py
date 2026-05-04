@@ -70,6 +70,13 @@ def get_parser(sys) -> ArgumentParser:
     parser.add_argument(
         "-c", "--config", type=Path, default=None, help="Override default config path"
     )
+    parser.add_argument(
+        "--color",
+        choices=["auto", "always", "never"],
+        default="auto",
+        help="control coloured output: auto (default; on iff stderr is a "
+        "TTY and NO_COLOR is unset), always, or never",
+    )
     parser.add_argument("-g", "--gitea_token", type=str, help="Gitea Access Token")
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
