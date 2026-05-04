@@ -30,11 +30,18 @@ import mtui
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    "myst_parser",
     "sphinx.ext.autodoc",
     "sphinx.ext.doctest",
     "sphinx.ext.coverage",
     "sphinx.ext.viewcode",
 ]
+
+# README.md (included via myst_parser into index.rst) links to the sibling
+# Documentation/*.rst files using GitHub-style relative paths so they
+# render on github.com. Sphinx itself does not model those as cross-refs;
+# silence the noisy warnings rather than rewriting README.md.
+suppress_warnings = ["myst.xref_missing"]
 
 # The suffix of source filenames.
 source_suffix = ".rst"
