@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a defect in mtui
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in as much of the form
+        below as you can. For suspected security vulnerabilities, see
+        [SECURITY.md](../SECURITY.md) and report privately instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One- or two-sentence description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal command sequence (or `-p` prerun script) that triggers the bug.
+      placeholder: |
+        1. mtui -a SUSE:Maintenance:1:1
+        2. add_host …
+        3. update
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include relevant log output (run with `-d` for debug). Redact hostnames / secrets.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: mtui version
+      description: Output of `mtui -V`.
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: Output of `python3 --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS / distribution, install method (zypper / uv / pip from source), relevant config snippets (with secrets redacted).
