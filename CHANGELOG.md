@@ -32,6 +32,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   for adding a new command.
 - `Documentation/cfg.rst` documents the `ssh_strict_host_key_checking`
   option introduced in the Phase 2 release.
+- Project test coverage rose from 58 % to 67 % after a public-API safety
+  net was added for `mtui/config.py`, `mtui/prompt.py`, `mtui/refhost.py`,
+  `mtui/target/target.py`, `mtui/target/hostgroup.py` and
+  `mtui/connection.py`. The Codecov project floor is bumped from 56 % to
+  66 % (current − 1, ratchets upward); patch target stays at 80 %.
+
+### Known issues
+- A non-numeric value for `connection_timeout` (e.g.
+  `connection_timeout = abc` under `[mtui]`) crashes `Config.__init__`
+  with `ValueError` instead of falling back to the documented default of
+  300 seconds. Workaround: ensure the option is unset or numeric.
+- A bad value for the typed config options handled by
+  `configparser.getint` / `getboolean` (`refhosts.https_expiration`,
+  `template.smelt_threshold`, `mtui.chdir_to_template_dir`,
+  `mtui.use_keyring`) is silently replaced by the default with no log
+  message, due to a malformed format string in the error path. The
+  default behaviour is correct but the diagnostic is missing.
 
 ## [Phase 3] — CI / tooling
 
