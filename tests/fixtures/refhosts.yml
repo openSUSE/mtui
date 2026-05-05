@@ -1,0 +1,42 @@
+default:
+  - name: host-default-x86
+    arch: x86_64
+    product:
+      name: sles
+      version:
+        major: 15
+        minor: 5
+    addons:
+      - name: sdk
+        version:
+          major: 15
+          minor: 5
+  - name: host-default-aarch64
+    arch: aarch64
+    product:
+      name: sles
+      version:
+        major: 15
+        minor: 5
+  - name: host-default-noaddon
+    arch: x86_64
+    product:
+      name: sles
+      version:
+        major: 12
+        minor: sp4
+nuremberg:
+  - name: host-nbg-x86
+    arch: x86_64
+    product:
+      name: sles
+      version:
+        major: 15
+        minor: 5
+  - name: host-nbg-only-here
+    arch: ppc64le
+    product:
+      name: sles
+      version:
+        major: 15
+        minor: 5
