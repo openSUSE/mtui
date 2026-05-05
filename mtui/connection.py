@@ -114,7 +114,7 @@ class Connection:
         self.hostname = hostname
 
         try:
-            self.port = int(port)
+            self.port = int(port) if port else 22
         except ValueError:
             logger.warning(
                 "invalid SSH port %r for %s; falling back to 22",
