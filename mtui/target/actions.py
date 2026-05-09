@@ -13,6 +13,7 @@ from queue import Empty, Queue
 from threading import Lock
 from typing import Any
 
+from ..types import ExecutionMode
 from ..utils import prompt_user
 from . import Target
 
@@ -203,7 +204,7 @@ class RunCommand:
         lock = Lock()
 
         for target in self.targets:
-            if self.targets[target].exclusive:
+            if self.targets[target].mode is ExecutionMode.SERIAL:
                 serial[target] = self.targets[target]
             else:
                 parallel[target] = self.targets[target]

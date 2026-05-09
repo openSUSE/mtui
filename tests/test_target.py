@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.target import Target, TargetLockedError
-from mtui.types import HostLog, Package
+from mtui.types import ExecutionMode, HostLog, Package
 from mtui.types.product import Product
 from mtui.types.rpmver import RPMVersion
 
@@ -25,7 +25,7 @@ def test_target_init_defaults(mock_config):
     assert target.port == ""
     assert target.state == "enabled"
     assert target._timeout == 300
-    assert target.exclusive is False
+    assert target.mode is ExecutionMode.PARALLEL
     assert target.transactional is False
     assert target.packages == {}
 
@@ -61,9 +61,9 @@ def test_target_init_with_timeout(mock_config):
 
 
 def test_target_init_with_exclusive(mock_config):
-    """Test Target initialization with exclusive mode."""
-    target = Target(mock_config, "host.example.com", exclusive=True)  # type: ignore[arg-type]
-    assert target.exclusive is True
+    """Test Target initialization with serial execution mode."""
+    target = Target(mock_config, "host.example.com", mode=ExecutionMode.SERIAL)  # type: ignore[arg-type]
+    assert target.mode is ExecutionMode.SERIAL
 
 
 def test_target_init_custom_classes(mock_config):
@@ -348,7 +348,7 @@ def test_report_self_calls_sink(mock_target):
         mock_target.system,
         mock_target.transactional,
         mock_target.state,
-        mock_target.exclusive,
+        mock_target.mode,
     )
 
 

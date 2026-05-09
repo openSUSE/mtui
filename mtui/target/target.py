@@ -15,7 +15,7 @@ from ..checks import downgrade_checks, install_checks, prepare_checks, update_ch
 from ..config import Config
 from ..connection import CommandTimeoutError, Connection, policy_from_config
 from ..target.parsers import parse_system
-from ..types import HostLog, Package, System, TargetState
+from ..types import ExecutionMode, HostLog, Package, System, TargetState
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
 from . import TargetLock, TargetLockedError
@@ -42,7 +42,7 @@ class Target:
         packages: dict[str, dict[str, str]] | None = None,
         state: TargetState | str = TargetState.ENABLED,
         timeout: int = 300,
-        exclusive: bool = False,
+        mode: ExecutionMode = ExecutionMode.PARALLEL,
         lock: type[TargetLock] = TargetLock,
         connection: type[Connection] = Connection,
     ) -> None:
@@ -54,7 +54,8 @@ class Target:
             packages: A dictionary of packages for the target.
             state: The initial state of the target.
             timeout: The command timeout for the target.
-            exclusive: Whether the target is in exclusive mode.
+            mode: Whether the target runs commands in parallel with the
+                rest of its group or holds the group in a serial barrier.
             lock: The lock class to use for the target.
             connection: The connection class to use for the target.
 
@@ -71,7 +72,7 @@ class Target:
         self.state: TargetState | str = TargetState(state)
         # default timeout for target, used only on connecting/reconnecting Target
         self._timeout = timeout
-        self.exclusive = exclusive
+        self.mode = mode
         self.connection: Connection
         self.transactional = False
         # helper for packages before system analysis
@@ -551,14 +552,17 @@ class Target:
         if self.connection:
             self.connection.close()
 
-    def report_self(self, sink: Callable[[str, System, bool, str, bool], None]) -> None:
+    def report_self(
+        self,
+        sink: Callable[[str, System, bool, TargetState | str, ExecutionMode], None],
+    ) -> None:
         """Reports the status of the target.
 
         Args:
             sink: The function to use for reporting.
 
         """
-        sink(self.hostname, self.system, self.transactional, self.state, self.exclusive)
+        sink(self.hostname, self.system, self.transactional, self.state, self.mode)
 
     def report_history(self, sink: Callable[[str, System, list[str]], None]) -> None:
         """Reports the history of the target.

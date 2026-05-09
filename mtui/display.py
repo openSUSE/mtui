@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import IO, Any
 
 from .target.hostgroup import HostsGroup
-from .types import RPMVersion, System, TargetState
+from .types import ExecutionMode, RPMVersion, System, TargetState
 from .utils import green, red, yellow
 
 
@@ -91,7 +91,7 @@ class CommandPromptDisplay:
         system: System,
         transactional: bool,
         state: TargetState | str,
-        exclusive: str,
+        mode: ExecutionMode,
     ) -> None:
         """Displays the status of a host.
 
@@ -100,10 +100,10 @@ class CommandPromptDisplay:
             system: The system information for the host.
             transactional: Whether the host is transactional.
             state: The state of the host (enabled, disabled, or dryrun).
-            exclusive: Whether the host is in exclusive mode.
+            mode: Whether the host runs in parallel or serial mode.
 
         """
-        mode = "serial" if exclusive else "parallel"
+        mode_label = mode.value
 
         match state:
             case TargetState.ENABLED:
@@ -116,7 +116,7 @@ class CommandPromptDisplay:
         trn = red("transactional") if transactional else green("standard     ")
 
         self.println(
-            f"{hostname:<20} ({system!s:<28}): {state:<8} - {trn:<15} - ({mode})"
+            f"{hostname:<20} ({system!s:<28}): {state:<8} - {trn:<15} - ({mode_label})"
         )
 
     def list_locks(self, hostname: str, system: System, lock) -> None:
