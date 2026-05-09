@@ -20,6 +20,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   GitHub issue templates and a pull-request template.
 
 ### Changed
+- `export` further condenses the openQA results section for incidents
+  loaded from the QEM Dashboard: zero counters are dropped from Summary
+  rows, the shared aggregate `BUILD` is hoisted into one header line,
+  all-passed groups are folded across architectures into a single row,
+  problem groups are sorted to the top, and the `Failed jobs:` subsection
+  is now nested under each group with the redundant
+  product/build/arch prefix removed and openQA URLs aligned. Cuts the
+  openQA section roughly to a third of its previous size.
+- `export` now condenses the openQA results section for incidents loaded
+  from the QEM Dashboard: passed jobs are collapsed into per-group counts
+  (version/flavor/arch for incident jobs, product/build/arch for aggregate
+  jobs), and only jobs whose result is `failed`, `incomplete` or
+  `timeout_exceeded` are listed individually under a `Failed jobs:`
+  subsection with a direct openQA URL. This shrinks the exported log from
+  hundreds of lines to a reviewable summary while keeping focus on
+  failures.
 - Documentation source switched from `README.rst` to `README.md` via
   `myst-parser`; `README.rst` has been removed.
 - Sphinx HTML theme switched to the built-in `alabaster`; copyright
