@@ -5,7 +5,7 @@ throughout the application.
 """
 
 from .commandlog import CommandLog
-from .enums import assignment, method
+from .enums import ExecutionMode, RequestKind, TargetState, assignment, method
 from .filelist import FileList
 from .hostlog import HostLog
 from .oqaresults import OpenQAResult, OpenQAResults
@@ -20,6 +20,7 @@ from .urls import URLs
 
 __all__ = [
     "CommandLog",
+    "ExecutionMode",
     "FileList",
     "HostLog",
     "OpenQAResult",
@@ -27,9 +28,11 @@ __all__ = [
     "Package",
     "Product",
     "RPMVersion",
+    "RequestKind",
     "RequestReviewID",
     "System",
     "TargetMeta",
+    "TargetState",
     "Test",
     "URLs",
     "assignment",
