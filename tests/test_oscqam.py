@@ -97,8 +97,8 @@ class TestOSCOperations:
 
     @patch("mtui.connector.oscqam.check_call")
     def test_no_skip_template_for_sle(self, mock_check_call, osc):
-        """Test --skip-template is NOT added for SLE kind."""
-        osc.rrid.kind = "SLE"
+        """Test --skip-template is NOT added for non-PI/non-SLFO kinds."""
+        osc.rrid.kind = RequestKind.MAINTENANCE
         osc.approve(["qam-sle"])
 
         cmd = mock_check_call.call_args[0][0]
