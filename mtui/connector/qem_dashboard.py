@@ -147,27 +147,29 @@ class DashboardAutoOpenQA:
         return normalized
 
     @staticmethod
-    def _has_passed_install_jobs(jobs) -> bool:
+    def _normalize_result(result: str | None) -> bool:
+        return result in ("passed", "softfailed")
+
+    @classmethod
+    def _has_passed_install_jobs(cls, jobs) -> bool:
         if jobs is None:
             return False
 
-        def normalize(result: str | None) -> bool:
-            return result in ("passed", "softfailed")
-
         return all(
-            normalize(job.get("result"))
+            cls._normalize_result(job.get("result"))
             for job in jobs
-            if job.get("test") in ["qam-incidentinstall", "qam-incidentinstall-ha"]
+            if "qam-incidentinstall" in job.get("test")
         )
 
     def _get_logs_url(self, jobs) -> list[URLs] | None:
         if not jobs:
             return None
+
         return [
             URLs(
-                str(job["settings"].get("DISTRI") or self.config.openqa_install_distri),
-                str(job["settings"].get("ARCH") or ""),
-                str(job["settings"].get("VERSION") or ""),
+                str(job["settings"].get("DISTRI", self.config.openqa_install_distri)),
+                str(job["settings"].get("ARCH", "")),
+                str(job["settings"].get("VERSION", "")),
                 join(
                     self.host,
                     "tests",
@@ -177,9 +179,10 @@ class DashboardAutoOpenQA:
                 ),
             )
             for job in jobs
-            if job.get("test") in ["qam-incidentinstall", "qam-incidentinstall-ha"]
-            and job.get("result") in ("passed", "softfailed")
-            and job.get("id") is not None
+            if (
+                "qam-incidentinstall" in job.get("test")
+                and self._normalize_result(job.get("result"))
+            )
         ]
 
     def _pretty_print(self, jobs) -> list[str]:
