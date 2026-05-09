@@ -174,7 +174,7 @@ def test_run_dryrun_does_not_execute(mock_config):
     """Test run() in dryrun state does not execute command."""
     target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
-    target.state = "dryrun"  # ty: ignore[invalid-assignment]
+    target.state = "dryrun"
 
     target.run("rm -rf /")
 
@@ -553,7 +553,7 @@ def test_query_versions_enabled_updates_packages(mock_target, monkeypatch):
 
 def test_query_versions_dryrun_logs_and_appends(mock_config):
     target = Target(mock_config, "h.example.com")  # type: ignore[arg-type]
-    target.state = "dryrun"  # ty: ignore[invalid-assignment]
+    target.state = "dryrun"
     target.packages = {"bash": Package("bash")}
     target.query_versions()
     assert target.lastout() == "dryrun\n"
