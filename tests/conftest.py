@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.types import HostLog, Package, Product
+from mtui.types import HostLog, Package, Product, RequestKind
 from mtui.types.rpmver import RPMVersion
 from mtui.types.systems import System
 
@@ -133,6 +133,6 @@ def mock_rrid():
     rrid = MagicMock()
     rrid.maintenance_id = "12345"
     rrid.review_id = "67890"
-    rrid.kind = "SLE"
+    rrid.kind = RequestKind.MAINTENANCE
     rrid.__str__ = lambda self: "SUSE:Maintenance:12345:67890"
     return rrid
