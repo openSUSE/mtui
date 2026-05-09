@@ -3,6 +3,7 @@
 from logging import getLogger
 
 from mtui.commands import Command
+from mtui.types import ExecutionMode
 from mtui.utils import complete_choices
 
 logger = getLogger("mtui.command.hoststate")
@@ -35,18 +36,16 @@ class HostState(Command):
         """Executes the `set_host_state` command."""
         targets = self.parse_hosts(enabled=False)
         state = self.args.state[0]
-        if state in ["serial", "parallel"]:
-            if state == "serial":
-                exclusive = True
-            elif state == "parallel":
-                exclusive = False
-            for target in targets:
-                logger.info("Setting host %s mode to %s", target, state)
-                targets[target].exclusive = exclusive
-        else:
-            for target in targets:
-                logger.info("Setting host %s state to %s", target, state)
-                targets[target].state = state
+        match state:
+            case "serial" | "parallel":
+                mode = ExecutionMode(state)
+                for target in targets:
+                    logger.info("Setting host %s mode to %s", target, state)
+                    targets[target].mode = mode
+            case _:
+                for target in targets:
+                    logger.info("Setting host %s state to %s", target, state)
+                    targets[target].state = state
 
     @staticmethod
     def complete(state, text, line, begidx, endidx):

@@ -45,7 +45,7 @@ class ExecutionMode(Enum):
 
     Plain :class:`Enum` (not :class:`StrEnum`): this concept was previously
     encoded as ``Target.exclusive: bool`` so there is no legacy string
-    surface to preserve.
+    surface to preserve. Migrated to ``Target.mode`` in the same change.
     """
 
     PARALLEL = "parallel"

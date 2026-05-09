@@ -1,7 +1,7 @@
 from io import StringIO
 
 from mtui import display
-from mtui.types import System
+from mtui.types import ExecutionMode, System
 
 
 class MockSystem(System):
@@ -50,7 +50,7 @@ def test_list_host():
     output = StringIO()
     d = display.CommandPromptDisplay(output)
     system = MockSystem("test_system")
-    d.list_host("test_host", system, False, "enabled", "")
+    d.list_host("test_host", system, False, "enabled", ExecutionMode.PARALLEL)
     output_str = output.getvalue()
     assert "test_host" in output_str
     assert "Enabled" in output_str
