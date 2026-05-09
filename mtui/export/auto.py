@@ -1,5 +1,6 @@
 """An exporter for the automatic workflow."""
 
+import ssl
 from http.client import RemoteDisconnected
 from itertools import zip_longest
 from logging import getLogger
@@ -12,6 +13,8 @@ from mtui.types import FileList
 from .base import BaseExport
 
 logger = getLogger("mtui.export.auto")
+
+no_verify = ssl._create_unverified_context()  # noqa: SLF001
 
 
 class AutoExport(BaseExport):
@@ -61,9 +64,17 @@ class AutoExport(BaseExport):
             with urlopen(url.url) as log:
                 t = log.readlines()
             return [x.decode() for x in t]
-        except (RemoteDisconnected, HTTPError, URLError):
+        except (RemoteDisconnected, HTTPError):
             logger.error("log %s failed to download", url.url)
             return []
+        except URLError:
+            try:
+                with urlopen(url.url, context=no_verify) as log:
+                    t = log.readlines()
+                return [x.decode() for x in t]
+            except (RemoteDisconnected, HTTPError, URLError):
+                logger.error("log %s failed to download", url.url)
+                return []
 
     def run(self, *args, **kwds) -> FileList | list[str]:
         """Runs the exporter.
