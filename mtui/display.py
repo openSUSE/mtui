@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import IO, Any
 
 from .target.hostgroup import HostsGroup
-from .types import RPMVersion, System
+from .types import RPMVersion, System, TargetState
 from .utils import green, red, yellow
 
 
@@ -90,7 +90,7 @@ class CommandPromptDisplay:
         hostname: str,
         system: System,
         transactional: bool,
-        state: str,
+        state: TargetState | str,
         exclusive: str,
     ) -> None:
         """Displays the status of a host.
@@ -105,12 +105,13 @@ class CommandPromptDisplay:
         """
         mode = "serial" if exclusive else "parallel"
 
-        if state == "enabled":
-            state = green("Enabled")
-        elif state == "dryrun":
-            state = yellow("Dryrun")
-        else:
-            state = red("Disabled")
+        match state:
+            case TargetState.ENABLED:
+                state = green("Enabled")
+            case TargetState.DRYRUN:
+                state = yellow("Dryrun")
+            case _:
+                state = red("Disabled")
 
         trn = red("transactional") if transactional else green("standard     ")
 

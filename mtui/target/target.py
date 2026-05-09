@@ -7,7 +7,7 @@ from logging import getLogger
 from pathlib import Path
 from string import Template
 from traceback import format_exc
-from typing import Any, Literal, final
+from typing import Any, final
 
 from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
@@ -15,7 +15,7 @@ from ..checks import downgrade_checks, install_checks, prepare_checks, update_ch
 from ..config import Config
 from ..connection import CommandTimeoutError, Connection, policy_from_config
 from ..target.parsers import parse_system
-from ..types import HostLog, Package, System
+from ..types import HostLog, Package, System, TargetState
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
 from . import TargetLock, TargetLockedError
@@ -40,7 +40,7 @@ class Target:
         config: Config,
         hostname: str,
         packages: dict[str, dict[str, str]] | None = None,
-        state: Literal["enabled", "disabled", "serial", "parallel"] = "enabled",
+        state: TargetState | str = TargetState.ENABLED,
         timeout: int = 300,
         exclusive: bool = False,
         lock: type[TargetLock] = TargetLock,
@@ -68,7 +68,7 @@ class Target:
         self.TargetLock = lock
         self.Connection = connection
 
-        self.state = state
+        self.state: TargetState | str = TargetState(state)
         # default timeout for target, used only on connecting/reconnecting Target
         self._timeout = timeout
         self.exclusive = exclusive
@@ -174,15 +174,16 @@ class Target:
         """
         if packages is None:
             packages = list(self.packages.keys())
-        if self.state == "enabled":
-            pvs = self.query_package_versions(packages)
-            for p, v in pvs.items():
-                self.packages[p].current = v
-        elif self.state == "dryrun":
-            logger.info('dryrun: %s running "rpm -q %s"', self.hostname, packages)
-            self.out.append([f"rpm -q {packages}", "dryrun\n", "", 0, 0])
-        elif self.state == "disabled":
-            self.out.append(["", "", "", 0, 0])
+        match self.state:
+            case TargetState.ENABLED:
+                pvs = self.query_package_versions(packages)
+                for p, v in pvs.items():
+                    self.packages[p].current = v
+            case TargetState.DRYRUN:
+                logger.info('dryrun: %s running "rpm -q %s"', self.hostname, packages)
+                self.out.append([f"rpm -q {packages}", "dryrun\n", "", 0, 0])
+            case TargetState.DISABLED:
+                self.out.append(["", "", "", 0, 0])
 
     def query_package_versions(
         self, packages: list[str]
@@ -282,40 +283,45 @@ class Target:
             lock: An optional lock to use.
 
         """
-        if self.state == "enabled":
-            logger.debug('%s: running "%s"', self.hostname, command)
-            time_before = timestamp()
-            try:
-                exitcode = self.connection.run(command, lock)
-            except CommandTimeoutError:
-                logger.critical('%s: command "%s" timed out', self.hostname, command)
-                exitcode = -1
-            except AssertionError:
-                logger.debug("zombie command terminated")
-                logger.debug(format_exc())
-                return
-            except Exception:
-                # failed to run command
-                logger.error('%s: failed to run command "%s"', self.hostname, command)
-                exitcode = -1
+        match self.state:
+            case TargetState.ENABLED:
+                logger.debug('%s: running "%s"', self.hostname, command)
+                time_before = timestamp()
+                try:
+                    exitcode = self.connection.run(command, lock)
+                except CommandTimeoutError:
+                    logger.critical(
+                        '%s: command "%s" timed out', self.hostname, command
+                    )
+                    exitcode = -1
+                except AssertionError:
+                    logger.debug("zombie command terminated")
+                    logger.debug(format_exc())
+                    return
+                except Exception:
+                    # failed to run command
+                    logger.error(
+                        '%s: failed to run command "%s"', self.hostname, command
+                    )
+                    exitcode = -1
 
-            time_after = timestamp()
-            runtime = int(time_after) - int(time_before)
-            # this is wrong
-            self.out.append(
-                [
-                    command,
-                    self.connection.stdout,
-                    self.connection.stderr,
-                    exitcode,
-                    runtime,
-                ]
-            )
-        elif self.state == "dryrun":
-            logger.info('dryrun: %s running "%s"', self.hostname, command)
-            self.out.append([command, "dryrun\n", "", 0, 0])
-        elif self.state == "disabled":
-            self.out.append(["", "", "", 0, 0])
+                time_after = timestamp()
+                runtime = int(time_after) - int(time_before)
+                # this is wrong
+                self.out.append(
+                    [
+                        command,
+                        self.connection.stdout,
+                        self.connection.stderr,
+                        exitcode,
+                        runtime,
+                    ]
+                )
+            case TargetState.DRYRUN:
+                logger.info('dryrun: %s running "%s"', self.hostname, command)
+                self.out.append([command, "dryrun\n", "", 0, 0])
+            case TargetState.DISABLED:
+                self.out.append(["", "", "", 0, 0])
 
     def shell(self) -> None:
         """Spawns a shell on the target host."""
