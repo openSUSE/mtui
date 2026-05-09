@@ -50,6 +50,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   message, due to a malformed format string in the error path. The
   default behaviour is correct but the diagnostic is missing.
 
+### Fixed
+- `Target.state` is now validated at construction; previously the
+  Literal type annotation listed `serial`/`parallel` (which are not
+  valid states, only execution modes) and omitted `dryrun` (which is).
+  The C9 refactor introduces a `TargetState` enum that rejects invalid
+  values with a clear `ValueError` instead of letting them sit in the
+  field and silently misroute downstream branches.
+
 ## [Phase 3] — CI / tooling
 
 ### Added
