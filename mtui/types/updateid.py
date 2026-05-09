@@ -29,6 +29,7 @@ from ..template.sltestreport import SLTestReport
 from ..template.testreport import TestReport
 from ..utils import prompt_user
 from . import RequestReviewID
+from .enums import RequestKind
 
 logger = getLogger("mtui.types.updateid")
 
@@ -138,9 +139,9 @@ class UpdateID(ABC):
             The `TestReport` class for the given ID.
 
         """
-        if id_.kind == "SLFO":
+        if id_.kind is RequestKind.SLFO:
             return SLTestReport
-        if id_.kind == "PI":
+        if id_.kind is RequestKind.PI:
             return PITestReport
         return OBSTestReport
 

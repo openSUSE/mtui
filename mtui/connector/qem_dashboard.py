@@ -7,7 +7,7 @@ from typing import Any, Self
 
 import requests
 
-from ..types import RequestReviewID, URLs
+from ..types import RequestKind, RequestReviewID, URLs
 
 logger = getLogger("mtui.connector.qem_dashboard")
 
@@ -75,7 +75,7 @@ class QEMIncident:
 
     @staticmethod
     def _incident_number(rrid: RequestReviewID) -> str | int:
-        if rrid.kind == "SLFO" and rrid.maintenance_id == "1.2":
+        if rrid.kind is RequestKind.SLFO and rrid.maintenance_id == "1.2":
             return rrid.review_id
         return rrid.maintenance_id
 

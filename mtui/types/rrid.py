@@ -4,6 +4,8 @@ from collections.abc import Callable, Sequence
 from itertools import zip_longest
 from typing import Any, final
 
+from .enums import RequestKind
+
 
 def apply_parser(f, x, cnt):
     from ..exceptions import (
@@ -160,25 +162,22 @@ class RequestReviewID:
             apply_parser(*ys)
             for ys in zip_longest(parsers, xs, range(1, len(parsers) + 1))
         ]
-        self.project, self.kind, self.maintenance_id, self.review_id = xs
+        self.project, raw_kind, self.maintenance_id, self.review_id = xs
 
         if self.project == "S":
             self.project = "SUSE"
 
-        if self.kind == "M":
-            self.kind = "Maintenance"
-        elif self.kind == "S":
-            self.kind = "SLFO"
-        elif self.kind == "P":
-            self.kind = "PI"
+        self.kind: RequestKind = RequestKind.from_token(raw_kind)
 
     def __str__(self) -> str:
         """Returns a string representation of the `RequestReviewID` object."""
-        return f"{self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}"
+        return (
+            f"{self.project}:{self.kind.value}:{self.maintenance_id}:{self.review_id}"
+        )
 
     def __repr__(self) -> str:
         """Returns a string representation of the `RequestReviewID` object."""
-        return f"<RRID - {self.project}:{self.kind}:{self.maintenance_id}:{self.review_id}>"
+        return f"<RRID - {self.project}:{self.kind.value}:{self.maintenance_id}:{self.review_id}>"
 
     def __hash__(self) -> int:
         """Returns the hash of the `RequestReviewID` object."""

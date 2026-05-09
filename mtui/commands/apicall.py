@@ -16,6 +16,7 @@ from ..argparse import ArgumentParser
 from ..commands import Command
 from ..connector import OSC, Gitea
 from ..exceptions import GiteaError, InvalidGiteaHashError
+from ..types import RequestKind
 from ..utils import complete_choices, prompt_user, requires_update
 
 logger = getLogger("mtui.command.apicalls")
@@ -46,7 +47,7 @@ class BaseApiCall(Command, ABC):
     def _is_gitea_workflow(self) -> bool:
         """Determines if the request should be handled by the Gitea API."""
         rrid = self.metadata.rrid
-        return rrid.kind == "SLFO" and rrid.maintenance_id != "1.1"
+        return rrid.kind is RequestKind.SLFO and rrid.maintenance_id != "1.1"
 
     @requires_update
     def __call__(self) -> None:

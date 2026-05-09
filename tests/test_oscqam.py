@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from mtui.connector.oscqam import OSC
+from mtui.types import RequestKind
 
 
 @pytest.fixture
@@ -88,7 +89,7 @@ class TestOSCOperations:
     @patch("mtui.connector.oscqam.check_call")
     def test_skip_template_for_pi(self, mock_check_call, osc):
         """Test --skip-template is added for PI kind."""
-        osc.rrid.kind = "PI"
+        osc.rrid.kind = RequestKind.PI
         osc.approve(["qam-sle"])
 
         cmd = mock_check_call.call_args[0][0]
