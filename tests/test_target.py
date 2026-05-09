@@ -49,7 +49,7 @@ def test_target_init_with_packages(mock_config):
 
 def test_target_init_with_state(mock_config):
     """Test Target initialization with different states."""
-    for state in ("enabled", "disabled", "serial", "parallel"):
+    for state in ("enabled", "disabled", "dryrun"):
         target = Target(mock_config, "host.example.com", state=state)  # type: ignore[arg-type]
         assert target.state == state
 
