@@ -10,6 +10,11 @@ from ..types import RequestReviewID, URLs
 
 logger = getLogger("mtui.connector.qem_dashboard")
 
+# Job result statuses that should be reported individually in the exported
+# log. Every other status (passed, softfailed, ...) is collapsed into a
+# per-group summary count to keep the report short and reviewable.
+FAILED_RESULTS: frozenset[str] = frozenset({"failed", "incomplete", "timeout_exceeded"})
+
 
 class QEMDashboardClient:
     """Small read-only client for the QEM Dashboard API."""
@@ -202,24 +207,225 @@ class DashboardAutoOpenQA:
         return ret
 
     @staticmethod
+    def _job_url(host: str, job_id: Any) -> str:
+        if job_id is None:
+            return ""
+        return f"{host.rstrip('/')}/tests/{job_id}"
+
+    # Counter keys, in display order. `total` is always kept; the others
+    # are only printed when non-zero so the Summary block stays scannable.
+    _COUNT_KEYS: tuple[str, ...] = (
+        "passed",
+        "softfailed",
+        "failed",
+        "incomplete",
+        "timeout_exceeded",
+        "other",
+    )
+
+    @staticmethod
+    def _val(value: Any) -> str:
+        return str(value) if value not in (None, "") else "unknown"
+
+    @classmethod
+    def _group_key(cls, job: dict[str, Any], source: str) -> tuple[str, str, str]:
+        settings = job.get("settings") or {}
+        if source == "aggregate":
+            return (
+                cls._val(job.get("product")),
+                cls._val(settings.get("BUILD")),
+                cls._val(settings.get("ARCH")),
+            )
+        return (
+            cls._val(settings.get("VERSION")),
+            cls._val(settings.get("FLAVOR")),
+            cls._val(settings.get("ARCH")),
+        )
+
+    @classmethod
+    def _format_counts(cls, counts: dict[str, int]) -> str:
+        """Render counts dropping zero entries; `total` is always last."""
+        parts = [f"{key}: {counts[key]}" for key in cls._COUNT_KEYS if counts[key]]
+        parts.append(f"total: {counts['total']}")
+        return ", ".join(parts)
+
+    @staticmethod
+    def _empty_counts() -> dict[str, int]:
+        return {
+            "passed": 0,
+            "softfailed": 0,
+            "failed": 0,
+            "incomplete": 0,
+            "timeout_exceeded": 0,
+            "other": 0,
+            "total": 0,
+        }
+
+    @staticmethod
+    def _has_problems(counts: dict[str, int]) -> bool:
+        return bool(
+            counts["failed"]
+            or counts["incomplete"]
+            or counts["timeout_exceeded"]
+            or counts["other"]
+        )
+
+    @staticmethod
+    def _format_group_header(
+        source: str, key: tuple[str, str, str], *, hoisted_build: bool = False
+    ) -> str:
+        if source == "aggregate":
+            product, build, arch = key
+            if hoisted_build:
+                return f"    product: {product} - arch: {arch}"
+            return f"    product: {product} - build: {build} - arch: {arch}"
+        version, flavor, arch = key
+        return f"    version: {version} - flavor: {flavor} - arch: {arch}"
+
+    @staticmethod
+    def _format_folded_header(
+        source: str, fold_key: tuple[str, ...], *, hoisted_build: bool
+    ) -> str:
+        if source == "aggregate":
+            if hoisted_build:
+                (product,) = fold_key
+                return f"    product: {product}"
+            product, build = fold_key
+            return f"    product: {product} - build: {build}"
+        version, flavor = fold_key
+        return f"    version: {version} - flavor: {flavor}"
+
+    @staticmethod
+    def _failed_group_header(
+        source: str, key: tuple[str, str, str], n_failed: int, *, hoisted_build: bool
+    ) -> str:
+        if source == "aggregate":
+            product, build, arch = key
+            if hoisted_build:
+                return f"    {product} / {arch} ({n_failed} failed):\n"
+            return f"    {product} / {build} / {arch} ({n_failed} failed):\n"
+        version, flavor, arch = key
+        return f"    {version} / {flavor} / {arch} ({n_failed} failed):\n"
+
     def _pretty_print_section(
-        ret: list[str], title: str, jobs: list[dict[str, Any]], source: str
+        self,
+        ret: list[str],
+        title: str,
+        jobs: list[dict[str, Any]],
+        source: str,
     ) -> None:
         section_jobs = [job for job in jobs if job.get("source") == source]
         if not section_jobs:
             return
 
         ret.append(f"{title}:\n")
+
+        # Hoist a shared aggregate BUILD when every job in the section uses
+        # the same one; this strips ~80 redundant `build: …` repetitions.
+        hoisted_build: str | None = None
+        if source == "aggregate":
+            builds = {
+                self._val((job.get("settings") or {}).get("BUILD"))
+                for job in section_jobs
+            }
+            if len(builds) == 1:
+                hoisted_build = next(iter(builds))
+                ret.append(f"  build: {hoisted_build}\n")
+
+        # Build per-group counts in insertion order so the summary mirrors
+        # the order in which the dashboard returned the jobs.
+        groups: dict[tuple[str, str, str], dict[str, int]] = {}
+        failed_by_group: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         for job in section_jobs:
-            settings = job["settings"]
+            key = self._group_key(job, source)
+            counts = groups.setdefault(key, self._empty_counts())
+            counts["total"] += 1
+            result = job.get("result") or "other"
+            if result in counts and result != "total":
+                counts[result] += 1
+            else:
+                counts["other"] += 1
+            if result in FAILED_RESULTS:
+                failed_by_group.setdefault(key, []).append(job)
+
+        # Split into problem and all-passed groups; problem groups stay
+        # per-arch so reviewers see exactly which arch failed. All-passed
+        # groups fold across architectures into one row.
+        problem_keys = [
+            key for key, counts in groups.items() if self._has_problems(counts)
+        ]
+        passed_keys = [
+            key for key, counts in groups.items() if not self._has_problems(counts)
+        ]
+
+        ret.append("  Summary:\n")
+
+        # Problem groups first, in original insertion order.
+        ret.extend(
+            f"  {self._format_group_header(source, key, hoisted_build=hoisted_build is not None)}"
+            f" -> {self._format_counts(groups[key])}\n"
+            for key in problem_keys
+        )
+
+        # Fold all-passed groups. For incidents, fold by (version, flavor).
+        # For aggregates, fold by (product,) when build is hoisted, else by
+        # (product, build) so the build stays visible in mixed-build sections.
+        folded: dict[tuple[str, ...], dict[str, Any]] = {}
+        for key in passed_keys:
             if source == "aggregate":
-                ret.append(
-                    f"  product: {job.get('product')} - build: {settings.get('BUILD')} - arch: {settings.get('ARCH')} - test: {job.get('test')} - result: {job.get('result')}\n"
+                product, build, arch = key
+                fold_key: tuple[str, ...] = (
+                    (product,) if hoisted_build is not None else (product, build)
                 )
             else:
+                version, flavor, arch = key
+                fold_key = (version, flavor)
+            entry = folded.setdefault(
+                fold_key,
+                {"archs": [], "counts": self._empty_counts()},
+            )
+            if arch not in entry["archs"]:
+                entry["archs"].append(arch)
+            for ckey in self._COUNT_KEYS:
+                entry["counts"][ckey] += groups[key][ckey]
+            entry["counts"]["total"] += groups[key]["total"]
+
+        for fold_key, entry in folded.items():
+            archs = ", ".join(entry["archs"])
+            n_archs = len(entry["archs"])
+            ret.append(
+                f"  {self._format_folded_header(source, fold_key, hoisted_build=hoisted_build is not None)}"
+                f" - archs: {archs}"
+                f" -> {self._format_counts(entry['counts'])}"
+                f" ({n_archs} arch{'es' if n_archs != 1 else ''})\n"
+            )
+
+        # Failed jobs, nested under their group header so the redundant
+        # product/build/arch prefix on each line disappears.
+        if failed_by_group:
+            ret.append("  Failed jobs:\n")
+            for key in problem_keys:
+                fjobs = failed_by_group.get(key, [])
+                if not fjobs:
+                    continue
                 ret.append(
-                    f"  flavor: {settings.get('FLAVOR')} - arch: {settings.get('ARCH')} - version: {settings.get('VERSION')} - test: {job.get('test')} - result: {job.get('result')}\n"
+                    self._failed_group_header(
+                        source, key, len(fjobs), hoisted_build=hoisted_build is not None
+                    )
                 )
+                # Pad test name with spaces so URLs align inside this group.
+                width = max(len(job.get("test") or "") for job in fjobs)
+                for job in fjobs:
+                    test = job.get("test") or ""
+                    url = self._job_url(self.host, job.get("id"))
+                    result = job.get("result")
+                    suffix = f"  {url}" if url else ""
+                    if result == "failed":
+                        ret.append(f"      {test.ljust(width)}{suffix}\n")
+                    else:
+                        ret.append(f"      {test.ljust(width)}  [{result}]{suffix}\n")
+        else:
+            ret.append("  All jobs passed.\n")
         ret.append("\n")
 
     def run(self) -> Self:
