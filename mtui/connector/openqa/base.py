@@ -7,7 +7,7 @@ from typing import ClassVar, Self
 import openqa_client.exceptions
 from openqa_client.client import OpenQA_Client as oqa
 
-from ...types import RequestReviewID, Test, URLs
+from ...types import RequestKind, RequestReviewID, Test, URLs
 
 logger = getLogger("mtui.connector.openqa")
 
@@ -36,7 +36,7 @@ class OpenQA(ABC):
         self.params["scope"] = "relevant"
         self.params["latest"] = 1
         # New format of build
-        prefix = "git" if rrid.kind == "SLFO" else "smelt"
+        prefix = "git" if rrid.kind is RequestKind.SLFO else "smelt"
         self.params["build"] = (
             f":{prefix}:{rrid.maintenance_id}:{incident.get_incident_name()}"
         )

@@ -7,7 +7,7 @@ from mtui.exceptions import (
     MissingComponentError,
     TooManyComponentsError,
 )
-from mtui.types import RequestReviewID
+from mtui.types import RequestKind, RequestReviewID
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def test_RRID_ok(r_review_id, m_review_id, rrid):
     rr = RequestReviewID(rrid.format(mid, rid))
 
     assert rr.review_id == rid
-    if rr.kind != "SLFO":
+    if rr.kind is not RequestKind.SLFO:
         assert rr.maintenance_id == mid
     else:
         assert isinstance(rr.maintenance_id, str)

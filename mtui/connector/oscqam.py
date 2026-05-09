@@ -6,6 +6,7 @@ from shlex import quote
 from subprocess import CalledProcessError, check_call
 
 from ..config import Config
+from ..types.enums import RequestKind
 from ..types.rrid import RequestReviewID
 
 logger = getLogger("mtui.connector.oscqam")
@@ -66,7 +67,7 @@ class OSC:
         skip_args = (
             ["--skip-template"]
             if (
-                self.rrid.kind in ("PI", "SLFO")
+                self.rrid.kind in (RequestKind.PI, RequestKind.SLFO)
                 and operation in ("assign", "approve", "reject")
             )
             else []
