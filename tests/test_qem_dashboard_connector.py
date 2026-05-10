@@ -221,6 +221,7 @@ def test_dashboard_auto_openqa_loads_incident_and_aggregate_jobs(mock_config):
     assert dashboard.results[0].url == (
         "https://openqa.example.com/tests/1001/file/install-logs.tar"
     )
+    assert dashboard.results[0].result == "passed"
 
 
 def test_pretty_print_collapses_passed(mock_config):

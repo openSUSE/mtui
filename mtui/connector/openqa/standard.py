@@ -101,6 +101,7 @@ class AutoOpenQA(OpenQA):
                     "file",
                     self.config.openqa_install_logs,
                 ),
+                job["result"],
             )
             for job in jobs
             if job["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]

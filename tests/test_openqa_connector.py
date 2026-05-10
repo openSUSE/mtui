@@ -162,6 +162,7 @@ class TestGetLogsUrl:
         # Only install jobs should be included
         assert len(result) == 1
         assert "123" in result[0].url
+        assert result[0].result == "passed"
 
 
 # --- AutoOpenQA.run ---
