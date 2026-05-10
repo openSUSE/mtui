@@ -3,8 +3,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.export import Export
+from mtui.export.auto import AutoExport
 from mtui.export.base import BaseExport
-from mtui.types import FileList, OpenQAResults, RequestReviewID
+from mtui.types import FileList, OpenQAResults, RequestReviewID, URLs
 
 
 class ExportProbe(BaseExport):
@@ -75,4 +76,61 @@ def test_manual_export_loads_dashboard_results_before_export(mock_config, tmp_pa
         mock_config.openqa_instance,
         prompt.metadata.incident,
         prompt.metadata.rrid,
+    )
+
+
+def test_auto_export_replaces_stale_install_results(mock_config):
+    openqa = MagicMock()
+    openqa.pp = []
+    openqa.results = [
+        URLs(
+            "sle",
+            "x86_64",
+            "15-SP7",
+            "https://openqa.example.com/tests/1001/file/install-logs.tar",
+            "passed",
+        )
+    ]
+    template = FileList(
+        [
+            "Test results by product-arch:\n",
+            "#############################\n",
+            "\n",
+            "source code change review:\n",
+            "##############\n",
+            "Install tests:\n",
+            "##############\n",
+            "\n",
+            "Installation tests done in openQA with following results: FAILED\n",
+            "\n",
+            "sle_15-SP7_x86_64 => none: https://openqa.example.com/tests/1001\n",
+            "\n",
+            "Links for update logs:\n",
+        ]
+    )
+
+    exporter = AutoExport(
+        mock_config,
+        OpenQAResults(auto=openqa),
+        template,
+        False,
+        "SUSE:Maintenance:1:1",
+        False,
+    )
+    with patch.object(exporter, "get_logs", return_value=[]):
+        result = exporter.run()
+
+    assert (
+        "Installation tests done in openQA with following results: FAILED\n"
+        not in result
+    )
+    assert (
+        "sle_15-SP7_x86_64 => none: https://openqa.example.com/tests/1001\n"
+        not in result
+    )
+    assert (
+        "Installation tests done in openQA with following results: PASSED\n" in result
+    )
+    assert (
+        "sle_15-SP7_x86_64 => PASSED: https://openqa.example.com/tests/1001\n" in result
     )

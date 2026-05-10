@@ -18,3 +18,4 @@ class URLs(NamedTuple):
     arch: str
     version: str
     url: str
+    result: str = ""

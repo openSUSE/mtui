@@ -196,6 +196,7 @@ class DashboardAutoOpenQA:
                     "file",
                     self.config.openqa_install_logs,
                 ),
+                str(job.get("result") or ""),
             )
             for job in jobs
             if (
