@@ -20,6 +20,70 @@ no_verify = ssl._create_unverified_context()  # noqa: SLF001
 class AutoExport(BaseExport):
     """An exporter for the automatic workflow."""
 
+    @staticmethod
+    def _install_job_line(result) -> str:
+        status = result.result.upper() if result.result else "UNKNOWN"
+        job_url = result.url.rsplit("/file/", 1)[0]
+        return (
+            f"{result.distri}_{result.version}_{result.arch} => {status}: {job_url}\n"
+        )
+
+    def _install_status(self) -> str:
+        auto = self.openqa.auto
+        results = auto.results if auto is not None else None
+        if not results:
+            return "FAILED"
+        return (
+            "PASSED"
+            if all(result.result in {"passed", "softfailed"} for result in results)
+            else "FAILED"
+        )
+
+    def install_results(self) -> None:
+        """Adds installation results to the template."""
+        status_line = (
+            "Installation tests done in openQA with following results: "
+            f"{self._install_status()}\n"
+        )
+        auto = self.openqa.auto
+        results = auto.results if auto is not None else []
+        result_lines = [self._install_job_line(result) for result in results or []]
+
+        try:
+            start = self.template.index("Install tests:\n") - 1
+        except ValueError:
+            start = len(self.template)
+            if "## export MTUI:" in self.template[-1]:
+                start -= 1
+            self.template[start:start] = [
+                "##############\n",
+                "Install tests:\n",
+                "##############\n",
+                "\n",
+            ]
+
+        try:
+            end = self.template.index("Links for update logs:\n", start)
+            while end > start and self.template[end - 1] == "\n":
+                end -= 1
+        except ValueError:
+            try:
+                end = self.template.index("## export MTUI:", start)
+            except ValueError:
+                end = len(self.template)
+
+        block = [
+            "##############\n",
+            "Install tests:\n",
+            "##############\n",
+            "\n",
+            status_line,
+            "\n",
+            *result_lines,
+            "\n",
+        ]
+        self.template[start:end] = block
+
     def get_logs(self, *args, **kwds) -> list[Path]:
         """Gets the logs from openQA.
 
@@ -87,13 +151,13 @@ class AutoExport(BaseExport):
             The exported template.
 
         """
+        install_logs_current = (
+            "Installation tests done in openQA with following results:" in self.template
+            and not self.force
+        )
         self.install_results()
         self.inject_openqa()
-        if (
-            "Installation tests done in openQA with following results: PASSED\n"
-            not in self.template
-            or self.force
-        ):
+        if not install_logs_current:
             filenames = self.get_logs()
             self.installlogs_lines(filenames)
         self.add_sysinfo()
