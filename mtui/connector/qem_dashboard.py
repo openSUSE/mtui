@@ -181,6 +181,7 @@ class DashboardAutoOpenQA:
             for job in jobs
             if (
                 "qam-incidentinstall" in job.get("test")
+                and "SLFO" not in job.get("test")
                 and self._normalize_result(job.get("result"))
             )
         ]
