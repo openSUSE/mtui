@@ -301,8 +301,8 @@ def test_pretty_print_aggregate_grouping(mock_config):
     out = "".join(dashboard._pretty_print(jobs))
 
     assert "Aggregate jobs:" in out
-    # Shared BUILD is hoisted, not repeated per-row.
-    assert "  build: 20240101-1\n" in out
+    # Shared BUILD is hoisted exactly once, not repeated per-row.
+    assert out.count("  build: 20240101-1\n") == 1
     # Two distinct product groups, each with its own summary row.
     assert "product: SLES-15-SP5" in out
     assert "product: SLES-15-SP6" in out
@@ -355,7 +355,7 @@ def test_pretty_print_aggregate_hoists_build(mock_config):
         _aggregate_job(6001, "mau-y", "passed", product="B", build="20260101-1"),
     ]
     out_same = "".join(dashboard._pretty_print(same_build))
-    assert "  build: 20260101-1\n" in out_same
+    assert out_same.count("  build: 20260101-1\n") == 1
     assert " - build: " not in out_same
 
     # Mixed builds: no hoist; per-row build re-appears.
@@ -368,8 +368,9 @@ def test_pretty_print_aggregate_hoists_build(mock_config):
     assert "  build: 20260101-1\n" not in out_mixed
     assert "  build: 20260102-2\n" not in out_mixed
     # Per-row build present on at least one summary row (folded/full).
-    assert "build: 20260101-1" in out_mixed
-    assert "build: 20260102-2" in out_mixed
+    # Anchor on the per-row "- build:" prefix so we don't match the hoisted form.
+    assert "- build: 20260101-1" in out_mixed
+    assert "- build: 20260102-2" in out_mixed
 
 
 def test_pretty_print_problem_groups_sorted_first(mock_config):
