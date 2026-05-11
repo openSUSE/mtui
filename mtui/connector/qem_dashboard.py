@@ -1,5 +1,6 @@
 """Connector for the QEM Dashboard API."""
 
+import concurrent.futures
 from logging import getLogger
 from os.path import join
 from typing import Any, Self
@@ -100,26 +101,57 @@ class DashboardAutoOpenQA:
         self.jobs: list[dict[str, Any]] = []
 
     def _load_jobs(self) -> list[dict[str, Any]]:
-        jobs: list[dict[str, Any]] = []
-        incident_settings = self.client.incident_settings(self.incident.incident_number)
+        # Fetch the two top-level settings lists concurrently; they are
+        # independent of each other.
+        incident_number = self.incident.incident_number
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            incident_settings_future = executor.submit(
+                self.client.incident_settings, incident_number
+            )
+            update_settings_future = executor.submit(
+                self.client.update_settings, incident_number
+            )
+            incident_settings = incident_settings_future.result()
+            update_settings = update_settings_future.result()
+
+        # Build a flat task list of (source, setting, fetcher) preserving
+        # the original insertion order: all incident settings first, then
+        # all update settings. Downstream pretty-printing relies on this
+        # order.
+        tasks: list[tuple[str, dict[str, Any], Any]] = []
         for setting in incident_settings:
             setting_id = setting.get("id")
             if setting_id is None:
                 continue
-            jobs.extend(
-                self._normalize_job(job, "incident", setting)
-                for job in self.client.incident_jobs(setting_id)
-            )
-
-        update_settings = self.client.update_settings(self.incident.incident_number)
+            tasks.append(("incident", setting, setting_id))
         for setting in update_settings:
             setting_id = setting.get("id")
             if setting_id is None:
                 continue
-            jobs.extend(
-                self._normalize_job(job, "aggregate", setting)
-                for job in self.client.update_jobs(setting_id)
-            )
+            tasks.append(("aggregate", setting, setting_id))
+
+        if not tasks:
+            return []
+
+        # Fan out the per-setting jobs fetches concurrently. Read futures
+        # back in submission order so the resulting `jobs` list keeps the
+        # same order as the sequential implementation.
+        def _fetch(source: str, setting_id: int) -> list[dict[str, Any]]:
+            if source == "incident":
+                return self.client.incident_jobs(setting_id)
+            return self.client.update_jobs(setting_id)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(_fetch, source, setting_id)
+                for source, _, setting_id in tasks
+            ]
+
+            jobs: list[dict[str, Any]] = []
+            for (source, setting, _), future in zip(tasks, futures, strict=True):
+                jobs.extend(
+                    self._normalize_job(job, source, setting) for job in future.result()
+                )
 
         return jobs
 
