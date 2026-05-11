@@ -115,11 +115,17 @@ def test_qem_incident_uses_review_id_for_slfo_1_2(mock_config):
     DashboardAutoOpenQA(mock_config, "https://openqa.example.com", incident, rrid).run()
 
     assert incident.incident_number == 12358
-    assert [call.request.url for call in responses.calls] == [
-        f"{API}/incidents/12358",
-        f"{API}/incident_settings/12358",
-        f"{API}/update_settings/12358",
-    ]
+    # `incidents/...` runs first in QEMIncident.__init__ (synchronous);
+    # the two settings calls fan out concurrently in _load_jobs so their
+    # relative order is nondeterministic.
+    call_urls = [call.request.url for call in responses.calls]
+    assert call_urls[0] == f"{API}/incidents/12358"
+    assert sorted(call_urls[1:]) == sorted(
+        [
+            f"{API}/incident_settings/12358",
+            f"{API}/update_settings/12358",
+        ]
+    )
 
 
 @responses.activate
@@ -455,3 +461,103 @@ def test_pretty_print_failed_jobs_grouped(mock_config):
     assert url_offsets[0] == url_offsets[1]
     # No `product:` / `build:` / `arch:` repeated on a per-failure line.
     assert "product: P - " not in out.split("Failed jobs:")[1]
+
+
+@responses.activate
+def test_dashboard_auto_openqa_fans_out_per_setting_fetches(mock_config):
+    """Per-setting jobs fetches run concurrently; each URL hits exactly once
+    and the resulting jobs list preserves insertion order (incident settings
+    in order, then update settings in order).
+    """
+    rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
+    responses.add(
+        responses.GET,
+        f"{API}/incidents/12358",
+        json={"number": 12358, "packages": ["bash"], "channels": []},
+        status=200,
+    )
+
+    incident_setting_ids = [11, 12, 13]
+    update_setting_ids = [21, 22, 23]
+
+    responses.add(
+        responses.GET,
+        f"{API}/incident_settings/12358",
+        json=[
+            {
+                "id": sid,
+                "incident": 12358,
+                "version": "15-SP5",
+                "flavor": "Server-DVD-Incidents",
+                "arch": "x86_64",
+                "settings": {"DISTRI": "sle"},
+            }
+            for sid in incident_setting_ids
+        ],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"{API}/update_settings/12358",
+        json=[
+            {
+                "id": sid,
+                "incidents": [12358],
+                "product": "SLES-15-SP5",
+                "arch": "x86_64",
+                "build": "20240101-1",
+                "repohash": "abc123",
+                "settings": {"DISTRI": "sle", "VERSION": "15-SP5"},
+            }
+            for sid in update_setting_ids
+        ],
+        status=200,
+    )
+
+    # One job per setting, named so we can verify ordering.
+    for sid in incident_setting_ids:
+        responses.add(
+            responses.GET,
+            f"{API}/jobs/incident/{sid}",
+            json=[
+                {
+                    "job_id": 1000 + sid,
+                    "name": f"qam-incident-{sid}",
+                    "status": "passed",
+                }
+            ],
+            status=200,
+        )
+    for sid in update_setting_ids:
+        responses.add(
+            responses.GET,
+            f"{API}/jobs/update/{sid}",
+            json=[
+                {
+                    "job_id": 2000 + sid,
+                    "name": f"mau-update-{sid}",
+                    "status": "passed",
+                }
+            ],
+            status=200,
+        )
+
+    incident = QEMIncident(rrid, API)
+    dashboard = DashboardAutoOpenQA(
+        mock_config, "https://openqa.example.com", incident, rrid
+    ).run()
+
+    # Each per-setting URL is called exactly once (no duplicates from the
+    # concurrent fan-out).
+    call_urls = [call.request.url for call in responses.calls]
+    for sid in incident_setting_ids:
+        assert call_urls.count(f"{API}/jobs/incident/{sid}") == 1
+    for sid in update_setting_ids:
+        assert call_urls.count(f"{API}/jobs/update/{sid}") == 1
+
+    # Insertion order is preserved: incident jobs (in setting order) come
+    # before aggregate jobs (in setting order). This is what the
+    # pretty-printer relies on to keep summaries stable.
+    assert [job["test"] for job in dashboard.jobs] == [
+        f"qam-incident-{sid}" for sid in incident_setting_ids
+    ] + [f"mau-update-{sid}" for sid in update_setting_ids]
