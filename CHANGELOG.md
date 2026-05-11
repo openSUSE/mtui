@@ -20,6 +20,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   GitHub issue templates and a pull-request template.
 
 ### Changed
+- `export` now reports `UNKNOWN` (previously `FAILED`) on the
+  "Installation tests done in openQA with following results:" line when
+  the openQA install results have not been fetched or have not run yet,
+  so a missing fetch is no longer indistinguishable from a real failure.
 - `export` further condenses the openQA results section for incidents
   loaded from the QEM Dashboard: zero counters are dropped from Summary
   rows, the shared aggregate `BUILD` is hoisted into one header line,

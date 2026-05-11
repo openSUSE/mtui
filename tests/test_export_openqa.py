@@ -134,3 +134,51 @@ def test_auto_export_replaces_stale_install_results(mock_config):
     assert (
         "sle_15-SP7_x86_64 => PASSED: https://openqa.example.com/tests/1001\n" in result
     )
+
+
+def _make_auto_exporter(mock_config, openqa) -> AutoExport:
+    return AutoExport(
+        mock_config,
+        OpenQAResults(auto=openqa),
+        FileList([]),
+        False,
+        "SUSE:Maintenance:1:1",
+        False,
+    )
+
+
+def test_install_status_unknown_when_auto_missing(mock_config):
+    """auto.results being unavailable is distinct from a FAILED outcome."""
+    exporter = _make_auto_exporter(mock_config, openqa=None)
+
+    assert exporter._install_status() == "UNKNOWN"
+
+
+def test_install_status_unknown_when_results_empty(mock_config):
+    openqa = MagicMock()
+    openqa.results = []
+    exporter = _make_auto_exporter(mock_config, openqa=openqa)
+
+    assert exporter._install_status() == "UNKNOWN"
+
+
+def test_install_status_passed_when_all_results_pass(mock_config):
+    openqa = MagicMock()
+    openqa.results = [
+        URLs("sle", "x86_64", "15-SP7", "https://o/tests/1/file/x", "passed"),
+        URLs("sle", "x86_64", "15-SP7", "https://o/tests/2/file/x", "softfailed"),
+    ]
+    exporter = _make_auto_exporter(mock_config, openqa=openqa)
+
+    assert exporter._install_status() == "PASSED"
+
+
+def test_install_status_failed_when_any_result_fails(mock_config):
+    openqa = MagicMock()
+    openqa.results = [
+        URLs("sle", "x86_64", "15-SP7", "https://o/tests/1/file/x", "passed"),
+        URLs("sle", "x86_64", "15-SP7", "https://o/tests/2/file/x", "failed"),
+    ]
+    exporter = _make_auto_exporter(mock_config, openqa=openqa)
+
+    assert exporter._install_status() == "FAILED"

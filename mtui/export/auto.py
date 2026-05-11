@@ -32,7 +32,10 @@ class AutoExport(BaseExport):
         auto = self.openqa.auto
         results = auto.results if auto is not None else None
         if not results:
-            return "FAILED"
+            # No results means the install tests have not run, are still
+            # running, or could not be fetched - which is distinct from a
+            # genuine FAILED outcome.
+            return "UNKNOWN"
         return (
             "PASSED"
             if all(result.result in {"passed", "softfailed"} for result in results)
