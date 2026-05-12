@@ -66,7 +66,8 @@ class UpdateID(ABC):
 
         """
         tr = self.testreport_factory(config)
-        trpath: Path = config.template_dir / str(self.id) / "log"
+        trdir: Path = config.template_dir / str(self.id)
+        trpath: Path = trdir / "log"
 
         try:
             tr.read(trpath)
@@ -98,8 +99,12 @@ class UpdateID(ABC):
                 self.id,
             )
             if not prompt_user(
-                "Force continue loading template ? [Y/N]: ", ["yes", "y"], interactive
+                "Force continue loading template ? [y/N]: ", ["yes", "y"], interactive
             ):
+                if trdir.exists():
+                    logger.warning(
+                        "Make sure to remove %s before relaunching MTUI", trdir
+                    )
                 raise TestReportNotLoadedError from None
             logger.warning("Template is loaded, but hash differs")
 
