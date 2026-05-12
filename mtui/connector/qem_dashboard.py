@@ -16,6 +16,14 @@ logger = getLogger("mtui.connector.qem_dashboard")
 # per-group summary count to keep the report short and reviewable.
 FAILED_RESULTS: frozenset[str] = frozenset({"failed", "incomplete", "timeout_exceeded"})
 
+# (connect, read) timeout for every dashboard HTTP call. Bounds a stuck
+# socket so a broken network can't hang mtui startup indefinitely.
+_HTTP_TIMEOUT: tuple[float, float] = (5.0, 30.0)
+# Wall-clock cap per future in the parallel fan-out. Defense-in-depth on
+# top of the per-request timeout above; a stuck worker won't block the
+# whole batch.
+_FUTURE_TIMEOUT: float = 60.0
+
 
 class QEMDashboardClient:
     """Small read-only client for the QEM Dashboard API."""
@@ -29,6 +37,7 @@ class QEMDashboardClient:
                 f"{self.apiurl}/{path.lstrip('/')}",
                 params=params or None,
                 headers={"Accept": "application/json"},
+                timeout=_HTTP_TIMEOUT,
             )
             response.raise_for_status()
             return response.json()
@@ -111,8 +120,12 @@ class DashboardAutoOpenQA:
             update_settings_future = executor.submit(
                 self.client.update_settings, incident_number
             )
-            incident_settings = incident_settings_future.result()
-            update_settings = update_settings_future.result()
+            incident_settings = self._await_settings(
+                incident_settings_future, "incident_settings"
+            )
+            update_settings = self._await_settings(
+                update_settings_future, "update_settings"
+            )
 
         # Build a flat task list of (source, setting, fetcher) preserving
         # the original insertion order: all incident settings first, then
@@ -148,12 +161,48 @@ class DashboardAutoOpenQA:
             ]
 
             jobs: list[dict[str, Any]] = []
-            for (source, setting, _), future in zip(tasks, futures, strict=True):
+            for (source, setting, setting_id), future in zip(
+                tasks, futures, strict=True
+            ):
+                try:
+                    setting_jobs = future.result(timeout=_FUTURE_TIMEOUT)
+                except concurrent.futures.TimeoutError:
+                    logger.warning(
+                        "QEM Dashboard %s jobs fetch for setting %s timed out "
+                        "after %.0fs; skipping",
+                        source,
+                        setting_id,
+                        _FUTURE_TIMEOUT,
+                    )
+                    future.cancel()
+                    continue
                 jobs.extend(
-                    self._normalize_job(job, source, setting) for job in future.result()
+                    self._normalize_job(job, source, setting) for job in setting_jobs
                 )
 
         return jobs
+
+    @staticmethod
+    def _await_settings(
+        future: "concurrent.futures.Future[list[dict[str, Any]]]",
+        label: str,
+    ) -> list[dict[str, Any]]:
+        """Wait for a top-level settings future, returning [] on timeout.
+
+        Mirrors `QEMDashboardClient.{incident,update}_settings` returning
+        [] on a swallowed `_get` failure, so callers see the same shape
+        whether the failure was an HTTP error or an executor timeout.
+        """
+        try:
+            return future.result(timeout=_FUTURE_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                "QEM Dashboard %s fetch timed out after %.0fs; treating as empty",
+                label,
+                _FUTURE_TIMEOUT,
+            )
+            future.cancel()
+            return []
 
     @staticmethod
     def _normalize_job(

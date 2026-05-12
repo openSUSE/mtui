@@ -58,6 +58,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `mtui/connection.py`. The Codecov project floor is bumped from 56 % to
   66 % (current − 1, ratchets upward); patch target stays at 80 %.
 
+### Fixed
+- QEM Dashboard HTTP requests now carry a (5 s connect, 30 s read)
+  timeout, and the parallel per-setting jobs fan-out is bounded by a 60 s
+  per-future wall-clock cap. A stuck connection or unresponsive endpoint
+  no longer hangs `mtui` startup or `reloadoqa` indefinitely; a single
+  timed-out setting is logged and skipped while the rest of the batch
+  still completes.
+
 ### Known issues
 - A non-numeric value for `connection_timeout` (e.g.
   `connection_timeout = abc` under `[mtui]`) crashes `Config.__init__`

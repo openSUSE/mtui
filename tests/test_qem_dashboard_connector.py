@@ -1,7 +1,9 @@
 import responses
 
+from mtui.connector import qem_dashboard
 from mtui.connector.qem_dashboard import (
     DashboardAutoOpenQA,
+    QEMDashboardClient,
     QEMIncident,
 )
 from mtui.types import RequestReviewID
@@ -561,3 +563,117 @@ def test_dashboard_auto_openqa_fans_out_per_setting_fetches(mock_config):
     assert [job["test"] for job in dashboard.jobs] == [
         f"qam-incident-{sid}" for sid in incident_setting_ids
     ] + [f"mau-update-{sid}" for sid in update_setting_ids]
+
+
+def test_get_passes_timeout_to_requests(monkeypatch):
+    """Every dashboard HTTP call must carry a (connect, read) timeout so a
+    stuck socket can't hang mtui forever."""
+    captured: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ok": True}
+
+    def _fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return _FakeResponse()
+
+    monkeypatch.setattr(qem_dashboard.requests, "get", _fake_get)
+
+    client = QEMDashboardClient("https://dashboard.example.com/api")
+    assert client.incident(123) == {"ok": True}
+
+    assert captured["kwargs"]["timeout"] == qem_dashboard._HTTP_TIMEOUT
+    # Sanity: the constant is a (connect, read) tuple of positive floats.
+    connect, read = qem_dashboard._HTTP_TIMEOUT
+    assert connect > 0
+    assert read > 0
+
+
+def test_load_jobs_skips_timed_out_per_setting_future(monkeypatch, mock_config, caplog):
+    """One slow per-setting fetch must not block or drop the rest."""
+    import time
+
+    # Tighten the future timeout so the test runs fast.
+    monkeypatch.setattr(qem_dashboard, "_FUTURE_TIMEOUT", 0.05)
+
+    dashboard = _make_dashboard(mock_config)
+
+    # Build a fake client: setting 12 hangs past the timeout, others return
+    # one job each.
+    class _FakeClient:
+        def incident_settings(self, _n):
+            return [{"id": sid, "settings": {}} for sid in (11, 12, 13)]
+
+        def update_settings(self, _n):
+            return []
+
+        def incident_jobs(self, sid):
+            if sid == 12:
+                time.sleep(0.5)  # > _FUTURE_TIMEOUT
+                return [
+                    {"job_id": 9999, "name": "should-not-appear", "status": "passed"}
+                ]
+            return [{"job_id": 1000 + sid, "name": f"qam-{sid}", "status": "passed"}]
+
+        def update_jobs(self, _sid):  # pragma: no cover - no update settings here
+            return []
+
+    dashboard.client = _FakeClient()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+
+    with caplog.at_level("WARNING", logger="mtui.connector.qem_dashboard"):
+        jobs = dashboard._load_jobs()
+
+    names = [job["test"] for job in jobs]
+    # Settings 11 and 13 contribute; 12 is dropped.
+    assert "qam-11" in names
+    assert "qam-13" in names
+    assert "should-not-appear" not in names
+    # The warning identifies the offending setting.
+    assert any(
+        "incident jobs fetch for setting 12 timed out" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_load_jobs_top_level_settings_timeout_returns_empty(
+    monkeypatch, mock_config, caplog
+):
+    """If incident_settings hangs, _load_jobs returns [] without raising."""
+    import time
+
+    monkeypatch.setattr(qem_dashboard, "_FUTURE_TIMEOUT", 0.05)
+
+    dashboard = _make_dashboard(mock_config)
+
+    class _FakeClient:
+        def incident_settings(self, _n):
+            time.sleep(0.5)  # > _FUTURE_TIMEOUT
+            return [{"id": 1, "settings": {}}]
+
+        def update_settings(self, _n):
+            time.sleep(0.5)  # > _FUTURE_TIMEOUT
+            return [{"id": 2, "settings": {}}]
+
+        def incident_jobs(self, _sid):  # pragma: no cover - never reached
+            return []
+
+        def update_jobs(self, _sid):  # pragma: no cover - never reached
+            return []
+
+    dashboard.client = _FakeClient()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+
+    with caplog.at_level("WARNING", logger="mtui.connector.qem_dashboard"):
+        jobs = dashboard._load_jobs()
+
+    assert jobs == []
+    assert any(
+        "incident_settings fetch timed out" in rec.message for rec in caplog.records
+    )
+    assert any(
+        "update_settings fetch timed out" in rec.message for rec in caplog.records
+    )
