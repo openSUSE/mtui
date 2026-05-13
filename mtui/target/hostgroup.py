@@ -525,25 +525,49 @@ class HostsGroup(UserDict[str, Target]):
         }
 
         try:
-            self.run(commands)
-            for t in self.data.values():
-                t.get_updater_check()(
-                    t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
+            try:
+                self.run(commands)
+                for t in self.data.values():
+                    t.get_updater_check()(
+                        t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
+                    )
+                self._reboot(reboot)
+            finally:
+                self.unlock()
+
+            if "newpackage" in params:
+                self.perform_prepare(
+                    testreport.get_package_list(), testreport, testing=True
                 )
-            self._reboot(reboot)
+
+            package_check(True)
+
+            if "noscript" not in params and not testreport.config.auto:
+                testreport.run_scripts(PostScript, self)
+                testreport.run_scripts(CompareScript, self)
         finally:
-            self.unlock()
+            # Always remove the test update repositories that were added above,
+            # even if the update / scripts raised. Repo metadata changes are
+            # not transactional, so no reboot is required for transactional
+            # systems here.
+            try:
+                self.update_lock()
+            except UpdateError:
+                logger.warning(
+                    "Could not lock hosts to remove update repositories; "
+                    "skipping repo cleanup."
+                )
+            else:
+                try:
+                    for t in self.data.values():
+                        queue.put((t.set_repo, ["remove", testreport]))
 
-        if "newpackage" in params:
-            self.perform_prepare(
-                testreport.get_package_list(), testreport, testing=True
-            )
+                    while queue.unfinished_tasks:
+                        spinner()
 
-        package_check(True)
-
-        if "noscript" not in params and not testreport.config.auto:
-            testreport.run_scripts(PostScript, self)
-            testreport.run_scripts(CompareScript, self)
+                    queue.join()
+                finally:
+                    self.unlock()
 
     def report_self(self, sink):
         """Reports the status of all hosts in the group.
