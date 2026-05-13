@@ -718,6 +718,68 @@ def test_perform_update_unlocks_when_run_fails(
     t1.unlock.assert_called()
 
 
+@patch("mtui.target.hostgroup.spinner")
+@patch("mtui.target.hostgroup.ThreadedMethod")
+@patch("mtui.target.hostgroup.queue")
+@patch("mtui.target.hostgroup.RunCommand")
+def test_perform_update_removes_repos_at_end(
+    mock_run, mock_queue, mock_thread, mock_spinner
+):
+    """``perform_update`` queues set_repo('remove', ...) after the update."""
+    t1 = _stub_target("h1")
+    t1.packages = {}
+    t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
+    t1.get_updater_check.return_value = MagicMock()
+    mock_queue.unfinished_tasks = 0
+    testreport = MagicMock()
+    testreport.config.auto = False
+    testreport.get_package_list.return_value = ["pkg"]
+    testreport.rrid.maintenance_id = "1"
+    testreport.rrid.review_id = "2"
+    hg = HostsGroup([t1])
+    hg.perform_update(testreport, ["noprepare", "noscript"])
+
+    set_repo_calls = [
+        call.args[0]
+        for call in mock_queue.put.call_args_list
+        if call.args and call.args[0][0] is t1.set_repo
+    ]
+    # The repo lifecycle is: add at the start, remove at the end.
+    assert set_repo_calls[0] == (t1.set_repo, ["add", testreport])
+    assert set_repo_calls[-1] == (t1.set_repo, ["remove", testreport])
+
+
+@patch("mtui.target.hostgroup.spinner")
+@patch("mtui.target.hostgroup.ThreadedMethod")
+@patch("mtui.target.hostgroup.queue")
+@patch("mtui.target.hostgroup.RunCommand")
+def test_perform_update_removes_repos_even_when_run_fails(
+    mock_run, mock_queue, mock_thread, mock_spinner
+):
+    """Repo cleanup runs even when the updater command itself raises."""
+    t1 = _stub_target("h1")
+    t1.packages = {}
+    t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
+    mock_queue.unfinished_tasks = 0
+    testreport = MagicMock()
+    testreport.config.auto = False
+    testreport.get_package_list.return_value = ["pkg"]
+    testreport.rrid.maintenance_id = "1"
+    testreport.rrid.review_id = "2"
+    hg = HostsGroup([t1])
+    mock_run.return_value.run.side_effect = RuntimeError("update boom")
+
+    with pytest.raises(RuntimeError, match="update boom"):
+        hg.perform_update(testreport, ["noprepare", "noscript"])
+
+    set_repo_calls = [
+        call.args[0]
+        for call in mock_queue.put.call_args_list
+        if call.args and call.args[0][0] is t1.set_repo
+    ]
+    assert (t1.set_repo, ["remove", testreport]) in set_repo_calls
+
+
 # ---------------------------------------------------------------------------
 # remaining group report methods
 # ---------------------------------------------------------------------------
