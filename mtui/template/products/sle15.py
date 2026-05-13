@@ -23,6 +23,10 @@ def normalize_sle15(x):
         x[0][0] = "ERICSSON"
         x[0][1] = x[0][1].replace("-ERICSSON", "")
         return x
+    if x[0][0] == "SLE-Product-SLES" and "TERADATA" in x[0][1]:
+        x[0][0] = "SLES_TERADATA"
+        x[0][1] = x[0][1].replace("-TERADATA", "")
+        return x
     if x[0][0] == "SLE-Product-SLES":
         x[0][0] = "SLES"
         return x
