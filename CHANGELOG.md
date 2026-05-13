@@ -59,6 +59,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   66 % (current − 1, ratchets upward); patch target stays at 80 %.
 
 ### Fixed
+- `update` now removes the test update repositories from every SUT after
+  the update finishes (and even when the update or its post/compare
+  scripts raise), instead of leaving them configured behind.
 - QEM Dashboard HTTP requests now carry a (5 s connect, 30 s read)
   timeout, and the parallel per-setting jobs fan-out is bounded by a 60 s
   per-future wall-clock cap. A stuck connection or unresponsive endpoint
