@@ -57,6 +57,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `mtui/target/target.py`, `mtui/target/hostgroup.py` and
   `mtui/connection.py`. The Codecov project floor is bumped from 56 % to
   66 % (current − 1, ratchets upward); patch target stays at 80 %.
+- `mtui.commands` now exposes a `registry: dict[str, type[Command]]`
+  populated automatically via `Command.__init_subclass__`. The legacy
+  `cmd_list` attribute and the `globals()`-based per-class re-export have
+  been removed; the only documented consumer was `CommandPrompt`, which
+  now iterates `commands.registry.values()` directly.
 
 ### Fixed
 - `update` now removes the test update repositories from every SUT after
