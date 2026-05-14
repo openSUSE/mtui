@@ -64,6 +64,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   now iterates `commands.registry.values()` directly.
 
 ### Fixed
+- Exceptions raised inside parallel target operations
+  (`Target.set_repo`, `Target.run`, the SFTP helpers used by `put` /
+  `get` / `remove`) now surface to the caller and abort the enclosing
+  `update` / `prepare` / `downgrade` / `install` / `uninstall` flow,
+  instead of being silently lost in a worker thread while the flow
+  pretended to succeed.
 - `update` now removes the test update repositories from every SUT after
   the update finishes (and even when the update or its post/compare
   scripts raise), instead of leaving them configured behind.
@@ -73,6 +79,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   no longer hangs `mtui` startup or `reloadoqa` indefinitely; a single
   timed-out setting is logged and skipped while the rest of the batch
   still completes.
+- Pressing `Ctrl+C` during a parallel `run` now drops queued hosts that
+  have not started yet and unblocks in-flight workers by closing their
+  SSH sessions, instead of waiting for the whole parallel batch to drain
+  before the interrupt was honoured. Workers already executing a remote
+  command will still finish their current command (Python cannot
+  interrupt a foreign blocking call), but session shutdown unblocks them
+  promptly.
+- Long-running parallel operations (`run`, file uploads / downloads /
+  deletes, `set_repo` fan-out used by `update`/`prepare`/`downgrade`)
+  now show user-visible progress again via a `|/-\` spinner on stderr
+  while work is in flight. The spinner is suppressed when stderr is
+  not a TTY (log files and redirected output stay clean). Restores the
+  "mtui is alive" feedback that was lost when the queue/spinner thread
+  was retired.
 
 ### Known issues
 - A non-numeric value for `connection_timeout` (e.g.
