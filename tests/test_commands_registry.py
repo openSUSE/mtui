@@ -77,21 +77,22 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
 
 
 def _current_surface() -> frozenset[tuple[str, str, str]]:
-    """Return the live ``(command, module, class_name)`` set the loader exposes.
+    """Return the live ``(command, module, class_name)`` set from the registry.
 
-    Reads the legacy ``cmd_list`` + ``getattr`` surface so this test passes
-    against ``main`` before the C5 refactor; it is updated in a follow-up
-    commit to read ``commands.registry`` once the registry exists.
+    Filters to classes defined under the ``mtui.commands`` package so that
+    test-only ``Command`` subclasses (e.g. ``ConcreteCommand`` in
+    ``tests/test_command_base.py``) registered earlier in the session do not
+    pollute the snapshot when tests run in arbitrary order.
     """
-    out: set[tuple[str, str, str]] = set()
-    for name in commands.cmd_list:
-        cls = getattr(commands, name)
-        out.add((cls.command, cls.__module__, cls.__name__))
-    return frozenset(out)
+    return frozenset(
+        (cls.command, cls.__module__, cls.__name__)
+        for cls in commands.registry.values()
+        if cls.__module__.startswith("mtui.commands.")
+    )
 
 
 def test_registry_matches_expected_surface() -> None:
-    """The loader exposes exactly the snapshot commands, no more, no less."""
+    """The registry exposes exactly the snapshot commands, no more, no less."""
     actual = _current_surface()
     assert actual == EXPECTED, {
         "missing": sorted(EXPECTED - actual),
@@ -104,9 +105,19 @@ def test_registry_count_matches_snapshot() -> None:
     assert len(_current_surface()) == len(EXPECTED)
 
 
-def test_abstract_base_apicall_is_not_exposed() -> None:
-    """``BaseApiCall`` is abstract and must not appear in the loader output."""
-    class_names = {cls_name for _, _, cls_name in _current_surface()}
+def test_registry_is_keyed_by_command_string() -> None:
+    """Every registry key equals its class's ``command`` attribute."""
+    for key, cls in commands.registry.items():
+        assert key == cls.command
+
+
+def test_abstract_base_apicall_is_not_registered() -> None:
+    """``BaseApiCall`` is abstract and must not appear in the registry."""
+    class_names = {
+        cls.__name__
+        for cls in commands.registry.values()
+        if cls.__module__.startswith("mtui.commands.")
+    }
     assert "BaseApiCall" not in class_names
     assert "Command" not in class_names
 
@@ -115,11 +126,21 @@ def test_quit_aliases_are_distinct_classes() -> None:
     """``quit`` / ``exit`` / ``EOF`` are three separate classes from quit.py."""
     from mtui.commands.quit import DEOF, QExit, Quit
 
-    by_command = {cls.command: cls for cls in (Quit, QExit, DEOF)}
-    assert by_command["quit"] is Quit
-    assert by_command["exit"] is QExit
-    assert by_command["EOF"] is DEOF
+    assert commands.registry["quit"] is Quit
+    assert commands.registry["exit"] is QExit
+    assert commands.registry["EOF"] is DEOF
     # exit/EOF inherit from quit; multi-class-per-module discovery must
     # keep working under __init_subclass__.
     assert issubclass(QExit, Quit)
     assert issubclass(DEOF, Quit)
+
+
+def test_legacy_cmd_list_attribute_is_gone() -> None:
+    """The legacy ``cmd_list`` and globals()-injected classes are removed."""
+    assert not hasattr(commands, "cmd_list")
+    # Spot-check that no command class is exposed as a module attribute on
+    # mtui.commands (the old loader injected each into globals()).
+    for _, _, class_name in EXPECTED:
+        assert not hasattr(commands, class_name), (
+            f"{class_name} unexpectedly re-exported on mtui.commands"
+        )

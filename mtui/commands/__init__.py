@@ -1,40 +1,36 @@
 """This package contains the command modules for mtui.
 
-Each module in this package defines a specific command that can be
-executed from the mtui command prompt. The modules are dynamically
-imported and registered as commands.
+Each module in this package defines one or more :class:`Command` subclasses.
+Importing this package walks the package directory with
+:func:`pkgutil.iter_modules`, imports every non-underscore submodule, and
+relies on :meth:`Command.__init_subclass__` to populate
+:data:`Command.registry` as a side-effect of class creation. The registry is
+re-exported as :data:`registry` for use by ``mtui.prompt``.
 """
 
 import importlib
+import pkgutil
 from logging import getLogger
-from pathlib import Path
 
 from ._command import Command as Command
+from ._command import CommandAlreadyBoundError as CommandAlreadyBoundError
 
 logger = getLogger("mtui.commands")
 
-_rootdir = Path(__file__).resolve().parent
-cmd_list: list[str] = []
-
-for pth in _rootdir.glob("*.py"):
-    if pth.is_file():
-        modname = pth.name[:-3]
-    else:
-        continue
-
-    # skip things like __init__, __pycache__, __main__ , _commad ...
-    if modname.startswith("_"):
+# Import every submodule whose name does not start with ``_`` so that each
+# Command subclass triggers Command.__init_subclass__. We do not need the
+# returned module objects; the side-effect of import is the whole point.
+for _modinfo in pkgutil.iter_modules(__path__):
+    if _modinfo.name.startswith("_"):
         continue
     try:
-        logger.debug("loading command module %s", modname)
-        module = importlib.import_module("." + modname, "mtui.commands")
+        logger.debug("loading command module %s", _modinfo.name)
+        importlib.import_module(f".{_modinfo.name}", __name__)
     except Exception:
-        logger.exception("loading command module %s failed", modname)
+        logger.exception("loading command module %s failed", _modinfo.name)
         continue
 
-    # register classes
-    klzs = [x for x in dir(module) if hasattr(getattr(module, x), "command")]
-    cmd_list += klzs
-
-    for x in klzs:
-        globals()[x] = getattr(module, x)
+#: Public alias for :attr:`Command.registry`. Keys are the user-facing command
+#: strings (e.g. ``"set_session_name"``), values are the concrete
+#: :class:`Command` subclasses.
+registry = Command.registry

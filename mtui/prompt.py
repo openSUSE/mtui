@@ -127,8 +127,8 @@ class CommandPrompt(cmd.Cmd):
         self.commands: dict[str, type[Command]] = {}
 
         # register commands
-        for x in commands.cmd_list:
-            self._add_subcommand(getattr(commands, x))
+        for cls in commands.registry.values():
+            self._add_subcommand(cls)
 
         # self.stdout is used by cmd.Cmd
         self.stdout = self.sys.stdout
