@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, ValuesView
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from pathlib import Path
-from queue import Empty, Queue
 from threading import Lock
 from typing import Any
 
@@ -17,35 +16,97 @@ from ..types import ExecutionMode
 from ..utils import prompt_user
 from . import Target
 
-queue: Queue[tuple[Callable[..., None], list[Any]]] = Queue()
+
+class _TtySpinner:
+    """A tiny ``|/-\\`` spinner that writes to stderr only when it is a TTY.
+
+    Drives a single daemon thread that repaints ``\\r<frame> <desc>`` on
+    a fixed cadence, then erases the line on stop. When stderr is not a
+    TTY (pytest, redirected output, log files) the spinner is a no-op so
+    test output and log files stay clean. Safe to ``stop()`` more than
+    once and from any thread.
+    """
+
+    _FRAMES = "|/-\\"
+    _INTERVAL = 0.1  # seconds
+
+    def __init__(self, desc: str) -> None:
+        self._desc = desc
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._enabled = sys.stderr.isatty()
+
+    def start(self) -> None:
+        """Start the spinner thread (no-op when stderr is not a TTY)."""
+        if not self._enabled:
+            return
+        self._thread = threading.Thread(target=self._spin, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Stop the spinner thread and erase the spinner line."""
+        if not self._enabled:
+            return
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+        # Erase the spinner line so the next caller writes from column 0.
+        with suppress(Exception):
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
+
+    def _spin(self) -> None:
+        i = 0
+        while not self._stop.is_set():
+            with suppress(Exception):
+                sys.stderr.write(f"\r[{self._FRAMES[i % 4]}] {self._desc}")
+                sys.stderr.flush()
+            i += 1
+            self._stop.wait(self._INTERVAL)
 
 
-class ThreadedMethod(threading.Thread):
-    """A thread that executes a method from a queue."""
+def run_parallel(
+    work: list[tuple[Callable[..., Any], tuple[Any, ...]]],
+    desc: str | None = None,
+) -> None:
+    """Submit ``(callable, args)`` pairs to a pool and re-raise on failure.
 
-    def __init__(self, queue: Queue[tuple[Callable[..., None], list[Any]]]) -> None:
-        """Initializes the thread.
+    Each callable runs in its own worker thread. The first worker
+    exception surfaces to the caller. On any exception (including
+    ``KeyboardInterrupt``) the executor is shut down with
+    ``cancel_futures=True`` and ``wait=False`` so queued-but-not-yet-
+    started callables are dropped and the caller is not blocked on
+    in-flight workers. Note: Python cannot interrupt a foreign C-level
+    blocking call, so callables already in flight will run to
+    completion -- callers that need prompt cancellation must arrange
+    for the worker's blocking I/O to be unblocked externally (e.g. by
+    closing the underlying socket).
 
-        Args:
-            queue: The queue to get methods from.
-
-        """
-        threading.Thread.__init__(self)
-        self.queue = queue
-
-    def run(self) -> None:
-        """Runs the thread."""
-        while True:
-            try:
-                (method, parameter) = self.queue.get(timeout=10)
-            except Empty:
-                return
-
-            try:
-                method(*parameter)
-            finally:
-                with suppress(ValueError):
-                    self.queue.task_done()
+    When ``desc`` is given the helper drives a TTY-only ``|/-\\``
+    spinner labelled with ``desc`` while work is in flight. The
+    spinner is silent when stderr is not a TTY (log files, redirected
+    output, pytest), and the call is behaviourally identical to a
+    ``desc=None`` call from the worker callables' point of view.
+    """
+    if not work:
+        return
+    spinner = _TtySpinner(desc) if desc else None
+    if spinner is not None:
+        spinner.start()
+    ex = ThreadPoolExecutor(max_workers=len(work))
+    try:
+        futures = [ex.submit(fn, *args) for fn, args in work]
+        for f in as_completed(futures):
+            f.result()  # propagate any worker exception
+    except BaseException:
+        ex.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        ex.shutdown(wait=True)
+    finally:
+        if spinner is not None:
+            spinner.stop()
 
 
 class ThreadedTargetGroup(ABC):
@@ -60,35 +121,16 @@ class ThreadedTargetGroup(ABC):
         """
         self.targets = targets
 
-    def mk_thread(self) -> None:
-        """Creates and starts a new thread."""
-        thread = ThreadedMethod(queue)
-        thread.daemon = True
-        thread.start()
-
-    def mk_threads(self) -> None:
-        """Creates and starts a thread for each target."""
-        for _ in range(len(self.targets)):
-            self.mk_thread()
-
     def run(self) -> None:
-        """Runs the action on all targets."""
-        self.mk_threads()
-        self.setup_queue()
-
-        while queue.unfinished_tasks:
-            spinner()
-
-        queue.join()
+        """Runs the action on every target in parallel."""
+        run_parallel(
+            [self.mk_cmd(t) for t in self.targets],
+            desc=type(self).__name__,
+        )
 
     @abstractmethod
-    def mk_cmd(self, *args, **kwds) -> tuple[Callable[..., None], list[Any]]:
-        """An abstract method for creating a command to be executed."""
-
-    def setup_queue(self) -> None:
-        """Sets up the queue with commands to be executed."""
-        for t in self.targets:
-            queue.put(self.mk_cmd(t))
+    def mk_cmd(self, t: Target) -> tuple[Callable[..., Any], tuple[Any, ...]]:
+        """Build a ``(callable, args)`` pair to dispatch for one target."""
 
 
 class FileDelete(ThreadedTargetGroup):
@@ -105,17 +147,9 @@ class FileDelete(ThreadedTargetGroup):
         super().__init__(targets)
         self.path = path
 
-    def mk_cmd(self, t: Target):
-        """Creates a command to delete a file on a target.
-
-        Args:
-            t: The target to delete the file from.
-
-        Returns:
-            A tuple containing the method to execute and its arguments.
-
-        """
-        return (t.sftp_remove, [self.path])
+    def mk_cmd(self, t: Target) -> tuple[Callable[..., Any], tuple[Any, ...]]:
+        """Creates a command to delete a file on a target."""
+        return (t.sftp_remove, (self.path,))
 
 
 class FileUpload(ThreadedTargetGroup):
@@ -136,17 +170,9 @@ class FileUpload(ThreadedTargetGroup):
         self.local = local
         self.remote = remote
 
-    def mk_cmd(self, t: Target):
-        """Creates a command to upload a file to a target.
-
-        Args:
-            t: The target to upload the file to.
-
-        Returns:
-            A tuple containing the method to execute and its arguments.
-
-        """
-        return (t.sftp_put, [self.local, self.remote])
+    def mk_cmd(self, t: Target) -> tuple[Callable[..., Any], tuple[Any, ...]]:
+        """Creates a command to upload a file to a target."""
+        return (t.sftp_put, (self.local, self.remote))
 
 
 class FileDownload(ThreadedTargetGroup):
@@ -168,21 +194,13 @@ class FileDownload(ThreadedTargetGroup):
         self.remote = remote
         self.local = local
 
-    def mk_cmd(self, t: Target):
-        """Creates a command to download a file from a target.
-
-        Args:
-            t: The target to download the file from.
-
-        Returns:
-            A tuple containing the method to execute and its arguments.
-
-        """
-        return (t.sftp_get, [self.remote, self.local])
+    def mk_cmd(self, t: Target) -> tuple[Callable[..., Any], tuple[Any, ...]]:
+        """Creates a command to download a file from a target."""
+        return (t.sftp_get, (self.remote, self.local))
 
 
 class RunCommand:
-    """Runs a command on a group of targets in parallel or serial."""
+    """Runs a command on a group of targets, parallel or serial."""
 
     def __init__(
         self, targets: dict[str, Target], command: str | dict[str, Any]
@@ -197,81 +215,43 @@ class RunCommand:
         self.targets = targets
         self.command = command
 
+    def _cmd_for(self, hostname: str) -> Any:
+        """Resolve the per-host command, accepting a string or dict shape."""
+        if isinstance(self.command, dict):
+            return self.command[hostname]
+        return self.command
+
     def run(self) -> None:
-        """Runs the command on all targets."""
-        parallel: dict[str, Target] = {}
-        serial: dict[str, Target] = {}
+        """Runs the command: parallel hosts in a pool, serial hosts one at a time."""
+        parallel = {
+            h: t for h, t in self.targets.items() if t.mode is not ExecutionMode.SERIAL
+        }
+        serial = {
+            h: t for h, t in self.targets.items() if t.mode is ExecutionMode.SERIAL
+        }
         lock = Lock()
 
-        for target in self.targets:
-            if self.targets[target].mode is ExecutionMode.SERIAL:
-                serial[target] = self.targets[target]
-            else:
-                parallel[target] = self.targets[target]
-
         try:
-            for target in parallel:
-                thread = ThreadedMethod(queue)
-                thread.daemon = True
-                thread.start()
-                if isinstance(self.command, dict):
-                    queue.put((parallel[target].run, [self.command[target], lock]))
-                elif isinstance(self.command, str):
-                    queue.put((parallel[target].run, [self.command, lock]))
+            run_parallel(
+                [(t.run, (self._cmd_for(h), lock)) for h, t in parallel.items()],
+                desc="run",
+            )
 
-            while queue.unfinished_tasks:
-                spinner(lock)
-
-            queue.join()
-
-            for target in serial:
+            for h, t in serial.items():
                 prompt_user(
-                    f"press Enter key to proceed with {serial[target].hostname!s}",
+                    f"press Enter key to proceed with {t.hostname!s}",
                     "",
                 )
-                thread = ThreadedMethod(queue)
-                thread.daemon = True
-                thread.start()
-                queue.put((serial[target].run, [self.command, lock]))
-
-                while queue.unfinished_tasks:
-                    spinner(lock)
-
-                queue.join()
+                t.run(self._cmd_for(h), lock)
 
         except KeyboardInterrupt:
+            # ``run_parallel`` already cancelled queued futures and
+            # returned without joining in-flight workers. Close every
+            # session here so any worker still blocked inside
+            # ``connection.run`` unblocks promptly and exits cleanly.
             print("stopping command queue, please wait.")  # noqa: T201
-            try:
-                while queue.unfinished_tasks:
-                    spinner(lock)
-            except KeyboardInterrupt:
-                for target in self.targets:
-                    with suppress(Exception):
-                        self.targets[target].connection.close_session()
-                with suppress(ValueError):
-                    thread.queue.task_done()
-
-            queue.join()
+            for t in self.targets.values():
+                with suppress(Exception):
+                    t.connection.close_session()
             print()  # noqa: T201
             raise
-
-
-def spinner(lock: Lock | None = None) -> None:
-    """A simple spinner to show that a process is running.
-
-    Args:
-        lock: An optional lock to use when printing to the console.
-
-    """
-    for pos in ["|", "/", "-", "\\"]:
-        if lock:
-            lock.acquire()
-
-        try:
-            sys.stdout.write(f"processing... [{pos}]\r")
-            sys.stdout.flush()
-        finally:
-            if lock:
-                lock.release()
-
-        time.sleep(0.1)
