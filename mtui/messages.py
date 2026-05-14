@@ -123,6 +123,8 @@ class MissingPackagesError(UserError):
 class TestReportNotLoadedError(UserError):
     """Raised when a test report is not loaded."""
 
+    __test__ = False
+
     def __str__(self) -> str:
         return "TestReport not loaded"
 
