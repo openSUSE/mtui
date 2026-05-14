@@ -17,7 +17,7 @@ from mtui import notification
 
 from . import commands, messages
 from .argparse import ArgsParseFailureError
-from .commands import Command
+from .commands import Command, CommandAlreadyBoundError
 from .template.nulltestreport import NullTestReport
 
 logger = getLogger("mtui.prompt")
@@ -69,10 +69,6 @@ class CmdQueue(list):
 
         """
         self.term.stdout.write(f"{self.prompt}{val}\n")
-
-
-class CommandAlreadyBoundError(RuntimeError):
-    """Raised when a command is already bound to the prompt."""
 
 
 class CommandPrompt(cmd.Cmd):
