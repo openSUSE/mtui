@@ -230,9 +230,7 @@ def test_hostgroup_names():
 # --- update_lock ---
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
-def test_update_lock_locks_unlocked_hosts(mock_queue, mock_thread_cls):
+def test_update_lock_locks_unlocked_hosts():
     """Test update_lock() locks hosts that are not locked."""
     t1 = MagicMock()
     t1.hostname = "h1"
@@ -244,9 +242,7 @@ def test_update_lock_locks_unlocked_hosts(mock_queue, mock_thread_cls):
     t1.lock.assert_called_once()
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
-def test_update_lock_raises_when_locked_by_other(mock_queue, mock_thread_cls):
+def test_update_lock_raises_when_locked_by_other():
     """Test update_lock() raises UpdateError when host is locked by another user."""
     t1 = MagicMock()
     t1.hostname = "h1"
@@ -269,10 +265,8 @@ def test_update_lock_raises_when_locked_by_other(mock_queue, mock_thread_cls):
 # --- perform_install ---
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_install_runs_and_unlocks(mock_run, mock_queue, mock_thread):
+def test_perform_install_runs_and_unlocks(mock_run):
     """Test perform_install runs commands and always unlocks."""
     t1 = MagicMock()
     t1.hostname = "h1"
@@ -291,10 +285,8 @@ def test_perform_install_runs_and_unlocks(mock_run, mock_queue, mock_thread):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_install_unlocks_on_error(mock_run, mock_queue, mock_thread):
+def test_perform_install_unlocks_on_error(mock_run):
     """Test perform_install unlocks even when commands raise."""
     t1 = MagicMock()
     t1.hostname = "h1"
@@ -426,9 +418,7 @@ def test_reboot_empty_dict_is_noop():
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
-def test_update_lock_logs_other_user_comment(mock_queue, mock_thread, caplog):
+def test_update_lock_logs_other_user_comment(caplog):
     """When the locking user left a comment, it is logged at info level."""
     t1 = _stub_target("h1", is_locked=True, is_mine=False)
     t1._lock.time.return_value = "Mon 01.01.2024"
@@ -448,10 +438,8 @@ def test_update_lock_logs_other_user_comment(mock_queue, mock_thread, caplog):
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_uninstall_runs_and_unlocks(mock_run, mock_queue, mock_thread):
+def test_perform_uninstall_runs_and_unlocks(mock_run):
     t1 = _stub_target("h1")
     t1.get_uninstaller.return_value = _doer_dict(command="zypper rm pkg", reboot="")
     t1.get_uninstaller_check.return_value = MagicMock()
@@ -461,10 +449,8 @@ def test_perform_uninstall_runs_and_unlocks(mock_run, mock_queue, mock_thread):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_uninstall_unlocks_on_error(mock_run, mock_queue, mock_thread):
+def test_perform_uninstall_unlocks_on_error(mock_run):
     t1 = _stub_target("h1")
     t1.get_uninstaller.return_value = _doer_dict(command="zypper rm pkg", reboot="")
     hg = HostsGroup([t1])
@@ -474,12 +460,8 @@ def test_perform_uninstall_unlocks_on_error(mock_run, mock_queue, mock_thread):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_uninstall_transactional_triggers_reboot(
-    mock_run, mock_queue, mock_thread
-):
+def test_perform_uninstall_transactional_triggers_reboot(mock_run):
     t1 = _stub_target("h1", transactional=True)
     t1.get_uninstaller.return_value = _doer_dict(
         command="transactional-update -n pkg remove pkg",
@@ -497,13 +479,8 @@ def test_perform_uninstall_transactional_triggers_reboot(
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_prepare_runs_per_package_command(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_prepare_runs_per_package_command(mock_run):
     """``perform_prepare`` runs the command-template once per package."""
     t1 = _stub_target("h1")
     t1.lasterr.return_value = ""
@@ -511,22 +488,15 @@ def test_perform_prepare_runs_per_package_command(
         command="zypper in $package", reboot="", start_command=""
     )
     t1.get_preparer_check.return_value = MagicMock()
-    # ``queue.unfinished_tasks`` is used as a loop sentinel; force it to 0.
-    mock_queue.unfinished_tasks = 0
-    hg = HostsGroup([t1])
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.perform_prepare(["pkg-a", "pkg-b"], MagicMock())
     # 2 packages → 2 RunCommand invocations beyond the lock cleanup.
     assert mock_run.call_count >= 2
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_prepare_filters_branding_upstream(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_prepare_filters_branding_upstream(mock_run):
     """The hard-coded ``branding-upstream`` name is excluded from per-pkg cmds."""
     t1 = _stub_target("h1")
     t1.lasterr.return_value = ""
@@ -534,8 +504,7 @@ def test_perform_prepare_filters_branding_upstream(
         command="zypper in $package", reboot="", start_command=""
     )
     t1.get_preparer_check.return_value = MagicMock()
-    mock_queue.unfinished_tasks = 0
-    hg = HostsGroup([t1])
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.perform_prepare(["pkg-a", "branding-upstream", "pkg-b"], MagicMock())
     # 2 surviving packages.
     per_pkg_calls = [
@@ -546,13 +515,8 @@ def test_perform_prepare_filters_branding_upstream(
     assert len(per_pkg_calls) == 2
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_prepare_aborts_on_set_repo_error(
-    mock_run, mock_queue, mock_thread, mock_spinner, caplog
-):
+def test_perform_prepare_aborts_on_set_repo_error(mock_run, caplog):
     """``set_repo`` failure (non-empty ``lasterr``) logs critical and returns early."""
     t1 = _stub_target("h1")
     t1.lasterr.return_value = "repo failure"
@@ -561,7 +525,6 @@ def test_perform_prepare_aborts_on_set_repo_error(
     t1.get_preparer.return_value = _doer_dict(
         command="zypper in $package", reboot="", start_command=""
     )
-    mock_queue.unfinished_tasks = 0
     hg = HostsGroup([t1])
     with caplog.at_level("CRITICAL", logger="mtui.target.hostgroup"):
         hg.perform_prepare(["pkg-a"], MagicMock())
@@ -581,13 +544,8 @@ def test_perform_prepare_aborts_on_set_repo_error(
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_downgrade_picks_highest_version_then_runs(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
     """The list_command output is parsed and the newest version is chosen."""
     t1 = _stub_target("h1")
     # Pretend list_command output is parsed: ``pkg-a = 1.0`` and ``pkg-a = 1.5``.
@@ -600,7 +558,6 @@ def test_perform_downgrade_picks_highest_version_then_runs(
         ),
     }
     t1.get_downgrader_check.return_value = MagicMock()
-    mock_queue.unfinished_tasks = 0
     hg = HostsGroup([t1])
     hg.perform_downgrade(["pkg-a"], MagicMock())
     # Confirm the per-package command was substituted with the higher version.
@@ -609,13 +566,8 @@ def test_perform_downgrade_picks_highest_version_then_runs(
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_downgrade_unlocks_on_error(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_downgrade_unlocks_on_error(mock_run):
     t1 = _stub_target("h1")
     t1.lastout.return_value = ""
     t1.get_downgrader.return_value = {
@@ -623,7 +575,6 @@ def test_perform_downgrade_unlocks_on_error(
         "list_command": MagicMock(safe_substitute=MagicMock(return_value="rpm -qa")),
         "command": MagicMock(safe_substitute=MagicMock(return_value="x")),
     }
-    mock_queue.unfinished_tasks = 0
     hg = HostsGroup([t1])
     mock_run.return_value.run.side_effect = RuntimeError("downgrade boom")
     with pytest.raises(RuntimeError, match="downgrade boom"):
@@ -636,19 +587,13 @@ def test_perform_downgrade_unlocks_on_error(
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_update_runs_full_flow_with_noprepare_and_noscript(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
     """``noprepare`` skips prepare; ``noscript`` skips Pre/Post/Compare scripts."""
     t1 = _stub_target("h1")
     t1.packages = {}  # short-circuit package_check
     t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
     t1.get_updater_check.return_value = MagicMock()
-    mock_queue.unfinished_tasks = 0
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -661,13 +606,8 @@ def test_perform_update_runs_full_flow_with_noprepare_and_noscript(
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_update_runs_pre_post_and_compare_scripts(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
     """Default flow runs Pre, Post and Compare scripts when not in auto mode."""
     from mtui.hooks import CompareScript, PostScript, PreScript
 
@@ -680,7 +620,6 @@ def test_perform_update_runs_pre_post_and_compare_scripts(
     )
     t1.get_preparer_check.return_value = MagicMock()
     t1.lasterr.return_value = ""
-    mock_queue.unfinished_tasks = 0
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -695,17 +634,11 @@ def test_perform_update_runs_pre_post_and_compare_scripts(
     assert CompareScript in script_classes_called
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_update_unlocks_when_run_fails(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_update_unlocks_when_run_fails(mock_run):
     t1 = _stub_target("h1")
     t1.packages = {}
     t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
-    mock_queue.unfinished_tasks = 0
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -718,19 +651,14 @@ def test_perform_update_unlocks_when_run_fails(
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
+@patch.object(HostsGroup, "_fanout_set_repo")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_update_removes_repos_at_end(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
-    """``perform_update`` queues set_repo('remove', ...) after the update."""
+def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
+    """``perform_update`` fans out set_repo('add') first, then ('remove')."""
     t1 = _stub_target("h1")
     t1.packages = {}
     t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
     t1.get_updater_check.return_value = MagicMock()
-    mock_queue.unfinished_tasks = 0
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -739,28 +667,19 @@ def test_perform_update_removes_repos_at_end(
     hg = HostsGroup([t1])
     hg.perform_update(testreport, ["noprepare", "noscript"])
 
-    set_repo_calls = [
-        call.args[0]
-        for call in mock_queue.put.call_args_list
-        if call.args and call.args[0][0] is t1.set_repo
-    ]
+    operations = [c.args[0] for c in mock_fanout.call_args_list]
     # The repo lifecycle is: add at the start, remove at the end.
-    assert set_repo_calls[0] == (t1.set_repo, ["add", testreport])
-    assert set_repo_calls[-1] == (t1.set_repo, ["remove", testreport])
+    assert operations[0] == "add"
+    assert operations[-1] == "remove"
 
 
-@patch("mtui.target.hostgroup.spinner")
-@patch("mtui.target.hostgroup.ThreadedMethod")
-@patch("mtui.target.hostgroup.queue")
+@patch.object(HostsGroup, "_fanout_set_repo")
 @patch("mtui.target.hostgroup.RunCommand")
-def test_perform_update_removes_repos_even_when_run_fails(
-    mock_run, mock_queue, mock_thread, mock_spinner
-):
+def test_perform_update_removes_repos_even_when_run_fails(mock_run, mock_fanout):
     """Repo cleanup runs even when the updater command itself raises."""
     t1 = _stub_target("h1")
     t1.packages = {}
     t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
-    mock_queue.unfinished_tasks = 0
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -772,12 +691,8 @@ def test_perform_update_removes_repos_even_when_run_fails(
     with pytest.raises(RuntimeError, match="update boom"):
         hg.perform_update(testreport, ["noprepare", "noscript"])
 
-    set_repo_calls = [
-        call.args[0]
-        for call in mock_queue.put.call_args_list
-        if call.args and call.args[0][0] is t1.set_repo
-    ]
-    assert (t1.set_repo, ["remove", testreport]) in set_repo_calls
+    operations = [c.args[0] for c in mock_fanout.call_args_list]
+    assert "remove" in operations
 
 
 # ---------------------------------------------------------------------------
