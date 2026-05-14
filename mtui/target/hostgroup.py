@@ -208,9 +208,6 @@ class HostsGroup(UserDict[str, Target]):
                     )
             else:
                 t.lock()
-                thread = ThreadedMethod(queue)
-                thread.daemon = True
-                thread.start()
 
         if skipped:
             for t in self.data.values():
@@ -226,7 +223,17 @@ class HostsGroup(UserDict[str, Target]):
         queue.join()`` block four times. Centralising it keeps the perform
         methods focused on their pre/post logic and gives the executor
         rewrite a single seam to swap.
+
+        Spawns one worker thread per target before queueing the work; the
+        worker pool used to be pre-warmed by ``update_lock`` as a side
+        effect, which was both surprising and fragile (workers died on the
+        10s queue timeout if the put loop took too long).
         """
+        for _ in self.data.values():
+            worker = ThreadedMethod(queue)
+            worker.daemon = True
+            worker.start()
+
         for t in self.data.values():
             queue.put((t.set_repo, [operation, testreport]))
 
