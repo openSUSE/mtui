@@ -218,6 +218,23 @@ class HostsGroup(UserDict[str, Target]):
                     t.unlock()
             raise UpdateError("Hosts locked")
 
+    def _fanout_set_repo(self, operation: str, testreport) -> None:
+        """Fan ``Target.set_repo(operation, testreport)`` out across every host.
+
+        The four ``perform_*`` flows used to inline this open-coded
+        ``for t: queue.put(...) ; while queue.unfinished_tasks: spinner() ;
+        queue.join()`` block four times. Centralising it keeps the perform
+        methods focused on their pre/post logic and gives the executor
+        rewrite a single seam to swap.
+        """
+        for t in self.data.values():
+            queue.put((t.set_repo, [operation, testreport]))
+
+        while queue.unfinished_tasks:
+            spinner()
+
+        queue.join()
+
     def perform_install(self, packages: list[str]) -> None:
         """Performs an installation on all hosts in the group.
 
@@ -308,11 +325,7 @@ class HostsGroup(UserDict[str, Target]):
         self.update_lock()
 
         try:
-            for t in self.data.values():
-                queue.put((t.set_repo, [operation, testreport]))
-
-            while queue.unfinished_tasks:
-                spinner()
+            self._fanout_set_repo(operation, testreport)
             if start:
                 self.run(start)
 
@@ -370,13 +383,7 @@ class HostsGroup(UserDict[str, Target]):
         }
 
         try:
-            for t in self.data.values():
-                queue.put((t.set_repo, ["remove", testreport]))
-
-            while queue.unfinished_tasks:
-                spinner()
-
-            queue.join()
+            self._fanout_set_repo("remove", testreport)
 
             list_cmd = {
                 h: t.get_downgrader()["list_command"].safe_substitute(
@@ -503,13 +510,7 @@ class HostsGroup(UserDict[str, Target]):
 
         self.update_lock()
 
-        for t in self.data.values():
-            queue.put((t.set_repo, ["add", testreport]))
-
-        while queue.unfinished_tasks:
-            spinner()
-
-        queue.join()
+        self._fanout_set_repo("add", testreport)
 
         repa = f":p={testreport.rrid.maintenance_id}:{testreport.rrid.review_id}"
         commands = {
@@ -559,13 +560,7 @@ class HostsGroup(UserDict[str, Target]):
                 )
             else:
                 try:
-                    for t in self.data.values():
-                        queue.put((t.set_repo, ["remove", testreport]))
-
-                    while queue.unfinished_tasks:
-                        spinner()
-
-                    queue.join()
+                    self._fanout_set_repo("remove", testreport)
                 finally:
                     self.unlock()
 
