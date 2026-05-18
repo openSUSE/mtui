@@ -175,6 +175,8 @@ class Target:
         """
         if packages is None:
             packages = list(self.packages.keys())
+        if not packages:
+            return
         match self.state:
             case TargetState.ENABLED:
                 pvs = self.query_package_versions(packages)
