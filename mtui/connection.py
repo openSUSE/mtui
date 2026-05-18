@@ -637,7 +637,11 @@ class Connection:
                 remote,
                 local,
             )
-            files = self.sftp_listdir(remote)
+            # listdir directly on the live client so the whole batch
+            # (1 listdir + N gets) shares one SFTP session; previously
+            # listdir went through self.sftp_listdir, opening a second
+            # client.
+            files = sftp.listdir(str(remote))
             for file in files:
                 sftp.get(
                     f"{remote}/{file}",
@@ -722,12 +726,16 @@ class Connection:
         """
         logger.debug("deleting dir %s:%s:%s", self.hostname, self.port, path)
         with self._sftp() as sftp:
-            items = self.sftp_listdir(path)
-
+            # listdir + per-file remove + final rmdir all share one
+            # SFTP session; previously each child op opened its own
+            # client via self.sftp_listdir / self.sftp_remove.
+            items = sftp.listdir(str(path))
             for item in items:
                 filename = path / item
-                self.sftp_remove(filename)
-
+                try:
+                    sftp.remove(str(filename))
+                except OSError:
+                    logger.exception("Can't remove %s from %s", filename, self.hostname)
             sftp.rmdir(str(path))
 
     def sftp_readlink(self, path: Path) -> str | None:
