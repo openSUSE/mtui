@@ -13,6 +13,8 @@ import stat
 import sys
 import termios
 import tty
+from collections.abc import Iterator
+from contextlib import contextmanager
 from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
@@ -520,6 +522,34 @@ class Connection:
             counter += 1
         return sftp
 
+    @contextmanager
+    def _sftp(self) -> Iterator[SFTPClient]:
+        """Open an SFTP client, yield it for one or more operations, then close.
+
+        Centralises the open + close lifecycle so every public ``sftp_*``
+        method (and external callers via :meth:`sftp_session`) reuses a
+        single client across the with-block. Mid-block paramiko errors
+        propagate to the caller; reconnect happens once at entry.
+        """
+        sftp = self.__sftp_reconnect()
+        try:
+            yield sftp
+        finally:
+            sftp.close()
+
+    @contextmanager
+    def sftp_session(self) -> Iterator[SFTPClient]:
+        """Public CM for batching multi-step SFTP ops against this host.
+
+        Yields a live :class:`paramiko.SFTPClient`. Use this when the
+        caller wants to perform several reads/writes against the same
+        host without paying the per-op handshake cost charged by the
+        individual ``sftp_*`` helpers. Mid-session paramiko errors
+        propagate out of the with-block; this CM does not auto-retry.
+        """
+        with self._sftp() as sftp:
+            yield sftp
+
     def sftp_put(self, local: Path, remote: Path) -> None:
         """Transfers a file to the remote host over SFTP.
 
@@ -530,48 +560,47 @@ class Connection:
             remote: The remote path to transfer the file to.
 
         """
-        path = ""
-        sftp = self.__sftp_reconnect()
+        with self._sftp() as sftp:
+            path = ""
+            # create remote base directory and copy the file to that directory
+            for subdir in str(remote).split("/")[:-1]:
+                path += subdir + "/"
+                created = False
+                while not created:
+                    try:
+                        sftp.mkdir(path)
+                        created = True
+                    except (
+                        AttributeError,
+                        paramiko.ChannelException,
+                        paramiko.SSHException,
+                    ):
+                        created = False
+                        sftp = self.__sftp_reconnect()
+                    except Exception:
+                        # Most commonly: directory already exists (sftp.mkdir
+                        # raises OSError on EEXIST). Treat as success but leave
+                        # a breadcrumb so unexpected failures are diagnosable.
+                        logger.debug(
+                            "sftp mkdir %s treated as success",
+                            path,
+                            exc_info=True,
+                        )
+                        created = True
 
-        # create remote base directory and copy the file to that directory
-        for subdir in str(remote).split("/")[:-1]:
-            path += subdir + "/"
-            created = False
-            while not created:
-                try:
-                    sftp.mkdir(path)
-                    created = True
-                except (
-                    AttributeError,
-                    paramiko.ChannelException,
-                    paramiko.SSHException,
-                ):
-                    created = False
-                    sftp = self.__sftp_reconnect()
-                except Exception:
-                    # Most commonly: directory already exists (sftp.mkdir
-                    # raises OSError on EEXIST). Treat as success but leave
-                    # a breadcrumb so unexpected failures are diagnosable.
-                    logger.debug(
-                        "sftp mkdir %s treated as success", path, exc_info=True
-                    )
-                    created = True
+            logger.debug(
+                "transmitting %s to %s:%s:%s",
+                local,
+                self.hostname,
+                self.port,
+                remote,
+            )
+            # paramiko isn't prepared for proper pathlib objects
+            sftp.put(str(local), str(remote))
 
-        logger.debug(
-            "transmitting %s to %s:%s:%s",
-            local,
-            self.hostname,
-            self.port,
-            remote,
-        )
-        # paramiko isn't prepared for proper pathlib objects
-        sftp.put(str(local), str(remote))
-
-        # make file executable since it's probably a script which needs to be
-        # run
-        sftp.chmod(str(remote), stat.S_IRWXG | stat.S_IRWXU)
-
-        sftp.close()
+            # make file executable since it's probably a script which needs
+            # to be run
+            sftp.chmod(str(remote), stat.S_IRWXG | stat.S_IRWXU)
 
     def sftp_get(self, remote: Path, local: Path) -> None:
         """Transfers a file from the remote host to the local host.
@@ -581,9 +610,7 @@ class Connection:
             local: The local path to transfer the file to.
 
         """
-        sftp = self.__sftp_reconnect()
-
-        try:
+        with self._sftp() as sftp:
             logger.debug(
                 "transmitting %s:%s:%s to %s",
                 self.hostname,
@@ -592,8 +619,6 @@ class Connection:
                 local,
             )
             sftp.get(str(remote), local)
-        finally:
-            sftp.close()
 
     # Similar to 'get' but handles folders.
     def sftp_get_folder(self, remote: Path, local: Path) -> None:
@@ -604,8 +629,7 @@ class Connection:
             local: The local path to transfer the folder to.
 
         """
-        sftp = self.__sftp_reconnect()
-        try:
+        with self._sftp() as sftp:
             logger.debug(
                 "transmitting %s:%s:%s to %s",
                 self.hostname,
@@ -619,8 +643,6 @@ class Connection:
                     f"{remote}/{file}",
                     f"{local}{file}.{self.hostname}",
                 )
-        finally:
-            sftp.close()
 
     def sftp_listdir(self, path: Path = Path()) -> list[str]:
         """Gets a directory listing of the remote host.
@@ -638,13 +660,8 @@ class Connection:
             self.port,
             path,
         )
-        sftp = self.__sftp_reconnect()
-
-        try:
-            listdir = sftp.listdir(str(path))
-        finally:
-            sftp.close()
-        return listdir
+        with self._sftp() as sftp:
+            return sftp.listdir(str(path))
 
     def sftp_open(self, filename: Path, mode: str = "r", bufsize=-1) -> SFTPFile:
         """Opens a remote file for reading.
@@ -658,6 +675,11 @@ class Connection:
             An SFTPFile object.
 
         """
+        # C7: keep manual SFTPClient lifetime here. The returned
+        # ``SFTPFile`` holds a strong reference to the SFTP channel, so
+        # the file stays usable after the client object is GC'd. Routing
+        # this through the ``_sftp`` context manager would call
+        # ``client.close()`` on exit and break that behaviour.
         logger.debug("%s open(%s, %s)", repr(self), filename, mode)
         logger.debug("  -> self.client.open_sftp")
         sftp = self.__sftp_reconnect()
@@ -685,14 +707,11 @@ class Connection:
 
         """
         logger.debug("deleting file %s:%s:%s", self.hostname, self.port, path)
-        sftp = self.__sftp_reconnect()
-
         try:
-            sftp.remove(str(path))
+            with self._sftp() as sftp:
+                sftp.remove(str(path))
         except OSError:
             logger.exception("Can't remove %s from %s", path, self.hostname)
-        finally:
-            sftp.close()
 
     def sftp_rmdir(self, path: Path) -> None:
         """Deletes a remote directory.
@@ -702,8 +721,7 @@ class Connection:
 
         """
         logger.debug("deleting dir %s:%s:%s", self.hostname, self.port, path)
-        sftp = self.__sftp_reconnect()
-        try:
+        with self._sftp() as sftp:
             items = self.sftp_listdir(path)
 
             for item in items:
@@ -711,8 +729,6 @@ class Connection:
                 self.sftp_remove(filename)
 
             sftp.rmdir(str(path))
-        finally:
-            sftp.close()
 
     def sftp_readlink(self, path: Path) -> str | None:
         """Returns the target of a symbolic link.
@@ -725,12 +741,8 @@ class Connection:
 
         """
         logger.debug("read link %s:%s:%s", self.hostname, self.port, path)
-        sftp = self.__sftp_reconnect()
-        try:
-            link = sftp.readlink(str(path))
-        finally:
-            sftp.close()
-        return link
+        with self._sftp() as sftp:
+            return sftp.readlink(str(path))
 
     def is_active(self) -> bool:
         """Checks if the connection is active.
