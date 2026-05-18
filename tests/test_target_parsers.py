@@ -116,27 +116,35 @@ class TestParseOsRelease:
 # --- parse_system (integration-style) ---
 
 
+def _mock_connection_with_sftp() -> tuple[MagicMock, MagicMock]:
+    """Return a mock Connection plus the SFTPClient yielded by sftp_session()."""
+    conn = MagicMock()
+    conn.hostname = "host1"
+    sftp = MagicMock()
+    conn.sftp_session.return_value.__enter__.return_value = sftp
+    return conn, sftp
+
+
 class TestParseSystem:
     @patch("mtui.target.parsers.system.product")
     def test_parse_suse_system(self, mock_product_module):
         """Test parsing a SUSE system with products.d."""
-        conn = MagicMock()
-        conn.hostname = "host1"
+        conn, sftp = _mock_connection_with_sftp()
 
         # List products.d - return prod files
-        conn.sftp_listdir.return_value = ["SLES.prod", "sle-module-basesystem.prod"]
+        sftp.listdir.return_value = ["SLES.prod", "sle-module-basesystem.prod"]
 
         # readlink for baseproduct
-        conn.sftp_readlink.return_value = "SLES.prod"
+        sftp.readlink.return_value = "SLES.prod"
 
         # Mock the SFTP file open as context manager
         base_file = MagicMock()
         addon_file = MagicMock()
-        # sftp_open calls sequence:
+        # sftp.open calls sequence:
         # 1. base product file
         # 2. addon product file
         # 3. transactional-update.conf (FileNotFoundError)
-        conn.sftp_open.side_effect = [
+        sftp.open.side_effect = [
             base_file,
             addon_file,
             FileNotFoundError("not found"),
@@ -153,15 +161,16 @@ class TestParseSystem:
 
         assert system.get_base().name == "SLES"
         assert transactional is False
+        # The whole parse_system call ran inside a single SFTP session.
+        assert conn.sftp_session.call_count == 1
 
     @patch("mtui.target.parsers.system.product")
     def test_parse_non_suse_system(self, mock_product_module):
         """Test parsing a non-SUSE system falls back to os-release."""
-        conn = MagicMock()
-        conn.hostname = "host1"
+        conn, sftp = _mock_connection_with_sftp()
 
-        # sftp_listdir raises OSError (no products.d)
-        conn.sftp_listdir.side_effect = OSError("not found")
+        # sftp.listdir raises OSError (no products.d)
+        sftp.listdir.side_effect = OSError("not found")
 
         # os-release file
         mock_product_module.parse_os_release.return_value = (
@@ -171,7 +180,7 @@ class TestParseSystem:
         )
 
         os_release_file = MagicMock()
-        conn.sftp_open.return_value = os_release_file
+        sftp.open.return_value = os_release_file
 
         from mtui.target.parsers.system import parse_system
 
@@ -179,3 +188,4 @@ class TestParseSystem:
 
         assert system.get_base().name == "ubuntu"
         assert transactional is False
+        assert conn.sftp_session.call_count == 1
