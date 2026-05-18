@@ -62,6 +62,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `cmd_list` attribute and the `globals()`-based per-class re-export have
   been removed; the only documented consumer was `CommandPrompt`, which
   now iterates `commands.registry.values()` directly.
+- Multi-step SFTP operations now share a single SFTP session instead of
+  opening a fresh channel for each step. `Connection.sftp_get_folder` and
+  `Connection.sftp_rmdir` (1 listdir + N gets/removes + optional rmdir)
+  drop from N+2 channel handshakes to 1, and target-system probing
+  (`parsers/system.parse_system`, called once per target on `add_host`)
+  drops from 6+ handshakes to 1. A new `Connection.sftp_session()`
+  context manager exposes the same batching primitive to other callers
+  that want to fan multiple reads/writes through one session.
 
 ### Fixed
 - Exceptions raised inside parallel target operations
@@ -105,6 +113,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `mtui.use_keyring`) is silently replaced by the default with no log
   message, due to a malformed format string in the error path. The
   default behaviour is correct but the diagnostic is missing.
+- `Connection.__sftp_open` has a dead defensive branch
+  (`if "sftp" in locals() and isinstance(sftp, SFTPClient)`) in its
+  exception handler: the named exceptions are raised by the very
+  `client.open_sftp()` assignment that would bind `sftp`, so `sftp` is
+  never in `locals()` when that branch runs. Harmless (the function
+  correctly returns `None` immediately afterwards) but the cleanup it
+  attempts can never fire.
 
 ### Fixed
 - `Target.state` is now validated at construction; previously the
