@@ -569,3 +569,71 @@ def test_sftp_readlink_returns_target(conn_with_sftp, sftp_client):
     sftp_client.readlink.return_value = "/real/path"
     assert conn_with_sftp.sftp_readlink(_Path("/link")) == "/real/path"
     sftp_client.close.assert_called()
+
+
+# ---------------------------------------------------------------------------
+# sftp_session() context manager + multi-step internal reuse (C7)
+# ---------------------------------------------------------------------------
+
+
+def test_sftp_session_reuses_single_client(
+    conn_with_sftp, sftp_client, mock_ssh_client
+):
+    """Multiple ops inside one ``sftp_session`` share the same client."""
+    with conn_with_sftp.sftp_session() as sftp:
+        sftp.listdir("/etc")
+        sftp.readlink("/some/link")
+        sftp.listdir("/var")
+
+    # One handshake at entry, one close on exit; no per-op churn.
+    assert mock_ssh_client.open_sftp.call_count == 1
+    assert sftp_client.close.call_count == 1
+
+
+def test_sftp_session_propagates_paramiko_errors(
+    conn_with_sftp, sftp_client, mock_ssh_client
+):
+    """Mid-block paramiko errors propagate; the client is still closed."""
+    sftp_client.listdir.side_effect = paramiko.SSHException("broken")
+
+    with (  # noqa: PT012
+        pytest.raises(paramiko.SSHException, match="broken"),
+        conn_with_sftp.sftp_session() as sftp,
+    ):
+        sftp.listdir("/")
+        # Second op never runs.
+        sftp.readlink("/nope")
+
+    # No auto-retry: a single handshake, single close.
+    assert mock_ssh_client.open_sftp.call_count == 1
+    assert sftp_client.close.call_count == 1
+    sftp_client.readlink.assert_not_called()
+
+
+def test_sftp_get_folder_uses_one_session(conn_with_sftp, sftp_client, mock_ssh_client):
+    """``sftp_get_folder`` performs listdir + N gets over a single session."""
+    from pathlib import Path as _Path
+
+    sftp_client.listdir.return_value = ["a", "b", "c"]
+    conn_with_sftp.sftp_get_folder(_Path("/remote"), _Path("/local/"))
+
+    # 1 handshake for the whole batch (listdir + 3 gets), not 4.
+    assert mock_ssh_client.open_sftp.call_count == 1
+    sftp_client.listdir.assert_called_once_with("/remote")
+    assert sftp_client.get.call_count == 3
+    assert sftp_client.close.call_count == 1
+
+
+def test_sftp_rmdir_uses_one_session(conn_with_sftp, sftp_client, mock_ssh_client):
+    """``sftp_rmdir`` performs listdir + N removes + rmdir over a single session."""
+    from pathlib import Path as _Path
+
+    sftp_client.listdir.return_value = ["a", "b"]
+    conn_with_sftp.sftp_rmdir(_Path("/some/dir"))
+
+    # Pre-C7 this opened 1 (listdir) + 2 (remove) + 1 (rmdir) = 4 sessions.
+    assert mock_ssh_client.open_sftp.call_count == 1
+    sftp_client.listdir.assert_called_once_with("/some/dir")
+    assert sftp_client.remove.call_count == 2
+    sftp_client.rmdir.assert_called_once_with("/some/dir")
+    assert sftp_client.close.call_count == 1
