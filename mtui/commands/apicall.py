@@ -162,8 +162,8 @@ class Unassign(BaseApiCall):
 
     def osc(self) -> None:
         """Unassigns the request in OSC."""
-        logger.info("Unassign request %s", self.metadata.id.review_id)
-        osc = OSC(self.config, self.metadata.id)
+        logger.info("Unassign request %s", self.metadata.rrid.review_id)
+        osc = OSC(self.config, self.metadata.rrid)
         osc.unassign(self.args.group)
 
     def gitea(self) -> None:
