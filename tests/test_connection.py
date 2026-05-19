@@ -484,6 +484,31 @@ def test_sftp_put_treats_existing_dir_as_success(conn_with_sftp, sftp_client, ca
     sftp_client.put.assert_called_once()
 
 
+def test_sftp_put_propagates_paramiko_errors_without_reconnect(
+    conn_with_sftp, sftp_client, mock_ssh_client
+):
+    """Paramiko transport errors during ``mkdir`` propagate to the caller.
+
+    Regression: ``sftp_put`` used to rebind the local ``sftp`` to a fresh
+    client returned from ``__sftp_reconnect`` on transport errors. Because
+    ``_sftp``'s ``finally`` closes the original (captured) client, the
+    rebound client was never closed and leaked. The fix drops the inner
+    retry loop entirely; any paramiko error propagates instead, and the
+    single SFTP client opened by ``_sftp`` is closed exactly once.
+    """
+    from pathlib import Path as _Path
+
+    sftp_client.mkdir.side_effect = paramiko.SSHException("transport gone")
+    with pytest.raises(paramiko.SSHException):
+        conn_with_sftp.sftp_put(_Path("/local"), _Path("/srv/sub/file.txt"))
+    # No retry => the put never happens.
+    sftp_client.put.assert_not_called()
+    # Exactly one SFTPClient was opened and exactly one was closed:
+    # nothing leaked from a mid-loop reconnect.
+    assert mock_ssh_client.open_sftp.call_count == 1
+    assert sftp_client.close.call_count == 1
+
+
 def test_sftp_get_calls_paramiko_get(conn_with_sftp, sftp_client):
     from pathlib import Path as _Path
 
