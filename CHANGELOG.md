@@ -72,6 +72,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   that want to fan multiple reads/writes through one session.
 
 ### Fixed
+- `Connection.sftp_put` no longer leaks SFTP clients when a transient
+  paramiko transport error interrupts the `mkdir` walk. The old
+  hand-rolled retry rebound the local `sftp` to a fresh client returned
+  from `__sftp_reconnect`, but the surrounding `_sftp()` context manager
+  only closes the client it originally captured; every reconnect (and
+  the final working client used for the actual `put` / `chmod`) leaked.
+  `sftp_put` now lets paramiko errors propagate per the documented
+  `_sftp()` contract, so the single client opened for the call is
+  always closed exactly once.
 - Exceptions raised inside parallel target operations
   (`Target.set_repo`, `Target.run`, the SFTP helpers used by `put` /
   `get` / `remove`) now surface to the caller and abort the enclosing

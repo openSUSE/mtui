@@ -562,31 +562,25 @@ class Connection:
         """
         with self._sftp() as sftp:
             path = ""
-            # create remote base directory and copy the file to that directory
+            # create remote base directory and copy the file to that directory.
+            # Paramiko transport errors propagate per the ``_sftp`` contract;
+            # don't rebind ``sftp`` mid-loop or the CM cannot close the
+            # replacement client. ``OSError`` covers the common "directory
+            # already exists" case (EEXIST) and is the only exception we
+            # intentionally swallow.
             for subdir in str(remote).split("/")[:-1]:
                 path += subdir + "/"
-                created = False
-                while not created:
-                    try:
-                        sftp.mkdir(path)
-                        created = True
-                    except (
-                        AttributeError,
-                        paramiko.ChannelException,
-                        paramiko.SSHException,
-                    ):
-                        created = False
-                        sftp = self.__sftp_reconnect()
-                    except Exception:
-                        # Most commonly: directory already exists (sftp.mkdir
-                        # raises OSError on EEXIST). Treat as success but leave
-                        # a breadcrumb so unexpected failures are diagnosable.
-                        logger.debug(
-                            "sftp mkdir %s treated as success",
-                            path,
-                            exc_info=True,
-                        )
-                        created = True
+                try:
+                    sftp.mkdir(path)
+                except OSError:
+                    # Most commonly: directory already exists. Treat as
+                    # success but leave a breadcrumb so unexpected failures
+                    # are diagnosable.
+                    logger.debug(
+                        "sftp mkdir %s treated as success",
+                        path,
+                        exc_info=True,
+                    )
 
             logger.debug(
                 "transmitting %s to %s:%s:%s",
