@@ -110,6 +110,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   not a TTY (log files and redirected output stay clean). Restores the
   "mtui is alive" feedback that was lost when the queue/spinner thread
   was retired.
+- `put` command log message no longer contains an extra `i` character;
+  fixed "uploaded /X to i/tmp/Y" → "uploaded /X to /tmp/Y".
+- `Attributes.__str__` (refhost string representation) now formats addon
+  versions consistently with product versions: only adds a dot separator
+  when the minor version exists and is numeric. Previously addons always
+  included a trailing dot ("ha 15."), while products omitted it ("sles 12").
 
 ### Known issues
 - A non-numeric value for `connection_timeout` (e.g.
