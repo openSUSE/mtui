@@ -113,7 +113,7 @@ class TestAttributes:
             {"name": "ha", "version": {"major": 15}},
         ]
         # Addons are sorted alphabetically.
-        assert str(attr) == "ha 15. sdk 15.5"
+        assert str(attr) == "ha 15 sdk 15.5"
 
     def test_repr_wraps_str(self):
         attr = refhost.Attributes()

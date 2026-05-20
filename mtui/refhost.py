@@ -57,8 +57,10 @@ class Attributes:
         for addon in sorted(self.addons, key=lambda addon: addon["name"]):
             serialization = addon["name"]
             if "version" in addon and "major" in addon["version"]:
-                serialization += " " + str(addon["version"]["major"]) + "."
+                serialization += " " + str(addon["version"]["major"])
                 if "minor" in addon["version"]:
+                    if isinstance(addon["version"]["minor"], int):
+                        serialization += "."
                     serialization += str(addon["version"]["minor"])
 
             addons.append(serialization)
