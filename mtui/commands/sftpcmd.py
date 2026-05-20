@@ -56,7 +56,7 @@ class SFTPPut(Command):
             remote = self.metadata.target_wd(filename.name)
 
             targets.sftp_put(filename, remote)
-            logger.info("uploaded %s to i%s", filename, remote)
+            logger.info("uploaded %s to %s", filename, remote)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
