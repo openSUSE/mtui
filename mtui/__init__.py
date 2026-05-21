@@ -4,7 +4,7 @@ This package provides a command-line tool for running shell commands on
 multiple hosts in parallel, with a focus on maintenance update testing.
 """
 
-__version__ = "16.1.9"
+__version__ = "16.1.10"
 
 
 def __getattr__(name):

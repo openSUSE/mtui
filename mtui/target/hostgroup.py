@@ -9,7 +9,13 @@ from typing import Self, final
 
 from ..exceptions import UpdateError
 from ..hooks import CompareScript, PostScript, PreScript
-from ..messages import HostIsNotConnectedError
+from ..messages import (
+    HostIsNotConnectedError,
+    MissingDowngraderError,
+    MissingInstallerError,
+    MissingPreparerError,
+    MissingUninstallerError,
+)
 from ..types import Package
 from ..types.rpmver import RPMVersion
 from . import Target
@@ -219,23 +225,23 @@ class HostsGroup(UserDict[str, Target]):
             raise UpdateError("Hosts locked")
 
     def perform_install(self, packages: list[str]) -> None:
-        """Performs an installation on all hosts in the group.
+        """Performs an installation on all hosts in the group."""
+        try:
+            commands = {
+                t.hostname: t.get_installer()["command"].substitute(
+                    packages=" ".join(packages)
+                )
+                for t in self.data.values()
+            }
+            reboot = {
+                t.hostname: t.get_installer()["reboot"].substitute()
+                for t in self.data.values()
+                if t.transactional
+            }
+        except MissingInstallerError as e:
+            logger.error("%s", e)
+            return
 
-        Args:
-            packages: A list of packages to install.
-
-        """
-        commands = {
-            t.hostname: t.get_installer()["command"].substitute(
-                packages=" ".join(packages)
-            )
-            for t in self.data.values()
-        }
-        reboot = {
-            t.hostname: t.get_installer()["reboot"].substitute()
-            for t in self.data.values()
-            if t.transactional
-        }
         self.update_lock()
         try:
             self.run(commands)
@@ -294,16 +300,20 @@ class HostsGroup(UserDict[str, Target]):
         pkgs = [p for p in packages if p != "branding-upstream"]
         # big change, all packages prepared in one step, so we dont need reboot transactional systems too many times
 
-        reboot = {
-            t.hostname: t.get_preparer()["reboot"].substitute()
-            for t in self.data.values()
-            if t.transactional
-        }
-        start = {
-            t.hostname: t.get_preparer()["start_command"].substitute()
-            for t in self.data.values()
-            if t.transactional
-        }
+        try:
+            reboot = {
+                t.hostname: t.get_preparer()["reboot"].substitute()
+                for t in self.data.values()
+                if t.transactional
+            }
+            start = {
+                t.hostname: t.get_preparer()["start_command"].substitute()
+                for t in self.data.values()
+                if t.transactional
+            }
+        except MissingPreparerError as e:
+            logger.error("%s", e)
+            return
 
         self.update_lock()
 
@@ -341,6 +351,8 @@ class HostsGroup(UserDict[str, Target]):
                 )
             self._reboot(reboot)
 
+        except MissingUninstallerError as e:
+            logger.error("%s", e)
         except Exception:
             logger.exception("Error during prepare operation")
         finally:
@@ -358,16 +370,20 @@ class HostsGroup(UserDict[str, Target]):
         versions: dict[str, dict[str, str]] = {}
         self.update_lock()
 
-        reboot = {
-            t.hostname: t.get_downgrader()["reboot"].substitute()
-            for t in self.data.values()
-            if t.transactional
-        }
-        init_snapshot = {
-            t.hostname: t.get_downgrader()["init_snapshot"].substitute()
-            for t in self.data.values()
-            if t.transactional
-        }
+        try:
+            reboot = {
+                t.hostname: t.get_downgrader()["reboot"].substitute()
+                for t in self.data.values()
+                if t.transactional
+            }
+            init_snapshot = {
+                t.hostname: t.get_downgrader()["init_snapshot"].substitute()
+                for t in self.data.values()
+                if t.transactional
+            }
+        except MissingDowngraderError as e:
+            logger.error("%s", e)
+            return
 
         try:
             for t in self.data.values():
@@ -378,13 +394,18 @@ class HostsGroup(UserDict[str, Target]):
 
             queue.join()
 
-            list_cmd = {
-                h: t.get_downgrader()["list_command"].safe_substitute(
-                    packages=" ".join(packages)
-                )
-                for h, t in self.data.items()
-                if "list_command" in t.get_downgrader()
-            }
+            try:
+                list_cmd = {
+                    h: t.get_downgrader()["list_command"].safe_substitute(
+                        packages=" ".join(packages)
+                    )
+                    for h, t in self.data.items()
+                    if "list_command" in t.get_downgrader()
+                }
+            except MissingDowngraderError as e:
+                logger.error("%s", e)
+                return
+
             self.run(list_cmd)
 
             for hn, t in self.data.items():
@@ -425,7 +446,8 @@ class HostsGroup(UserDict[str, Target]):
                         )
 
             self._reboot(reboot)
-
+        except MissingDowngraderError:
+            return
         finally:
             self.unlock()
 
@@ -512,17 +534,28 @@ class HostsGroup(UserDict[str, Target]):
         queue.join()
 
         repa = f":p={testreport.rrid.maintenance_id}:{testreport.rrid.review_id}"
-        commands = {
-            hn: t.get_updater()["command"].safe_substitute(
-                repa=repa, packages=" ".join(testreport.get_package_list())
-            )
-            for hn, t in self.data.items()
-        }
-        reboot = {
-            t.hostname: t.get_updater()["reboot"].substitute()
-            for t in self.data.values()
-            if t.transactional
-        }
+        try:
+            commands = {
+                hn: t.get_updater()["command"].safe_substitute(
+                    repa=repa, packages=" ".join(testreport.get_package_list())
+                )
+                for hn, t in self.data.items()
+            }
+            reboot = {
+                t.hostname: t.get_updater()["reboot"].substitute()
+                for t in self.data.values()
+                if t.transactional
+            }
+        except MissingInstallerError as e:
+            logger.error("%s", e)
+            for t in self.data.values():
+                queue.put((t.set_repo, ["remove", testreport]))
+
+            while queue.unfinished_tasks:
+                spinner()
+
+            queue.join()
+            return
 
         try:
             try:
