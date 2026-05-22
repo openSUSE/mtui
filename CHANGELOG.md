@@ -8,6 +8,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ## [Unreleased]
 
 ### Added
+- `openqa_overview` interactive command that ports the upstream
+  [oqa-search](https://github.com/mjdonis/oqa-search) helper into the
+  mtui REPL. For the currently loaded testreport it prints three
+  sections suitable for pasting into the update log: per-version openQA
+  status under "Single Incidents - Core", recent matching builds under
+  "Aggregated Updates" (configurable window via `--days`, groups via
+  `--aggregated-groups`), and parsed test-result summaries scraped from
+  the qam.suse.de `build_checks/` directory. URLs default to the existing
+  mtui config (`openqa_instance`, `qem_dashboard_api`, `reports_url`)
+  and can be overridden per invocation with `--url-openqa`,
+  `--url-dashboard-qam`, `--url-qam`. The structured payload is also
+  stored on the testreport at `metadata.openqa.overview` for downstream
+  consumers. TLS verification is disabled for these HTTP calls because
+  the SUSE-internal hosts (openqa.suse.de, dashboard.qam.suse.de,
+  qam.suse.de) commonly present self-signed or internal-CA certs.
+- `openqa_overview --export` injects the rendered overview into the
+  loaded testreport's `log` file under the `regression tests:`
+  section. The block is delimited by HTML-comment markers so
+  re-exports replace the previous block in place instead of
+  duplicating it. The regular `export` command also picks up
+  `metadata.openqa.overview` automatically when present, so running
+  `openqa_overview` (without `--export`) followed by `export` yields
+  the same result. A `--no-fetch` flag reuses the cached payload
+  without hitting the network.
 - `--color {auto,always,never}` flag and `NO_COLOR` environment variable
   support for both ANSI log output and colorised display helpers; `auto`
   (the new default) disables colour when stderr is not a TTY.
