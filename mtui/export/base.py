@@ -144,6 +144,30 @@ class BaseExport(ABC):
     def run(self, *args, **kwds) -> FileList | list[str]:
         """An abstract method for running the exporter."""
 
+    def inject_overview(self) -> None:
+        """Inject the ``openqa_overview`` block into the template.
+
+        No-op unless ``metadata.openqa.overview`` was populated by the
+        ``openqa_overview`` command (typically with ``--export``).
+        Idempotent via begin/end markers -- a previously-inserted block
+        is replaced in place rather than duplicated.
+        """
+        overview = self.openqa.overview
+        if not overview:
+            return
+
+        # Lazy import: avoids dragging the connector module into export
+        # base's import path when nobody used the overview feature.
+        from .overview_inject import inject_overview as _inject
+
+        if _inject(
+            self.template,
+            overview.single_incidents,
+            overview.aggregated_updates,
+            overview.build_checks,
+        ):
+            logger.info("Injected openqa_overview block into template")
+
     def inject_openqa(self) -> None:
         """Injects openQA results into the template."""
         if not self.openqa.auto:

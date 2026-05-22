@@ -326,6 +326,7 @@ class ManualExport(BaseExport):
         """
         self.install_results()
         self.inject_openqa()
+        self.inject_overview()
         filenames = self.get_logs(hosts)
         self.installlogs_lines(filenames)
         self.add_sysinfo()
