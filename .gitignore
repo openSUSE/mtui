@@ -61,6 +61,10 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Test fixtures: vendored upstream build-check logs must be tracked
+# even though *.log above is ignored project-wide.
+!tests/fixtures/oqa_search/**/*.log
+
 # Flask stuff:
 instance/
 .webassets-cache

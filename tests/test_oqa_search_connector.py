@@ -4,16 +4,23 @@ Covers the three public entry points (`single_incidents`,
 `aggregated_updates`, `build_checks`) with `responses`-mocked HTTP.
 The shared `lru_cache` on `_fetch_openqa_groups` is cleared between
 tests so each test sees a clean slate.
+
+Helper-level tests (group filters, heuristic match extraction) are
+ported from the upstream oqa-search test suite to keep parity with the
+reference implementation.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 import responses
 
 from mtui.connector import oqa_search
+
+_FIXTURES = Path(__file__).parent / "fixtures" / "oqa_search"
 
 OPENQA = "https://openqa.example.com"
 DASHBOARD = "https://dashboard.example.com"
@@ -415,3 +422,267 @@ def test_get_incident_info_no_builds_falls_back_to_package_name():
     build, versions = oqa_search.get_incident_info(DASHBOARD, 12358)
     assert build == ":12358:bash"
     assert versions is None
+
+
+# --- Group-filter helpers (ported from upstream oqa-search) ---
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        # SLE-Micro templates are filtered out via the MICRO_TEMPLATE_IDENTIFIER.
+        ("sle-micro-2", False),
+        # Missing / empty template => invalid.
+        (None, False),
+        ("", False),
+        # Anything else is accepted.
+        ("sle-15", True),
+        ("sometext", True),
+    ],
+)
+def test_is_valid_template(template, expected):
+    group = {"id": 1, "name": "n", "template": template}
+    assert oqa_search._is_valid_template(group) is expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # Wrong product family.
+        ("Maintenance: SLE 15 SP6 Core Incidents - DEV", False),
+        ("Maintenance: Leap 15.6 Core Incidents", False),
+        ("Maintenance: SLEM 5.4 Incidents", False),
+        # Real single-incidents group => keep.
+        ("Maintenance: SLE 12 SP5 Core Incidents", True),
+    ],
+)
+def test_is_name_matching_single_incidents(name, expected):
+    group = {"id": 1, "name": name, "template": "tpl"}
+    assert (
+        oqa_search._is_name_matching(
+            group,
+            list(oqa_search.SINGLE_INCIDENTS_TERMS),
+            list(oqa_search.EXCLUDED_GROUPS),
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # Development / Micro / excluded buckets must not match aggregated.
+        ("YaST Maintenance Updates - Development", False),
+        ("Maintenance: SLE Micro / Public Cloud Maintenance Updates", False),
+        ("Core Wicked Maintenance Updates", False),
+        # Anything not in the match terms list is dropped too.
+        ("Helm Chart required Images", False),
+    ],
+)
+def test_is_name_matching_aggregated_updates(name, expected):
+    group = {"id": 1, "name": name, "template": "tpl"}
+    assert (
+        oqa_search._is_name_matching(
+            group,
+            list(oqa_search.AGGREGATED_GROUPS_TERMS),
+            list(oqa_search.EXCLUDED_GROUPS),
+        )
+        is expected
+    )
+
+
+@responses.activate
+@pytest.mark.parametrize(
+    ("match_text", "extractor", "bad_groups", "valid_groups", "expected"),
+    [
+        # Single incidents: SLE-Micro template + Wicked excluded term get
+        # dropped; the two valid SP groups survive keyed by version.
+        (
+            list(oqa_search.SINGLE_INCIDENTS_TERMS),
+            oqa_search._extract_version,
+            [
+                {
+                    "id": 123,
+                    "name": "Whatever Core Incidents",
+                    "template": "sle-micro-testing",
+                },
+                {
+                    "id": 321,
+                    "name": "Wicked Core Incidents",
+                    "template": "tpl",
+                },
+            ],
+            [
+                {
+                    "id": 282,
+                    "name": "Maintenance: SLE 12 SP5 Core Incidents",
+                    "template": "tpl",
+                },
+                {
+                    "id": 546,
+                    "name": "Maintenance: SLE 15 SP6 Core Incidents",
+                    "template": "tpl",
+                },
+            ],
+            {"12-SP5": 282, "15-SP6": 546},
+        ),
+        # Aggregated: Development/Micro buckets get dropped; the two real
+        # Maintenance Updates groups survive keyed by short name.
+        (
+            list(oqa_search.AGGREGATED_GROUPS_TERMS),
+            oqa_search._extract_aggregated_name,
+            [
+                {
+                    "id": 1,
+                    "name": "YaST Maintenance Updates - Development",
+                    "template": "tpl",
+                },
+                {
+                    "id": 2,
+                    "name": "Maintenance: SLE Micro / Public Cloud Maintenance Updates",
+                    "template": "tpl",
+                },
+            ],
+            [
+                {
+                    "id": 222,
+                    "name": "Public Cloud Maintenance Updates",
+                    "template": "tpl",
+                },
+                {
+                    "id": 333,
+                    "name": "Core Maintenance Updates",
+                    "template": "tpl",
+                },
+            ],
+            {"cloud": 222, "core": 333},
+        ),
+    ],
+)
+def test_filter_openqa_groups(
+    match_text, extractor, bad_groups, valid_groups, expected
+):
+    """Verify that the bad groups are dropped and the survivors are keyed
+    by the extractor's output. Mirrors upstream's parametrized test.
+    """
+    _register_job_groups(*bad_groups, *valid_groups)
+    actual = oqa_search._filter_openqa_groups(
+        OPENQA, match_text, list(oqa_search.EXCLUDED_GROUPS), extractor
+    )
+    assert actual == expected
+
+
+# --- summarize_test_results (parametrized parity with upstream) ---
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected_summary"),
+    [
+        # Two-line middle: "passed" + "failed" counted from distinct rows.
+        (
+            [
+                "First line",
+                "100 passed",
+                "50 failed",
+                "Last line",
+            ],
+            "(2 more results, 100 passed, 50 failed)",
+        ),
+        # Mixed pass/fail wording across multiple middle rows.
+        (
+            [
+                "First line",
+                "10 pass",
+                "5 fail",
+                "20 pass",
+                "3 fail",
+                "Last line",
+            ],
+            "(4 more results, 30 passed, 8 failed)",
+        ),
+        # OBS-style block: only rows with explicit "N passed / N failed"
+        # tokens count; the "# PASS:" / "# FAIL:" cells do not match
+        # the regex and stay at zero.
+        (
+            [
+                "[  204s] ======================= 437 passed, 5 skipped in 22.51s ========================",
+                "[  204s] # TOTAL: 0",
+                "[  204s] # PASS:  0",
+                "[  204s] # SKIP:  0",
+                "[  204s] # XFAIL: 0",
+                "[  204s] # FAIL:  0",
+                "[  204s] # XPASS: 0",
+                "[  204s] # ERROR: 0",
+            ],
+            "(6 more results, 0 passed, 0 failed)",
+        ),
+    ],
+)
+def test_summarize_test_results_parametrized(lines, expected_summary):
+    assert oqa_search.summarize_test_results(lines) == expected_summary
+
+
+# --- extract_test_results against real build-check logs (C1 scope) ---
+#
+# Two upstream packages are vendored under tests/fixtures/oqa_search/:
+#
+#   * iniparser -- minimal "OK (N tests)" summary line; exercises the
+#     "summary keywords" branch of the heuristic.
+#   * rust      -- multi-arch logs whose "test result: ok. N passed; N
+#     failed" lines exercise the "summary patterns" branch and produce
+#     enough matches to be folded by summarize_test_results.
+#
+# Each .log has a sibling .matches file with the exact lines upstream
+# expects extract_test_results to return for that log. Keeping the
+# fixture pairs in sync with upstream is the regression signal for the
+# heuristic constants (TESTSUITE_*) that the connector copies verbatim.
+
+
+def _fixture_pairs(package: str) -> list[tuple[Path, Path]]:
+    """Pair each .log with its sibling .matches file (matched by arch)."""
+    pkg_dir = _FIXTURES / package
+    pairs: list[tuple[Path, Path]] = []
+    for log in sorted(pkg_dir.glob("*.log")):
+        # Filenames look like "...x86_64.log" -> "x86_64.matches".
+        # Strip the extension and take the arch token after the last dot.
+        arch = log.stem.rsplit(".", 1)[-1]
+        matches_path = pkg_dir / f"{arch}.matches"
+        if not matches_path.exists():
+            pytest.fail(f"Missing matches fixture for {log}")
+        pairs.append((log, matches_path))
+    return pairs
+
+
+@pytest.mark.parametrize("package", ["iniparser", "rust"])
+def test_extract_test_results_real_logs(package):
+    """For each (log, matches) fixture pair the heuristic output must
+    match the upstream-curated expected lines exactly.
+    """
+    for log_path, matches_path in _fixture_pairs(package):
+        log_text = log_path.read_text()
+        # Upstream stores expected matches one-per-line; splitlines()
+        # transparently handles both LF-terminated and bare last-line
+        # cases (e.g. iniparser's single-line matches file).
+        expected = matches_path.read_text().splitlines()
+        assert oqa_search.extract_test_results(log_text) == expected, (
+            f"heuristic drift for {package} / {log_path.name}"
+        )
+
+
+def test_extract_test_results_rust_folds_via_summarize():
+    """End-to-end: the rust aarch64 log produces enough matches that
+    summarize_test_results folds them into a "N more results" summary
+    with non-zero pass/fail aggregates.
+    """
+    pkg_dir = _FIXTURES / "rust"
+    log_text = (
+        pkg_dir / "rust1.95.SUSE_SLE-15-SP3_Update:test.aarch64.log"
+    ).read_text()
+    matches = oqa_search.extract_test_results(log_text)
+    assert len(matches) > 4, "expected the aarch64 fixture to produce >4 matches"
+    summary = oqa_search.summarize_test_results(matches)
+    assert "more results" in summary
+    # The fixture rows include lines like "19848 passed; 0 failed", so
+    # the totals must be > 0 for passed.
+    assert "0 passed" not in summary
+    assert "0 failed" in summary
