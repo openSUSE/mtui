@@ -23,7 +23,7 @@ from ..argparse import ArgumentParser
 from ..connector import oqa_search as oqa
 from ..export.overview_inject import inject_overview
 from ..types import FileList, OpenQAOverviewResult
-from ..utils import complete_choices, green, red, requires_update, yellow
+from ..utils import blue, complete_choices, green, red, requires_update, yellow
 from . import Command
 
 logger = getLogger("mtui.commands.openqa_overview")
@@ -327,10 +327,14 @@ class OpenQAOverview(Command):
 
     @staticmethod
     def _title(text: str) -> str:
-        """Cyan-ish title via mtui's color helpers (blue, since no cyan exists)."""
-        # mtui exposes green/red/yellow/blue; use blue for titles. The
-        # helpers honour colors_enabled() automatically.
-        return text  # titles stay plain so they survive piping into mtui logs
+        """Color section titles blue for the REPL.
+
+        Output is REPL-only (``_export_to_testreport`` builds its own
+        plain-text via ``render_overview``), so coloring here is pure
+        UX. ``blue()`` honours ``colors_enabled()``, so piping mtui's
+        stdout to a file still produces plain text.
+        """
+        return blue(text)
 
     def _print_version_row(self, row: oqa.VersionResult) -> None:
         """Render one PASSED/FAILED/RUNNING/MISSING line."""

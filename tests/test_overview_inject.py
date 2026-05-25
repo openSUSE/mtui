@@ -99,6 +99,18 @@ def test_render_overview_no_data_renders_empty_placeholders():
     assert "_No build checks for this incident._" in text
 
 
+def test_render_overview_skip_aggregated_with_empty_single_shows_hint():
+    """Regression: --no-aggregated with no single-incident results must
+    still emit the "No openQA builds" hint instead of silently
+    rendering only the Build Checks section.
+    """
+    lines = render_overview([], [], [], skip_aggregated=True)
+    text = "\n".join(lines)
+    assert "_No openQA builds for this incident yet._" in text
+    # Aggregated section stays hidden because of skip_aggregated.
+    assert not any("Aggregated Updates" in line for line in lines)
+
+
 # --- inject_overview ---
 
 

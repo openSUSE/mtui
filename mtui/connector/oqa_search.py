@@ -734,8 +734,11 @@ def render_overview(
         for row in single_incidents_rows:
             lines.extend(_render_version_row(row))
         lines.append("")
-    elif not skip_aggregated and not aggregated_updates_rows:
-        # Both sections empty -> upstream's "No openQA builds" hint.
+    elif skip_aggregated or not aggregated_updates_rows:
+        # Nothing to show in the visible sections -> upstream's "No
+        # openQA builds" hint. When --no-aggregated is in effect we
+        # cannot rely on the aggregated section to convey emptiness,
+        # so the hint fires whenever single incidents is empty.
         lines.append("_No openQA builds for this incident yet._")
         lines.append("")
 
@@ -755,14 +758,12 @@ def render_overview(
             lines.append("")
 
     # --- Build checks ---
+    lines.append("### Build Checks")
+    lines.append("")
     if build_checks_rows:
-        lines.append("### Build Checks")
-        lines.append("")
         for entry in build_checks_rows:
             lines.extend(_render_build_check(entry))
     else:
-        lines.append("### Build Checks")
-        lines.append("")
         lines.append("_No build checks for this incident._")
         lines.append("")
 
