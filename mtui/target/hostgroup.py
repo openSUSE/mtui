@@ -263,17 +263,21 @@ class HostsGroup(UserDict[str, Target]):
             packages: A list of packages to uninstall.
 
         """
-        commands = {
-            t.hostname: t.get_uninstaller()["command"].substitute(
-                packages=" ".join(packages)
-            )
-            for t in self.data.values()
-        }
-        reboot = {
-            t.hostname: t.get_uninstaller()["reboot"].substitute()
-            for t in self.data.values()
-            if t.transactional
-        }
+        try:
+            commands = {
+                t.hostname: t.get_uninstaller()["command"].substitute(
+                    packages=" ".join(packages)
+                )
+                for t in self.data.values()
+            }
+            reboot = {
+                t.hostname: t.get_uninstaller()["reboot"].substitute()
+                for t in self.data.values()
+                if t.transactional
+            }
+        except MissingUninstallerError as e:
+            logger.error("%s", e)
+            return
         self.update_lock()
         try:
             self.run(commands)
@@ -349,7 +353,7 @@ class HostsGroup(UserDict[str, Target]):
                 )
             self._reboot(reboot)
 
-        except MissingUninstallerError as e:
+        except MissingPreparerError as e:
             logger.error("%s", e)
         except Exception:
             logger.exception("Error during prepare operation")
