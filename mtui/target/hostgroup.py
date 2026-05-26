@@ -12,9 +12,8 @@ from ..hooks import CompareScript, PostScript, PreScript
 from ..messages import (
     HostIsNotConnectedError,
     MissingDowngraderError,
-    MissingInstallerError,
     MissingPreparerError,
-    MissingUninstallerError,
+    MissingUpdaterError,
 )
 from ..types import Package
 from ..types.rpmver import RPMVersion
@@ -27,6 +26,7 @@ from .actions import (
     run_parallel,
 )
 from .locks import TargetLockedError
+from .operation import InstallOperation, UninstallOperation
 
 logger = getLogger("mtui.target.hostgroup")
 
@@ -228,33 +228,7 @@ class HostsGroup(UserDict[str, Target]):
 
     def perform_install(self, packages: list[str]) -> None:
         """Performs an installation on all hosts in the group."""
-        try:
-            commands = {
-                t.hostname: t.get_installer()["command"].substitute(
-                    packages=" ".join(packages)
-                )
-                for t in self.data.values()
-            }
-            reboot = {
-                t.hostname: t.get_installer()["reboot"].substitute()
-                for t in self.data.values()
-                if t.transactional
-            }
-        except MissingInstallerError as e:
-            logger.error("%s", e)
-            return
-
-        self.update_lock()
-        try:
-            self.run(commands)
-            for t in self.data.values():
-                t.get_installer_check()(
-                    t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
-                )
-            self._reboot(reboot)
-
-        finally:
-            self.unlock()
+        InstallOperation(self, packages).run()
 
     def perform_uninstall(self, packages: list[str]) -> None:
         """Performs an uninstallation on all hosts in the group.
@@ -263,32 +237,7 @@ class HostsGroup(UserDict[str, Target]):
             packages: A list of packages to uninstall.
 
         """
-        try:
-            commands = {
-                t.hostname: t.get_uninstaller()["command"].substitute(
-                    packages=" ".join(packages)
-                )
-                for t in self.data.values()
-            }
-            reboot = {
-                t.hostname: t.get_uninstaller()["reboot"].substitute()
-                for t in self.data.values()
-                if t.transactional
-            }
-        except MissingUninstallerError as e:
-            logger.error("%s", e)
-            return
-        self.update_lock()
-        try:
-            self.run(commands)
-
-            for t in self.data.values():
-                t.get_uninstaller_check()(
-                    t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
-                )
-            self._reboot(reboot)
-        finally:
-            self.unlock()
+        UninstallOperation(self, packages).run()
 
     def perform_prepare(self, packages: list[str], testreport, **kw) -> None:
         """Performs a preparation on all hosts in the group.
@@ -397,7 +346,7 @@ class HostsGroup(UserDict[str, Target]):
                     for h, t in self.data.items()
                     if "list_command" in t.get_downgrader()
                 }
-            except MissingInstallerError as e:
+            except MissingDowngraderError as e:
                 logger.error("%s", e)
                 raise e
 
@@ -535,7 +484,7 @@ class HostsGroup(UserDict[str, Target]):
                 for t in self.data.values()
                 if t.transactional
             }
-        except MissingInstallerError as e:
+        except MissingUpdaterError as e:
             logger.error("%s", e)
             self._fanout_set_repo("remove", testreport)
             return
