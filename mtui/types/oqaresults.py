@@ -13,7 +13,14 @@ reality without forcing a class hierarchy change.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from ..connector.oqa_search import (
+        BuildCheckResult,
+        GroupResult,
+        VersionResult,
+    )
 
 
 @runtime_checkable
@@ -40,6 +47,25 @@ class OpenQAResult(Protocol):
 
 
 @dataclass
+class OpenQAOverviewResult:
+    """Structured payload produced by the ``openqa_overview`` command.
+
+    Carries the three sections the upstream oqa-search script prints so
+    other consumers (e.g. exporters) can render them without re-fetching.
+    """
+
+    single_incidents: list["VersionResult"] = field(default_factory=list)
+    aggregated_updates: list["GroupResult"] = field(default_factory=list)
+    build_checks: list["BuildCheckResult"] = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        """True if any of the three sections has content."""
+        return bool(
+            self.single_incidents or self.aggregated_updates or self.build_checks
+        )
+
+
+@dataclass
 class OpenQAResults:
     """Typed container for openQA results attached to a ``TestReport``.
 
@@ -50,12 +76,17 @@ class OpenQAResults:
         kernel: The list of "kernel" workflow results. For kernel updates
             this typically contains two entries: a regular openQA instance
             result and a baremetal openQA instance result.
+        overview: Output of the ``openqa_overview`` command (ported from
+            oqa-search). ``None`` until the command is run.
 
     """
 
     auto: OpenQAResult | None = None
     kernel: list[OpenQAResult] = field(default_factory=list)
+    overview: OpenQAOverviewResult | None = None
 
     def __bool__(self) -> bool:
         """True if any result is present and truthy."""
-        return bool(self.auto) or any(bool(k) for k in self.kernel)
+        return (
+            bool(self.auto) or any(bool(k) for k in self.kernel) or bool(self.overview)
+        )

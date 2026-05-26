@@ -8,7 +8,7 @@ from .commandlog import CommandLog
 from .enums import ExecutionMode, RequestKind, TargetState, assignment, method
 from .filelist import FileList
 from .hostlog import HostLog
-from .oqaresults import OpenQAResult, OpenQAResults
+from .oqaresults import OpenQAOverviewResult, OpenQAResult, OpenQAResults
 from .package import Package
 from .product import Product
 from .rpmver import RPMVersion
@@ -23,6 +23,7 @@ __all__ = [
     "ExecutionMode",
     "FileList",
     "HostLog",
+    "OpenQAOverviewResult",
     "OpenQAResult",
     "OpenQAResults",
     "Package",

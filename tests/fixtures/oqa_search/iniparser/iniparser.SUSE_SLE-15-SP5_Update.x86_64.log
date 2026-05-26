@@ -1,0 +1,44 @@
+[   46s] Executing(%check): /bin/sh -e /var/tmp/rpm-tmp.cr6hVE
+[   46s] + umask 022
+[   46s] + cd /home/abuild/rpmbuild/BUILD
+[   46s] + cd iniparser-4.1
+[   46s] + ln -s libiniparser.so.1 libiniparser.so
+[   46s] + make -j4 check
+[   46s] make[1]: Entering directory '/home/abuild/rpmbuild/BUILD/iniparser-4.1/test'
+[   46s] CC	CuTest.o
+[   46s] CC	test_dictionary.o
+[   46s] CC	test_iniparser.o
+[   46s] test_iniparser.c:19:22: warning: ISO C does not permit named variadic macros [-Wvariadic-macros]
+[   46s]  #define stringify_2(x...)     #x
+[   46s]                       ^~~
+[   46s] test_iniparser.c:20:20: warning: ISO C does not permit named variadic macros [-Wvariadic-macros]
+[   46s]  #define stringify(x...)       stringify_2(x)
+[   46s]                     ^~~
+[   46s] GN	Alltests.c
+[   46s] CC	AllTests.o
+[   47s] CC	testrun
+[   47s] iniparser: cannot open /you/shall/not/path
+[   47s] iniparser: input line too long in ressources/bad_ini/twisted-ofkey.ini (14)
+[   47s] iniparser: syntax error in ressources/bad_ini/twisted-errors.ini (5):
+[   47s] -> hello
+[   47s] iniparser: syntax error in ressources/bad_ini/twisted-errors.ini (6):
+[   47s] -> world
+[   47s] iniparser: syntax error in ressources/bad_ini/twisted-errors.ini (8):
+[   47s] -> hello world
+[   47s] iniparser: syntax error in ressources/bad_ini/twisted-errors.ini (9):
+[   47s] -> a + b ;
+[   47s] iniparser: input line too long in ressources/bad_ini/twisted-ofval.ini (14)
+[   47s] iniparser: syntax error in ressources/bad_ini/ends_well.ini (5):
+[   47s] -> error is here
+[   47s] iniparser: cannot open /path/to/nowhere.ini
+[   47s] ....................
+[   47s]
+[   47s] OK (20 tests)
+[   47s]
+[   47s] make[1]: Leaving directory '/home/abuild/rpmbuild/BUILD/iniparser-4.1/test'
+[   47s] + exit 0
+[   47s] Processing files: iniparser-debugsource-4.1-150500.4.8.1.x86_64
+[   47s] Provides: iniparser-debugsource = 4.1-150500.4.8.1 iniparser-debugsource(x86-64) = 4.1-150500.4.8.1
+[   47s] Requires(rpmlib): rpmlib(CompressedFileNames) <= 3.0.4-1 rpmlib(FileDigests) <= 4.6.0-1 rpmlib(PayloadFilesHavePrefix) <= 4.0-1
+[   47s] Processing files: libiniparser1-4.1-150500.4.8.1.x86_64
+[   47s] Executing(%doc): /bin/sh -e /var/tmp/rpm-tmp.taFEGE

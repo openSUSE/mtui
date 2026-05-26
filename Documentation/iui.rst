@@ -140,6 +140,89 @@ reload_openqa
 Reload informations from openQA instances.
 
 
+openqa_overview
++++++++++++++++
+
+::
+
+  openqa_overview [--no-aggregated] [--days N]
+                  [--aggregated-groups {core,containers,yast,security} [...]]
+                  [--url-openqa URL] [--url-dashboard-qam URL] [--url-qam URL]
+                  [--test-pattern REGEX] [--export] [--no-fetch]
+
+Port of the ``oqa-search`` helper script
+(https://github.com/mjdonis/oqa-search).
+
+For the currently loaded testreport, prints three sections suitable for
+pasting into the update log:
+
+* **Single Incidents - Core**: PASSED / FAILED / RUNNING per SLE
+  version.
+* **Aggregated Updates**: most recent build per requested group
+  (default ``core``) within the last ``--days`` days that exercises the
+  current incident.
+* **Build checks**: parsed test-result summaries scraped from the
+  qam.suse.de ``build_checks/`` directory.
+
+URLs default to mtui's config (``openqa_instance``,
+``qem_dashboard_api``, ``reports_url``). The structured payload is
+stored on the testreport at ``metadata.openqa.overview`` for later
+reuse.
+
+
+.. option:: --no-aggregated
+
+  Skip the Aggregated Updates section.
+
+.. option:: --days N
+
+  How many days to walk back when searching for aggregated builds
+  (1-30, default 5).
+
+.. option:: --aggregated-groups GROUP [GROUP ...]
+
+  Aggregated job groups to query. One or more of
+  ``core``, ``containers``, ``yast``, ``security``. Default: ``core``.
+
+.. option:: --url-openqa URL
+
+  Override the openQA host (otherwise ``config.openqa_instance``).
+
+.. option:: --url-dashboard-qam URL
+
+  Override the QAM Dashboard base URL (otherwise derived from
+  ``config.qem_dashboard_api``).
+
+.. option:: --url-qam URL
+
+  Override the QAM base URL (otherwise derived from
+  ``config.reports_url``).
+
+.. option:: --test-pattern REGEX
+
+  Custom regex applied to each build-check log instead of the default
+  heuristics.
+
+.. option:: --export
+
+  Also inject the overview into the loaded testreport's ``log`` file
+  under the ``regression tests:`` section. The inserted block is
+  delimited by ``<!-- mtui openqa_overview begin -->`` /
+  ``<!-- mtui openqa_overview end -->`` markers so re-exports replace
+  the prior block in place instead of duplicating it. The regular
+  ``export`` command will also pick up
+  ``metadata.openqa.overview`` automatically when it runs, so an
+  earlier ``openqa_overview`` (without ``--export``) followed by
+  ``export`` produces the same result.
+
+.. option:: --no-fetch
+
+  Skip the network search and reuse the cached overview from
+  ``metadata.openqa.overview``. Only meaningful with ``--export``;
+  a no-op when nothing is cached (the command then falls back to a
+  normal fetch).
+
+
 set_workflow
 ++++++++++++
 

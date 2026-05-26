@@ -160,6 +160,7 @@ class AutoExport(BaseExport):
         )
         self.install_results()
         self.inject_openqa()
+        self.inject_overview()
         if not install_logs_current:
             filenames = self.get_logs()
             self.installlogs_lines(filenames)

@@ -182,3 +182,73 @@ def test_install_status_failed_when_any_result_fails(mock_config):
     exporter = _make_auto_exporter(mock_config, openqa=openqa)
 
     assert exporter._install_status() == "FAILED"
+
+
+# --- inject_overview ---
+
+
+def test_inject_overview_writes_block_into_template(mock_config):
+    """BaseExport.inject_overview inserts the marker-bounded block."""
+    from mtui.connector.oqa_search import (
+        OVERVIEW_BEGIN_MARKER,
+        OVERVIEW_END_MARKER,
+        VersionResult,
+    )
+    from mtui.types import OpenQAOverviewResult
+
+    template = FileList(
+        [
+            "regression tests:\n",
+            "-----------------\n",
+            "\n",
+            "(put your details here)\n",
+            "\n",
+            "build log review:\n",
+            "-----------------\n",
+        ]
+    )
+    overview = OpenQAOverviewResult(
+        single_incidents=[VersionResult("15-SP5", "u1", "passed")]
+    )
+
+    exporter = ExportProbe(
+        mock_config,
+        OpenQAResults(overview=overview),
+        template,
+        False,
+        "SUSE:Maintenance:1:1",
+        False,
+    )
+
+    exporter.inject_overview()
+
+    body = "".join(exporter.template)
+    assert OVERVIEW_BEGIN_MARKER in body
+    assert OVERVIEW_END_MARKER in body
+    assert "15-SP5" in body
+
+
+def test_inject_overview_is_noop_when_overview_unset(mock_config):
+    """No overview means no template mutation."""
+    template = FileList(
+        [
+            "regression tests:\n",
+            "-----------------\n",
+            "(put your details here)\n",
+            "build log review:\n",
+        ]
+    )
+    original = list(template)
+
+    exporter = ExportProbe(
+        mock_config,
+        OpenQAResults(),
+        template,
+        False,
+        "SUSE:Maintenance:1:1",
+        False,
+    )
+
+    exporter.inject_overview()
+
+    assert list(exporter.template) == original

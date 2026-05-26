@@ -85,6 +85,7 @@ class KernelExport(BaseExport):
         """
         self.install_results()
         self.inject_openqa()
+        self.inject_overview()
         self.kernel_results()
         filenames = self.get_logs()
         self.installlogs_lines(filenames)
