@@ -8,10 +8,12 @@ handles command dispatching, tab completion, and history.
 import cmd
 import readline
 import subprocess
-from collections.abc import Callable
 from logging import DEBUG, getLogger
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from mtui import notification
 
@@ -168,6 +170,14 @@ class CommandPrompt(cmd.Cmd):
     def _add_subcommand(self, cmd: type[Command]) -> None:
         """Adds a subcommand to the prompt.
 
+        Binds ``do_<name>``, ``help_<name>``, and ``complete_<name>`` as
+        instance attributes so that normal Python attribute lookup (and
+        ``cmd.Cmd.onecmd``'s ``getattr(self, "do_" + cmd, None)``) resolves
+        them directly, without going through a ``__getattr__`` synthesis
+        path. ``setattr`` accepts attribute names that aren't valid Python
+        identifiers, so command names containing ``-`` (e.g. ``report-bug``)
+        work the same way as the underscore-only ones.
+
         Args:
             cmd: The command class to add.
 
@@ -175,6 +185,38 @@ class CommandPrompt(cmd.Cmd):
         if cmd.command in self.commands:
             raise CommandAlreadyBoundError(cmd.command)
         self.commands[cmd.command] = cmd
+
+        name = cmd.command
+        c = cmd  # bind once for each closure
+
+        def do(arg) -> None:
+            try:
+                args = c.parse_args(arg, self.sys)
+            except ArgsParseFailureError:
+                return
+            c(args, self.config, self.sys, self)()
+
+        def help() -> None:
+            c.argparser(self.sys).print_help()
+
+        def complete(*args, **kw):
+            try:
+                return c.complete(
+                    {
+                        "hosts": self.targets.select(),
+                        "metadata": self.metadata,
+                        "config": self.config,
+                    },
+                    *args,
+                    **kw,
+                )
+            except Exception as e:
+                logger.exception(e)
+                raise e
+
+        setattr(self, f"do_{name}", do)
+        setattr(self, f"help_{name}", help)
+        setattr(self, f"complete_{name}", complete)
 
     def set_cmdqueue(self, queue: list[str]) -> None:
         """Sets the command queue for prerun commands.
@@ -237,55 +279,15 @@ class CommandPrompt(cmd.Cmd):
         names += ["help_" + x for x in self.commands]
         return names
 
-    def __getattr__(self, x: str) -> Callable:
-        """Dynamically gets attributes for commands, help, and completion."""
-        if x.startswith("help_"):
-            y = x.replace("help_", "", 1)
-            if y in self.commands:
-                c = self.commands[y]
-
-                def help() -> None:
-                    c.argparser(self.sys).print_help()
-
-                return help
-
-        elif x.startswith("do_"):
-            y = x.replace("do_", "", 1)
-            if y in self.commands:
-                c = self.commands[y]
-
-                def do(arg) -> None:
-                    try:
-                        args = c.parse_args(arg, self.sys)
-                    except ArgsParseFailureError:
-                        return
-                    c(args, self.config, self.sys, self)()
-
-                return do
-
-        elif x.startswith("complete_"):
-            y = x.replace("complete_", "", 1)
-            if y in self.commands:
-                c = self.commands[y]
-
-                def complete(*args, **kw):
-                    try:
-                        return c.complete(
-                            {
-                                "hosts": self.targets.select(),
-                                "metadata": self.metadata,
-                                "config": self.config,
-                            },
-                            *args,
-                            **kw,
-                        )
-                    except Exception as e:
-                        logger.exception(e)
-                        raise e
-
-                return complete
-
-        raise AttributeError(str(x))
+    if TYPE_CHECKING:
+        # Typing-only escape hatch. The ``do_<name>``, ``help_<name>``,
+        # and ``complete_<name>`` attributes are bound at runtime by
+        # ``_add_subcommand`` via ``setattr``; the type checker can't see
+        # through that. This stub tells ``ty`` (and IDEs) that any
+        # attribute access on a ``CommandPrompt`` is callable, mirroring
+        # the previous runtime ``__getattr__`` typing contract without
+        # the lazy synthesis. Runtime lookups never reach this method.
+        def __getattr__(self, name: str) -> "Callable[..., Any]": ...
 
     def emptyline(self) -> bool:
         """Called when an empty line is entered."""
