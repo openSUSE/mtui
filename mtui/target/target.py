@@ -19,6 +19,7 @@ from ..types import ExecutionMode, HostLog, Package, System, TargetState
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
 from . import TargetLock, TargetLockedError
+from .reporter import Reporter
 
 logger = getLogger("mtui.target")
 
@@ -576,72 +577,17 @@ class Target:
         if self.connection:
             self.connection.close()
 
-    def report_self(
-        self,
-        sink: Callable[[str, System, bool, TargetState | str, ExecutionMode], None],
-    ) -> None:
-        """Reports the status of the target.
+    @property
+    def reporter(self) -> "Reporter":
+        """The :class:`Reporter` collaborator for this target.
 
-        Args:
-            sink: The function to use for reporting.
-
+        Returns a fresh ``Reporter`` per access — the type is stateless,
+        so allocation cost is negligible compared to the SSH call that
+        is usually about to happen anyway. Avoids keeping a strong
+        cached reference, which would otherwise tie ``Reporter`` (and
+        anything captured by sink callbacks) into ``Target``'s lifetime.
         """
-        sink(self.hostname, self.system, self.transactional, self.state, self.mode)
-
-    def report_history(self, sink: Callable[[str, System, list[str]], None]) -> None:
-        """Reports the history of the target.
-
-        Args:
-            sink: The function to use for reporting.
-
-        """
-        sink(self.hostname, self.system, self.lastout().split("\n"))
-
-    def report_locks(self, sink: Callable[[str, System, TargetLock], None]) -> None:
-        """Reports the lock state of the target.
-
-        Args:
-            sink: The function to use for reporting.
-
-        """
-        sink(self.hostname, self.system, self._lock)
-
-    def report_timeout(self, sink: Callable[[str, System, int], None]) -> None:
-        """Reports the timeout of the target.
-
-        Args:
-            sink: The function to use for reporting.
-
-        """
-        sink(self.hostname, self.system, self.connection.timeout)
-
-    def report_sessions(self, sink: Callable[[str, System, str], None]) -> None:
-        """Reports the sessions of the target.
-
-        Args:
-            sink: The function to use for reporting.
-
-        """
-        sink(self.hostname, self.system, self.lastout())
-
-    def report_log(self, sink: Callable, arg) -> None:
-        """Reports the log of the target.
-
-        Args:
-            sink: The function to use for reporting.
-            arg: An additional argument to pass to the reporting function.
-
-        """
-        sink(self.hostname, self.out, arg)
-
-    def report_products(self, sink: Callable[[str, System], None]) -> None:
-        """Reports the products of the target.
-
-        Args:
-            sink: The function to use for reporting.
-
-        """
-        sink(self.hostname, self.system)
+        return Reporter(self)
 
     def doer(
         self, role: str, force: bool = False, testing: bool = False
