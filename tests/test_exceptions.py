@@ -36,6 +36,11 @@ def test_gitea_error():
     """Test GiteaError and its subclasses."""
     from mtui.types import assignment
 
+    # GiteaError must derive from Exception, not BaseException, so that
+    # broad ``except Exception`` clauses (e.g. the cmdloop catch-all in
+    # prompt.py) still trap it instead of letting it crash the process.
+    assert issubclass(exceptions.GiteaError, Exception)
+
     with pytest.raises(exceptions.GiteaError):
         raise exceptions.GiteaError()
 

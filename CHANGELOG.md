@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- Loading an SLFO or PI update with no `GITEA_TOKEN` configured no longer
+  crashes with an uncaught traceback. Missing tokens are now reported with
+  a clear configuration hint and exit with a non-zero status. Transient
+  Gitea API failures and hash mismatches raised during the post-checkout
+  template retry now reach the same handlers (`TestReportNotLoadedError`
+  and the force-continue prompt) as failures from the initial read.
+- `GiteaError` now derives from `Exception` instead of `BaseException`,
+  so the interactive command loop's catch-all handler traps Gitea errors
+  cleanly instead of letting them tear down the prompt.
+
 ### Changed
 
 - Internal refactor: `Target` was decomposed into four focused
