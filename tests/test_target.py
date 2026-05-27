@@ -488,11 +488,7 @@ def test_reload_system_replaces_system_and_transactional(mock_config, monkeypatc
     assert target.transactional is True
 
 
-def test_set_repo_delegates_to_testreport(mock_config):
-    target = Target(mock_config, "h.example.com")  # type: ignore[arg-type]
-    tr = MagicMock()
-    target.set_repo("add", tr)  # ty: ignore[unresolved-attribute]
-    tr.set_repo.assert_called_once_with(target, "add")
+# NOTE: set_repo coverage moved to tests/test_repo_manager.py
 
 
 # ---------------------------------------------------------------------------
@@ -574,47 +570,7 @@ def test_query_package_versions_keeps_max_on_duplicate(mock_target):
     assert out["bash"] == RPMVersion("5.2-1")
 
 
-# ---------------------------------------------------------------------------
-# run_zypper
-# ---------------------------------------------------------------------------
-
-
-def test_run_zypper_ar_emits_add_command(mock_target, mock_rrid):
-    """``ar`` (add-repo) builds an issue-* alias and runs zypper ar."""
-    mock_target.state = "enabled"
-    mock_target.connection.run.return_value = 0
-    mock_target.connection.stdout = ""
-    mock_target.connection.stderr = ""
-    mock_target.system = MagicMock()
-    mock_target.system.flatten.return_value = {Product("SLES", "15-SP5", "x86_64")}
-    repos = {Product("SLES", "15-SP5", "x86_64"): "https://example/repo"}
-    mock_target.run_zypper("ar", repos, mock_rrid)
-    commands = [c[0][0] for c in mock_target.connection.run.call_args_list]
-    assert any("zypper ar" in c and "issue-SLES" in c for c in commands)
-    assert commands[-1] == "zypper -n ref"
-
-
-def test_run_zypper_rr_emits_remove_command(mock_target, mock_rrid):
-    mock_target.state = "enabled"
-    mock_target.connection.run.return_value = 0
-    mock_target.connection.stdout = ""
-    mock_target.connection.stderr = ""
-    mock_target.system = MagicMock()
-    mock_target.system.flatten.return_value = {Product("SLES", "15-SP5", "x86_64")}
-    repos = {Product("SLES", "15-SP5", "x86_64"): "https://example/repo"}
-    mock_target.run_zypper("rr", repos, mock_rrid)
-    commands = [c[0][0] for c in mock_target.connection.run.call_args_list]
-    assert any("zypper rr https://example/repo" in c for c in commands)
-
-
-def test_run_zypper_unknown_command_unlocks_and_raises(mock_target, mock_rrid):
-    mock_target.state = "enabled"
-    mock_target.system = MagicMock()
-    mock_target.system.flatten.return_value = {Product("SLES", "15-SP5", "x86_64")}
-    repos = {Product("SLES", "15-SP5", "x86_64"): "https://example/repo"}
-    with pytest.raises(ValueError):  # noqa: PT011  -- bare ValueError raised by run_zypper
-        mock_target.run_zypper("nosuch", repos, mock_rrid)
-    mock_target._lock.unlock.assert_called_with(True)
+# NOTE: run_zypper coverage moved to tests/test_repo_manager.py
 
 
 # ---------------------------------------------------------------------------
