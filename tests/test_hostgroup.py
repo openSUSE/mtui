@@ -272,11 +272,11 @@ def test_perform_install_runs_and_unlocks(mock_run):
     t1.hostname = "h1"
     t1.is_locked.return_value = False
     t1.transactional = False
-    t1.get_installer.return_value = {
+    t1.doer.return_value = {
         "command": MagicMock(substitute=MagicMock(return_value="zypper in pkg")),
         "reboot": MagicMock(substitute=MagicMock(return_value="")),
     }
-    t1.get_installer_check.return_value = MagicMock()
+    t1.check.return_value = MagicMock()
 
     hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     hg.perform_install(["pkg"])
@@ -292,7 +292,7 @@ def test_perform_install_unlocks_on_error(mock_run):
     t1.hostname = "h1"
     t1.is_locked.return_value = False
     t1.transactional = False
-    t1.get_installer.return_value = {
+    t1.doer.return_value = {
         "command": MagicMock(substitute=MagicMock(return_value="zypper in pkg")),
         "reboot": MagicMock(substitute=MagicMock(return_value="")),
     }
@@ -441,8 +441,8 @@ def test_update_lock_logs_other_user_comment(caplog):
 @patch("mtui.target.hostgroup.RunCommand")
 def test_perform_uninstall_runs_and_unlocks(mock_run):
     t1 = _stub_target("h1")
-    t1.get_uninstaller.return_value = _doer_dict(command="zypper rm pkg", reboot="")
-    t1.get_uninstaller_check.return_value = MagicMock()
+    t1.doer.return_value = _doer_dict(command="zypper rm pkg", reboot="")
+    t1.check.return_value = MagicMock()
     hg = HostsGroup([t1])
     hg.perform_uninstall(["pkg"])
     mock_run.assert_called()
@@ -452,7 +452,7 @@ def test_perform_uninstall_runs_and_unlocks(mock_run):
 @patch("mtui.target.hostgroup.RunCommand")
 def test_perform_uninstall_unlocks_on_error(mock_run):
     t1 = _stub_target("h1")
-    t1.get_uninstaller.return_value = _doer_dict(command="zypper rm pkg", reboot="")
+    t1.doer.return_value = _doer_dict(command="zypper rm pkg", reboot="")
     hg = HostsGroup([t1])
     mock_run.return_value.run.side_effect = RuntimeError("boom")
     with pytest.raises(RuntimeError, match="boom"):
@@ -463,11 +463,11 @@ def test_perform_uninstall_unlocks_on_error(mock_run):
 @patch("mtui.target.hostgroup.RunCommand")
 def test_perform_uninstall_transactional_triggers_reboot(mock_run):
     t1 = _stub_target("h1", transactional=True)
-    t1.get_uninstaller.return_value = _doer_dict(
+    t1.doer.return_value = _doer_dict(
         command="transactional-update -n pkg remove pkg",
         reboot="systemctl reboot",
     )
-    t1.get_uninstaller_check.return_value = MagicMock()
+    t1.check.return_value = MagicMock()
     hg = HostsGroup([t1])
     hg.perform_uninstall(["pkg"])
     # _reboot eventually triggers reconnect.
@@ -484,10 +484,10 @@ def test_perform_prepare_runs_per_package_command(mock_run):
     """``perform_prepare`` runs the command-template once per package."""
     t1 = _stub_target("h1")
     t1.lasterr.return_value = ""
-    t1.get_preparer.return_value = _doer_dict(
+    t1.doer.return_value = _doer_dict(
         command="zypper in $package", reboot="", start_command=""
     )
-    t1.get_preparer_check.return_value = MagicMock()
+    t1.check.return_value = MagicMock()
     hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.perform_prepare(["pkg-a", "pkg-b"], MagicMock())
     # 2 packages → 2 RunCommand invocations beyond the lock cleanup.
@@ -500,10 +500,10 @@ def test_perform_prepare_filters_branding_upstream(mock_run):
     """The hard-coded ``branding-upstream`` name is excluded from per-pkg cmds."""
     t1 = _stub_target("h1")
     t1.lasterr.return_value = ""
-    t1.get_preparer.return_value = _doer_dict(
+    t1.doer.return_value = _doer_dict(
         command="zypper in $package", reboot="", start_command=""
     )
-    t1.get_preparer_check.return_value = MagicMock()
+    t1.check.return_value = MagicMock()
     hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.perform_prepare(["pkg-a", "branding-upstream", "pkg-b"], MagicMock())
     # 2 surviving packages.
@@ -522,7 +522,7 @@ def test_perform_prepare_aborts_on_set_repo_error(mock_run, caplog):
     t1.lasterr.return_value = "repo failure"
     t1.lastin.return_value = "zypper ar"
     t1.lastout.return_value = ""
-    t1.get_preparer.return_value = _doer_dict(
+    t1.doer.return_value = _doer_dict(
         command="zypper in $package", reboot="", start_command=""
     )
     hg = HostsGroup([t1])
@@ -550,18 +550,18 @@ def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
     t1 = _stub_target("h1")
     # Pretend list_command output is parsed: ``pkg-a = 1.0`` and ``pkg-a = 1.5``.
     t1.lastout.return_value = "pkg-a = 1.0-1\npkg-a = 1.5-1\n"
-    t1.get_downgrader.return_value = {
+    t1.doer.return_value = {
         **_doer_dict(reboot="", init_snapshot=""),
         "list_command": MagicMock(safe_substitute=MagicMock(return_value="rpm -qa")),
         "command": MagicMock(
             safe_substitute=MagicMock(return_value="zypper in pkg-a-1.5-1")
         ),
     }
-    t1.get_downgrader_check.return_value = MagicMock()
+    t1.check.return_value = MagicMock()
     hg = HostsGroup([t1])
     hg.perform_downgrade(["pkg-a"], MagicMock())
     # Confirm the per-package command was substituted with the higher version.
-    cmd_tpl = t1.get_downgrader.return_value["command"]
+    cmd_tpl = t1.doer.return_value["command"]
     cmd_tpl.safe_substitute.assert_any_call(package="pkg-a", version="1.5-1")
     t1.unlock.assert_called()
 
@@ -570,7 +570,7 @@ def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
 def test_perform_downgrade_unlocks_on_error(mock_run):
     t1 = _stub_target("h1")
     t1.lastout.return_value = ""
-    t1.get_downgrader.return_value = {
+    t1.doer.return_value = {
         **_doer_dict(reboot="", init_snapshot=""),
         "list_command": MagicMock(safe_substitute=MagicMock(return_value="rpm -qa")),
         "command": MagicMock(safe_substitute=MagicMock(return_value="x")),
@@ -592,8 +592,8 @@ def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
     """``noprepare`` skips prepare; ``noscript`` skips Pre/Post/Compare scripts."""
     t1 = _stub_target("h1")
     t1.packages = {}  # short-circuit package_check
-    t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
-    t1.get_updater_check.return_value = MagicMock()
+    t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
+    t1.check.return_value = MagicMock()
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -613,12 +613,16 @@ def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
 
     t1 = _stub_target("h1")
     t1.packages = {}
-    t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
-    t1.get_updater_check.return_value = MagicMock()
-    t1.get_preparer.return_value = _doer_dict(
-        command="zypper in $package", reboot="", start_command=""
-    )
-    t1.get_preparer_check.return_value = MagicMock()
+    # perform_update internally calls perform_prepare → two distinct
+    # doer roles are looked up against the same target. Dispatch by role.
+    doers = {
+        "updater": _doer_dict(command="zypper up", reboot=""),
+        "preparer": _doer_dict(
+            command="zypper in $package", reboot="", start_command=""
+        ),
+    }
+    t1.doer.side_effect = lambda role, *a, **kw: doers[role]
+    t1.check.return_value = MagicMock()
     t1.lasterr.return_value = ""
     testreport = MagicMock()
     testreport.config.auto = False
@@ -638,7 +642,7 @@ def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
 def test_perform_update_unlocks_when_run_fails(mock_run):
     t1 = _stub_target("h1")
     t1.packages = {}
-    t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
+    t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -657,8 +661,8 @@ def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
     """``perform_update`` fans out set_repo('add') first, then ('remove')."""
     t1 = _stub_target("h1")
     t1.packages = {}
-    t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
-    t1.get_updater_check.return_value = MagicMock()
+    t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
+    t1.check.return_value = MagicMock()
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
@@ -679,7 +683,7 @@ def test_perform_update_removes_repos_even_when_run_fails(mock_run, mock_fanout)
     """Repo cleanup runs even when the updater command itself raises."""
     t1 = _stub_target("h1")
     t1.packages = {}
-    t1.get_updater.return_value = _doer_dict(command="zypper up", reboot="")
+    t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
     testreport = MagicMock()
     testreport.config.auto = False
     testreport.get_package_list.return_value = ["pkg"]
