@@ -1,7 +1,6 @@
 """The `Target` class, which represents a single target host."""
 
 import errno
-import re
 from collections.abc import Callable
 from logging import getLogger
 from pathlib import Path
@@ -19,6 +18,7 @@ from ..types import ExecutionMode, HostLog, Package, System, TargetState
 from ..types.rpmver import RPMVersion
 from ..utils import timestamp
 from . import TargetLock, TargetLockedError
+from .package_querier import PackageQuerier
 from .reporter import Reporter
 
 logger = getLogger("mtui.target")
@@ -216,6 +216,10 @@ class Target:
     ) -> dict[str, RPMVersion | None]:
         """Queries the versions of a list of packages.
 
+        Thin delegate to :class:`PackageQuerier`; kept so existing
+        callers (``HostsGroup.query_versions``, this class's own
+        ``query_versions``) do not need to change.
+
         Args:
             packages: A list of packages to query.
 
@@ -223,33 +227,7 @@ class Target:
             A dictionary mapping package names to `RPMVersion` objects.
 
         """
-        if self.system.get_base().name != "ubuntu":
-            self.run(
-                'rpm -q --queryformat "%{{Name}} %{{Version}}-%{{Release}}\n" {}'.format(
-                    " ".join(packages)
-                )
-            )
-        else:
-            self.run(
-                "dpkg-query -W -f='${{package}} ${{version}}\n' {}".format(
-                    " ".join(packages)
-                )
-            )
-
-        pkgs: dict[str, RPMVersion | None] = {}
-        for line in self.lastout().splitlines():
-            if match := re.search("package (.*) is not installed", line):
-                pkgs[match.group(1)] = None
-                continue
-            p, v = line.split()
-            # Make sure that it shows to the user the highest version
-            new_ver = RPMVersion(v)
-            if p in pkgs:
-                existing = pkgs[p]
-                pkgs[p] = max(existing, new_ver) if existing is not None else new_ver
-            else:
-                pkgs[p] = new_ver
-        return pkgs
+        return PackageQuerier(self).versions(packages)
 
     def set_timeout(self, value: int) -> None:
         """Sets the command timeout for the target host.
