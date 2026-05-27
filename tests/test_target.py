@@ -2,7 +2,6 @@
 
 import errno
 from pathlib import Path
-from string import Template
 from unittest.mock import MagicMock
 
 import pytest
@@ -888,62 +887,4 @@ def test_report_products_calls_sink(mock_target):
     sink.assert_called_once_with(mock_target.hostname, mock_target.system)
 
 
-# ---------------------------------------------------------------------------
-# Doer / check getters
-# ---------------------------------------------------------------------------
-
-
-def _target_with_release(mock_config, release: str = "15", transactional: bool = False):
-    target = Target(mock_config, "h.example.com")  # type: ignore[arg-type]
-    target.system = MagicMock()
-    target.system.get_release.return_value = release
-    target.transactional = transactional
-    return target
-
-
-@pytest.mark.parametrize(
-    "method",
-    [
-        "get_installer",
-        "get_uninstaller",
-        "get_downgrader",
-        "get_updater",
-    ],
-)
-def test_doer_getters_return_command_template_dict(mock_config, method):
-    """All non-preparer doer getters yield a ``{name: Template}`` mapping for SLES 15."""
-    target = _target_with_release(mock_config)
-    result = getattr(target, method)()
-    assert isinstance(result, dict)
-    assert all(isinstance(v, Template) for v in result.values())
-
-
-def test_get_preparer_invokes_factory_with_force_and_testing(mock_config):
-    """``preparer`` is ``Callable``; the getter forwards force/testing flags."""
-    target = _target_with_release(mock_config)
-    result = target.get_preparer(force=True, testing=True)
-    assert isinstance(result, dict)
-
-
-@pytest.mark.parametrize(
-    "method",
-    [
-        "get_installer_check",
-        "get_uninstaller_check",
-        "get_downgrader_check",
-        "get_updater_check",
-        "get_preparer_check",
-    ],
-)
-def test_check_getters_return_callable(mock_config, method):
-    target = _target_with_release(mock_config)
-    fn = getattr(target, method)()
-    assert callable(fn)
-
-
-def test_check_getter_returns_no_checks_for_unknown_release(mock_config):
-    """Unknown ``(release, transactional)`` combinations fall back to the no-op."""
-    from mtui.target.target import _no_checks
-
-    target = _target_with_release(mock_config, release="9999", transactional=False)
-    assert target.get_installer_check() is _no_checks
+# NOTE: doer/check coverage moved to tests/test_doers.py
