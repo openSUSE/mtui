@@ -334,45 +334,7 @@ def test_parse_packages_none(mock_config):
     assert result == {}
 
 
-# --- report methods with assertions ---
-
-
-def test_report_self_calls_sink(mock_target):
-    """Test report_self calls sink with correct args."""
-    sink = MagicMock()
-    mock_target.report_self(sink)
-
-    sink.assert_called_once_with(
-        mock_target.hostname,
-        mock_target.system,
-        mock_target.transactional,
-        mock_target.state,
-        mock_target.mode,
-    )
-
-
-def test_report_history_calls_sink(mock_target):
-    """Test report_history calls sink with correct args."""
-    sink = MagicMock()
-    # Need output to split
-    mock_target.out = HostLog()
-    mock_target.out.append(["cmd", "line1\nline2", "", 0, 0])
-
-    mock_target.report_history(sink)
-
-    sink.assert_called_once()
-    args = sink.call_args[0]
-    assert args[0] == mock_target.hostname
-
-
-def test_report_timeout_calls_sink(mock_target):
-    """Test report_timeout calls sink with timeout."""
-    sink = MagicMock()
-    mock_target.report_timeout(sink)
-
-    sink.assert_called_once()
-    args = sink.call_args[0]
-    assert args[0] == mock_target.hostname
+# NOTE: report_* coverage moved to tests/test_reporter.py
 
 
 # --- sftp delegation ---
@@ -851,40 +813,5 @@ def test_close_poweroff(mock_target):
     mock_target.connection.close.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# remaining report_* sinks
-# ---------------------------------------------------------------------------
-
-
-def test_report_locks_calls_sink(mock_target):
-    sink = MagicMock()
-    mock_target.report_locks(sink)
-    sink.assert_called_once_with(
-        mock_target.hostname, mock_target.system, mock_target._lock
-    )
-
-
-def test_report_sessions_calls_sink(mock_target):
-    sink = MagicMock()
-    mock_target.out = HostLog()
-    mock_target.out.append(["who", "alice tty1\n", "", 0, 0])
-    mock_target.report_sessions(sink)
-    sink.assert_called_once_with(
-        mock_target.hostname, mock_target.system, "alice tty1\n"
-    )
-
-
-def test_report_log_calls_sink_with_full_outlog(mock_target):
-    sink = MagicMock()
-    mock_target.out = HostLog()
-    mock_target.report_log(sink, "some-arg")
-    sink.assert_called_once_with(mock_target.hostname, mock_target.out, "some-arg")
-
-
-def test_report_products_calls_sink(mock_target):
-    sink = MagicMock()
-    mock_target.report_products(sink)
-    sink.assert_called_once_with(mock_target.hostname, mock_target.system)
-
-
+# NOTE: report_* coverage moved to tests/test_reporter.py
 # NOTE: doer/check coverage moved to tests/test_doers.py
