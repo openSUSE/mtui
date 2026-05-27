@@ -120,10 +120,10 @@ class InstallOperation(Operation):
     missing_error: ClassVar[type[Exception]] = MissingInstallerError
 
     def get_doer(self, target: Target) -> dict[str, Any]:
-        return target.get_installer()
+        return target.doer(self.role)
 
     def get_check(self, target: Target) -> Callable[..., None]:
-        return target.get_installer_check()
+        return target.check(self.role)
 
 
 @final
@@ -134,7 +134,7 @@ class UninstallOperation(Operation):
     missing_error: ClassVar[type[Exception]] = MissingUninstallerError
 
     def get_doer(self, target: Target) -> dict[str, Any]:
-        return target.get_uninstaller()
+        return target.doer(self.role)
 
     def get_check(self, target: Target) -> Callable[..., None]:
-        return target.get_uninstaller_check()
+        return target.check(self.role)
