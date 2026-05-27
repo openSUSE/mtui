@@ -320,7 +320,7 @@ def test_report_self_delegates():
     hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     hg.report_self(sink)
 
-    t1.report_self.assert_called_once_with(sink)
+    t1.reporter.self_.assert_called_once_with(sink)
 
 
 def test_report_locks_delegates():
@@ -332,7 +332,7 @@ def test_report_locks_delegates():
     hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     hg.report_locks(sink)
 
-    t1.report_locks.assert_called_once_with(sink)
+    t1.reporter.locks.assert_called_once_with(sink)
 
 
 def test_report_timeout_delegates():
@@ -344,7 +344,7 @@ def test_report_timeout_delegates():
     hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     hg.report_timeout(sink)
 
-    t1.report_timeout.assert_called_once_with(sink)
+    t1.reporter.timeout.assert_called_once_with(sink)
 
 
 def test_report_products_delegates():
@@ -356,7 +356,7 @@ def test_report_products_delegates():
     hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     hg.report_products(sink)
 
-    t1.report_products.assert_called_once_with(sink)
+    t1.reporter.products.assert_called_once_with(sink)
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +713,7 @@ def test_report_history_with_events_uses_grep(mock_run):
     cmd = mock_run.call_args[0][1]
     assert "grep" in cmd
     assert "-m 5" in cmd
-    t1.report_history.assert_called_once_with(sink)
+    t1.reporter.history.assert_called_once_with(sink)
 
 
 @patch("mtui.target.hostgroup.RunCommand")
@@ -724,7 +724,7 @@ def test_report_history_without_events_uses_tail(mock_run):
     hg.report_history(sink, count=10, events=[])
     cmd = mock_run.call_args[0][1]
     assert "tail -n 10" in cmd
-    t1.report_history.assert_called_once_with(sink)
+    t1.reporter.history.assert_called_once_with(sink)
 
 
 def test_report_sessions_delegates():
@@ -732,7 +732,7 @@ def test_report_sessions_delegates():
     sink = MagicMock()
     hg = HostsGroup([t1])
     hg.report_sessions(sink)
-    t1.report_sessions.assert_called_once_with(sink)
+    t1.reporter.sessions.assert_called_once_with(sink)
 
 
 def test_report_log_delegates():
@@ -740,4 +740,4 @@ def test_report_log_delegates():
     sink = MagicMock()
     hg = HostsGroup([t1])
     hg.report_log(sink, "arg")
-    t1.report_log.assert_called_once_with(sink, "arg")
+    t1.reporter.log.assert_called_once_with(sink, "arg")
