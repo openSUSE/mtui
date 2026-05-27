@@ -27,6 +27,28 @@ def _no_checks(*args: tuple[Any, ...]) -> None:
     return None
 
 
+# Dispatch tables for Target.doer/check. ``installer`` etc. are the
+# (release, transactional) -> dict-of-templates registries from
+# mtui.actions; ``install_checks`` etc. are the parallel callable
+# registries from mtui.checks. ``preparer`` is dispatched inline in
+# Target.doer because its registry yields a callable, not a dict.
+# ``uninstaller`` deliberately consults ``install_checks`` (no dedicated
+# uninstall_checks table exists) — preserves prior behaviour.
+_DOERS: dict[str, dict[tuple[str, bool], dict[str, Template]]] = {
+    "installer": installer,
+    "uninstaller": uninstaller,
+    "downgrader": downgrader,
+    "updater": updater,
+}
+_CHECKS: dict[str, dict[tuple[str, bool], Callable]] = {
+    "installer": install_checks,
+    "uninstaller": install_checks,
+    "downgrader": downgrade_checks,
+    "updater": update_checks,
+    "preparer": prepare_checks,
+}
+
+
 @final
 class Target:
     """Represents a single target host.
@@ -621,111 +643,36 @@ class Target:
         """
         sink(self.hostname, self.system)
 
-    def get_installer(self) -> dict[str, Template]:
-        """Gets the installer for the target.
-
-        Returns:
-            A dictionary of installer command templates.
-
-        """
-        return installer[(self.system.get_release(), self.transactional)]
-
-    def get_installer_check(self) -> Callable:
-        """Gets the installer check function for the target.
-
-        Returns:
-            The installer check function.
-
-        """
-        return install_checks.get(
-            (self.system.get_release(), self.transactional), _no_checks
-        )
-
-    def get_uninstaller(self) -> dict[str, Template]:
-        """Gets the uninstaller for the target.
-
-        Returns:
-            A dictionary of uninstaller command templates.
-
-        """
-        return uninstaller[(self.system.get_release(), self.transactional)]
-
-    def get_uninstaller_check(self) -> Callable:
-        """Gets the uninstaller check function for the target.
-
-        Returns:
-            The uninstaller check function.
-
-        """
-        return install_checks.get(
-            (self.system.get_release(), self.transactional), _no_checks
-        )
-
-    def get_downgrader(self) -> dict[str, Template]:
-        """Gets the downgrader for the target.
-
-        Returns:
-            A dictionary of downgrader command templates.
-
-        """
-        return downgrader[(self.system.get_release(), self.transactional)]
-
-    def get_downgrader_check(self) -> Callable:
-        """Gets the downgrader check function for the target.
-
-        Returns:
-            The downgrader check function.
-
-        """
-        return downgrade_checks.get(
-            (self.system.get_release(), self.transactional), _no_checks
-        )
-
-    def get_updater(self) -> dict[str, Template]:
-        """Gets the updater for the target.
-
-        Returns:
-            A dictionary of updater command templates.
-
-        """
-        return updater[(self.system.get_release(), self.transactional)]
-
-    def get_updater_check(self) -> Callable:
-        """Gets the updater check function for the target.
-
-        Returns:
-            The updater check function.
-
-        """
-        return update_checks.get(
-            (self.system.get_release(), self.transactional), _no_checks
-        )
-
-    def get_preparer(
-        self, force: bool = False, testing: bool = False
+    def doer(
+        self, role: str, force: bool = False, testing: bool = False
     ) -> dict[str, Template]:
-        """Gets the preparer for the target.
+        """Returns the action-template dict for ``role`` on this target.
 
-        Args:
-            force: Whether to force the preparation.
-            testing: Whether to include testing repositories.
-
-        Returns:
-            A dictionary of preparer command templates.
-
+        ``role`` is one of ``"installer"``, ``"uninstaller"``,
+        ``"downgrader"``, ``"updater"``, ``"preparer"``. The lookup is
+        keyed by ``(release, transactional)``; missing entries surface as
+        the corresponding ``MissingXerError`` raised by the underlying
+        registry. ``force`` and ``testing`` are only honoured for
+        ``"preparer"`` (the only role whose registry value is a callable
+        rather than a dict).
         """
-        return preparer[(self.system.get_release(), self.transactional)](force, testing)
+        key = (self.system.get_release(), self.transactional)
+        if role == "preparer":
+            return preparer[key](force, testing)
+        return _DOERS[role][key]
 
-    def get_preparer_check(self) -> Callable:
-        """Gets the preparer check function for the target.
+    def check(self, role: str) -> Callable:
+        """Returns the post-run check callable for ``role`` on this target.
 
-        Returns:
-            The preparer check function.
-
+        Falls back to a no-op when the registry has no entry for the
+        current ``(release, transactional)`` tuple. Mirrors
+        :meth:`doer`'s ``role`` vocabulary; note that the historical
+        ``get_uninstaller_check`` consulted ``install_checks`` (no
+        dedicated uninstall-check table exists), and that behaviour is
+        preserved here.
         """
-        return prepare_checks.get(
-            (self.system.get_release(), self.transactional), _no_checks
-        )
+        key = (self.system.get_release(), self.transactional)
+        return _CHECKS[role].get(key, _no_checks)
 
     def __repr__(self) -> str:
         """Returns a string representation of the `Target` object."""
