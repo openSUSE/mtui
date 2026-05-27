@@ -81,7 +81,7 @@ class PITestReport(TestReport):
         repa = f":p={self.rrid.maintenance_id}:{self.rrid.review_id}"
         for hn, t in targets.items():
             display(
-                f"{hn} - commands: \n{t.get_updater()['command'].safe_substitute(repa=repa, packages=packages)}"
+                f"{hn} - commands: \n{t.doer('updater')['command'].safe_substitute(repa=repa, packages=packages)}"
             )
 
     def check_hash(self) -> tuple[bool, str, str]:
