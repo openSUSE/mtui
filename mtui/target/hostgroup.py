@@ -257,12 +257,12 @@ class HostsGroup(UserDict[str, Target]):
 
         try:
             reboot = {
-                t.hostname: t.get_preparer()["reboot"].substitute()
+                t.hostname: t.doer("preparer")["reboot"].substitute()
                 for t in self.data.values()
                 if t.transactional
             }
             start = {
-                t.hostname: t.get_preparer()["start_command"].substitute()
+                t.hostname: t.doer("preparer")["start_command"].substitute()
                 for t in self.data.values()
                 if t.transactional
             }
@@ -288,7 +288,7 @@ class HostsGroup(UserDict[str, Target]):
                     return
             for pkg in pkgs:
                 command = {
-                    t.hostname: t.get_preparer(force, testing)[cmd].substitute(
+                    t.hostname: t.doer("preparer", force, testing)[cmd].substitute(
                         package=pkg
                     )
                     for t in self.data.values()
@@ -297,7 +297,7 @@ class HostsGroup(UserDict[str, Target]):
                 self.run(command)
 
             for t in self.data.values():
-                t.get_preparer_check()(
+                t.check("preparer")(
                     t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                 )
             self._reboot(reboot)
@@ -323,12 +323,12 @@ class HostsGroup(UserDict[str, Target]):
 
         try:
             reboot = {
-                t.hostname: t.get_downgrader()["reboot"].substitute()
+                t.hostname: t.doer("downgrader")["reboot"].substitute()
                 for t in self.data.values()
                 if t.transactional
             }
             init_snapshot = {
-                t.hostname: t.get_downgrader()["init_snapshot"].substitute()
+                t.hostname: t.doer("downgrader")["init_snapshot"].substitute()
                 for t in self.data.values()
                 if t.transactional
             }
@@ -340,11 +340,11 @@ class HostsGroup(UserDict[str, Target]):
             self._fanout_set_repo("remove", testreport)
             try:
                 list_cmd = {
-                    h: t.get_downgrader()["list_command"].safe_substitute(
+                    h: t.doer("downgrader")["list_command"].safe_substitute(
                         packages=" ".join(packages)
                     )
                     for h, t in self.data.items()
-                    if "list_command" in t.get_downgrader()
+                    if "list_command" in t.doer("downgrader")
                 }
             except MissingDowngraderError as e:
                 logger.error("%s", e)
@@ -371,7 +371,7 @@ class HostsGroup(UserDict[str, Target]):
 
             for package in packages:
                 cmd = {
-                    h: t.get_downgrader()["command"].safe_substitute(
+                    h: t.doer("downgrader")["command"].safe_substitute(
                         package=package, version=versions[h][package]
                     )
                     for h, t in self.data.items()
@@ -381,7 +381,7 @@ class HostsGroup(UserDict[str, Target]):
                     self.run(cmd)
 
                     for t in self.data.values():
-                        t.get_downgrader_check()(
+                        t.check("downgrader")(
                             t.hostname,
                             t.lastout(),
                             t.lastin(),
@@ -474,13 +474,13 @@ class HostsGroup(UserDict[str, Target]):
         repa = f":p={testreport.rrid.maintenance_id}:{testreport.rrid.review_id}"
         try:
             commands = {
-                hn: t.get_updater()["command"].safe_substitute(
+                hn: t.doer("updater")["command"].safe_substitute(
                     repa=repa, packages=" ".join(testreport.get_package_list())
                 )
                 for hn, t in self.data.items()
             }
             reboot = {
-                t.hostname: t.get_updater()["reboot"].substitute()
+                t.hostname: t.doer("updater")["reboot"].substitute()
                 for t in self.data.values()
                 if t.transactional
             }
@@ -493,7 +493,7 @@ class HostsGroup(UserDict[str, Target]):
             try:
                 self.run(commands)
                 for t in self.data.values():
-                    t.get_updater_check()(
+                    t.check("updater")(
                         t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
                     )
                 self._reboot(reboot)
