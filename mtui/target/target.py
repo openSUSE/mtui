@@ -19,6 +19,7 @@ from ..types.rpmver import RPMVersion
 from ..utils import timestamp
 from . import TargetLock, TargetLockedError
 from .package_querier import PackageQuerier
+from .repo_manager import RepoManager
 from .reporter import Reporter
 
 logger = getLogger("mtui.target")
@@ -240,44 +241,13 @@ class Target:
         self.connection.timeout = value
         self._timeout = value
 
-    def set_repo(self, operation, testreport) -> None:
-        """Adds or removes a repository on the target host.
+    @property
+    def repo_manager(self) -> "RepoManager":
+        """The :class:`RepoManager` collaborator for this target.
 
-        Args:
-            operation: The operation to perform ("add" or "remove").
-            testreport: The test report object.
-
+        Fresh-per-access; see :attr:`reporter` for the rationale.
         """
-        logger.debug("%s: changing %s repos", self.hostname, operation)
-        testreport.set_repo(self, operation)
-
-    def run_zypper(self, cmd, repos, rrid) -> None:
-        """Runs a `zypper` command on the target host.
-
-        Args:
-            cmd: The `zypper` command to run.
-            repos: A dictionary of repositories.
-            rrid: The RequestReviewID of the current update.
-
-        """
-        # ur - generator returning tuple with product, repopart
-        ur = ((x, y) for x, y in repos.items() if x in self.system.flatten())
-
-        def name(product, rrid) -> str:
-            return f"issue-{product.name}:{product.version}:p={rrid.maintenance_id}:{rrid.review_id}"
-
-        for x, y in ur:
-            if "ar" in cmd:
-                logger.info("Adding repo %s on %s", y, self.hostname)
-                self.run(f"zypper {cmd} {name(x, rrid)} {y} {name(x, rrid)}")
-            elif "rr" in cmd:
-                logger.info("Removing repo %s on %s", y, self.hostname)
-                self.run(f"zypper {cmd} {y}")
-            else:
-                self.unlock(force=True)
-                raise ValueError
-
-        self.run("zypper -n ref")
+        return RepoManager(self)
 
     def run(self, command: str, lock=None) -> None:
         """Runs a command on the target host.

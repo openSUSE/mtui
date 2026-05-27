@@ -26,7 +26,7 @@ def _querier_with_base(base_name: str = "SLES", stdout: str = ""):
     target.system.get_base.return_value = MagicMock(name="Product")
     target.system.get_base.return_value.name = base_name
     target.lastout.return_value = stdout
-    return PackageQuerier(target), target
+    return PackageQuerier(target), target  # ty: ignore[invalid-argument-type]
 
 
 def test_non_ubuntu_base_uses_rpm_query():

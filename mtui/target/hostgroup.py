@@ -220,9 +220,9 @@ class HostsGroup(UserDict[str, Target]):
             raise UpdateError("Hosts locked")
 
     def _fanout_set_repo(self, operation: str, testreport) -> None:
-        """Fan ``Target.set_repo(operation, testreport)`` out across every host."""
+        """Fan ``Target.repo_manager.set(operation, testreport)`` out across every host."""
         run_parallel(
-            [(t.set_repo, (operation, testreport)) for t in self.data.values()],
+            [(t.repo_manager.set, (operation, testreport)) for t in self.data.values()],
             desc=f"set_repo {operation}",
         )
 
