@@ -63,9 +63,9 @@ class PITestReport(TestReport):
 
         """
         if operation == "add":
-            target.run_zypper("-n ar -cfGkn", self.update_repos, self.rrid)
+            target.repo_manager.run_zypper("-n ar -cfGkn", self.update_repos, self.rrid)
         elif operation == "remove":
-            target.run_zypper("-n rr", self.update_repos, self.rrid)
+            target.repo_manager.run_zypper("-n rr", self.update_repos, self.rrid)
         else:
             raise ValueError(f"Not supported repose operation {operation}")
 

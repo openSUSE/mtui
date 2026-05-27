@@ -47,7 +47,7 @@ class SetRepo(Command):
         try:
             with LockedTargets([self.targets[x] for x in hosts]):
                 for t in [self.targets[x] for x in hosts]:
-                    t.set_repo(operation, self.metadata)
+                    t.repo_manager.set(operation, self.metadata)
         except TargetLockedError as err:
             logger.error("Target locked %s", err)
 

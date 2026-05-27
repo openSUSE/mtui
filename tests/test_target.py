@@ -491,7 +491,7 @@ def test_reload_system_replaces_system_and_transactional(mock_config, monkeypatc
 def test_set_repo_delegates_to_testreport(mock_config):
     target = Target(mock_config, "h.example.com")  # type: ignore[arg-type]
     tr = MagicMock()
-    target.set_repo("add", tr)
+    target.set_repo("add", tr)  # ty: ignore[unresolved-attribute]
     tr.set_repo.assert_called_once_with(target, "add")
 
 
