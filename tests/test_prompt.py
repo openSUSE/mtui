@@ -338,6 +338,50 @@ def test_set_prompt_kernel_mode():
     assert p.prompt == "mtui-kernel> "
 
 
+def test_add_subcommand_binds_methods_to_instance():
+    """``_add_subcommand`` must pre-bind ``do_/help_/complete_`` on the instance.
+
+    Locks in the C4 refactor: the closures are constructed at registration
+    time and stored in ``self.__dict__`` rather than synthesised lazily by
+    ``__getattr__``. A regression that reintroduces lazy synthesis would
+    leave the instance dict empty for these prefixes and fail here.
+    """
+    p = _make_prompt()
+    cmd = MagicMock()
+    cmd.command = "alpha"
+    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    assert "do_alpha" in p.__dict__
+    assert "help_alpha" in p.__dict__
+    assert "complete_alpha" in p.__dict__
+
+
+def test_command_prompt_has_no_getattr():
+    """``CommandPrompt`` must not define ``__getattr__``.
+
+    The per-attribute synthesis path was deleted in C4; this test pins the
+    deletion so a future regression that re-adds lazy dispatch is caught.
+    """
+    assert "__getattr__" not in vars(prompt.CommandPrompt)
+
+
+def test_dash_in_command_name_dispatches():
+    """Command names containing ``-`` (e.g. ``report-bug``) still round-trip.
+
+    ``setattr`` accepts attribute names that aren't valid Python
+    identifiers, so the dash-named ``do_report-bug`` is reachable via
+    ``getattr``. This locks in compatibility with the one production
+    command that uses a dash.
+    """
+    p = _make_prompt()
+    cmd = MagicMock()
+    cmd.command = "dash-cmd"
+    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    do = getattr(p, "do_dash-cmd")
+    do("args")
+    cmd.parse_args.assert_called_with("args", p.sys)
+    cmd.return_value.assert_called_once()
+
+
 def test_load_update_swaps_metadata_and_targets():
     """``load_update`` installs the new test report and resets the prompt."""
     p = _make_prompt()
