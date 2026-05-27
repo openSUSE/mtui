@@ -536,7 +536,7 @@ class HostsGroup(UserDict[str, Target]):
 
         """
         for hn in sorted(self.data.keys()):
-            self.data[hn].report_self(sink)
+            self.data[hn].reporter.self_(sink)
 
     def report_history(self, sink, count, events) -> None:
         """Reports the history of all hosts in the group.
@@ -557,7 +557,7 @@ class HostsGroup(UserDict[str, Target]):
             self._run(f"tail -n {count} /var/log/mtui.log")
 
         for hn in sorted(self.data.keys()):
-            self.data[hn].report_history(sink)
+            self.data[hn].reporter.history(sink)
 
     def report_locks(self, sink):
         """Reports the lock state of all hosts in the group.
@@ -567,7 +567,7 @@ class HostsGroup(UserDict[str, Target]):
 
         """
         for hn in sorted(self.data.keys()):
-            self.data[hn].report_locks(sink)
+            self.data[hn].reporter.locks(sink)
 
     def report_timeout(self, sink) -> None:
         """Reports the timeout of all hosts in the group.
@@ -577,7 +577,7 @@ class HostsGroup(UserDict[str, Target]):
 
         """
         for hn in sorted(self.data.keys()):
-            self.data[hn].report_timeout(sink)
+            self.data[hn].reporter.timeout(sink)
 
     def report_sessions(self, sink) -> None:
         """Reports the sessions of all hosts in the group.
@@ -587,7 +587,7 @@ class HostsGroup(UserDict[str, Target]):
 
         """
         for hn in sorted(self.data.keys()):
-            self.data[hn].report_sessions(sink)
+            self.data[hn].reporter.sessions(sink)
 
     def report_log(self, sink, arg) -> None:
         """Reports the log of all hosts in the group.
@@ -598,7 +598,7 @@ class HostsGroup(UserDict[str, Target]):
 
         """
         for hn in sorted(self.data.keys()):
-            self.data[hn].report_log(sink, arg)
+            self.data[hn].reporter.log(sink, arg)
 
     def report_products(self, sink) -> None:
         """Reports the products of all hosts in the group.
@@ -608,4 +608,4 @@ class HostsGroup(UserDict[str, Target]):
 
         """
         for hn in sorted(self.data.keys()):
-            self.data[hn].report_products(sink)
+            self.data[hn].reporter.products(sink)
