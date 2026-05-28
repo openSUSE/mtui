@@ -12,6 +12,7 @@ from .colorctl import set_mode as set_color_mode
 from .colorlog import create_logger
 from .config import Config
 from .display import CommandPromptDisplay
+from .exceptions import MissingGiteaTokenError
 from .messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
 from .prompt import CommandPrompt
 from .systemcheck import detect_system
@@ -87,6 +88,9 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
             MetadataNotLoadedError,
         ) as e:
             logger.error(e)
+            return 1
+        except MissingGiteaTokenError:
+            # _checkout already logged a user-facing message; just exit.
             return 1
 
     if args.sut:

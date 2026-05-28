@@ -118,7 +118,7 @@ class UpdateError(Exception):
         return f"{self.host!s}: {self.reason!s}"
 
 
-class GiteaError(BaseException):
+class GiteaError(Exception):
     """Base exception for Gitea-related errors."""
 
 

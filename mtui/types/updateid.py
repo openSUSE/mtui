@@ -71,23 +71,30 @@ class UpdateID(ABC):
         trpath: Path = trdir / "log"
 
         try:
-            tr.read(trpath)
-        except TemplateIOError as e:
-            if e.errno != ENOENT:
-                raise
             try:
-                self._vcs_checkout(config, config.svn_path, self.id)
-            except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
-                logger.error("SVN checkout failed")
-                raise TestReportNotLoadedError from e
-            else:
+                tr.read(trpath)
+            except TemplateIOError as e:
+                if e.errno != ENOENT:
+                    raise
                 try:
-                    tr.read(trpath)
-                except Exception as e:
-                    raise e
-        except (MissingGiteaTokenError, FailedGiteaCallError):
-            logger.error("Gitea error")
-            logger.warning("TestReport ins't loaded")
+                    self._vcs_checkout(config, config.svn_path, self.id)
+                except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
+                    logger.error("SVN checkout failed")
+                    raise TestReportNotLoadedError from e
+                # Retry the read now that the template is on disk. Any
+                # Gitea-related error raised here must reach the outer
+                # except clauses below, so we let it propagate.
+                tr.read(trpath)
+        except MissingGiteaTokenError:
+            logger.error(
+                "Gitea API token is not configured. "
+                "Pass -g/--gitea_token, set GITEA_TOKEN in your environment, "
+                "or add a [gitea] token entry to ~/.mtuirc."
+            )
+            raise
+        except FailedGiteaCallError:
+            logger.error("Gitea API call failed")
+            logger.warning("TestReport isn't loaded")
             raise TestReportNotLoadedError from None
 
         except InvalidGiteaHashError:
