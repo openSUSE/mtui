@@ -155,35 +155,40 @@ def test_location_setter_resolve_failed_keeps_previous(tmpdir, caplog):
 
 
 @pytest.mark.parametrize(
-    ("ini_section", "ini_key", "ini_value"),
+    ("ini_section", "ini_key", "ini_value", "attr", "expected_default"),
     [
         # ``connection_timeout`` reads via ``config.get`` then ``int`` as fixup.
-        # The ``ValueError`` from ``int("abc")`` escapes ``_parse_config`` and
-        # crashes ``Config.__init__``.
-        ("mtui", "connection_timeout", "abc"),
+        # The ``ValueError`` from ``int("abc")`` used to escape ``_parse_config``
+        # and crash ``Config.__init__``; Phase 5b/C10 routes fixup failures
+        # through the same log+default path as getter failures.
+        ("mtui", "connection_timeout", "abc", "connection_timeout", 300),
     ],
 )
-def test_fixup_failure_propagates_and_aborts_construction(
-    tmpdir, ini_section, ini_key, ini_value
+def test_fixup_failure_logs_and_falls_back_to_default(
+    tmpdir, caplog, ini_section, ini_key, ini_value, attr, expected_default
 ):
-    """Captures current behaviour: a bad ``int`` fixup crashes ``Config()``.
+    """A bad ``int`` fixup is logged at ERROR and the default is applied.
 
-    FIXME (Phase 5b/C10): ``_parse_config`` only handles failures that
-    originate inside ``_get_option``; ``fixup(val)`` is invoked outside the
-    ``try`` so its exceptions are not converted into the documented
-    "use default" behaviour. Replace with explicit per-option parse handling.
+    Phase 5b/C10: ``_parse_config`` now wraps both ``_get_option`` AND
+    ``fixup(val)`` in the same ``try`` block, so a malformed
+    ``connection_timeout`` no longer crashes startup.
     """
     cfg_file = Path(tmpdir.join("typed.cfg"))
     cfg_file.write_text(f"[{ini_section}]\n{ini_key} = {ini_value}\n")
-    with pytest.raises(ValueError, match="invalid literal for int"):
-        config.Config(cfg_file, refhosts=MockRefhosts)
+    with caplog.at_level("ERROR", logger="mtui.config"):
+        cfg = config.Config(cfg_file, refhosts=MockRefhosts)
+    assert getattr(cfg, attr) == expected_default
+    assert any(attr in r.message and ini_value in r.message for r in caplog.records), (
+        f"expected an ERROR log line mentioning {attr!r} and the bad value "
+        f"{ini_value!r}; got: {[r.message for r in caplog.records]}"
+    )
 
 
 @pytest.mark.parametrize(
     ("ini_section", "ini_key", "ini_value", "attr", "expected_default"),
     [
-        # ``getint`` raises inside ``_get_option`` → caught by outer
-        # ``except Exception`` → default applied.
+        # ``getint`` raises inside ``_get_option`` → caught in ``_parse_config``
+        # → ERROR logged → default applied.
         ("refhosts", "https_expiration", "xyz", "refhosts_https_expiration", 3600 * 12),
         ("template", "smelt_threshold", "nope", "threshold", 10),
         # ``getboolean`` raises inside ``_get_option`` → same path.
@@ -191,20 +196,21 @@ def test_fixup_failure_propagates_and_aborts_construction(
         ("mtui", "use_keyring", "perhaps", "use_keyring", False),
     ],
 )
-def test_typed_getter_failure_falls_back_to_default(
-    tmpdir, ini_section, ini_key, ini_value, attr, expected_default
+def test_typed_getter_failure_logs_and_falls_back_to_default(
+    tmpdir, caplog, ini_section, ini_key, ini_value, attr, expected_default
 ):
-    """Captures current behaviour: typed-getter failures silently use the default.
+    """Typed-getter failures are logged at ERROR and fall back to the default.
 
-    FIXME (Phase 5b/C10): ``_get_option`` lines 298-301 are intended to log an
-    error before re-raising, but the format-string call
-    ``msg.format((*secopt, self.configfiles))`` passes a single tuple to a
-    template that expects three positional args, so the ``logger.error`` call
-    itself raises and the user gets no diagnostic. Either way, the outer
-    ``except Exception`` in ``_parse_config`` swallows everything and applies
-    the default. The "log on failure" intent should be restored.
+    Phase 5b/C10: the previously-broken ``logger.error`` call in
+    ``_get_option`` is replaced by a working ``logger.error`` in
+    ``_parse_config`` that names the option and the offending value.
     """
     cfg_file = Path(tmpdir.join("typed.cfg"))
     cfg_file.write_text(f"[{ini_section}]\n{ini_key} = {ini_value}\n")
-    cfg = config.Config(cfg_file, refhosts=MockRefhosts)
+    with caplog.at_level("ERROR", logger="mtui.config"):
+        cfg = config.Config(cfg_file, refhosts=MockRefhosts)
     assert getattr(cfg, attr) == expected_default
+    assert any(attr in r.message for r in caplog.records), (
+        f"expected an ERROR log line mentioning {attr!r}; "
+        f"got: {[r.message for r in caplog.records]}"
+    )
