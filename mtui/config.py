@@ -36,8 +36,9 @@ class ConfigOption:
     - ``getter`` is invoked as ``getter(*ini_path)`` to read the raw value
       from the INI file (typically ``config.get``, ``config.getint`` or
       ``config.getboolean``).
-    - When the read fails (option absent or malformed), the option falls
-      back to ``default`` (called if callable, otherwise used verbatim).
+    - On any failure during read OR ``fixup``, the option falls back to
+      ``default`` (called if callable, otherwise used verbatim) and the
+      failure is logged at ERROR level.
     - ``fixup`` is applied to the successfully-read value to coerce it to
       the final attribute type (e.g. ``Path``, ``int``).
     """
@@ -148,19 +149,36 @@ class Config:
         self.__location = x
 
     def _parse_config(self) -> None:
-        """Parses the configuration options from the config files."""
-        for opt in self.data:
-            try:
-                val = self._get_option(opt.ini_path, opt.getter)
-            except Exception:
-                logger.debug(
-                    "config option %s not in INI; using default",
-                    opt.attr,
-                    exc_info=True,
-                )
-                val = opt.default() if callable(opt.default) else opt.default
+        """Parses the configuration options from the config files.
 
-            setattr(self, opt.attr, opt.fixup(val))
+        For each declared :class:`ConfigOption`, reads the raw value via the
+        option's ``getter``, applies its ``fixup``, and assigns the result
+        to ``self``. On any failure during read OR fixup, logs an ERROR
+        naming the option, the offending value (when known), and the
+        default being applied, then assigns the default.
+        """
+        for opt in self.data:
+            raw: Any = None
+            try:
+                raw = self._get_option(opt.ini_path, opt.getter)
+                val = opt.fixup(raw)
+            except (configparser.NoSectionError, configparser.NoOptionError):
+                # Option absent from the INI: not an error, just use the default.
+                val = opt.default() if callable(opt.default) else opt.default
+            except Exception:
+                default_val = opt.default() if callable(opt.default) else opt.default
+                logger.exception(
+                    "Config option %s (%s.%s) failed to parse value %r; "
+                    "falling back to default %r",
+                    opt.attr,
+                    opt.ini_path[0],
+                    opt.ini_path[1],
+                    raw,
+                    default_val,
+                )
+                val = default_val
+
+            setattr(self, opt.attr, val)
             logger.debug('config.%s set to "%s"', opt.attr, val)
 
     def _define_config_options(self) -> None:
@@ -360,7 +378,7 @@ class Config:
         scripts: list[str] = [x.name[5:-3] for x in terms_path().glob("term.*.sh")]
         self.termnames = scripts
 
-    def _get_option(self, secopt, getter):
+    def _get_option(self, secopt: tuple[str, str], getter: Callable[..., Any]) -> Any:
         """Gets an option from the configuration.
 
         Args:
@@ -370,16 +388,18 @@ class Config:
         Returns:
             The value of the option.
 
+        Raises:
+            configparser.NoSectionError / NoOptionError: option absent.
+            Exception: any failure raised by ``getter`` (e.g. ``ValueError``
+                from ``getint`` / ``getboolean`` on a malformed value); the
+                caller (:meth:`_parse_config`) is responsible for logging
+                and falling back to the default.
+
         """
         try:
             return getter(*secopt)
         except (configparser.NoSectionError, configparser.NoOptionError):
-            msg = "Config option {}.{} not found.".format(*secopt)
-            logger.debug(msg)
-            raise
-        except Exception:
-            msg = "Config option {0}.{1} extraction from {2} " + "failed."
-            logger.error(msg.format((*secopt, self.configfiles)))
+            logger.debug("Config option %s.%s not found.", *secopt)
             raise
 
     def merge_args(self, args: Namespace) -> None:

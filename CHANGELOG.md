@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `Config` now logs an error and falls back to the documented default when
+  an INI value fails to parse. Previously `connection_timeout = abc`
+  crashed startup with an uncaught `ValueError`, and malformed typed
+  options like `refhosts.https_expiration = xyz` or
+  `mtui.use_keyring = perhaps` were silently replaced with the default
+  because the intended diagnostic log call was itself broken
+  (Phase 5b / C10).
 - Loading an SLFO or PI update with no `GITEA_TOKEN` configured no longer
   crashes with an uncaught traceback. Missing tokens are now reported with
   a clear configuration hint and exit with a non-zero status. Transient
