@@ -14,7 +14,7 @@ from json.decoder import JSONDecodeError
 from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ..config import Config
 from ..datafiles import scripts_path
@@ -26,6 +26,9 @@ from ..target.hostgroup import HostsGroup
 from ..template import TemplateIOError, TestReportAlreadyLoadedError
 from ..types import OpenQAResults, Product, TargetMeta
 from ..utils import ensure_dir_exists
+
+if TYPE_CHECKING:
+    from ..prompter import Prompter
 
 logger = getLogger("mtui.template.testreport")
 
@@ -46,15 +49,26 @@ class TestReport(ABC):
     # -- Attributes set dynamically by UpdateID subclasses --
     incident: Any
 
-    def __init__(self, config: Config, scripts_src_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        scripts_src_dir: Path | None = None,
+        prompter: "Prompter | None" = None,
+    ) -> None:
         """Initializes the `TestReport` object.
 
         Args:
             config: The application configuration.
             scripts_src_dir: The source directory for scripts.
+            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+                to every :class:`mtui.target.Target` built by
+                :meth:`connect_target` and :meth:`add_target`. ``None``
+                means "no prompt"; SSH command timeouts will silently
+                wait. See :class:`mtui.connection.Connection`.
 
         """
         self.config: Config = config
+        self._prompter = prompter
 
         self._scripts_src_dir: Path = scripts_src_dir or scripts_path()
 
@@ -376,6 +390,7 @@ class TestReport(ABC):
                 host,
                 self.packages,
                 timeout=self.config.connection_timeout,
+                prompter=self._prompter,
             )
             target.connect()
             new_system = str(target.system)
@@ -450,7 +465,12 @@ class TestReport(ABC):
             )
             return
         try:
-            self.targets[hostname] = Target(self.config, hostname, self.packages)
+            self.targets[hostname] = Target(
+                self.config,
+                hostname,
+                self.packages,
+                prompter=self._prompter,
+            )
             self.targets[hostname].connect()
 
             if self:

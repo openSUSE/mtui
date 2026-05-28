@@ -13,7 +13,7 @@ import stat
 import sys
 import termios
 import tty
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from logging import getLogger
 from pathlib import Path
@@ -82,6 +82,7 @@ class Connection:
 
     __slots__ = [
         "_policy",
+        "_timeout_prompt",
         "client",
         "command",
         "hostname",
@@ -98,6 +99,7 @@ class Connection:
         port: int | str,
         timeout: int,
         missing_host_key_policy: paramiko.MissingHostKeyPolicy | None = None,
+        timeout_prompt: Callable[[str], str] | None = None,
     ) -> None:
         """Opens an SSH channel to the specified host.
 
@@ -111,8 +113,19 @@ class Connection:
             missing_host_key_policy: paramiko policy applied to unknown
                 host keys. ``None`` (the default) preserves the legacy
                 behaviour of ``AutoAddPolicy``.
+            timeout_prompt: Optional callable invoked with prompt text
+                when a remote command times out. Returns the user's
+                response (Enter / ``y`` to wait, ``n`` to abort). When
+                ``None`` (the default) the timeout branch silently
+                loops back to wait for the command — matching the
+                long-standing Enter / Y default — and emits one WARNING
+                log line so the silence is observable. Wire a
+                :class:`mtui.prompter.Prompter`'s ``ask`` method here
+                to surface a serialised, race-free prompt to the user
+                when multiple targets run a command in parallel.
 
         """
+        self._timeout_prompt = timeout_prompt
         self.hostname = hostname
 
         try:
@@ -380,24 +393,30 @@ class Connection:
                         f"Session lost during command execution on {self.hostname}"
                     )
 
-                # writing on stdout needs locking as all run threads could
-                # write at the same time to stdout
-                if lock:
-                    lock.acquire()
+                # No prompt callback wired: silently wait. Matches the
+                # long-standing Enter / Y default but emits a WARNING
+                # so the silence is observable in logs.
+                if self._timeout_prompt is None:
+                    logger.warning(
+                        'command "%s" timed out on %s; no prompt callback wired, '
+                        "waiting for completion",
+                        command,
+                        self.hostname,
+                    )
+                    continue
 
-                try:
-                    if input(
-                        f'command "{command}" timed out on {self.hostname}. wait? (Y/n) ',
-                    ).lower() not in ("no", "n", "ne", "nein"):
-                        continue
-                    # if the user don't want to wait, raise CommandTimeoutError
-                    # and procceed
-                    raise CommandTimeoutError
-                finally:
-                    # release lock to allow other command threads to write to
-                    # stdout
-                    if lock:
-                        lock.release()
+                # Prompt callback wired: ask the user. The callback is
+                # responsible for any cross-thread serialisation (the
+                # production wiring uses ``Prompter.ask`` which holds a
+                # single lock so workers don't race for stdin).
+                answer = self._timeout_prompt(
+                    f'command "{command}" timed out on {self.hostname}. wait? (Y/n) ',
+                )
+                if answer.lower() not in ("no", "n", "ne", "nein"):
+                    continue
+                # If the user don't want to wait, raise CommandTimeoutError
+                # and procceed.
+                raise CommandTimeoutError
 
             try:
                 # wait for data on the session's stdout/stderr. if debug is enabled,

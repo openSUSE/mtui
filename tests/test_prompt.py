@@ -390,7 +390,9 @@ def test_load_update_swaps_metadata_and_targets():
     update = MagicMock()
     update.make_testreport.return_value = new_tr
     p.load_update(update, autoconnect=False)
-    update.make_testreport.assert_called_once_with(p.config, False, p.interactive)
+    update.make_testreport.assert_called_once_with(
+        p.config, False, p.interactive, prompter=p.prompter
+    )
     assert p.metadata is new_tr
     assert p.targets is new_targets
     # ``set_prompt(None)`` resets the session marker to empty.

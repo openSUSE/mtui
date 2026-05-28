@@ -104,18 +104,161 @@ def test_run_command_success(mock_ssh_client, mock_ssh_config, mock_path):
 
 
 def test_run_command_timeout(mock_ssh_client, mock_ssh_config, mock_path):
-    """Test command timeout in the 'run' method."""
-    conn = Connection("test_host", 22, 300)
+    """Timeout + callback returning 'n' must raise ``CommandTimeoutError``.
+
+    Rewritten from the prior ``patch("builtins.input", ...)`` shape:
+    the new ``Connection.__init__`` takes an injectable ``timeout_prompt``
+    callable, so the test wires one directly instead of monkey-patching
+    the global ``input`` builtin.
+    """
+    conn = Connection("test_host", 22, 300, timeout_prompt=lambda _text: "n")
 
     mock_session = MagicMock()
     mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
 
     with (
         patch("select.select", return_value=([], [], [])),
-        patch("builtins.input", return_value="n"),
         pytest.raises(CommandTimeoutError),
     ):
         conn.run("sleep 10")
+
+
+def test_run_command_timeout_wait_continues(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """Timeout + callback returning Enter (empty) must loop and complete.
+
+    First ``select.select`` returns "no fds ready" (timeout); the
+    callback returns ``""`` (Enter) which the parser treats as "wait".
+    Second ``select.select`` returns the session ready so the recv
+    loop terminates normally with exit code 0.
+    """
+    prompt_calls = []
+
+    def _prompt(text: str) -> str:
+        prompt_calls.append(text)
+        return ""  # Enter == wait
+
+    conn = Connection("test_host", 22, 300, timeout_prompt=_prompt)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+    mock_session.recv_exit_status.return_value = 0
+    mock_session.recv.side_effect = [b"done", b""]
+    mock_session.recv_stderr.side_effect = [b""]
+    mock_session.recv_ready.side_effect = [True, False]
+    mock_session.recv_stderr_ready.side_effect = [False, False]
+
+    # Three outer iterations: (1) select times out → continue,
+    # (2) select ready → recv "done" → buffer non-empty → loop,
+    # (3) select ready → no data → break.
+    with patch(
+        "select.select",
+        side_effect=[
+            ([], [], []),
+            ([mock_session], [], []),
+            ([mock_session], [], []),
+        ],
+    ):
+        exit_code = conn.run("sleep 1")
+
+    assert exit_code == 0
+    assert len(prompt_calls) == 1
+    assert "timed out" in prompt_calls[0]
+    assert "test_host" in prompt_calls[0]
+
+
+def test_run_command_timeout_no_callback_waits_silently(
+    mock_ssh_client, mock_ssh_config, mock_path, caplog
+):
+    """No callback wired: loop silently after a WARNING log line.
+
+    Pins the default behaviour for library callers / scripts / tests
+    that build a ``Connection`` without a prompter. The legacy code
+    would have blocked on ``input()``; the new default emits a
+    WARNING and continues to wait, preserving the Enter / Y default.
+    """
+    import logging
+
+    conn = Connection("test_host", 22, 300)  # no timeout_prompt
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+    mock_session.recv_exit_status.return_value = 0
+    mock_session.recv.side_effect = [b"done", b""]
+    mock_session.recv_stderr.side_effect = [b""]
+    mock_session.recv_ready.side_effect = [True, False]
+    mock_session.recv_stderr_ready.side_effect = [False, False]
+
+    # Three outer iterations: (1) select times out → WARNING → continue,
+    # (2) select ready → recv "done" → loop, (3) select ready → no data → break.
+    with (
+        caplog.at_level(logging.WARNING, logger="mtui.connection"),
+        patch(
+            "select.select",
+            side_effect=[
+                ([], [], []),
+                ([mock_session], [], []),
+                ([mock_session], [], []),
+            ],
+        ),
+    ):
+        exit_code = conn.run("sleep 1")
+
+    assert exit_code == 0
+    assert any(
+        "timed out on test_host" in rec.message
+        and "no prompt callback wired" in rec.message
+        for rec in caplog.records
+    ), [rec.message for rec in caplog.records]
+
+
+def test_run_command_timeout_callback_runs_on_calling_thread(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """The injected callback runs synchronously on ``Connection.run``'s thread.
+
+    Pins the C6 invariant: ``Connection.run`` does NOT spawn a fresh
+    thread for the prompt. Whatever serialisation the callback
+    performs (the production :class:`Prompter` holds a lock) is
+    therefore the only thing fencing concurrent worker prompts. If a
+    future change accidentally re-introduced a worker-side prompt
+    thread, this test would catch it.
+    """
+    import threading
+
+    captured_thread_ident: list[int] = []
+
+    def _prompt(_text: str) -> str:
+        captured_thread_ident.append(threading.get_ident())
+        return "n"  # abort
+
+    conn = Connection("test_host", 22, 300, timeout_prompt=_prompt)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+
+    worker_thread_ident: list[int] = []
+
+    def _drive() -> None:
+        worker_thread_ident.append(threading.get_ident())
+        with (
+            patch("select.select", return_value=([], [], [])),
+            pytest.raises(CommandTimeoutError),
+        ):
+            conn.run("sleep 10")
+
+    t = threading.Thread(target=_drive)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive(), "worker thread leaked"
+
+    assert len(captured_thread_ident) == 1
+    assert len(worker_thread_ident) == 1
+    assert captured_thread_ident[0] == worker_thread_ident[0], (
+        "callback must run on the same thread as Connection.run, not a "
+        "fresh one spawned by Connection itself"
+    )
 
 
 def test_connection_invalid_port_warns_and_falls_back(
