@@ -8,6 +8,7 @@ import configparser
 import getpass
 from argparse import Namespace
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from logging import getLogger
 from os import getenv
 from pathlib import Path
@@ -18,6 +19,37 @@ from .messages import InvalidLocationError
 from .refhost import RefhostsFactory, RefhostsResolveFailedError
 
 logger = getLogger("mtui.config")
+
+
+def _identity(x: Any) -> Any:
+    """Default fixup: return the value unchanged."""
+    return x
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigOption:
+    """Declarative description of a single configuration option.
+
+    Replaces the historical 5-tuple shape used in ``Config._define_config_options``
+    with a named-field record. Behaviour is unchanged from the tuple form:
+
+    - ``getter`` is invoked as ``getter(*ini_path)`` to read the raw value
+      from the INI file (typically ``config.get``, ``config.getint`` or
+      ``config.getboolean``).
+    - When the read fails (option absent or malformed), the option falls
+      back to ``default`` (called if callable, otherwise used verbatim).
+    - ``fixup`` is applied to the successfully-read value to coerce it to
+      the final attribute type (e.g. ``Path``, ``int``).
+    """
+
+    attr: str
+    ini_path: tuple[str, str]
+    default: Any
+    fixup: Callable[[Any], Any] = field(default=_identity)
+    # ``getter`` cannot have a meaningful default at class-definition time
+    # because it is a bound method of the per-instance ConfigParser; the
+    # caller fills it in (defaulting to ``config.get``) when building the list.
+    getter: Callable[..., Any] = field(default=_identity)
 
 
 class Config:
@@ -71,10 +103,6 @@ class Config:
         self.refhosts = refhosts
         self.__location = "default"
 
-        # FIXME: gotta read config overide from env instead of argv
-        # because this crap is used as a singleton all over the
-        # place
-
         if path:
             self.configfiles = [path]
         elif _pth := getenv("MTUI_CONF"):
@@ -121,156 +149,210 @@ class Config:
 
     def _parse_config(self) -> None:
         """Parses the configuration options from the config files."""
-        for datum in self.data:
-            attr, inipath, default, fixup, getter = datum
-
+        for opt in self.data:
             try:
-                val = self._get_option(inipath, getter)
+                val = self._get_option(opt.ini_path, opt.getter)
             except Exception:
                 logger.debug(
-                    "config option %s not in INI; using default", attr, exc_info=True
+                    "config option %s not in INI; using default",
+                    opt.attr,
+                    exc_info=True,
                 )
-                val = default() if callable(default) else default
+                val = opt.default() if callable(opt.default) else opt.default
 
-            setattr(self, str(attr), fixup(val))
-            logger.debug('config.%s set to "%s"', attr, val)
+            setattr(self, opt.attr, opt.fixup(val))
+            logger.debug('config.%s set to "%s"', opt.attr, val)
 
     def _define_config_options(self) -> None:
         """Defines all available configuration options."""
 
-        def normalizer(x: Any) -> Any:
-            return x
-
         def expanduser(p: Path | str) -> Path:
             return Path(p).expanduser()
 
-        data: list[tuple[Any, ...]] = [
-            (
+        get = self.config.get
+        getint = self.config.getint
+        getboolean = self.config.getboolean
+
+        self.data: list[ConfigOption] = [
+            ConfigOption(
                 "template_dir",
                 ("mtui", "template_dir"),
                 lambda: Path(getenv("TEMPLATE_DIR", ".")),
                 expanduser,
+                get,
             ),
-            (
+            ConfigOption(
                 "local_tempdir",
                 ("mtui", "tempdir"),
                 lambda: Path(getenv("TMPDIR", "/tmp")),
                 expanduser,
+                get,
             ),
-            ("session_user", ("mtui", "user"), getpass.getuser),
-            ("install_logs", ("mtui", "install_logs"), Path("install_logs"), Path),
+            ConfigOption(
+                "session_user",
+                ("mtui", "user"),
+                getpass.getuser,
+                getter=get,
+            ),
+            ConfigOption(
+                "install_logs",
+                ("mtui", "install_logs"),
+                Path("install_logs"),
+                Path,
+                get,
+            ),
             # connection.timeout appears to be in units of seconds as
             # indicated by
             # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
-            ("connection_timeout", ("mtui", "connection_timeout"), 300, int),
-            (
+            ConfigOption(
+                "connection_timeout",
+                ("mtui", "connection_timeout"),
+                300,
+                int,
+                get,
+            ),
+            ConfigOption(
                 "svn_path",
                 ("svn", "path"),
                 "svn+ssh://svn@qam.suse.de/testreports",
+                getter=get,
             ),
-            (
+            ConfigOption(
                 "bugzilla_url",
                 ("url", "bugzilla"),
                 "https://bugzilla.suse.com",
+                getter=get,
             ),
-            (
+            ConfigOption(
                 "reports_url",
                 ("url", "testreports"),
                 "https://qam.suse.de/testreports",
+                getter=get,
             ),
-            (
+            ConfigOption(
                 "fancy_reports_url",
                 ("url", "fancy_reports"),
                 "https://qam.suse.de/reports",
+                getter=get,
             ),
-            (
+            ConfigOption(
                 "qem_dashboard_api",
                 ("qem_dashboard", "api"),
                 "http://dashboard.qam.suse.de/api",
+                getter=get,
             ),
-            ("target_tempdir", ("target", "tempdir"), Path("/tmp"), Path),
-            (
+            ConfigOption(
+                "target_tempdir",
+                ("target", "tempdir"),
+                Path("/tmp"),
+                Path,
+                get,
+            ),
+            ConfigOption(
                 "chdir_to_template_dir",
                 ("mtui", "chdir_to_template_dir"),
                 False,
-                normalizer,
-                self.config.getboolean,
+                getter=getboolean,
             ),
-            ("refhosts_resolvers", ("refhosts", "resolvers"), "https,path"),
-            (
+            ConfigOption(
+                "refhosts_resolvers",
+                ("refhosts", "resolvers"),
+                "https,path",
+                getter=get,
+            ),
+            ConfigOption(
                 "refhosts_https_uri",
                 ("refhosts", "https_uri"),
                 "https://qam.suse.de/refhosts/refhosts.yml",
+                getter=get,
             ),
-            (
+            ConfigOption(
                 "refhosts_https_expiration",
                 ("refhosts", "https_expiration"),
                 3600 * 12,
                 int,
-                self.config.getint,
+                getint,
             ),
-            (
+            ConfigOption(
                 "refhosts_path",
                 ("refhosts", "path"),
                 Path("/usr/share/qam-metadata/refhosts.yml"),
                 Path,
+                get,
             ),
-            (
+            ConfigOption(
                 "use_keyring",
                 ("mtui", "use_keyring"),
                 False,
                 bool,
-                self.config.getboolean,
+                getboolean,
             ),
-            (
+            ConfigOption(
                 "report_bug_url",
                 ("mtui", "report_bug_url"),
                 "https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI",
+                getter=get,
             ),
             # openQA connector
-            ("openqa_instance", ("openqa", "openqa"), "https://openqa.suse.de"),
-            (
+            ConfigOption(
+                "openqa_instance",
+                ("openqa", "openqa"),
+                "https://openqa.suse.de",
+                getter=get,
+            ),
+            ConfigOption(
                 "openqa_instance_baremetal",
                 ("openqa", "baremetal"),
                 "http://openqa.qam.suse.cz",
+                getter=get,
             ),
-            ("openqa_install_distri", ("openqa", "distri"), "sle"),
-            (
+            ConfigOption(
+                "openqa_install_distri",
+                ("openqa", "distri"),
+                "sle",
+                getter=get,
+            ),
+            ConfigOption(
                 "openqa_install_logs",
                 ("openqa", "install_logfile"),
                 "update_install-zypper.log",
+                getter=get,
             ),
-            (
+            ConfigOption(
                 "openqa_kernel_install_logs",
                 ("openqa", "kernel_install_logfile"),
                 "update_kernel-zypper.log",
+                getter=get,
             ),
             # config for template export
-            ("threshold", ("template", "smelt_threshold"), 10, int, self.config.getint),
+            ConfigOption(
+                "threshold",
+                ("template", "smelt_threshold"),
+                10,
+                int,
+                getint,
+            ),
             # process location last as that needs to access
             # RefhostsFactory which need access to parts of config.
-            ("location", ("mtui", "location"), "default"),
-            ("gitea_token", ("gitea", "token"), getenv("GITEA_TOKEN", "")),
-            (
+            ConfigOption(
+                "location",
+                ("mtui", "location"),
+                "default",
+                getter=get,
+            ),
+            ConfigOption(
+                "gitea_token",
+                ("gitea", "token"),
+                getenv("GITEA_TOKEN", ""),
+                getter=get,
+            ),
+            ConfigOption(
                 "ssh_strict_host_key_checking",
                 ("connection", "ssh_strict_host_key_checking"),
                 "auto_add",
                 str,
+                get,
             ),
-        ]
-
-        def add_normalizer(x):
-            return x if len(x) > 3 else (*x, normalizer)
-
-        n_data = (add_normalizer(x) for x in data)
-
-        getter = self.config.get
-
-        def add_getter(x):
-            return x if len(x) > 4 else (*x, getter)
-
-        self.data: list[tuple[str, tuple[str, ...], Any, Callable, Callable]] = [
-            add_getter(x) for x in n_data
         ]
 
     def _list_terms(self) -> None:
