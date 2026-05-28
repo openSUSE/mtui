@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from .prompter import Prompter
+
 from mtui import notification
 
 from . import commands, messages
@@ -97,7 +99,9 @@ class CommandPrompt(cmd.Cmd):
     # frameworks. Eg. cement. Maybe there's something in twisted, which
     # would be great if it could replace the ssh layer as well.
 
-    def __init__(self, config, log, sys, display_factory) -> None:
+    def __init__(
+        self, config, log, sys, display_factory, prompter: "Prompter | None" = None
+    ) -> None:
         """Initializes the command prompt.
 
         Args:
@@ -105,14 +109,20 @@ class CommandPrompt(cmd.Cmd):
             log: The logger instance.
             sys: The sys module.
             display_factory: A factory for creating display objects.
+            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+                to every constructed :class:`TestReport` so that SSH
+                command-timeout prompts surface to the user with
+                cross-thread serialisation. ``None`` (the default)
+                disables the prompt: command timeouts silently wait.
 
         """
         self.sys = sys
+        self.prompter = prompter
 
         super().__init__(stdout=self.sys.stdout, stdin=self.sys.stdin)
         self.interactive: bool = True
         self.display = display_factory(self.sys.stdout)
-        self.metadata = NullTestReport(config)
+        self.metadata = NullTestReport(config, prompter=prompter)
         self.targets = self.metadata.targets
         """
         alias to ease refactoring
@@ -317,7 +327,12 @@ class CommandPrompt(cmd.Cmd):
             autoconnect: Whether to automatically connect to hosts.
 
         """
-        tr = update.make_testreport(self.config, autoconnect, self.interactive)
+        tr = update.make_testreport(
+            self.config,
+            autoconnect,
+            self.interactive,
+            prompter=self.prompter,
+        )
         self.metadata = tr
         self.targets = tr.targets
         self.set_prompt(None)

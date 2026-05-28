@@ -15,6 +15,7 @@ from .display import CommandPromptDisplay
 from .exceptions import MissingGiteaTokenError
 from .messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
 from .prompt import CommandPrompt
+from .prompter import Prompter
 from .systemcheck import detect_system
 
 
@@ -69,7 +70,11 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
 
     config.distro, config.distro_ver, config.distro_kernel = detect_system()
 
-    prompt = CommandPrompt(config, logger, sys, CommandPromptDisplay)
+    # One Prompter for the whole process: serialises SSH command-timeout
+    # prompts across worker threads behind a single lock so they reach
+    # the user one at a time (no stdin races, no interleaved prompt text).
+    prompter = Prompter()
+    prompt = CommandPrompt(config, logger, sys, CommandPromptDisplay, prompter=prompter)
     prompt.interactive = not args.noninteractive
     if args.update:
         if args.update.kind == "kernel":

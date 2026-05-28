@@ -5,7 +5,10 @@ from collections.abc import Callable
 from errno import ENOENT
 from logging import getLogger
 from pathlib import Path
-from typing import final
+from typing import TYPE_CHECKING, final
+
+if TYPE_CHECKING:
+    from ..prompter import Prompter
 
 from mtui.exceptions import (
     FailedGiteaCallError,
@@ -56,17 +59,28 @@ class UpdateID(ABC):
         self.testreport_factory = testreport_factory
         self._vcs_checkout = testreport_svn_checkout
 
-    def _checkout(self, config: Config, interactive: bool) -> TestReport:
+    def _checkout(
+        self,
+        config: Config,
+        interactive: bool,
+        prompter: "Prompter | None" = None,
+    ) -> TestReport:
         """Checks out a test report from version control.
 
         Args:
             config: The application configuration.
+            interactive: Whether to prompt the user for confirmation on
+                template hash mismatches.
+            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+                to the constructed :class:`TestReport` so that SSH
+                command-timeout prompts can reach the user with
+                cross-thread serialisation.
 
         Returns:
             A `TestReport` instance.
 
         """
-        tr = self.testreport_factory(config)
+        tr = self.testreport_factory(config, prompter=prompter)
         trdir: Path = config.template_dir / str(self.id)
         trpath: Path = trdir / "log"
 
@@ -130,7 +144,11 @@ class UpdateID(ABC):
 
     @abstractmethod
     def make_testreport(
-        self, config: Config, autoconnect: bool = True, interactive: bool = True
+        self,
+        config: Config,
+        autoconnect: bool = True,
+        interactive: bool = True,
+        prompter: "Prompter | None" = None,
     ) -> TestReport:
         """An abstract method for creating a `TestReport` instance."""
         ...
@@ -173,22 +191,29 @@ class AutoOBSUpdateID(UpdateID):
         super().__init__(id_, self.tr_factory(id_), testreport_svn_checkout)
 
     def make_testreport(
-        self, config: Config, autoconnect: bool = True, interactive: bool = True
+        self,
+        config: Config,
+        autoconnect: bool = True,
+        interactive: bool = True,
+        prompter: "Prompter | None" = None,
     ) -> TestReport:
         """Creates a `TestReport` instance for an automatic OBS update.
 
         Args:
             config: The application configuration.
             autoconnect: Whether to automatically connect to hosts.
+            interactive: Whether to prompt the user.
+            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+                to the constructed :class:`TestReport`.
 
         Returns:
             A `TestReport` instance.
 
         """
         try:
-            tr = self._checkout(config, interactive)
+            tr = self._checkout(config, interactive, prompter=prompter)
         except TestReportNotLoadedError:
-            return NullTestReport(config)
+            return NullTestReport(config, prompter=prompter)
 
         self._create_installogs_dir(config)
         tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
@@ -249,22 +274,29 @@ class KernelOBSUpdateID(UpdateID):
         directory.mkdir(parents=False, exist_ok=True)
 
     def make_testreport(
-        self, config: Config, autoconnect: bool = False, interactive: bool = True
+        self,
+        config: Config,
+        autoconnect: bool = False,
+        interactive: bool = True,
+        prompter: "Prompter | None" = None,
     ) -> TestReport:
         """Creates a `TestReport` instance for a kernel OBS update.
 
         Args:
             config: The application configuration.
             autoconnect: Whether to automatically connect to hosts.
+            interactive: Whether to prompt the user.
+            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+                to the constructed :class:`TestReport`.
 
         Returns:
             A `TestReport` instance.
 
         """
         try:
-            tr = self._checkout(config, interactive)
+            tr = self._checkout(config, interactive, prompter=prompter)
         except TestReportNotLoadedError:
-            return NullTestReport(config)
+            return NullTestReport(config, prompter=prompter)
 
         self._create_installogs_dir(config)
         self.create_results_dir(config)

@@ -9,6 +9,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Parallel target operations no longer race for `stdin` when an SSH
+  command times out on multiple hosts simultaneously. The timeout
+  prompt (`command "..." timed out on <host>. wait? (Y/n)`) is now
+  serialised through a single `mtui.prompter.Prompter` constructed in
+  `main()` and threaded down through `CommandPrompt` / `TestReport` /
+  `Target` to `Connection`. Previously the prompt was raised from the
+  SSH worker thread via a bare `input()` call; with several hosts in
+  flight two workers could attempt to read the same line of input and
+  prompt text was interleaved with sibling stdout writes. Library
+  callers that build `Connection` directly without wiring a prompter
+  now silently wait on timeout (matching the historical Enter / Y
+  default) and emit one `WARNING` log line so the silence is
+  observable (Phase 5b / C6).
 - `Config` now logs an error and falls back to the documented default when
   an INI value fails to parse. Previously `connection_timeout = abc`
   crashed startup with an uncaught `ValueError`, and malformed typed

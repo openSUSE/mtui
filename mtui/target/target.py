@@ -6,7 +6,7 @@ from logging import getLogger
 from pathlib import Path
 from string import Template
 from traceback import format_exc
-from typing import Any, final
+from typing import TYPE_CHECKING, Any, final
 
 from .. import messages
 from ..actions import downgrader, installer, preparer, uninstaller, updater
@@ -21,6 +21,9 @@ from . import TargetLock, TargetLockedError
 from .package_querier import PackageQuerier
 from .repo_manager import RepoManager
 from .reporter import Reporter
+
+if TYPE_CHECKING:
+    from ..prompter import Prompter
 
 logger = getLogger("mtui.target")
 
@@ -69,6 +72,7 @@ class Target:
         mode: ExecutionMode = ExecutionMode.PARALLEL,
         lock: type[TargetLock] = TargetLock,
         connection: type[Connection] = Connection,
+        prompter: "Prompter | None" = None,
     ) -> None:
         """Initializes the `Target` object.
 
@@ -82,6 +86,11 @@ class Target:
                 rest of its group or holds the group in a serial barrier.
             lock: The lock class to use for the target.
             connection: The connection class to use for the target.
+            prompter: Optional :class:`mtui.prompter.Prompter` used to
+                surface SSH command-timeout questions to the user with
+                cross-thread serialisation. ``None`` means "no prompt,
+                silently wait on timeout" — see
+                :class:`mtui.connection.Connection`.
 
         """
         self.config = config
@@ -92,6 +101,7 @@ class Target:
         self.out = HostLog()
         self.TargetLock = lock
         self.Connection = connection
+        self._prompter = prompter
 
         self.state: TargetState | str = TargetState(state)
         # default timeout for target, used only on connecting/reconnecting Target
@@ -137,6 +147,7 @@ class Target:
                 self.port,
                 self._timeout,
                 missing_host_key_policy=policy_from_config(policy_name),
+                timeout_prompt=self._prompter.ask if self._prompter else None,
             )
         except Exception as e:
             logger.critical(messages.ConnectingTargetFailedMessage(self.hostname, e))
