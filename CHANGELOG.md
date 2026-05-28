@@ -16,6 +16,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `mtui.use_keyring = perhaps` were silently replaced with the default
   because the intended diagnostic log call was itself broken
   (Phase 5b / C10).
+- Malformed host rows in `refhosts.yml` are now logged at ERROR level and
+  dropped; previously they were silently skipped at search time with no
+  operator-visible signal (Phase 5b / C11).
 - Loading an SLFO or PI update with no `GITEA_TOKEN` configured no longer
   crashes with an uncaught traceback. Missing tokens are now reported with
   a clear configuration hint and exit with a non-zero status. Transient
@@ -47,4 +50,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   - `target.query_package_versions()` is kept as a thin delegate but
     the rpm-vs-dpkg logic now lives in
     `target.package_querier`. All in-tree callers were migrated.
+- Internal refactor: `mtui.refhost` was rewritten around a typed schema
+  and a `Resolver` registry. Behaviour is unchanged for in-tree
+  callers; out-of-tree consumers may need to migrate (Phase 5b / C11):
+  - `Attributes` is now a `@dataclass` with typed fields (`arch: str`,
+    `product: Product | None`, `addons: list[Addon]`). The historical
+    free-form `setattr` shape and the undocumented `tags=(name)` /
+    `<other>=name(...)` segments in `testplatform` strings are no
+    longer parsed; unknown segments log an ERROR and are skipped. SMELT
+    never emitted those forms, and no field in `refhosts-ng.yml`
+    matched them, so this prunes dead grammar.
+  - `Refhosts.data` is now `dict[str, list[Host]]` (was
+    `dict[str, list[dict]]`). The `Host` dataclass and the matcher work
+    against typed fields; `is_candidate_match` no longer iterates
+    `vars(attribute)`.
+  - `_RefhostsFactory` now takes a `dict[str, Resolver]` registry
+    instead of five positional collaborators. Use
+    `_RefhostsFactory({"https": HttpsResolver(...), "path": PathResolver()})`.
+    The `getattr(self, f"resolve_{name}")` reflection is gone; the
+    `resolve_https` / `resolve_path` methods and the cache-refresh
+    helpers (`_is_https_cache_refresh_needed`,
+    `refresh_https_cache_if_needed`, `refresh_https_cache`) move to
+    `HttpsResolver` as private methods.
 
