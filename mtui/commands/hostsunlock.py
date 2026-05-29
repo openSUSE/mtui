@@ -2,7 +2,7 @@
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.utils import complete_choices
+from mtui.completion import complete_choices
 
 
 class HostsUnlock(Command):

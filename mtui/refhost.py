@@ -45,7 +45,7 @@ from urllib.request import urlopen
 from ruamel.yaml import YAML
 
 from . import messages
-from .utils import atomic_write_file
+from .fileops import atomic_write_file
 from .xdg import save_cache_path
 
 logger = getLogger("mtui.refhost")

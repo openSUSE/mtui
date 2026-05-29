@@ -5,8 +5,8 @@ from subprocess import check_call
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
+from mtui.completion import complete_choices
 from mtui.datafiles import terms_path
-from mtui.utils import complete_choices
 
 logger = getLogger("mtui.command.terms")
 

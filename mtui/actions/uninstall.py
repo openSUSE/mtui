@@ -3,7 +3,7 @@
 from string import Template
 
 from ..messages import MissingUninstallerError
-from ..utils import DictWithInjections
+from ..misc import DictWithInjections
 
 #: A dictionary of command templates for uninstalling packages using zypper.
 zypper_uninstall = {"command": Template("zypper -n rm $packages")}

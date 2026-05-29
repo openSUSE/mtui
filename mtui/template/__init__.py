@@ -4,9 +4,9 @@ import subprocess
 from logging import getLogger
 from os.path import join
 
+from ..fileops import chdir, ensure_dir_exists
 from ..messages import SvnCheckoutFailed, SvnCheckoutInterruptedError
 from ..types import RequestReviewID
-from ..utils import chdir, ensure_dir_exists
 
 logger = getLogger("mtui.template")
 

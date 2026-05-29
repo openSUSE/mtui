@@ -14,10 +14,12 @@ from typing import final
 
 from ..argparse import ArgumentParser
 from ..commands import Command
+from ..completion import complete_choices
 from ..connector import OSC, Gitea
 from ..exceptions import GiteaError, InvalidGiteaHashError
+from ..misc import requires_update
+from ..term import prompt_user
 from ..types import RequestKind
-from ..utils import complete_choices, prompt_user, requires_update
 
 logger = getLogger("mtui.command.apicalls")
 

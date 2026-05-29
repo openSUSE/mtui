@@ -13,10 +13,10 @@ from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
 from ..config import Config
 from ..connection import CommandTimeoutError, Connection, policy_from_config
+from ..fileops import timestamp
 from ..target.parsers import parse_system
 from ..types import ExecutionMode, HostLog, Package, System, TargetState
 from ..types.rpmver import RPMVersion
-from ..utils import timestamp
 from . import TargetLock, TargetLockedError
 from .package_querier import PackageQuerier
 from .repo_manager import RepoManager

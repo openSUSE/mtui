@@ -3,8 +3,8 @@
 from collections.abc import Callable
 from logging import getLogger
 
+from ..colors import yellow
 from ..exceptions import UpdateError
-from ..utils import yellow
 
 logger = getLogger("mtui.checks.update")
 

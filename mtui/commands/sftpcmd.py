@@ -7,7 +7,7 @@ from pathlib import Path
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.utils import complete_choices_filelist
+from mtui.completion import complete_choices_filelist
 
 logger = getLogger("mtui.command.sftp")
 

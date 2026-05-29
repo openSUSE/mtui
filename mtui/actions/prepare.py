@@ -3,7 +3,7 @@
 from string import Template
 
 from ..messages import MissingPreparerError
-from ..utils import DictWithInjections
+from ..misc import DictWithInjections
 
 
 def zypper_prepare(force: bool = False, testing: bool = False) -> dict[str, Template]:

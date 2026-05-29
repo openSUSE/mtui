@@ -5,9 +5,10 @@ from traceback import format_exc
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
+from mtui.completion import complete_choices
 from mtui.messages import NoRefhostsDefinedError
+from mtui.misc import requires_update
 from mtui.types.systems import UnknownSystemError
-from mtui.utils import complete_choices, requires_update
 
 logger = getLogger("mtui.commands.prepare")
 

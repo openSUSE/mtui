@@ -9,7 +9,7 @@ from typing import Self
 
 from ..config import Config
 from ..connection import Connection
-from ..utils import timestamp
+from ..fileops import timestamp
 
 logger = getLogger("mtui.target.locks")
 

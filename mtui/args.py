@@ -7,8 +7,8 @@ from pathlib import Path
 from mtui import __version__
 
 from .argparse import ArgumentParser
+from .misc import SUTParse
 from .types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
-from .utils import SUTParse
 
 
 def _dep_version(name: str) -> str:

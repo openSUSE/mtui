@@ -19,13 +19,13 @@ from typing import Any, Literal
 from ..config import Config
 from ..datafiles import scripts_path
 from ..exceptions import InvalidGiteaHashError, UpdateError
+from ..fileops import ensure_dir_exists
 from ..messages import MetadataNotLoadedError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..template import TemplateIOError, TestReportAlreadyLoadedError
 from ..types import OpenQAResults, Product, TargetMeta
-from ..utils import ensure_dir_exists
 
 logger = getLogger("mtui.template.testreport")
 

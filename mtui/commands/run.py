@@ -5,9 +5,10 @@ from logging import getLogger
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
+from mtui.completion import complete_choices
 from mtui.messages import NoRefhostsDefinedError
 from mtui.target.locks import LockedTargets, TargetLockedError
-from mtui.utils import complete_choices, page
+from mtui.term import page
 
 logger = getLogger("mtui.command.run")
 

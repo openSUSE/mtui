@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mtui import colorctl, colorlog, utils
+from mtui import colorctl, colorlog, colors
 
 
 @pytest.fixture(autouse=True)
@@ -56,21 +56,21 @@ def test_colors_enabled_decision_matrix(
 
 
 def test_green_returns_plain_when_disabled(monkeypatch):
-    """utils.green() must omit ANSI escapes when colour is off."""
+    """colors.green() must omit ANSI escapes when colour is off."""
     colorctl.set_mode("never")
-    assert utils.green("hello") == "hello"
-    assert utils.red("err") == "err"
-    assert utils.yellow("warn") == "warn"
-    assert utils.blue("info") == "info"
+    assert colors.green("hello") == "hello"
+    assert colors.red("err") == "err"
+    assert colors.yellow("warn") == "warn"
+    assert colors.blue("info") == "info"
 
 
 def test_green_emits_ansi_when_enabled():
-    """utils.green() must wrap in the expected ANSI sequence."""
+    """colors.green() must wrap in the expected ANSI sequence."""
     colorctl.set_mode("always")
-    assert utils.green("hi") == "\033[1;32mhi\033[1;m\033[0m"
-    assert utils.red("hi") == "\033[1;31mhi\033[1;m\033[0m"
-    assert utils.yellow("hi") == "\033[1;33mhi\033[1;m\033[0m"
-    assert utils.blue("hi") == "\033[1;34mhi\033[1;m\033[0m"
+    assert colors.green("hi") == "\033[1;32mhi\033[1;m\033[0m"
+    assert colors.red("hi") == "\033[1;31mhi\033[1;m\033[0m"
+    assert colors.yellow("hi") == "\033[1;33mhi\033[1;m\033[0m"
+    assert colors.blue("hi") == "\033[1;34mhi\033[1;m\033[0m"
 
 
 def test_color_formatter_plain_when_disabled():
