@@ -384,6 +384,35 @@ Gitea API access token, this config has higher prio than environment
 variable. Token must have full access to the issue API.
 
 
+``lock.reap_stale``
+~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     bool
+  | **default**
+  |     ``True``
+
+When connecting to a reference host, force-remove a pre-existing
+``/var/lock/mtui.lock`` that is older than ``lock.stale_age`` regardless
+of which user or session created it (including exclusive, commented
+locks). Such a lock is almost always left over from a crashed or
+abandoned session. Set to ``false`` to only warn about pre-existing
+locks, as in older releases. Fresh locks are never removed.
+
+
+``lock.stale_age``
+~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     86400
+
+Age, in seconds, beyond which a remote lock is considered stale and
+eligible for automatic removal (see ``lock.reap_stale``). A value of
+``0`` disables reaping.
+
+
 Example
 =======
 
@@ -407,3 +436,7 @@ Example
 
   [gitea]
   token = s3cr3t_token
+
+  [lock]
+  reap_stale = true
+  stale_age = 86400

@@ -2,6 +2,7 @@
 
 import errno
 import os
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -248,6 +249,95 @@ class TestTargetLock:
 
         result = lock.time()
         assert "UTC" in result
+
+
+# --- Stale lock reaping ---
+
+
+class TestTargetLockReaping:
+    @pytest.fixture
+    def lock(self, mock_config):
+        """A TargetLock with stale-reaping enabled (1 day threshold)."""
+        mock_config.session_user = "testuser"
+        mock_config.lock_reap_stale = True
+        mock_config.lock_stale_age = 86400
+        conn = MagicMock()
+        conn.hostname = "host1.example.com"
+        return TargetLock(conn, mock_config)
+
+    @staticmethod
+    def _set_lockfile(lock, contents):
+        """Make the mocked remote return a lockfile with the given line."""
+        mock_file = MagicMock()
+        mock_file.readline.return_value = contents
+        lock.connection.sftp_open.return_value = mock_file
+
+    def test_age_seconds_none_when_unlocked(self, lock):
+        """age_seconds() returns None when no lockfile exists."""
+        lock.connection.sftp_open.side_effect = OSError(errno.ENOENT, "not found")
+        assert lock.age_seconds() is None
+
+    def test_age_seconds_none_on_malformed_timestamp(self, lock):
+        """age_seconds() returns None for a non-numeric timestamp."""
+        self._set_lockfile(lock, "not-a-number:otheruser:99999")
+        assert lock.age_seconds() is None
+
+    def test_age_seconds_computes_age(self, lock):
+        """age_seconds() returns roughly the elapsed time since the lock."""
+        old = int(time.time()) - 3600
+        self._set_lockfile(lock, f"{old}:otheruser:99999")
+        age = lock.age_seconds()
+        assert age is not None
+        assert 3590 <= age <= 3700
+
+    def test_reap_removes_stale_foreign_lock(self, lock):
+        """A lock older than the threshold is force-removed regardless of owner."""
+        stale = int(time.time()) - 200000  # > 1 day
+        self._set_lockfile(lock, f"{stale}:otheruser:99999")
+
+        assert lock.reap_if_stale() is True
+        lock.connection.sftp_remove.assert_called_once()
+
+    def test_reap_removes_stale_exclusive_lock(self, lock):
+        """Exclusive (commented) locks are reaped too once stale."""
+        stale = int(time.time()) - 200000
+        self._set_lockfile(lock, f"{stale}:otheruser:99999:do not touch")
+
+        assert lock.reap_if_stale() is True
+        lock.connection.sftp_remove.assert_called_once()
+
+    def test_reap_keeps_fresh_lock(self, lock):
+        """A lock younger than the threshold is left untouched."""
+        fresh = int(time.time()) - 60
+        self._set_lockfile(lock, f"{fresh}:otheruser:99999")
+
+        assert lock.reap_if_stale() is False
+        lock.connection.sftp_remove.assert_not_called()
+
+    def test_reap_disabled_by_flag(self, lock):
+        """reap_if_stale() does nothing when lock_reap_stale is False."""
+        lock.config.lock_reap_stale = False
+        stale = int(time.time()) - 200000
+        self._set_lockfile(lock, f"{stale}:otheruser:99999")
+
+        assert lock.reap_if_stale() is False
+        lock.connection.sftp_remove.assert_not_called()
+
+    def test_reap_disabled_by_zero_age(self, lock):
+        """A non-positive lock_stale_age disables reaping."""
+        lock.config.lock_stale_age = 0
+        stale = int(time.time()) - 200000
+        self._set_lockfile(lock, f"{stale}:otheruser:99999")
+
+        assert lock.reap_if_stale() is False
+        lock.connection.sftp_remove.assert_not_called()
+
+    def test_reap_keeps_malformed_lock(self, lock):
+        """A lock with an unparseable timestamp is left untouched."""
+        self._set_lockfile(lock, "garbage:otheruser:99999")
+
+        assert lock.reap_if_stale() is False
+        lock.connection.sftp_remove.assert_not_called()
 
 
 # --- LockedTargets context manager ---
