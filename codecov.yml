@@ -4,14 +4,14 @@ comment:
   behavior: default
   require_changes: true
 coverage:
-  range: 66..95
+  range: 81..95
   round: down
   precision: 2
   status:
     changes: false
     project:
       default:
-        target: 66.0
+        target: 81.0
         threshold: 0.5
     patch:
       default:
