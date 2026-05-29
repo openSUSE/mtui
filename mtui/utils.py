@@ -5,16 +5,19 @@ import readline
 import struct
 import termios
 import time
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection
 from contextlib import chdir as chdir  # noqa: PLC0414  # re-exported for callers
 from functools import wraps
-from itertools import chain
 from pathlib import Path
 from shutil import move
 from tempfile import mkstemp
 from typing import Any
 
 from .colors import blue, green, red, yellow  # noqa: F401  # re-exported for callers
+from .completion import (  # noqa: F401  # re-exported for callers
+    complete_choices,
+    complete_choices_filelist,
+)
 from .messages import TestReportNotLoadedError
 
 
@@ -207,93 +210,6 @@ class SUTParse:
 
         """
         return self.args
-
-
-def complete_choices(
-    synonyms: Sequence[tuple[str, ...]],
-    line: str,
-    text: str,
-    hostnames: list[str] | None = None,
-) -> list[str]:
-    """Provides command-line completion for choices.
-
-    Args:
-        synonyms: A list of tuples, where each tuple contains
-            synonymous arguments (e.g., `("-a", "--all")`).
-        line: The current command line string.
-        text: The text being completed.
-        hostnames: A list of hostnames to include in the completion choices.
-
-    Returns:
-        A list of possible completion strings.
-
-    """
-    if not hostnames:
-        hostnames = []
-
-    choices = set(list(chain.from_iterable(synonyms)) + hostnames)
-
-    ls = line.split(" ")
-    _ = ls.pop(0)
-
-    for line in ls:
-        if len(line) >= 2 and line[0] == "-" and line[1] != "-" and len(line) > 2:
-            for c in list(line[1:]):
-                ls.append("-" + c)
-
-            continue
-
-        for s in synonyms:
-            if line in s:
-                choices = choices - set(s)
-
-    endchoices: list[str] = []
-    for c in choices:
-        if text == c:
-            return [c]
-        if text == c[0 : len(text)]:
-            endchoices.append(c)
-
-    return endchoices
-
-
-def complete_choices_filelist(
-    synonyms: list[tuple[str, ...]],
-    line: str,
-    text: str,
-    hostnames: list[str] | None = None,
-) -> list[str]:
-    """Provides command-line completion for file paths.
-
-    Args:
-        synonyms: A list of tuples, where each tuple contains
-            synonymous arguments.
-        line: The current command line string.
-        text: The text being completed.
-        hostnames: A list of hostnames to include in the completion choices.
-
-    Returns:
-        A list of possible completion strings, including file and
-        directory names.
-
-    """
-    dirname = ""
-    filename = ""
-
-    if text.startswith("~"):
-        text = text.replace("~", os.path.expanduser("~"), 1)
-        text += "/"
-
-    if "/" in text:
-        dirname = "/".join(text.split("/")[:-1])
-        dirname += "/"
-
-    if not dirname:
-        dirname = "./"
-
-    synonyms += [(dirname + i,) for i in os.listdir(dirname) if i.startswith(filename)]
-
-    return complete_choices(synonyms, line, text, hostnames)
 
 
 def timestamp() -> str:
