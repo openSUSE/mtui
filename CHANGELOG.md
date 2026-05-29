@@ -7,6 +7,42 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Tests
+
+- Phase 6 test backfill: total suite grew from 697 to 952 tests
+  (+255, +37%); total branch coverage rose from 71% to 82%
+  (+11 pp). New `tests/test_cmd_<name>.py` files cover one happy
+  and one error path for every interactive command in
+  `mtui/commands/*` that previously lacked focused tests.
+  Coverage was also brought up across `mtui/actions/*`,
+  `mtui/checks/*` (all four modules now at 100%),
+  `mtui/template/*` (testreport from 34% to 72%; the four
+  subclass reports plus the products normalisers all sit at
+  100%), `mtui/export/{downloader,kernel}.py`, and the
+  previously-uncovered SFTP, reconnect, host-key and channel
+  paths of `mtui/connection.py` (85% → 96%).
+- The seven `test_target_init_*` cases were consolidated into a
+  single `@pytest.mark.parametrize`-driven `test_target_init`;
+  the seven test IDs are preserved so `pytest -k init` still
+  surfaces them individually (Phase 6 / D3).
+- The 0-byte `tests/fixtures/mtuirc` was replaced with a
+  realistic six-section INI fixture and a dedicated
+  `tests/test_config.py` test round-trips it through
+  `mtui.config.Config` across str/int/bool value types
+  (Phase 6 / D5).
+
+### Removed
+
+- Three unreferenced JSON fixtures (`tests/fixtures/inc_12358*.json`,
+  ~1.1 MB total) were deleted after a repo-wide reference sweep
+  confirmed no code, test, or doc loaded them (Phase 6 / D4).
+
+### CI
+
+- Codecov project floor ratcheted from 66% to 81% to reflect the
+  Phase 6 coverage gains; the `coverage.range` was widened to
+  `81..95` to match. Patch target is unchanged at 80%.
+
 ### Fixed
 
 - Parallel target operations no longer race for `stdin` when an SSH
