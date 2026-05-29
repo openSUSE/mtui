@@ -3,7 +3,7 @@
 from string import Template
 
 from ..messages import MissingUpdaterError
-from ..utils import DictWithInjections
+from ..misc import DictWithInjections
 
 #: A dictionary of command templates for updating packages using yum.
 yum_update = {

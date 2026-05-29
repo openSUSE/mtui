@@ -1,7 +1,7 @@
 """The `show_update_repos` command."""
 
 from mtui.commands import Command
-from mtui.utils import requires_update
+from mtui.misc import requires_update
 
 
 class Showrepos(Command):

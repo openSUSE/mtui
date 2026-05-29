@@ -4,7 +4,7 @@ from logging import getLogger
 from subprocess import check_call
 
 from mtui.commands import Command
-from mtui.utils import requires_update
+from mtui.misc import requires_update
 
 logger = getLogger("mtui.command.checkout")
 

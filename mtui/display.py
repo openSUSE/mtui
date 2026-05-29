@@ -4,9 +4,9 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import IO, Any
 
+from .colors import green, red, yellow
 from .target.hostgroup import HostsGroup
 from .types import ExecutionMode, RPMVersion, System, TargetState
-from .utils import green, red, yellow
 
 
 class CommandPromptDisplay:

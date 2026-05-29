@@ -20,10 +20,12 @@ import re
 from logging import getLogger
 
 from ..argparse import ArgumentParser
+from ..colors import blue, green, red, yellow
+from ..completion import complete_choices
 from ..connector import oqa_search as oqa
 from ..export.overview_inject import inject_overview
+from ..misc import requires_update
 from ..types import FileList, OpenQAOverviewResult
-from ..utils import blue, complete_choices, green, red, requires_update, yellow
 from . import Command
 
 logger = getLogger("mtui.commands.openqa_overview")

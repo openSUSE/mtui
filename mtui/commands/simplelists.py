@@ -4,7 +4,9 @@ from typing import ClassVar
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.utils import complete_choices, page, requires_update
+from mtui.completion import complete_choices
+from mtui.misc import requires_update
+from mtui.term import page
 
 
 class ListBugs(Command):

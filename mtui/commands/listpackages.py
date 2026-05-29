@@ -4,7 +4,9 @@ from typing import ClassVar, final
 
 from .. import messages
 from ..argparse import ArgumentParser
-from ..utils import blue, complete_choices, green, red, requires_update, yellow
+from ..colors import blue, green, red, yellow
+from ..completion import complete_choices
+from ..misc import requires_update
 from . import Command
 
 

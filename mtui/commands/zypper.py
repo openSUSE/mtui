@@ -4,7 +4,8 @@ from logging import getLogger
 
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.utils import complete_choices, requires_update
+from mtui.completion import complete_choices
+from mtui.misc import requires_update
 
 logger = getLogger("mtui.command.zypper")
 

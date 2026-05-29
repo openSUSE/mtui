@@ -30,7 +30,7 @@ from ..template.obstestreport import OBSTestReport
 from ..template.pitestreport import PITestReport
 from ..template.sltestreport import SLTestReport
 from ..template.testreport import TestReport
-from ..utils import prompt_user
+from ..term import prompt_user
 from . import RequestReviewID
 from .enums import RequestKind
 

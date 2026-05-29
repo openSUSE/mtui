@@ -4,8 +4,8 @@ from datetime import datetime
 from logging import getLogger
 from pathlib import Path
 
+from mtui.fileops import ensure_dir_exists
 from mtui.types import FileList
-from mtui.utils import ensure_dir_exists
 
 from .base import BaseExport
 from .downloader import download_logs

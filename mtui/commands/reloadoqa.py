@@ -4,7 +4,7 @@ from logging import getLogger
 
 from ..connector.openqa import KernelOpenQA
 from ..connector.qem_dashboard import DashboardAutoOpenQA
-from ..utils import requires_update
+from ..misc import requires_update
 from . import Command
 
 logger = getLogger("mtui.commands.reloadopenqa")

@@ -7,9 +7,10 @@ from mtui.argparse import ArgumentParser
 from mtui.connector.qem_dashboard import DashboardAutoOpenQA
 from mtui.export.base import BaseExport
 
+from ..completion import complete_choices_filelist
 from ..export import AutoExport, KernelExport, ManualExport
+from ..misc import requires_update
 from ..types.filelist import FileList
-from ..utils import complete_choices_filelist, requires_update
 from . import Command
 
 logger = getLogger("mtui.commands.export")

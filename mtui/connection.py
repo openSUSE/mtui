@@ -23,7 +23,7 @@ import paramiko
 from paramiko import Channel, SFTPClient, SFTPFile, SSHClient, SSHConfig
 
 from .messages import ReConnectFailed
-from .utils import termsize
+from .term import termsize
 
 logger = getLogger("mtui.connection")
 RETRIES: int = 5

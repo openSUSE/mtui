@@ -8,7 +8,7 @@ from time import sleep
 from mtui import messages
 from mtui.argparse import ArgumentParser
 from mtui.commands import Command
-from mtui.utils import complete_choices
+from mtui.completion import complete_choices
 
 logger = getLogger("mtui.commands.reportbug")
 
