@@ -72,4 +72,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
     helpers (`_is_https_cache_refresh_needed`,
     `refresh_https_cache_if_needed`, `refresh_https_cache`) move to
     `HttpsResolver` as private methods.
+- Internal refactor: the grab-bag `mtui/utils.py` is split into five
+  topical modules and the file itself is deleted. Out-of-tree consumers
+  that imported from `mtui.utils` must update each import per the map
+  below (Phase 5b / C8):
+  - `green`, `red`, `yellow`, `blue` → `mtui.colors`.
+  - `complete_choices`, `complete_choices_filelist` → `mtui.completion`.
+  - `chdir`, `ensure_dir_exists`, `atomic_write_file`, `timestamp` →
+    `mtui.fileops`.
+  - `termsize`, `filter_ansi`, `prompt_user`, `page` → `mtui.term`.
+  - `DictWithInjections`, `SUTParse`, `requires_update` → `mtui.misc`.
 
