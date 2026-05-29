@@ -14,10 +14,7 @@ from mtui.types.rpmver import RPMVersion
 # --- Initialization ---
 
 
-def test_target_init_defaults(mock_config):
-    """Test Target initialization with default parameters."""
-    target = Target(mock_config, "test-host.example.com")  # type: ignore[arg-type]
-
+def _check_defaults(mock_config, target):
     assert target.config is mock_config
     assert target.host == "test-host.example.com"
     assert target.hostname == "test-host.example.com"
@@ -29,56 +26,104 @@ def test_target_init_defaults(mock_config):
     assert target.packages == {}
 
 
-def test_target_init_with_port(mock_config):
-    """Test Target initialization with port in hostname."""
-    target = Target(mock_config, "test-host.example.com:2222")  # type: ignore[arg-type]
-
+def _check_port(_, target):
     assert target.host == "test-host.example.com"
     assert target.port == "2222"
     assert target.hostname == "test-host.example.com:2222"
 
 
-def test_target_init_with_packages(mock_config):
-    """Test Target initialization with packages dict."""
-    packages = {"standard": {"bash": "5.1-1.2"}}
-    target = Target(mock_config, "host.example.com", packages)  # type: ignore[arg-type]
-
-    assert target._pkgs == packages
+def _check_packages(_, target):
+    assert target._pkgs == {"standard": {"bash": "5.1-1.2"}}
 
 
-def test_target_init_with_state(mock_config):
-    """Test Target initialization with different states."""
-    for state in ("enabled", "disabled", "dryrun"):
-        target = Target(mock_config, "host.example.com", state=state)  # type: ignore[arg-type]
-        assert target.state == state
+def _check_state(_, target):
+    # The parameterised case below builds three Targets, one per state,
+    # so the assertion is performed inside the parametrise harness.
+    assert target.state in {"enabled", "disabled", "dryrun"}
 
 
-def test_target_init_with_timeout(mock_config):
-    """Test Target initialization with custom timeout."""
-    target = Target(mock_config, "host.example.com", timeout=600)  # type: ignore[arg-type]
+def _check_timeout(_, target):
     assert target._timeout == 600
 
 
-def test_target_init_with_exclusive(mock_config):
-    """Test Target initialization with serial execution mode."""
-    target = Target(mock_config, "host.example.com", mode=ExecutionMode.SERIAL)  # type: ignore[arg-type]
+def _check_exclusive(_, target):
     assert target.mode is ExecutionMode.SERIAL
 
 
-def test_target_init_custom_classes(mock_config):
-    """Test Target initialization with custom lock and connection classes."""
-    mock_lock_class = MagicMock()
-    mock_conn_class = MagicMock()
+def _check_custom_classes(_, target):
+    assert target.TargetLock is target._expected_lock_class
+    assert target.Connection is target._expected_conn_class
 
-    target = Target(  # type: ignore[arg-type]
+
+def _build_state_target(mock_config):
+    """Build three Targets, one per supported state; return last for shape checks."""
+    last = None
+    for state in ("enabled", "disabled", "dryrun"):
+        t = Target(mock_config, "host.example.com", state=state)  # type: ignore[arg-type]
+        assert t.state == state
+        last = t
+    return last
+
+
+def _build_custom_classes_target(mock_config):
+    """Build a Target with mocked lock/connection classes; stash them for the check."""
+    lock_class = MagicMock()
+    conn_class = MagicMock()
+    t = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        lock=mock_lock_class,  # ty: ignore[invalid-argument-type]
-        connection=mock_conn_class,  # ty: ignore[invalid-argument-type]
+        lock=lock_class,  # ty: ignore[invalid-argument-type]
+        connection=conn_class,  # ty: ignore[invalid-argument-type]
     )
+    # Smuggle the expected classes into the instance so the shared check fn
+    # can compare without leaking the parametrise builder's locals.
+    t._expected_lock_class = lock_class  # ty: ignore[unresolved-attribute]
+    t._expected_conn_class = conn_class  # ty: ignore[unresolved-attribute]
+    return t
 
-    assert target.TargetLock is mock_lock_class
-    assert target.Connection is mock_conn_class
+
+@pytest.mark.parametrize(
+    ("builder", "check"),
+    [
+        pytest.param(
+            lambda cfg: Target(cfg, "test-host.example.com"),  # type: ignore[arg-type]
+            _check_defaults,
+            id="defaults",
+        ),
+        pytest.param(
+            lambda cfg: Target(cfg, "test-host.example.com:2222"),  # type: ignore[arg-type]
+            _check_port,
+            id="with_port",
+        ),
+        pytest.param(
+            lambda cfg: Target(  # type: ignore[arg-type]
+                cfg, "host.example.com", {"standard": {"bash": "5.1-1.2"}}
+            ),
+            _check_packages,
+            id="with_packages",
+        ),
+        pytest.param(_build_state_target, _check_state, id="with_state"),
+        pytest.param(
+            lambda cfg: Target(cfg, "host.example.com", timeout=600),  # type: ignore[arg-type]
+            _check_timeout,
+            id="with_timeout",
+        ),
+        pytest.param(
+            lambda cfg: Target(  # type: ignore[arg-type]
+                cfg, "host.example.com", mode=ExecutionMode.SERIAL
+            ),
+            _check_exclusive,
+            id="with_exclusive",
+        ),
+        pytest.param(
+            _build_custom_classes_target, _check_custom_classes, id="custom_classes"
+        ),
+    ],
+)
+def test_target_init(mock_config, builder, check):
+    """Parametrised Target init coverage (was seven separate test_target_init_* functions)."""
+    target = builder(mock_config)
+    check(mock_config, target)
 
 
 # --- String representation ---
