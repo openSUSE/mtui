@@ -14,52 +14,8 @@ from shutil import move
 from tempfile import mkstemp
 from typing import Any
 
-from .colorctl import colors_enabled
+from .colors import blue, green, red, yellow  # noqa: F401  # re-exported for callers
 from .messages import TestReportNotLoadedError
-
-
-def green(xs: str) -> str:
-    """Wraps a string in ANSI escape codes to make it green.
-
-    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
-    the input unchanged when colour is disabled.
-    """
-    if not colors_enabled():
-        return str(xs)
-    return f"\033[1;32m{xs!s}\033[1;m\033[0m"
-
-
-def red(xs: str) -> str:
-    """Wraps a string in ANSI escape codes to make it red.
-
-    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
-    the input unchanged when colour is disabled.
-    """
-    if not colors_enabled():
-        return str(xs)
-    return f"\033[1;31m{xs!s}\033[1;m\033[0m"
-
-
-def yellow(xs: str) -> str:
-    """Wraps a string in ANSI escape codes to make it yellow.
-
-    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
-    the input unchanged when colour is disabled.
-    """
-    if not colors_enabled():
-        return str(xs)
-    return f"\033[1;33m{xs!s}\033[1;m\033[0m"
-
-
-def blue(xs: str) -> str:
-    """Wraps a string in ANSI escape codes to make it blue.
-
-    Honours the runtime colour mode (see :mod:`mtui.colorctl`); returns
-    the input unchanged when colour is disabled.
-    """
-    if not colors_enabled():
-        return str(xs)
-    return f"\033[1;34m{xs!s}\033[1;m\033[0m"
 
 
 def prompt_user(text: str, options: Collection[str], interactive: bool = True) -> bool:
