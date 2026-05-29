@@ -214,3 +214,36 @@ def test_typed_getter_failure_logs_and_falls_back_to_default(
         f"expected an ERROR log line mentioning {attr!r}; "
         f"got: {[r.message for r in caplog.records]}"
     )
+
+
+# --- Realistic fixture round-trip (Phase 6 / D5) ---
+
+
+def test_mtuirc_fixture_parses_all_sections():
+    """The packaged ``tests/fixtures/mtuirc`` should parse end-to-end.
+
+    Exercises a realistic multi-section INI (``[mtui]``, ``[openqa]``,
+    ``[qem_dashboard]``, ``[gitea]``, ``[connection]``, ``[url]``) and
+    asserts the parsed attributes match the fixture's values across all
+    three value types the parser knows (str, int, bool).
+    """
+    fixture = Path(__file__).parent / "fixtures" / "mtuirc"
+    assert fixture.is_file(), "tests/fixtures/mtuirc fixture missing"
+    assert fixture.stat().st_size > 0, "tests/fixtures/mtuirc must be populated"
+
+    cfg = config.Config(fixture, refhosts=MockRefhosts)
+
+    # String values across multiple sections.
+    assert cfg.location == "nuremberg"
+    assert cfg.session_user == "qauser"
+    assert cfg.openqa_instance == "https://openqa.example.com"
+    assert cfg.openqa_install_distri == "sle"
+    assert cfg.qem_dashboard_api == "https://dashboard.example.com/api"
+    assert cfg.gitea_token == "ghp_fixture_token_for_tests"
+    assert cfg.ssh_strict_host_key_checking == "warn"
+    assert cfg.bugzilla_url == "https://bugzilla.example.com"
+    assert cfg.reports_url == "https://qam.example.com/testreports"
+    # Integer-typed option.
+    assert cfg.connection_timeout == 450
+    # Boolean-typed option.
+    assert cfg.chdir_to_template_dir is True
