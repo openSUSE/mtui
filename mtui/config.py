@@ -83,6 +83,8 @@ class Config:
     threshold: int
     gitea_token: str
     ssh_strict_host_key_checking: str
+    lock_reap_stale: bool
+    lock_stale_age: int
 
     # -- Attributes set externally in main.py --
     kernel: bool
@@ -370,6 +372,23 @@ class Config:
                 "auto_add",
                 str,
                 get,
+            ),
+            # On connect, force-remove a pre-existing remote lock older
+            # than ``lock_stale_age`` seconds regardless of owner. Set
+            # ``reap_stale = false`` (or ``stale_age = 0``) to disable.
+            ConfigOption(
+                "lock_reap_stale",
+                ("lock", "reap_stale"),
+                True,
+                bool,
+                getboolean,
+            ),
+            ConfigOption(
+                "lock_stale_age",
+                ("lock", "stale_age"),
+                86400,
+                int,
+                getint,
             ),
         ]
 

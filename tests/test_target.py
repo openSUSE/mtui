@@ -479,10 +479,11 @@ def test_connect_success_wires_up_lock_and_system(mock_config, monkeypatch):
 
 
 def test_connect_warns_when_already_locked(mock_config, monkeypatch, caplog):
-    """A pre-existing lock is logged at warning but does not abort connect."""
+    """A fresh pre-existing lock is logged at warning but does not abort connect."""
     conn_class = MagicMock()
     lock_class = MagicMock()
     lock_class.return_value.is_locked.return_value = True
+    lock_class.return_value.reap_if_stale.return_value = False
     lock_class.return_value.locked_by_msg.return_value = "locked by alice"
     fake_system = MagicMock()
     fake_system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
@@ -498,6 +499,30 @@ def test_connect_warns_when_already_locked(mock_config, monkeypatch, caplog):
     with caplog.at_level("WARNING", logger="mtui.target"):
         target.connect()
     assert any("locked by alice" in r.message for r in caplog.records)
+
+
+def test_connect_reaps_stale_lock_without_warning(mock_config, monkeypatch, caplog):
+    """A stale lock is reaped on connect; no 'locked by' warning is emitted."""
+    conn_class = MagicMock()
+    lock_class = MagicMock()
+    lock_class.return_value.is_locked.return_value = True
+    lock_class.return_value.reap_if_stale.return_value = True
+    fake_system = MagicMock()
+    fake_system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
+    monkeypatch.setattr(
+        "mtui.target.target.parse_system", lambda _conn: (fake_system, False)
+    )
+    target = Target(  # type: ignore[arg-type]
+        mock_config,
+        "host.example.com",
+        connection=conn_class,  # ty: ignore[invalid-argument-type]
+        lock=lock_class,  # ty: ignore[invalid-argument-type]
+    )
+    with caplog.at_level("WARNING", logger="mtui.target"):
+        target.connect()
+    lock_class.return_value.reap_if_stale.assert_called_once()
+    lock_class.return_value.locked_by_msg.assert_not_called()
+    assert not any("locked by" in r.message for r in caplog.records)
 
 
 def test_connect_failure_logs_critical_and_reraises(mock_config, caplog):

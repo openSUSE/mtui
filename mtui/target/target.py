@@ -154,7 +154,7 @@ class Target:
             raise e
 
         self._lock = self.TargetLock(self.connection, self.config)
-        if self.is_locked():
+        if self.is_locked() and not self._lock.reap_if_stale():
             logger.warning(self._lock.locked_by_msg())
 
         # get system

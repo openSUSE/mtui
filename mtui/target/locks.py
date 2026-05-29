@@ -2,6 +2,7 @@
 
 import errno
 import os
+import time
 from datetime import datetime
 from logging import getLogger
 from pathlib import Path
@@ -127,6 +128,7 @@ class TargetLock:
 
         """
         self.connection = connection
+        self.config = config
         self.i_am_user = config.session_user
         self.i_am_pid = os.getpid()
         """
@@ -163,6 +165,57 @@ class TargetLock:
         """
         self.load()
         return bool(self._lock.user)
+
+    def age_seconds(self) -> int | None:
+        """Returns the age of the current remote lock in seconds.
+
+        Returns:
+            The lock age in seconds, or None when there is no lock or the
+            stored timestamp is missing/malformed (so callers treat such a
+            lock as "leave it alone").
+
+        """
+        self.load()
+        if not self._lock.user or not self._lock.timestamp:
+            return None
+        try:
+            return int(time.time()) - int(self._lock.timestamp)
+        except ValueError:
+            logger.debug(
+                "%s: malformed lock timestamp %r",
+                self.connection.hostname,
+                self._lock.timestamp,
+            )
+            return None
+
+    def reap_if_stale(self) -> bool:
+        """Force-removes the remote lock if it is older than the threshold.
+
+        Controlled by the ``lock_reap_stale`` (default on) and
+        ``lock_stale_age`` (seconds, default 86400) config options. Applies
+        to every lock, including exclusive (commented) ones and locks owned
+        by other users, since a sufficiently old lock is almost always left
+        over from a crashed or abandoned session.
+
+        Returns:
+            True if a stale lock was removed, False otherwise.
+
+        """
+        if not self.config.lock_reap_stale or self.config.lock_stale_age <= 0:
+            return False
+
+        age = self.age_seconds()
+        if age is None or age <= self.config.lock_stale_age:
+            return False
+
+        logger.warning(
+            "%s: removing stale lock held by %s (%d h old)",
+            self.connection.hostname,
+            self._lock.user,
+            age // 3600,
+        )
+        self.unlock(force=True)
+        return True
 
     def lock(self, comment: str = "") -> None:
         """Locks the target system.

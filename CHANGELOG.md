@@ -7,6 +7,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Stale reference-host locks are now reaped automatically on connect.
+  When `add_host` (or any connect) finds a pre-existing `/var/lock/mtui.lock`
+  older than a configurable threshold, mtui force-removes it regardless of
+  owner — including exclusive (commented) locks — since such a lock is
+  almost always left over from a crashed or abandoned session. The removal
+  is logged at `WARNING` (`<host>: removing stale lock held by <user>
+  (<N> h old)`). Controlled by two new `[lock]` config options:
+  `reap_stale` (default `true`) and `stale_age` in seconds (default
+  `86400`, i.e. one day); set `reap_stale = false` or `stale_age = 0` to
+  restore the previous behaviour of only warning. Fresh locks are still
+  only reported, never removed.
+
 ### Tests
 
 - Phase 6 test backfill: total suite grew from 697 to 952 tests
