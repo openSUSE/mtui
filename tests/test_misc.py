@@ -1,6 +1,7 @@
 import logging
 
 from mtui.export.base import BaseExport
+from mtui.misc import SUTParse
 
 
 class FakeExport(BaseExport):
@@ -36,3 +37,8 @@ def test_diffeerent_files(caplog, log_install) -> None:
 
     assert caplog.records[0].message == f"file {fn} exists."
     assert caplog.records[1].message.startswith("exporting log to")
+
+
+def test_sutparse():
+    sut = SUTParse("a,b,c")
+    assert sut.print_args() == "-t a -t b -t c"

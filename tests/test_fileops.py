@@ -1,3 +1,5 @@
+"""Tests for the helpers in :mod:`mtui.fileops`."""
+
 import os
 from pathlib import Path
 from tempfile import mkdtemp
@@ -5,14 +7,13 @@ from typing import ClassVar
 
 import pytest
 
-from mtui import utils
-from mtui.utils import atomic_write_file, chdir, ensure_dir_exists
+from mtui.fileops import atomic_write_file, chdir, ensure_dir_exists, timestamp
 
 
 @pytest.fixture
 def create_temp(tmpdir_factory):
     """simple tmpdir_factory wrapper."""
-    return tmpdir_factory.mktemp("utils")
+    return tmpdir_factory.mktemp("fileops")
 
 
 class TestEnsureDirExists:
@@ -77,41 +78,6 @@ def test_atomic_write(create_temp):
     atomic_write_file(data.encode(), Path(path) / "bytes")
 
 
-def test_colors():
-    """Test ANSI color utils."""
-    from mtui import colorctl
-
-    saved = colorctl.get_mode()
-    colorctl.set_mode("always")
-    try:
-        text = "some text"
-        assert utils.green(text) == f"\033[1;32m{text!s}\033[1;m\033[0m"
-        assert utils.red(text) == f"\033[1;31m{text!s}\033[1;m\033[0m"
-        assert utils.yellow(text) == f"\033[1;33m{text!s}\033[1;m\033[0m"
-        assert utils.blue(text) == f"\033[1;34m{text!s}\033[1;m\033[0m"
-    finally:
-        colorctl.set_mode(saved)
-
-
-def test_filter_ansi():
-    """Test ANSI filter."""
-    from mtui import colorctl
-
-    saved = colorctl.get_mode()
-    colorctl.set_mode("always")
-    try:
-        text = "some text"
-        ansi_text = utils.green(text)
-        assert utils.filter_ansi(ansi_text) == text
-    finally:
-        colorctl.set_mode(saved)
-
-
 def test_timestamp():
     """Test timestamp."""
-    assert isinstance(int(utils.timestamp()), int)
-
-
-def test_sutparse():
-    sut = utils.SUTParse("a,b,c")
-    assert sut.print_args() == "-t a -t b -t c"
+    assert isinstance(int(timestamp()), int)
