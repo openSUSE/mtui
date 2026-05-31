@@ -1,11 +1,11 @@
-"""Defines checks to be performed after a prepare action."""
+"""Defines checks to be performed after a downgrade action."""
 
 from collections.abc import Callable
 from logging import getLogger
 
-from ..support.exceptions import UpdateError
+from ...support.exceptions import UpdateError
 
-logger = getLogger("mtui.checks.prepare")
+logger = getLogger("mtui.checks.downgrade")
 
 
 def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -> None:
@@ -25,19 +25,16 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
     if "A ZYpp transaction is already in progress." in stderr:
         logger.critical(
             '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-            hostname,
-            stdin,
-            stdout,
-            stderr,
         )
         raise UpdateError(hostname, "update stack locked")
     if "System management is locked" in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
             stderr,
+            exitcode,
         )
         raise UpdateError("update stack locked", hostname)
     if "(c): c" in stdout:
@@ -47,19 +44,15 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
             stdout,
         )
         raise UpdateError("Dependency Error", hostname)
-    if "Error:" in stderr:
-        logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-            hostname,
-            stdin,
-            stdout,
-            stderr,
-        )
-        raise UpdateError("RPM Error", hostname)
+    if exitcode == 104:
+        logger.critical("%s: zypper returned with errorcode 104:\n%s", hostname, stderr)
+        raise UpdateError("Unspecified Error", hostname)
+    if exitcode == 106:
+        logger.warning("%s: zypper returned with errocode 106:\n%s", hostname, stderr)
 
 
-#: A dictionary that maps system configurations to prepare check functions.
-prepare_checks: dict[tuple[str, bool], Callable[[str, str, str, str, int], None]] = {
+#: A dictionary that maps system configurations to downgrade check functions.
+downgrade_checks: dict[tuple[str, bool], Callable[[str, str, str, str, int], None]] = {
     ("11", False): zypper,
     ("12", False): zypper,
     ("15", False): zypper,

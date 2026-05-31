@@ -6,8 +6,8 @@ import logging
 
 import pytest
 
-from mtui.checks.prepare import prepare_checks, zypper
 from mtui.support.exceptions import UpdateError
+from mtui.update_workflow.checks.prepare import prepare_checks, zypper
 
 
 @pytest.fixture(autouse=True)

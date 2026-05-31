@@ -6,8 +6,8 @@ import logging
 
 import pytest
 
-from mtui.checks.downgrade import downgrade_checks, zypper
 from mtui.support.exceptions import UpdateError
+from mtui.update_workflow.checks.downgrade import downgrade_checks, zypper
 
 
 @pytest.fixture(autouse=True)
