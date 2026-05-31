@@ -74,6 +74,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Loading a non-existent test report now fails with a clear message
+  instead of a raw SVN error. For any update kind, when the report's SVN
+  checkout fails mtui reports `Test report for <RRID> does not exist.
+  Please check <reports-url>/<RRID>/log for potential issues.` and the cryptic
+  `svn: E170000: URL ... doesn't exist` line is suppressed (shown only at
+  `--debug`). When the report was requested explicitly on the command
+  line (`-a` / `-k`), mtui now exits non-zero instead of dropping into an
+  empty interactive session.
 - `set_location` now resets the working reference-host selection. Hosts
   inherited from the testreport template and from the previously
   configured location are dropped, so a subsequent `add_host` connects

@@ -81,9 +81,20 @@ def testreport_svn_checkout(config, path: str, rrid: RequestReviewID) -> None:
 
     with chdir(config.template_dir):
         try:
-            subprocess.check_call(["svn", "co", uri])
+            # Capture stderr so svn's cryptic "E170000: URL ... doesn't
+            # exist" line does not reach the user; it is surfaced at debug
+            # while the caller logs a clear, actionable message instead.
+            result = subprocess.run(
+                ["svn", "co", uri],
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
         except KeyboardInterrupt:
             raise SvnCheckoutInterruptedError(uri) from None
-        except subprocess.CalledProcessError:
-            f_url = join(config.fancy_reports_url, str(rrid))
-            raise SvnCheckoutFailed(uri, f_url) from None
+
+        if result.returncode != 0:
+            if result.stderr:
+                logger.debug("svn co %s failed: %s", uri, result.stderr.strip())
+            report_url = f"{config.fancy_reports_url.rstrip('/')}/{rrid}/log"
+            raise SvnCheckoutFailed(str(rrid), report_url) from None

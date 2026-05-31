@@ -89,14 +89,14 @@ class SvnCheckoutInterruptedError(ErrorMessage):
 
 
 class SvnCheckoutFailed(ErrorMessage):
-    """Raised when an SVN checkout fails."""
+    """Raised when a test report template cannot be checked out."""
 
-    _msg = "Svn checkout of {0!r} Failed\n Please check {1!s}"
+    _msg = "Test report for {0} does not exist.\nPlease check {1} for potential issues."
 
-    def __init__(self, uri, f_url: str) -> None:
-        self.uri = uri
-        self.f_url = f_url
-        self.message = self._msg.format(uri, f_url)
+    def __init__(self, rrid, report_url: str) -> None:
+        self.rrid = rrid
+        self.report_url = report_url
+        self.message = self._msg.format(rrid, report_url)
 
 
 class ConnectingTargetFailedMessage(UserMessage):

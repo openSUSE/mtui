@@ -83,3 +83,54 @@ def test_run_mtui_with_debug():
 
             # Verify logger level was set to debug
             mock_logger.setLevel.assert_called_once_with(level=logging.DEBUG)
+
+
+def test_run_mtui_quits_when_explicit_update_not_loaded():
+    """An explicit -a update that fails to load exits 1 without a session."""
+    from mtui.template.nulltestreport import NullTestReport
+
+    mock_config = MagicMock()
+    mock_logger = MagicMock()
+
+    with (
+        patch("mtui.main.detect_system", return_value=("sles", "15", "6")),
+        patch("mtui.main.Prompter"),
+        patch("mtui.main.CommandPrompt") as cp,
+    ):
+        prompt = cp.return_value
+        # Failed checkout falls back to a NullTestReport.
+        prompt.metadata = NullTestReport(mock_config)
+        update = MagicMock()
+        update.kind = "auto"
+        args = Namespace(
+            debug=False, update=update, sut=None, prerun=None, noninteractive=False
+        )
+
+        result = run_mtui(mock_config, mock_logger, args)
+
+    assert result == 1
+    prompt.cmdloop.assert_not_called()
+
+
+def test_run_mtui_starts_session_when_update_loads():
+    """A successfully loaded explicit update proceeds to the command loop."""
+    mock_config = MagicMock()
+    mock_logger = MagicMock()
+
+    with (
+        patch("mtui.main.detect_system", return_value=("sles", "15", "6")),
+        patch("mtui.main.Prompter"),
+        patch("mtui.main.CommandPrompt") as cp,
+    ):
+        prompt = cp.return_value
+        prompt.metadata = MagicMock()  # a real (non-Null) test report
+        update = MagicMock()
+        update.kind = "auto"
+        args = Namespace(
+            debug=False, update=update, sut=None, prerun=None, noninteractive=False
+        )
+
+        result = run_mtui(mock_config, mock_logger, args)
+
+    assert result == 0
+    prompt.cmdloop.assert_called_once()

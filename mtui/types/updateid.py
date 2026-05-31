@@ -93,7 +93,7 @@ class UpdateID(ABC):
                 try:
                     self._vcs_checkout(config, config.svn_path, self.id)
                 except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
-                    logger.error("SVN checkout failed")
+                    logger.error(e)
                     raise TestReportNotLoadedError from e
                 # Retry the read now that the template is on disk. Any
                 # Gitea-related error raised here must reach the outer
