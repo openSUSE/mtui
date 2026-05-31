@@ -124,7 +124,7 @@ error-on-warning = true
 # Strict-mode opt-in for well-typed surfaces. Keep the default rule
 # set for the rest of mtui until the Phase 5 refactors land.
 [[tool.ty.overrides]]
-include = ["mtui/types/**", "mtui/connector/**"]
+include = ["mtui/types/**", "mtui/data_sources/**"]
 
 [tool.ty.overrides.rules]
 all = "error"
