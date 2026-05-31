@@ -1,4 +1,4 @@
-"""Helper classes and functions for working with test report templates."""
+"""SVN I/O helpers and shared exceptions for test report templates."""
 
 import subprocess
 from logging import getLogger
@@ -9,6 +9,9 @@ from ..support.fileops import chdir, ensure_dir_exists
 from ..support.messages import SvnCheckoutFailed, SvnCheckoutInterruptedError
 from ..types import RequestReviewID
 
+# Logger name kept at the original "mtui.template" string for log-config
+# stability; logger identifiers are stable external contracts independent of
+# the import path (precedent: commit 1be141b).
 logger = getLogger("mtui.template")
 
 

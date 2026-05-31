@@ -1,4 +1,4 @@
-"""Tests for ``mtui.template.testreport.TestReport`` (via ``OBSTestReport``)."""
+"""Tests for ``mtui.test_reports.testreport.TestReport`` (via ``OBSTestReport``)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.support.exceptions import UpdateError
-from mtui.template.obstestreport import OBSTestReport
+from mtui.test_reports.obs_report import OBSTestReport
 from mtui.types import RequestReviewID
 
 
@@ -290,7 +290,7 @@ def test_connect_target_happy_returns_pair(tmp_path: Path) -> None:
     fake_target = MagicMock()
     fake_target.system = "sles15"
     with patch(
-        "mtui.template.testreport.Target", return_value=fake_target
+        "mtui.test_reports.testreport.Target", return_value=fake_target
     ) as target_cls:
         t, sys = r.connect_target("h1")
     target_cls.assert_called_once()
@@ -300,7 +300,7 @@ def test_connect_target_happy_returns_pair(tmp_path: Path) -> None:
 
 def test_connect_target_exception_returns_false_false(tmp_path: Path) -> None:
     r = _make(tmp_path)
-    with patch("mtui.template.testreport.Target", side_effect=RuntimeError("nope")):
+    with patch("mtui.test_reports.testreport.Target", side_effect=RuntimeError("nope")):
         out = r.connect_target("h1")
     assert out == (False, False)
 
@@ -331,7 +331,7 @@ def test_refhosts_from_tp_resolves_via_factory(tmp_path: Path) -> None:
     fake_refhosts.search.return_value = ["host-a", "host-b"]
     r.refhostsFactory = MagicMock(return_value=fake_refhosts)
     with patch(
-        "mtui.template.testreport.Attributes.from_testplatform",
+        "mtui.test_reports.testreport.Attributes.from_testplatform",
         return_value="attrs",
     ):
         r.refhosts_from_tp("tp-foo")
@@ -422,7 +422,7 @@ def test_add_target_happy_path_records_system(tmp_path: Path) -> None:
     r = _make(tmp_path)
     fake_target = MagicMock()
     fake_target.system = "sles15-x86"
-    with patch("mtui.template.testreport.Target", return_value=fake_target):
+    with patch("mtui.test_reports.testreport.Target", return_value=fake_target):
         r.add_target("h-new")
     # The Target instance was stored and the system string was recorded.
     assert r.targets["h-new"] is fake_target
@@ -432,7 +432,7 @@ def test_add_target_happy_path_records_system(tmp_path: Path) -> None:
 def test_add_target_exception_cleans_up(tmp_path: Path) -> None:
     r = _make(tmp_path)
     # Target() raises; nothing should remain in targets/systems
-    with patch("mtui.template.testreport.Target", side_effect=RuntimeError("nope")):
+    with patch("mtui.test_reports.testreport.Target", side_effect=RuntimeError("nope")):
         r.add_target("h-bad")
     assert "h-bad" not in r.targets
 

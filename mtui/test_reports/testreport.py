@@ -26,7 +26,7 @@ from ..support.paths import scripts_path
 from ..target import Target, TargetLockedError
 from ..target.hostgroup import HostsGroup
 from ..types import OpenQAResults, Product, TargetMeta
-from . import (
+from .svn_io import (
     TemplateFormatError,
     TemplateIOError,
     TestReportAlreadyLoadedError,

@@ -5,7 +5,7 @@ from logging import getLogger
 
 from ..cli.completion import complete_choices
 from ..support.misc import requires_update
-from ..template import svn_commit_testreport
+from ..test_reports.svn_io import svn_commit_testreport
 from . import Command
 
 logger = getLogger("mtui.command.commit")

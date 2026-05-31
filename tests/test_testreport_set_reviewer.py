@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from mtui.template import TemplateFormatError
-from mtui.template.testreport import TestReport
+from mtui.test_reports.svn_io import TemplateFormatError
+from mtui.test_reports.testreport import TestReport
 
 
 class _ConcreteReport(TestReport):

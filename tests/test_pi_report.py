@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.template.pitestreport import PITestReport
+from mtui.test_reports.pi_report import PITestReport
 from mtui.types import RequestReviewID
 
 

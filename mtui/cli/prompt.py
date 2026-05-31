@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from .. import commands
 from ..commands import Command, CommandAlreadyBoundError
 from ..support import messages
-from ..template.nulltestreport import NullTestReport
+from ..test_reports.null_report import NullTestReport
 from . import notification
 from .argparse import ArgsParseFailureError
 

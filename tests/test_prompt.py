@@ -6,7 +6,7 @@ import pytest
 from mtui.cli import prompt
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.support import messages
-from mtui.template.nulltestreport import NullTestReport
+from mtui.test_reports.null_report import NullTestReport
 
 
 def _make_prompt(*, auto: bool = False, kernel: bool = False) -> prompt.CommandPrompt:
