@@ -1,4 +1,4 @@
-"""Tests for ``mtui.connector.oqa_search``.
+"""Tests for ``mtui.data_sources.oqa_search``.
 
 Covers the three public entry points (`single_incidents`,
 `aggregated_updates`, `build_checks`) with `responses`-mocked HTTP.
@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import responses
 
-from mtui.connector import oqa_search
+from mtui.data_sources import oqa_search
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "oqa_search"
 

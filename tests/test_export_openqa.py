@@ -189,7 +189,7 @@ def test_install_status_failed_when_any_result_fails(mock_config):
 
 def test_inject_overview_writes_block_into_template(mock_config):
     """BaseExport.inject_overview inserts the marker-bounded block."""
-    from mtui.connector.oqa_search import (
+    from mtui.data_sources.oqa_search import (
         OVERVIEW_BEGIN_MARKER,
         OVERVIEW_END_MARKER,
         VersionResult,

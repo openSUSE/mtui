@@ -1,24 +1,15 @@
-"""openQA / QAM Dashboard / QAM build-check overview search.
-
-Port of https://github.com/mjdonis/oqa-search adapted to mtui idioms:
-
-* No printing -- functions return structured dataclasses; the
-  ``openqa_overview`` command formats and prints.
-* Logging via ``logger`` instead of stdout.
-* Module-level ``lru_cache`` only fires inside the public entry points
-  (never at import time).
-* HTTP via a shared ``requests.Session`` with a (connect, read) timeout
-  so a hung peer cannot block the REPL indefinitely.
+"""Public entry points and supporting helpers for the openQA / QAM Dashboard search.
 
 The three high-level entry points are :func:`single_incidents`,
 :func:`aggregated_updates`, and :func:`build_checks`. Each returns a
-list of typed result rows that the command layer renders.
+list of typed result rows (defined in :mod:`.results`) that the command
+layer renders. :func:`render_overview` produces the plain-text block
+shared by the interactive command and the export injector.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import lru_cache
 from html.parser import HTMLParser
@@ -26,200 +17,24 @@ from logging import getLogger
 from typing import Any, Final
 from urllib.parse import quote, unquote
 
-import requests
-import urllib3
+from .heuristics import (
+    AGGREGATED_EXCLUDED_VERSIONS,
+    AGGREGATED_GROUPS_TERMS,
+    AGGREGATED_NAME_MAP,
+    EXCLUDED_GROUPS,
+    MICRO_TEMPLATE_IDENTIFIER,
+    OQA_QUERY_STRINGS,
+    SINGLE_INCIDENTS_TERMS,
+    TESTSUITE_NUMBERS_PATTERN,
+    TESTSUITE_SUMMARY_KEYWORDS,
+    TESTSUITE_SUMMARY_PATTERNS,
+    TESTSUITE_VISUAL_SEPARATORS,
+    TESTSUITE_WORDS_BLOCKLIST,
+)
+from .http import _fetch_url_content, _get_json, _HTTPError
+from .results import BuildCheckResult, GroupResult, VersionResult
 
 logger = getLogger("mtui.connector.oqa_search")
-
-# (connect, read) timeout for every HTTP call made by this module.
-_HTTP_TIMEOUT: tuple[float, float] = (5.0, 30.0)
-
-# Most of the hosts we talk to (openqa.suse.de, dashboard.qam.suse.de,
-# qam.suse.de, internal mirrors) present self-signed or internal-CA
-# certificates that the system trust store does not know about. Mirror
-# the upstream oqa-search behaviour (which works because users typically
-# run it on a SUSE machine with the SUSE CA installed) by disabling
-# verification here, and silence the resulting per-request warning to
-# keep the REPL output readable.
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# --- Heuristics shared with upstream oqa-search. Keep verbatim to avoid
-# behavioural drift when comparing output against the upstream tool. ---
-
-MICRO_TEMPLATE_IDENTIFIER = "sle-micro"
-
-EXCLUDED_GROUPS: list[str] = [
-    "DEV",
-    "Leap",
-    "Development",
-    "Micro",
-    "Kernel",
-    "Wicked",
-]
-
-SINGLE_INCIDENTS_TERMS: list[str] = ["Core Incidents", "Core Staging"]
-
-AGGREGATED_GROUPS_TERMS: list[str] = ["Maintenance Updates"]
-
-AGGREGATED_NAME_MAP: dict[str, str] = {"Public Cloud": "cloud", "SAP/HA": "sap"}
-
-AGGREGATED_EXCLUDED_VERSIONS: list[str] = ["TERADATA", "16.0"]
-
-OQA_QUERY_STRINGS: dict[str, str] = {
-    "failed": "&result=failed&result=incomplete&result=timeout_exceeded",
-    "running": "&state=scheduled&state=running",
-    "all": "",
-}
-
-TESTSUITE_NUMBERS_PATTERN = re.compile(r"(?:^|\s|\()\d+(?=$|\s|\))")
-
-TESTSUITE_WORDS_BLOCKLIST: list[str] = [
-    "syntax",
-    "--",
-    "meson",
-    "gcc",
-    "clang",
-    "make",
-    "cmake",
-    "/usr/bin",
-    ".tap",
-    ".sh",
-    "t/",
-    "TODO",
-    " - ",
-    "duration",
-    " + ",
-    "group",
-    "value",
-    "doc",
-    "stack",
-    "errno",
-    "tests in",
-    "limit",
-    "size",
-    "test for",
-    "creating",
-    "task",
-    "no tests",
-    "thread",
-    "server",
-    "method",
-    "object",
-    "issue",
-    "line",
-    "set",
-    "test_",
-    "example",
-    "flag",
-    "print",
-    "extra",
-]
-
-TESTSUITE_VISUAL_SEPARATORS: list[str] = ["===", "---"]
-
-TESTSUITE_SUMMARY_KEYWORDS: list[str] = [
-    "result:",
-    "summary",
-    "out of",
-    "tests passed",
-    "tests failed",
-]
-
-TESTSUITE_SUMMARY_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"\bok\s*\("),
-    re.compile(r"\d+%\s+tests?\s+passed"),
-    re.compile(r"\d+\s+tests?\s+(ok|passed|failed|skipped)"),
-    re.compile(r"#\s*(total|pass|fail|skip|xfail|xpass|error):"),
-    re.compile(r"^(ok|fail|expected fail|unexpected pass|skipped):\s*\d+"),
-]
-
-
-# --- Result dataclasses (the public return shapes of the entry points) ---
-
-
-@dataclass
-class VersionResult:
-    """One row in a Single Incidents / Aggregated Updates section.
-
-    ``status`` is one of: ``"passed"``, ``"failed"``, ``"running"``,
-    ``"missing"`` (no openQA build found in the date window for
-    aggregated updates).
-    """
-
-    version: str
-    url: str
-    status: str
-    failed_count: int = 0
-    running_count: int = 0
-    note: str = ""
-
-
-@dataclass
-class GroupResult:
-    """Aggregated Updates results for one job group (e.g. ``core``)."""
-
-    group: str
-    versions: list[VersionResult] = field(default_factory=list)
-
-
-@dataclass
-class BuildCheckResult:
-    """One build-check log entry parsed from qam.suse.de."""
-
-    url: str
-    matches: list[str] = field(default_factory=list)
-    summary: str = ""
-
-
-# --- HTTP helpers ---
-
-
-@lru_cache(maxsize=1)
-def _session() -> requests.Session:
-    """Lazy shared session with TLS verification disabled.
-
-    Internal SUSE hosts (openqa.suse.de, dashboard.qam.suse.de,
-    qam.suse.de) frequently present self-signed or internal-CA certs
-    that the user's system trust store does not validate. Disable
-    verification on the session so the command works out of the box;
-    the InsecureRequestWarning is silenced module-wide above.
-    """
-    session = requests.Session()
-    session.verify = False
-    return session
-
-
-class _HTTPError(RuntimeError):
-    """Raised when an HTTP call fails after retries."""
-
-
-def _get_json(url: str) -> Any:
-    """Fetch JSON from a URL with a bounded timeout.
-
-    Raises :class:`_HTTPError` on any transport or HTTP-status failure
-    so callers can convert into a user-friendly message.
-    """
-    try:
-        response = _session().get(url, timeout=_HTTP_TIMEOUT)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        logger.debug("HTTP GET %s failed: %s", url, e)
-        raise _HTTPError(str(e)) from e
-    except ValueError as e:
-        logger.debug("Invalid JSON from %s: %s", url, e)
-        raise _HTTPError(str(e)) from e
-
-
-def _fetch_url_content(url: str) -> str:
-    """Fetch text from a URL with a bounded timeout."""
-    try:
-        response = _session().get(url, timeout=_HTTP_TIMEOUT)
-        response.raise_for_status()
-        return response.text
-    except requests.exceptions.RequestException as e:
-        logger.debug("HTTP GET %s failed: %s", url, e)
-        raise _HTTPError(str(e)) from e
 
 
 # --- Incident info (Dashboard) ---

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from mtui.connector.oqa_search import (
+from mtui.data_sources.oqa_search import (
     OVERVIEW_BEGIN_MARKER,
     OVERVIEW_END_MARKER,
     BuildCheckResult,
