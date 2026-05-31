@@ -3,7 +3,7 @@
 The block lives under the existing ``regression tests:`` section. On
 first export the block is appended after any existing content in that
 section. On subsequent exports, a previously-inserted block is detected
-via the BEGIN/END markers from ``mtui.connector.oqa_search`` and
+via the BEGIN/END markers from ``mtui.data_sources.oqa_search`` and
 replaced in place so the file never accumulates duplicate copies.
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import MutableSequence
 from logging import getLogger
 
-from ...connector.oqa_search import (
+from ...data_sources.oqa_search import (
     OVERVIEW_BEGIN_MARKER,
     OVERVIEW_END_MARKER,
     BuildCheckResult,

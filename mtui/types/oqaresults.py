@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from ..connector.oqa_search import (
+    from ..data_sources.oqa_search import (
         BuildCheckResult,
         GroupResult,
         VersionResult,

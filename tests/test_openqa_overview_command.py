@@ -12,7 +12,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.openqa_overview import OpenQAOverview
-from mtui.connector.oqa_search import (
+from mtui.data_sources.oqa_search import (
     BuildCheckResult,
     GroupResult,
     VersionResult,

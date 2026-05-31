@@ -22,7 +22,7 @@ from logging import getLogger
 from ..cli.argparse import ArgumentParser
 from ..cli.colors import blue, green, red, yellow
 from ..cli.completion import complete_choices
-from ..connector import oqa_search as oqa
+from ..data_sources import oqa_search as oqa
 from ..support.misc import requires_update
 from ..types import FileList, OpenQAOverviewResult
 from ..update_workflow.export.overview_inject import inject_overview
