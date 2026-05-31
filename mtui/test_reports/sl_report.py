@@ -3,7 +3,7 @@
 from logging import getLogger
 from typing import final
 
-from ..connector.gitea import Gitea
+from ..data_sources.gitea import Gitea
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..types import Product, RequestReviewID

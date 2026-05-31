@@ -13,7 +13,7 @@ from typing import final
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
 from ..cli.term import prompt_user
-from ..connector import OSC, Gitea
+from ..data_sources import OSC, Gitea
 from ..support.exceptions import GiteaError, InvalidGiteaHashError
 from ..support.misc import requires_update
 from ..test_reports.svn_io import TemplateFormatError, svn_commit_testreport

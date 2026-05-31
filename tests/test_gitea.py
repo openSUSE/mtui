@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 import responses
 
-from mtui.connector.gitea import Comment, Gitea
+from mtui.data_sources.gitea import Comment, Gitea
 from mtui.support.exceptions import (
     FailedGiteaCallError,
     GiteaAssignInvalidError,

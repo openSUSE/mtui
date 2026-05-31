@@ -1,11 +1,10 @@
-"""This package contains the connector classes for mtui.
+"""Transitional shim: connector/ is being moved to data_sources/.
 
-Each module in this package defines a connector to a specific
-backend service, such as Gitea, OSC, or QEM Dashboard.
+Only ``qem_dashboard`` and ``oqa_search`` remain here while their
+splits land in subsequent commits. ``Gitea`` and ``OSC`` have moved
+to :mod:`mtui.data_sources`.
 """
 
-from .gitea import Gitea
-from .oscqam import OSC
 from .qem_dashboard import DashboardAutoOpenQA, QEMIncident
 
-__all__ = ["OSC", "Gitea", "QEMIncident", "DashboardAutoOpenQA"]
+__all__ = ["DashboardAutoOpenQA", "QEMIncident"]

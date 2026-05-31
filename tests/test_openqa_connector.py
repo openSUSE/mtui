@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mtui.connector.openqa.standard import AutoOpenQA
+from mtui.data_sources.openqa.standard import AutoOpenQA
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def mock_incident():
 @pytest.fixture
 def auto_oqa(mock_config, mock_rrid, mock_incident):
     """Create an AutoOpenQA instance with mocked dependencies."""
-    with patch("mtui.connector.openqa.base.oqa"):
+    with patch("mtui.data_sources.openqa.base.oqa"):
         oqa = AutoOpenQA(
             mock_config, "https://openqa.example.com", mock_incident, mock_rrid
         )
