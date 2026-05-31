@@ -59,6 +59,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `set_location` now resets the working reference-host selection. Hosts
+  inherited from the testreport template and from the previously
+  configured location are dropped, so a subsequent `add_host` connects
+  only hosts from the newly selected location (the per-testplatform
+  fallback to the `default` location is unchanged). Previously the
+  template/old-location hosts lingered in the accumulated host set and
+  `add_host` connected them alongside the new location's hosts.
 - Parallel target operations no longer race for `stdin` when an SSH
   command times out on multiple hosts simultaneously. The timeout
   prompt (`command "..." timed out on <host>. wait? (Y/n)`) is now

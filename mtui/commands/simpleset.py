@@ -59,6 +59,18 @@ class SetLocation(Command):
         old: str = self.config.location
         new: str = self.args.site[0]
         self.config.location = new
+        if self.config.location != new:
+            # The config setter rejected the location (and logged why);
+            # leave the working refhost set untouched.
+            return
+
+        # A manual location change resets the working refhost selection:
+        # drop hosts inherited from the testreport template and from the
+        # previously configured location so a subsequent ``add_host``
+        # derives hosts only from the newly selected location. The
+        # per-testplatform fallback to the ``default`` location in
+        # ``Refhosts.search`` still applies.
+        self.metadata.hostnames.clear()
         logger.info(messages.LocationChangedMessage(old, new))
 
     @staticmethod
