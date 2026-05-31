@@ -5,9 +5,9 @@
 
 ## Project Shape
 - Python package entrypoint is `mtui.main:main`; run it from the checkout with `uv run python -m mtui --help` or `uv run mtui --help`.
-- `mtui/commands/` is dynamically imported at startup. Add one command module per interactive command; modules starting with `_` are skipped.
+- `mtui/commands/` is imported as a package; every `Command` subclass auto-registers via `Command.__init_subclass__` into `Command.registry`. Add one command module per interactive command; modules starting with `_` are skipped.
 - Commands subclass `mtui.commands._command.Command`, set `command`, implement `_add_arguments()` when needed, and implement `__call__()`.
-- Main runtime wiring is `mtui/main.py` -> `mtui/prompt.py` -> dynamic `mtui.commands` registry.
+- Main runtime wiring is `mtui/main.py` -> `mtui/prompt.py` -> `mtui.commands.registry`.
 - Config is INI from `MTUI_CONF`, explicit `--config`, or `/etc/mtui.cfg` plus `~/.mtuirc`; `TEMPLATE_DIR`, `TMPDIR`, and `GITEA_TOKEN` are also read.
 
 ## Development Commands

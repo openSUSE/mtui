@@ -22,7 +22,11 @@ Project layout
       main.py              # console-script entry point
       prompt.py            # interactive Cmd subclass (CommandPrompt)
       refhost.py           # reference-host attribute schema
-      utils.py             # term/colour/path helpers (slated to split)
+      colors.py            # ANSI colour helpers
+      completion.py        # readline completion helpers
+      fileops.py           # filesystem helpers (atomic write, ensure_dir)
+      term.py              # terminal size / prompting helpers
+      misc.py              # remaining small helpers (e.g. requires_update)
       actions/             # background SSH worker actions
       checks/              # post-update verification probes
       commands/            # one module per `do_<command>` (see below)
@@ -107,18 +111,23 @@ Every interactive ``mtui>`` command lives in its own module under
 ``mtui/commands/``. A command is a subclass of
 ``mtui.commands._command.Command`` exposing:
 
-- ``command``: the textual command name.
-- ``stable``: ``True`` for stable commands, ``False`` for experimental.
-- ``parse_args``: builds an ``argparse.ArgumentParser``.
-- ``run``: implementation; reads ``self.args`` and ``self.targets``.
-- ``complete``: optional readline completer.
+- ``command``: the textual command name (class attribute, required).
+- ``_add_arguments(cls, parser)``: classmethod that registers
+  argparse arguments on the supplied parser (optional; default no-op).
+- ``__call__(self)``: the implementation, reads ``self.args`` and
+  ``self.targets`` (required; ``Command`` is abstract on ``__call__``).
+- ``complete(state, text, line, begidx, endidx)``: optional readline
+  completer; the base class returns ``[]``.
 
-At interpreter start, ``mtui/commands/__init__.py`` imports every module
-in the directory; ``CommandPrompt`` then registers ``do_<command>``,
-``help_<command>`` and ``complete_<command>`` shims for each subclass.
-
-(Phase 5 will replace the filesystem glob with a
-``Command.__init_subclass__`` registry; see ``PLAN.md`` track C5.)
+Importing ``mtui.commands`` walks the package with
+``pkgutil.iter_modules`` and imports every submodule whose name does
+not start with ``_``. Each ``Command`` subclass that assigns ``command``
+in its own body auto-registers via ``Command.__init_subclass__`` into
+``Command.registry`` (re-exported as ``mtui.commands.registry``); two
+subclasses claiming the same ``command`` string raise
+``CommandAlreadyBoundError`` at class-creation time. ``CommandPrompt``
+iterates the registry and binds ``do_<command>``, ``help_<command>``
+and ``complete_<command>`` shims for each entry.
 
 
 How to add a new command
@@ -128,20 +137,18 @@ How to add a new command
 
    .. code-block:: python
 
+       from ..argparse import ArgumentParser
        from ._command import Command
 
 
        class Foo(Command):
            command = "foo"
-           stable = True
 
            @classmethod
-           def parse_args(cls, args, sys_):
-               parser = cls._parse_args(sys_)
+           def _add_arguments(cls, parser: ArgumentParser) -> None:
                parser.add_argument("name")
-               return parser.parse_args(cls.split_arg(args))
 
-           def run(self):
+           def __call__(self) -> None:
                self.println(f"hello, {self.args.name}")
 
 2. Add tests under ``tests/test_foo.py``: at minimum a happy-path
