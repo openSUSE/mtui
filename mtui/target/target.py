@@ -8,7 +8,6 @@ from string import Template
 from traceback import format_exc
 from typing import TYPE_CHECKING, Any, final
 
-from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
 from ..connection import CommandTimeoutError, Connection, policy_from_config
 from ..support import messages
 from ..support.config import Config
@@ -21,6 +20,12 @@ from ..update_workflow.actions import (
     preparer,
     uninstaller,
     updater,
+)
+from ..update_workflow.checks import (
+    downgrade_checks,
+    install_checks,
+    prepare_checks,
+    update_checks,
 )
 from . import TargetLock, TargetLockedError
 from .package_querier import PackageQuerier
@@ -40,8 +45,9 @@ def _no_checks(*args: tuple[Any, ...]) -> None:
 
 # Dispatch tables for Target.doer/check. ``installer`` etc. are the
 # (release, transactional) -> dict-of-templates registries from
-# mtui.actions; ``install_checks`` etc. are the parallel callable
-# registries from mtui.checks. ``preparer`` is dispatched inline in
+# mtui.update_workflow.actions; ``install_checks`` etc. are the parallel
+# callable registries from mtui.update_workflow.checks. ``preparer`` is
+# dispatched inline in
 # Target.doer because its registry yields a callable, not a dict.
 # ``uninstaller`` deliberately consults ``install_checks`` (no dedicated
 # uninstall_checks table exists) — preserves prior behaviour.
