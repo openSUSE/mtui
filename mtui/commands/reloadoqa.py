@@ -2,8 +2,8 @@
 
 from logging import getLogger
 
-from ..connector.qem_dashboard import DashboardAutoOpenQA
 from ..data_sources.openqa import KernelOpenQA
+from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..support.misc import requires_update
 from . import Command
 
