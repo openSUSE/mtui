@@ -9,6 +9,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Reference hosts are now automatically locked while testing a Product
+  Increment (PI). Running `assign` on a PI locks every connected
+  reference host with the comment `testing of SUSE:PI:<id>:<review>`
+  (an exclusive lock that blocks other sessions); hosts added via
+  `add_host` while the assignment is active are locked too. The locks
+  are released at the end of testing — `unassign`, `approve`, or
+  `reject` — and only this session's locks are removed (a host locked by
+  someone else is left alone). Controlled by a new `[lock] pi_autolock`
+  option (default `true`); set it to `false` to disable.
 - Stale reference-host locks are now reaped automatically on connect.
   When `add_host` (or any connect) finds a pre-existing `/var/lock/mtui.lock`
   older than a configurable threshold, mtui force-removes it regardless of

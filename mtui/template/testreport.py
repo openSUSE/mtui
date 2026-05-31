@@ -8,6 +8,7 @@ import shutil
 import stat
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
+from contextlib import suppress
 from errno import EEXIST, ENOENT
 from json import loads
 from json.decoder import JSONDecodeError
@@ -22,7 +23,7 @@ from ..exceptions import InvalidGiteaHashError, UpdateError
 from ..fileops import ensure_dir_exists
 from ..messages import MetadataNotLoadedError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
-from ..target import Target
+from ..target import Target, TargetLockedError
 from ..target.hostgroup import HostsGroup
 from ..template import TemplateIOError, TestReportAlreadyLoadedError
 from ..types import OpenQAResults, Product, TargetMeta
@@ -99,6 +100,10 @@ class TestReport(ABC):
                  repository = str
         """
         self.hostnames: set[str] = set()
+        # When non-empty, newly connected reference hosts are locked with
+        # this comment (set while a PI assignment is active). See
+        # ``mtui.commands.apicall`` and ``lock_pi_autolock``.
+        self.lock_comment: str = ""
         self.bugs: dict[str, str] = {}
         self.jira: dict[str, str] = {}
         self.testplatforms: list[str] = []
@@ -371,6 +376,23 @@ class TestReport(ABC):
             st = os.stat(i)
             os.chmod(i, st.st_mode | stat.S_IEXEC)
 
+    def _autolock_new_target(self, target: Target) -> None:
+        """Locks a freshly connected target if a PI lock is active.
+
+        When :attr:`lock_comment` is set (a PI assignment is in progress),
+        newly connected reference hosts are locked with that comment so a
+        host added via ``add_host`` after ``assign`` is covered too. A host
+        already locked by someone else is left as-is.
+
+        Args:
+            target: The freshly connected target to lock.
+
+        """
+        if not self.lock_comment:
+            return
+        with suppress(TargetLockedError):
+            target.lock(self.lock_comment)
+
     def connect_target(
         self, host
     ) -> tuple[Target, str] | tuple[Literal[False], Literal[False]]:
@@ -394,6 +416,7 @@ class TestReport(ABC):
             )
             target.connect()
             new_system = str(target.system)
+            self._autolock_new_target(target)
         except KeyboardInterrupt:
             logger.warning("Connection to %s canceled by user", host)
             return False, False
@@ -475,6 +498,8 @@ class TestReport(ABC):
 
             if self:
                 self.systems[hostname] = str(self.targets[hostname].system)
+
+            self._autolock_new_target(self.targets[hostname])
 
         except Exception:
             if hostname in self.targets:
