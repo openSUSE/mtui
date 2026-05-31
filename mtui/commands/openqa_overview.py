@@ -23,9 +23,9 @@ from ..cli.argparse import ArgumentParser
 from ..cli.colors import blue, green, red, yellow
 from ..cli.completion import complete_choices
 from ..connector import oqa_search as oqa
-from ..export.overview_inject import inject_overview
 from ..support.misc import requires_update
 from ..types import FileList, OpenQAOverviewResult
+from ..update_workflow.export.overview_inject import inject_overview
 from . import Command
 
 logger = getLogger("mtui.commands.openqa_overview")

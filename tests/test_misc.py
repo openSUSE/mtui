@@ -1,7 +1,7 @@
 import logging
 
-from mtui.export.base import BaseExport
 from mtui.support.misc import SUTParse
+from mtui.update_workflow.export.base import BaseExport
 
 
 class FakeExport(BaseExport):

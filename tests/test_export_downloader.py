@@ -1,4 +1,4 @@
-"""Tests for ``mtui.export.downloader``."""
+"""Tests for ``mtui.update_workflow.export.downloader``."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mtui.export.downloader import (
+from mtui.support.messages import ResultsMissingError
+from mtui.update_workflow.export.downloader import (
     _emptylog,
     _installlog,
     _resultlog,
@@ -15,7 +16,6 @@ from mtui.export.downloader import (
     download_logs,
     downloader,
 )
-from mtui.support.messages import ResultsMissingError
 
 # ---------------------------------------------------------------------------
 # _subdl
@@ -23,7 +23,7 @@ from mtui.support.messages import ResultsMissingError
 
 
 def test_subdl_success() -> None:
-    with patch("mtui.export.downloader.urlretrieve") as urlretrieve:
+    with patch("mtui.update_workflow.export.downloader.urlretrieve") as urlretrieve:
         _subdl("http://h/file", "/tmp/x", {"name": "t", "arch": "x"}, "tolerant")
     urlretrieve.assert_called_once_with("http://h/file", "/tmp/x")
 
@@ -31,7 +31,7 @@ def test_subdl_success() -> None:
 def test_subdl_http_error_tolerant_logs_no_raise(caplog) -> None:
     err = urllib.error.HTTPError("http://h", 404, "no", {}, None)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     with (
-        patch("mtui.export.downloader.urlretrieve", side_effect=err),
+        patch("mtui.update_workflow.export.downloader.urlretrieve", side_effect=err),
         caplog.at_level("ERROR", logger="mtui.export.downloader"),
     ):
         _subdl("http://h/file", "/tmp/x", {"name": "t", "arch": "x"}, "tolerant")
@@ -41,7 +41,7 @@ def test_subdl_http_error_tolerant_logs_no_raise(caplog) -> None:
 def test_subdl_http_error_full_raises_results_missing() -> None:
     err = urllib.error.HTTPError("http://h", 404, "no", {}, None)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
     with (
-        patch("mtui.export.downloader.urlretrieve", side_effect=err),
+        patch("mtui.update_workflow.export.downloader.urlretrieve", side_effect=err),
         pytest.raises(ResultsMissingError),
     ):
         _subdl("http://h/file", "/tmp/x", {"name": "t", "arch": "x"}, "full")
@@ -64,7 +64,7 @@ def test_emptylog_logs_only(caplog) -> None:
 
 
 def test_resultlog_dispatches_to_subdl() -> None:
-    with patch("mtui.export.downloader._subdl") as subdl:
+    with patch("mtui.update_workflow.export.downloader._subdl") as subdl:
         _resultlog(
             "http://h",
             {"test_id": "1", "arch": "x", "name": "ltp"},
@@ -78,7 +78,7 @@ def test_resultlog_dispatches_to_subdl() -> None:
 
 
 def test_installlog_dispatches_to_subdl() -> None:
-    with patch("mtui.export.downloader._subdl") as subdl:
+    with patch("mtui.update_workflow.export.downloader._subdl") as subdl:
         _installlog(
             "http://h",
             {"test_id": "1", "arch": "x", "name": "install_kernel"},
@@ -123,7 +123,7 @@ def test_download_logs_dispatches_via_thread_pool() -> None:
     fake_executor.__enter__.return_value = fake_executor
     fake_executor.__exit__.return_value = False
     with patch(
-        "mtui.export.downloader.concurrent.futures.ThreadPoolExecutor",
+        "mtui.update_workflow.export.downloader.concurrent.futures.ThreadPoolExecutor",
         return_value=fake_executor,
     ):
         download_logs([host], "/r", "/i", "tolerant")

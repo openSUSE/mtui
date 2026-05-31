@@ -1,11 +1,11 @@
-"""Tests for ``mtui.export.kernel.KernelExport``."""
+"""Tests for ``mtui.update_workflow.export.kernel.KernelExport``."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from mtui.export.kernel import KernelExport
+from mtui.update_workflow.export.kernel import KernelExport
 
 
 def _config(tmp_path: Path) -> MagicMock:
@@ -72,9 +72,9 @@ def test_get_logs_writes_into_install_logs_dir(tmp_path: Path) -> None:
     in_path.mkdir(parents=True, exist_ok=True)
     (in_path / "foo.log").write_text("data")
     with (
-        patch("mtui.export.kernel.download_logs") as dl,
+        patch("mtui.update_workflow.export.kernel.download_logs") as dl,
         patch(
-            "mtui.export.kernel.ensure_dir_exists",
+            "mtui.update_workflow.export.kernel.ensure_dir_exists",
             side_effect=lambda p: p,
         ),
     ):

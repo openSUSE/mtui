@@ -12,12 +12,12 @@ from pathlib import Path
 from traceback import format_exc
 from typing import TYPE_CHECKING, Literal
 
-from .support import messages
+from ..support import messages
 
 if TYPE_CHECKING:
-    from .target import Target
-    from .target.hostgroup import HostsGroup
-    from .template.testreport import TestReport
+    from ..target import Target
+    from ..target.hostgroup import HostsGroup
+    from ..template.testreport import TestReport
 
 
 log = getLogger("mtui.script")

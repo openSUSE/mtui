@@ -10,7 +10,7 @@ from mtui.connector.oqa_search import (
     VersionResult,
     render_overview,
 )
-from mtui.export.overview_inject import inject_overview
+from mtui.update_workflow.export.overview_inject import inject_overview
 
 
 def _template_with_regression_section() -> list[str]:
