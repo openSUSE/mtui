@@ -5,8 +5,8 @@ This replaces the prior ``dict[str, Any]`` of the form
 statically typed and string-key typos are surfaced at definition time.
 
 The :class:`OpenQAResult` Protocol describes the shared structural surface
-of :class:`mtui.connector.openqa.standard.AutoOpenQA`,
-:class:`mtui.connector.openqa.kernel.KernelOpenQA` and
+of :class:`mtui.data_sources.openqa.standard.AutoOpenQA`,
+:class:`mtui.data_sources.openqa.kernel.KernelOpenQA` and
 :class:`mtui.connector.qem_dashboard.DashboardAutoOpenQA`. The latter does
 not inherit from the ``OpenQA`` ABC -- a Protocol matches that duck-typed
 reality without forcing a class hierarchy change.

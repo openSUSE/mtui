@@ -11,8 +11,8 @@ if TYPE_CHECKING:
     from ..cli.prompter import Prompter
 
 from ..cli.term import prompt_user
-from ..connector.openqa import KernelOpenQA
 from ..connector.qem_dashboard import DashboardAutoOpenQA, QEMIncident
+from ..data_sources.openqa import KernelOpenQA
 from ..support.config import Config
 from ..support.exceptions import (
     FailedGiteaCallError,
