@@ -943,10 +943,15 @@ approve
 
 ::
 
-    approve [-h] [-g [GROUP]]
+    approve [-h] [-g [GROUP]] [-r REVIEWER]
 
 Wrapper around the `osc qam approve`_ command; approves current update. It is
 possible to specify more QA groups for approval.
+
+When ``-r REVIEWER`` is given, the reviewer is recorded in the testreport (the
+``Test Plan Reviewer:`` line), the testreport is committed to SVN, and only
+then is the update approved. If the testreport has no ``Test Plan Reviewer:``
+line or the SVN commit fails, the approval is aborted.
 
 .. _osc qam approve: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#approve
 
@@ -955,6 +960,11 @@ possible to specify more QA groups for approval.
 .. option:: -g [GROUP], --group [GROUP]
 
   QA group to approve under.
+
+.. option:: -r REVIEWER, --reviewer REVIEWER
+
+  Record REVIEWER in the testreport, commit it to SVN, then approve. Aborts the
+  approval if recording the reviewer or the SVN commit fails.
 
 
 reject

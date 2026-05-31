@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- The `approve` command now accepts `-r REVIEWER` / `--reviewer REVIEWER`.
+  It records the reviewer in the testreport's `Test Plan Reviewer:` line,
+  commits the testreport to SVN, and then approves the update — all in one
+  step. If the testreport has no `Test Plan Reviewer:` line or the SVN
+  commit fails, the approval is aborted and nothing is approved. Running
+  `approve` without `-r` behaves exactly as before.
 - Reference hosts are now automatically locked while testing a Product
   Increment (PI). Running `assign` on a PI locks every connected
   reference host with the comment `testing of SUSE:PI:<id>:<review>`

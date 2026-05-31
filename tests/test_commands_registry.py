@@ -20,7 +20,7 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
         ("EOF", "mtui.commands.quit", "DEOF"),
         ("add_host", "mtui.commands.addhost", "AddHost"),
         ("analyze_diff", "mtui.commands.showdiff", "AnalyzeDiff"),
-        ("approve", "mtui.commands.apicall", "Approve"),
+        ("approve", "mtui.commands.approve", "Approve"),
         ("assign", "mtui.commands.apicall", "Assign"),
         ("checkout", "mtui.commands.checkout", "Checkout"),
         ("comment", "mtui.commands.apicall", "Comment"),

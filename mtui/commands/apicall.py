@@ -1,10 +1,9 @@
 """Commands for interacting with backend APIs (OSC and Gitea).
 
-This module defines a set of commands for interacting with backend APIs
-like OSC and Gitea. It uses a base class `BaseApiCall` to handle the
-dispatch logic between the two backends, and then provides concrete
-implementations for `approve`, `assign`, `unassign`, `reject`, and
-`comment`.
+This module defines the :class:`BaseApiCall` base class, which handles the
+dispatch logic between the OSC and Gitea backends, along with the concrete
+`assign`, `unassign`, `reject`, and `comment` commands. The `approve`
+command lives in :mod:`mtui.commands.approve`.
 """
 
 from abc import ABC, abstractmethod
@@ -16,9 +15,8 @@ from ..argparse import ArgumentParser
 from ..commands import Command
 from ..completion import complete_choices
 from ..connector import OSC, Gitea
-from ..exceptions import GiteaError, InvalidGiteaHashError
+from ..exceptions import GiteaError
 from ..misc import requires_update
-from ..term import prompt_user
 from ..types import RequestKind
 
 logger = getLogger("mtui.command.apicalls")
@@ -108,48 +106,6 @@ class BaseApiCall(Command, ABC):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices([("-g", "--group"), ("-u", "--user")], line, text)
-
-
-@final
-class Approve(BaseApiCall):
-    """A command to approve a review request."""
-
-    command = "approve"
-    _pi_action = "unlock"
-
-    def osc(self) -> None:
-        """Approves the request in OSC."""
-        logger.info("Approving request %s", self.metadata.rrid.review_id)
-        osc = OSC(self.config, self.metadata.rrid)
-        osc.approve(self.args.group)
-
-    def gitea(self) -> None:
-        """Approves the pull request in Gitea."""
-        logger.info("Approving PR %s", self.metadata.id)
-        try:
-            gitea = Gitea(self.config, self.metadata.giteaprapi)
-            result, old_hash, new_hash = self.metadata.check_hash()
-            if not result:
-                logger.error(
-                    "GiteaPR hash is different from testreport, please reconsider approval\n Testreport %s ->repo %s",
-                    old_hash,
-                    new_hash,
-                )
-                if prompt_user(
-                    "Do you really want approve this update ?",
-                    ["Yes", "Y", "yes", "y", "Ja", "ja"],
-                    self.prompt.interactive,
-                ):
-                    gitea.approve(self.args.user)
-                else:
-                    raise InvalidGiteaHashError(
-                        self.metadata.id, self.metadata.giteacohash, new_hash
-                    )
-            else:
-                gitea.approve(self.args.user)
-
-        except GiteaError as e:
-            logger.error(e)
 
 
 @final
