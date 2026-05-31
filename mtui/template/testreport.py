@@ -25,7 +25,11 @@ from ..messages import MetadataNotLoadedError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
 from ..target import Target, TargetLockedError
 from ..target.hostgroup import HostsGroup
-from ..template import TemplateIOError, TestReportAlreadyLoadedError
+from ..template import (
+    TemplateFormatError,
+    TemplateIOError,
+    TestReportAlreadyLoadedError,
+)
 from ..types import OpenQAResults, Product, TargetMeta
 
 if TYPE_CHECKING:
@@ -35,6 +39,16 @@ logger = getLogger("mtui.template.testreport")
 
 
 re_ver = re.compile(r"(\S+)\s+(\S+)")
+
+
+# Matches the "Test Plan Reviewer:" metadata line in a testreport template.
+# Group 1 captures the literal label so only the value after the colon is
+# replaced. Older templates used the "Suggested Test Plan Reviewer(s):"
+# phrasing; both are matched and normalized to "Test Plan Reviewer:".
+_reviewer_line = re.compile(
+    r"^(?:Suggested )?Test Plan Reviewers?:.*$",
+    re.MULTILINE,
+)
 
 
 class TestReport(ABC):
@@ -182,6 +196,45 @@ class TestReport(ABC):
         result = self.check_hash()
         if not result[0]:
             raise InvalidGiteaHashError(self.id, result[1], result[2])
+
+    def set_reviewer(self, name: str) -> None:
+        """Records the reviewer in the loaded testreport template on disk.
+
+        Replaces the value of the ``Test Plan Reviewer:`` metadata line with
+        ``name`` and rewrites the template file atomically. The line is always
+        normalized to ``Test Plan Reviewer: <name>`` (older ``Suggested ...``
+        phrasings are replaced). The in-memory :attr:`reviewer` attribute is
+        updated only after the file is written.
+
+        Args:
+            name: The reviewer to record. Surrounding whitespace is stripped.
+
+        Raises:
+            ValueError: If ``name`` is empty or whitespace only.
+            RuntimeError: If no template is loaded (``self.path`` is ``None``).
+            TemplateFormatError: If the template has no ``Test Plan Reviewer:``
+                line to replace.
+
+        """
+        name = name.strip()
+        if not name:
+            raise ValueError("reviewer must be a non-empty string")
+        if not self.path:
+            raise RuntimeError("Called while missing path")
+
+        text = self.path.read_text(errors="replace")
+        new_text, count = _reviewer_line.subn(
+            f"Test Plan Reviewer: {name}", text, count=1
+        )
+        if count == 0:
+            raise TemplateFormatError(
+                f"no 'Test Plan Reviewer:' line found in {self.path}"
+            )
+
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(new_text)
+        os.replace(tmp, self.path)
+        self.reviewer = name
 
     @abstractmethod
     def check_hash(self) -> tuple[bool, str, str]:
