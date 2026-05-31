@@ -8,7 +8,7 @@ from string import Template
 from traceback import format_exc
 from typing import TYPE_CHECKING, Any, final
 
-from ..connection import CommandTimeoutError, Connection, policy_from_config
+from ..hosts.connection import CommandTimeoutError, Connection, policy_from_config
 from ..support import messages
 from ..support.config import Config
 from ..support.fileops import timestamp

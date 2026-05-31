@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import paramiko
 import pytest
 
-from mtui.connection import CommandTimeoutError, Connection, policy_from_config
+from mtui.hosts.connection import CommandTimeoutError, Connection, policy_from_config
 
 
 @pytest.fixture
@@ -12,7 +12,9 @@ def mock_ssh_client(monkeypatch):
     """Fixture to mock paramiko.SSHClient within the connection module."""
     mock_client = MagicMock()
     # The Connection class has `from paramiko import SSHClient`, so we patch it there
-    monkeypatch.setattr("mtui.connection.SSHClient", lambda: mock_client)
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.SSHClient", lambda: mock_client
+    )
 
     # The is_active() method accesses _transport directly.
     mock_transport = MagicMock()
@@ -27,7 +29,9 @@ def mock_ssh_client(monkeypatch):
 def mock_ssh_config(monkeypatch):
     """Fixture to mock paramiko.SSHConfig within the connection module."""
     mock_config = MagicMock()
-    monkeypatch.setattr("mtui.connection.SSHConfig", lambda: mock_config)
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.SSHConfig", lambda: mock_config
+    )
     mock_config.lookup.return_value = {}
     return mock_config
 
@@ -38,7 +42,9 @@ def mock_path(monkeypatch):
     mock_path_instance = MagicMock()
     string_io = StringIO("")  # An empty file for config parsing
     mock_path_instance.expanduser.return_value.open.return_value.__enter__.return_value = string_io
-    monkeypatch.setattr("mtui.connection.Path", lambda path: mock_path_instance)
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.Path", lambda path: mock_path_instance
+    )
     return mock_path_instance
 
 
@@ -361,7 +367,9 @@ def test_connect_logs_non_enoent_ssh_config_error(
     fake_path.expanduser.return_value.open.side_effect = OSError(
         _errno.EACCES, "denied"
     )
-    monkeypatch.setattr("mtui.connection.Path", lambda _path: fake_path)
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.Path", lambda _path: fake_path
+    )
     with caplog.at_level("WARNING", logger="mtui.connection"):
         Connection("test_host", 22, 300)
     assert any("denied" in r.message for r in caplog.records)
@@ -440,7 +448,8 @@ def test_reconnect_raises_after_exhausting_retries(
     conn = Connection("h", 22, 300)
     mock_ssh_client._transport.is_active.return_value = False
     monkeypatch.setattr(
-        "mtui.connection.select.select", lambda *_a, **_kw: ([], [], [])
+        "mtui.hosts.connection.connection.select.select",
+        lambda *_a, **_kw: ([], [], []),
     )
     with pytest.raises(ConnectionError, match="Failed to reconnect"):
         conn.reconnect(retry=2, timeout=0)
@@ -453,7 +462,7 @@ def test_reconnect_backoff_grows_timeout(
     conn = Connection("h", 22, 300)
     mock_ssh_client._transport.is_active.return_value = False
     sel_mock = MagicMock(return_value=([], [], []))
-    monkeypatch.setattr("mtui.connection.select.select", sel_mock)
+    monkeypatch.setattr("mtui.hosts.connection.connection.select.select", sel_mock)
     with pytest.raises(ConnectionError):
         conn.reconnect(retry=2, timeout=1, backoff=True)
     # First attempt uses raw timeout, then 2*(1 + 5*1) = 12, then 2*(1 + 5*2) = 22.
@@ -542,7 +551,9 @@ def test_run_recv_timeout_is_swallowed(mock_ssh_client, mock_ssh_config, mock_pa
     sess.recv_ready.side_effect = [True, True, False]
     sess.recv.side_effect = [TimeoutError("boom"), b"data", b""]
     sess.recv_stderr_ready.return_value = False
-    with patch("mtui.connection.select.select", return_value=([sess], [], [])):
+    with patch(
+        "mtui.hosts.connection.connection.select.select", return_value=([sess], [], [])
+    ):
         rc = conn.run("cmd")
     assert rc == 0
     assert "data" in conn.stdout

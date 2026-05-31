@@ -2,7 +2,7 @@
 
 from logging import getLogger
 
-from ...connection import Connection
+from ...hosts.connection import Connection
 from ...types import Product
 from ...types.systems import System
 from . import product

@@ -340,7 +340,7 @@ def test_refhosts_from_tp_resolves_via_factory(tmp_path: Path) -> None:
 
 
 def test_refhosts_from_tp_failed_resolve_swallows(tmp_path: Path) -> None:
-    from mtui.refhost import RefhostsResolveFailedError
+    from mtui.hosts.refhost import RefhostsResolveFailedError
 
     r = _make(tmp_path)
     r.refhostsFactory = MagicMock(side_effect=RefhostsResolveFailedError("bad"))

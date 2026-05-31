@@ -14,7 +14,7 @@ from os import getenv
 from pathlib import Path
 from typing import Any
 
-from ..refhost import RefhostsFactory, RefhostsResolveFailedError
+from ..hosts.refhost import RefhostsFactory, RefhostsResolveFailedError
 from .messages import InvalidLocationError
 from .paths import terms_path
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from traceback import format_exc
 from typing import TYPE_CHECKING, Any, Literal
 
-from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
+from ..hosts.refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
 from ..support.config import Config
 from ..support.exceptions import InvalidGiteaHashError, UpdateError
 from ..support.fileops import ensure_dir_exists
