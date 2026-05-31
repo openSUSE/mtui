@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.template.obstestreport import OBSTestReport
+from mtui.test_reports.obs_report import OBSTestReport
 from mtui.types import RequestReviewID
 
 

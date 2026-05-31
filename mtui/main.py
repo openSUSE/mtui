@@ -17,7 +17,7 @@ from .support.config import Config
 from .support.exceptions import MissingGiteaTokenError
 from .support.messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
 from .support.systemcheck import detect_system
-from .template.nulltestreport import NullTestReport
+from .test_reports.null_report import NullTestReport
 
 
 def main() -> int:

@@ -17,7 +17,7 @@ from ..support import messages
 if TYPE_CHECKING:
     from ..target import Target
     from ..target.hostgroup import HostsGroup
-    from ..template.testreport import TestReport
+    from ..test_reports.testreport import TestReport
 
 
 log = getLogger("mtui.script")

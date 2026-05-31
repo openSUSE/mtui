@@ -1,4 +1,4 @@
-"""Tests for ``mtui.template.testreport_svn_checkout`` error handling."""
+"""Tests for ``mtui.test_reports.svn_io.testreport_svn_checkout`` error handling."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-from mtui import template
 from mtui.support.messages import SvnCheckoutFailed
+from mtui.test_reports import svn_io
 from mtui.types import RequestReviewID
 
 
@@ -30,10 +30,10 @@ def test_svn_checkout_missing_raises_clear_error(tmp_path: Path) -> None:
     )
 
     with (
-        patch("mtui.template.subprocess.run", return_value=completed) as run,
+        patch("mtui.test_reports.svn_io.subprocess.run", return_value=completed) as run,
         pytest.raises(SvnCheckoutFailed) as excinfo,
     ):
-        template.testreport_svn_checkout(
+        svn_io.testreport_svn_checkout(
             cfg, "svn+ssh://svn@qam.suse.de/testreports", rrid
         )
 
@@ -52,5 +52,5 @@ def test_svn_checkout_success_does_not_raise(tmp_path: Path) -> None:
     rrid = RequestReviewID("SUSE:Maintenance:1:1")
     completed = subprocess.CompletedProcess(args=[], returncode=0, stderr="")
 
-    with patch("mtui.template.subprocess.run", return_value=completed):
-        template.testreport_svn_checkout(cfg, "svn+ssh://svn@example/testreports", rrid)
+    with patch("mtui.test_reports.svn_io.subprocess.run", return_value=completed):
+        svn_io.testreport_svn_checkout(cfg, "svn+ssh://svn@example/testreports", rrid)

@@ -1,4 +1,4 @@
-"""Tests for ``mtui.template.products.*`` normalize functions."""
+"""Tests for ``mtui.test_reports.products.*`` normalize functions."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ from unittest.mock import patch
 
 import pytest
 
-from mtui.template.products import normalize, normalize_16
-from mtui.template.products.misc import (
+from mtui.test_reports.products import normalize, normalize_16
+from mtui.test_reports.products.misc import (
     normalize_manager,
     normalize_osle,
     normalize_rt,
     normalize_ses,
 )
-from mtui.template.products.sle11 import normalize_sle11
-from mtui.template.products.sle12 import normalize_sle12
-from mtui.template.products.sle15 import normalize_sle15
+from mtui.test_reports.products.sle11 import normalize_sle11
+from mtui.test_reports.products.sle12 import normalize_sle12
+from mtui.test_reports.products.sle15 import normalize_sle15
 from mtui.types import Product
 
 
@@ -155,42 +155,42 @@ def test_normalize_16_passthrough_unchanged() -> None:
 
 
 def test_normalize_dispatch_sle_rt() -> None:
-    with patch("mtui.template.products.normalize_rt", return_value="rt-out") as m:
+    with patch("mtui.test_reports.products.normalize_rt", return_value="rt-out") as m:
         out = normalize([["SLE-RT", "12", "x86_64"]])
     m.assert_called_once()
     assert out == "rt-out"
 
 
 def test_normalize_dispatch_sle11_prefix() -> None:
-    with patch("mtui.template.products.normalize_sle11", return_value="11") as m:
+    with patch("mtui.test_reports.products.normalize_sle11", return_value="11") as m:
         out = normalize([["SLE-SDK", "11", "x86_64"]])
     m.assert_called_once()
     assert out == "11"
 
 
 def test_normalize_dispatch_sle12_prefix() -> None:
-    with patch("mtui.template.products.normalize_sle12", return_value="12") as m:
+    with patch("mtui.test_reports.products.normalize_sle12", return_value="12") as m:
         out = normalize([["SLE-SERVER", "12", "x86_64"]])
     m.assert_called_once()
     assert out == "12"
 
 
 def test_normalize_dispatch_sle15_prefix() -> None:
-    with patch("mtui.template.products.normalize_sle15", return_value="15") as m:
+    with patch("mtui.test_reports.products.normalize_sle15", return_value="15") as m:
         out = normalize([["SLE-Product-SLES", "15", "x86_64"]])
     m.assert_called_once()
     assert out == "15"
 
 
 def test_normalize_dispatch_storage() -> None:
-    with patch("mtui.template.products.normalize_ses", return_value="ses-out") as m:
+    with patch("mtui.test_reports.products.normalize_ses", return_value="ses-out") as m:
         out = normalize([["Storage", "7", "x86_64"]])
     m.assert_called_once()
     assert out == "ses-out"
 
 
 def test_normalize_dispatch_manager() -> None:
-    with patch("mtui.template.products.normalize_manager", return_value="mgr") as m:
+    with patch("mtui.test_reports.products.normalize_manager", return_value="mgr") as m:
         out = normalize([["SUSE-Manager-Server", "4.1", "x86_64"]])
     m.assert_called_once()
     assert out == "mgr"
@@ -198,7 +198,7 @@ def test_normalize_dispatch_manager() -> None:
 
 def test_normalize_dispatch_osle() -> None:
     # The dispatcher matches when the *version* field contains "openSUSE-SLE".
-    with patch("mtui.template.products.normalize_osle", return_value="leap") as m:
+    with patch("mtui.test_reports.products.normalize_osle", return_value="leap") as m:
         out = normalize([["leap", "openSUSE-SLE-15.4", "x86_64"]])
     m.assert_called_once()
     assert out == "leap"

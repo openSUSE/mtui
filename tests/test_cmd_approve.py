@@ -10,7 +10,7 @@ import pytest
 
 from mtui.commands.approve import Approve
 from mtui.support.messages import TestReportNotLoadedError
-from mtui.template import TemplateFormatError
+from mtui.test_reports.svn_io import TemplateFormatError
 from mtui.types import RequestKind, RequestReviewID
 
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from mtui.template.nulltestreport import NullTestReport
+from mtui.test_reports.null_report import NullTestReport
 
 
 def _config(tmp_path: Path) -> MagicMock:

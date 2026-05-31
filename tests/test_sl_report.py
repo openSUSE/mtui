@@ -1,4 +1,4 @@
-"""Tests for ``mtui.template.sltestreport.SLTestReport``."""
+"""Tests for ``mtui.test_reports.sl_report.SLTestReport``."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mtui.template.sltestreport import SLTestReport
+from mtui.test_reports.sl_report import SLTestReport
 from mtui.types import RequestReviewID
 
 
@@ -95,7 +95,7 @@ def test_sl_check_hash_gitea_compare_match(tmp_path: Path) -> None:
 
     fake_gitea = MagicMock()
     fake_gitea.get_hash.return_value = "abc"
-    with patch("mtui.template.sltestreport.Gitea", return_value=fake_gitea):
+    with patch("mtui.test_reports.sl_report.Gitea", return_value=fake_gitea):
         ok, old, new = r.check_hash()
     assert ok is True
     assert old == "abc"
@@ -111,7 +111,7 @@ def test_sl_check_hash_gitea_compare_mismatch(tmp_path: Path) -> None:
 
     fake_gitea = MagicMock()
     fake_gitea.get_hash.return_value = "xyz"
-    with patch("mtui.template.sltestreport.Gitea", return_value=fake_gitea):
+    with patch("mtui.test_reports.sl_report.Gitea", return_value=fake_gitea):
         ok, old, new = r.check_hash()
     assert ok is False
     assert old == "abc"
@@ -126,7 +126,7 @@ def test_sl_update_repos_parser_uses_reporepoparse_when_repositories_set(
     r.repositories = frozenset(["a"])
     r.products = ["p"]
     with patch(
-        "mtui.template.sltestreport.reporepoparse", return_value={"x": "y"}
+        "mtui.test_reports.sl_report.reporepoparse", return_value={"x": "y"}
     ) as m:
         out = r._update_repos_parser()
     m.assert_called_once()
@@ -138,7 +138,7 @@ def test_sl_update_repos_parser_uses_slrepoparse_for_1_1(tmp_path: Path) -> None
     r.rrid = RequestReviewID("SUSE:SLFO:1.1:7")
     r.repository = "some-repo"
     r.products = ["p"]
-    with patch("mtui.template.sltestreport.slrepoparse", return_value={"k": "v"}) as m:
+    with patch("mtui.test_reports.sl_report.slrepoparse", return_value={"k": "v"}) as m:
         out = r._update_repos_parser()
     m.assert_called_once()
     assert out == {"k": "v"}
@@ -149,7 +149,9 @@ def test_sl_update_repos_parser_falls_back_to_gitrepoparse(tmp_path: Path) -> No
     r.rrid = _make_rrid_with_maint("2.0")
     r.repository = "some-repo"
     r.products = ["p"]
-    with patch("mtui.template.sltestreport.gitrepoparse", return_value={"g": "h"}) as m:
+    with patch(
+        "mtui.test_reports.sl_report.gitrepoparse", return_value={"g": "h"}
+    ) as m:
         out = r._update_repos_parser()
     m.assert_called_once()
     assert out == {"g": "h"}

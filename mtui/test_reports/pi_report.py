@@ -1,28 +1,26 @@
-"""A `TestReport` implementation for OBS test reports."""
+"""A `TestReport` implementation for PI test reports."""
 
 from typing import final
 
-from ..parsemeta import ReducedMetadataParser
-from ..parsemetajson import JSONParser
-from ..repoparse import obsrepoparse
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..types import Product, RequestReviewID
+from .metadata_parsers import JSONParser, ReducedMetadataParser, reporepoparse
 from .testreport import TestReport
 
 
 @final
-class OBSTestReport(TestReport):
-    """A `TestReport` implementation for OBS test reports."""
+class PITestReport(TestReport):
+    """A `TestReport` implementation for PI test reports."""
 
     def __init__(self, *a, **kw) -> None:
-        """Initializes the `OBSTestReport` object."""
+        """Initializes the `PITestReport` object."""
         super().__init__(*a, **kw)
 
         self.rrid: RequestReviewID
         self.rating = ""
         self.realid = ""
-
+        self.repositories: frozenset = frozenset()
         self._attrs += ["rrid", "rating", "realid"]
 
     @property
@@ -40,16 +38,19 @@ class OBSTestReport(TestReport):
 
     def _update_repos_parser(self) -> dict[Product, str]:
         """Returns a dictionary of update repositories."""
-        return obsrepoparse(self.repository, self.report_wd())
+        return reporepoparse(self.repositories, self.products)
 
     def _show_yourself_data(self) -> list[tuple[str, str]]:
         """Returns a list of data to be displayed by `list_metadata`."""
-        return [
-            ("ReviewRequestID", str(self.rrid)),
-            ("Rating", self.rating),
-            ("Real ID", self.realid),
-            *super()._show_yourself_data(),
-        ]
+        return (
+            [
+                ("ReviewRequestID", str(self.rrid)),
+                ("Rating", self.rating),
+                ("Real ID", self.realid),
+            ]
+            + [("Repo", x) for x in self.repositories]
+            + super()._show_yourself_data()
+        )
 
     def set_repo(self, target: Target, operation: str) -> None:
         """Adds or removes a repository on a target host.
@@ -60,7 +61,7 @@ class OBSTestReport(TestReport):
 
         """
         if operation == "add":
-            target.repo_manager.run_zypper("-n ar -ckn", self.update_repos, self.rrid)
+            target.repo_manager.run_zypper("-n ar -cfGkn", self.update_repos, self.rrid)
         elif operation == "remove":
             target.repo_manager.run_zypper("-n rr", self.update_repos, self.rrid)
         else:

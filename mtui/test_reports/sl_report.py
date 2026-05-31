@@ -4,12 +4,16 @@ from logging import getLogger
 from typing import final
 
 from ..connector.gitea import Gitea
-from ..parsemeta import ReducedMetadataParser
-from ..parsemetajson import JSONParser
-from ..repoparse import gitrepoparse, reporepoparse, slrepoparse
 from ..target import Target
 from ..target.hostgroup import HostsGroup
 from ..types import Product, RequestReviewID
+from .metadata_parsers import (
+    JSONParser,
+    ReducedMetadataParser,
+    gitrepoparse,
+    reporepoparse,
+    slrepoparse,
+)
 from .testreport import TestReport
 
 logger = getLogger("mtui.template.sltestreport")

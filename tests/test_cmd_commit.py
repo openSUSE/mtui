@@ -30,8 +30,8 @@ def test_commit_happy_runs_svn_add_up_ci(mock_config, tmp_path):
     args = Namespace(msg=None)
 
     with (
-        patch("mtui.template.subprocess.check_call") as cc,
-        patch("mtui.template.subprocess.call") as call,
+        patch("mtui.test_reports.svn_io.subprocess.check_call") as cc,
+        patch("mtui.test_reports.svn_io.subprocess.call") as call,
     ):
         Commit(args, mock_config, MagicMock(), prompt)()
 
@@ -46,7 +46,9 @@ def test_commit_swallows_subprocess_error(mock_config, tmp_path, caplog):
     caplog.set_level(logging.ERROR, logger="mtui.command.commit")
     args = Namespace(msg=None)
 
-    with patch("mtui.template.subprocess.check_call", side_effect=OSError("boom")):
+    with patch(
+        "mtui.test_reports.svn_io.subprocess.check_call", side_effect=OSError("boom")
+    ):
         Commit(args, mock_config, MagicMock(), prompt)()
 
     assert any("committing template.failed" in r.message for r in caplog.records)

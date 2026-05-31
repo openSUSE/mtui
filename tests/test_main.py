@@ -87,7 +87,7 @@ def test_run_mtui_with_debug():
 
 def test_run_mtui_quits_when_explicit_update_not_loaded():
     """An explicit -a update that fails to load exits 1 without a session."""
-    from mtui.template.nulltestreport import NullTestReport
+    from mtui.test_reports.null_report import NullTestReport
 
     mock_config = MagicMock()
     mock_logger = MagicMock()

@@ -24,12 +24,12 @@ from ..support.messages import (
     SvnCheckoutInterruptedError,
     TestReportNotLoadedError,
 )
-from ..template import TemplateIOError, testreport_svn_checkout
-from ..template.nulltestreport import NullTestReport
-from ..template.obstestreport import OBSTestReport
-from ..template.pitestreport import PITestReport
-from ..template.sltestreport import SLTestReport
-from ..template.testreport import TestReport
+from ..test_reports.null_report import NullTestReport
+from ..test_reports.obs_report import OBSTestReport
+from ..test_reports.pi_report import PITestReport
+from ..test_reports.sl_report import SLTestReport
+from ..test_reports.svn_io import TemplateIOError, testreport_svn_checkout
+from ..test_reports.testreport import TestReport
 from . import RequestReviewID
 from .enums import RequestKind
 

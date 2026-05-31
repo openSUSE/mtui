@@ -29,7 +29,7 @@ from mtui.support.exceptions import (
     MissingGiteaTokenError,
 )
 from mtui.support.messages import TestReportNotLoadedError
-from mtui.template import TemplateIOError
+from mtui.test_reports.svn_io import TemplateIOError
 from mtui.types.updateid import AutoOBSUpdateID
 
 RRID = "SUSE:Maintenance:12358:199773"
