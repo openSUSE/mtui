@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.target import Target, TargetLockedError
+from mtui.hosts.target import Target, TargetLockedError
 from mtui.types import ExecutionMode, HostLog, Package
 from mtui.types.product import Product
 from mtui.types.rpmver import RPMVersion
@@ -463,7 +463,7 @@ def test_connect_success_wires_up_lock_and_system(mock_config, monkeypatch):
     fake_system = MagicMock()
     fake_system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
     monkeypatch.setattr(
-        "mtui.target.target.parse_system", lambda _conn: (fake_system, False)
+        "mtui.hosts.target.target.parse_system", lambda _conn: (fake_system, False)
     )
     target = Target(  # type: ignore[arg-type]
         mock_config,
@@ -488,7 +488,7 @@ def test_connect_warns_when_already_locked(mock_config, monkeypatch, caplog):
     fake_system = MagicMock()
     fake_system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
     monkeypatch.setattr(
-        "mtui.target.target.parse_system", lambda _conn: (fake_system, False)
+        "mtui.hosts.target.target.parse_system", lambda _conn: (fake_system, False)
     )
     target = Target(  # type: ignore[arg-type]
         mock_config,
@@ -510,7 +510,7 @@ def test_connect_reaps_stale_lock_without_warning(mock_config, monkeypatch, capl
     fake_system = MagicMock()
     fake_system.get_base.return_value = Product("SLES", "15-SP5", "x86_64")
     monkeypatch.setattr(
-        "mtui.target.target.parse_system", lambda _conn: (fake_system, False)
+        "mtui.hosts.target.target.parse_system", lambda _conn: (fake_system, False)
     )
     target = Target(  # type: ignore[arg-type]
         mock_config,
@@ -551,7 +551,7 @@ def test_reload_system_replaces_system_and_transactional(mock_config, monkeypatc
     target.connection = MagicMock()
     new_system = MagicMock()
     monkeypatch.setattr(
-        "mtui.target.target.parse_system", lambda _conn: (new_system, True)
+        "mtui.hosts.target.target.parse_system", lambda _conn: (new_system, True)
     )
     target.reload_system()
     assert target.system is new_system

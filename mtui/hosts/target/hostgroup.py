@@ -7,16 +7,16 @@ from logging import getLogger
 from pathlib import Path
 from typing import Self, final
 
-from ..support.exceptions import UpdateError
-from ..support.messages import (
+from ...support.exceptions import UpdateError
+from ...support.messages import (
     HostIsNotConnectedError,
     MissingDowngraderError,
     MissingPreparerError,
     MissingUpdaterError,
 )
-from ..types import Package
-from ..types.rpmver import RPMVersion
-from ..update_workflow.hooks import CompareScript, PostScript, PreScript
+from ...types import Package
+from ...types.rpmver import RPMVersion
+from ...update_workflow.hooks import CompareScript, PostScript, PreScript
 from . import Target
 from .actions import (
     FileDelete,

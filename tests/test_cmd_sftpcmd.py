@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from mtui.commands.sftpcmd import SFTPPut
-from mtui.target.hostgroup import HostsGroup
+from mtui.hosts.target.hostgroup import HostsGroup
 
 
 def _target(hostname):
@@ -43,7 +43,7 @@ def test_sftp_put_uploads_real_file(mock_config, tmp_path):
     def fake_sftp(self, local, remote):
         sent.append((local, remote))
 
-    from mtui.target.hostgroup import HostsGroup as HG
+    from mtui.hosts.target.hostgroup import HostsGroup as HG
 
     original = HG.sftp_put
     HG.sftp_put = fake_sftp  # ty: ignore[invalid-assignment]

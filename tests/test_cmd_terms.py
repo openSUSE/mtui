@@ -7,7 +7,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock
 
 from mtui.commands.terms import Terms
-from mtui.target.hostgroup import HostsGroup
+from mtui.hosts.target.hostgroup import HostsGroup
 
 
 def _target(hostname):

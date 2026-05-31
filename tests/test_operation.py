@@ -1,6 +1,6 @@
 """Focused unit tests for the ``Operation`` template introduced in C3.
 
-These tests exercise :class:`mtui.target.hostgroup.Operation` and its two
+These tests exercise :class:`mtui.hosts.target.hostgroup.Operation` and its two
 concrete subclasses directly with stub targets and a stub group, without
 constructing a real :class:`HostsGroup`. The pre-existing
 ``test_perform_install_*`` / ``test_perform_uninstall_*`` cases in
@@ -12,12 +12,12 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from mtui.support.messages import MissingInstallerError, MissingUninstallerError
-from mtui.target.operation import (
+from mtui.hosts.target.operation import (
     InstallOperation,
     Operation,
     UninstallOperation,
 )
+from mtui.support.messages import MissingInstallerError, MissingUninstallerError
 
 
 def _stub_target(hostname: str, *, transactional: bool = False):

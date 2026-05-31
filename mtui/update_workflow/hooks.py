@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Literal
 from ..support import messages
 
 if TYPE_CHECKING:
-    from ..target import Target
-    from ..target.hostgroup import HostsGroup
+    from ..hosts.target import Target
+    from ..hosts.target.hostgroup import HostsGroup
     from ..test_reports.testreport import TestReport
 
 

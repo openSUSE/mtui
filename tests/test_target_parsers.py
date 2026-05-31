@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from mtui.target.parsers.product import parse_os_release, parse_product
+from mtui.hosts.target.parsers.product import parse_os_release, parse_product
 
 # --- parse_product ---
 
@@ -126,7 +126,7 @@ def _mock_connection_with_sftp() -> tuple[MagicMock, MagicMock]:
 
 
 class TestParseSystem:
-    @patch("mtui.target.parsers.system.product")
+    @patch("mtui.hosts.target.parsers.system.product")
     def test_parse_suse_system(self, mock_product_module):
         """Test parsing a SUSE system with products.d."""
         conn, sftp = _mock_connection_with_sftp()
@@ -155,7 +155,7 @@ class TestParseSystem:
             ("sle-module-basesystem", "15-SP5", "x86_64"),
         ]
 
-        from mtui.target.parsers.system import parse_system
+        from mtui.hosts.target.parsers.system import parse_system
 
         system, transactional = parse_system(conn)
 
@@ -164,7 +164,7 @@ class TestParseSystem:
         # The whole parse_system call ran inside a single SFTP session.
         assert conn.sftp_session.call_count == 1
 
-    @patch("mtui.target.parsers.system.product")
+    @patch("mtui.hosts.target.parsers.system.product")
     def test_parse_non_suse_system(self, mock_product_module):
         """Test parsing a non-SUSE system falls back to os-release."""
         conn, sftp = _mock_connection_with_sftp()
@@ -182,7 +182,7 @@ class TestParseSystem:
         os_release_file = MagicMock()
         sftp.open.return_value = os_release_file
 
-        from mtui.target.parsers.system import parse_system
+        from mtui.hosts.target.parsers.system import parse_system
 
         system, transactional = parse_system(conn)
 

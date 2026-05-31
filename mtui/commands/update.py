@@ -5,9 +5,9 @@ from traceback import format_exc
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
+from ..hosts.target.locks import TargetLockedError
 from ..support.messages import NoRefhostsDefinedError
 from ..support.misc import requires_update
-from ..target.locks import TargetLockedError
 from . import Command
 
 logger = getLogger("mtui.command.update")

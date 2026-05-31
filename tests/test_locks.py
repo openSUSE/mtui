@@ -7,7 +7,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.target.locks import LockedTargets, RemoteLock, TargetLock, TargetLockedError
+from mtui.hosts.target.locks import (
+    LockedTargets,
+    RemoteLock,
+    TargetLock,
+    TargetLockedError,
+)
 
 # --- RemoteLock ---
 

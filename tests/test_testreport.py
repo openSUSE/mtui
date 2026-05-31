@@ -65,7 +65,7 @@ def test_autolock_new_target_noop_without_comment(tmp_path: Path) -> None:
 
 
 def test_autolock_new_target_suppresses_foreign_lock(tmp_path: Path) -> None:
-    from mtui.target import TargetLockedError
+    from mtui.hosts.target import TargetLockedError
 
     r = _make(tmp_path)
     r.lock_comment = "testing of SUSE:PI:34556:1"

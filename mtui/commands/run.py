@@ -6,8 +6,8 @@ from logging import getLogger
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
 from ..cli.term import page
+from ..hosts.target.locks import LockedTargets, TargetLockedError
 from ..support.messages import NoRefhostsDefinedError
-from ..target.locks import LockedTargets, TargetLockedError
 from . import Command
 
 logger = getLogger("mtui.command.run")

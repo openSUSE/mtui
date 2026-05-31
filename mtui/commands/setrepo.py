@@ -4,8 +4,8 @@ from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
+from ..hosts.target.locks import LockedTargets, TargetLockedError
 from ..support.misc import requires_update
-from ..target.locks import LockedTargets, TargetLockedError
 from . import Command
 
 logger = getLogger("mtui.command.setrepo")

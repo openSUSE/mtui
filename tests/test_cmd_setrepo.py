@@ -8,8 +8,8 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.setrepo import SetRepo
-from mtui.target.hostgroup import HostsGroup
-from mtui.target.locks import TargetLockedError
+from mtui.hosts.target.hostgroup import HostsGroup
+from mtui.hosts.target.locks import TargetLockedError
 
 
 def _target(hostname):

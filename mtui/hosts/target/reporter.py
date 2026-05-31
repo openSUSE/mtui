@@ -23,7 +23,7 @@ from collections.abc import Callable
 from logging import getLogger
 from typing import TYPE_CHECKING, final
 
-from ..types import ExecutionMode, System, TargetState
+from ...types import ExecutionMode, System, TargetState
 
 if TYPE_CHECKING:
     from . import TargetLock

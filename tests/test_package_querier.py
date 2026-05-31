@@ -1,7 +1,7 @@
 """Focused tests for ``PackageQuerier`` (the rpm/dpkg branch).
 
 These tests pin the contracts exposed by
-``mtui.target.package_querier.PackageQuerier``:
+``mtui.hosts.target.package_querier.PackageQuerier``:
 
 * the rpm vs dpkg branch keyed on ``system.get_base().name``,
 * the ``"package X is not installed"`` line → ``None`` mapping,
@@ -16,7 +16,7 @@ at the collaborator boundary.
 
 from unittest.mock import MagicMock
 
-from mtui.target.package_querier import PackageQuerier
+from mtui.hosts.target.package_querier import PackageQuerier
 from mtui.types.rpmver import RPMVersion
 
 

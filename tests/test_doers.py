@@ -21,8 +21,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.target import Target
-from mtui.target.target import _no_checks
+from mtui.hosts.target import Target
+from mtui.hosts.target.target import _no_checks
 
 
 def _target_with_release(
