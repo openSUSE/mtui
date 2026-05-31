@@ -7,6 +7,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Internal: reorganized the `mtui/` package layout. No public CLI behaviour
+  change. The 24 loose top-level modules are now grouped into six
+  subpackages — `mtui/cli/`, `mtui/hosts/`, `mtui/data_sources/`,
+  `mtui/test_reports/`, `mtui/update_workflow/`, and `mtui/support/` — and
+  five oversize files (`connection.py`, `refhost.py`,
+  `connector/qem_dashboard.py`, `connector/oqa_search.py`) were split along
+  their existing internal seams. Two small file pairs that always travel
+  together were merged: `parsemeta.py` + `parsemetajson.py` +
+  `repoparse.py` → `test_reports/metadata_parsers.py`, and `datafiles.py` +
+  `xdg.py` → `support/paths.py`. Public class names, method signatures, and
+  exception types are unchanged; only import paths moved. The
+  `mtui/commands/`, `mtui/helper/`, `mtui/scripts/`, `mtui/terms/`, and
+  `mtui/types/` directories are unchanged.
+
 ### Added
 
 - The `approve` command now accepts `-r REVIEWER` / `--reviewer REVIEWER`.
