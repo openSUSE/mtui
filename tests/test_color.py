@@ -7,15 +7,15 @@ from unittest.mock import patch
 
 import pytest
 
-from mtui import colorctl, colorlog, colors
+from mtui.cli import colors
 
 
 @pytest.fixture(autouse=True)
 def _reset_color_mode():
     """Restore the default colour mode after every test."""
-    saved = colorctl.get_mode()
+    saved = colors.get_mode()
     yield
-    colorctl.set_mode(saved)
+    colors.set_mode(saved)
 
 
 @pytest.mark.parametrize(
@@ -41,7 +41,7 @@ def test_colors_enabled_decision_matrix(
     monkeypatch, mode, no_color, color_env, isatty, expected
 ):
     """colors_enabled() must follow the documented precedence order."""
-    colorctl.set_mode(mode)
+    colors.set_mode(mode)
     if no_color:
         monkeypatch.setenv("NO_COLOR", no_color)
     else:
@@ -51,13 +51,13 @@ def test_colors_enabled_decision_matrix(
     else:
         monkeypatch.delenv("COLOR", raising=False)
 
-    with patch("mtui.colorctl.sys.stderr.isatty", return_value=isatty):
-        assert colorctl.colors_enabled() is expected
+    with patch("mtui.cli.colors.mode.sys.stderr.isatty", return_value=isatty):
+        assert colors.colors_enabled() is expected
 
 
 def test_green_returns_plain_when_disabled(monkeypatch):
     """colors.green() must omit ANSI escapes when colour is off."""
-    colorctl.set_mode("never")
+    colors.set_mode("never")
     assert colors.green("hello") == "hello"
     assert colors.red("err") == "err"
     assert colors.yellow("warn") == "warn"
@@ -66,7 +66,7 @@ def test_green_returns_plain_when_disabled(monkeypatch):
 
 def test_green_emits_ansi_when_enabled():
     """colors.green() must wrap in the expected ANSI sequence."""
-    colorctl.set_mode("always")
+    colors.set_mode("always")
     assert colors.green("hi") == "\033[1;32mhi\033[1;m\033[0m"
     assert colors.red("hi") == "\033[1;31mhi\033[1;m\033[0m"
     assert colors.yellow("hi") == "\033[1;33mhi\033[1;m\033[0m"
@@ -75,16 +75,16 @@ def test_green_emits_ansi_when_enabled():
 
 def test_color_formatter_plain_when_disabled():
     """ColorFormatter.formatColor() emits plain lowercase when off."""
-    colorctl.set_mode("never")
-    fmt = colorlog.ColorFormatter("%(levelname)s: %(message)s")
+    colors.set_mode("never")
+    fmt = colors.ColorFormatter("%(levelname)s: %(message)s")
     assert fmt.formatColor("INFO") == "info"
     assert fmt.formatColor("ERROR") == "error"
 
 
 def test_color_formatter_includes_module_suffix_for_debug():
     """DEBUG output keeps its '[module:function]' suffix in both modes."""
-    colorctl.set_mode("never")
-    fmt = colorlog.ColorFormatter("%(levelname)s: %(message)s")
+    colors.set_mode("never")
+    fmt = colors.ColorFormatter("%(levelname)s: %(message)s")
     out = fmt.formatColor("DEBUG")
     assert out.startswith("debug ")
     assert "[" in out
@@ -94,8 +94,8 @@ def test_color_formatter_includes_module_suffix_for_debug():
 
 def test_color_formatter_full_record_no_color():
     """End-to-end: a LogRecord rendered through the formatter is plain."""
-    colorctl.set_mode("never")
-    fmt = colorlog.ColorFormatter("%(levelname)s: %(message)s")
+    colors.set_mode("never")
+    fmt = colors.ColorFormatter("%(levelname)s: %(message)s")
     record = logging.LogRecord(
         name="mtui.test",
         level=logging.WARNING,
@@ -113,5 +113,5 @@ def test_color_formatter_full_record_no_color():
 def test_set_mode_round_trip():
     """set_mode + get_mode are symmetric."""
     for mode in ("auto", "always", "never"):
-        colorctl.set_mode(mode)
-        assert colorctl.get_mode() == mode
+        colors.set_mode(mode)
+        assert colors.get_mode() == mode

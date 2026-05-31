@@ -2,7 +2,7 @@
 
 from logging import getLogger
 
-from ..completion import complete_choices
+from ..cli.completion import complete_choices
 from ..types import ExecutionMode
 from . import Command
 

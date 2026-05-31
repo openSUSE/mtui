@@ -7,7 +7,7 @@ environment variable) and returns the input unchanged when colour is
 disabled.
 """
 
-from .colorctl import colors_enabled
+from .mode import colors_enabled
 
 
 def green(xs: str) -> str:

@@ -5,8 +5,8 @@ from glob import glob
 from logging import getLogger
 from pathlib import Path
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices_filelist
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices_filelist
 from . import Command
 
 logger = getLogger("mtui.command.sftp")

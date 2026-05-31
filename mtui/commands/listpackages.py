@@ -2,9 +2,9 @@
 
 from typing import ClassVar, final
 
-from ..argparse import ArgumentParser
-from ..colors import blue, green, red, yellow
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.colors import blue, green, red, yellow
+from ..cli.completion import complete_choices
 from ..support import messages
 from ..support.misc import requires_update
 from . import Command

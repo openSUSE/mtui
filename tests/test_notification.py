@@ -1,7 +1,7 @@
 import sys
 from unittest.mock import MagicMock
 
-from mtui import notification
+from mtui.cli import notification
 
 
 def test_display_success(monkeypatch):

@@ -5,8 +5,8 @@ import subprocess
 from logging import getLogger
 from time import sleep
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
 from ..support import messages
 from . import Command
 

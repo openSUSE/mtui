@@ -3,8 +3,8 @@
 import re
 from logging import getLogger
 
+from ..cli.term import page
 from ..support.misc import requires_update
-from ..term import page
 from . import Command
 
 logger = getLogger("mtui.commands.showdiff")

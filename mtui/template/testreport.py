@@ -33,7 +33,7 @@ from . import (
 )
 
 if TYPE_CHECKING:
-    from ..prompter import Prompter
+    from ..cli.prompter import Prompter
 
 logger = getLogger("mtui.template.testreport")
 
@@ -75,7 +75,7 @@ class TestReport(ABC):
         Args:
             config: The application configuration.
             scripts_src_dir: The source directory for scripts.
-            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+            prompter: Optional :class:`mtui.cli.prompter.Prompter` forwarded
                 to every :class:`mtui.target.Target` built by
                 :meth:`connect_target` and :meth:`add_target`. ``None``
                 means "no prompt"; SSH command timeouts will silently

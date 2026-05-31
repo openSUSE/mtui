@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from mtui import args
-from mtui.argparse import ArgsParseFailureError
+from mtui.cli import args
+from mtui.cli.argparse import ArgsParseFailureError
 
 
 def test_get_parser():

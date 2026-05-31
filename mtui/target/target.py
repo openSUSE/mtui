@@ -23,7 +23,7 @@ from .repo_manager import RepoManager
 from .reporter import Reporter
 
 if TYPE_CHECKING:
-    from ..prompter import Prompter
+    from ..cli.prompter import Prompter
 
 logger = getLogger("mtui.target")
 
@@ -86,7 +86,7 @@ class Target:
                 rest of its group or holds the group in a serial barrier.
             lock: The lock class to use for the target.
             connection: The connection class to use for the target.
-            prompter: Optional :class:`mtui.prompter.Prompter` used to
+            prompter: Optional :class:`mtui.cli.prompter.Prompter` used to
                 surface SSH command-timeout questions to the user with
                 cross-thread serialisation. ``None`` means "no prompt,
                 silently wait on timeout" — see

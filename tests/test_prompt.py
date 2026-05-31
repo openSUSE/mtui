@@ -3,8 +3,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui import prompt
-from mtui.argparse import ArgsParseFailureError
+from mtui.cli import prompt
+from mtui.cli.argparse import ArgsParseFailureError
 from mtui.support import messages
 from mtui.template.nulltestreport import NullTestReport
 

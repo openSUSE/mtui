@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, final
 
 if TYPE_CHECKING:
-    from ..prompter import Prompter
+    from ..cli.prompter import Prompter
 
+from ..cli.term import prompt_user
 from ..connector.openqa import KernelOpenQA
 from ..connector.qem_dashboard import DashboardAutoOpenQA, QEMIncident
 from ..support.config import Config
@@ -29,7 +30,6 @@ from ..template.obstestreport import OBSTestReport
 from ..template.pitestreport import PITestReport
 from ..template.sltestreport import SLTestReport
 from ..template.testreport import TestReport
-from ..term import prompt_user
 from . import RequestReviewID
 from .enums import RequestKind
 
@@ -70,7 +70,7 @@ class UpdateID(ABC):
             config: The application configuration.
             interactive: Whether to prompt the user for confirmation on
                 template hash mismatches.
-            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+            prompter: Optional :class:`mtui.cli.prompter.Prompter` forwarded
                 to the constructed :class:`TestReport` so that SSH
                 command-timeout prompts can reach the user with
                 cross-thread serialisation.
@@ -202,7 +202,7 @@ class AutoOBSUpdateID(UpdateID):
             config: The application configuration.
             autoconnect: Whether to automatically connect to hosts.
             interactive: Whether to prompt the user.
-            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+            prompter: Optional :class:`mtui.cli.prompter.Prompter` forwarded
                 to the constructed :class:`TestReport`.
 
         Returns:
@@ -285,7 +285,7 @@ class KernelOBSUpdateID(UpdateID):
             config: The application configuration.
             autoconnect: Whether to automatically connect to hosts.
             interactive: Whether to prompt the user.
-            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+            prompter: Optional :class:`mtui.cli.prompter.Prompter` forwarded
                 to the constructed :class:`TestReport`.
 
         Returns:

@@ -1,4 +1,4 @@
-"""Behaviour tests for :class:`mtui.prompter.Prompter`.
+"""Behaviour tests for :class:`mtui.cli.prompter.Prompter`.
 
 The Prompter owns a single :class:`threading.Lock` so that concurrent
 worker threads asking the user for input over ``stdin`` see strictly
@@ -13,7 +13,7 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from mtui.prompter import Prompter
+from mtui.cli.prompter import Prompter
 
 
 def test_ask_returns_reader_response():

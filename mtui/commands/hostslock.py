@@ -2,7 +2,7 @@
 
 from argparse import REMAINDER
 
-from ..completion import complete_choices
+from ..cli.completion import complete_choices
 from . import Command
 
 

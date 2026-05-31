@@ -4,7 +4,7 @@ import logging
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
-from mtui.argparse import ArgsParseFailureError
+from mtui.cli.argparse import ArgsParseFailureError
 from mtui.main import main, run_mtui
 
 

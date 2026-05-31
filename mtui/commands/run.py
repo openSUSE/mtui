@@ -3,11 +3,11 @@
 from argparse import REMAINDER
 from logging import getLogger
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
+from ..cli.term import page
 from ..support.messages import NoRefhostsDefinedError
 from ..target.locks import LockedTargets, TargetLockedError
-from ..term import page
 from . import Command
 
 logger = getLogger("mtui.command.run")

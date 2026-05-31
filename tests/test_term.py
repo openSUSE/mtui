@@ -1,8 +1,8 @@
 """Tests for the helpers in :mod:`mtui.term`."""
 
-from mtui import colorctl
-from mtui.colors import green
-from mtui.term import filter_ansi
+from mtui.cli import colors as colorctl
+from mtui.cli.colors import green
+from mtui.cli.term import filter_ansi
 
 
 def test_filter_ansi():
