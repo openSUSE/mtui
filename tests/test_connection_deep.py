@@ -1,4 +1,4 @@
-"""Deeper coverage for ``mtui.connection.Connection``.
+"""Deeper coverage for ``mtui.hosts.connection.Connection``.
 
 Targets the remaining gaps from ``test_connection.py``:
 * ``new_session`` NullHandler attach swallow
@@ -20,14 +20,16 @@ from unittest.mock import MagicMock, patch
 import paramiko
 import pytest
 
-from mtui.connection import Connection
+from mtui.hosts.connection import Connection
 
 
 @pytest.fixture
 def mock_ssh_client(monkeypatch):
-    """Patches ``mtui.connection.SSHClient`` to return a mock."""
+    """Patches ``mtui.hosts.connection.connection.SSHClient`` to return a mock."""
     mock_client = MagicMock()
-    monkeypatch.setattr("mtui.connection.SSHClient", lambda: mock_client)
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.SSHClient", lambda: mock_client
+    )
     mock_transport = MagicMock()
     mock_transport.is_active.return_value = True
     mock_client.get_transport.return_value = mock_transport
@@ -37,20 +39,24 @@ def mock_ssh_client(monkeypatch):
 
 @pytest.fixture
 def mock_ssh_config(monkeypatch):
-    """Patches ``mtui.connection.SSHConfig``."""
+    """Patches ``mtui.hosts.connection.connection.SSHConfig``."""
     mock_config = MagicMock()
-    monkeypatch.setattr("mtui.connection.SSHConfig", lambda: mock_config)
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.SSHConfig", lambda: mock_config
+    )
     mock_config.lookup.return_value = {}
     return mock_config
 
 
 @pytest.fixture
 def mock_path(monkeypatch):
-    """Patches ``mtui.connection.Path`` so the SSH config read becomes a no-op."""
+    """Patches ``mtui.hosts.connection.connection.Path`` so the SSH config read becomes a no-op."""
     mock_path_instance = MagicMock()
     string_io = StringIO("")
     mock_path_instance.expanduser.return_value.open.return_value.__enter__.return_value = string_io
-    monkeypatch.setattr("mtui.connection.Path", lambda _p: mock_path_instance)
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.Path", lambda _p: mock_path_instance
+    )
     return mock_path_instance
 
 
@@ -150,7 +156,9 @@ def test_run_raises_session_lost_when_session_falsey(
     mock_ssh_client.get_transport.return_value.open_session.return_value = flipping
     conn = Connection("h", 22, 300)
     with (
-        patch("mtui.connection.select.select", return_value=([], [], [])),
+        patch(
+            "mtui.hosts.connection.connection.select.select", return_value=([], [], [])
+        ),
         pytest.raises(ConnectionError, match="Session lost"),
     ):
         conn.run("cmd")
@@ -167,14 +175,21 @@ def _stub_terminal(monkeypatch) -> MagicMock:
     fake_stdin.fileno.return_value = 0
     fake_stdin.read.return_value = ""  # empty → break
 
-    monkeypatch.setattr("mtui.connection.sys.stdin", fake_stdin)
+    monkeypatch.setattr("mtui.hosts.connection.connection.sys.stdin", fake_stdin)
     monkeypatch.setattr(
-        "mtui.connection.termios.tcgetattr", lambda *_a, **_kw: object()
+        "mtui.hosts.connection.connection.termios.tcgetattr",
+        lambda *_a, **_kw: object(),
     )
-    monkeypatch.setattr("mtui.connection.termios.tcsetattr", lambda *_a, **_kw: None)
-    monkeypatch.setattr("mtui.connection.tty.setraw", lambda *_a, **_kw: None)
-    monkeypatch.setattr("mtui.connection.tty.setcbreak", lambda *_a, **_kw: None)
-    monkeypatch.setattr("mtui.connection.termsize", lambda: (80, 24))
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.termios.tcsetattr", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.tty.setraw", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.tty.setcbreak", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr("mtui.hosts.connection.connection.termsize", lambda: (80, 24))
     return fake_stdin
 
 
@@ -195,7 +210,7 @@ def test_shell_invokes_shell_after_one_retry(
     monkeypatch.setattr(Connection, "reconnect", lambda *_a, **_kw: None)
 
     with patch(
-        "mtui.connection.select.select",
+        "mtui.hosts.connection.connection.select.select",
         return_value=([real_sess], [], []),
     ):
         conn.shell()
@@ -213,7 +228,7 @@ def test_shell_handles_stdin_branch(
     fake_stdin = _stub_terminal(monkeypatch)
 
     with patch(
-        "mtui.connection.select.select",
+        "mtui.hosts.connection.connection.select.select",
         side_effect=[
             ([fake_stdin], [], []),
             ([sess], [], []),

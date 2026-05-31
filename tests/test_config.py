@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from mtui.refhost import RefhostsResolveFailedError
+from mtui.hosts.refhost import RefhostsResolveFailedError
 from mtui.support import config
 from mtui.support.messages import InvalidLocationError
 

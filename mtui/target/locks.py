@@ -8,7 +8,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Self
 
-from ..connection import Connection
+from ..hosts.connection import Connection
 from ..support.config import Config
 from ..support.fileops import timestamp
 
