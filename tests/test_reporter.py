@@ -1,7 +1,7 @@
 """Focused tests for the ``Reporter`` collaborator.
 
 These tests cover the seven sink-dispatch methods extracted from
-:class:`mtui.target.Target` (Phase 5b / C2 / Cluster B). They mirror
+:class:`mtui.hosts.target.Target` (Phase 5b / C2 / Cluster B). They mirror
 the contracts the deleted ``Target.report_*`` methods used to advertise
 and are reached through the ``Target.reporter`` property so the
 property's own behaviour (fresh-per-access binding) is covered
@@ -10,7 +10,7 @@ implicitly by every test that asserts against ``target.reporter``.
 
 from unittest.mock import MagicMock
 
-from mtui.target.reporter import Reporter
+from mtui.hosts.target.reporter import Reporter
 from mtui.types import HostLog
 
 

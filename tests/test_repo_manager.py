@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.target.repo_manager import RepoManager
+from mtui.hosts.target.repo_manager import RepoManager
 from mtui.types import Product
 
 # ---------------------------------------------------------------------------

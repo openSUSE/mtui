@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any, final
 
-from ..target.hostgroup import HostsGroup
+from ..hosts.target.hostgroup import HostsGroup
 from ..types import Product
 from .testreport import TestReport
 

@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.commands.removehost import RemoveHost
+from mtui.hosts.target.hostgroup import HostsGroup
 from mtui.support.messages import HostIsNotConnectedError
-from mtui.target.hostgroup import HostsGroup
 
 
 def _target(hostname):

@@ -5,10 +5,10 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
+from mtui.hosts.target.hostgroup import HostsGroup
+from mtui.hosts.target.locks import TargetLockedError
 from mtui.support.exceptions import UpdateError
 from mtui.support.messages import HostIsNotConnectedError
-from mtui.target.hostgroup import HostsGroup
-from mtui.target.locks import TargetLockedError
 
 
 def _stub_target(
@@ -265,7 +265,7 @@ def test_update_lock_raises_when_locked_by_other():
 # --- perform_install ---
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_install_runs_and_unlocks(mock_run):
     """Test perform_install runs commands and always unlocks."""
     t1 = MagicMock()
@@ -285,7 +285,7 @@ def test_perform_install_runs_and_unlocks(mock_run):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_install_unlocks_on_error(mock_run):
     """Test perform_install unlocks even when commands raise."""
     t1 = MagicMock()
@@ -364,7 +364,7 @@ def test_report_products_delegates():
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.FileDownload")
+@patch("mtui.hosts.target.hostgroup.FileDownload")
 def test_sftp_get_delegates_to_filedownload(mock_dl):
     t1 = _stub_target("h1")
     hg = HostsGroup([t1])
@@ -373,7 +373,7 @@ def test_sftp_get_delegates_to_filedownload(mock_dl):
     mock_dl.return_value.run.assert_called_once()
 
 
-@patch("mtui.target.hostgroup.FileUpload")
+@patch("mtui.hosts.target.hostgroup.FileUpload")
 def test_sftp_put_delegates_to_fileupload(mock_ul):
     t1 = _stub_target("h1")
     hg = HostsGroup([t1])
@@ -382,7 +382,7 @@ def test_sftp_put_delegates_to_fileupload(mock_ul):
     mock_ul.return_value.run.assert_called_once()
 
 
-@patch("mtui.target.hostgroup.FileDelete")
+@patch("mtui.hosts.target.hostgroup.FileDelete")
 def test_sftp_remove_delegates_to_filedelete(mock_rm):
     t1 = _stub_target("h1")
     hg = HostsGroup([t1])
@@ -396,7 +396,7 @@ def test_sftp_remove_delegates_to_filedelete(mock_rm):
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_reboot_runs_commands_and_reconnects(mock_run):
     """Non-empty reboot dict triggers run + per-host reconnect."""
     t1 = _stub_target("h1", transactional=True)
@@ -438,7 +438,7 @@ def test_update_lock_logs_other_user_comment(caplog):
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_uninstall_runs_and_unlocks(mock_run):
     t1 = _stub_target("h1")
     t1.doer.return_value = _doer_dict(command="zypper rm pkg", reboot="")
@@ -449,7 +449,7 @@ def test_perform_uninstall_runs_and_unlocks(mock_run):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_uninstall_unlocks_on_error(mock_run):
     t1 = _stub_target("h1")
     t1.doer.return_value = _doer_dict(command="zypper rm pkg", reboot="")
@@ -460,7 +460,7 @@ def test_perform_uninstall_unlocks_on_error(mock_run):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_uninstall_transactional_triggers_reboot(mock_run):
     t1 = _stub_target("h1", transactional=True)
     t1.doer.return_value = _doer_dict(
@@ -479,7 +479,7 @@ def test_perform_uninstall_transactional_triggers_reboot(mock_run):
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_prepare_runs_per_package_command(mock_run):
     """``perform_prepare`` runs the command-template once per package."""
     t1 = _stub_target("h1")
@@ -495,7 +495,7 @@ def test_perform_prepare_runs_per_package_command(mock_run):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_prepare_filters_branding_upstream(mock_run):
     """The hard-coded ``branding-upstream`` name is excluded from per-pkg cmds."""
     t1 = _stub_target("h1")
@@ -515,7 +515,7 @@ def test_perform_prepare_filters_branding_upstream(mock_run):
     assert len(per_pkg_calls) == 2
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_prepare_aborts_on_set_repo_error(mock_run, caplog):
     """``set_repo`` failure (non-empty ``lasterr``) logs critical and returns early."""
     t1 = _stub_target("h1")
@@ -544,7 +544,7 @@ def test_perform_prepare_aborts_on_set_repo_error(mock_run, caplog):
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
     """The list_command output is parsed and the newest version is chosen."""
     t1 = _stub_target("h1")
@@ -566,7 +566,7 @@ def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_downgrade_unlocks_on_error(mock_run):
     t1 = _stub_target("h1")
     t1.lastout.return_value = ""
@@ -587,7 +587,7 @@ def test_perform_downgrade_unlocks_on_error(mock_run):
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
     """``noprepare`` skips prepare; ``noscript`` skips Pre/Post/Compare scripts."""
     t1 = _stub_target("h1")
@@ -606,7 +606,7 @@ def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
     t1.unlock.assert_called()
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
     """Default flow runs Pre, Post and Compare scripts when not in auto mode."""
     from mtui.update_workflow.hooks import CompareScript, PostScript, PreScript
@@ -638,7 +638,7 @@ def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
     assert CompareScript in script_classes_called
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_update_unlocks_when_run_fails(mock_run):
     t1 = _stub_target("h1")
     t1.packages = {}
@@ -656,7 +656,7 @@ def test_perform_update_unlocks_when_run_fails(mock_run):
 
 
 @patch.object(HostsGroup, "_fanout_set_repo")
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
     """``perform_update`` fans out set_repo('add') first, then ('remove')."""
     t1 = _stub_target("h1")
@@ -678,7 +678,7 @@ def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
 
 
 @patch.object(HostsGroup, "_fanout_set_repo")
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_update_removes_repos_even_when_run_fails(mock_run, mock_fanout):
     """Repo cleanup runs even when the updater command itself raises."""
     t1 = _stub_target("h1")
@@ -704,7 +704,7 @@ def test_perform_update_removes_repos_even_when_run_fails(mock_run, mock_fanout)
 # ---------------------------------------------------------------------------
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_report_history_with_events_uses_grep(mock_run):
     t1 = _stub_target("h1")
     sink = MagicMock()
@@ -716,7 +716,7 @@ def test_report_history_with_events_uses_grep(mock_run):
     t1.reporter.history.assert_called_once_with(sink)
 
 
-@patch("mtui.target.hostgroup.RunCommand")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_report_history_without_events_uses_tail(mock_run):
     t1 = _stub_target("h1")
     sink = MagicMock()

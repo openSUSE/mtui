@@ -17,7 +17,7 @@ import re
 from logging import getLogger
 from typing import TYPE_CHECKING, final
 
-from ..types.rpmver import RPMVersion
+from ...types.rpmver import RPMVersion
 
 if TYPE_CHECKING:
     from .target import Target

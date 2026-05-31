@@ -2,8 +2,8 @@
 
 from typing import final
 
-from ..target import Target
-from ..target.hostgroup import HostsGroup
+from ..hosts.target import Target
+from ..hosts.target.hostgroup import HostsGroup
 from ..types import Product, RequestReviewID
 from .metadata_parsers import JSONParser, ReducedMetadataParser, reporepoparse
 from .testreport import TestReport

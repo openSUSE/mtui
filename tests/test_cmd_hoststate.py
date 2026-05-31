@@ -6,7 +6,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock
 
 from mtui.commands.hoststate import HostState
-from mtui.target.hostgroup import HostsGroup
+from mtui.hosts.target.hostgroup import HostsGroup
 from mtui.types import ExecutionMode
 
 

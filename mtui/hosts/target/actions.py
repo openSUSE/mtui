@@ -12,8 +12,8 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from ..cli.term import prompt_user
-from ..types import ExecutionMode
+from ...cli.term import prompt_user
+from ...types import ExecutionMode
 from . import Target
 
 

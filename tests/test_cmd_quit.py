@@ -6,7 +6,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.quit import Quit
-from mtui.target.hostgroup import HostsGroup
+from mtui.hosts.target.hostgroup import HostsGroup
 
 
 def _make_target(hostname):

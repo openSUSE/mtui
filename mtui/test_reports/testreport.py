@@ -18,13 +18,13 @@ from traceback import format_exc
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..hosts.refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
+from ..hosts.target import Target, TargetLockedError
+from ..hosts.target.hostgroup import HostsGroup
 from ..support.config import Config
 from ..support.exceptions import InvalidGiteaHashError, UpdateError
 from ..support.fileops import ensure_dir_exists
 from ..support.messages import MetadataNotLoadedError
 from ..support.paths import scripts_path
-from ..target import Target, TargetLockedError
-from ..target.hostgroup import HostsGroup
 from ..types import OpenQAResults, Product, TargetMeta
 from .svn_io import (
     TemplateFormatError,

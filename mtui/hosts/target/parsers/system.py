@@ -2,9 +2,9 @@
 
 from logging import getLogger
 
-from ...hosts.connection import Connection
-from ...types import Product
-from ...types.systems import System
+from ....types import Product
+from ....types.systems import System
+from ...connection import Connection
 from . import product
 
 logger = getLogger("mtui.targer.parsers.system")

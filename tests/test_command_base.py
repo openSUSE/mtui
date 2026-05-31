@@ -7,8 +7,8 @@ import pytest
 
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.commands._command import Command
+from mtui.hosts.target.hostgroup import HostsGroup
 from mtui.support.messages import HostIsNotConnectedError
-from mtui.target.hostgroup import HostsGroup
 
 
 # Create a concrete subclass for testing

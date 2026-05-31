@@ -1,4 +1,4 @@
-"""Behaviour tests for ``mtui.target.actions``.
+"""Behaviour tests for ``mtui.hosts.target.actions``.
 
 The module fans worker callables out across a host group via a
 ``ThreadPoolExecutor``. The contract these tests pin:
@@ -25,7 +25,7 @@ import pytest
 
 def test_threaded_target_group_run_propagates_worker_exception():
     """A ``FileDelete`` worker that raises must propagate to ``run()``."""
-    from mtui.target.actions import FileDelete
+    from mtui.hosts.target.actions import FileDelete
 
     target = MagicMock()
     target.hostname = "h1"
@@ -38,7 +38,7 @@ def test_threaded_target_group_run_propagates_worker_exception():
 
 def test_run_command_run_propagates_worker_exception():
     """A parallel ``Target.run`` failure must propagate to ``RunCommand.run()``."""
-    from mtui.target.actions import RunCommand
+    from mtui.hosts.target.actions import RunCommand
     from mtui.types import ExecutionMode
 
     target = MagicMock()
@@ -53,7 +53,7 @@ def test_run_command_run_propagates_worker_exception():
 
 def test_run_parallel_no_work_is_noop():
     """``run_parallel([])`` must not allocate an executor."""
-    from mtui.target.actions import run_parallel
+    from mtui.hosts.target.actions import run_parallel
 
     # Should simply return; no exception, no thread spawned.
     run_parallel([])
@@ -61,7 +61,7 @@ def test_run_parallel_no_work_is_noop():
 
 def test_run_parallel_runs_each_callable_once():
     """Each ``(callable, args)`` pair runs exactly once with the given args."""
-    from mtui.target.actions import run_parallel
+    from mtui.hosts.target.actions import run_parallel
 
     a = MagicMock()
     b = MagicMock()
@@ -72,7 +72,7 @@ def test_run_parallel_runs_each_callable_once():
 
 def test_run_command_serial_runs_sequentially_after_prompt():
     """Serial-mode hosts skip the pool and run one-at-a-time after a prompt."""
-    from mtui.target.actions import RunCommand
+    from mtui.hosts.target.actions import RunCommand
     from mtui.types import ExecutionMode
 
     t1 = MagicMock()
@@ -83,7 +83,7 @@ def test_run_command_serial_runs_sequentially_after_prompt():
     t2.mode = ExecutionMode.SERIAL
 
     cmd = RunCommand({"h1": t1, "h2": t2}, "echo hi")  # type: ignore[dict-item]  # ty: ignore[invalid-argument-type]
-    with patch("mtui.target.actions.prompt_user") as mock_prompt:
+    with patch("mtui.hosts.target.actions.prompt_user") as mock_prompt:
         cmd.run()
 
     # Each host was prompted before running, and ran exactly once.
@@ -102,7 +102,7 @@ def test_run_parallel_keyboard_interrupt_cancels_queued_work():
     cancelled rather than awaited, and the never-started callables
     inside the cancelled futures must not have run.
     """
-    from mtui.target.actions import run_parallel
+    from mtui.hosts.target.actions import run_parallel
 
     # ThreadPoolExecutor schedules submitted callables eagerly when
     # workers are available, so we can't rely on "queued but not
@@ -150,7 +150,7 @@ def test_run_parallel_emits_no_log_records(caplog):
     lines were dropped because they buried real diagnostics in noise on
     multi-host runs. A regression here would re-introduce that noise.
     """
-    from mtui.target.actions import run_parallel
+    from mtui.hosts.target.actions import run_parallel
 
     with caplog.at_level(logging.DEBUG, logger="mtui.target.actions"):
         run_parallel([(MagicMock(), ()), (MagicMock(), ())], desc="probe")
@@ -160,7 +160,7 @@ def test_run_parallel_emits_no_log_records(caplog):
 
 def test_tty_spinner_is_silent_when_stderr_not_a_tty(capsys):
     """``_TtySpinner`` must be a no-op when stderr is not a TTY (pytest case)."""
-    from mtui.target.actions import _TtySpinner
+    from mtui.hosts.target.actions import _TtySpinner
 
     s = _TtySpinner("anything")
     s.start()

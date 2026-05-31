@@ -4,7 +4,7 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import IO, Any
 
-from ..target.hostgroup import HostsGroup
+from ..hosts.target.hostgroup import HostsGroup
 from ..types import ExecutionMode, RPMVersion, System, TargetState
 from .colors import green, red, yellow
 
