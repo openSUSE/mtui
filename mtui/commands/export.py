@@ -5,7 +5,7 @@ from pathlib import Path
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices_filelist
-from ..connector.qem_dashboard import DashboardAutoOpenQA
+from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..support.misc import requires_update
 from ..types.filelist import FileList
 from ..update_workflow.export import AutoExport, KernelExport, ManualExport

@@ -1,11 +1,12 @@
 import responses
 
-from mtui.connector import qem_dashboard
-from mtui.connector.qem_dashboard import (
+from mtui.data_sources.qem_dashboard import (
     DashboardAutoOpenQA,
     QEMDashboardClient,
     QEMIncident,
 )
+from mtui.data_sources.qem_dashboard import client as _qem_client
+from mtui.data_sources.qem_dashboard import dashboard_openqa as _qem_dashboard_openqa
 from mtui.types import RequestReviewID
 
 API = "https://dashboard.example.com/api"
@@ -582,14 +583,14 @@ def test_get_passes_timeout_to_requests(monkeypatch):
         captured["kwargs"] = kwargs
         return _FakeResponse()
 
-    monkeypatch.setattr(qem_dashboard.requests, "get", _fake_get)
+    monkeypatch.setattr(_qem_client.requests, "get", _fake_get)
 
     client = QEMDashboardClient("https://dashboard.example.com/api")
     assert client.incident(123) == {"ok": True}
 
-    assert captured["kwargs"]["timeout"] == qem_dashboard._HTTP_TIMEOUT
+    assert captured["kwargs"]["timeout"] == _qem_client._HTTP_TIMEOUT
     # Sanity: the constant is a (connect, read) tuple of positive floats.
-    connect, read = qem_dashboard._HTTP_TIMEOUT
+    connect, read = _qem_client._HTTP_TIMEOUT
     assert connect > 0
     assert read > 0
 
@@ -599,7 +600,7 @@ def test_load_jobs_skips_timed_out_per_setting_future(monkeypatch, mock_config, 
     import time
 
     # Tighten the future timeout so the test runs fast.
-    monkeypatch.setattr(qem_dashboard, "_FUTURE_TIMEOUT", 0.05)
+    monkeypatch.setattr(_qem_dashboard_openqa, "_FUTURE_TIMEOUT", 0.05)
 
     dashboard = _make_dashboard(mock_config)
 
@@ -646,7 +647,7 @@ def test_load_jobs_top_level_settings_timeout_returns_empty(
     """If incident_settings hangs, _load_jobs returns [] without raising."""
     import time
 
-    monkeypatch.setattr(qem_dashboard, "_FUTURE_TIMEOUT", 0.05)
+    monkeypatch.setattr(_qem_dashboard_openqa, "_FUTURE_TIMEOUT", 0.05)
 
     dashboard = _make_dashboard(mock_config)
 

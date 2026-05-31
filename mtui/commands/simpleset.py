@@ -4,8 +4,8 @@ import logging
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
-from ..connector.qem_dashboard import DashboardAutoOpenQA
 from ..data_sources.openqa import KernelOpenQA
+from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..refhost import RefhostsFactory
 from ..support import messages
 from ..support.misc import requires_update
