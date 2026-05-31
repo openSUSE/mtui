@@ -2,7 +2,7 @@
 
 from contextlib import suppress
 
-from ..argparse import ArgumentParser
+from ..cli.argparse import ArgumentParser
 from . import Command
 
 

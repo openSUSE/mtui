@@ -2,7 +2,7 @@
 
 import concurrent.futures
 
-from ..completion import complete_choices
+from ..cli.completion import complete_choices
 from . import Command
 
 

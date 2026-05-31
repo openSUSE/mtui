@@ -1,6 +1,6 @@
 # TODO: Colorformater tests ?
 
-from mtui.colorlog import create_logger
+from mtui.cli.colors import create_logger
 
 
 def test_formatter_name():

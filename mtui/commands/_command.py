@@ -6,7 +6,7 @@ from argparse import Namespace, RawDescriptionHelpFormatter
 from logging import getLogger
 from typing import ClassVar
 
-from ..argparse import ArgumentParser
+from ..cli.argparse import ArgumentParser
 from ..support.messages import HostIsNotConnectedError
 from ..target.hostgroup import HostsGroup
 
@@ -35,7 +35,7 @@ class Command(ABC):
     #: Auto-populated registry of every concrete ``Command`` subclass that
     #: assigns ``command`` in its own class body. Mutated by
     #: ``__init_subclass__`` at class-creation time; consumers (notably
-    #: ``mtui.prompt.CommandPrompt``) iterate this dict to discover commands.
+    #: ``mtui.cli.prompt.CommandPrompt``) iterate this dict to discover commands.
     registry: ClassVar[dict[str, type["Command"]]] = {}
 
     __slots__ = [

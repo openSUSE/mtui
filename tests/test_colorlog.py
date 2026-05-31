@@ -1,12 +1,12 @@
-from mtui import colorctl, colorlog
+from mtui.cli import colors
 
 
 def test_create_logger(capsys):
     """Test create_logger."""
-    saved = colorctl.get_mode()
-    colorctl.set_mode("always")
+    saved = colors.get_mode()
+    colors.set_mode("always")
     try:
-        logger = colorlog.create_logger("test_logger", "DEBUG")
+        logger = colors.create_logger("test_logger", "DEBUG")
         logger.info("test info message")
         logger.debug("test debug message")
         logger.warning("test warning message")
@@ -31,4 +31,4 @@ def test_create_logger(capsys):
         # Check for debug message format
         assert "[tests.test_colorlog:test_create_logger]" in captured.err
     finally:
-        colorctl.set_mode(saved)
+        colors.set_mode(saved)

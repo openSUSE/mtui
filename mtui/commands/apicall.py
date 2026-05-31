@@ -11,8 +11,8 @@ from argparse import REMAINDER
 from logging import getLogger
 from typing import ClassVar, final
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
 from ..connector import OSC, Gitea
 from ..support.exceptions import GiteaError
 from ..support.misc import requires_update

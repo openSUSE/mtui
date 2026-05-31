@@ -4,10 +4,10 @@ import argparse
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from . import __version__
+from .. import __version__
+from ..support.misc import SUTParse
+from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 from .argparse import ArgumentParser
-from .support.misc import SUTParse
-from .types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 
 
 def _dep_version(name: str) -> str:

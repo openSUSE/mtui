@@ -2,10 +2,10 @@
 
 from typing import ClassVar
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
+from ..cli.term import page
 from ..support.misc import requires_update
-from ..term import page
 from . import Command
 
 

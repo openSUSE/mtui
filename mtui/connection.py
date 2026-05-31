@@ -22,8 +22,8 @@ from traceback import format_exc
 import paramiko
 from paramiko import Channel, SFTPClient, SFTPFile, SSHClient, SSHConfig
 
+from .cli.term import termsize
 from .support.messages import ReConnectFailed
-from .term import termsize
 
 logger = getLogger("mtui.connection")
 RETRIES: int = 5
@@ -120,7 +120,7 @@ class Connection:
                 loops back to wait for the command — matching the
                 long-standing Enter / Y default — and emits one WARNING
                 log line so the silence is observable. Wire a
-                :class:`mtui.prompter.Prompter`'s ``ask`` method here
+                :class:`mtui.cli.prompter.Prompter`'s ``ask`` method here
                 to surface a serialised, race-free prompt to the user
                 when multiple targets run a command in parallel.
 

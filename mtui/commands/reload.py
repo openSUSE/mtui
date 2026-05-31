@@ -2,8 +2,8 @@
 
 from logging import getLogger
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
 from . import Command
 
 logger = getLogger("mtui.commands.reload")

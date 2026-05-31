@@ -3,7 +3,7 @@
 import inspect
 import logging
 
-from .colorctl import colors_enabled
+from .mode import colors_enabled
 
 # ANSI color offsets (added to 30 to form the foreground color escape code).
 # Positions matter: only RED..BLUE are referenced, but the indexes determine
@@ -82,11 +82,11 @@ class ColorFormatter(logging.Formatter):
 
         Returns:
             A `(frame, function_name)` tuple for the first caller whose
-            module is not `logging`, `mtui.colorlog`, or `contextlib`,
-            or `None` if no such frame exists.
+            module is not `logging`, ``mtui.cli.colors.formatter``, or
+            ``contextlib``, or `None` if no such frame exists.
 
         """
-        skip_modules = {"logging", "mtui.colorlog", "contextlib"}
+        skip_modules = {"logging", "mtui.cli.colors.formatter", "contextlib"}
         for frame_info in inspect.getouterframes(inspect.currentframe()):
             module = inspect.getmodule(frame_info.frame)
             module_name = module.__name__ if module else ""

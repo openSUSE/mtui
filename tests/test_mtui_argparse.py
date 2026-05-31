@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui import argparse as mtui_argparse
-from mtui.argparse import ArgsParseFailureError, ArgumentParser
+from mtui.cli import argparse as mtui_argparse
+from mtui.cli.argparse import ArgsParseFailureError, ArgumentParser
 
 
 def _make_parser():

@@ -1,7 +1,7 @@
 """Runtime control over coloured output.
 
 Both the colour helpers in :mod:`mtui.utils` and the
-:class:`mtui.colorlog.ColorFormatter` consult :func:`colors_enabled` at
+:class:`mtui.cli.colors.ColorFormatter` consult :func:`colors_enabled` at
 call time, so the value of the ``--color`` flag (set by
 :func:`mtui.main.main`) and the ``NO_COLOR`` environment variable take
 effect for every output call without needing reimport.

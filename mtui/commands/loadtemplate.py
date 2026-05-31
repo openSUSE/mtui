@@ -1,9 +1,9 @@
 """The `load_template` command."""
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
+from ..cli.term import prompt_user
 from ..support.messages import TestReportNotLoadedError
-from ..term import prompt_user
 from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 from . import Command
 

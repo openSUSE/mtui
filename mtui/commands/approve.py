@@ -10,13 +10,13 @@ import subprocess
 from logging import getLogger
 from typing import final
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
+from ..cli.term import prompt_user
 from ..connector import OSC, Gitea
 from ..support.exceptions import GiteaError, InvalidGiteaHashError
 from ..support.misc import requires_update
 from ..template import TemplateFormatError, svn_commit_testreport
-from ..term import prompt_user
 from .apicall import BaseApiCall
 
 logger = getLogger("mtui.command.approve")

@@ -3,8 +3,8 @@
 from logging import getLogger
 from pathlib import Path
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices_filelist
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices_filelist
 from ..connector.qem_dashboard import DashboardAutoOpenQA
 from ..export import AutoExport, KernelExport, ManualExport
 from ..export.base import BaseExport

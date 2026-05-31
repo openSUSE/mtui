@@ -1,6 +1,6 @@
 from io import StringIO
 
-from mtui import display
+from mtui.cli import display
 from mtui.types import ExecutionMode, System
 
 

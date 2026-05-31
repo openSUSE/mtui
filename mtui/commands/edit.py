@@ -4,8 +4,8 @@ from logging import getLogger
 from os import getenv
 from subprocess import check_call
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices_filelist
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices_filelist
 from ..support.misc import requires_update
 from . import Command
 

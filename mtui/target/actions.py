@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from ..term import prompt_user
+from ..cli.term import prompt_user
 from ..types import ExecutionMode
 from . import Target
 

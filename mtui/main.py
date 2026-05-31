@@ -6,13 +6,13 @@ from argparse import Namespace
 from subprocess import CalledProcessError
 from typing import Literal
 
-from .argparse import ArgsParseFailureError
-from .args import get_parser
-from .colorctl import set_mode as set_color_mode
-from .colorlog import create_logger
-from .display import CommandPromptDisplay
-from .prompt import CommandPrompt
-from .prompter import Prompter
+from .cli.argparse import ArgsParseFailureError
+from .cli.args import get_parser
+from .cli.colors import create_logger
+from .cli.colors import set_mode as set_color_mode
+from .cli.display import CommandPromptDisplay
+from .cli.prompt import CommandPrompt
+from .cli.prompter import Prompter
 from .support.config import Config
 from .support.exceptions import MissingGiteaTokenError
 from .support.messages import MetadataNotLoadedError, SvnCheckoutInterruptedError

@@ -3,8 +3,8 @@
 from logging import getLogger
 from traceback import format_exc
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
 from ..support.messages import NoRefhostsDefinedError
 from ..support.misc import requires_update
 from ..target.locks import TargetLockedError

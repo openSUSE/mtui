@@ -17,11 +17,12 @@ if TYPE_CHECKING:
 
     from .prompter import Prompter
 
-from . import commands, notification
+from .. import commands
+from ..commands import Command, CommandAlreadyBoundError
+from ..support import messages
+from ..template.nulltestreport import NullTestReport
+from . import notification
 from .argparse import ArgsParseFailureError
-from .commands import Command, CommandAlreadyBoundError
-from .support import messages
-from .template.nulltestreport import NullTestReport
 
 logger = getLogger("mtui.prompt")
 
@@ -108,7 +109,7 @@ class CommandPrompt(cmd.Cmd):
             log: The logger instance.
             sys: The sys module.
             display_factory: A factory for creating display objects.
-            prompter: Optional :class:`mtui.prompter.Prompter` forwarded
+            prompter: Optional :class:`mtui.cli.prompter.Prompter` forwarded
                 to every constructed :class:`TestReport` so that SSH
                 command-timeout prompts surface to the user with
                 cross-thread serialisation. ``None`` (the default)

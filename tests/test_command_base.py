@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.argparse import ArgsParseFailureError
+from mtui.cli.argparse import ArgsParseFailureError
 from mtui.commands._command import Command
 from mtui.support.messages import HostIsNotConnectedError
 from mtui.target.hostgroup import HostsGroup

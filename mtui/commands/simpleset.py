@@ -2,8 +2,8 @@
 
 import logging
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
 from ..connector.openqa import KernelOpenQA
 from ..connector.qem_dashboard import DashboardAutoOpenQA
 from ..refhost import RefhostsFactory

@@ -4,8 +4,8 @@ import concurrent.futures
 import readline
 from contextlib import suppress
 
-from ..argparse import ArgumentParser
-from ..completion import complete_choices
+from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices
 from . import Command
 
 
