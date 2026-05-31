@@ -2,8 +2,8 @@
 
 from string import Template
 
-from ..messages import MissingUpdaterError
-from ..misc import DictWithInjections
+from ..support.messages import MissingUpdaterError
+from ..support.misc import DictWithInjections
 
 #: A dictionary of command templates for updating packages using yum.
 yum_update = {

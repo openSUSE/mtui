@@ -13,8 +13,8 @@ from typing import final
 from ..argparse import ArgumentParser
 from ..completion import complete_choices
 from ..connector import OSC, Gitea
-from ..exceptions import GiteaError, InvalidGiteaHashError
-from ..misc import requires_update
+from ..support.exceptions import GiteaError, InvalidGiteaHashError
+from ..support.misc import requires_update
 from ..template import TemplateFormatError, svn_commit_testreport
 from ..term import prompt_user
 from .apicall import BaseApiCall

@@ -3,8 +3,8 @@
 from logging import getLogger
 from subprocess import check_call
 
-from mtui.commands import Command
-from mtui.misc import requires_update
+from ..support.misc import requires_update
+from . import Command
 
 logger = getLogger("mtui.command.checkout")
 

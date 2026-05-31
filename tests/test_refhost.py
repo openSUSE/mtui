@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui import refhost
-from mtui.messages import InvalidLocationError
+from mtui.support.messages import InvalidLocationError
 
 REFHOSTS_FIXTURE = Path(__file__).parent / "fixtures" / "refhosts.yml"
 

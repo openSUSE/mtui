@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.commands.simplelists import ListHosts, ListLocks, ListMetadata
-from mtui.messages import TestReportNotLoadedError
+from mtui.support.messages import TestReportNotLoadedError
 
 
 def _prompt() -> MagicMock:

@@ -2,11 +2,11 @@
 
 from typing import ClassVar, final
 
-from .. import messages
 from ..argparse import ArgumentParser
 from ..colors import blue, green, red, yellow
 from ..completion import complete_choices
-from ..misc import requires_update
+from ..support import messages
+from ..support.misc import requires_update
 from . import Command
 
 

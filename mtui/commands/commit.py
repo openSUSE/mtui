@@ -3,10 +3,10 @@
 from argparse import REMAINDER
 from logging import getLogger
 
-from mtui.commands import Command
-from mtui.completion import complete_choices
-from mtui.misc import requires_update
-from mtui.template import svn_commit_testreport
+from ..completion import complete_choices
+from ..support.misc import requires_update
+from ..template import svn_commit_testreport
+from . import Command
 
 logger = getLogger("mtui.command.commit")
 

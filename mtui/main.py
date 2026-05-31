@@ -10,13 +10,13 @@ from .argparse import ArgsParseFailureError
 from .args import get_parser
 from .colorctl import set_mode as set_color_mode
 from .colorlog import create_logger
-from .config import Config
 from .display import CommandPromptDisplay
-from .exceptions import MissingGiteaTokenError
-from .messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
 from .prompt import CommandPrompt
 from .prompter import Prompter
-from .systemcheck import detect_system
+from .support.config import Config
+from .support.exceptions import MissingGiteaTokenError
+from .support.messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
+from .support.systemcheck import detect_system
 from .template.nulltestreport import NullTestReport
 
 

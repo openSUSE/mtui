@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.commands.listpackages import ListPackages
-from mtui.messages import MissingPackagesError, TestReportNotLoadedError
+from mtui.support.messages import MissingPackagesError, TestReportNotLoadedError
 
 
 def _prompt() -> MagicMock:

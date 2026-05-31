@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from mtui.messages import MissingInstallerError, MissingUninstallerError
+from mtui.support.messages import MissingInstallerError, MissingUninstallerError
 from mtui.target.operation import (
     InstallOperation,
     Operation,

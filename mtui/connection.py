@@ -22,7 +22,7 @@ from traceback import format_exc
 import paramiko
 from paramiko import Channel, SFTPClient, SFTPFile, SSHClient, SSHConfig
 
-from .messages import ReConnectFailed
+from .support.messages import ReConnectFailed
 from .term import termsize
 
 logger = getLogger("mtui.connection")

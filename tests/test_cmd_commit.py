@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.commands.commit import Commit
-from mtui.messages import TestReportNotLoadedError
+from mtui.support.messages import TestReportNotLoadedError
 
 
 def _prompt(tmp: Path) -> MagicMock:

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.commands.showdiff import AnalyzeDiff, ShowDiff
-from mtui.messages import TestReportNotLoadedError
+from mtui.support.messages import TestReportNotLoadedError
 
 
 def _prompt(report_wd) -> MagicMock:

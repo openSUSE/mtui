@@ -17,11 +17,10 @@ if TYPE_CHECKING:
 
     from .prompter import Prompter
 
-from mtui import notification
-
-from . import commands, messages
+from . import commands, notification
 from .argparse import ArgsParseFailureError
 from .commands import Command, CommandAlreadyBoundError
+from .support import messages
 from .template.nulltestreport import NullTestReport
 
 logger = getLogger("mtui.prompt")

@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from mtui import config
-from mtui.messages import InvalidLocationError
 from mtui.refhost import RefhostsResolveFailedError
+from mtui.support import config
+from mtui.support.messages import InvalidLocationError
 
 
 class MockRefhosts:

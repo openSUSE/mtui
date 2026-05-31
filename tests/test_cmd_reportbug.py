@@ -8,8 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mtui import messages
 from mtui.commands.reportbug import ReportBug
+from mtui.support import messages
 
 
 def _prompt() -> MagicMock:

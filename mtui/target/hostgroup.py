@@ -7,9 +7,9 @@ from logging import getLogger
 from pathlib import Path
 from typing import Self, final
 
-from ..exceptions import UpdateError
 from ..hooks import CompareScript, PostScript, PreScript
-from ..messages import (
+from ..support.exceptions import UpdateError
+from ..support.messages import (
     HostIsNotConnectedError,
     MissingDowngraderError,
     MissingPreparerError,

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from logging import getLogger
 
 from ..colors import yellow
-from ..exceptions import UpdateError
+from ..support.exceptions import UpdateError
 
 logger = getLogger("mtui.checks.update")
 

@@ -5,7 +5,7 @@ from shlex import join as shlex_join
 from shlex import quote
 from subprocess import CalledProcessError, check_call
 
-from ..config import Config
+from ..support.config import Config
 from ..types.enums import RequestKind
 from ..types.rrid import RequestReviewID
 

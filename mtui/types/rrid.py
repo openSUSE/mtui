@@ -8,7 +8,7 @@ from .enums import RequestKind
 
 
 def apply_parser(f, x, cnt):
-    from ..exceptions import (
+    from ..support.exceptions import (
         ComponentParseError,
         InternalParseError,
         MissingComponentError,
@@ -154,7 +154,7 @@ class RequestReviewID:
             check_type(int),
         ]
 
-        from ..exceptions import TooManyComponentsError
+        from ..support.exceptions import TooManyComponentsError
 
         TooManyComponentsError.raise_if(xs, 4)
 

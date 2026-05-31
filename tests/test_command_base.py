@@ -7,7 +7,7 @@ import pytest
 
 from mtui.argparse import ArgsParseFailureError
 from mtui.commands._command import Command
-from mtui.messages import HostIsNotConnectedError
+from mtui.support.messages import HostIsNotConnectedError
 from mtui.target.hostgroup import HostsGroup
 
 

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from logging import getLogger
 from urllib.request import urlretrieve
 
-from mtui.messages import ResultsMissingError
+from ..support.messages import ResultsMissingError
 
 logger = getLogger("mtui.export.downloader")
 

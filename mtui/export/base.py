@@ -4,10 +4,9 @@ from abc import ABC, abstractmethod
 from logging import getLogger
 from pathlib import Path
 
-from mtui.fileops import timestamp
-from mtui.systemcheck import system_info
-from mtui.term import prompt_user
-
+from ..support.fileops import timestamp
+from ..support.systemcheck import system_info
+from ..term import prompt_user
 from ..types import FileList, OpenQAResults
 
 logger = getLogger("mtui.export.base")

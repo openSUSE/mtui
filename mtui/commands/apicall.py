@@ -12,12 +12,12 @@ from logging import getLogger
 from typing import ClassVar, final
 
 from ..argparse import ArgumentParser
-from ..commands import Command
 from ..completion import complete_choices
 from ..connector import OSC, Gitea
-from ..exceptions import GiteaError
-from ..misc import requires_update
+from ..support.exceptions import GiteaError
+from ..support.misc import requires_update
 from ..types import RequestKind
+from . import Command
 
 logger = getLogger("mtui.command.apicalls")
 

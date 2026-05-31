@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.commands.downgrade import Downgrade
-from mtui.messages import NoRefhostsDefinedError, TestReportNotLoadedError
+from mtui.support.messages import NoRefhostsDefinedError, TestReportNotLoadedError
 from mtui.target.hostgroup import HostsGroup
 
 

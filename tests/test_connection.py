@@ -516,7 +516,7 @@ def test_run_command_retries_then_raises_reconnect_failed(
     mock_ssh_client, mock_ssh_config, mock_path, monkeypatch
 ):
     """If ``__run_command`` keeps failing, ``ReConnectFailed`` is raised."""
-    from mtui.messages import ReConnectFailed
+    from mtui.support.messages import ReConnectFailed
 
     conn = Connection("h", 22, 300)
     # Force ``new_session`` to always return None so __run_command yields None.
@@ -598,7 +598,7 @@ def test_sftp_open_failure_returns_none(
     conn = Connection("h", 22, 300)
     # Force is_active False so reconnect loop runs once and fails.
     mock_ssh_client._transport.is_active.return_value = False
-    from mtui.messages import ReConnectFailed
+    from mtui.support.messages import ReConnectFailed
 
     monkeypatch.setattr(Connection, "reconnect", lambda *_args, **_kw: None)
     with pytest.raises(ReConnectFailed):

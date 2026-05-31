@@ -14,9 +14,9 @@ from os import getenv
 from pathlib import Path
 from typing import Any
 
-from .datafiles import terms_path
+from ..refhost import RefhostsFactory, RefhostsResolveFailedError
 from .messages import InvalidLocationError
-from .refhost import RefhostsFactory, RefhostsResolveFailedError
+from .paths import terms_path
 
 logger = getLogger("mtui.config")
 

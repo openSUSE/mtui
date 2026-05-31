@@ -84,7 +84,7 @@ def test_run_command_exec_raises_closes_session_and_retries(
     the session and return None; ``run`` then retries via ``reconnect`` and
     eventually raises ``ReConnectFailed`` after ``RETRIES`` attempts.
     """
-    from mtui.messages import ReConnectFailed
+    from mtui.support.messages import ReConnectFailed
 
     conn = Connection("h", 22, 300)
     sess = MagicMock()
@@ -233,7 +233,7 @@ def test_sftp_open_attribute_error_returns_none(
     """An ``AttributeError`` from ``open_sftp`` makes ``__sftp_open`` return
     None; ``__sftp_reconnect`` then retries (we exhaust retries → raise).
     """
-    from mtui.messages import ReConnectFailed
+    from mtui.support.messages import ReConnectFailed
 
     mock_ssh_client.open_sftp.side_effect = AttributeError("gone")
     conn = Connection("h", 22, 300)

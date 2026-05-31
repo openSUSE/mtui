@@ -2,8 +2,8 @@
 
 from contextlib import suppress
 
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
+from ..argparse import ArgumentParser
+from . import Command
 
 
 class Config(Command):

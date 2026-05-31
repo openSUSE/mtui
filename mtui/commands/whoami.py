@@ -2,7 +2,7 @@
 
 import os
 
-from mtui.commands import Command
+from . import Command
 
 
 class Whoami(Command):

@@ -15,7 +15,7 @@ from mtui.export.downloader import (
     download_logs,
     downloader,
 )
-from mtui.messages import ResultsMissingError
+from mtui.support.messages import ResultsMissingError
 
 # ---------------------------------------------------------------------------
 # _subdl

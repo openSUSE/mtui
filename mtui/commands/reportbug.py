@@ -5,10 +5,10 @@ import subprocess
 from logging import getLogger
 from time import sleep
 
-from mtui import messages
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
-from mtui.completion import complete_choices
+from ..argparse import ArgumentParser
+from ..completion import complete_choices
+from ..support import messages
+from . import Command
 
 logger = getLogger("mtui.commands.reportbug")
 

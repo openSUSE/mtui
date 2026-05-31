@@ -2,8 +2,8 @@
 
 from string import Template
 
-from ..messages import MissingPreparerError
-from ..misc import DictWithInjections
+from ..support.messages import MissingPreparerError
+from ..support.misc import DictWithInjections
 
 
 def zypper_prepare(force: bool = False, testing: bool = False) -> dict[str, Template]:

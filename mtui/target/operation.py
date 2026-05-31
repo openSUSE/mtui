@@ -20,7 +20,7 @@ from collections.abc import Callable
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, ClassVar, final
 
-from ..messages import MissingInstallerError, MissingUninstallerError
+from ..support.messages import MissingInstallerError, MissingUninstallerError
 from . import Target
 
 if TYPE_CHECKING:

@@ -4,8 +4,8 @@ from argparse import REMAINDER
 from logging import getLogger
 from subprocess import check_call
 
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
+from ..argparse import ArgumentParser
+from . import Command
 
 logger = getLogger("mtui.commands.lrun")
 

@@ -5,8 +5,8 @@ from logging import getLogger
 from os.path import join
 from pathlib import Path
 
-from ..fileops import chdir, ensure_dir_exists
-from ..messages import SvnCheckoutFailed, SvnCheckoutInterruptedError
+from ..support.fileops import chdir, ensure_dir_exists
+from ..support.messages import SvnCheckoutFailed, SvnCheckoutInterruptedError
 from ..types import RequestReviewID
 
 logger = getLogger("mtui.template")

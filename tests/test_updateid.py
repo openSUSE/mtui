@@ -23,12 +23,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mtui.exceptions import (
+from mtui.support.exceptions import (
     FailedGiteaCallError,
     InvalidGiteaHashError,
     MissingGiteaTokenError,
 )
-from mtui.messages import TestReportNotLoadedError
+from mtui.support.messages import TestReportNotLoadedError
 from mtui.template import TemplateIOError
 from mtui.types.updateid import AutoOBSUpdateID
 

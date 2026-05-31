@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.commands.approve import Approve
-from mtui.messages import TestReportNotLoadedError
+from mtui.support.messages import TestReportNotLoadedError
 from mtui.template import TemplateFormatError
 from mtui.types import RequestKind, RequestReviewID
 
