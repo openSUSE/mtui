@@ -7,7 +7,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any
 
-from ..types import FileList
+from ...types import FileList
 from .base import BaseExport
 
 logger = getLogger("mtui.export.manual")

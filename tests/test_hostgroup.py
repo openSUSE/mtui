@@ -609,7 +609,7 @@ def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
 @patch("mtui.target.hostgroup.RunCommand")
 def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
     """Default flow runs Pre, Post and Compare scripts when not in auto mode."""
-    from mtui.hooks import CompareScript, PostScript, PreScript
+    from mtui.update_workflow.hooks import CompareScript, PostScript, PreScript
 
     t1 = _stub_target("h1")
     t1.packages = {}

@@ -1,11 +1,11 @@
-"""Tests for ``mtui.export.manual.ManualExport``."""
+"""Tests for ``mtui.update_workflow.export.manual.ManualExport``."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from mtui.export.manual import ManualExport
+from mtui.update_workflow.export.manual import ManualExport
 
 
 def _config(tmp_path: Path) -> MagicMock:

@@ -44,7 +44,7 @@ def test_export_manual_branch_instantiates_manual_exporter(mock_config):
 
     # ManualExport must be a real class so the `issubclass()` check inside
     # `Export.__call__` returns True. Subclass the real one and stub `run`.
-    from mtui.export.manual import ManualExport as RealManual
+    from mtui.update_workflow.export.manual import ManualExport as RealManual
 
     class StubManual(RealManual):
         def __init__(self, *a, **kw):  # noqa: D401 - test stub
@@ -70,7 +70,7 @@ def test_export_logs_exception_on_filelist_failure(mock_config, caplog):
     args = Namespace(filename=Path("/nonexistent"), hosts=None, force=False)
     caplog.set_level(logging.ERROR, logger="mtui.commands.export")
 
-    from mtui.export.manual import ManualExport as RealManual
+    from mtui.update_workflow.export.manual import ManualExport as RealManual
 
     class StubManual(RealManual):
         def __init__(self, *a, **kw):

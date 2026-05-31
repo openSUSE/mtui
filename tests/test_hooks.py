@@ -1,7 +1,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from mtui import hooks
+from mtui.update_workflow import hooks
 
 
 class MockTestReport:

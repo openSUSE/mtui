@@ -3,9 +3,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.export import Export
-from mtui.export.auto import AutoExport
-from mtui.export.base import BaseExport
 from mtui.types import FileList, OpenQAResults, RequestReviewID, URLs
+from mtui.update_workflow.export.auto import AutoExport
+from mtui.update_workflow.export.base import BaseExport
 
 
 class ExportProbe(BaseExport):
