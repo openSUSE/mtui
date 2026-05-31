@@ -21,8 +21,9 @@ def test_messages():
         == "Svn checkout of 'test_uri' interrupted"
     )
     assert (
-        str(messages.SvnCheckoutFailed("test_uri", "test_url"))
-        == "Svn checkout of 'test_uri' Failed\n Please check test_url"
+        str(messages.SvnCheckoutFailed("SUSE:SLFO:1.2:9999", "test_url"))
+        == "Test report for SUSE:SLFO:1.2:9999 does not exist.\n"
+        "Please check test_url for potential issues."
     )
     assert (
         str(messages.ConnectingTargetFailedMessage("test_host", "test_reason"))

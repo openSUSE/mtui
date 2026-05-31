@@ -17,6 +17,7 @@ from .messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
 from .prompt import CommandPrompt
 from .prompter import Prompter
 from .systemcheck import detect_system
+from .template.nulltestreport import NullTestReport
 
 
 def main() -> int:
@@ -96,6 +97,12 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
             return 1
         except MissingGiteaTokenError:
             # _checkout already logged a user-facing message; just exit.
+            return 1
+
+        # An explicitly requested update that could not be loaded falls back
+        # to a NullTestReport. The clear "does not exist" message was already
+        # logged; quit rather than dropping into an empty interactive session.
+        if isinstance(prompt.metadata, NullTestReport):
             return 1
 
     if args.sut:
