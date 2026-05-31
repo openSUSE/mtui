@@ -17,20 +17,20 @@ from pathlib import Path
 from traceback import format_exc
 from typing import TYPE_CHECKING, Any, Literal
 
-from ..config import Config
-from ..datafiles import scripts_path
-from ..exceptions import InvalidGiteaHashError, UpdateError
-from ..fileops import ensure_dir_exists
-from ..messages import MetadataNotLoadedError
 from ..refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
+from ..support.config import Config
+from ..support.exceptions import InvalidGiteaHashError, UpdateError
+from ..support.fileops import ensure_dir_exists
+from ..support.messages import MetadataNotLoadedError
+from ..support.paths import scripts_path
 from ..target import Target, TargetLockedError
 from ..target.hostgroup import HostsGroup
-from ..template import (
+from ..types import OpenQAResults, Product, TargetMeta
+from . import (
     TemplateFormatError,
     TemplateIOError,
     TestReportAlreadyLoadedError,
 )
-from ..types import OpenQAResults, Product, TargetMeta
 
 if TYPE_CHECKING:
     from ..prompter import Prompter

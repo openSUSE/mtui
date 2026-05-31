@@ -5,9 +5,9 @@ from glob import glob
 from logging import getLogger
 from pathlib import Path
 
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
-from mtui.completion import complete_choices_filelist
+from ..argparse import ArgumentParser
+from ..completion import complete_choices_filelist
+from . import Command
 
 logger = getLogger("mtui.command.sftp")
 

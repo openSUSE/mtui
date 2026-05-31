@@ -8,9 +8,9 @@ from logging import getLogger
 from pathlib import Path
 from typing import Self
 
-from ..config import Config
 from ..connection import Connection
-from ..fileops import timestamp
+from ..support.config import Config
+from ..support.fileops import timestamp
 
 logger = getLogger("mtui.target.locks")
 

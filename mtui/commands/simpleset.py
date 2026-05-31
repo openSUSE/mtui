@@ -2,14 +2,14 @@
 
 import logging
 
-from mtui import messages
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
-from mtui.completion import complete_choices
-from mtui.connector.openqa import KernelOpenQA
-from mtui.connector.qem_dashboard import DashboardAutoOpenQA
-from mtui.misc import requires_update
-from mtui.refhost import RefhostsFactory
+from ..argparse import ArgumentParser
+from ..completion import complete_choices
+from ..connector.openqa import KernelOpenQA
+from ..connector.qem_dashboard import DashboardAutoOpenQA
+from ..refhost import RefhostsFactory
+from ..support import messages
+from ..support.misc import requires_update
+from . import Command
 
 logger = logging.getLogger("mtui.commands.simplesets")
 

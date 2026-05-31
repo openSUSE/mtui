@@ -2,7 +2,7 @@ from random import randint
 
 import pytest
 
-from mtui.exceptions import (
+from mtui.support.exceptions import (
     ComponentParseError,
     MissingComponentError,
     TooManyComponentsError,

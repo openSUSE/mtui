@@ -18,8 +18,8 @@ from urllib3.exceptions import InsecureRequestWarning
 
 # The 'Config' object has dynamically generated attributes, so we must
 # ignore type checker warnings when accessing them.
-from ..config import Config
-from ..exceptions import (
+from ..support.config import Config
+from ..support.exceptions import (
     FailedGiteaCallError,
     GiteaAssignInvalidError,
     GiteaNoReviewError,

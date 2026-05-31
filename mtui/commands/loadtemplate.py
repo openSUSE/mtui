@@ -1,9 +1,8 @@
 """The `load_template` command."""
 
-from mtui.argparse import ArgumentParser
-
+from ..argparse import ArgumentParser
 from ..completion import complete_choices
-from ..messages import TestReportNotLoadedError
+from ..support.messages import TestReportNotLoadedError
 from ..term import prompt_user
 from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 from . import Command

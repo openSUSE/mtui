@@ -1,6 +1,6 @@
 from unittest.mock import mock_open
 
-from mtui import systemcheck
+from mtui.support import systemcheck
 
 
 def test_detect_system(monkeypatch):

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.commands.products import ListProducts
-from mtui.messages import HostIsNotConnectedError
+from mtui.support.messages import HostIsNotConnectedError
 
 
 def _prompt() -> MagicMock:

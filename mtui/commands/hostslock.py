@@ -2,8 +2,8 @@
 
 from argparse import REMAINDER
 
-from mtui.commands import Command
-from mtui.completion import complete_choices
+from ..completion import complete_choices
+from . import Command
 
 
 class HostLock(Command):

@@ -5,8 +5,8 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
-from mtui.exceptions import UpdateError
-from mtui.messages import HostIsNotConnectedError
+from mtui.support.exceptions import UpdateError
+from mtui.support.messages import HostIsNotConnectedError
 from mtui.target.hostgroup import HostsGroup
 from mtui.target.locks import TargetLockedError
 

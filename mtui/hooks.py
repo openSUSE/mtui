@@ -12,7 +12,7 @@ from pathlib import Path
 from traceback import format_exc
 from typing import TYPE_CHECKING, Literal
 
-from . import messages
+from .support import messages
 
 if TYPE_CHECKING:
     from .target import Target

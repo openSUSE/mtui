@@ -10,16 +10,15 @@ from typing import TYPE_CHECKING, final
 if TYPE_CHECKING:
     from ..prompter import Prompter
 
-from mtui.exceptions import (
+from ..connector.openqa import KernelOpenQA
+from ..connector.qem_dashboard import DashboardAutoOpenQA, QEMIncident
+from ..support.config import Config
+from ..support.exceptions import (
     FailedGiteaCallError,
     InvalidGiteaHashError,
     MissingGiteaTokenError,
 )
-
-from ..config import Config
-from ..connector.openqa import KernelOpenQA
-from ..connector.qem_dashboard import DashboardAutoOpenQA, QEMIncident
-from ..messages import (
+from ..support.messages import (
     SvnCheckoutFailed,
     SvnCheckoutInterruptedError,
     TestReportNotLoadedError,

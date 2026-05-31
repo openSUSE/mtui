@@ -9,8 +9,8 @@ from ..parsemetajson import JSONParser
 from ..repoparse import gitrepoparse, reporepoparse, slrepoparse
 from ..target import Target
 from ..target.hostgroup import HostsGroup
-from ..template.testreport import TestReport
 from ..types import Product, RequestReviewID
+from .testreport import TestReport
 
 logger = getLogger("mtui.template.sltestreport")
 

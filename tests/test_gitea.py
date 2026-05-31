@@ -7,7 +7,7 @@ import pytest
 import responses
 
 from mtui.connector.gitea import Comment, Gitea
-from mtui.exceptions import (
+from mtui.support.exceptions import (
     FailedGiteaCallError,
     GiteaAssignInvalidError,
     GiteaNoReviewError,

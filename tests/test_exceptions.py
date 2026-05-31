@@ -1,6 +1,6 @@
 import pytest
 
-from mtui import exceptions
+from mtui.support import exceptions
 
 
 def test_request_review_id_parse_error():

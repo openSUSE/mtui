@@ -7,7 +7,7 @@ from logging import getLogger
 from typing import ClassVar
 
 from ..argparse import ArgumentParser
-from ..messages import HostIsNotConnectedError
+from ..support.messages import HostIsNotConnectedError
 from ..target.hostgroup import HostsGroup
 
 logger = getLogger("mtui.commands.command")

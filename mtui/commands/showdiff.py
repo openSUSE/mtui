@@ -3,9 +3,9 @@
 import re
 from logging import getLogger
 
-from mtui.commands import Command
-from mtui.misc import requires_update
-from mtui.term import page
+from ..support.misc import requires_update
+from ..term import page
+from . import Command
 
 logger = getLogger("mtui.commands.showdiff")
 

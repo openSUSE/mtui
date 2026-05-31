@@ -3,12 +3,12 @@
 from argparse import REMAINDER
 from logging import getLogger
 
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
-from mtui.completion import complete_choices
-from mtui.messages import NoRefhostsDefinedError
-from mtui.target.locks import LockedTargets, TargetLockedError
-from mtui.term import page
+from ..argparse import ArgumentParser
+from ..completion import complete_choices
+from ..support.messages import NoRefhostsDefinedError
+from ..target.locks import LockedTargets, TargetLockedError
+from ..term import page
+from . import Command
 
 logger = getLogger("mtui.command.run")
 

@@ -8,8 +8,7 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-from mtui.types import FileList
-
+from ..types import FileList
 from .base import BaseExport
 
 logger = getLogger("mtui.export.auto")

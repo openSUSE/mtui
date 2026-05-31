@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.commands.showrepos import Showrepos
-from mtui.messages import TestReportNotLoadedError
+from mtui.support.messages import TestReportNotLoadedError
 
 
 def _prompt(metadata_truthy: bool = True) -> MagicMock:

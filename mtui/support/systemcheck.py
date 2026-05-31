@@ -4,7 +4,7 @@ import re
 
 from paramiko import __version__ as paramiko_version
 
-from mtui import __version__ as mtui_version
+from .. import __version__ as mtui_version
 
 
 def detect_system() -> tuple[str, str, str]:

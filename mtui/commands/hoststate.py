@@ -2,9 +2,9 @@
 
 from logging import getLogger
 
-from mtui.commands import Command
-from mtui.completion import complete_choices
-from mtui.types import ExecutionMode
+from ..completion import complete_choices
+from ..types import ExecutionMode
+from . import Command
 
 logger = getLogger("mtui.command.hoststate")
 

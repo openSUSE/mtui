@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.commands.edit import Edit
-from mtui.messages import TestReportNotLoadedError
+from mtui.support.messages import TestReportNotLoadedError
 
 
 def _prompt(metadata_truthy: bool = True) -> MagicMock:

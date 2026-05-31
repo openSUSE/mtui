@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from mtui import template
-from mtui.messages import SvnCheckoutFailed
+from mtui.support.messages import SvnCheckoutFailed
 from mtui.types import RequestReviewID
 
 

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.commands.run import Run
-from mtui.messages import NoRefhostsDefinedError
+from mtui.support.messages import NoRefhostsDefinedError
 from mtui.target.hostgroup import HostsGroup
 
 

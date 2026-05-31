@@ -7,7 +7,7 @@ import logging
 import pytest
 
 from mtui.checks.update import update_checks, zypper
-from mtui.exceptions import UpdateError
+from mtui.support.exceptions import UpdateError
 
 
 @pytest.fixture(autouse=True)

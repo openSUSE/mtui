@@ -1,5 +1,5 @@
-from mtui.config import Config
-from mtui.systemcheck import detect_system
+from mtui.support.config import Config
+from mtui.support.systemcheck import detect_system
 
 
 def test_systemcheck():

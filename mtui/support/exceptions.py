@@ -4,10 +4,10 @@ from argparse import ArgumentTypeError
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from .types import assignment
+from ..types import assignment
 
 if TYPE_CHECKING:
-    from .types import RequestReviewID
+    from ..types import RequestReviewID
 
 
 class RequestReviewIDParseError(ValueError, ArgumentTypeError):

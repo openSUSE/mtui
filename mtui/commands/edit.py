@@ -4,10 +4,10 @@ from logging import getLogger
 from os import getenv
 from subprocess import check_call
 
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
-from mtui.completion import complete_choices_filelist
-from mtui.misc import requires_update
+from ..argparse import ArgumentParser
+from ..completion import complete_choices_filelist
+from ..support.misc import requires_update
+from . import Command
 
 logger = getLogger("mtui.command.edit")
 

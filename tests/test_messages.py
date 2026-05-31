@@ -1,4 +1,4 @@
-from mtui import messages
+from mtui.support import messages
 
 
 def test_messages():

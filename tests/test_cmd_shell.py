@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.commands.shell import Shell
-from mtui.messages import HostIsNotConnectedError
+from mtui.support.messages import HostIsNotConnectedError
 from mtui.target.hostgroup import HostsGroup
 
 

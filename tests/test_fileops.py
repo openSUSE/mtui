@@ -7,7 +7,7 @@ from typing import ClassVar
 
 import pytest
 
-from mtui.fileops import atomic_write_file, chdir, ensure_dir_exists, timestamp
+from mtui.support.fileops import atomic_write_file, chdir, ensure_dir_exists, timestamp
 
 
 @pytest.fixture

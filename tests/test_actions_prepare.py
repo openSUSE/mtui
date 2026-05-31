@@ -10,7 +10,7 @@ from mtui.actions.prepare import (
     yum_prepare,
     zypper_prepare,
 )
-from mtui.messages import MissingPreparerError
+from mtui.support.messages import MissingPreparerError
 
 
 def test_yum_prepare_with_testing_true_includes_repo() -> None:

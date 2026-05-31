@@ -3,12 +3,12 @@
 from logging import getLogger
 from traceback import format_exc
 
-from mtui.argparse import ArgumentParser
-from mtui.commands import Command
-from mtui.completion import complete_choices
-from mtui.messages import NoRefhostsDefinedError
-from mtui.misc import requires_update
-from mtui.types.systems import UnknownSystemError
+from ..argparse import ArgumentParser
+from ..completion import complete_choices
+from ..support.messages import NoRefhostsDefinedError
+from ..support.misc import requires_update
+from ..types.systems import UnknownSystemError
+from . import Command
 
 logger = getLogger("mtui.commands.prepare")
 

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mtui.exceptions import UpdateError
+from mtui.support.exceptions import UpdateError
 from mtui.template.obstestreport import OBSTestReport
 from mtui.types import RequestReviewID
 

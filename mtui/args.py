@@ -4,10 +4,9 @@ import argparse
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from mtui import __version__
-
+from . import __version__
 from .argparse import ArgumentParser
-from .misc import SUTParse
+from .support.misc import SUTParse
 from .types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 
 

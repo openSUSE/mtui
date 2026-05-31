@@ -24,7 +24,7 @@ from ..colors import blue, green, red, yellow
 from ..completion import complete_choices
 from ..connector import oqa_search as oqa
 from ..export.overview_inject import inject_overview
-from ..misc import requires_update
+from ..support.misc import requires_update
 from ..types import FileList, OpenQAOverviewResult
 from . import Command
 

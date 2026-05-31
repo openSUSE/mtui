@@ -5,7 +5,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Self
 
-from ..fileops import atomic_write_file
+from ..support.fileops import atomic_write_file
 
 logger = getLogger("mtui.types.filelist")
 
