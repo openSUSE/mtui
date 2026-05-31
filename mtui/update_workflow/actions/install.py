@@ -2,8 +2,8 @@
 
 from string import Template
 
-from ..support.messages import MissingInstallerError
-from ..support.misc import DictWithInjections
+from ...support.messages import MissingInstallerError
+from ...support.misc import DictWithInjections
 
 #: A dictionary of command templates for installing packages using zypper.
 zypper_install = {"command": Template("zypper -n in -y -l $packages")}
