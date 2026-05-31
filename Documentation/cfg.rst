@@ -413,6 +413,21 @@ eligible for automatic removal (see ``lock.reap_stale``). A value of
 ``0`` disables reaping.
 
 
+``lock.pi_autolock``
+~~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     bool
+  | **default**
+  |     ``True``
+
+When testing a Product Increment (PI), automatically lock all reference
+hosts on ``assign`` with a comment naming the request, and unlock this
+session's locks at the end of testing (``unassign`` / ``approve`` /
+``reject``). Reference hosts added with ``add_host`` while the
+assignment is active are locked too. Set to ``false`` to disable.
+
+
 Example
 =======
 
@@ -440,3 +455,4 @@ Example
   [lock]
   reap_stale = true
   stale_age = 86400
+  pi_autolock = true

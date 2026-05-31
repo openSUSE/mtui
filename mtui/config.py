@@ -85,6 +85,7 @@ class Config:
     ssh_strict_host_key_checking: str
     lock_reap_stale: bool
     lock_stale_age: int
+    lock_pi_autolock: bool
 
     # -- Attributes set externally in main.py --
     kernel: bool
@@ -389,6 +390,17 @@ class Config:
                 86400,
                 int,
                 getint,
+            ),
+            # When testing a Product Increment (PI), automatically lock all
+            # reference hosts on ``assign`` and unlock them at end of testing
+            # (``unassign`` / ``approve`` / ``reject``). Set to false to
+            # disable.
+            ConfigOption(
+                "lock_pi_autolock",
+                ("lock", "pi_autolock"),
+                True,
+                bool,
+                getboolean,
             ),
         ]
 

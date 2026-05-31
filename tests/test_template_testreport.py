@@ -43,6 +43,39 @@ def test_get_package_list_dedups_across_versions(tmp_path: Path) -> None:
     assert sorted(out) == ["bash", "libfoo", "openssl"]
 
 
+# ---------------------------------------------------------------------------
+# PI auto-lock: locking freshly connected targets
+# ---------------------------------------------------------------------------
+
+
+def test_autolock_new_target_locks_when_comment_set(tmp_path: Path) -> None:
+    r = _make(tmp_path)
+    r.lock_comment = "testing of SUSE:PI:34556:1"
+    target = MagicMock()
+    r._autolock_new_target(target)  # ty: ignore[invalid-argument-type]
+    target.lock.assert_called_once_with("testing of SUSE:PI:34556:1")
+
+
+def test_autolock_new_target_noop_without_comment(tmp_path: Path) -> None:
+    r = _make(tmp_path)
+    assert r.lock_comment == ""
+    target = MagicMock()
+    r._autolock_new_target(target)  # ty: ignore[invalid-argument-type]
+    target.lock.assert_not_called()
+
+
+def test_autolock_new_target_suppresses_foreign_lock(tmp_path: Path) -> None:
+    from mtui.target import TargetLockedError
+
+    r = _make(tmp_path)
+    r.lock_comment = "testing of SUSE:PI:34556:1"
+    target = MagicMock()
+    target.lock.side_effect = TargetLockedError("locked by someone else")
+    # A host already locked by another user must not abort the connect flow.
+    r._autolock_new_target(target)  # ty: ignore[invalid-argument-type]
+    target.lock.assert_called_once()
+
+
 def test_get_package_list_empty(tmp_path: Path) -> None:
     r = _make(tmp_path)
     r.packages = {}

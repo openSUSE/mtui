@@ -10,7 +10,7 @@ implementations for `approve`, `assign`, `unassign`, `reject`, and
 from abc import ABC, abstractmethod
 from argparse import REMAINDER
 from logging import getLogger
-from typing import final
+from typing import ClassVar, final
 
 from ..argparse import ArgumentParser
 from ..commands import Command
@@ -26,6 +26,11 @@ logger = getLogger("mtui.command.apicalls")
 
 class BaseApiCall(Command, ABC):
     """An abstract base class for commands that interact with backend APIs."""
+
+    # For a Product Increment, ``assign`` locks all reference hosts and the
+    # end-of-testing operations unlock them. Subclasses set this to "lock"
+    # or "unlock"; ``None`` (the default, e.g. ``comment``) does neither.
+    _pi_action: ClassVar[str | None] = None
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -58,6 +63,36 @@ class BaseApiCall(Command, ABC):
             self.gitea()
         else:
             self.osc()
+        self._pi_autolock()
+
+    def _pi_autolock(self) -> None:
+        """Locks/unlocks reference hosts around PI testing.
+
+        On ``assign`` of a Product Increment, lock every connected
+        reference host with a comment naming the request, and remember the
+        comment so hosts added later (via ``add_host``) are locked too. On
+        ``unassign`` / ``approve`` / ``reject``, unlock this session's
+        locks. No-op unless the request is a PI and ``lock_pi_autolock`` is
+        enabled.
+        """
+        if self._pi_action is None or not self.config.lock_pi_autolock:
+            return
+        if self.metadata.rrid.kind is not RequestKind.PI:
+            return
+
+        if self._pi_action == "lock":
+            comment = f"testing of {self.metadata.rrid}"
+            self.metadata.lock_comment = comment
+            logger.info("Locking reference hosts for %s", self.metadata.rrid)
+            self.targets.lock(comment)
+        else:  # "unlock"
+            logger.info(
+                "Unlocking reference hosts after %s of %s",
+                self.command,
+                self.metadata.rrid,
+            )
+            self.targets.unlock()
+            self.metadata.lock_comment = ""
 
     @abstractmethod
     def osc(self) -> None:
@@ -80,6 +115,7 @@ class Approve(BaseApiCall):
     """A command to approve a review request."""
 
     command = "approve"
+    _pi_action = "unlock"
 
     def osc(self) -> None:
         """Approves the request in OSC."""
@@ -121,6 +157,7 @@ class Assign(BaseApiCall):
     """A command to assign a review request to a user or group."""
 
     command = "assign"
+    _pi_action = "lock"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -161,6 +198,7 @@ class Unassign(BaseApiCall):
     """A command to unassign a review request."""
 
     command = "unassign"
+    _pi_action = "unlock"
 
     def osc(self) -> None:
         """Unassigns the request in OSC."""
@@ -183,6 +221,7 @@ class Reject(BaseApiCall):
     """A command to reject a review request."""
 
     command = "reject"
+    _pi_action = "unlock"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
