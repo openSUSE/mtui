@@ -8,7 +8,6 @@ from string import Template
 from traceback import format_exc
 from typing import TYPE_CHECKING, Any, final
 
-from ..actions import downgrader, installer, preparer, uninstaller, updater
 from ..checks import downgrade_checks, install_checks, prepare_checks, update_checks
 from ..connection import CommandTimeoutError, Connection, policy_from_config
 from ..support import messages
@@ -16,6 +15,13 @@ from ..support.config import Config
 from ..support.fileops import timestamp
 from ..types import ExecutionMode, HostLog, Package, System, TargetState
 from ..types.rpmver import RPMVersion
+from ..update_workflow.actions import (
+    downgrader,
+    installer,
+    preparer,
+    uninstaller,
+    updater,
+)
 from . import TargetLock, TargetLockedError
 from .package_querier import PackageQuerier
 from .parsers import parse_system

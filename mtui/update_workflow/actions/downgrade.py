@@ -2,8 +2,8 @@
 
 from string import Template
 
-from ..support.messages import MissingDowngraderError
-from ..support.misc import DictWithInjections
+from ...support.messages import MissingDowngraderError
+from ...support.misc import DictWithInjections
 
 
 def zypper() -> dict[str, Template]:

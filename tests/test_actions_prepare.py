@@ -1,16 +1,16 @@
-"""Tests for ``mtui.actions.prepare``."""
+"""Tests for ``mtui.update_workflow.actions.prepare``."""
 
 from __future__ import annotations
 
 import pytest
 
-from mtui.actions.prepare import (
+from mtui.support.messages import MissingPreparerError
+from mtui.update_workflow.actions.prepare import (
     preparer,
     slm_prepare,
     yum_prepare,
     zypper_prepare,
 )
-from mtui.support.messages import MissingPreparerError
 
 
 def test_yum_prepare_with_testing_true_includes_repo() -> None:
