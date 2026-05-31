@@ -13,29 +13,58 @@ Project layout
 .. code-block:: text
 
     mtui/                  # main package
-      args.py              # argparse setup
-      argparse.py          # ArgsParseFailureError + custom parser
-      colorlog.py          # coloured logging formatter
-      config.py            # INI config loader
-      connection.py        # paramiko-based SSH connection
-      display.py           # tabular CLI output helpers
+      __init__.py          # __version__
+      __main__.py          # `python -m mtui` entry
       main.py              # console-script entry point
-      prompt.py            # interactive Cmd subclass (CommandPrompt)
-      refhost.py           # reference-host attribute schema
-      colors.py            # ANSI colour helpers
-      completion.py        # readline completion helpers
-      fileops.py           # filesystem helpers (atomic write, ensure_dir)
-      term.py              # terminal size / prompting helpers
-      misc.py              # remaining small helpers (e.g. requires_update)
-      actions/             # background SSH worker actions
-      checks/              # post-update verification probes
-      commands/            # one module per `do_<command>` (see below)
-      connector/           # OBS, openQA, Gitea, … HTTP backends
-      target/              # Target / HostsGroup / lock files
-      template/            # test-report template loaders
+      cli/                 # command-line surface
+        args.py            #   argparse setup
+        argparse.py        #   ArgsParseFailureError + custom parser
+        completion.py      #   readline completion helpers
+        display.py         #   tabular CLI output helpers
+        notification.py    #   desktop notification helpers
+        prompt.py          #   interactive Cmd subclass (CommandPrompt)
+        prompter.py        #   confirm/choice prompt helpers
+        term.py            #   terminal size / paging helpers
+        colors/            #   ANSI constants, log formatter, runtime switch
+      hosts/               # SSH + Target + reference-host metadata
+        connection/        #   paramiko-based SSH Connection (split)
+        target/            #   Target / HostsGroup / lock files / parsers
+        refhost/           #   reference-host schema (models, resolvers, store)
+      data_sources/        # external HTTP services
+        gitea.py           #   Gitea API client
+        oscqam.py          #   osc-qam wrapper
+        openqa/            #   openQA clients (standard, kernel)
+        qem_dashboard/     #   QEM dashboard client (split)
+        oqa_search/        #   openQA build/version search (split)
+      test_reports/        # test-report templates + metadata parsers
+        testreport.py      #   TestReport ABC
+        obs_report.py      #   OBS / kernel / PI / SL report subclasses
+        pi_report.py       #     (pi_report.py, sl_report.py, null_report.py)
+        sl_report.py
+        null_report.py
+        metadata_parsers.py#   parsemeta + parsemetajson + repoparse (merged)
+        svn_io.py          #   SVN checkout/commit + template errors
+        products/          #   per-codestream product normalisers
+      update_workflow/     # update execution (the verbs)
+        actions/           #   background SSH worker actions
+        checks/            #   post-update verification probes
+        export/            #   testreport export + artefact download
+        hooks.py           #   pre/post hook runner
+      support/             # cross-cutting utilities (the only layer-named dir)
+        config.py          #   INI config loader
+        exceptions.py      #   typed exception hierarchy
+        messages.py        #   user-facing message strings
+        misc.py            #   requires_update etc.
+        fileops.py         #   atomic write, ensure_dir
+        systemcheck.py     #   `ssh`/`osc`/`svn` availability probes
+        paths.py           #   scripts_path / terms_path / XDG cache (merged)
+      commands/            # one module per `do_<command>` (auto-discovered)
       types/               # typed value objects (UpdateID, RpmVer, …)
+      helper/              # shell/perl helper scripts (data)
+      scripts/             # pre/post/compare hook scripts (data)
+      terms/               # terminal-launcher snippets (data)
 
-    tests/                 # pytest test suite (mirrors mtui/ paths)
+    tests/                 # pytest test suite (flat, mirrors mtui/ paths)
     Documentation/         # Sphinx sources (this directory)
     .github/               # CI workflows, dependabot, templates
     pyproject.toml         # PEP 621 metadata, ruff/ty/pytest config
@@ -137,7 +166,7 @@ How to add a new command
 
    .. code-block:: python
 
-       from ..argparse import ArgumentParser
+       from ..cli.argparse import ArgumentParser
        from ._command import Command
 
 
@@ -188,7 +217,7 @@ Type checking
 
 ``ty check`` is a hard CI gate. ``[tool.ty]`` in ``pyproject.toml``
 enables ``error-on-warning`` and promotes everything in
-``mtui/types/**`` and ``mtui/connector/**`` to ``error all``. New
+``mtui/types/**`` and ``mtui/data_sources/**`` to ``error all``. New
 ``# ty: ignore`` directives need a specific rule code (the
 ``PGH003`` ruff rule enforces this).
 

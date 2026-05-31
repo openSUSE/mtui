@@ -7,7 +7,7 @@
 - Python package entrypoint is `mtui.main:main`; run it from the checkout with `uv run python -m mtui --help` or `uv run mtui --help`.
 - `mtui/commands/` is imported as a package; every `Command` subclass auto-registers via `Command.__init_subclass__` into `Command.registry`. Add one command module per interactive command; modules starting with `_` are skipped.
 - Commands subclass `mtui.commands._command.Command`, set `command`, implement `_add_arguments()` when needed, and implement `__call__()`.
-- Main runtime wiring is `mtui/main.py` -> `mtui/prompt.py` -> `mtui.commands.registry`.
+- Main runtime wiring is `mtui/main.py` -> `mtui/cli/prompt.py` -> `mtui.commands.registry`.
 - Config is INI from `MTUI_CONF`, explicit `--config`, or `/etc/mtui.cfg` plus `~/.mtuirc`; `TEMPLATE_DIR`, `TMPDIR`, and `GITEA_TOKEN` are also read.
 
 ## Development Commands
@@ -25,7 +25,7 @@
 
 ## Type And Style Quirks
 - Supported Python is 3.11 through 3.14; `ty` is pinned to 3.11 (lowest supported) and treats warnings as errors. CI runs the pytest matrix across all four versions but only one ty job.
-- `mtui/types/**` and `mtui/connector/**` have stricter `ty` rules (`all = "error"`).
+- `mtui/types/**` and `mtui/data_sources/**` have stricter `ty` rules (`all = "error"`).
 - Ruff enforces import sorting, pyupgrade for py311+, no `print`, and specific `# ty: ignore[...]` codes via `PGH003`.
 - Tests have relaxed Ruff ignores for asserts/private access; do not copy those assumptions into package code.
 
