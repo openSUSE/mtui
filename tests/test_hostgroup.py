@@ -1,5 +1,6 @@
 """Tests for the mtui hostgroup module."""
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
@@ -305,6 +306,43 @@ def test_perform_install_unlocks_on_error(mock_run):
         hg.perform_install(["pkg"])
 
     # unlock must still be called
+    t1.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.HostsGroup._fanout_set_repo")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_prepare_dependency_error_logged_without_traceback(
+    mock_run, mock_fanout, caplog
+):
+    """An UpdateError from the preparer check is reported cleanly (no traceback)."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    t1.transactional = False
+    t1.is_locked.return_value = False
+    t1.lasterr.return_value = ""  # pass the early "Failed to prepare host" guard
+    # The preparer check raises the expected dependency error.
+    t1.check.return_value = MagicMock(side_effect=UpdateError("Dependency Error", "h1"))
+
+    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+
+    with caplog.at_level(logging.ERROR, logger="mtui.hosts.target.hostgroup"):
+        hg.perform_prepare(
+            ["pkg"], MagicMock(), force=False, installed_only=False, testing=False
+        )
+
+    # Clean, actionable error -- not a stack-trace dump.
+    failures = [
+        r
+        for r in caplog.records
+        if "Prepare failed: h1: Dependency Error" in r.getMessage()
+    ]
+    assert len(failures) == 1
+    assert failures[0].exc_info is None  # logger.error, not logger.exception
+    # The broad "Error during prepare operation" traceback path must NOT fire.
+    assert not any(
+        "Error during prepare operation" in r.getMessage() for r in caplog.records
+    )
+    # Cleanup still happens.
     t1.unlock.assert_called()
 
 
