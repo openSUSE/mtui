@@ -22,3 +22,20 @@ def test_detect_system(monkeypatch):
     assert distro == "test_distro"
     assert verid == "test_verid"
     assert kernel == "test_kernel"
+
+
+def test_system_info_default_prefix():
+    """The export footer keeps the ``## export`` prefix."""
+    s = systemcheck.system_info("openSUSE Leap", "16.0", "6.12.0", "mpluskal")
+    assert s.startswith("## export MTUI:")
+    assert "on openSUSE Leap-16.0 (kernel: 6.12.0) by mpluskal" in s
+    assert s.endswith("\n")
+
+
+def test_system_info_custom_prefix():
+    """A custom prefix (e.g. for commit messages) replaces ``## export``."""
+    s = systemcheck.system_info(
+        "openSUSE Leap", "16.0", "6.12.0", "mpluskal", prefix="committed from"
+    )
+    assert s.startswith("committed from MTUI:")
+    assert "on openSUSE Leap-16.0 (kernel: 6.12.0) by mpluskal" in s

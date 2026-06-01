@@ -5,6 +5,7 @@ from logging import getLogger
 
 from ..cli.completion import complete_choices
 from ..support.misc import requires_update
+from ..support.systemcheck import system_info
 from ..test_reports.svn_io import svn_commit_testreport
 from . import Command
 
@@ -32,9 +33,20 @@ class Commit(Command):
         """Executes the `commit` command."""
         checkout = self.metadata.report_wd()
 
-        msg = []
         if self.args.msg:
             msg = ["-m", '"' + " ".join(self.args.msg[0]) + '"']
+        else:
+            # No -m given: commit non-interactively with a generated message
+            # reusing the testreport export footer (instead of letting svn
+            # open an editor to ask for one).
+            default_message = system_info(
+                self.config.distro,
+                self.config.distro_ver,
+                self.config.distro_kernel,
+                self.config.session_user,
+                prefix="committed from",
+            ).rstrip()
+            msg = ["-m", default_message]
 
         try:
             svn_commit_testreport(checkout, self.config.install_logs, msg)
