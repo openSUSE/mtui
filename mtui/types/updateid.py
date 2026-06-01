@@ -1,5 +1,6 @@
 """Classes for handling different types of update IDs."""
 
+import shutil
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from errno import ENOENT
@@ -122,10 +123,14 @@ class UpdateID(ABC):
             if not prompt_user(
                 "Force continue loading template ? [y/N]: ", ["yes", "y"], interactive
             ):
-                if trdir.exists():
-                    logger.warning(
-                        "Make sure to remove %s before relaunching MTUI", trdir
-                    )
+                if trdir.exists() and prompt_user(
+                    f"Delete checked out template {trdir}? [Y/n]: ",
+                    ["yes", "y"],
+                    interactive,
+                    default=True,
+                ):
+                    shutil.rmtree(trdir, ignore_errors=True)
+                    logger.info("Removed checked out template %s", trdir)
                 raise TestReportNotLoadedError from None
             logger.warning("Template is loaded, but hash differs")
 

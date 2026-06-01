@@ -56,16 +56,27 @@ def filter_ansi(text: str) -> str:
     return text
 
 
-def prompt_user(text: str, options: Collection[str], interactive: bool = True) -> bool:
+def prompt_user(
+    text: str,
+    options: Collection[str],
+    interactive: bool = True,
+    default: bool = False,
+) -> bool:
     """Prompts the user with a question and waits for a response.
 
     Args:
         text: The prompt to display to the user.
         options: A collection of strings that are considered "yes" answers.
         interactive: If False, the prompt is printed but no input is requested.
+        default: Result returned when the user submits an empty response
+            (just presses Enter) in interactive mode. Lets a prompt have a
+            preselected answer, e.g. ``[Y/n]``. Non-interactive mode always
+            returns False so a defaulted prompt never auto-confirms an
+            unattended (e.g. destructive) action.
 
     Returns:
-        True if the user's response is in `options`, False otherwise.
+        True if the user's response is in `options` (or empty and
+        ``default`` is True), False otherwise.
 
     """
     result = False
@@ -77,7 +88,9 @@ def prompt_user(text: str, options: Collection[str], interactive: bool = True) -
 
     try:
         response = input(text).lower()
-        if response and response in options:
+        if not response:
+            result = default
+        elif response in options:
             result = True
     except KeyboardInterrupt:
         pass

@@ -25,6 +25,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- When a loaded template's hash differs from the Gitea PR and you decline
+  to force-continue, mtui now offers to delete the checked-out template
+  (`Delete checked out template <path>? [Y/n]:`, default yes). Declining
+  keeps the checkout. Non-interactive runs never delete automatically.
+
 - The `approve` command now accepts `-r REVIEWER` / `--reviewer REVIEWER`.
   It records the reviewer in the testreport's `Test Plan Reviewer:` line,
   commits the testreport to SVN, and then approves the update — all in one
