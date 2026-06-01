@@ -14,6 +14,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   installing the previously released, lower version actually proceeds.
   Without it zypper refused to replace an installed package with an older
   one, leaving the host on the too-recent version.
+- `prepare` no longer dumps a Python traceback when a host hits an
+  expected error such as an unresolved dependency conflict. The preparer
+  check already logs the actionable detail (the zypper resolutions to
+  pick); the `UpdateError` it raises is now reported as a single concise
+  `error: Prepare failed: <host>: <reason>` line instead of a stack
+  trace. Genuinely unexpected errors still log a full traceback.
 
 ### Changed
 
