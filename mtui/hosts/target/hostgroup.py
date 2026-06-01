@@ -304,6 +304,11 @@ class HostsGroup(UserDict[str, Target]):
 
         except MissingPreparerError as e:
             logger.error("%s", e)
+        except UpdateError as e:
+            # Expected outcome (e.g. an unresolved dependency conflict): the
+            # preparer check already logged the actionable detail, so report
+            # it concisely without dumping a Python traceback.
+            logger.error("Prepare failed: %s", e)
         except Exception:
             logger.exception("Error during prepare operation")
         finally:
