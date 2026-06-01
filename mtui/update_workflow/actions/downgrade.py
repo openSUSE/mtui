@@ -23,7 +23,7 @@ done \
 | awk -F "|" '{{ print $2,"=",$4 }}'
 """
 
-    cmd_template = "rpm -q $package &>/dev/null  && zypper -n in -C --force-resolution -y $package=$version"
+    cmd_template = "rpm -q $package &>/dev/null  && zypper -n in -C --force-resolution --oldpackage -y $package=$version"
 
     return {
         "list_command": Template(list_command_template),
@@ -48,7 +48,7 @@ done \
 | awk -F "|" '{{ print $2,"=",$4 }}'
 """
 
-    cmd_template = "rpm -q $package &>/dev/null && transactional-update -c pkg in -C --force-resolution -y $package=$version"
+    cmd_template = "rpm -q $package &>/dev/null && transactional-update -c pkg in -C --force-resolution --oldpackage -y $package=$version"
     reboot = "systemctl reboot"
     init_snapshot = "transactional-update run true"
 

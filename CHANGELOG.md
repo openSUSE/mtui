@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Fixed
+
+- `downgrade` now passes `--oldpackage` to zypper (and the
+  `transactional-update pkg in` variant on transactional systems), so
+  installing the previously released, lower version actually proceeds.
+  Without it zypper refused to replace an installed package with an older
+  one, leaving the host on the too-recent version.
+
 ### Changed
 
 - `commit` without `-m` no longer opens an editor to ask for a message.
