@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `commit` without `-m` no longer opens an editor to ask for a message.
+  It now commits non-interactively with a generated message that reuses
+  the testreport export footer, e.g. `committed from MTUI:<version>,
+  paramiko <version> on <distro>-<verid> (kernel: <kernel>) by <user>`.
+  Passing `-m` still uses the given message.
+
 - Internal: reorganized the `mtui/` package layout. No public CLI behaviour
   change. The 24 loose top-level modules are now grouped into six
   subpackages — `mtui/cli/`, `mtui/hosts/`, `mtui/data_sources/`,

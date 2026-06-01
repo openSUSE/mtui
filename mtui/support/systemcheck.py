@@ -42,7 +42,9 @@ def detect_system() -> tuple[str, str, str]:
     return distro, verid, kernel
 
 
-def system_info(distro: str, verid: str, kernel: str, user: str) -> str:
+def system_info(
+    distro: str, verid: str, kernel: str, user: str, prefix: str = "## export"
+) -> str:
     """Formats system information into a string.
 
     Args:
@@ -50,10 +52,13 @@ def system_info(distro: str, verid: str, kernel: str, user: str) -> str:
         verid: The version ID of the distribution.
         kernel: The kernel version.
         user: The current user.
+        prefix: Leading text before the version details. Defaults to
+            ``"## export"`` (the testreport export footer); the ``commit``
+            command reuses this with ``"committed from"``.
 
     Returns:
         A formatted string containing the system information.
 
     """
-    string = f"## export MTUI:{mtui_version}, paramiko {paramiko_version} on {distro}-{verid} (kernel: {kernel}) by {user}\n"
+    string = f"{prefix} MTUI:{mtui_version}, paramiko {paramiko_version} on {distro}-{verid} (kernel: {kernel}) by {user}\n"
     return string
