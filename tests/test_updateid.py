@@ -77,10 +77,10 @@ def _make_updateid_with_checkout_retry(
     return uid, tr_mock, vcs_mock
 
 
-def test_checkout_invalid_hash_abort_warns_when_trdir_exists(
-    mock_config, tmp_path, caplog
+def test_checkout_invalid_hash_abort_declining_delete_keeps_trdir(
+    mock_config, tmp_path
 ):
-    """Abort + existing trdir -> cleanup hint logged, prompt uses [y/N]."""
+    """Abort + decline delete -> trdir kept, no further action."""
     mock_config.template_dir = tmp_path
     uid, _tr_mock = _make_updateid()
     trdir = tmp_path / str(uid.id)
@@ -90,18 +90,40 @@ def test_checkout_invalid_hash_abort_warns_when_trdir_exists(
         patch(
             "mtui.types.updateid.prompt_user", return_value=False
         ) as prompt_user_mock,
-        caplog.at_level(logging.WARNING, logger="mtui.types.updateid"),
         pytest.raises(TestReportNotLoadedError),
     ):
         uid._checkout(mock_config, interactive=True)
 
-    # Prompt label change is locked in here.
-    prompt_user_mock.assert_called_once()
-    assert prompt_user_mock.call_args.args[0] == PROMPT_LABEL
+    # Two prompts: force-continue, then (since trdir exists) delete.
+    assert prompt_user_mock.call_count == 2
+    assert prompt_user_mock.call_args_list[0].args[0] == PROMPT_LABEL
+    delete_call = prompt_user_mock.call_args_list[1]
+    assert delete_call.args[0] == f"Delete checked out template {trdir}? [Y/n]: "
+    assert delete_call.kwargs["default"] is True
+    assert trdir.exists()  # declined -> not removed
 
-    cleanup_warnings = [r for r in caplog.records if CLEANUP_HINT in r.getMessage()]
-    assert len(cleanup_warnings) == 1
-    assert str(trdir) in cleanup_warnings[0].getMessage()
+
+def test_checkout_invalid_hash_abort_accepting_delete_removes_trdir(
+    mock_config, tmp_path, caplog
+):
+    """Abort + accept delete -> trdir removed, no cleanup hint."""
+    mock_config.template_dir = tmp_path
+    uid, _tr_mock = _make_updateid()
+    trdir = tmp_path / str(uid.id)
+    trdir.mkdir(parents=True)
+
+    with (
+        # First prompt (force-continue) -> False, second (delete) -> True.
+        patch("mtui.types.updateid.prompt_user", side_effect=[False, True]),
+        caplog.at_level(logging.INFO, logger="mtui.types.updateid"),
+        pytest.raises(TestReportNotLoadedError),
+    ):
+        uid._checkout(mock_config, interactive=True)
+
+    assert not trdir.exists()  # removed
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("Removed checked out template" in m for m in messages)
+    assert not any(CLEANUP_HINT in m for m in messages)
 
 
 def test_checkout_invalid_hash_abort_silent_when_trdir_missing(
@@ -230,7 +252,7 @@ def test_checkout_invalid_hash_after_svn_checkout_prompts(
         uid._checkout(mock_config, interactive=True)  # noqa: SLF001
 
     vcs_mock.assert_called_once()
-    prompt_user_mock.assert_called_once()
-    assert prompt_user_mock.call_args.args[0] == PROMPT_LABEL
-    cleanup_warnings = [r for r in caplog.records if CLEANUP_HINT in r.getMessage()]
-    assert len(cleanup_warnings) == 1
+    # Two prompts: force-continue, then delete (trdir exists, both declined).
+    assert prompt_user_mock.call_count == 2
+    assert prompt_user_mock.call_args_list[0].args[0] == PROMPT_LABEL
+    assert not any(CLEANUP_HINT in r.getMessage() for r in caplog.records)
