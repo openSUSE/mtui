@@ -20,6 +20,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   positionally into `Connection.reconnect`, whose second positional
   parameter is `timeout` — so the backoff flag was silently dropped and
   the per-attempt wait collapsed to ~1s. It is now passed by keyword.
+- Transactional-update systems are detected more reliably. Detection
+  previously only checked `/usr/etc/transactional-update.conf`, so older
+  transactional hosts (SLE Micro 5.x, openSUSE MicroOS) that keep the
+  config in `/etc/transactional-update.conf` were misdetected as
+  non-transactional. Both locations are now probed.
 
 - `downgrade` now passes `--oldpackage` to zypper (and the
   `transactional-update pkg in` variant on transactional systems), so
