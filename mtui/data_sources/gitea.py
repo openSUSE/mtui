@@ -292,20 +292,27 @@ class Gitea:
             force: If True, bypasses the check for an existing review request.
 
         Raises:
-            GiteaNoReviewError: If a review has not been requested and `force` is False.
-            GiteaAssignInvalidError: If the PR is not in an unassigned state.
+            GiteaNoReviewError: If a review has not been requested and `force`
+                is False, or if the PR was already approved/rejected.
+            GiteaAssignInvalidError: If the PR is not in an unassigned state
+                and `force` is False.
 
         """
         a_user = other or self.user
-        if not self.__has_review() and not force:
+        # `force` skips the "review requested" and "already assigned" guards
+        # and simply posts the assignment comment -- e.g. to (re)assign a PR
+        # that is currently assigned to a different user. An approved/rejected
+        # PR is still refused.
+        if not force and not self.__has_review():
             raise GiteaNoReviewError(f"There is no review for {self.group}-review")
 
         if self.__is_done():
             raise GiteaNoReviewError("PR was already approved/rejected")
 
-        assign_state = self.__check_assign(a_user)
-        if assign_state != assignment.UNASSIGNED:
-            raise GiteaAssignInvalidError(assign_state, a_user)
+        if not force:
+            assign_state = self.__check_assign(a_user)
+            if assign_state != assignment.UNASSIGNED:
+                raise GiteaAssignInvalidError(assign_state, a_user)
 
         logger.info("Assigning PR to %s for group %s", a_user, self.group)
         msg = self.ASSIGN_TEMPLATE % (a_user, self.group)

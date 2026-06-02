@@ -156,6 +156,65 @@ class TestGiteaOperations:
         gitea.assign()
 
     @responses.activate
+    def test_assign_force_posts_comment_when_assigned_to_other(self, gitea):
+        """assign(force=True) posts the assignment even if assigned to someone else."""
+        other = self._make_comment(1, gitea.ASSIGN_TEMPLATE % ("alice", gitea.group))
+        # is_done -> an assignment comment, not an approval -> not done
+        responses.add(responses.GET, gitea.prissues, json=[other], status=200)
+        # POST the (forced) assignment comment
+        responses.add(responses.POST, gitea.prissues, json={"id": 2}, status=201)
+
+        gitea.assign(force=True)
+
+        posts = [c for c in responses.calls if c.request.method == "POST"]
+        assert len(posts) == 1
+        assert f"assigned to user: {gitea.user}" in str(posts[0].request.body)
+
+    @responses.activate
+    def test_assign_without_force_raises_when_assigned_to_other(self, gitea):
+        """Without --force, assigning a PR held by another user is refused."""
+        other = self._make_comment(1, gitea.ASSIGN_TEMPLATE % ("alice", gitea.group))
+        # has_review -> the review is requested
+        responses.add(
+            responses.GET,
+            gitea.pr,
+            json={"requested_reviewers": [{"login": f"{gitea.group}-review"}]},
+            status=200,
+        )
+        # is_done -> not done
+        responses.add(responses.GET, gitea.prissues, json=[other], status=200)
+        # check_assign -> assigned to alice (ASSIGNED_OTHER)
+        responses.add(responses.GET, gitea.prissues, json=[other], status=200)
+
+        with pytest.raises(GiteaAssignInvalidError):
+            gitea.assign()
+
+    @responses.activate
+    def test_approve_uses_last_assignee(self, gitea):
+        """approve() respects only the last assignee, ignoring an earlier one."""
+        alice = self._make_comment(
+            1,
+            gitea.ASSIGN_TEMPLATE % ("alice", gitea.group),
+            "2024-01-01T00:00:00+00:00",
+        )
+        me = self._make_comment(
+            2,
+            gitea.ASSIGN_TEMPLATE % (gitea.user, gitea.group),
+            "2024-01-02T00:00:00+00:00",
+        )
+        # check_assign -> last assignee is the session user
+        responses.add(responses.GET, gitea.prissues, json=[alice, me], status=200)
+        # is_done -> not done
+        responses.add(responses.GET, gitea.prissues, json=[alice, me], status=200)
+        responses.add(responses.POST, gitea.prissues, json={"id": 3}, status=201)
+
+        gitea.approve()
+
+        posts = [c for c in responses.calls if c.request.method == "POST"]
+        assert len(posts) == 1
+        assert "LGTM" in str(posts[0].request.body)
+
+    @responses.activate
     def test_assign_no_review_raises(self, gitea):
         """Test assign raises GiteaNoReviewError when no review exists."""
         responses.add(
