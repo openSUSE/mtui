@@ -276,6 +276,25 @@ def test_target_reboot_dispatches_fire_and_forget(mock_config):
     target.connection.fire_and_forget.assert_called_once_with("systemctl reboot")
 
 
+def test_target_boot_id_reads_proc(mock_config):
+    """boot_id() reads /proc/sys/kernel/random/boot_id and strips it."""
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+    target.connection = MagicMock()
+    target.connection.stdout = "cab001af-4985-41d3-ac1b-e889523076ef\n"
+
+    assert target.boot_id() == "cab001af-4985-41d3-ac1b-e889523076ef"
+    target.connection.run.assert_called_once_with("cat /proc/sys/kernel/random/boot_id")
+
+
+def test_target_boot_id_returns_empty_on_failure(mock_config):
+    """boot_id() returns '' if the command cannot be run."""
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+    target.connection = MagicMock()
+    target.connection.run.side_effect = OSError("connection lost")
+
+    assert target.boot_id() == ""
+
+
 # --- reconnect ---
 
 

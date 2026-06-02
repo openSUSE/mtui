@@ -220,14 +220,46 @@ class HostsGroup(UserDict[str, Target]):
             return
 
         logger.info("Rebooting %s", list(self.data))
+        # Record the boot id before rebooting so we can confirm afterwards
+        # that the host actually came back on a fresh boot.
+        boot_ids = {hn: t.boot_id() for hn, t in self.data.items()}
         for t in self.data.values():
             t.reboot(command)
         for t in self.data.values():
             t.reconnect(retry=10, backoff=True)
 
+        for hn, t in self.data.items():
+            self._verify_reboot(t, boot_ids[hn])
+
         if relock_comment:
             logger.info("Re-applying lock after reboot")
             self.lock(relock_comment)
+
+    @staticmethod
+    def _verify_reboot(target, old_boot_id: str) -> None:
+        """Logs an error if ``target``'s boot id did not change after a reboot.
+
+        ``/proc/sys/kernel/random/boot_id`` is regenerated on every boot
+        (on both transactional and normal systems), so an unchanged value
+        means the host did not actually reboot.
+
+        Args:
+            target: The rebooted target to check.
+            old_boot_id: The boot id captured before the reboot.
+
+        """
+        new_boot_id = target.boot_id()
+        if not old_boot_id or not new_boot_id:
+            logger.warning(
+                "%s: could not read boot id to confirm the reboot", target.hostname
+            )
+        elif old_boot_id == new_boot_id:
+            logger.error(
+                "%s: boot id unchanged (%s) after reboot -- the host may not "
+                "have rebooted",
+                target.hostname,
+                new_boot_id,
+            )
 
     def update_lock(self) -> None:
         """Locks all hosts in the group for an update."""

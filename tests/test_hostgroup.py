@@ -458,6 +458,9 @@ def test_reboot_all_fires_and_reconnects_each():
     """reboot() fire-and-forgets the command then reconnects every host."""
     t1 = _stub_target("h1")
     t2 = _stub_target("h2")
+    # boot id changes (before -> after) so the reboot is confirmed.
+    t1.boot_id.side_effect = ["id-h1-before", "id-h1-after"]
+    t2.boot_id.side_effect = ["id-h2-before", "id-h2-after"]
     hg = HostsGroup([t1, t2])
     hg.reboot()
     for t in (t1, t2):
@@ -469,11 +472,32 @@ def test_reboot_all_fires_and_reconnects_each():
 def test_reboot_all_relocks_when_comment_given():
     """A relock_comment re-applies the lock after reconnect (PI lock survives)."""
     t1 = _stub_target("h1")
+    t1.boot_id.side_effect = ["before", "after"]
     hg = HostsGroup([t1])
     hg.reboot(relock_comment="testing of SUSE:PI:34556:1")
     t1.reboot.assert_called_once_with("systemctl reboot")
     t1.reconnect.assert_called_once_with(retry=10, backoff=True)
     t1.lock.assert_called_once_with("testing of SUSE:PI:34556:1")
+
+
+def test_reboot_all_errors_when_boot_id_unchanged(caplog):
+    """An unchanged boot id after reboot is reported as an error."""
+    t1 = _stub_target("h1")
+    t1.boot_id.side_effect = ["same-boot-id", "same-boot-id"]
+    hg = HostsGroup([t1])
+    with caplog.at_level(logging.ERROR, logger="mtui.hosts.target.hostgroup"):
+        hg.reboot()
+    assert any("boot id unchanged" in r.getMessage() for r in caplog.records)
+
+
+def test_reboot_all_no_error_when_boot_id_changes(caplog):
+    """A changed boot id confirms the reboot; no error is logged."""
+    t1 = _stub_target("h1")
+    t1.boot_id.side_effect = ["before", "after"]
+    hg = HostsGroup([t1])
+    with caplog.at_level(logging.ERROR, logger="mtui.hosts.target.hostgroup"):
+        hg.reboot()
+    assert not any("boot id unchanged" in r.getMessage() for r in caplog.records)
 
 
 def test_reboot_all_empty_group_is_noop():
