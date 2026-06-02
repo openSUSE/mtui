@@ -319,8 +319,16 @@ def summarize_test_results(lines: list[str]) -> str:
     total_passed = 0
     total_failed = 0
     for line in lines[1:-1]:
+        # N passed / N failed
         passed_match = re.search(r"(\d+) pass(?:ed)?", line, re.IGNORECASE)
         failed_match = re.search(r"(\d+) fail(?:ed)?", line, re.IGNORECASE)
+        # PASS: N / FAIL: N
+        passed_match = passed_match or re.search(
+            r"#\s*pass(?:ed)?:?\s*(\d+)", line, re.IGNORECASE
+        )
+        failed_match = failed_match or re.search(
+            r"#\s*fail(?:ed)?:?\s*(\d+)", line, re.IGNORECASE
+        )
         if passed_match:
             total_passed += int(passed_match.group(1))
         if failed_match:

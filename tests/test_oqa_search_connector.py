@@ -600,21 +600,18 @@ def test_filter_openqa_groups(
             ],
             "(4 more results, 30 passed, 8 failed)",
         ),
-        # OBS-style block: only rows with explicit "N passed / N failed"
-        # tokens count; the "# PASS:" / "# FAIL:" cells do not match
-        # the regex and stay at zero.
         (
             [
-                "[  204s] ======================= 437 passed, 5 skipped in 22.51s ========================",
-                "[  204s] # TOTAL: 0",
-                "[  204s] # PASS:  0",
-                "[  204s] # SKIP:  0",
-                "[  204s] # XFAIL: 0",
-                "[  204s] # FAIL:  0",
-                "[  204s] # XPASS: 0",
-                "[  204s] # ERROR: 0",
+                "[  949s] # TOTAL: 2901",
+                "[  949s] # PASS:  2709",
+                "[  949s] # SKIP:  151",
+                "[  949s] # XFAIL: 0",
+                "[  949s] # FAIL:  2",
+                "[  949s] # XPASS: 0",
+                "[  949s] # ERROR: 0",
+                "[  949s] make[1]: Leaving directory '/usr/src/packages/BUILD/automake-1.16.5'",
             ],
-            "(6 more results, 0 passed, 0 failed)",
+            "(6 more results, 2709 passed, 2 failed)",
         ),
     ],
 )
