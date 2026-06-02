@@ -264,6 +264,18 @@ def test_run_handles_generic_exception(mock_config):
     assert target.lastexit() == -1
 
 
+# --- reboot ---
+
+
+def test_target_reboot_dispatches_fire_and_forget(mock_config):
+    """reboot() sends the command fire-and-forget via the connection."""
+    target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
+    target.connection = MagicMock()
+
+    target.reboot("systemctl reboot")
+    target.connection.fire_and_forget.assert_called_once_with("systemctl reboot")
+
+
 # --- reconnect ---
 
 

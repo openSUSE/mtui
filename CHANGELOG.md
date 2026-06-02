@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Transactional hosts no longer fail to reconnect after the post-update
+  reboot. The reboot command was run through the normal command path,
+  which on the (expected) dropped connection tried its own single,
+  immediate reconnect and gave up with `Failed to reconnect … after 1
+  retries` before the real retry loop ran. The reboot is now dispatched
+  fire-and-forget (the disconnect is expected), then mtui reconnects with
+  retries and backoff while the host comes back up.
 - Reconnect backoff now works. `Target.reconnect` passed `backoff`
   positionally into `Connection.reconnect`, whose second positional
   parameter is `timeout` — so the backoff flag was silently dropped and

@@ -436,11 +436,14 @@ def test_sftp_remove_delegates_to_filedelete(mock_rm):
 
 @patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_reboot_runs_commands_and_reconnects(mock_run):
-    """Non-empty reboot dict triggers run + per-host reconnect."""
+    """Non-empty reboot dict fires the reboot then reconnects per host."""
     t1 = _stub_target("h1", transactional=True)
     hg = HostsGroup([t1])
     hg._reboot({"h1": "systemctl reboot"})
-    mock_run.return_value.run.assert_called_once()
+    # Fire-and-forget reboot (not via the normal run/RunCommand path)...
+    t1.reboot.assert_called_once_with("systemctl reboot")
+    mock_run.return_value.run.assert_not_called()
+    # ...then a robust reconnect with retries + backoff.
     t1.reconnect.assert_called_once_with(retry=10, backoff=True)
 
 

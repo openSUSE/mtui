@@ -188,7 +188,13 @@ class HostsGroup(UserDict[str, Target]):
         """
         if reboot:
             logger.info("Rebooting transactional hosts %s", reboot.keys())
-            self.run(reboot)
+            # Dispatch the reboot fire-and-forget on every host first: the
+            # command intentionally drops the connection, so running it
+            # through the normal ``run`` path would trip its retry=0
+            # recovery and fail before we reconnect. Then reconnect each
+            # host with retries + backoff while it comes back up.
+            for hn, command in reboot.items():
+                self.data[hn].reboot(command)
             for hn in reboot:
                 self.data[hn].reconnect(retry=10, backoff=True)
 
