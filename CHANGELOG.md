@@ -37,6 +37,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   transactional hosts (SLE Micro 5.x, openSUSE MicroOS) that keep the
   config in `/etc/transactional-update.conf` were misdetected as
   non-transactional. Both locations are now probed.
+- `assign --force` now reassigns a Gitea PR that is already assigned to a
+  different user. Previously `--force` only bypassed the "no review
+  requested" check, so force-assigning a PR held by someone else still
+  failed with `Gitea PR has assigned different user than <you>`; it now
+  posts the assignment comment regardless of the current assignee (an
+  already approved/rejected PR is still refused). Approval continues to
+  respect only the last assignee.
 
 - `downgrade` now passes `--oldpackage` to zypper (and the
   `transactional-update pkg in` variant on transactional systems), so
