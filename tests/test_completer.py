@@ -19,7 +19,7 @@ from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 
 from mtui.cli._completer import MtuiCompleter, _split_text_word
-from mtui.cli.completion import complete_choices
+from mtui.cli.completion import complete_choices, complete_choices_filelist
 from mtui.cli.repl import CommandPrompt
 
 
@@ -212,6 +212,30 @@ def test_adapter_matches_complete_choices_for_run():
 # --------------------------------------------------------------------------- #
 # Error robustness                                                            #
 # --------------------------------------------------------------------------- #
+
+
+def test_filelist_completion_survives_missing_directory(tmp_path, monkeypatch):
+    """A typo'd path prefix (e.g. ``,/``) must not raise from completion.
+
+    Tab-completion fires on every keystroke. If the user types ``put ,/``
+    (missed shift on ``./``), ``os.listdir(',/')`` raises FileNotFoundError.
+    The helper must absorb that and just return no file suggestions —
+    otherwise the traceback is logged on every subsequent keypress
+    (see repl.CommandPrompt.complete which logger.exception's the raise).
+    """
+    monkeypatch.chdir(tmp_path)
+    # Bare typo with trailing slash hits os.listdir(',/').
+    assert complete_choices_filelist([], "put ,/", ",/") == []
+    # Same shape, with a partial filename after the bad dir.
+    assert complete_choices_filelist([], "put ,/foo", ",/foo") == []
+
+
+def test_filelist_completion_survives_non_directory_in_path(tmp_path, monkeypatch):
+    """A regular file used as a directory prefix must not raise."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "file.txt").write_text("")
+    # ``file.txt/`` is syntactically a directory prefix but file.txt is a file.
+    assert complete_choices_filelist([], "put file.txt/", "file.txt/") == []
 
 
 def test_completer_swallows_underlying_exception(caplog):

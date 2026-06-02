@@ -315,6 +315,26 @@ def test_cmdloop_keyboard_interrupt_resets_state(monkeypatch):
     assert p.cmdqueue == []
 
 
+def test_cmdloop_keyboard_interrupt_during_command_returns_to_prompt(
+    monkeypatch, caplog
+):
+    """Ctrl-C raised by a dispatched command aborts that command, not the REPL.
+
+    Regression: ``add_host`` (and any other command that blocks on a
+    paramiko connect) used to propagate ``KeyboardInterrupt`` through
+    the dispatch ``except Exception`` clause -- which doesn't catch
+    ``BaseException`` -- and tore the whole mtui process down with a
+    traceback.
+    """
+    p = _make_prompt()
+    _bind_do(p, "slow", MagicMock(side_effect=KeyboardInterrupt))
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["slow", "quit"])
+    with caplog.at_level("WARNING", logger="mtui.prompt"):
+        p.cmdloop()  # must return cleanly via the seeded "quit"
+    assert any("interrupted by user" in r.message for r in caplog.records)
+
+
 def test_cmdloop_quit_loop_exits(monkeypatch):
     """``QuitLoopError`` from a dispatched command exits the loop."""
     p = _make_prompt()

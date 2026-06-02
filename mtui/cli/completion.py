@@ -91,6 +91,15 @@ def complete_choices_filelist(
     if not dirname:
         dirname = "./"
 
-    synonyms += [(dirname + i,) for i in os.listdir(dirname) if i.startswith(filename)]
+    # Tab-completion fires on every keystroke, including transient
+    # typos like ``,/`` (missed shift on ``./``). A missing directory,
+    # a non-directory in the path, or an unreadable directory must not
+    # tear down the completer — just yield no file suggestions.
+    try:
+        entries = os.listdir(dirname)
+    except (FileNotFoundError, NotADirectoryError, PermissionError):
+        entries = []
+
+    synonyms += [(dirname + i,) for i in entries if i.startswith(filename)]
 
     return complete_choices(synonyms, line, text, hostnames)
