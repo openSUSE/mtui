@@ -80,3 +80,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the testreport export footer, e.g. `committed from MTUI:<version>,
   paramiko <version> on <distro>-<verid> (kernel: <kernel>) by <user>`.
   Passing `-m` still uses the given message.
+- Replaced the `cmd.Cmd`-based REPL with `prompt_toolkit`; adds Ctrl-R
+  history search, bottom status toolbar, autosuggest from history, and a
+  command-token lexer that highlights known commands and flags. History
+  file path (`~/.mtui_history`) and all command names unchanged.
