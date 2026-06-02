@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Reconnect backoff now works. `Target.reconnect` passed `backoff`
+  positionally into `Connection.reconnect`, whose second positional
+  parameter is `timeout` — so the backoff flag was silently dropped and
+  the per-attempt wait collapsed to ~1s. It is now passed by keyword.
+
 - `downgrade` now passes `--oldpackage` to zypper (and the
   `transactional-update pkg in` variant on transactional systems), so
   installing the previously released, lower version actually proceeds.

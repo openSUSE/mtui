@@ -184,7 +184,9 @@ class Target:
             backoff: Whether to use exponential backoff for retries.
 
         """
-        self.connection.reconnect(retry, backoff)
+        # ``backoff`` must be passed by keyword: ``Connection.reconnect``'s
+        # second positional parameter is ``timeout``, not ``backoff``.
+        self.connection.reconnect(retry, backoff=backoff)
 
     def reload_system(self) -> None:
         """Reloads the system information for the target host."""

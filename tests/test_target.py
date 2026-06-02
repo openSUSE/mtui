@@ -268,13 +268,17 @@ def test_run_handles_generic_exception(mock_config):
 
 
 def test_reconnect_delegates(mock_config):
-    """Test reconnect() delegates to connection."""
+    """Test reconnect() delegates to connection, passing backoff by keyword.
+
+    ``Connection.reconnect``'s second positional parameter is ``timeout``,
+    so ``backoff`` must be passed by keyword or it is silently dropped.
+    """
     target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
 
     target.reconnect(3, True)
 
-    target.connection.reconnect.assert_called_once_with(3, True)
+    target.connection.reconnect.assert_called_once_with(3, backoff=True)
 
 
 # --- set_timeout ---
