@@ -410,6 +410,15 @@ class CommandPrompt:
                 self._dispatch(line)
             except QuitLoopError:
                 return
+            except KeyboardInterrupt:
+                # Ctrl-C during a command should abort the command and
+                # drop back to the prompt -- not tear down the REPL.
+                # Individual commands are expected to clean up their own
+                # resources in their own KeyboardInterrupt handlers; this
+                # is the last-resort safety net so an uncaught one never
+                # kills the session.
+                self.println()
+                logger.warning("command interrupted by user")
             except (messages.UserMessage, subprocess.CalledProcessError) as e:
                 if logger.isEnabledFor(DEBUG):
                     logger.exception(e)

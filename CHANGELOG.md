@@ -36,6 +36,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- File-path tab completion (e.g. for `put`, `get`, `edit`, `export`) no
+  longer logs a `FileNotFoundError` traceback when the typed path prefix
+  points at a directory that does not exist (a common transient typo
+  like `,/` instead of `./`). The completer now treats a missing,
+  non-directory, or unreadable directory as "no file suggestions" and
+  silently returns an empty list, instead of letting `os.listdir` raise
+  on every keystroke.
+- Pressing `Ctrl-C` while a command is running no longer crashes mtui
+  with a `KeyboardInterrupt` traceback. The REPL's main dispatch loop
+  now catches an unhandled `KeyboardInterrupt` from any command, logs
+  `command interrupted by user`, and drops back to the prompt instead
+  of exiting the session. Previously the dispatch loop only caught
+  `Exception`, so a Ctrl-C raised inside e.g. `add_host` waiting on a
+  slow SSH connection escaped and tore the whole process down.
 - The interactive REPL's `help` command is back. The `prompt_toolkit`
   migration removed the `cmd.Cmd` built-in; typing `help` printed
   `unknown command: help`. `help` with no argument now lists every
