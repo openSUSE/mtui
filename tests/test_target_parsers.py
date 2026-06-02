@@ -265,3 +265,58 @@ class TestParseSystem:
         _, transactional = parse_system(conn)
 
         assert transactional is True
+
+    @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_non_suse_without_os_release_falls_back_to_rhel(
+        self, mock_product_module
+    ):
+        """A non-SUSE host with no /etc/os-release falls back to rhel 6."""
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.side_effect = OSError("no products.d")
+        sftp.open.side_effect = FileNotFoundError("no os-release")
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        system, transactional = parse_system(conn)
+
+        assert system.get_base().name == "rhel"
+        assert system.get_base().version == "6"
+        assert transactional is False
+        mock_product_module.parse_os_release.assert_not_called()
+
+    @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_sles_sap_12_adds_sles_and_ha_addons(self, mock_product_module):
+        """SLES_SAP 12 implicitly carries SLES and sle-ha repos (workaround)."""
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = ["SLES_SAP.prod"]
+        sftp.readlink.return_value = "SLES_SAP.prod"
+        sftp.open.side_effect = _dispatch_open(transactional=False)
+        mock_product_module.parse_product.side_effect = [
+            ("SLES_SAP", "12-SP5", "x86_64"),
+        ]
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        system, _ = parse_system(conn)
+
+        addons = {(p.name, p.version) for p in system.get_addons()}
+        assert ("SLES", "12-SP5") in addons
+        assert ("sle-ha", "12-SP5") in addons
+
+    @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_sles_sap_16_adds_ha_addon(self, mock_product_module):
+        """SLES_SAP 16 implicitly carries the sle-ha repo (workaround)."""
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = ["SLES_SAP.prod"]
+        sftp.readlink.return_value = "SLES_SAP.prod"
+        sftp.open.side_effect = _dispatch_open(transactional=False)
+        mock_product_module.parse_product.side_effect = [
+            ("SLES_SAP", "16.0", "x86_64"),
+        ]
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        system, _ = parse_system(conn)
+
+        addons = {(p.name, p.version) for p in system.get_addons()}
+        assert ("sle-ha", "16.0") in addons
