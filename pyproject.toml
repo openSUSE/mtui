@@ -21,6 +21,7 @@ requires-python = ">=3.11"
 dependencies = [
   "openqa-client",
   "paramiko",
+  "prompt_toolkit",
   "pyxdg",
   "requests",
   "ruamel.yaml"
