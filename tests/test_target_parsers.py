@@ -125,6 +125,28 @@ def _mock_connection_with_sftp() -> tuple[MagicMock, MagicMock]:
     return conn, sftp
 
 
+def _dispatch_open(*, transactional: bool):
+    """Build a path-aware ``sftp.open`` side effect.
+
+    Product file opens return a generic context-manager mock (the parsed
+    values come from the mocked ``product`` module). Opening a
+    ``transactional-update.conf`` path succeeds when ``transactional`` is
+    True, else raises ``FileNotFoundError``. Being path-based (not a fixed
+    call sequence) keeps the tests robust to how many config locations the
+    detector probes.
+    """
+    product_file = MagicMock()
+
+    def _open(path, *args, **kwargs):
+        if "transactional-update.conf" in str(path):
+            if transactional:
+                return MagicMock()
+            raise FileNotFoundError(path)
+        return product_file
+
+    return _open
+
+
 class TestParseSystem:
     @patch("mtui.hosts.target.parsers.system.product")
     def test_parse_suse_system(self, mock_product_module):
@@ -189,3 +211,27 @@ class TestParseSystem:
         assert system.get_base().name == "ubuntu"
         assert transactional is False
         assert conn.sftp_session.call_count == 1
+
+    @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_transactional_system(self, mock_product_module):
+        """A SL-Micro host with transactional-update.conf is transactional.
+
+        Mirrors a real SL-Micro 6.1 host: SL-Micro.prod base, one extras
+        addon, and /usr/etc/transactional-update.conf present.
+        """
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = ["SL-Micro.prod", "SL-Micro-Extras.prod"]
+        sftp.readlink.return_value = "SL-Micro.prod"
+        sftp.open.side_effect = _dispatch_open(transactional=True)
+        mock_product_module.parse_product.side_effect = [
+            ("SL-Micro", "6.1", "x86_64"),
+            ("SL-Micro-Extras", "6.1", "x86_64"),
+        ]
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        system, transactional = parse_system(conn)
+
+        assert system.get_base().name == "SL-Micro"
+        assert system.get_base().version == "6.1"
+        assert transactional is True
