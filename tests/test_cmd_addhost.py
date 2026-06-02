@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
@@ -17,9 +18,27 @@ def _prompt() -> MagicMock:
     return p
 
 
+def test_add_host_argparser_accepts_target_and_keep_mode():
+    """The argument parser wires up -t/--target and -k/--keep-mode."""
+    ns = AddHost.parse_args("-t h1 -t h2 -k", sys)
+    assert ns.target == ["h1", "h2"]
+    assert ns.keep_mode is True
+
+    default = AddHost.parse_args("", sys)
+    assert default.target is None
+    assert default.keep_mode is False
+
+
+def test_add_host_complete_offers_flags():
+    """Tab completion offers -t and the new -k/--keep-mode flag."""
+    out = AddHost.complete({"hosts": []}, "", "add_host ", 9, 9)
+    assert "--keep-mode" in out
+    assert "--target" in out
+
+
 def test_add_host_with_explicit_targets_submits_per_host(mock_config):
     prompt = _prompt()
-    args = Namespace(target=["h1", "h2"])
+    args = Namespace(target=["h1", "h2"], keep_mode=False)
 
     with (
         patch("mtui.commands.addhost.concurrent.futures.ThreadPoolExecutor") as tpe,
@@ -40,7 +59,7 @@ def test_add_host_with_explicit_targets_submits_per_host(mock_config):
 
 def test_add_host_without_targets_uses_testplatforms(mock_config):
     prompt = _prompt()
-    args = Namespace(target=None)
+    args = Namespace(target=None, keep_mode=False)
 
     AddHost(args, mock_config, MagicMock(), prompt)()
 
@@ -48,3 +67,46 @@ def test_add_host_without_targets_uses_testplatforms(mock_config):
         "base=sles(major=15);arch=[x86_64]"
     )
     prompt.metadata.connect_targets.assert_called_once_with()
+
+
+def test_add_host_in_automatic_mode_switches_to_manual(mock_config):
+    """Running add_host while in automatic mode switches to the manual workflow."""
+    mock_config.auto = True
+    mock_config.kernel = False
+    prompt = _prompt()
+    args = Namespace(target=None, keep_mode=False)
+
+    AddHost(args, mock_config, MagicMock(), prompt)()
+
+    assert mock_config.auto is False
+    assert mock_config.kernel is False
+    # Prompt indicator refreshed (drops the "-auto" marker).
+    prompt.set_prompt.assert_called_once_with(prompt.session)
+    # The hosts are still added.
+    prompt.metadata.connect_targets.assert_called_once_with()
+
+
+def test_add_host_keep_mode_stays_automatic(mock_config):
+    """--keep-mode leaves automatic mode untouched even though a host is added."""
+    mock_config.auto = True
+    mock_config.kernel = False
+    prompt = _prompt()
+    args = Namespace(target=None, keep_mode=True)
+
+    AddHost(args, mock_config, MagicMock(), prompt)()
+
+    assert mock_config.auto is True  # still automatic
+    prompt.set_prompt.assert_not_called()
+    # The hosts are still added.
+    prompt.metadata.connect_targets.assert_called_once_with()
+
+
+def test_add_host_in_manual_mode_does_not_switch(mock_config):
+    """In manual mode add_host leaves the workflow untouched."""
+    mock_config.auto = False
+    prompt = _prompt()
+    args = Namespace(target=None, keep_mode=False)
+
+    AddHost(args, mock_config, MagicMock(), prompt)()
+
+    prompt.set_prompt.assert_not_called()

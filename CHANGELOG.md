@@ -18,6 +18,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   host did not actually reboot. While testing a Product Increment, the
   per-host testing lock is re-applied after the reboot (a reboot clears
   `/var/lock`), so it is not lost.
+- `add_host` now switches the session from automatic to manual workflow.
+  Running `add_host` is a manual action, so when a session that was
+  started in automatic mode adds a host it is taken as the intent to test
+  manually — `mtui` drops `config.auto`/`config.kernel`, updates the
+  prompt (the `-auto` marker disappears), and continues adding the host.
+  In manual mode the workflow is left untouched. Pass `-k`/`--keep-mode`
+  to add a host without switching the workflow.
 
 ### Fixed
 

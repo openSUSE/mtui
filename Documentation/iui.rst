@@ -47,10 +47,15 @@ add_host
 
 ::
 
-  add_host [-t HOST]
+  add_host [-t HOST] [-k]
 
 Adds another machine to the target host list.
 Without parameter adds all hosts from testplatform based on location
+
+If the session is in automatic mode, running ``add_host`` switches it to
+the manual workflow (adding hosts by hand is a manual action), updating
+the prompt accordingly. Pass ``-k``/``--keep-mode`` to add a host without
+switching the workflow.
 
 
 remove_host
