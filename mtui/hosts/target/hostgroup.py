@@ -349,10 +349,12 @@ class HostsGroup(UserDict[str, Target]):
             for t in self.data.values():
                 if t.lasterr():
                     logger.critical(
-                        "Failed to prepare host %s/ Stopping..\n# %s\n%s",
+                        "Failed to prepare host %s/ Stopping..\n# StdIN:\n%s\nStdOUT:\n%s\nStdERR:\n%s\nExit code: %s",
                         t.hostname,
                         t.lastin(),
                         t.lastout(),
+                        t.lasterr(),
+                        t.lastexit(),
                     )
                     return
             for pkg in pkgs:
