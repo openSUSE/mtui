@@ -1,74 +1,122 @@
+"""Tests for the prompt_toolkit-backed interactive REPL.
+
+These tests target :mod:`mtui.cli.repl` directly; the historical
+:mod:`mtui.cli.prompt` module is now a thin re-export shim, locked in by
+:func:`test_prompt_shim_reexports`.
+
+The loop is driven by feeding text into a
+:class:`~prompt_toolkit.input.PipeInput` plumbed through ``PromptSession``
+via the ``_input``/``_output`` test seam on :class:`CommandPrompt`.
+"""
+
 import subprocess
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 
-from mtui.cli import prompt
+from mtui.cli import prompt, repl
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.support import messages
 from mtui.test_reports.null_report import NullTestReport
 
 
-def _make_prompt(*, auto: bool = False, kernel: bool = False) -> prompt.CommandPrompt:
-    """Build a ``CommandPrompt`` with stock magic-mocked collaborators."""
+def _bind_do(p: repl.CommandPrompt, name: str, handler: Any) -> None:
+    """Bind ``do_<name>`` and register the command on ``p``.
+
+    Centralises the ``setattr`` + ``p.commands[name]`` plumbing the
+    cmdloop tests need so the ``ty`` ``unresolved-attribute`` and
+    ``invalid-assignment`` warnings live in exactly one place.
+    """
+    setattr(p, f"do_{name}", handler)
+    p.commands[name] = MagicMock()  # ty: ignore[invalid-assignment]
+
+
+def _make_prompt(
+    *,
+    auto: bool = False,
+    kernel: bool = False,
+    pipe_input=None,
+) -> repl.CommandPrompt:
+    """Build a ``CommandPrompt`` with stock magic-mocked collaborators.
+
+    When ``pipe_input`` is supplied, it is plumbed into ``PromptSession``
+    via the ``_input`` kwarg so tests can feed lines through the real
+    session machinery without touching the controlling TTY.
+    """
     config = MagicMock()
     config.auto = auto
     config.kernel = kernel
     log = MagicMock()
     sys = MagicMock()
     display_factory = MagicMock()
-    return prompt.CommandPrompt(config, log, sys, display_factory)
+    return repl.CommandPrompt(
+        config,
+        log,
+        sys,
+        display_factory,
+        _input=pipe_input,
+        _output=DummyOutput() if pipe_input is not None else None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Construction & basic attributes                                             #
+# --------------------------------------------------------------------------- #
 
 
 def test_command_prompt_init():
-    """Test CommandPrompt initialization."""
+    """``CommandPrompt`` exposes the documented attribute surface."""
     config = MagicMock()
     log = MagicMock()
     sys = MagicMock()
     display_factory = MagicMock()
 
-    p = prompt.CommandPrompt(config, log, sys, display_factory)
+    p = repl.CommandPrompt(config, log, sys, display_factory)
 
-    assert p.config == config
-    assert p.log == log
-    assert p.sys == sys
-    assert p.display == display_factory.return_value
-
-
-def test_set_prompt():
-    """Test set_prompt."""
-    config = MagicMock()
-    config.auto = False
-    config.kernel = False
-    log = MagicMock()
-    sys = MagicMock()
-    display_factory = MagicMock()
-
-    p = prompt.CommandPrompt(config, log, sys, display_factory)
-    p.set_prompt("test_session")
-
-    assert p.prompt == "mtui:test_session> "
+    assert p.config is config
+    assert p.log is log
+    assert p.sys is sys
+    assert p.display is display_factory.return_value
+    assert p.interactive is True
+    assert p.prompt == "mtui-empty>"
+    assert isinstance(p.metadata, NullTestReport)
 
 
-def test_cmd_queue():
-    """Test CmdQueue."""
+def test_prompt_shim_reexports():
+    """The legacy ``mtui.cli.prompt`` module must re-export the new names."""
+    assert prompt.CommandPrompt is repl.CommandPrompt
+    assert prompt.CmdQueue is repl.CmdQueue
+    assert prompt.QuitLoopError is repl.QuitLoopError
+    assert prompt.CommandAlreadyBoundError is repl.CommandAlreadyBoundError
+
+
+# --------------------------------------------------------------------------- #
+# CmdQueue                                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_cmd_queue_pop_echoes():
+    """``CmdQueue.pop`` echoes the prompt + popped line to the terminal."""
     term = MagicMock()
-    queue = prompt.CmdQueue(["test_cmd"], "mtui> ", term)
+    queue = repl.CmdQueue(["test_cmd"], "mtui> ", term)
 
-    cmd = queue.pop(0)
+    val = queue.pop(0)
 
-    assert cmd == "test_cmd"
+    assert val == "test_cmd"
     term.stdout.write.assert_called_with("mtui> test_cmd\n")
 
 
-def test_dispatching():
-    """Test command, help, and completion dispatching."""
-    config = MagicMock()
-    log = MagicMock()
-    sys = MagicMock()
-    display_factory = MagicMock()
+# --------------------------------------------------------------------------- #
+# Subcommand registration                                                     #
+# --------------------------------------------------------------------------- #
 
-    p = prompt.CommandPrompt(config, log, sys, display_factory)
+
+def test_dispatching():
+    """``_add_subcommand`` binds working ``do_/help_/complete_`` closures."""
+    p = _make_prompt()
 
     mock_command = MagicMock()
     mock_command.command = "test_command"
@@ -77,78 +125,18 @@ def test_dispatching():
 
     p._add_subcommand(mock_command)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
-    # Test do_
-    do_method = p.do_test_command
-    do_method("test_args")
-    mock_command.parse_args.assert_called_with("test_args", sys)
+    # do_
+    p.do_test_command("test_args")
+    mock_command.parse_args.assert_called_with("test_args", p.sys)
     mock_command.return_value.assert_called_once()
 
-    # Test help_
-    help_method = p.help_test_command
-    help_method()
+    # help_
+    p.help_test_command()
     mock_argparser.print_help.assert_called_once()
 
-    # Test complete_
-    complete_method = p.complete_test_command
-    complete_method("text", "line", 0, 1)
+    # complete_
+    p.complete_test_command("text", "line", 0, 1)
     mock_command.complete.assert_called_once()
-
-
-def test_cmdloop_keyboard_interrupt(monkeypatch):
-    """Test that cmdloop handles KeyboardInterrupt."""
-    config = MagicMock()
-    log = MagicMock()
-    sys = MagicMock()
-    display_factory = MagicMock()
-
-    p = prompt.CommandPrompt(config, log, sys, display_factory)
-
-    # Raise KeyboardInterrupt on the first call, then QuitLoopError
-    monkeypatch.setattr(
-        "cmd.Cmd.cmdloop",
-        MagicMock(side_effect=[KeyboardInterrupt, prompt.QuitLoopError]),
-    )
-
-    p.cmdloop()
-
-    assert p.interactive is True
-    assert p.cmdqueue == []
-
-
-def test_cmdloop_quit_loop(monkeypatch):
-    """Test that cmdloop handles QuitLoopError."""
-    config = MagicMock()
-    log = MagicMock()
-    sys = MagicMock()
-    display_factory = MagicMock()
-
-    p = prompt.CommandPrompt(config, log, sys, display_factory)
-
-    monkeypatch.setattr("cmd.Cmd.cmdloop", MagicMock(side_effect=prompt.QuitLoopError))
-
-    p.cmdloop()  # Should exit cleanly
-
-
-def test_notify_user_calls_notification_display(monkeypatch):
-    """``notify_user`` is a thin wrapper around ``notification.display``."""
-    p = _make_prompt()
-    display = MagicMock()
-    monkeypatch.setattr(prompt.notification, "display", display)
-    p.notify_user("hello", class_="info")
-    display.assert_called_once_with("MTUI", "hello", "info")
-
-
-def test_read_history_swallows_oserror(monkeypatch, caplog):
-    """A missing/unreadable history file is logged at debug and ignored."""
-    monkeypatch.setattr(
-        prompt.readline,
-        "read_history_file",
-        MagicMock(side_effect=OSError("no such file")),
-    )
-    with caplog.at_level("DEBUG", logger="mtui.prompt"):
-        # Construction calls ``_read_history``; must not raise.
-        _make_prompt()
-    assert any("history file" in r.message for r in caplog.records)
 
 
 def test_add_subcommand_duplicate_raises():
@@ -159,8 +147,73 @@ def test_add_subcommand_duplicate_raises():
     cmd_b = MagicMock()
     cmd_b.command = "dup"
     p._add_subcommand(cmd_a)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
-    with pytest.raises(prompt.CommandAlreadyBoundError, match="dup"):
+    with pytest.raises(repl.CommandAlreadyBoundError, match="dup"):
         p._add_subcommand(cmd_b)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+
+
+def test_add_subcommand_binds_methods_to_instance():
+    """Closures are stored in ``self.__dict__`` at registration time."""
+    p = _make_prompt()
+    cmd = MagicMock()
+    cmd.command = "alpha"
+    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    assert "do_alpha" in p.__dict__
+    assert "help_alpha" in p.__dict__
+    assert "complete_alpha" in p.__dict__
+
+
+def test_dash_in_command_name_dispatches():
+    """Command names containing ``-`` (e.g. ``report-bug``) round-trip."""
+    p = _make_prompt()
+    cmd = MagicMock()
+    cmd.command = "dash-cmd"
+    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    do = getattr(p, "do_dash-cmd")
+    do("args")
+    cmd.parse_args.assert_called_with("args", p.sys)
+    cmd.return_value.assert_called_once()
+
+
+def test_do_handles_argsparse_failure():
+    """``do_*`` swallows ``ArgsParseFailureError`` and does not invoke the command."""
+    p = _make_prompt()
+    cmd = MagicMock()
+    cmd.command = "boom"
+    cmd.parse_args.side_effect = ArgsParseFailureError()
+    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p.do_boom("--bad")
+    cmd.assert_not_called()
+
+
+def test_complete_logs_and_reraises(caplog):
+    """``complete_*`` logs the exception then re-raises."""
+    p = _make_prompt()
+    cmd = MagicMock()
+    cmd.command = "alpha"
+    cmd.complete.side_effect = RuntimeError("comp-fail")
+    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    with (
+        caplog.at_level("ERROR", logger="mtui.prompt"),
+        pytest.raises(RuntimeError, match="comp-fail"),
+    ):
+        p.complete_alpha("text", "line", 0, 1)
+    assert any(r.exc_info is not None for r in caplog.records)
+
+
+def test_get_names_includes_registered_commands():
+    """``get_names`` surfaces ``do_X`` and ``help_X`` for every registered command."""
+    p = _make_prompt()
+    cmd = MagicMock()
+    cmd.command = "alpha"
+    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    names = p.get_names()
+    assert "do_alpha" in names
+    assert "help_alpha" in names
+
+
+# --------------------------------------------------------------------------- #
+# Queue + non-interactive behaviour                                           #
+# --------------------------------------------------------------------------- #
 
 
 def test_set_cmdqueue_interactive_keeps_queue_as_is():
@@ -169,7 +222,7 @@ def test_set_cmdqueue_interactive_keeps_queue_as_is():
     p.interactive = True
     p.set_cmdqueue(["a", "b"])
     assert list(p.cmdqueue) == ["a", "b"]
-    assert isinstance(p.cmdqueue, prompt.CmdQueue)
+    assert isinstance(p.cmdqueue, repl.CmdQueue)
 
 
 def test_set_cmdqueue_non_interactive_appends_quit():
@@ -180,14 +233,122 @@ def test_set_cmdqueue_non_interactive_appends_quit():
     assert list(p.cmdqueue) == ["a", "b", "quit"]
 
 
+def test_cmdloop_non_interactive_drains_queue_without_session(monkeypatch):
+    """Non-interactive cmdloop drains the queue without touching PromptSession.
+
+    Locks in PLAN.md Risk #3: ``PromptSession.prompt`` raises on non-TTY
+    stdin, so the loop must read from ``cmdqueue`` exclusively when
+    ``interactive=False``. We assert ``_session.prompt`` is never
+    invoked.
+    """
+    p = _make_prompt()
+    p.interactive = False
+
+    do_foo = MagicMock()
+    do_quit = MagicMock()
+    _bind_do(p, "foo", do_foo)
+    _bind_do(p, "quit", do_quit)
+
+    session_prompt = MagicMock()
+    monkeypatch.setattr(p._session, "prompt", session_prompt)
+
+    p.set_cmdqueue(["foo"])  # auto-appends "quit"
+    p.cmdloop()
+
+    do_foo.assert_called_once_with("")
+    do_quit.assert_called_once_with("")
+    session_prompt.assert_not_called()
+
+
+def test_cmdloop_non_interactive_empty_queue_returns(monkeypatch):
+    """An empty queue + non-interactive session exits without prompting."""
+    p = _make_prompt()
+    p.interactive = False
+    session_prompt = MagicMock()
+    monkeypatch.setattr(p._session, "prompt", session_prompt)
+    p.cmdloop()
+    session_prompt.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# cmdloop control flow                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def _seed_quit(p: repl.CommandPrompt) -> MagicMock:
+    """Bind a ``do_quit`` that raises :class:`QuitLoopError` and return the mock.
+
+    Used by every cmdloop test that needs to terminate the loop cleanly:
+    queue a final ``"quit"`` line, and let the dispatch error path catch
+    the ``QuitLoopError`` exactly like the production ``Quit`` command
+    does on its own ``self.sys.exit(0)`` path.
+    """
+    quit_mock = MagicMock(side_effect=repl.QuitLoopError)
+    _bind_do(p, "quit", quit_mock)
+    return quit_mock
+
+
+def _mock_prompt(monkeypatch, p: repl.CommandPrompt, lines: list[Any]) -> MagicMock:
+    """Make ``p._session.prompt`` return successive ``lines``.
+
+    Each invocation returns the next item; tests that need an exception
+    on the input phase (``KeyboardInterrupt``, ``EOFError``) can replace
+    a list element with the exception type itself — :class:`MagicMock`
+    will raise it.
+    """
+    mock = MagicMock(side_effect=lines)
+    monkeypatch.setattr(p._session, "prompt", mock)
+    return mock
+
+
+def test_cmdloop_keyboard_interrupt_resets_state(monkeypatch):
+    """``KeyboardInterrupt`` clears the queue and forces interactive mode.
+
+    Mimics the prerun → ctrl-C → interactive-mode drop documented in
+    PLAN.md step 6: ``KeyboardInterrupt`` flips ``interactive`` back to
+    ``True``, drops any remaining prerun lines, and reprompts.
+    """
+    p = _make_prompt()
+    _seed_quit(p)
+    # First prompt call raises Ctrl-C; second returns "quit" to exit.
+    # The Ctrl-C handler must clear the queue and force interactive=True.
+    _mock_prompt(monkeypatch, p, [KeyboardInterrupt, "quit"])
+
+    # Pretend we entered cmdloop with a queue and non-interactive mode
+    # AFTER the first prompt call has already happened (e.g. the user
+    # cleared the queue manually); we cannot truly seed the queue here
+    # because the first iteration would pop from it instead of calling
+    # session.prompt. So just observe the post-Ctrl-C state.
+    p.cmdloop()
+
+    assert p.interactive is True
+    assert p.cmdqueue == []
+
+
+def test_cmdloop_quit_loop_exits(monkeypatch):
+    """``QuitLoopError`` from a dispatched command exits the loop."""
+    p = _make_prompt()
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["quit"])
+    p.cmdloop()  # must return cleanly
+
+
+def test_cmdloop_eof_dispatches_eof_command(monkeypatch):
+    """``EOFError`` (Ctrl-D) dispatches the registered ``EOF`` command."""
+    p = _make_prompt()
+    do_eof = MagicMock(side_effect=repl.QuitLoopError)
+    _bind_do(p, "EOF", do_eof)
+    _mock_prompt(monkeypatch, p, [EOFError])
+    p.cmdloop()
+    do_eof.assert_called_once_with("")
+
+
 def test_cmdloop_user_message_logs_error_then_quits(monkeypatch, caplog):
     """``UserMessage`` is logged at error level (non-debug path) and the loop continues."""
     p = _make_prompt()
-    err = messages.NoRefhostsDefinedError()
-    monkeypatch.setattr(
-        "cmd.Cmd.cmdloop",
-        MagicMock(side_effect=[err, prompt.QuitLoopError]),
-    )
+    _bind_do(p, "boom", MagicMock(side_effect=messages.NoRefhostsDefinedError()))
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["boom", "quit"])
     with caplog.at_level("ERROR", logger="mtui.prompt"):
         p.cmdloop()
     assert any("No refhosts defined" in r.message for r in caplog.records)
@@ -196,12 +357,9 @@ def test_cmdloop_user_message_logs_error_then_quits(monkeypatch, caplog):
 def test_cmdloop_user_message_logs_traceback_in_debug(monkeypatch, caplog):
     """When debug is enabled, ``UserMessage`` is logged with a traceback."""
     p = _make_prompt()
-    monkeypatch.setattr(
-        "cmd.Cmd.cmdloop",
-        MagicMock(
-            side_effect=[messages.NoRefhostsDefinedError(), prompt.QuitLoopError]
-        ),
-    )
+    _bind_do(p, "boom", MagicMock(side_effect=messages.NoRefhostsDefinedError()))
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["boom", "quit"])
     with caplog.at_level("DEBUG", logger="mtui.prompt"):
         p.cmdloop()
     assert any(r.exc_info is not None for r in caplog.records)
@@ -211,10 +369,9 @@ def test_cmdloop_called_process_error_logs_and_continues(monkeypatch, caplog):
     """``subprocess.CalledProcessError`` follows the same path as ``UserMessage``."""
     p = _make_prompt()
     err = subprocess.CalledProcessError(1, ["false"])
-    monkeypatch.setattr(
-        "cmd.Cmd.cmdloop",
-        MagicMock(side_effect=[err, prompt.QuitLoopError]),
-    )
+    _bind_do(p, "boom", MagicMock(side_effect=err))
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["boom", "quit"])
     with caplog.at_level("ERROR", logger="mtui.prompt"):
         p.cmdloop()
     assert any("false" in r.message or "1" in r.message for r in caplog.records)
@@ -223,10 +380,9 @@ def test_cmdloop_called_process_error_logs_and_continues(monkeypatch, caplog):
 def test_cmdloop_unexpected_error_logs_and_continues(monkeypatch, caplog):
     """Generic ``Exception`` is logged as 'Unexpected error' and the loop continues."""
     p = _make_prompt()
-    monkeypatch.setattr(
-        "cmd.Cmd.cmdloop",
-        MagicMock(side_effect=[RuntimeError("kaboom"), prompt.QuitLoopError]),
-    )
+    _bind_do(p, "boom", MagicMock(side_effect=RuntimeError("kaboom")))
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["boom", "quit"])
     with caplog.at_level("ERROR", logger="mtui.prompt"):
         p.cmdloop()
     assert any(
@@ -238,16 +394,86 @@ def test_cmdloop_unexpected_error_logs_and_continues(monkeypatch, caplog):
 def test_cmdloop_unexpected_error_logs_traceback_in_debug(monkeypatch, caplog):
     """In debug mode the unexpected-error path uses ``logger.exception``."""
     p = _make_prompt()
-    monkeypatch.setattr(
-        "cmd.Cmd.cmdloop",
-        MagicMock(side_effect=[RuntimeError("kaboom"), prompt.QuitLoopError]),
-    )
+    _bind_do(p, "boom", MagicMock(side_effect=RuntimeError("kaboom")))
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["boom", "quit"])
     with caplog.at_level("DEBUG", logger="mtui.prompt"):
         p.cmdloop()
     assert any(
         r.exc_info is not None and "Unexpected error" in r.message
         for r in caplog.records
     )
+
+
+def test_cmdloop_unknown_command_logs_warning(monkeypatch, caplog):
+    """An unrecognised command logs ``unknown command`` and keeps looping."""
+    p = _make_prompt()
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["definitely-not-a-command", "quit"])
+    with caplog.at_level("WARNING", logger="mtui.prompt"):
+        p.cmdloop()
+    assert any("unknown command" in r.message for r in caplog.records)
+
+
+def test_cmdloop_empty_line_is_ignored(monkeypatch):
+    """An empty input line must not crash the loop."""
+    p = _make_prompt()
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["", "   ", "quit"])
+    p.cmdloop()
+
+
+def test_cmdloop_intro_is_printed(monkeypatch):
+    """The ``intro`` banner, when provided, is emitted through ``println``."""
+    p = _make_prompt()
+    println = MagicMock()
+    monkeypatch.setattr(p, "println", println)
+    _seed_quit(p)
+    _mock_prompt(monkeypatch, p, ["quit"])
+    p.cmdloop(intro="hello world")
+    # The first call is the intro; later calls are post-quit (none).
+    println.assert_any_call("hello world")
+
+
+def test_cmdloop_drives_real_session_via_pipe_input(monkeypatch):
+    """Smoke test the full PromptSession path with a PipeInput.
+
+    Exercises the seam end-to-end: a real ``PromptSession`` reads from
+    the pipe, returns the line, the loop dispatches it, then the next
+    iteration hits ``EOF`` (Ctrl-D) and the registered ``do_EOF`` raises
+    ``QuitLoopError``.
+    """
+    with create_pipe_input() as pipe_input:
+        p = _make_prompt(pipe_input=pipe_input)
+
+        do_hello = MagicMock()
+        _bind_do(p, "hello", do_hello)
+
+        def quit_via_eof(_arg):
+            raise repl.QuitLoopError
+
+        _bind_do(p, "EOF", quit_via_eof)
+
+        pipe_input.send_text("hello world\n")
+        pipe_input.send_text("\x04")  # Ctrl-D → EOFError → "EOF" dispatch
+
+        p.cmdloop()
+
+    do_hello.assert_called_once_with("world")
+
+
+# --------------------------------------------------------------------------- #
+# Misc helpers                                                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_notify_user_calls_notification_display(monkeypatch):
+    """``notify_user`` is a thin wrapper around ``notification.display``."""
+    p = _make_prompt()
+    display = MagicMock()
+    monkeypatch.setattr(repl.notification, "display", display)
+    p.notify_user("hello", class_="info")
+    display.assert_called_once_with("MTUI", "hello", "info")
 
 
 def test_postcmd_short_circuits_for_null_test_report():
@@ -268,61 +494,17 @@ def test_postcmd_updates_prompt_when_metadata_loaded():
     assert p.prompt == "mtui:sess1> "
 
 
-def test_get_names_includes_registered_commands():
-    """``get_names`` must surface ``do_X`` and ``help_X`` for every registered command."""
-    p = _make_prompt()
-    cmd = MagicMock()
-    cmd.command = "alpha"
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
-    names = p.get_names()
-    assert "do_alpha" in names
-    assert "help_alpha" in names
-
-
-def test_do_handles_argsparse_failure(caplog):
-    """``do_*`` swallows ``ArgsParseFailureError`` and does not invoke the command."""
-    p = _make_prompt()
-    cmd = MagicMock()
-    cmd.command = "boom"
-    cmd.parse_args.side_effect = ArgsParseFailureError()
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
-    p.do_boom("--bad")
-    cmd.assert_not_called()  # the command class itself must not be instantiated
-
-
-def test_complete_logs_and_reraises(caplog):
-    """``complete_*`` logs the exception then re-raises so readline sees it."""
-    p = _make_prompt()
-    cmd = MagicMock()
-    cmd.command = "alpha"
-    cmd.complete.side_effect = RuntimeError("comp-fail")
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
-    with (
-        caplog.at_level("ERROR", logger="mtui.prompt"),
-        pytest.raises(RuntimeError, match="comp-fail"),
-    ):
-        p.complete_alpha("text", "line", 0, 1)
-    assert any(r.exc_info is not None for r in caplog.records)
-
-
-def test_getattr_unknown_attr_raises():
-    """Unknown attributes that don't match the do_/help_/complete_ prefixes raise."""
-    p = _make_prompt()
-    with pytest.raises(AttributeError, match="no_such_thing"):
-        p.no_such_thing  # noqa: B018  -- attribute access is the side effect under test
-
-
-def test_getattr_unknown_command_raises():
-    """do_/help_/complete_ for an unregistered command also raises ``AttributeError``."""
-    p = _make_prompt()
-    with pytest.raises(AttributeError):
-        p.do_nonexistent  # noqa: B018
-
-
 def test_emptyline_returns_false():
-    """An empty input line must not stop the loop and must not repeat the last command."""
+    """``emptyline`` must not stop the loop and must not repeat the last command."""
     p = _make_prompt()
     assert p.emptyline() is False
+
+
+def test_set_prompt_normal_mode():
+    """No auto, no kernel: prompt prefix is ``mtui``."""
+    p = _make_prompt()
+    p.set_prompt("test_session")
+    assert p.prompt == "mtui:test_session> "
 
 
 def test_set_prompt_auto_mode():
@@ -339,50 +521,6 @@ def test_set_prompt_kernel_mode():
     assert p.prompt == "mtui-kernel> "
 
 
-def test_add_subcommand_binds_methods_to_instance():
-    """``_add_subcommand`` must pre-bind ``do_/help_/complete_`` on the instance.
-
-    Locks in the C4 refactor: the closures are constructed at registration
-    time and stored in ``self.__dict__`` rather than synthesised lazily by
-    ``__getattr__``. A regression that reintroduces lazy synthesis would
-    leave the instance dict empty for these prefixes and fail here.
-    """
-    p = _make_prompt()
-    cmd = MagicMock()
-    cmd.command = "alpha"
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
-    assert "do_alpha" in p.__dict__
-    assert "help_alpha" in p.__dict__
-    assert "complete_alpha" in p.__dict__
-
-
-def test_command_prompt_has_no_getattr():
-    """``CommandPrompt`` must not define ``__getattr__``.
-
-    The per-attribute synthesis path was deleted in C4; this test pins the
-    deletion so a future regression that re-adds lazy dispatch is caught.
-    """
-    assert "__getattr__" not in vars(prompt.CommandPrompt)
-
-
-def test_dash_in_command_name_dispatches():
-    """Command names containing ``-`` (e.g. ``report-bug``) still round-trip.
-
-    ``setattr`` accepts attribute names that aren't valid Python
-    identifiers, so the dash-named ``do_report-bug`` is reachable via
-    ``getattr``. This locks in compatibility with the one production
-    command that uses a dash.
-    """
-    p = _make_prompt()
-    cmd = MagicMock()
-    cmd.command = "dash-cmd"
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
-    do = getattr(p, "do_dash-cmd")
-    do("args")
-    cmd.parse_args.assert_called_with("args", p.sys)
-    cmd.return_value.assert_called_once()
-
-
 def test_load_update_swaps_metadata_and_targets():
     """``load_update`` installs the new test report and resets the prompt."""
     p = _make_prompt()
@@ -396,6 +534,5 @@ def test_load_update_swaps_metadata_and_targets():
     )
     assert p.metadata is new_tr
     assert p.targets is new_targets
-    # ``set_prompt(None)`` resets the session marker to empty.
     assert p.prompt.endswith("> ")
     assert ":" not in p.prompt

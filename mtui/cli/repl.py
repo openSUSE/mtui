@@ -1,0 +1,459 @@
+"""prompt_toolkit-backed interactive REPL for the mtui application.
+
+Replaces the historical :mod:`cmd`-based prompt. The previous
+implementation inherited from :class:`cmd.Cmd` and relied on GNU
+``readline`` for line editing, history, and tab completion. This module
+keeps the same public surface (``CommandPrompt``, ``CmdQueue``,
+``QuitLoopError``, ``CommandAlreadyBoundError``) so existing callers and
+tests do not change shape, but the input loop is driven by
+:class:`prompt_toolkit.PromptSession` and history goes through the shared
+:mod:`mtui.cli._history` backend.
+
+This module is the implementation; :mod:`mtui.cli.prompt` is a thin
+re-export shim kept for backwards-compatible imports.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from collections.abc import Callable
+from logging import DEBUG, getLogger
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from prompt_toolkit import PromptSession
+
+from .. import commands
+from ..commands import Command, CommandAlreadyBoundError
+from ..support import messages
+from ..test_reports.null_report import NullTestReport
+from . import notification
+from ._history import default_history_path, get_history
+from .argparse import ArgsParseFailureError
+
+if TYPE_CHECKING:
+    from prompt_toolkit.input import Input
+    from prompt_toolkit.output import Output
+
+    from .prompter import Prompter
+
+logger = getLogger("mtui.prompt")
+
+
+class QuitLoopError(RuntimeError):
+    """Exception raised to exit the command loop."""
+
+
+class _LoopExitError(Exception):
+    """Internal sentinel: input phase requests :meth:`cmdloop` to return."""
+
+
+class _LoopContinueError(Exception):
+    """Internal sentinel: input phase requests :meth:`cmdloop` to reprompt.
+
+    Used by the ``KeyboardInterrupt`` handler so the loop skips dispatch
+    and goes straight to the next read cycle.
+    """
+
+
+class CmdQueue(list):
+    """A list-like object that supports prerun commands.
+
+    This class echoes the prompt with the command that's being popped
+    and is about to be executed.
+    """
+
+    def __init__(self, iterable, prompt, term) -> None:
+        """Initializes the command queue.
+
+        Args:
+            iterable: An iterable of commands.
+            prompt: The command prompt string.
+            term: The terminal object.
+
+        """
+        self.prompt = prompt
+        self.term = term
+        list.__init__(self, iterable)
+
+    def pop(self, i=-1, /) -> Any:  # type: ignore[override]
+        """Pops a command from the queue and echoes it to the terminal.
+
+        Args:
+            i: The index of the command to pop.
+
+        Returns:
+            The popped command.
+
+        """
+        val = list.pop(self, i)
+        self.echo_prompt(val)
+        return val
+
+    def echo_prompt(self, val) -> None:
+        """Echoes the prompt and a command to the terminal.
+
+        Args:
+            val: The command to echo.
+
+        """
+        self.term.stdout.write(f"{self.prompt}{val}\n")
+
+
+class CommandPrompt:
+    """The main interactive REPL for the mtui application.
+
+    Public surface mirrors the previous :class:`cmd.Cmd` subclass so the
+    rest of the codebase (``main.py``, tests, command dispatch) does not
+    move. The loop, history, and line editing now come from
+    :mod:`prompt_toolkit` rather than :mod:`cmd` and ``readline``.
+    """
+
+    def __init__(
+        self,
+        config,
+        log,
+        sys,
+        display_factory,
+        prompter: Prompter | None = None,
+        *,
+        _input: Input | None = None,
+        _output: Output | None = None,
+    ) -> None:
+        """Initializes the command prompt.
+
+        Args:
+            config: The application configuration.
+            log: The logger instance.
+            sys: The sys module.
+            display_factory: A factory for creating display objects.
+            prompter: Optional :class:`mtui.cli.prompter.Prompter` forwarded
+                to every constructed :class:`TestReport` so that SSH
+                command-timeout prompts surface to the user with
+                cross-thread serialisation. ``None`` (the default)
+                disables the prompt: command timeouts silently wait.
+            _input: Test-only :class:`prompt_toolkit.input.Input`; when
+                provided it is passed to :class:`PromptSession` so unit
+                tests can drive the loop through a
+                :class:`~prompt_toolkit.input.PipeInput` without touching
+                the real terminal. Production callers leave this ``None``
+                so prompt_toolkit auto-detects the TTY.
+            _output: Test-only :class:`prompt_toolkit.output.Output`;
+                paired with ``_input`` (typically
+                :class:`~prompt_toolkit.output.DummyOutput`) to silence
+                terminal rendering in tests.
+
+        """
+        self.sys = sys
+        self.prompter = prompter
+
+        self.interactive: bool = True
+        self.display = display_factory(self.sys.stdout)
+        self.metadata = NullTestReport(config, prompter=prompter)
+        self.targets = self.metadata.targets
+        """
+        alias to ease refactoring
+        """
+
+        self.homedir = Path("~").expanduser()
+        self.config = config
+        self.log = log
+
+        # Shared FileHistory: one writer per process, also used by
+        # mtui.cli.term.prompt_user and mtui.commands.quit so the file
+        # is not raced.
+        self._history = get_history(default_history_path())
+
+        # Single PromptSession owns input, output, and history.
+        # _input/_output are the test seam: tests construct a PipeInput
+        # + DummyOutput; production passes None so prompt_toolkit binds
+        # to the controlling TTY.
+        self._session: PromptSession[str] = PromptSession(
+            history=self._history,
+            input=_input,
+            output=_output,
+        )
+
+        # cmdqueue stays a plain list until set_cmdqueue wraps it in a
+        # CmdQueue (preserving the prerun echo behaviour).
+        self.cmdqueue: list[str] = []
+
+        self.commands: dict[str, type[Command]] = {}
+
+        # register commands
+        for cls in commands.registry.values():
+            self._add_subcommand(cls)
+
+        # Default prompt; load_update / set_prompt override once a test
+        # report is loaded.
+        self.stdout = self.sys.stdout
+        self.prompt: str = "mtui-empty>"
+
+    def notify_user(self, msg: str, class_: str = "") -> None:
+        """Displays a desktop notification.
+
+        Args:
+            msg: The message to display.
+            class_: The notification class.
+
+        """
+        notification.display("MTUI", msg, class_)
+
+    def println(self, msg: str = "", eol: str = "\n") -> None:
+        """Prints a message to the output stream.
+
+        Args:
+            msg: The message to print.
+            eol: The end-of-line character.
+
+        """
+        self.stdout.write(msg + eol)
+
+    def _add_subcommand(self, cmd: type[Command]) -> None:
+        """Adds a subcommand to the prompt.
+
+        Binds ``do_<name>``, ``help_<name>``, and ``complete_<name>`` as
+        instance attributes so that normal Python attribute lookup
+        resolves them directly. ``setattr`` accepts attribute names that
+        aren't valid Python identifiers, so command names containing
+        ``-`` (e.g. ``report-bug``) work the same way as the
+        underscore-only ones.
+
+        Args:
+            cmd: The command class to add.
+
+        """
+        if cmd.command in self.commands:
+            raise CommandAlreadyBoundError(cmd.command)
+        self.commands[cmd.command] = cmd
+
+        name = cmd.command
+        c = cmd  # bind once for each closure
+
+        def do(arg) -> None:
+            try:
+                args = c.parse_args(arg, self.sys)
+            except ArgsParseFailureError:
+                return
+            c(args, self.config, self.sys, self)()
+
+        def help() -> None:
+            c.argparser(self.sys).print_help()
+
+        def complete(*args, **kw):
+            try:
+                return c.complete(
+                    {
+                        "hosts": self.targets.select(),
+                        "metadata": self.metadata,
+                        "config": self.config,
+                    },
+                    *args,
+                    **kw,
+                )
+            except Exception as e:
+                logger.exception(e)
+                raise e
+
+        setattr(self, f"do_{name}", do)
+        setattr(self, f"help_{name}", help)
+        setattr(self, f"complete_{name}", complete)
+
+    def set_cmdqueue(self, queue: list[str]) -> None:
+        """Sets the command queue for prerun commands.
+
+        Args:
+            queue: A list of commands to run.
+
+        """
+        q = queue[:]
+        if not self.interactive:
+            q.append("quit")
+
+        self.cmdqueue = CmdQueue(q, self.prompt, self.sys)
+
+    def _dispatch(self, line: str) -> None:
+        """Parse ``line`` and invoke the matching ``do_<name>`` closure.
+
+        Splits on the first run of whitespace. Command names may contain
+        ``-`` (the historical :attr:`cmd.Cmd.identchars` widening); we
+        accept any non-whitespace first token. Unknown commands log a
+        warning and return so the loop keeps going — matching the
+        previous ``cmd.Cmd.default`` behaviour.
+
+        ``postcmd`` is invoked here (rather than in the loop) so every
+        dispatch path — interactive prompt, prerun queue drain, and the
+        ``EOFError → "EOF"`` shortcut — gets the same post-command hook
+        treatment.
+        """
+        line = line.strip()
+        if not line:
+            return
+        name, _, rest = line.partition(" ")
+        rest = rest.lstrip()
+        do = getattr(self, f"do_{name}", None)
+        if do is None:
+            logger.warning("unknown command: %s", name)
+            return
+        do(rest)
+        self.postcmd(False, line)
+
+    def cmdloop(self, intro: str | None = None) -> None:
+        """Run the main command loop.
+
+        Drains :attr:`cmdqueue` first (so prerun commands run without
+        needing a TTY-attached :class:`PromptSession`); only when the
+        queue is empty *and* the session is interactive do we ask
+        :class:`PromptSession` for a new line. Non-interactive sessions
+        with an empty queue exit immediately, matching the previous
+        behaviour of appending ``quit`` to the prerun queue.
+
+        Args:
+            intro: Optional banner string printed before the first
+                prompt. Preserved for signature parity with
+                :meth:`cmd.Cmd.cmdloop`; emitted via :meth:`println`.
+
+        """
+        if intro is not None:
+            self.println(str(intro))
+
+        while True:
+            try:
+                line = self._read_next_line()
+            except _LoopExitError:
+                return
+            except _LoopContinueError:
+                continue
+
+            try:
+                self._dispatch(line)
+            except QuitLoopError:
+                return
+            except (messages.UserMessage, subprocess.CalledProcessError) as e:
+                if logger.isEnabledFor(DEBUG):
+                    logger.exception(e)
+                else:
+                    logger.error(e)
+            except Exception as e:
+                if logger.isEnabledFor(DEBUG):
+                    logger.exception("Unexpected error")
+                else:
+                    logger.error("Unexpected error: %s", e)
+
+    def _read_next_line(self) -> str:
+        """Acquire the next line for dispatch.
+
+        Centralises queue-drain → PromptSession → control-key handling
+        so :meth:`cmdloop` only deals with dispatch-phase exceptions.
+
+        Returns:
+            The raw input line (still un-stripped; :meth:`_dispatch`
+            normalises it).
+
+        Raises:
+            _LoopExitError: when the loop must return (non-interactive
+                session with an empty queue, or any unexpected input
+                error logged through the normal dispatch error path).
+            _LoopContinueError: when the loop must skip dispatch and
+                reprompt (Ctrl-C / ``KeyboardInterrupt``).
+
+        """
+        try:
+            if self.cmdqueue:
+                return self.cmdqueue.pop(0)
+            if not self.interactive:
+                # Non-interactive with an empty queue: we are done.
+                # Touching PromptSession on a non-TTY stdin would raise.
+                raise _LoopExitError
+            return self._session.prompt(self.prompt)
+        except KeyboardInterrupt:
+            # Drop to interactive mode. Effective only if we were in
+            # prerun; for an already-interactive session it just clears
+            # the partial input and reprompts.
+            self.interactive = True
+            self.cmdqueue = []
+            self.println()
+            raise _LoopContinueError from None
+        except EOFError:
+            # Ctrl-D on an empty buffer dispatches the registered EOF
+            # command (alias of Quit). Returning the literal "EOF" lets
+            # the normal dispatch try/except in :meth:`cmdloop` handle
+            # any exception that ``do_EOF`` raises (notably
+            # ``QuitLoopError``) uniformly with typed-command dispatch.
+            return "EOF"
+
+    def postcmd(self, stop: bool, line: str) -> bool:
+        """A hook that is called after a command is executed.
+
+        Args:
+            stop: Whether to stop the command loop.
+            line: The command that was executed.
+
+        Returns:
+            Whether to stop the command loop.
+
+        """
+        if isinstance(self.metadata, NullTestReport):
+            return stop
+        self.set_prompt(session=self.__dict__.get("session", None))
+        return stop
+
+    def get_names(self) -> list[str]:
+        """Returns a list of all command names.
+
+        Surfaces ``do_<name>`` and ``help_<name>`` for every registered
+        command. Used by external introspection (e.g. help auto-listing)
+        and locked in by the test suite.
+        """
+        names: list[str] = []
+        names += [f"do_{x}" for x in self.commands]
+        names += [f"help_{x}" for x in self.commands]
+        return names
+
+    def emptyline(self) -> bool:
+        """Called when an empty line is entered."""
+        return False
+
+    def set_prompt(self, session: str | None = None) -> None:
+        """Sets the command prompt string.
+
+        Args:
+            session: The current session name.
+
+        """
+        self.session = session
+        session = ":" + str(session) if session else ""
+        mode = "mtui"
+        if self.config.auto and not self.config.kernel:
+            mode += "-auto"
+        elif self.config.kernel:
+            mode += "-kernel"
+        self.prompt = f"{mode}{session}> "
+
+    if TYPE_CHECKING:
+        # Typing-only escape hatch. The ``do_<name>``, ``help_<name>``,
+        # and ``complete_<name>`` attributes are bound at runtime by
+        # ``_add_subcommand`` via ``setattr``; the type checker can't
+        # see through that. This stub tells ``ty`` (and IDEs) that any
+        # attribute access on a ``CommandPrompt`` is callable, mirroring
+        # the previous runtime ``__getattr__`` typing contract without
+        # the lazy synthesis. Runtime lookups never reach this method.
+        def __getattr__(self, name: str) -> Callable[..., Any]: ...
+
+    def load_update(self, update, autoconnect: bool) -> None:
+        """Loads an update and sets the test report.
+
+        Args:
+            update: The update to load.
+            autoconnect: Whether to automatically connect to hosts.
+
+        """
+        tr = update.make_testreport(
+            self.config,
+            autoconnect,
+            self.interactive,
+            prompter=self.prompter,
+        )
+        self.metadata = tr
+        self.targets = tr.targets
+        self.set_prompt(None)
