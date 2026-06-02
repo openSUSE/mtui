@@ -176,6 +176,18 @@ class Target:
         self.packages = self._parse_packages()
         self.query_versions()
 
+    def reboot(self, command: str) -> None:
+        """Sends a reboot command without waiting for it to return.
+
+        The command is expected to drop the SSH connection; callers
+        should follow up with :meth:`reconnect`.
+
+        Args:
+            command: The reboot command to dispatch.
+
+        """
+        self.connection.fire_and_forget(command)
+
     def reconnect(self, retry, backoff) -> None:
         """Reconnects to the target host.
 

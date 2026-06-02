@@ -455,6 +455,23 @@ def test_reconnect_raises_after_exhausting_retries(
         conn.reconnect(retry=2, timeout=0)
 
 
+def test_fire_and_forget_dispatches_and_closes(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """fire_and_forget sends the command on a session, then closes the link."""
+    conn = Connection("h", 22, 300)
+    session = MagicMock()
+    # Connection has __slots__, so patch on the class, not the instance.
+    with (
+        patch.object(Connection, "new_session", return_value=session),
+        patch.object(Connection, "close") as close,
+    ):
+        conn.fire_and_forget("systemctl reboot")
+
+    session.exec_command.assert_called_once_with("systemctl reboot")
+    close.assert_called_once()
+
+
 def test_reconnect_backoff_grows_timeout(
     mock_ssh_client, mock_ssh_config, mock_path, monkeypatch
 ):

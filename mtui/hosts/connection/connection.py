@@ -229,6 +229,27 @@ class Connection:
                 f"Failed to reconnect to {self.hostname}:{self.port} after {count} retries"
             )
 
+    def fire_and_forget(self, command: str) -> None:
+        """Dispatches a command without waiting for it to complete.
+
+        Intended for commands that deliberately tear down the connection
+        (e.g. a reboot): the command is sent on a new session and the
+        local connection is then closed. No output or exit status is
+        collected and a dropped link is expected -- callers should follow
+        up with :meth:`reconnect`. This avoids the normal :meth:`run`
+        recovery path, which would otherwise try (and fail) to reconnect
+        to the still-rebooting host.
+
+        Args:
+            command: The command to dispatch.
+
+        """
+        logger.debug(
+            "%s: dispatching fire-and-forget command: %s", self.hostname, command
+        )
+        self.__run_command(command)
+        self.close()
+
     def new_session(self) -> Channel | None:
         """Opens a new session on the channel.
 
