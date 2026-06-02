@@ -3,14 +3,10 @@
 Replaces the historical :mod:`cmd`-based prompt. The previous
 implementation inherited from :class:`cmd.Cmd` and relied on GNU
 ``readline`` for line editing, history, and tab completion. This module
-keeps the same public surface (``CommandPrompt``, ``CmdQueue``,
-``QuitLoopError``, ``CommandAlreadyBoundError``) so existing callers and
-tests do not change shape, but the input loop is driven by
+exposes ``CommandPrompt``, ``CmdQueue``, ``QuitLoopError``, and
+``CommandAlreadyBoundError``; the input loop is driven by
 :class:`prompt_toolkit.PromptSession` and history goes through the shared
 :mod:`mtui.cli._history` backend.
-
-This module is the implementation; :mod:`mtui.cli.prompt` is a thin
-re-export shim kept for backwards-compatible imports.
 """
 
 from __future__ import annotations

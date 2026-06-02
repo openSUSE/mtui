@@ -11,8 +11,8 @@ from .cli.args import get_parser
 from .cli.colors import create_logger
 from .cli.colors import set_mode as set_color_mode
 from .cli.display import CommandPromptDisplay
-from .cli.prompt import CommandPrompt
 from .cli.prompter import Prompter
+from .cli.repl import CommandPrompt
 from .support.config import Config
 from .support.exceptions import MissingGiteaTokenError
 from .support.messages import MetadataNotLoadedError, SvnCheckoutInterruptedError
