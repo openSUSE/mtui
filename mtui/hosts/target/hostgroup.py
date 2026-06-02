@@ -198,6 +198,37 @@ class HostsGroup(UserDict[str, Target]):
             for hn in reboot:
                 self.data[hn].reconnect(retry=10, backoff=True)
 
+    def reboot(
+        self, command: str = "systemctl reboot", relock_comment: str = ""
+    ) -> None:
+        """Reboots every host in the group and reconnects.
+
+        Each host is sent ``command`` fire-and-forget (the reboot drops the
+        connection), then reconnected with retries and backoff once it is
+        back up. Works for both transactional and non-transactional hosts.
+
+        Args:
+            command: The reboot command to dispatch on each host.
+            relock_comment: If non-empty, re-apply a lock with this comment
+                after reconnecting. A reboot clears ``/var/lock`` (tmpfs),
+                dropping any mtui lock, so an active lock (e.g. a Product
+                Increment testing lock) must be re-asserted to survive.
+
+        """
+        if not self.data:
+            logger.info("No hosts to reboot")
+            return
+
+        logger.info("Rebooting %s", list(self.data))
+        for t in self.data.values():
+            t.reboot(command)
+        for t in self.data.values():
+            t.reconnect(retry=10, backoff=True)
+
+        if relock_comment:
+            logger.info("Re-applying lock after reboot")
+            self.lock(relock_comment)
+
     def update_lock(self) -> None:
         """Locks all hosts in the group for an update."""
         skipped = False

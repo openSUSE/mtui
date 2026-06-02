@@ -454,6 +454,33 @@ def test_reboot_empty_dict_is_noop():
     t1.reconnect.assert_not_called()
 
 
+def test_reboot_all_fires_and_reconnects_each():
+    """reboot() fire-and-forgets the command then reconnects every host."""
+    t1 = _stub_target("h1")
+    t2 = _stub_target("h2")
+    hg = HostsGroup([t1, t2])
+    hg.reboot()
+    for t in (t1, t2):
+        t.reboot.assert_called_once_with("systemctl reboot")
+        t.reconnect.assert_called_once_with(retry=10, backoff=True)
+        t.lock.assert_not_called()  # no relock comment -> no relock
+
+
+def test_reboot_all_relocks_when_comment_given():
+    """A relock_comment re-applies the lock after reconnect (PI lock survives)."""
+    t1 = _stub_target("h1")
+    hg = HostsGroup([t1])
+    hg.reboot(relock_comment="testing of SUSE:PI:34556:1")
+    t1.reboot.assert_called_once_with("systemctl reboot")
+    t1.reconnect.assert_called_once_with(retry=10, backoff=True)
+    t1.lock.assert_called_once_with("testing of SUSE:PI:34556:1")
+
+
+def test_reboot_all_empty_group_is_noop():
+    hg = HostsGroup([])
+    hg.reboot()  # should not raise
+
+
 # ---------------------------------------------------------------------------
 # update_lock — comment-logging branch
 # ---------------------------------------------------------------------------

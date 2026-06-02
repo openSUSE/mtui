@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- New `reboot` command: reboots all connected reference hosts (or only
+  those given with `-t`/`--target`) and reconnects automatically, with
+  retries and backoff, once each host is back up. Works for both
+  transactional and non-transactional hosts. While testing a Product
+  Increment, the per-host testing lock is re-applied after the reboot (a
+  reboot clears `/var/lock`), so it is not lost.
+
 ### Fixed
 
 - Transactional hosts no longer fail to reconnect after the post-update

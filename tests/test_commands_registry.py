@@ -50,6 +50,7 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
         ("prepare", "mtui.commands.prepare", "Prepare"),
         ("put", "mtui.commands.sftpcmd", "SFTPPut"),
         ("quit", "mtui.commands.quit", "Quit"),
+        ("reboot", "mtui.commands.reboot", "Reboot"),
         ("reject", "mtui.commands.apicall", "Reject"),
         ("reload_openqa", "mtui.commands.reloadoqa", "ReloadOpenQA"),
         ("reload_products", "mtui.commands.reload", "ReloadProducts"),
