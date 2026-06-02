@@ -26,6 +26,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   In manual mode the workflow is left untouched. Pass `-k`/`--keep-mode`
   to add a host without switching the workflow.
 
+### Removed
+
+- The `mtui.cli.prompt` compatibility shim has been deleted. It only
+  re-exported `CommandPrompt`, `CmdQueue`, `QuitLoopError`, and
+  `CommandAlreadyBoundError` from `mtui.cli.repl`; import them from
+  `mtui.cli.repl` directly. MTUI is shipped as an application, not a
+  library, so this affects no external consumers.
+
 ### Fixed
 
 - The interactive REPL's `help` command is back. The `prompt_toolkit`

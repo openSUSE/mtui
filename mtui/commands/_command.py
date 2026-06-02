@@ -35,7 +35,7 @@ class Command(ABC):
     #: Auto-populated registry of every concrete ``Command`` subclass that
     #: assigns ``command`` in its own class body. Mutated by
     #: ``__init_subclass__`` at class-creation time; consumers (notably
-    #: ``mtui.cli.prompt.CommandPrompt``) iterate this dict to discover commands.
+    #: ``mtui.cli.repl.CommandPrompt``) iterate this dict to discover commands.
     registry: ClassVar[dict[str, type["Command"]]] = {}
 
     __slots__ = [

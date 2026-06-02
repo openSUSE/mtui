@@ -1,8 +1,6 @@
 """Tests for the prompt_toolkit-backed interactive REPL.
 
-These tests target :mod:`mtui.cli.repl` directly; the historical
-:mod:`mtui.cli.prompt` module is now a thin re-export shim, locked in by
-:func:`test_prompt_shim_reexports`.
+These tests target :mod:`mtui.cli.repl` directly.
 
 The loop is driven by feeding text into a
 :class:`~prompt_toolkit.input.PipeInput` plumbed through ``PromptSession``
@@ -17,7 +15,7 @@ import pytest
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from mtui.cli import prompt, repl
+from mtui.cli import repl
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.support import messages
 from mtui.test_reports.null_report import NullTestReport
@@ -83,14 +81,6 @@ def test_command_prompt_init():
     assert p.interactive is True
     assert p.prompt == "mtui-empty>"
     assert isinstance(p.metadata, NullTestReport)
-
-
-def test_prompt_shim_reexports():
-    """The legacy ``mtui.cli.prompt`` module must re-export the new names."""
-    assert prompt.CommandPrompt is repl.CommandPrompt
-    assert prompt.CmdQueue is repl.CmdQueue
-    assert prompt.QuitLoopError is repl.QuitLoopError
-    assert prompt.CommandAlreadyBoundError is repl.CommandAlreadyBoundError
 
 
 # --------------------------------------------------------------------------- #
