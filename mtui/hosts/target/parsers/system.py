@@ -72,11 +72,21 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
         if base.name == "SLES_SAP" and base.version.startswith("16"):
             addons.add(Product("sle-ha", base.version, base.arch))
 
-        try:
-            _ = sftp.open("/usr/etc/transactional-update.conf")
+        # transactional-update ships its config in /usr/etc on newer
+        # systems (SL-Micro 6.x), but older transactional systems
+        # (SLE Micro 5.x, openSUSE MicroOS) keep it in /etc. Probe both so
+        # the older layout is not misdetected as non-transactional.
+        transactional = False
+        for conf in (
+            "/usr/etc/transactional-update.conf",
+            "/etc/transactional-update.conf",
+        ):
+            try:
+                sftp.open(conf)
+            except FileNotFoundError:
+                continue
             transactional = True
             logger.info("Host: %s is transactional system", connection.hostname)
-        except FileNotFoundError:
-            transactional = False
+            break
 
     return (System(base, addons), transactional)

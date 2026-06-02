@@ -162,13 +162,12 @@ class TestParseSystem:
         # Mock the SFTP file open as context manager
         base_file = MagicMock()
         addon_file = MagicMock()
-        # sftp.open calls sequence:
-        # 1. base product file
-        # 2. addon product file
-        # 3. transactional-update.conf (FileNotFoundError)
+        # sftp.open sequence: base product, addon product, then the two
+        # transactional-update.conf probes (usr-etc then etc), both missing.
         sftp.open.side_effect = [
             base_file,
             addon_file,
+            FileNotFoundError("not found"),
             FileNotFoundError("not found"),
         ]
 
@@ -234,4 +233,35 @@ class TestParseSystem:
 
         assert system.get_base().name == "SL-Micro"
         assert system.get_base().version == "6.1"
+        assert transactional is True
+
+    @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_transactional_system_with_etc_config(self, mock_product_module):
+        """Older transactional layout: config in /etc, not /usr/etc.
+
+        SLE Micro 5.x / MicroOS keep transactional-update.conf in /etc;
+        the detector must still recognise such hosts as transactional.
+        """
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = ["SLE-Micro.prod"]
+        sftp.readlink.return_value = "SLE-Micro.prod"
+        product_file = MagicMock()
+
+        def _open(path, *args, **kwargs):
+            p = str(path)
+            if p == "/usr/etc/transactional-update.conf":
+                raise FileNotFoundError(p)  # newer location absent
+            if p == "/etc/transactional-update.conf":
+                return MagicMock()  # older location present
+            return product_file
+
+        sftp.open.side_effect = _open
+        mock_product_module.parse_product.side_effect = [
+            ("SLE-Micro", "5.5", "x86_64"),
+        ]
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        _, transactional = parse_system(conn)
+
         assert transactional is True
