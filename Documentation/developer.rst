@@ -19,10 +19,17 @@ Project layout
       cli/                 # command-line surface
         args.py            #   argparse setup
         argparse.py        #   ArgsParseFailureError + custom parser
-        completion.py      #   readline completion helpers
+        completion.py      #   tab-completion helpers (legacy cmd.Cmd-style
+                           #     signature, adapted by _completer.py)
         display.py         #   tabular CLI output helpers
         notification.py    #   desktop notification helpers
-        prompt.py          #   interactive Cmd subclass (CommandPrompt)
+        prompt.py          #   back-compat shim re-exporting CommandPrompt
+                           #     from repl.py
+        repl.py            #   interactive REPL (prompt_toolkit PromptSession)
+        _completer.py      #   prompt_toolkit Completer adapter for the
+                           #     legacy complete() signature
+        _history.py        #   shared FileHistory (~/.mtui_history)
+        _lexer.py          #   prompt_toolkit Lexer for command-token highlighting
         prompter.py        #   confirm/choice prompt helpers
         term.py            #   terminal size / paging helpers
         colors/            #   ANSI constants, log formatter, runtime switch
@@ -145,8 +152,10 @@ Every interactive ``mtui>`` command lives in its own module under
   argparse arguments on the supplied parser (optional; default no-op).
 - ``__call__(self)``: the implementation, reads ``self.args`` and
   ``self.targets`` (required; ``Command`` is abstract on ``__call__``).
-- ``complete(state, text, line, begidx, endidx)``: optional readline
-  completer; the base class returns ``[]``.
+- ``complete(state, text, line, begidx, endidx)``: optional tab completer
+  (legacy ``cmd.Cmd``-style signature, still used by every command; the
+  ``prompt_toolkit`` adapter in ``cli/_completer.py`` translates a
+  ``Document`` into this tuple). The base class returns ``[]``.
 
 Importing ``mtui.commands`` walks the package with
 ``pkgutil.iter_modules`` and imports every submodule whose name does
