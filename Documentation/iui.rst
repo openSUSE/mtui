@@ -404,6 +404,24 @@ downgrade
 Downgrades all related packages to the last released version (using
 the UPDATE channel).
 
+reboot
+++++++
+
+::
+
+    reboot [-t HOST]
+
+Reboots reference hosts and reconnects once they are back up. With no
+argument all connected reference hosts are rebooted; ``-t``/``--target``
+limits it to the named hosts. The reboot is dispatched without waiting
+(the SSH connection is expected to drop) and mtui reconnects
+automatically with retries and backoff. Works for both transactional and
+non-transactional hosts.
+
+While testing a Product Increment, the per-host testing lock is
+re-applied after the reboot (a reboot clears ``/var/lock``), so it is not
+lost.
+
 update
 ++++++
 
