@@ -101,6 +101,7 @@ def test_openqa_overview_runs_all_three_sections_and_stores_payload(mock_config)
     assert overview.single_incidents == single_rows
     assert overview.aggregated_updates == aggregated_rows
     assert overview.build_checks == build_check_rows
+    assert overview.skip_aggregated is False
 
 
 def test_openqa_overview_no_aggregated_flag_skips_aggregated_section(mock_config):
@@ -126,6 +127,7 @@ def test_openqa_overview_no_aggregated_flag_skips_aggregated_section(mock_config
 
     au.assert_not_called()
     assert prompt.metadata.openqa.overview.aggregated_updates == []
+    assert prompt.metadata.openqa.overview.skip_aggregated is True
 
 
 def test_openqa_overview_no_versions_skips_openqa_sections(mock_config):
