@@ -165,6 +165,7 @@ class BaseExport(ABC):
             overview.single_incidents,
             overview.aggregated_updates,
             overview.build_checks,
+            skip_aggregated=overview.skip_aggregated,
         ):
             logger.info("Injected openqa_overview block into template")
 

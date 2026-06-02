@@ -3,7 +3,18 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.export import Export
-from mtui.types import FileList, OpenQAResults, RequestReviewID, URLs
+from mtui.data_sources.oqa_search import (
+    OVERVIEW_BEGIN_MARKER,
+    OVERVIEW_END_MARKER,
+    VersionResult,
+)
+from mtui.types import (
+    FileList,
+    OpenQAOverviewResult,
+    OpenQAResults,
+    RequestReviewID,
+    URLs,
+)
 from mtui.update_workflow.export.auto import AutoExport
 from mtui.update_workflow.export.base import BaseExport
 
@@ -189,13 +200,6 @@ def test_install_status_failed_when_any_result_fails(mock_config):
 
 def test_inject_overview_writes_block_into_template(mock_config):
     """BaseExport.inject_overview inserts the marker-bounded block."""
-    from mtui.data_sources.oqa_search import (
-        OVERVIEW_BEGIN_MARKER,
-        OVERVIEW_END_MARKER,
-        VersionResult,
-    )
-    from mtui.types import OpenQAOverviewResult
-
     template = FileList(
         [
             "regression tests:\n",
@@ -252,3 +256,36 @@ def test_inject_overview_is_noop_when_overview_unset(mock_config):
     exporter.inject_overview()
 
     assert list(exporter.template) == original
+
+
+def test_inject_overview_skip_aggregated_omits_aggregated_section(mock_config):
+    """skip_aggregated=True suppresses the aggregated section entirely."""
+    template = FileList(
+        [
+            "regression tests:\n",
+            "-----------------\n",
+            "(put your details here)\n",
+            "build log review:\n",
+        ]
+    )
+    overview = OpenQAOverviewResult(
+        single_incidents=[VersionResult("15-SP5", "u1", "passed")],
+        aggregated_updates=[],
+        skip_aggregated=True,
+    )
+
+    exporter = ExportProbe(
+        mock_config,
+        OpenQAResults(overview=overview),
+        template,
+        False,
+        "SUSE:Maintenance:1:1",
+        False,
+    )
+
+    exporter.inject_overview()
+
+    body = "".join(exporter.template)
+    assert "No aggregated updates" not in body
+    assert "Aggregated Updates" not in body
+    assert "15-SP5" in body

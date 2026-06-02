@@ -52,11 +52,21 @@ class OpenQAOverviewResult:
 
     Carries the three sections the upstream oqa-search script prints so
     other consumers (e.g. exporters) can render them without re-fetching.
+
+    Attributes:
+        single_incidents: results for the single-incidents section
+        aggregated_updates: results for the aggregated-updates section
+        build_checks: results for the build-checks section.
+        skip_aggregated: whether the user requested to skip the aggregated-updates section
+            When ``True`` the aggregated section should be omitted from
+            exported output entirely because the absence is intentional
+
     """
 
     single_incidents: list["VersionResult"] = field(default_factory=list)
     aggregated_updates: list["GroupResult"] = field(default_factory=list)
     build_checks: list["BuildCheckResult"] = field(default_factory=list)
+    skip_aggregated: bool = False
 
     def __bool__(self) -> bool:
         """True if any of the three sections has content."""

@@ -188,7 +188,7 @@ class OpenQAOverview(Command):
             incident_id if isinstance(incident_id, int) else request_id
         )
 
-        overview = OpenQAOverviewResult()
+        overview = OpenQAOverviewResult(skip_aggregated=self.args.no_aggregated)
 
         self.println(self._title("OpenQA:"))
         self.println(self._title("#######"))
