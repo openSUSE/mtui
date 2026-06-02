@@ -521,6 +521,67 @@ def test_set_prompt_kernel_mode():
     assert p.prompt == "mtui-kernel> "
 
 
+# --------------------------------------------------------------------------- #
+# Bottom toolbar                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_bottom_toolbar_manual_mode_empty_session_zero_hosts():
+    """Default config + no loaded report → ``manual`` / ``empty`` / 0 hosts."""
+    p = _make_prompt()
+    # NullTestReport.targets is an empty HostsGroup which supports len().
+    assert len(p.targets) == 0
+    assert p._bottom_toolbar() == " mode: manual  session: empty  hosts: 0 "
+
+
+def test_bottom_toolbar_kernel_mode_takes_precedence_over_auto():
+    """``config.kernel`` wins the mode coin-flip even when auto is also set."""
+    p = _make_prompt(auto=True, kernel=True)
+    assert " mode: kernel " in p._bottom_toolbar()
+
+
+def test_bottom_toolbar_auto_mode():
+    """``config.auto`` (without kernel) renders the ``auto`` label."""
+    p = _make_prompt(auto=True, kernel=False)
+    assert " mode: auto " in p._bottom_toolbar()
+
+
+def test_bottom_toolbar_renders_session_name_after_set_prompt():
+    """Once ``set_prompt`` records a session, the toolbar surfaces it."""
+    p = _make_prompt()
+    p.set_prompt("sess-42")
+    assert " session: sess-42 " in p._bottom_toolbar()
+
+
+def test_bottom_toolbar_renders_host_count():
+    """``len(self.targets)`` is reflected in the ``hosts:`` field."""
+    p = _make_prompt()
+    p.targets = MagicMock()
+    p.targets.__len__ = MagicMock(return_value=3)
+    assert " hosts: 3 " in p._bottom_toolbar()
+
+
+def test_bottom_toolbar_handles_targets_without_len():
+    """Defensive guard: a ``targets`` value lacking ``__len__`` yields ``?``."""
+    p = _make_prompt()
+
+    class _NoLen:
+        pass
+
+    p.targets = _NoLen()
+    assert " hosts: ? " in p._bottom_toolbar()
+
+
+def test_bottom_toolbar_before_set_prompt_uses_literal_empty():
+    """Toolbar must not raise even when called before ``set_prompt`` runs."""
+    p = _make_prompt()
+    # ``self.session`` is only assigned by set_prompt; ensure the getattr
+    # guard kicks in.
+    assert not hasattr(p, "session")
+    out = p._bottom_toolbar()
+    assert " session: empty " in out
+
+
 def test_load_update_swaps_metadata_and_targets():
     """``load_update`` installs the new test report and resets the prompt."""
     p = _make_prompt()

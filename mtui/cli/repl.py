@@ -22,13 +22,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.styles import Style
 
 from .. import commands
 from ..commands import Command, CommandAlreadyBoundError
 from ..support import messages
 from ..test_reports.null_report import NullTestReport
 from . import notification
+from ._completer import MtuiCompleter
 from ._history import default_history_path, get_history
+from ._lexer import MtuiCommandLexer
 from .argparse import ArgsParseFailureError
 
 if TYPE_CHECKING:
@@ -38,6 +42,21 @@ if TYPE_CHECKING:
     from .prompter import Prompter
 
 logger = getLogger("mtui.prompt")
+
+
+# Token classes are defined by ``MtuiCommandLexer`` (``command.known``,
+# ``command.unknown``, ``flag``) and resolved to terminal colors here so
+# the palette is one edit away from a theme swap. The ``bottom-toolbar``
+# class uses prompt_toolkit's reverse-video default style to match what
+# users expect from other prompt_toolkit applications.
+_PROMPT_STYLE = Style.from_dict(
+    {
+        "command.known": "ansigreen",
+        "command.unknown": "ansired",
+        "flag": "ansicyan",
+        "bottom-toolbar": "reverse",
+    }
+)
 
 
 class QuitLoopError(RuntimeError):
@@ -164,21 +183,44 @@ class CommandPrompt:
         # is not raced.
         self._history = get_history(default_history_path())
 
-        # Single PromptSession owns input, output, and history.
-        # _input/_output are the test seam: tests construct a PipeInput
-        # + DummyOutput; production passes None so prompt_toolkit binds
-        # to the controlling TTY.
-        self._session: PromptSession[str] = PromptSession(
-            history=self._history,
-            input=_input,
-            output=_output,
-        )
-
         # cmdqueue stays a plain list until set_cmdqueue wraps it in a
         # CmdQueue (preserving the prerun echo behaviour).
         self.cmdqueue: list[str] = []
 
         self.commands: dict[str, type[Command]] = {}
+
+        # Single PromptSession owns input, output, history, completion,
+        # lexing, and the bottom toolbar. ``MtuiCompleter`` and
+        # ``MtuiCommandLexer`` are constructed with a back-reference to
+        # ``self`` and look up ``self.commands`` lazily on each
+        # keystroke, so the registration loop below (which still
+        # mutates ``self.commands``) is reflected immediately — no
+        # post-init wiring needed.
+        #
+        # ``complete_while_typing=False`` keeps the legacy tab-only
+        # completion behaviour. ``enable_history_search=True`` gives
+        # Ctrl-R reverse history search (and Ctrl-S forward, where
+        # supported). ``AutoSuggestFromHistory`` displays a greyed-out
+        # suggestion based on the most recent matching history entry;
+        # right-arrow accepts it. Mouse support is intentionally
+        # omitted: enabling it would capture click events and break
+        # terminal text selection / copy-paste.
+        #
+        # ``_input``/``_output`` are the test seam: tests construct a
+        # PipeInput + DummyOutput; production passes None so
+        # prompt_toolkit binds to the controlling TTY.
+        self._session: PromptSession[str] = PromptSession(
+            history=self._history,
+            completer=MtuiCompleter(self),
+            auto_suggest=AutoSuggestFromHistory(),
+            complete_while_typing=False,
+            enable_history_search=True,
+            lexer=MtuiCommandLexer(self),
+            style=_PROMPT_STYLE,
+            bottom_toolbar=self._bottom_toolbar,
+            input=_input,
+            output=_output,
+        )
 
         # register commands
         for cls in commands.registry.values():
@@ -188,6 +230,49 @@ class CommandPrompt:
         # report is loaded.
         self.stdout = self.sys.stdout
         self.prompt: str = "mtui-empty>"
+
+    def _bottom_toolbar(self) -> str:
+        """Build the bottom status line shown beneath the prompt.
+
+        Rendered fields:
+
+        * ``mode`` — ``kernel`` when :attr:`config.kernel` is set
+          (kernel-update workflow), ``auto`` when only :attr:`config.auto`
+          is set (automatic-update workflow), ``manual`` otherwise.
+        * ``session`` — the session name passed to :meth:`set_prompt`
+          (typically the test report's session id), or the literal
+          ``"empty"`` before any test report is loaded.
+        * ``hosts`` — count of connected refhosts. Falls back to ``"?"``
+          if ``self.targets`` does not expose ``__len__`` (defensive
+          guard for the brief construction window between ``__init__``
+          and the first ``load_update``).
+
+        The toolbar is invoked by prompt_toolkit on every redraw, so
+        this stays cheap — three attribute reads plus a ``len()``.
+        prompt_toolkit auto-detects non-TTY stdout and suppresses the
+        toolbar's ANSI output, so acceptance tests that scrape stdout
+        are not affected.
+
+        Returns:
+            The single-line status string, including its surrounding
+            spaces so it reads naturally inside the reverse-video bar.
+
+        """
+        if self.config.kernel:
+            mode = "kernel"
+        elif self.config.auto:
+            mode = "auto"
+        else:
+            mode = "manual"
+
+        sess = self.session if getattr(self, "session", None) else "empty"
+
+        try:
+            n_hosts: int | str = len(self.targets)
+        except TypeError:
+            n_hosts = "?"
+
+        return f" mode: {mode}  session: {sess}  hosts: {n_hosts} "
 
     def notify_user(self, msg: str, class_: str = "") -> None:
         """Displays a desktop notification.
