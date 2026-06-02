@@ -31,6 +31,7 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
         ("exit", "mtui.commands.quit", "QExit"),
         ("export", "mtui.commands.export", "Export"),
         ("get", "mtui.commands.sftpcmd", "SFTPGet"),
+        ("help", "mtui.commands.help", "Help"),
         ("install", "mtui.commands.zypper", "Install"),
         ("list_bugs", "mtui.commands.simplelists", "ListBugs"),
         ("list_history", "mtui.commands.simplelists", "ListHistory"),

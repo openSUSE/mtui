@@ -28,6 +28,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The interactive REPL's `help` command is back. The `prompt_toolkit`
+  migration removed the `cmd.Cmd` built-in; typing `help` printed
+  `unknown command: help`. `help` with no argument now lists every
+  registered command (split into documented and undocumented groups),
+  and `help <command>` prints that command's `--help` output. Tab
+  completion offers the command names.
 - Transactional hosts no longer fail to reconnect after the post-update
   reboot. The reboot command was run through the normal command path,
   which on the (expected) dropped connection tried its own single,
