@@ -1,7 +1,6 @@
 """The `quit`, `exit`, and `EOF` commands."""
 
 import concurrent.futures
-import readline
 from contextlib import suppress
 
 from ..cli.argparse import ArgumentParser
@@ -49,8 +48,13 @@ class Quit(Command):
             ]
             concurrent.futures.wait(targets, timeout=45)
 
+        # FileHistory writes synchronously on each ``append_string``, so the
+        # on-disk file is already current. ``flush()`` is the canonical
+        # "make sure everything is persisted" call on
+        # :class:`prompt_toolkit.history.History`; for ``FileHistory`` it is
+        # a no-op today but stays correct if the backend ever buffers.
         with suppress(Exception):
-            readline.write_history_file(f"{self.prompt.homedir!s}/.mtui_history")
+            self.prompt._history.flush()  # noqa: SLF001
 
         self.sys.exit(0)
 

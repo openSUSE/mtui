@@ -9,10 +9,11 @@ part of ``mtui.utils``.
 import fcntl
 import os
 import re
-import readline
 import struct
 import termios
 from collections.abc import Collection
+
+from ._history import default_history_path, pop_last_entry
 
 
 def termsize() -> tuple[int, int]:
@@ -96,11 +97,11 @@ def prompt_user(
         pass
     finally:
         if response:
-            hlen = readline.get_current_history_length()
-            if hlen > 0:
-                # this is normaly not a problem but it breaks acceptance
-                # tests
-                readline.remove_history_item(hlen - 1)
+            # Scrub the y/n confirmation so it does not pollute the
+            # up-arrow stack or get persisted in ``~/.mtui_history``.
+            # This is normally cosmetic, but acceptance tests assert
+            # the history file contents and break otherwise.
+            pop_last_entry(default_history_path())
 
     return result
 
