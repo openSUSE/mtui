@@ -188,6 +188,23 @@ class Target:
         """
         self.connection.fire_and_forget(command)
 
+    def boot_id(self) -> str:
+        """Returns the host's current boot id.
+
+        Reads ``/proc/sys/kernel/random/boot_id``, which changes on every
+        boot. Used to confirm a reboot actually happened. Returns an empty
+        string if it cannot be read.
+
+        Returns:
+            The boot id, or "" if it could not be read.
+
+        """
+        try:
+            self.connection.run("cat /proc/sys/kernel/random/boot_id")
+        except Exception:
+            return ""
+        return self.connection.stdout.strip()
+
     def reconnect(self, retry, backoff) -> None:
         """Reconnects to the target host.
 
