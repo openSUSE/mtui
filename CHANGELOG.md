@@ -20,6 +20,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   pick); the `UpdateError` it raises is now reported as a single concise
   `error: Prepare failed: <host>: <reason>` line instead of a stack
   trace. Genuinely unexpected errors still log a full traceback.
+- `openqa_overview --no-aggregated` now correctly omits the aggregated
+  updates section from exported logs. Previously the section appeared with
+  a "No aggregated updates builds available" message even when explicitly
+  skipped, making it look like data was missing rather than intentionally
+  excluded.
+- Test result summaries in `openqa_overview` now correctly parse the
+  `# PASS: N` / `# FAIL: N` format used in OBS build logs. Previously only
+  the `N passed` / `N failed` format was recognized, causing OBS test
+  counts to be reported as zero.
 
 ### Changed
 
