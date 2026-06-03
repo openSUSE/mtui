@@ -112,3 +112,8 @@ must be installed separately from the Python dependencies.
 ``ssh`` / ``scp``
     Required by paramiko's underlying configuration parsing and by
     several mtui helper scripts. Any modern OpenSSH client suffices.
+
+``svn``
+    Required for the ``svn`` connector. The command-line client must be
+    installed, but it does not need to be configured with any repositories
+    since mtui shells out to it with explicit repository URLs.
