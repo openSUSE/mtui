@@ -117,8 +117,17 @@ class Connection:
         policy = self._policy if self._policy is not None else paramiko.AutoAddPolicy()
         self.client.set_missing_host_key_policy(policy)
 
-    def connect(self) -> None:
-        """Connects to the remote host using paramiko."""
+    def connect(self, quiet: bool = False) -> None:
+        """Connects to the remote host using paramiko.
+
+        Args:
+            quiet: When True, a failed connection (host unreachable) is
+                logged at debug rather than error level. Used during
+                reconnect retries -- e.g. while a host is rebooting -- where
+                a refused/timed-out connection is expected and only the
+                final give-up (a raised error) should surface to the user.
+
+        """
         cfg = SSHConfig()
         try:
             with Path("~/.ssh/config").expanduser().open() as fd:
@@ -192,7 +201,12 @@ class Connection:
             raise
 
         except OSError:
-            logger.error("No valid connection to %s:%s", self.hostname, self.port)
+            if quiet:
+                logger.debug(
+                    "No valid connection to %s:%s (yet)", self.hostname, self.port
+                )
+            else:
+                logger.error("No valid connection to %s:%s", self.hostname, self.port)
         except Exception as e:
             # general Exception
             logger.debug("%s: %s", self.hostname, e)
@@ -222,7 +236,10 @@ class Connection:
             select.select([], [], [], rtimeout)
             if backoff:
                 rtimeout = 2 * (timeout + 5 * count)
-            self.connect()
+            # Retries are expected to fail while the host is still down
+            # (e.g. mid-reboot); keep them quiet and let the final
+            # ConnectionError below be the single surfaced failure.
+            self.connect(quiet=True)
 
         if not self.is_active():
             raise ConnectionError(

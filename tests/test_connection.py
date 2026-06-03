@@ -413,6 +413,50 @@ def test_connect_oserror_is_logged_not_raised(
     assert any("No valid connection" in r.message for r in caplog.records)
 
 
+def test_connect_oserror_quiet_logs_at_debug_not_error(
+    mock_ssh_client, mock_ssh_config, mock_path, caplog
+):
+    """quiet=True downgrades the unreachable-host log from error to debug."""
+    conn = Connection("h", 22, 300)
+    mock_ssh_client.connect.side_effect = OSError("network")
+    with caplog.at_level("DEBUG", logger="mtui.connection"):
+        conn.connect(quiet=True)
+    # No error-level "No valid connection" line ...
+    assert not any(
+        r.levelname == "ERROR" and "No valid connection" in r.message
+        for r in caplog.records
+    )
+    # ... but a debug breadcrumb is still emitted.
+    assert any(
+        r.levelname == "DEBUG" and "No valid connection" in r.message
+        for r in caplog.records
+    )
+
+
+def test_reconnect_retries_are_quiet(
+    mock_ssh_client, mock_ssh_config, mock_path, monkeypatch, caplog
+):
+    """Reconnect retries call connect(quiet=True) so failures don't log as errors."""
+    conn = Connection("h", 22, 300)
+    mock_ssh_client._transport.is_active.return_value = False
+    mock_ssh_client.connect.side_effect = OSError("still down")
+    monkeypatch.setattr(
+        "mtui.hosts.connection.connection.select.select",
+        lambda *_a, **_kw: ([], [], []),
+    )
+    with (
+        caplog.at_level("DEBUG", logger="mtui.connection"),
+        pytest.raises(ConnectionError, match="Failed to reconnect"),
+    ):
+        conn.reconnect(retry=2, timeout=0)
+    # The expected mid-reboot failures are debug, not error; only the final
+    # ConnectionError (raised above) surfaces the give-up to the user.
+    assert not any(
+        r.levelname == "ERROR" and "No valid connection" in r.message
+        for r in caplog.records
+    )
+
+
 def test_connect_unknown_exception_propagates(
     mock_ssh_client, mock_ssh_config, mock_path, caplog
 ):
