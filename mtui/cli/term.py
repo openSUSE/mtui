@@ -1,6 +1,7 @@
 """Terminal-facing helpers.
 
-Houses the synchronous prompt (:func:`prompt_user`), a pager
+Houses the two synchronous prompts (:func:`prompt_user` for yes/no
+confirmations, :func:`ask_user` for free-form text), a pager
 (:func:`page`), and the two low-level helpers they need
 (:func:`termsize`, :func:`filter_ansi`). All four were historically
 part of ``mtui.utils``.
@@ -12,6 +13,9 @@ import re
 import struct
 import termios
 from collections.abc import Collection
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import InMemoryHistory
 
 from ._history import default_history_path, pop_last_entry
 
@@ -57,6 +61,24 @@ def filter_ansi(text: str) -> str:
     return text
 
 
+def _read_line(text: str) -> str:
+    """Read one line from the user through prompt_toolkit.
+
+    Shared by :func:`prompt_user` and :func:`ask_user` so the terminal
+    state (raw mode, cursor key bindings, alt-screen) set up by the
+    outer REPL ``PromptSession`` is properly saved and restored around
+    every mid-command read. A bare ``input()`` here would inherit
+    prompt_toolkit's half-configured TTY and either echo literal ``^M``
+    or block entirely, depending on the host terminal.
+
+    Uses an ephemeral :class:`InMemoryHistory` so transient answers
+    (yes/no confirmations, free-form comments) never reach
+    ``~/.mtui_history``. The shared on-disk file is still owned by
+    :mod:`mtui.cli._history`.
+    """
+    return PromptSession(history=InMemoryHistory()).prompt(text)
+
+
 def prompt_user(
     text: str,
     options: Collection[str],
@@ -88,22 +110,54 @@ def prompt_user(
         return False
 
     try:
-        response = input(text).lower()
+        response = _read_line(text).lower()
         if not response:
             result = default
         elif response in options:
             result = True
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         pass
     finally:
         if response:
-            # Scrub the y/n confirmation so it does not pollute the
-            # up-arrow stack or get persisted in ``~/.mtui_history``.
-            # This is normally cosmetic, but acceptance tests assert
-            # the history file contents and break otherwise.
+            # Defensive scrub: even with the ephemeral in-memory history
+            # used inside ``_read_line``, a stale ``readline``-era entry
+            # written by an older mtui (or a hand-edit) would still be
+            # popped, matching the previous behaviour the acceptance
+            # tests lock in.
             pop_last_entry(default_history_path())
 
     return result
+
+
+def ask_user(text: str, interactive: bool = True) -> str:
+    """Read a free-form line of input from the user.
+
+    Counterpart to :func:`prompt_user` for prompts that take an
+    arbitrary string instead of a yes/no answer (e.g. a comment body).
+    Routes through prompt_toolkit so the surrounding REPL's terminal
+    state is preserved; a bare ``input()`` would hang or echo literal
+    ``^M`` between two ``PromptSession`` calls.
+
+    Args:
+        text: The prompt to display to the user.
+        interactive: If False, the prompt is printed and an empty string
+            is returned. Lets non-interactive callers reach this helper
+            without trying to read from a closed stdin.
+
+    Returns:
+        The line typed by the user with surrounding whitespace stripped,
+        or an empty string when the user cancels with Ctrl-C / Ctrl-D
+        or when ``interactive`` is False.
+
+    """
+    if not interactive:
+        print(text)  # noqa: T201
+        return ""
+
+    try:
+        return _read_line(text).strip()
+    except (KeyboardInterrupt, EOFError):
+        return ""
 
 
 def page(text: list[str], interactive: bool = True) -> None:

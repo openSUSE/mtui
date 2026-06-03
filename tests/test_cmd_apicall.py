@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mtui.commands.apicall import Assign, Reject, Unassign
+from mtui.commands.apicall import Assign, Comment, Reject, Unassign
 from mtui.types import RequestKind, RequestReviewID
 
 
@@ -90,3 +90,50 @@ def test_end_of_testing_pi_unlocks(mock_config, cls, extra):
 
     prompt.targets.unlock.assert_called_once_with()
     assert prompt.metadata.lock_comment == ""
+
+
+# ---------------------------------------------------------------------------
+# Comment reads the body through ask_user (not the bare input() that
+# would block / echo ^M between two prompt_toolkit sessions)
+# ---------------------------------------------------------------------------
+
+
+def test_comment_osc_reads_body_through_ask_user(mock_config):
+    """The OSC ``comment`` path must route the body read through ``ask_user``.
+
+    A regression to the bare ``input()`` call would hang the REPL on a
+    real TTY (see the prompt_toolkit ↔ cooked-mode interaction fixed
+    alongside ``prompt_user``).
+    """
+    mock_config.lock_pi_autolock = False
+    prompt = _prompt()  # MAINTENANCE kind -> osc() path
+    args = Namespace(group=None, user="")
+
+    with (
+        patch("mtui.commands.apicall.OSC") as osc_cls,
+        patch("mtui.commands.apicall.ask_user", return_value="looks good") as ask,
+    ):
+        Comment(args, mock_config, MagicMock(), prompt)()
+
+    ask.assert_called_once_with("Comment: ")
+    osc_cls.return_value.comment.assert_called_once_with("looks good")
+
+
+def test_comment_gitea_reads_body_through_ask_user(mock_config):
+    """The Gitea ``comment`` path must route the body read through ``ask_user``."""
+    mock_config.lock_pi_autolock = False
+    prompt = _prompt()
+    # Force the Gitea branch: SLFO + non-1.1 maintenance_id.
+    prompt.metadata.rrid.kind = RequestKind.SLFO
+    prompt.metadata.rrid.maintenance_id = "55.1"
+    prompt.metadata.giteaprapi = MagicMock()
+    args = Namespace(group=None, user="")
+
+    with (
+        patch("mtui.commands.apicall.Gitea") as gitea_cls,
+        patch("mtui.commands.apicall.ask_user", return_value="ack") as ask,
+    ):
+        Comment(args, mock_config, MagicMock(), prompt)()
+
+    ask.assert_called_once_with("Comment: ")
+    gitea_cls.return_value.comment.assert_called_once_with("ack")

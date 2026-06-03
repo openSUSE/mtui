@@ -13,6 +13,7 @@ from typing import ClassVar, final
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
+from ..cli.term import ask_user
 from ..data_sources import OSC, Gitea
 from ..support.exceptions import GiteaError
 from ..support.misc import requires_update
@@ -257,13 +258,13 @@ class Comment(BaseApiCall):
 
     def osc(self) -> None:
         """Adds a comment to the request in OSC."""
-        comment = input("Comment: ")
+        comment = ask_user("Comment: ")
         osc = OSC(self.config, self.metadata.rrid)
         osc.comment(comment)
 
     def gitea(self) -> None:
         """Adds a comment to the pull request in Gitea."""
-        comment = input("Comment: ")
+        comment = ask_user("Comment: ")
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
             gitea.comment(comment)

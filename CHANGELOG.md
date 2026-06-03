@@ -36,6 +36,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Interactive prompts triggered from inside a command no longer hang
+  or echo literal `^M` after the answer is typed, then drop the user
+  back to the shell. Both the yes/no confirmation helper used by
+  `load_template`, `approve`, the OBS template checkout, and the pager,
+  and the free-form body read used by the `comment` command, were
+  still calling Python's built-in `input()`. That call inherited the
+  half-configured terminal state left over from the surrounding
+  `prompt_toolkit` session — on a real TTY the read either blocked
+  forever or returned an EOF that quietly aborted the command. Both
+  helpers now read through `prompt_toolkit` itself, so the terminal is
+  properly saved and restored around the read; transient answers are
+  still kept out of the persistent up-arrow history.
 - File-path tab completion (e.g. for `put`, `get`, `edit`, `export`) no
   longer logs a `FileNotFoundError` traceback when the typed path prefix
   points at a directory that does not exist (a common transient typo
