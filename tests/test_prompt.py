@@ -592,6 +592,34 @@ def test_bottom_toolbar_before_set_prompt_uses_literal_empty():
     assert " session: empty " in out
 
 
+def test_bottom_toolbar_falls_back_to_metadata_id_when_no_session():
+    """A loaded test report surfaces its RRID via ``metadata.id``."""
+    p = _make_prompt()
+    # No explicit session set; metadata is a real (non-null) report with an id.
+    assert not hasattr(p, "session")
+    p.metadata = MagicMock()
+    p.metadata.id = "SUSE:Maintenance:12345:67890"
+    assert " session: SUSE:Maintenance:12345:67890 " in p._bottom_toolbar()
+
+
+def test_bottom_toolbar_manual_session_overrides_metadata_id():
+    """``set_session_name`` wins over the loaded report's RRID."""
+    p = _make_prompt()
+    p.metadata = MagicMock()
+    p.metadata.id = "SUSE:Maintenance:12345:67890"
+    p.session = "my-debug-session"
+    assert " session: my-debug-session " in p._bottom_toolbar()
+
+
+def test_bottom_toolbar_empty_metadata_id_falls_back_to_empty():
+    """A ``NullTestReport``-style empty id collapses to the ``empty`` literal."""
+    p = _make_prompt()
+    # NullTestReport.id returns ""; the default p.metadata is already that.
+    assert isinstance(p.metadata, NullTestReport)
+    assert p.metadata.id == ""
+    assert " session: empty " in p._bottom_toolbar()
+
+
 def test_load_update_swaps_metadata_and_targets():
     """``load_update`` installs the new test report and resets the prompt."""
     p = _make_prompt()
