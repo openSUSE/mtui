@@ -235,9 +235,12 @@ class CommandPrompt:
         * ``mode`` — ``kernel`` when :attr:`config.kernel` is set
           (kernel-update workflow), ``auto`` when only :attr:`config.auto`
           is set (automatic-update workflow), ``manual`` otherwise.
-        * ``session`` — the session name passed to :meth:`set_prompt`
-          (typically the test report's session id), or the literal
-          ``"empty"`` before any test report is loaded.
+        * ``session`` — resolved in precedence order: an explicit name
+          set via ``set_session_name`` (:attr:`self.session`) wins; else
+          the loaded test report's :attr:`id` (its RRID); else the
+          literal ``"empty"`` when no test report is loaded.
+          :class:`NullTestReport` returns ``""`` from ``id``, so the
+          fallback to ``"empty"`` covers the pre-load state.
         * ``hosts`` — count of connected refhosts. Falls back to ``"?"``
           if ``self.targets`` does not expose ``__len__`` (defensive
           guard for the brief construction window between ``__init__``
@@ -261,7 +264,10 @@ class CommandPrompt:
         else:
             mode = "manual"
 
-        sess = self.session if getattr(self, "session", None) else "empty"
+        sess = self.session if getattr(self, "session", None) else ""
+        if not sess:
+            metadata = getattr(self, "metadata", None)
+            sess = getattr(metadata, "id", "") or "empty"
 
         try:
             n_hosts: int | str = len(self.targets)

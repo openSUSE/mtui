@@ -36,6 +36,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The interactive REPL's bottom toolbar no longer reports
+  `session: empty` after a test report has been loaded. The toolbar now
+  shows, in precedence order, an explicit name set via
+  `set_session_name`, the loaded report's RRID, or the literal `empty`
+  before any report is loaded. Previously the toolbar only reflected the
+  manual `set_session_name` value and stayed on `empty` for every other
+  case, even with a fully loaded template.
 - Interactive prompts triggered from inside a command no longer hang
   or echo literal `^M` after the answer is typed, then drop the user
   back to the shell. Both the yes/no confirmation helper used by
