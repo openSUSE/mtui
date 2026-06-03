@@ -68,6 +68,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   registered command (split into documented and undocumented groups),
   and `help <command>` prints that command's `--help` output. Tab
   completion offers the command names.
+- Rebooting reference hosts now reads cleanly. The progress line prints a
+  sorted, comma-separated host list instead of a raw Python list repr, each
+  host logs a `… is back up` line once it reconnects, and the connection
+  attempts that fail while a host is still down (expected mid-reboot) are
+  logged at debug instead of as `No valid connection …` errors — only a
+  genuine give-up still surfaces as an error.
 - Transactional hosts no longer fail to reconnect after the post-update
   reboot. The reboot command was run through the normal command path,
   which on the (expected) dropped connection tried its own single,

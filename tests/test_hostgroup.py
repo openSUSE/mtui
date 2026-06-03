@@ -505,6 +505,23 @@ def test_reboot_all_empty_group_is_noop():
     hg.reboot()  # should not raise
 
 
+def test_reboot_all_logs_clean_host_list_and_back_up(caplog):
+    """Reboot logs a sorted comma-joined host list (not a Python list repr)."""
+    t1 = _stub_target("h2")
+    t2 = _stub_target("h1")
+    t1.boot_id.side_effect = ["b2", "a2"]
+    t2.boot_id.side_effect = ["b1", "a1"]
+    hg = HostsGroup([t1, t2])
+    with caplog.at_level(logging.INFO, logger="mtui.target.hostgroup"):
+        hg.reboot()
+    msgs = [r.getMessage() for r in caplog.records]
+    assert "Rebooting: h1, h2" in msgs
+    assert "h1 is back up" in msgs
+    assert "h2 is back up" in msgs
+    # No raw list repr leaked into the output.
+    assert not any("['" in m for m in msgs)
+
+
 # ---------------------------------------------------------------------------
 # update_lock — comment-logging branch
 # ---------------------------------------------------------------------------

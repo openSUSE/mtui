@@ -187,7 +187,7 @@ class HostsGroup(UserDict[str, Target]):
 
         """
         if reboot:
-            logger.info("Rebooting transactional hosts %s", reboot.keys())
+            logger.info("Rebooting transactional hosts: %s", ", ".join(sorted(reboot)))
             # Dispatch the reboot fire-and-forget on every host first: the
             # command intentionally drops the connection, so running it
             # through the normal ``run`` path would trip its retry=0
@@ -195,8 +195,9 @@ class HostsGroup(UserDict[str, Target]):
             # host with retries + backoff while it comes back up.
             for hn, command in reboot.items():
                 self.data[hn].reboot(command)
-            for hn in reboot:
+            for hn in sorted(reboot):
                 self.data[hn].reconnect(retry=10, backoff=True)
+                logger.info("%s is back up", hn)
 
     def reboot(
         self, command: str = "systemctl reboot", relock_comment: str = ""
@@ -219,14 +220,15 @@ class HostsGroup(UserDict[str, Target]):
             logger.info("No hosts to reboot")
             return
 
-        logger.info("Rebooting %s", list(self.data))
+        logger.info("Rebooting: %s", ", ".join(sorted(self.data)))
         # Record the boot id before rebooting so we can confirm afterwards
         # that the host actually came back on a fresh boot.
         boot_ids = {hn: t.boot_id() for hn, t in self.data.items()}
         for t in self.data.values():
             t.reboot(command)
-        for t in self.data.values():
-            t.reconnect(retry=10, backoff=True)
+        for hn in sorted(self.data):
+            self.data[hn].reconnect(retry=10, backoff=True)
+            logger.info("%s is back up", hn)
 
         for hn, t in self.data.items():
             self._verify_reboot(t, boot_ids[hn])
