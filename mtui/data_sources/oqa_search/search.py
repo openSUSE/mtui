@@ -465,12 +465,24 @@ def build_checks(
     product: str,
     incident_id: int | str,
     request_id: int,
-    build: str,
+    packages: list[str],
     url_qam: str,
     test_pattern: str | None = None,
 ) -> list[BuildCheckResult]:
-    """Parse the qam.suse.de build_checks index and extract summaries."""
-    package_name = build.split(":")[-1]
+    """Parse the qam.suse.de build_checks index and extract summaries.
+
+    Args:
+        product: The product kind (e.g., "Maintenance", "SLFO").
+        incident_id: The incident/maintenance ID.
+        request_id: The request/review ID.
+        packages: List of package names to filter logs by.
+        url_qam: Base URL for the QAM service.
+        test_pattern: Optional regex pattern to extract test results.
+
+    Returns:
+        List of BuildCheckResult objects, one per matching .log file.
+
+    """
     base_url = (
         f"{url_qam}/testreports/SUSE:{product}:{incident_id}:{request_id}/build_checks"
     )
@@ -484,10 +496,17 @@ def build_checks(
     parser = LogFileLinkParser()
     parser.feed(html_text)
 
-    logfiles = [
-        log for log in parser.log_files if package_name in log and ".log" in log
-    ]
+    # Filter .log files to those matching any package in this update
+    logfiles = [log for log in parser.log_files if any(pkg in log for pkg in packages)]
+
+    logger.debug(
+        "Found %d .log files in build_checks index, %d match packages %r",
+        len(parser.log_files),
+        len(logfiles),
+        packages,
+    )
     if not logfiles:
+        logger.warning("No build check logs found for packages %r", packages)
         return []
 
     out: list[BuildCheckResult] = []
