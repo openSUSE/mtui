@@ -288,9 +288,7 @@ def test_build_checks_filters_logs_by_package_and_parses():
             body=_LOG_SHORT,
             status=200,
         )
-    out = oqa_search.build_checks(
-        "Maintenance", 12358, 199773, ":12358:bash", QAM, None
-    )
+    out = oqa_search.build_checks("Maintenance", 12358, 199773, ["bash"], QAM, None)
 
     # Two .log files in the index match the package "bash"
     assert len(out) == 2
@@ -316,9 +314,7 @@ def test_build_checks_folds_long_match_lists():
         status=200,
     )
 
-    out = oqa_search.build_checks(
-        "Maintenance", 12358, 199773, ":12358:bash", QAM, None
-    )
+    out = oqa_search.build_checks("Maintenance", 12358, 199773, ["bash"], QAM, None)
     assert len(out) == 1
     entry = out[0]
     assert entry.summary  # non-empty
@@ -334,10 +330,42 @@ def test_build_checks_index_404_returns_empty():
         f"{QAM}/testreports/SUSE:Maintenance:12358:199773/build_checks",
         status=404,
     )
-    out = oqa_search.build_checks(
-        "Maintenance", 12358, 199773, ":12358:bash", QAM, None
-    )
+    out = oqa_search.build_checks("Maintenance", 12358, 199773, ["bash"], QAM, None)
     assert out == []
+
+
+@responses.activate
+def test_build_checks_filters_multiple_packages():
+    """Logs matching any package in the list are included."""
+    responses.add(
+        responses.GET,
+        f"{QAM}/testreports/SUSE:Maintenance:12358:199773/build_checks",
+        body=_HTML_INDEX,
+        status=200,
+        content_type="text/html",
+    )
+    for arch in ("x86_64", "aarch64"):
+        responses.add(
+            responses.GET,
+            url=(
+                f"{QAM}/testreports/SUSE:Maintenance:12358:199773/build_checks/"
+                f"bash.SUSE_SLE-15-SP5_Update.{arch}.log"
+            ),
+            body=_LOG_SHORT,
+            status=200,
+        )
+    responses.add(
+        responses.GET,
+        f"{QAM}/testreports/SUSE:Maintenance:12358:199773/build_checks/other-package.log",
+        body=_LOG_SHORT,
+        status=200,
+    )
+
+    out = oqa_search.build_checks(
+        "Maintenance", 12358, 199773, ["bash", "other-package"], QAM, None
+    )
+
+    assert len(out) == 3
 
 
 def test_extract_test_results_custom_pattern_overrides_heuristics():

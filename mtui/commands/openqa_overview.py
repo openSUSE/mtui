@@ -236,11 +236,14 @@ class OpenQAOverview(Command):
         self.println("-------")
         self.println(self._title("\nBuild checks:"))
         self.println(self._title("#############"))
+        packages = self.metadata.get_package_list() if self.metadata else []
+        if not packages and build:
+            packages = [build.split(":")[-1]]
         overview.build_checks = oqa.build_checks(
             product,
             effective_incident_id,
             request_id,
-            build,
+            packages,
             url_qam,
             self.args.test_pattern,
         )
