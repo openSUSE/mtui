@@ -30,6 +30,7 @@ dynamic = ["version"]
 
 [project.scripts]
 mtui = "mtui.main:main"
+mtui-mcp = "mtui.mcp.main:main"
 
 [project.optional-dependencies]
 keyring = ["keyring"]
