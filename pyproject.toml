@@ -33,6 +33,7 @@ mtui = "mtui.main:main"
 
 [project.optional-dependencies]
 keyring = ["keyring"]
+mcp = ["fastmcp>=2"]
 norpm = ["version_utils"]
 notify = ["notify"]
 rpm = ["rpm"]
