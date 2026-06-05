@@ -1,0 +1,149 @@
+"""Reassemble argparse argv from a tool-call kwargs dict.
+
+FastMCP delivers a tool call as a dict of ``{dest: value}`` keyed by the
+synthesised parameter names from :mod:`mtui.mcp._schema`. To run the
+underlying :class:`mtui.commands._command.Command` we must turn that
+dict back into a token list ``argparse`` can parse. The mapping is the
+inverse of :func:`mtui.mcp._schema.action_to_parameter`:
+
+* ``store_true`` / ``store_false`` / ``store_const`` → emit the long
+  flag iff the value is the "on" side.
+* ``append`` → emit ``[flag, item]`` per element of the list value.
+* Positional ``nargs=REMAINDER``/``*``/``+`` → append elements verbatim
+  at the end (after every flag-shaped argument), preserving order.
+* Optional scalar → emit ``[long_flag, str(value)]``.
+* Positional scalar → append ``str(value)`` after the flags.
+
+The function returns a list of strings; callers (notably
+:meth:`McpSession.run_command`) feed it to :func:`shlex.join` and then
+to the per-command argparser.
+"""
+
+from __future__ import annotations
+
+import argparse
+from logging import getLogger
+from typing import Any
+
+logger = getLogger("mtui.mcp.argv")
+
+#: Sentinel used by argparse for "no default supplied". We treat
+#: kwargs equal to this as "client did not supply anything".
+_NO_DEFAULT = object()
+
+
+def _action_index(
+    parser: argparse.ArgumentParser,
+) -> dict[str, argparse.Action]:
+    """Build a ``{dest: action}`` map for ``parser``.
+
+    Multiple actions can share a ``dest`` (mutually exclusive groups);
+    :mod:`mtui.mcp._schema` keeps only the first one, so we mirror that
+    here. Used by :func:`kwargs_to_argv` to look up how each kwarg
+    should be re-emitted.
+    """
+    index: dict[str, argparse.Action] = {}
+    for action in parser._actions:  # noqa: SLF001 - argparse exposes only this
+        if isinstance(action, argparse._SubParsersAction):
+            continue
+        if action.dest == argparse.SUPPRESS:
+            continue
+        index.setdefault(action.dest, action)
+    return index
+
+
+def _long_flag(action: argparse.Action) -> str:
+    """Return the long ``--flag`` form, falling back to whatever exists.
+
+    Every mtui optional that has a short form also has a long form, but
+    we tolerate optional-only short forms defensively.
+    """
+    for opt in action.option_strings:
+        if opt.startswith("--"):
+            return opt
+    return action.option_strings[0]
+
+
+def kwargs_to_argv(
+    parser: argparse.ArgumentParser,
+    kwargs: dict[str, Any],
+) -> list[str]:
+    """Re-encode a tool-call kwargs dict as argparse-compatible argv.
+
+    Arguments are emitted in the same order ``parser._actions`` defines
+    them so the output is deterministic and easy to read in logs. All
+    optional flags come out first, then positional values — argparse
+    accepts positionals after flags but not interleaved with them when
+    ``nargs=REMAINDER`` is involved.
+
+    Args:
+        parser: The command's :class:`argparse.ArgumentParser`. Used to
+            look up the action class behind each kwarg.
+        kwargs: ``{dest: value}`` as delivered by FastMCP.
+
+    Returns:
+        A list of argv tokens ready to be passed through
+        :func:`shlex.join` and back into :meth:`Command.parse_args`.
+
+    """
+    index = _action_index(parser)
+    flag_tokens: list[str] = []
+    positional_tail: list[str] = []
+
+    for action in parser._actions:  # noqa: SLF001 - argparse exposes only this
+        if action.dest not in index or index[action.dest] is not action:
+            continue  # secondary action sharing a dest (e.g. load_template -k)
+        if action.dest not in kwargs:
+            continue
+        value = kwargs[action.dest]
+
+        # ---- boolean-shaped flags ------------------------------------
+        if isinstance(action, argparse._StoreTrueAction):
+            if value:
+                flag_tokens.append(_long_flag(action))
+            continue
+        if isinstance(action, argparse._StoreFalseAction):
+            if not value:
+                flag_tokens.append(_long_flag(action))
+            continue
+        if isinstance(action, argparse._StoreConstAction):
+            if value:
+                flag_tokens.append(_long_flag(action))
+            continue
+
+        # ---- append ---------------------------------------------------
+        if isinstance(action, argparse._AppendAction):
+            if not value:
+                continue
+            flag = _long_flag(action)
+            for item in value:
+                flag_tokens.extend([flag, str(item)])
+            continue
+
+        # ---- positional ----------------------------------------------
+        is_positional = not action.option_strings
+        if is_positional:
+            if value is None:
+                continue
+            if isinstance(value, list):
+                positional_tail.extend(str(x) for x in value)
+            else:
+                positional_tail.append(str(value))
+            continue
+
+        # ---- optional scalar / multi-value flag ----------------------
+        if value is None:
+            continue
+        flag = _long_flag(action)
+        if isinstance(value, list):
+            # ``nargs`` in ``+``, ``*``, integer N, or ``REMAINDER``
+            # makes argparse consume the rest of the argv after the flag
+            # token. We must emit ``[--flag, v1, v2, ...]`` once, not
+            # ``[--flag, v1, --flag, v2]`` (the latter would be parsed
+            # as a single value list ``[v1, '--flag', v2]``).
+            flag_tokens.append(flag)
+            flag_tokens.extend(str(item) for item in value)
+        else:
+            flag_tokens.extend([flag, str(value)])
+
+    return flag_tokens + positional_tail

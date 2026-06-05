@@ -1132,7 +1132,7 @@ doc = [
 [package.metadata]
 requires-dist = [
     { name = "argcomplete", marker = "extra == 'completion'", specifier = ">=3.0" },
-    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=2" },
+    { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3" },
     { name = "keyring", marker = "extra == 'keyring'" },
     { name = "notify", marker = "extra == 'notify'" },
     { name = "openqa-client" },

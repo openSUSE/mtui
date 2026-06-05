@@ -24,7 +24,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync dependencies
-        run: uv sync --extra norpm --group dev
+        run: uv sync --extra norpm --extra mcp --group dev
       - name: Run ty check
         run: uv run ty check
   test:
@@ -41,7 +41,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
       - name: Sync dependencies
-        run: uv sync --extra norpm --group dev
+        run: uv sync --extra norpm --extra mcp --group dev
       - name: Test run ${{ matrix.python-version }}
         run: uv run pytest -v --cov=./mtui --cov-report=xml --cov-report=term --junitxml=junit.xml -o junit_family=legacy
       - name: Upload coverage to CodeCov
