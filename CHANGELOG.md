@@ -19,6 +19,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `lrun` now captures child stdout/stderr and propagates the real exit
+  code when invoked through `mtui-mcp` (or any non-interactive prompt).
+  Previously a failing local command surfaced to the MCP client as
+  `exit_code=1` with no output; the child's streams went to the server's
+  TTY and `CalledProcessError.returncode` was discarded. The interactive
+  REPL path is unchanged — output still streams live to the terminal.
 - `openqa_overview` now shows build check logs for all packages in a
   multi-package update, not just one. Previously only logs matching a
   single package name extracted from the build string were displayed,
