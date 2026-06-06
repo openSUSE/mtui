@@ -19,6 +19,7 @@ In addition, MTUI provides convenience commands to help with maintenance update 
 - File transfer: `put` (glob upload to all hosts) and `get` (download with per-host filename suffix or recursive folder mode).
 - Interactive shell with readline completion, history search, per-command `--help`, configurable log level, optional desktop notifications (`notify` extra), and OS-keyring credential storage (`keyring` extra).
 - Shell-completion script via the `completion` extra (`register-python-argcomplete mtui`).
+- MCP server (`mtui-mcp`, optional `mcp` extra): exposes every non-interactive mtui command as a [Model Context Protocol](https://modelcontextprotocol.io) tool, plus dedicated `testreport_read` / `testreport_patch` / `testreport_write` tools, so LLM clients can drive a headless mtui session over `stdio` or `http`.
 
 ## License
 
