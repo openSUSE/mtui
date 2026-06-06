@@ -215,9 +215,15 @@ def action_to_parameter(
         default: Any = _REQUIRED
         annotated = Annotated[annotation, field]
     elif is_list:
-        # Optional list arg defaults to ``[]`` so the JSON schema stays
+        # Optional list arg: preserve a real non-empty argparse default
+        # (e.g. ``openqa_overview --aggregated-groups`` defaults to
+        # ``["core"]``) so the MCP path matches the REPL. An empty
+        # default falls back to ``[]`` so the JSON schema stays
         # ``{"type": "array"}`` instead of widening to ``anyOf``.
-        default = []
+        if isinstance(action.default, list | tuple) and action.default:
+            default = list(action.default)
+        else:
+            default = []
         annotated = Annotated[annotation, field]
     else:
         default = action.default

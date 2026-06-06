@@ -298,6 +298,26 @@ def test_optional_multivalue_flag_round_trip() -> None:
     assert parsed.message == ["why", "not"]
 
 
+def test_optional_list_arg_preserves_nonempty_argparse_default() -> None:
+    """``openqa_overview --aggregated-groups`` defaults to ``["core"]``.
+
+    Regression for the MCP-side bug where an optional ``nargs="+"`` arg
+    with a non-empty argparse default was rewritten to ``[]``, causing
+    ``kwargs_to_argv`` to emit a bare ``--aggregated-groups`` flag and
+    argparse to fail with *"expected at least one argument"*.
+    """
+    parser = Command.registry["openqa_overview"].argparser(__import__("sys"))
+    params = {p.name: p for p in build_parameters(parser)}
+    assert "aggregated_groups" in params
+    assert params["aggregated_groups"].default == ["core"]
+
+    # Round-trip the defaulted value through the encoder + argparse.
+    argv = kwargs_to_argv(parser, {"aggregated_groups": ["core"]})
+    assert argv == ["--aggregated-groups", "core"]
+    parsed = parser.parse_args(argv)
+    assert parsed.aggregated_groups == ["core"]
+
+
 def test_required_choice_appears_in_schema_required(
     mcp: FastMCP, registered_names: list[str]
 ) -> None:

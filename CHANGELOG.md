@@ -33,3 +33,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `operation` enum (`add`/`remove`); `load_template` now takes two
   optional strings `auto_review_id` / `kernel_review_id` with an
   "exactly one required" runtime check.
+- `mtui-mcp` now preserves real argparse defaults for optional
+  list-shaped arguments. Previously the schema layer replaced every
+  optional list default with `[]`, so invoking `openqa_overview`
+  without `aggregated_groups` emitted a bare `--aggregated-groups`
+  flag and crashed with *"expected at least one argument"*. Non-empty
+  argparse defaults (like `["core"]`) now flow through to the MCP
+  schema and match the REPL behaviour.
