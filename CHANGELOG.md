@@ -40,3 +40,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   flag and crashed with *"expected at least one argument"*. Non-empty
   argparse defaults (like `["core"]`) now flow through to the MCP
   schema and match the REPL behaviour.
+- `config show` with no attributes no longer crashes with
+  `TypeError: 'ConfigOption' object is not subscriptable`. The handler
+  was still indexing config entries as tuples after they were
+  refactored into a `ConfigOption` dataclass, so any caller (REPL or
+  `mtui-mcp`'s `config_show` tool) that omitted attribute names hit
+  the error instead of getting the sorted option list.
