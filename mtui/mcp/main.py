@@ -14,6 +14,7 @@ manual restart for a single typo. The REPL's stricter "exit 1 on
 preload failure" contract does not translate cleanly to a server.
 """
 
+import asyncio
 import logging
 import shlex
 import sys
@@ -31,6 +32,32 @@ from .args import get_parser
 from .session import McpCommandError, McpSession
 from .testreport_tools import register_testreport_tools
 from .tools import build_tools
+
+# Exception types that we treat as "user asked us to stop" rather than
+# as crashes. ``CancelledError`` shows up because FastMCP runs under
+# ``anyio.run``; when SIGINT cancels in-flight tasks anyio surfaces
+# cancellations alongside the KeyboardInterrupt inside a group.
+_SHUTDOWN_LEAVES: tuple[type[BaseException], ...] = (
+    KeyboardInterrupt,
+    SystemExit,
+    asyncio.CancelledError,
+)
+
+
+def _is_clean_shutdown_group(exc: BaseException) -> bool:
+    """Return True iff every leaf in ``exc`` is a shutdown sentinel.
+
+    ``anyio.run`` (used by :meth:`FastMCP.run`) wraps task-group failures
+    in :class:`BaseExceptionGroup` on Python 3.11+, so a bare
+    ``except KeyboardInterrupt`` does not catch Ctrl-C delivered to an
+    active task group. We walk the group recursively and only treat it
+    as a clean shutdown when *every* leaf is one of
+    :data:`_SHUTDOWN_LEAVES`; if any leaf is a real error we let the
+    group propagate so the crash path still triggers.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        return all(_is_clean_shutdown_group(e) for e in exc.exceptions)
+    return isinstance(exc, _SHUTDOWN_LEAVES)
 
 
 def main() -> int:
@@ -87,6 +114,9 @@ def main() -> int:
             cfg.kernel = False
         try:
             session.load_update(args.update, autoconnect=not bool(args.sut))
+        except KeyboardInterrupt:
+            logger.info("mtui-mcp: shutting down")
+            return 0
         except (
             SvnCheckoutInterruptedError,
             CalledProcessError,
@@ -111,11 +141,15 @@ def main() -> int:
         if add_host_cls is None:
             logger.error("add_host command missing from registry; cannot autoconnect")
         else:
-            for x in args.sut:
-                try:
-                    session._run_sync(add_host_cls, shlex.split(x.print_args()))  # noqa: SLF001
-                except McpCommandError as e:
-                    logger.error("failed to add host %s: %s", x, e)
+            try:
+                for x in args.sut:
+                    try:
+                        session._run_sync(add_host_cls, shlex.split(x.print_args()))  # noqa: SLF001
+                    except McpCommandError as e:
+                        logger.error("failed to add host %s: %s", x, e)
+            except KeyboardInterrupt:
+                logger.info("mtui-mcp: shutting down")
+                return 0
 
     mcp = FastMCP(name="mtui")
     build_tools(mcp, session)
@@ -127,7 +161,18 @@ def main() -> int:
         else:
             mcp.run()
     except KeyboardInterrupt:
+        logger.info("mtui-mcp: shutting down")
         return 0
+    except BaseExceptionGroup as eg:
+        # ``anyio.run`` may wrap a Ctrl-C delivered to an active task
+        # group inside a BaseExceptionGroup; treat groups whose every
+        # leaf is a shutdown sentinel as a clean exit, otherwise let
+        # the group propagate to the crash path below.
+        if _is_clean_shutdown_group(eg):
+            logger.info("mtui-mcp: shutting down")
+            return 0
+        logger.error("mtui-mcp crashed: %s", eg)
+        return 1
     except Exception as e:  # noqa: BLE001
         logger.error("mtui-mcp crashed: %s", e)
         return 1

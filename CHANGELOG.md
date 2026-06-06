@@ -52,3 +52,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   refactored into a `ConfigOption` dataclass, so any caller (REPL or
   `mtui-mcp`'s `config_show` tool) that omitted attribute names hit
   the error instead of getting the sorted option list.
+- `mtui-mcp` now shuts down cleanly on Ctrl-C. The previous handler
+  caught a bare `KeyboardInterrupt`, but FastMCP runs the server
+  under `anyio.run`, which on Python 3.11+ wraps a Ctrl-C delivered
+  to an active task group inside a `BaseExceptionGroup`. The group
+  slipped past the handler and the user saw a multi-frame traceback
+  instead of a graceful exit. The server now also catches
+  `BaseExceptionGroup` instances whose leaves are all shutdown
+  sentinels (`KeyboardInterrupt`, `SystemExit`,
+  `asyncio.CancelledError`), logs a single `mtui-mcp: shutting down`
+  line, and exits 0. Ctrl-C pressed during pre-server preload
+  (`-a` / `-k` testreport load) or autoconnect (`-s` SUT loop)
+  is handled the same way. Groups containing a real error still hit
+  the existing crash path (`mtui-mcp crashed`, exit 1).
