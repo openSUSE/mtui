@@ -90,7 +90,62 @@ def kwargs_to_argv(
     flag_tokens: list[str] = []
     positional_tail: list[str] = []
 
+    # ---- synthetic-name routing (load_template -a / -k case) -----------
+    # mtui.mcp._schema collapses mutex StoreAction groups that share a
+    # dest into one parameter per long flag and attaches the mapping
+    # here. Each non-None value is emitted via its underlying action's
+    # long flag; the underlying actions are then skipped in the main
+    # loop because nothing in ``kwargs`` references their real dest.
+    synthetic_map: dict[str, argparse.Action] = getattr(
+        parser,
+        "_mtui_synthetic_dests",
+        {},
+    )
+    synthetic_action_ids: set[int] = {id(a) for a in synthetic_map.values()}
+    for syn_name, syn_action in synthetic_map.items():
+        if syn_name not in kwargs:
+            continue
+        syn_value = kwargs[syn_name]
+        if syn_value is None:
+            continue
+        flag_tokens.extend([_long_flag(syn_action), str(syn_value)])
+
+    # ---- StoreConst enum routing (set_repo -A / -R case) ----------------
+    # mtui.mcp._schema also collapses mutex StoreConstAction groups that
+    # share a dest into one Literal parameter. The kwarg value is now
+    # the chosen const, not a bool, so we walk the parser's mutex
+    # groups and emit the long flag of the matching member action.
+    # Action ids touched here are skipped by the main loop so the
+    # legacy truthy-check below doesn't re-emit a stale flag.
+    const_action_ids: set[int] = set()
+    for group in parser._mutually_exclusive_groups:  # noqa: SLF001
+        members = list(group._group_actions)  # noqa: SLF001
+        if len(members) < 2:
+            continue
+        if not all(
+            isinstance(a, argparse._StoreConstAction)
+            for a in members  # noqa: SLF001
+        ):
+            continue
+        dests = {a.dest for a in members}
+        if len(dests) != 1:
+            continue
+        shared_dest = members[0].dest
+        for a in members:
+            const_action_ids.add(id(a))
+        if shared_dest not in kwargs:
+            continue
+        chosen = kwargs[shared_dest]
+        if chosen is None:
+            continue
+        for a in members:
+            if a.const == chosen:
+                flag_tokens.append(_long_flag(a))
+                break
+
     for action in parser._actions:  # noqa: SLF001 - argparse exposes only this
+        if id(action) in synthetic_action_ids or id(action) in const_action_ids:
+            continue  # already handled by a synthetic pass above
         if action.dest not in index or index[action.dest] is not action:
             continue  # secondary action sharing a dest (e.g. load_template -k)
         if action.dest not in kwargs:

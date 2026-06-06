@@ -24,3 +24,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   single package name extracted from the build string were displayed,
   causing build check results for other packages in the update to be
   silently omitted.
+- `mtui-mcp` now exposes the full surface of `set_repo` and
+  `load_template`. The previous schema-synthesis collapsed each
+  command's mutually exclusive flag pair onto a single MCP parameter,
+  silently hiding the `--remove` operation of `set_repo` and the
+  `--kernel-review-id` path of `load_template` from clients (visible at
+  boot as `duplicate dest` warnings). `set_repo` now takes a required
+  `operation` enum (`add`/`remove`); `load_template` now takes two
+  optional strings `auto_review_id` / `kernel_review_id` with an
+  "exactly one required" runtime check.

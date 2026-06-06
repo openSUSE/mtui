@@ -35,6 +35,7 @@ from ..commands import Command
 from ._argv import kwargs_to_argv
 from ._schema import build_parameters
 from .deny import REPL_ONLY
+from .session import McpCommandError
 
 if TYPE_CHECKING:
     import argparse
@@ -86,7 +87,33 @@ def _make_wrapper(
     annotations = {p.name: p.annotation for p in params}
     annotations["return"] = str
 
+    # Synthetic-name mutex groups (load_template -a/-k) need a runtime
+    # "exactly one required" check: each synthetic kwarg is optional in
+    # the JSON schema so the LLM can call either one, but the
+    # underlying argparse mutex group is ``required=True``. Surfacing
+    # the violation here gives a clean one-line stderr instead of an
+    # argparse usage dump.
+    synthetic_dests: dict[str, Any] = getattr(parser, "_mtui_synthetic_dests", {})
+    synthetic_required = synthetic_dests and any(
+        g.required
+        for g in parser._mutually_exclusive_groups  # noqa: SLF001
+        if {id(a) for a in g._group_actions}  # noqa: SLF001
+        & {id(a) for a in synthetic_dests.values()}
+    )
+    synthetic_names = tuple(synthetic_dests.keys())
+    synthetic_flags = ", ".join(
+        a.option_strings[-1] for a in synthetic_dests.values() if a.option_strings
+    )
+
     async def wrapper(**kwargs: Any) -> str:
+        if synthetic_required:
+            supplied = [n for n in synthetic_names if kwargs.get(n) is not None]
+            if len(supplied) != 1:
+                msg = (
+                    f"exactly one of {synthetic_flags} is required; "
+                    f"got {len(supplied)} ({', '.join(supplied) or 'none'})"
+                )
+                raise McpCommandError("", msg, 2)
         argv = list(argv_prefix) + kwargs_to_argv(parser, kwargs)
         return await session.run_command(cls, argv)
 

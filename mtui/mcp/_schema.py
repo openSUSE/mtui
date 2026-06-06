@@ -231,6 +231,143 @@ def action_to_parameter(
     return name, annotated, default
 
 
+def _synthetic_name(action: argparse.Action) -> str:
+    """Derive a synthetic kwarg name from an action's long option.
+
+    Used when several actions in a mutually exclusive group share a
+    single ``dest`` but represent semantically distinct CLI inputs (the
+    ``load_template`` ``-a`` / ``-k`` case): collapsing them into one
+    parameter hides half the surface from MCP clients, so each gets
+    its own parameter named after its long flag.
+
+    ``--auto-review-id`` becomes ``auto_review_id``. Falls back to the
+    first option string with non-alphanumeric characters mapped to
+    underscores when no long form exists.
+    """
+    for opt in action.option_strings:
+        if opt.startswith("--"):
+            return opt[2:].replace("-", "_")
+    return action.option_strings[0].lstrip("-").replace("-", "_")
+
+
+def _scan_shared_dest_groups(
+    parser: argparse.ArgumentParser,
+) -> tuple[
+    dict[int, list[tuple[str, Any, Any]]],
+    set[int],
+    dict[str, argparse.Action],
+]:
+    """Pre-scan mutually exclusive groups whose members share a ``dest``.
+
+    Returns three structures keyed off action ``id()``:
+
+    * ``emit_at`` — action id of the *first* member of each handled
+      group, mapped to the synthesised ``(name, annotation, default)``
+      tuple(s) to emit when that action's slot is reached in the main
+      loop. For the ``StoreConstAction`` (``set_repo``) shape this is
+      a single tuple — one ``Literal`` enum. For the ``StoreAction``
+      (``load_template``) shape this is the *first* of N tuples; the
+      rest are stored alongside so they emit in deterministic order.
+    * ``skip`` — action ids to silently skip in the main loop (every
+      member of a handled group lands here so no ``duplicate dest``
+      warning fires).
+    * ``synthetic_map`` — synthetic-name -> action map written onto
+      the parser so :mod:`mtui.mcp._argv` can route the kwarg back to
+      the right CLI flag.
+
+    Groups that don't fit one of the two recognised shapes are left
+    alone; the main loop's existing first-wins + WARNING path handles
+    them.
+    """
+    emit_at: dict[int, list[tuple[str, Any, Any]]] = {}
+    skip: set[int] = set()
+    synthetic_map: dict[str, argparse.Action] = {}
+
+    for group in parser._mutually_exclusive_groups:  # noqa: SLF001
+        members = list(group._group_actions)  # noqa: SLF001
+        if len(members) < 2:
+            continue
+        dests = {a.dest for a in members}
+        if len(dests) != 1:
+            continue  # distinct dests — main loop handles each as-is
+
+        first = members[0]
+
+        # ---- shape A: StoreConstAction mutex -> single Literal enum
+        if all(isinstance(a, argparse._StoreConstAction) for a in members):  # noqa: SLF001
+            consts = tuple(a.const for a in members)
+            descs = [
+                f"``{a.option_strings[-1]}``: {(a.help or '').strip()}".rstrip(": ")
+                for a in members
+            ]
+            description = "Operation selector. " + " ".join(descs)
+            annotation = Annotated[
+                Literal[consts],  # ty: ignore[invalid-type-form]
+                Field(description=description),
+            ]
+            default: Any = _REQUIRED if group.required else None
+            if default is None:
+                annotation = Annotated[
+                    Literal[consts] | None,  # ty: ignore[invalid-type-form]
+                    Field(description=description),
+                ]
+            emit_at[id(first)] = [(first.dest, annotation, default)]
+            for a in members:
+                skip.add(id(a))
+            continue
+
+        # ---- shape B: StoreAction mutex -> N synthetic-name params
+        if all(
+            isinstance(a, argparse._StoreAction)  # noqa: SLF001
+            and not isinstance(a, argparse._StoreConstAction)  # noqa: SLF001
+            for a in members
+        ):
+            tuples: list[tuple[str, Any, Any]] = []
+            sibling_flags = ", ".join(
+                a.option_strings[-1] for a in members if a.option_strings
+            )
+            for a in members:
+                syn = _synthetic_name(a)
+                if syn in synthetic_map:
+                    # Defensive: refuse to collide; fall back to
+                    # legacy first-wins behaviour for this group.
+                    logger.warning(
+                        "synthetic name %r collides in parser %r; "
+                        "leaving mutex group %r untouched",
+                        syn,
+                        parser.prog,
+                        sibling_flags,
+                    )
+                    tuples = []
+                    break
+                base = _base_type(a)
+                desc = (a.help or "").strip()
+                if a.type in _TYPE_DESCRIPTIONS:
+                    desc = f"{desc} {_TYPE_DESCRIPTIONS[a.type]}".strip()
+                if group.required:
+                    desc = (
+                        f"{desc} (mutually exclusive with {sibling_flags}; "
+                        "exactly one of the group is required)"
+                    )
+                else:
+                    desc = f"{desc} (mutually exclusive with {sibling_flags})"
+                # ``Annotated[X | None, ...]`` makes the FastMCP schema
+                # nullable. Widen to ``Any`` locally so ty does not flag
+                # the union expression as a runtime type value (same
+                # pattern as the optional-scalar branch above).
+                optional_base: Any = base
+                annotation = Annotated[optional_base | None, Field(description=desc)]
+                tuples.append((syn, annotation, None))
+                synthetic_map[syn] = a
+
+            if tuples:
+                emit_at[id(first)] = tuples
+                for a in members:
+                    skip.add(id(a))
+
+    return emit_at, skip, synthetic_map
+
+
 def build_parameters(
     parser: argparse.ArgumentParser,
 ) -> list[inspect.Parameter]:
@@ -243,33 +380,32 @@ def build_parameters(
 
     Multiple argparse actions can share a single ``dest`` (mutually
     exclusive groups in ``load_template`` and ``set_repo`` do this).
-    Each ``dest`` becomes one MCP field; later actions for the same
-    ``dest`` are skipped with a WARNING so the caller sees the lossy
-    mapping at boot time. Subparser ``dest`` values like ``SUPPRESS``
-    are ignored — subparsers are fanned out to multiple tools in
-    :mod:`mtui.mcp.tools` rather than collapsed into one parameter.
+    Two shapes are handled specially via :func:`_scan_shared_dest_groups`:
+
+    * All members are ``_StoreConstAction`` (``set_repo`` ``-A`` / ``-R``)
+      → one ``Literal`` enum parameter covering both consts.
+    * All members are ``_StoreAction`` with distinct ``type=`` callables
+      (``load_template`` ``-a`` / ``-k``) → one synthetic-name parameter
+      per action, plus a parser-attached map so :mod:`mtui.mcp._argv`
+      can route each kwarg back to the right flag.
+
+    Anything else falls through to the legacy first-wins-with-WARNING
+    path. Subparser ``dest`` values like ``SUPPRESS`` are ignored —
+    subparsers are fanned out to multiple tools in :mod:`mtui.mcp.tools`
+    rather than collapsed into one parameter.
     """
+    emit_at, skip, synthetic_map = _scan_shared_dest_groups(parser)
+    # Expose the synthetic-name map for the argv encoder and the
+    # MCP wrapper's "exactly one required" runtime check.
+    parser._mtui_synthetic_dests = synthetic_map  # type: ignore[attr-defined]  # noqa: SLF001 - attach metadata, see mtui.mcp._argv  # ty: ignore[unresolved-attribute]
+
     required: list[inspect.Parameter] = []
     optional: list[inspect.Parameter] = []
     seen: set[str] = set()
-    for action in parser._actions:  # noqa: SLF001 - argparse exposes only this
-        if isinstance(action, argparse._SubParsersAction):
-            # Handled by the subparser fan-out in mtui.mcp.tools.
-            continue
-        if action.dest == argparse.SUPPRESS:
-            continue
-        result = action_to_parameter(action)
-        if result is None:
-            continue
-        name, annotation, default = result
+
+    def _add(name: str, annotation: Any, default: Any) -> None:
         if name in seen:
-            logger.warning(
-                "duplicate dest %r in parser %r; ignoring action %r",
-                name,
-                parser.prog,
-                action.option_strings or "<positional>",
-            )
-            continue
+            return
         seen.add(name)
         if default is _REQUIRED:
             required.append(
@@ -288,4 +424,33 @@ def build_parameters(
                     default=default,
                 )
             )
+
+    for action in parser._actions:  # noqa: SLF001 - argparse exposes only this
+        if isinstance(action, argparse._SubParsersAction):
+            # Handled by the subparser fan-out in mtui.mcp.tools.
+            continue
+        if action.dest == argparse.SUPPRESS:
+            continue
+
+        if id(action) in emit_at:
+            for name, annotation, default in emit_at[id(action)]:
+                _add(name, annotation, default)
+            continue
+        if id(action) in skip:
+            continue
+
+        result = action_to_parameter(action)
+        if result is None:
+            continue
+        name, annotation, default = result
+        if name in seen:
+            logger.warning(
+                "duplicate dest %r in parser %r; ignoring action %r",
+                name,
+                parser.prog,
+                action.option_strings or "<positional>",
+            )
+            continue
+        _add(name, annotation, default)
+
     return required + optional

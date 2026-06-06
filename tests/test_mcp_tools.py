@@ -327,14 +327,37 @@ def test_build_parameters_drops_help_action() -> None:
     assert all(p.name != "help" for p in params)
 
 
-def test_build_parameters_skips_duplicate_dest(caplog) -> None:
-    """``load_template`` mutex group: only the first action survives."""
+def test_build_parameters_loadtemplate_exposes_both_review_ids(caplog) -> None:
+    """``load_template`` mutex StoreAction group: each long flag gets its own param.
+
+    Regression for the original ``duplicate dest 'update' in parser
+    'load_template'`` boot warning that hid the kernel review-id path
+    from MCP clients.
+    """
     parser = Command.registry["load_template"].argparser(__import__("sys"))
     with caplog.at_level(logging.WARNING, logger="mtui.mcp.schema"):
         params = build_parameters(parser)
     names = [p.name for p in params]
-    assert names.count("update") == 1
-    assert any("duplicate dest" in r.message for r in caplog.records)
+    assert "auto_review_id" in names
+    assert "kernel_review_id" in names
+    assert "update" not in names
+    # No more "duplicate dest" warning for either side of the group.
+    assert not any("duplicate dest" in r.message for r in caplog.records)
+
+
+def test_build_parameters_setrepo_collapses_to_operation_enum(caplog) -> None:
+    """``set_repo`` mutex StoreConst group becomes a single Literal enum.
+
+    Regression for the original ``duplicate dest 'operation' in parser
+    'set_repo'`` boot warning that hid the ``remove`` operation from
+    MCP clients.
+    """
+    parser = Command.registry["set_repo"].argparser(__import__("sys"))
+    with caplog.at_level(logging.WARNING, logger="mtui.mcp.schema"):
+        params = build_parameters(parser)
+    names = [p.name for p in params]
+    assert names.count("operation") == 1
+    assert not any("duplicate dest" in r.message for r in caplog.records)
 
 
 def test_build_parameters_required_before_optional() -> None:
@@ -349,3 +372,128 @@ def test_build_parameters_required_before_optional() -> None:
             assert not seen_optional, (
                 f"required parameter {p.name!r} after an optional one"
             )
+
+
+# --------------------------------------------------------------------------- #
+# Mutex-group MCP surface regressions                                         #
+# --------------------------------------------------------------------------- #
+
+
+def test_setrepo_operation_enum_in_schema(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """``set_repo`` exposes ``operation`` as a required ``add``/``remove`` enum."""
+    params = _params_of(mcp, "set_repo")
+    assert "operation" in params.get("required", [])
+    enum_values = params["properties"]["operation"]["enum"]
+    assert sorted(enum_values) == ["add", "remove"]
+
+
+def test_setrepo_operation_remove_routes_to_remove_flag() -> None:
+    """``operation='remove'`` must emit ``--remove``, not ``--add``."""
+    parser = Command.registry["set_repo"].argparser(__import__("sys"))
+    # Prime the parser's synthetic-name metadata (build_parameters
+    # attaches it; _argv reads it).
+    build_parameters(parser)
+    argv = kwargs_to_argv(parser, {"operation": "remove", "hosts": []})
+    assert "--remove" in argv
+    assert "--add" not in argv
+
+
+def test_setrepo_operation_add_routes_to_add_flag() -> None:
+    """``operation='add'`` must emit ``--add``, not ``--remove``."""
+    parser = Command.registry["set_repo"].argparser(__import__("sys"))
+    build_parameters(parser)
+    argv = kwargs_to_argv(parser, {"operation": "add", "hosts": []})
+    assert "--add" in argv
+    assert "--remove" not in argv
+
+
+def test_loadtemplate_kernel_id_routes_to_kernel_flag() -> None:
+    """``kernel_review_id`` must emit ``--kernel-review-id``, not ``--auto-review-id``."""
+    parser = Command.registry["load_template"].argparser(__import__("sys"))
+    build_parameters(parser)
+    argv = kwargs_to_argv(
+        parser,
+        {
+            "kernel_review_id": "SUSE:Maintenance:1:1",
+            "auto_review_id": None,
+            "chosts": True,
+        },
+    )
+    assert argv[:2] == ["--kernel-review-id", "SUSE:Maintenance:1:1"]
+    assert "--auto-review-id" not in argv
+
+
+def test_loadtemplate_auto_id_routes_to_auto_flag() -> None:
+    """``auto_review_id`` must emit ``--auto-review-id``, not ``--kernel-review-id``."""
+    parser = Command.registry["load_template"].argparser(__import__("sys"))
+    build_parameters(parser)
+    argv = kwargs_to_argv(
+        parser,
+        {
+            "auto_review_id": "SUSE:Maintenance:1:1",
+            "kernel_review_id": None,
+            "chosts": True,
+        },
+    )
+    assert argv[:2] == ["--auto-review-id", "SUSE:Maintenance:1:1"]
+    assert "--kernel-review-id" not in argv
+
+
+def test_loadtemplate_schema_exposes_both_review_ids(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """``load_template`` schema must show both review-id params, neither in ``required``."""
+    params = _params_of(mcp, "load_template")
+    props = params["properties"]
+    assert "auto_review_id" in props
+    assert "kernel_review_id" in props
+    # Both are individually optional in the JSON schema (the
+    # "exactly one" rule is enforced at call time by the wrapper).
+    required = params.get("required", [])
+    assert "auto_review_id" not in required
+    assert "kernel_review_id" not in required
+    assert "update" not in props
+
+
+def test_loadtemplate_rejects_neither_review_id(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """Calling ``load_template`` with no review id must surface a clean error."""
+    from mtui.mcp.session import McpCommandError
+
+    async def _call() -> str:
+        tool = await mcp.get_tool("load_template")
+        assert tool is not None
+        return await tool.fn(  # ty: ignore[unresolved-attribute]
+            auto_review_id=None,
+            kernel_review_id=None,
+            chosts=True,
+        )
+
+    with pytest.raises(McpCommandError) as ei:
+        asyncio.run(_call())
+    assert ei.value.exit_code == 2
+    assert "exactly one" in ei.value.stderr
+
+
+def test_loadtemplate_rejects_both_review_ids(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """Calling ``load_template`` with both review ids must surface a clean error."""
+    from mtui.mcp.session import McpCommandError
+
+    async def _call() -> str:
+        tool = await mcp.get_tool("load_template")
+        assert tool is not None
+        return await tool.fn(  # ty: ignore[unresolved-attribute]
+            auto_review_id="SUSE:Maintenance:1:1",
+            kernel_review_id="SUSE:Maintenance:2:2",
+            chosts=True,
+        )
+
+    with pytest.raises(McpCommandError) as ei:
+        asyncio.run(_call())
+    assert ei.value.exit_code == 2
+    assert "exactly one" in ei.value.stderr
