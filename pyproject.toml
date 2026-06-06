@@ -24,7 +24,8 @@ dependencies = [
   "prompt_toolkit",
   "pyxdg",
   "requests",
-  "ruamel.yaml"
+  "ruamel.yaml",
+  "typing-extensions>=4.5"
 ]
 dynamic = ["version"]
 
