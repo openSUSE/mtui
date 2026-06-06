@@ -14,6 +14,7 @@ from typing import Any, final
 
 import requests
 import urllib3
+from typing_extensions import override
 from urllib3.exceptions import InsecureRequestWarning
 
 # The 'Config' object has dynamically generated attributes, so we must
@@ -42,12 +43,14 @@ class Comment:
     body: str
     date: datetime
 
+    @override
     def __eq__(self, other: object, /) -> bool:
         """Checks if two comments are equal."""
         if not isinstance(other, Comment):
             return NotImplemented
         return self.date == other.date
 
+    @override
     def __hash__(self) -> int:
         """Hashes the comment by serial."""
         return hash(self.serial)
@@ -58,10 +61,12 @@ class Comment:
             return NotImplemented
         return self.date > other.date
 
+    @override
     def __repr__(self) -> str:
         """Returns a string representation of the comment."""
         return f"<Comment: {self.serial}>"
 
+    @override
     def __str__(self) -> str:
         return self.body
 
@@ -351,6 +356,7 @@ class Gitea:
         data = self.__request(method.GET, self.pr)
         return data["head"]["sha"]
 
+    @override
     def __repr__(self) -> str:
         """Returns a string representation of the Gitea object."""
         return f"<GiteaAPI: {self.pr}>"

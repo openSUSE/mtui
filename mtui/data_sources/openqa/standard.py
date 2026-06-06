@@ -4,6 +4,8 @@ from logging import getLogger
 from os.path import join
 from typing import Self
 
+from typing_extensions import override
+
 from ...types.urls import URLs
 from .base import OpenQA
 
@@ -39,6 +41,7 @@ class AutoOpenQA(OpenQA):
             if y["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
         )
 
+    @override
     def _pretty_print(self, *args) -> list[str]:
         """Pretty-prints the results of the openQA jobs.
 
@@ -107,6 +110,7 @@ class AutoOpenQA(OpenQA):
             if job["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
         ]
 
+    @override
     def run(self) -> Self:
         """Gets the processed result from openQA for the auto workflow."""
         jobs = self._get_jobs()
@@ -118,6 +122,7 @@ class AutoOpenQA(OpenQA):
 
         return self
 
+    @override
     def __bool__(self) -> bool:
         """Returns `True` if the connector has results, `False` otherwise."""
         return bool(self.pp) or bool(self.results)

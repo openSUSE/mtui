@@ -1,5 +1,7 @@
 """A list-like object for storing command log entries."""
 
+from typing_extensions import override
+
 from . import CommandLog
 
 
@@ -27,6 +29,7 @@ class HostLog(list):
         """Initializes the `HostLog` object."""
         super().__init__()
 
+    @override
     def append(self, *args) -> None:
         """Appends a command log entry to the list.
 
@@ -64,6 +67,7 @@ class HostLog(list):
         )
 
     # suprisingly this isn't used ?
+    @override
     def insert(self, pos, *args) -> None:
         """Inserts a command log entry into the list.
 

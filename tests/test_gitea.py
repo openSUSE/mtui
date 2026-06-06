@@ -269,7 +269,7 @@ class TestGiteaOperations:
         body = responses.calls[0].request.body
         if isinstance(body, bytes):
             body = body.decode("utf-8")
-        assert body is not None
+        assert isinstance(body, str)
         assert "test comment body" in body
 
     @responses.activate

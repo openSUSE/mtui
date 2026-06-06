@@ -3,6 +3,8 @@
 from logging import getLogger
 from typing import Self
 
+from typing_extensions import override
+
 from ...types.test import Test
 from .base import OpenQA
 
@@ -73,6 +75,7 @@ class KernelOpenQA(OpenQA):
             )
         ]
 
+    @override
     def _pretty_print(self, *args) -> list[str]:
         """Pretty-prints the results of the kernel tests.
 
@@ -93,6 +96,7 @@ class KernelOpenQA(OpenQA):
 
         return lines
 
+    @override
     def run(self) -> Self:
         """Gets the processed result from openQA for the kernel workflow."""
         jobs = self._get_jobs()

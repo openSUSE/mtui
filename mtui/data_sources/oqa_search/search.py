@@ -17,6 +17,8 @@ from logging import getLogger
 from typing import Any, Final
 from urllib.parse import quote, unquote
 
+from typing_extensions import override
+
 from .heuristics import (
     AGGREGATED_EXCLUDED_VERSIONS,
     AGGREGATED_GROUPS_TERMS,
@@ -268,6 +270,7 @@ class LogFileLinkParser(HTMLParser):
         super().__init__()
         self.log_files: list[str] = []
 
+    @override
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag != "a":
             return

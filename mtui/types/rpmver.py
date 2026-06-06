@@ -2,6 +2,8 @@
 
 from typing import ClassVar, final
 
+from typing_extensions import override
+
 try:
     import rpm  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]
 except ImportError:
@@ -67,10 +69,12 @@ class RPMVersion:
             rpm.labelCompare(("1", self.ver, self.rel), ("1", other.ver, other.rel)) > 0
         )
 
+    @override
     def __hash__(self) -> int:
         """Hashes the version by version and release."""
         return hash((self.ver, self.rel))
 
+    @override
     def __eq__(self, other: object) -> bool:
         """Checks if this version is equal to another."""
         if not isinstance(other, RPMVersion):
@@ -94,6 +98,7 @@ class RPMVersion:
             >= 0
         )
 
+    @override
     def __ne__(self, other: object) -> bool:
         """Checks if this version is not equal to another."""
         if not isinstance(other, RPMVersion):
@@ -103,6 +108,7 @@ class RPMVersion:
             != 0
         )
 
+    @override
     def __str__(self) -> str:
         """Returns a string representation of the version."""
         s = str(self.ver)
@@ -110,6 +116,7 @@ class RPMVersion:
             s += "-" + str(self.rel)
         return s
 
+    @override
     def __repr__(self) -> str:
         """Returns a string representation of the `RPMVersion` object."""
         return f"<RPMVersion: {self}>"
