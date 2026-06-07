@@ -46,6 +46,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   flag and crashed with *"expected at least one argument"*. Non-empty
   argparse defaults (like `["core"]`) now flow through to the MCP
   schema and match the REPL behaviour.
+- `mtui-mcp` single-token positional commands now accept a scalar
+  argument instead of a 1-element array. Affected tools: `set_location`,
+  `set_log_level`, `set_timeout`, `set_host_state`, `put`, `get`.
+  Previously the schema demanded e.g. `{"site": ["prague"]}` because
+  the synthesis layer treated argparse `nargs=1` like `nargs="+"`,
+  causing clients that sent `{"site": "prague"}` to fail with
+  `Input should be a valid list`. The MCP schema now exposes these
+  arguments as plain scalars while the underlying argparse layer is
+  unchanged.
 - `config show` with no attributes no longer crashes with
   `TypeError: 'ConfigOption' object is not subscriptable`. The handler
   was still indexing config entries as tuples after they were

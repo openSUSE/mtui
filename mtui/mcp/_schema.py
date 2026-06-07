@@ -92,6 +92,13 @@ def _wrap_nargs(base: Any, nargs: object) -> tuple[Any, bool]:
     """
     if nargs is None or nargs == "?":
         return base, False
+    # ``nargs=1`` is an argparse quirk: it parses exactly one token but
+    # wraps the result in a 1-element list. For the MCP schema we expose
+    # a plain scalar so clients send ``"prague"`` instead of
+    # ``["prague"]``; the ``_argv`` encoder accepts a scalar positional
+    # and argparse still produces the 1-list internally.
+    if nargs == 1:
+        return base, False
     # ``argparse.REMAINDER`` is the sentinel "..." string at runtime;
     # treat it like ``"*"`` for schema purposes.
     if nargs in ("*", "+", argparse.REMAINDER) or isinstance(nargs, int):
@@ -117,7 +124,10 @@ def _field(
         kw["description"] = description.strip()
     if nargs == "+":
         kw["min_length"] = 1
-    elif isinstance(nargs, int) and nargs > 0:
+    elif isinstance(nargs, int) and nargs > 1:
+        # ``nargs=1`` is intentionally excluded: ``_wrap_nargs`` exposes
+        # it as a scalar, where ``min_length``/``max_length`` would be
+        # interpreted as string-length bounds instead of array bounds.
         kw["min_length"] = nargs
         kw["max_length"] = nargs
     return Field(**kw)

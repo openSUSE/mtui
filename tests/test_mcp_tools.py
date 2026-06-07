@@ -171,15 +171,35 @@ def test_set_host_state_schema_carries_enum(
     """``choices=[...]`` on the parser becomes a JSON-Schema ``enum``."""
     params = _params_of(mcp, "set_host_state")
     state = params["properties"]["state"]
-    # ``nargs=1`` wraps the choice in an array.
-    assert state["type"] == "array"
-    assert state["items"]["enum"] == [
+    # ``nargs=1`` is exposed as a scalar enum (not an array) so MCP
+    # clients send ``"parallel"`` instead of ``["parallel"]``.
+    assert "type" not in state or state["type"] != "array"
+    assert state["enum"] == [
         "parallel",
         "serial",
         "dryrun",
         "disabled",
         "enabled",
     ]
+
+
+def test_set_location_schema_is_scalar_string(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """``set_location`` positional ``nargs=1`` is a required scalar string.
+
+    Regression for the MCP-side bug where ``{"site": "prague"}`` was
+    rejected with ``Input should be a valid list`` because the schema
+    demanded an array.
+    """
+    params = _params_of(mcp, "set_location")
+    site = params["properties"]["site"]
+    assert site["type"] == "string"
+    assert site.get("description") == "location name"
+    # Scalar field must not carry array-shaped length bounds.
+    assert "minItems" not in site
+    assert "maxItems" not in site
+    assert "site" in params.get("required", [])
 
 
 def test_update_schema_exposes_store_const_as_booleans(
@@ -296,6 +316,21 @@ def test_optional_multivalue_flag_round_trip() -> None:
     parsed = parser.parse_args(argv)
     assert parsed.reason == "admin"
     assert parsed.message == ["why", "not"]
+
+
+def test_nargs_one_positional_accepts_scalar_round_trip() -> None:
+    """``set_location site`` (``nargs=1``) round-trips a scalar string.
+
+    Regression for the MCP-side bug where ``{"site": "prague"}`` was
+    rejected with ``Input should be a valid list`` because the schema
+    demanded an array. The encoder must accept the scalar and argparse
+    must still produce its conventional 1-element list.
+    """
+    parser = Command.registry["set_location"].argparser(__import__("sys"))
+    argv = kwargs_to_argv(parser, {"site": "prague"})
+    assert argv == ["prague"]
+    parsed = parser.parse_args(argv)
+    assert parsed.site == ["prague"]
 
 
 def test_optional_list_arg_preserves_nonempty_argparse_default() -> None:
