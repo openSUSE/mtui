@@ -2,8 +2,9 @@
 
 Focused on the Ctrl-C / graceful shutdown contract:
 
-* a bare ``KeyboardInterrupt`` raised by :meth:`FastMCP.run` exits ``0``
-  with a single ``mtui-mcp: shutting down`` log line and no traceback;
+* a bare ``KeyboardInterrupt`` raised by
+  :meth:`mcp.server.fastmcp.FastMCP.run` exits ``0`` with a single
+  ``mtui-mcp: shutting down`` log line and no traceback;
 * a :class:`BaseExceptionGroup` whose leaves are all shutdown sentinels
   (``KeyboardInterrupt`` / ``SystemExit`` / ``asyncio.CancelledError``)
   is also treated as a clean shutdown — anyio wraps Ctrl-C delivered to
@@ -17,7 +18,8 @@ Focused on the Ctrl-C / graceful shutdown contract:
 The tests stub out :class:`Config`, :func:`detect_system`, the
 :class:`McpSession` constructor, and ``build_tools`` /
 ``register_testreport_tools`` so the module-level flow can be exercised
-without touching real config files, OBS, SSH, or fastmcp internals.
+without touching real config files, OBS, SSH, or the
+:mod:`mcp.server.fastmcp` internals.
 """
 
 from __future__ import annotations
@@ -67,6 +69,43 @@ def stub_environment(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
     }
 
 
+def _install_fake_fastmcp(
+    monkeypatch: pytest.MonkeyPatch,
+    fastmcp_run: Any = None,
+) -> tuple[MagicMock, MagicMock]:
+    """Install a fake ``mcp.server.fastmcp.FastMCP`` class for ``main()``.
+
+    ``main()`` does ``from mcp.server.fastmcp import FastMCP`` lazily,
+    so the stub has to live on ``sys.modules["mcp.server.fastmcp"]``
+    before the call. Returns ``(fastmcp_cls, fastmcp_instance)``.
+
+    ``fastmcp_run`` may be a callable (invoked with no args) or an
+    exception instance/class to raise from ``mcp.run(...)``. When
+    ``None``, ``mcp.run(...)`` is a no-op (used by the preload tests
+    that never actually reach the server loop).
+    """
+    fastmcp_instance = MagicMock(name="FastMCP_instance")
+    if fastmcp_run is None:
+        fastmcp_instance.run.side_effect = lambda *a, **kw: None
+    elif isinstance(fastmcp_run, BaseException) or (
+        isinstance(fastmcp_run, type) and issubclass(fastmcp_run, BaseException)
+    ):
+        fastmcp_instance.run.side_effect = fastmcp_run
+    else:
+        fastmcp_instance.run.side_effect = lambda *a, **kw: fastmcp_run()
+
+    fastmcp_cls = MagicMock(name="FastMCP_cls", return_value=fastmcp_instance)
+
+    # The SDK's package layout is ``mcp.server.fastmcp``. Injecting a
+    # stub module at that dotted path makes the lazy ``from ... import
+    # FastMCP`` resolve to ``fastmcp_cls`` without ever touching the
+    # real SDK code.
+    fake_module = MagicMock(name="mcp.server.fastmcp_module")
+    fake_module.FastMCP = fastmcp_cls
+    monkeypatch.setitem(__import__("sys").modules, "mcp.server.fastmcp", fake_module)
+    return fastmcp_cls, fastmcp_instance
+
+
 def _run_with_fake_fastmcp(
     monkeypatch: pytest.MonkeyPatch,
     fastmcp_run: Any,
@@ -77,22 +116,7 @@ def _run_with_fake_fastmcp(
     ``fastmcp_run`` may be a callable (invoked with no args) or an
     exception instance/class to raise. Returns ``(exit_code, fastmcp_instance)``.
     """
-    fastmcp_instance = MagicMock(name="FastMCP_instance")
-    if isinstance(fastmcp_run, BaseException) or (
-        isinstance(fastmcp_run, type) and issubclass(fastmcp_run, BaseException)
-    ):
-        fastmcp_instance.run.side_effect = fastmcp_run
-    else:
-        fastmcp_instance.run.side_effect = lambda *a, **kw: fastmcp_run()
-
-    fastmcp_cls = MagicMock(name="FastMCP_cls", return_value=fastmcp_instance)
-
-    # mtui.mcp.main does ``from fastmcp import FastMCP`` lazily inside
-    # main(); patch the module so the import resolves to our stub.
-    fake_module = MagicMock(name="fastmcp_module")
-    fake_module.FastMCP = fastmcp_cls
-    monkeypatch.setitem(__import__("sys").modules, "fastmcp", fake_module)
-
+    _, fastmcp_instance = _install_fake_fastmcp(monkeypatch, fastmcp_run)
     monkeypatch.setattr("sys.argv", ["mtui-mcp", *(argv or [])])
     rc = mcp_main.main()
     return rc, fastmcp_instance
@@ -240,11 +264,7 @@ def test_main_returns_zero_on_keyboardinterrupt_during_preload(
     parser.parse_args.return_value = fake_args
     monkeypatch.setattr(mcp_main, "get_parser", lambda _sys: parser)
 
-    fastmcp_instance = MagicMock(name="FastMCP_instance")
-    fastmcp_cls = MagicMock(name="FastMCP_cls", return_value=fastmcp_instance)
-    fake_module = MagicMock(name="fastmcp_module")
-    fake_module.FastMCP = fastmcp_cls
-    monkeypatch.setitem(__import__("sys").modules, "fastmcp", fake_module)
+    fastmcp_cls, fastmcp_instance = _install_fake_fastmcp(monkeypatch)
 
     rc = mcp_main.main()
 
@@ -291,11 +311,7 @@ def test_main_returns_zero_on_keyboardinterrupt_during_autoconnect(
     parser.parse_args.return_value = fake_args
     monkeypatch.setattr(mcp_main, "get_parser", lambda _sys: parser)
 
-    fastmcp_instance = MagicMock(name="FastMCP_instance")
-    fastmcp_cls = MagicMock(name="FastMCP_cls", return_value=fastmcp_instance)
-    fake_module = MagicMock(name="fastmcp_module")
-    fake_module.FastMCP = fastmcp_cls
-    monkeypatch.setitem(__import__("sys").modules, "fastmcp", fake_module)
+    fastmcp_cls, fastmcp_instance = _install_fake_fastmcp(monkeypatch)
 
     rc = mcp_main.main()
 
@@ -326,13 +342,17 @@ def test_main_happy_path_http_transport(
     monkeypatch: pytest.MonkeyPatch,
     stub_environment: dict[str, MagicMock],
 ) -> None:
-    """Verify HTTP transport reaches ``mcp.run(transport=...)`` with host/port."""
+    """``--transport http`` maps to ``mcp.run(transport="streamable-http")``.
+
+    The user-facing flag stays ``http`` for back-compat with the
+    standalone fastmcp era; under the SDK, host/port are constructor
+    settings on :class:`FastMCP` (verified separately below) and
+    ``run`` only takes ``transport``/``mount_path``.
+    """
     rc, fastmcp_instance = _run_with_fake_fastmcp(
         monkeypatch,
         lambda: None,
         argv=["--transport", "http", "--host", "0.0.0.0", "--port", "9000"],
     )
     assert rc == 0
-    fastmcp_instance.run.assert_called_once_with(
-        transport="http", host="0.0.0.0", port=9000
-    )
+    fastmcp_instance.run.assert_called_once_with(transport="streamable-http")

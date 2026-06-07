@@ -1,4 +1,4 @@
-"""Hand-written FastMCP tools for editing the loaded testreport file.
+"""Hand-written MCP tools for editing the loaded testreport file.
 
 The auto-generated tools synthesised by :mod:`mtui.mcp.tools` cover
 every :class:`mtui.commands.Command` subclass, but the REPL ``edit``
@@ -21,8 +21,8 @@ Refusal is uniform: when ``session.metadata`` is a
 :class:`NullTestReport` or ``metadata.path`` is ``None``, every tool
 raises :class:`mtui.mcp.session.McpCommandError` carrying an empty
 stdout, a one-sentence stderr, and ``exit_code=1`` — the same envelope
-the auto-generated tools use, so the FastMCP layer surfaces the same
-error shape across the whole MCP surface.
+the auto-generated tools use, so the MCP server layer surfaces the
+same error shape across the whole MCP surface.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from ..test_reports.null_report import NullTestReport
 from .session import McpCommandError
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP
+    from mcp.server.fastmcp import FastMCP
 
     from .session import McpSession
 
@@ -244,7 +244,7 @@ def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
     so the boot log entries look uniform.
 
     Args:
-        mcp: The :class:`fastmcp.FastMCP` server.
+        mcp: The :class:`mcp.server.fastmcp.FastMCP` server.
         session: The shared :class:`McpSession` bound into each closure.
 
     Returns:
@@ -252,7 +252,6 @@ def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
         and asserted in tests.
 
     """
-    from fastmcp.tools.function_tool import FunctionTool
     from mcp.types import ToolAnnotations
 
     async def _read() -> dict[str, Any]:
@@ -306,13 +305,19 @@ def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
 
     names: list[str] = []
     for name, fn, desc, hints in specs:
-        tool = FunctionTool.from_function(
-            fn=fn,
+        # ``structured_output=False`` keeps the wire shape quirks-
+        # compatible with the standalone fastmcp era: clients receive
+        # a single text content block (the dict's str repr) rather
+        # than the SDK's auto-derived structured payload + output
+        # schema. The dict return is still useful for tests that
+        # invoke the coroutines directly.
+        mcp.add_tool(
+            fn,
             name=name,
             description=desc,
             annotations=hints,
+            structured_output=False,
         )
-        mcp.add_tool(tool)
         names.append(name)
 
     names.sort()

@@ -8,10 +8,11 @@ The tests stay close to the verify clauses listed in ``PLAN.md`` step 7:
 * ``config`` subparsers are fanned out to ``config_show`` / ``config_set``,
 * read-only commands carry ``readOnlyHint=True``.
 
-We avoid pulling in :class:`fastmcp.Client`: the round-trip behaviour
-is exercised in ``tests/test_mcp_stdio_roundtrip.py`` (PLAN step 9).
-Here we test the synthesis layer directly, which keeps the suite fast
-and decoupled from FastMCP's transport surface.
+We avoid pulling in the in-memory MCP client: the round-trip
+behaviour is exercised in ``tests/test_mcp_stdio_roundtrip.py``
+(PLAN step 9). Here we test the synthesis layer directly, which
+keeps the suite fast and decoupled from the MCP server's transport
+surface.
 """
 
 from __future__ import annotations
@@ -24,9 +25,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("fastmcp")
+pytest.importorskip("mcp")
 
-from fastmcp import FastMCP  # noqa: E402
+from mcp.server.fastmcp import FastMCP  # noqa: E402
 
 from mtui.commands import Command  # noqa: E402
 from mtui.mcp._argv import kwargs_to_argv  # noqa: E402
@@ -73,25 +74,22 @@ def registered_names(mcp: FastMCP, session: McpSession) -> list[str]:
 
 
 def _params_of(mcp: FastMCP, name: str) -> dict:
-    """Return the JSON-Schema parameters dict for tool ``name``."""
+    """Return the JSON-Schema parameters dict for tool ``name``.
 
-    async def _get() -> dict:
-        tool = await mcp.get_tool(name)
-        assert tool is not None, f"tool {name!r} not registered"
-        return tool.parameters
-
-    return asyncio.run(_get())
+    The SDK's :class:`FastMCP` does not expose a public ``get_tool``;
+    we reach through ``_tool_manager`` (synchronous, returns the
+    :class:`mcp.server.fastmcp.tools.base.Tool` pydantic model).
+    """
+    tool = mcp._tool_manager.get_tool(name)  # noqa: SLF001
+    assert tool is not None, f"tool {name!r} not registered"
+    return tool.parameters
 
 
 def _annotations_of(mcp: FastMCP, name: str):
     """Return the ``ToolAnnotations`` envelope for tool ``name``."""
-
-    async def _get():
-        tool = await mcp.get_tool(name)
-        assert tool is not None, f"tool {name!r} not registered"
-        return tool.annotations
-
-    return asyncio.run(_get())
+    tool = mcp._tool_manager.get_tool(name)  # noqa: SLF001
+    assert tool is not None, f"tool {name!r} not registered"
+    return tool.annotations
 
 
 # --------------------------------------------------------------------------- #
@@ -150,15 +148,21 @@ def test_subparser_fan_out_registers_show_and_set(
 def test_run_tool_schema_has_command_and_hosts_list(
     mcp: FastMCP, registered_names: list[str]
 ) -> None:
-    """The ``run`` tool's REMAINDER positional becomes ``array<string>``."""
+    """The ``run`` tool's REMAINDER positional becomes ``array<string>``.
+
+    Uses subset-assertions rather than dict equality because the
+    pydantic version bundled with :mod:`mcp.server.fastmcp` adds a
+    schema-generated ``title`` key alongside the documented fields.
+    """
     params = _params_of(mcp, "run")
     props = params["properties"]
-    assert props["command"] == {
+    expected_command = {
         "type": "array",
         "items": {"type": "string"},
         "default": [],
         "description": "Command to run on refhost",
     }
+    assert expected_command.items() <= props["command"].items()
     assert props["hosts"]["type"] == "array"
     assert props["hosts"]["items"] == {"type": "string"}
     # Optional list: default empty, not in required.
@@ -518,10 +522,11 @@ def test_loadtemplate_rejects_neither_review_id(
     """Calling ``load_template`` with no review id must surface a clean error."""
     from mtui.mcp.session import McpCommandError
 
+    tool = mcp._tool_manager.get_tool("load_template")  # noqa: SLF001
+    assert tool is not None
+
     async def _call() -> str:
-        tool = await mcp.get_tool("load_template")
-        assert tool is not None
-        return await tool.fn(  # ty: ignore[unresolved-attribute]
+        return await tool.fn(
             auto_review_id=None,
             kernel_review_id=None,
             chosts=True,
@@ -539,10 +544,11 @@ def test_loadtemplate_rejects_both_review_ids(
     """Calling ``load_template`` with both review ids must surface a clean error."""
     from mtui.mcp.session import McpCommandError
 
+    tool = mcp._tool_manager.get_tool("load_template")  # noqa: SLF001
+    assert tool is not None
+
     async def _call() -> str:
-        tool = await mcp.get_tool("load_template")
-        assert tool is not None
-        return await tool.fn(  # ty: ignore[unresolved-attribute]
+        return await tool.fn(
             auto_review_id="SUSE:Maintenance:1:1",
             kernel_review_id="SUSE:Maintenance:2:2",
             chosts=True,

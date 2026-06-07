@@ -1,6 +1,6 @@
 """Reassemble argparse argv from a tool-call kwargs dict.
 
-FastMCP delivers a tool call as a dict of ``{dest: value}`` keyed by the
+The MCP server delivers a tool call as a dict of ``{dest: value}`` keyed by the
 synthesised parameter names from :mod:`mtui.mcp._schema`. To run the
 underlying :class:`mtui.commands._command.Command` we must turn that
 dict back into a token list ``argparse`` can parse. The mapping is the
@@ -79,7 +79,7 @@ def kwargs_to_argv(
     Args:
         parser: The command's :class:`argparse.ArgumentParser`. Used to
             look up the action class behind each kwarg.
-        kwargs: ``{dest: value}`` as delivered by FastMCP.
+        kwargs: ``{dest: value}`` as delivered by the MCP server.
 
     Returns:
         A list of argv tokens ready to be passed through

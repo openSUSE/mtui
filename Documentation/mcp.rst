@@ -48,11 +48,14 @@ With pip
     pip install -e '.[mcp]'
     mtui-mcp --help
 
-The extra pulls in `fastmcp <https://pypi.org/project/fastmcp/>`_
-(``>=3``) and its transitive tree (pydantic, uvicorn, starlette,
-httpx, sse-starlette). The rest of mtui keeps working without it; the
-``mtui.mcp`` package is import-gated so a missing extra produces a
-friendly error from ``mtui-mcp`` rather than breaking ``mtui``.
+The extra pulls in the official `mcp
+<https://pypi.org/project/mcp/>`_ Python SDK (``mcp[cli]>=1.2``) and
+its transitive tree (pydantic, uvicorn, starlette, httpx,
+sse-starlette). On openSUSE the SDK is packaged as ``python3-mcp``
+and can be installed with ``zypper in python3-mcp``. The rest of
+mtui keeps working without it; the ``mtui.mcp`` package is
+import-gated so a missing extra produces a friendly error from
+``mtui-mcp`` rather than breaking ``mtui``.
 
 
 Invocation
@@ -85,8 +88,9 @@ Flags mirror :doc:`cli` for the configuration surface that
     Override the default config path; same semantics as ``mtui -c``.
 
 ``--debug``
-    Raise both the ``mtui-mcp`` logger and the ``fastmcp`` logger
-    to ``DEBUG`` so protocol-level frames become visible.
+    Raise both the ``mtui-mcp`` logger and the
+    ``mcp.server.fastmcp`` logger to ``DEBUG`` so protocol-level
+    frames become visible.
 
 ``--color {auto,always,never}``
     Control coloured log output; default ``auto``.
