@@ -248,6 +248,101 @@ The ``-W`` flag promotes warnings to errors, matching what we expect
 in CI.
 
 
+MCP server
+##########
+
+The ``mtui-mcp`` console script (see :doc:`mcp` for the user-facing
+reference) auto-synthesises one FastMCP tool per non-denied entry in
+``Command.registry`` and adds three hand-written testreport tools.
+This section covers smoke-testing and debugging the server itself —
+operator-facing client configuration lives in :doc:`mcp`.
+
+Smoke-testing with MCP Inspector
+================================
+
+The upstream `MCP Inspector`_ is a browser UI that speaks the MCP
+protocol directly, so the tool surface can be exercised without an
+LLM in the loop. Useful when iterating on schema generation, the
+deny-list, or a new ``testreport_*`` tool.
+
+Start ``mtui-mcp`` under the HTTP transport on a known port:
+
+.. code-block:: sh
+
+    mtui-mcp --transport http --port 8765 --debug
+
+Then launch the Inspector:
+
+.. code-block:: sh
+
+    npx @modelcontextprotocol/inspector
+
+In the UI: select transport ``Streamable HTTP``, set the URL to
+``http://127.0.0.1:8765/mcp``, connect, and use the *Tools* tab to
+list every registered tool and call it with hand-crafted arguments.
+``--debug`` makes both the mtui logger and the ``fastmcp`` logger
+emit ``DEBUG``-level frames on stderr so JSON-RPC traffic and FastMCP
+routing decisions are visible alongside the Inspector interaction.
+
+.. _MCP Inspector: https://github.com/modelcontextprotocol/inspector
+
+For a stdio-transport smoke-test, point the Inspector at the
+binary instead of an HTTP URL — it spawns the subprocess itself and
+attaches to its stdio streams. The first ``tools/list`` round-trip
+should return one entry per command in ``Command.registry`` minus the
+REPL-only deny-list (``mtui/mcp/deny.py``) plus
+``testreport_read``, ``testreport_patch``, ``testreport_write``.
+
+Verifying dispatch
+==================
+
+``whoami`` is the cheapest end-to-end check — it requires no loaded
+test report and no connected hosts, so a successful call confirms the
+schema-synthesis path, the dispatch wrapper, the session lock, and
+the response envelope. From a fresh server:
+
+.. code-block:: text
+
+    > whoami()
+    User: <username>, Session PID: <pid>
+
+If a test report was preloaded with ``-a`` / ``-k``,
+``testreport_read`` returns its current contents. Otherwise the
+editing tools refuse cleanly with
+``no testreport loaded; run `load_template` first`` — that is the
+correct refusal path and exercises
+:class:`~mtui.support.messages.UserError` handling.
+
+Troubleshooting
+===============
+
+* **``mtui-mcp: command not found`` from a stdio client.** The MCP
+  host launched the subprocess outside the environment where the
+  ``mcp`` extra was installed. Use the absolute path
+  (``which mtui-mcp`` inside the right venv) or wrap the command in
+  ``uv --directory <repo> run mtui-mcp …``.
+* **HTTP client gets ``404`` at the root.** The streamable-HTTP
+  endpoint is mounted at ``/mcp``, not ``/``. Append ``/mcp`` to the
+  URL the client is configured with.
+* **Tool calls time out under HTTP.** mtui's network-bound commands
+  (``update``, ``prepare``, ``checkout``) can run for minutes against
+  real refhosts. Raise the client's per-tool timeout. The
+  process-wide ``asyncio.Lock`` serialises invocations, so a long
+  tool call blocks every concurrent client on the same server — that
+  is by design, not a bug.
+* **Need to see the wire protocol.** Pass ``--debug`` to ``mtui-mcp``;
+  both the server logger and the ``fastmcp`` logger drop to
+  ``DEBUG``, surfacing JSON-RPC frames and FastMCP routing decisions
+  on stderr. Combine with the Inspector to see request and response
+  on both sides of the wire.
+* **A new command is missing from the MCP tool surface.** Check
+  ``mtui/mcp/deny.py`` — only commands on the REPL-only deny-list are
+  filtered. If the command is not denied and still not exposed, the
+  registry probably failed to import the module (a syntax error or a
+  missing ``command = "..."`` class attribute); ``mtui-mcp --debug``
+  logs the synthesis loop and names the commands it registered.
+
+
 Branching and commits
 #####################
 

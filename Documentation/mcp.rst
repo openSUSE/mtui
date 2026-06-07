@@ -110,6 +110,130 @@ Flags mirror :doc:`cli` for the configuration surface that
     exit.
 
 
+Connecting an LLM client
+========================
+
+``mtui-mcp`` speaks the standard Model Context Protocol framing, so
+any MCP-aware client wires up the same way it would for any other
+server: ``stdio`` clients spawn the binary as a subprocess; ``http``
+clients connect to a streamable-HTTP endpoint at ``/mcp`` on the
+configured host and port. The two examples below — Claude Desktop
+(stdio) and opencode (remote HTTP) — cover the common shapes; other
+clients (Cursor, Zed, Codex CLI, Continue, etc.) follow the same
+pattern with their own config file names.
+
+For Inspector-based smoke-testing and operational troubleshooting,
+see the *MCP server* section of :doc:`developer`.
+
+Claude Desktop (stdio)
+----------------------
+
+stdio is the default transport: the client spawns ``mtui-mcp`` as a
+child process and exchanges MCP frames over its stdin/stdout. Add
+``mtui`` to ``mcpServers`` in
+``~/.config/Claude/claude_desktop_config.json`` (Linux/macOS) or the
+equivalent on other platforms:
+
+.. code-block:: json
+
+    {
+      "mcpServers": {
+        "mtui": {
+          "command": "mtui-mcp",
+          "args": ["--transport", "stdio"]
+        }
+      }
+    }
+
+When mtui is installed inside a ``uv`` project or a virtualenv that
+is not on the client's ``PATH``, give the absolute path
+(``which mtui-mcp`` from the right environment) or wrap it in ``uv``:
+
+.. code-block:: json
+
+    {
+      "mcpServers": {
+        "mtui": {
+          "command": "uv",
+          "args": [
+            "--directory", "/path/to/mtui",
+            "run", "mtui-mcp", "--transport", "stdio"
+          ]
+        }
+      }
+    }
+
+Preload a test report on boot by appending the matching CLI flag to
+``args`` — ``-a``/``-k`` for the RRID, ``-s`` for autoconnect hosts,
+``-c`` for a custom config:
+
+.. code-block:: json
+
+    {
+      "mcpServers": {
+        "mtui": {
+          "command": "mtui-mcp",
+          "args": [
+            "--transport", "stdio",
+            "-a", "SUSE:Maintenance:12345:67890",
+            "-s", "host1.example.com,host2.example.com"
+          ]
+        }
+      }
+    }
+
+opencode (remote HTTP)
+----------------------
+
+The HTTP transport binds a streamable-HTTP server on
+``--host`` / ``--port`` (default ``127.0.0.1:8000``); the MCP endpoint
+is mounted at ``/mcp``, so the URL the client connects to is
+``http://HOST:PORT/mcp``.
+
+Start the server:
+
+.. code-block:: sh
+
+    mtui-mcp --transport http --port 8765
+
+Add the endpoint to ``opencode.json`` as a ``remote`` MCP server:
+
+.. code-block:: json
+
+    {
+      "$schema": "https://opencode.ai/config.json",
+      "mcp": {
+        "mtui": {
+          "type": "remote",
+          "url": "http://127.0.0.1:8765/mcp",
+          "enabled": true
+        }
+      }
+    }
+
+opencode also accepts ``type: "local"`` for stdio-style spawning,
+which avoids the long-lived server process entirely:
+
+.. code-block:: json
+
+    {
+      "$schema": "https://opencode.ai/config.json",
+      "mcp": {
+        "mtui": {
+          "type": "local",
+          "command": ["mtui-mcp", "--transport", "stdio"],
+          "enabled": true
+        }
+      }
+    }
+
+The HTTP transport is single-tenant by contract (see
+:ref:`mcp-concurrency`). Bind to loopback (the default) and front
+with the operator's reverse-proxy of choice if remote access is
+required — ``mtui-mcp`` itself does not terminate TLS or authenticate
+callers.
+
+
 Tool coverage
 =============
 
@@ -240,6 +364,8 @@ re-read to confirm the new line count:
      "line_count": 6,
      "content": "header\nX\nY\nZ\nfooter\ntrailer\n"}
 
+
+.. _mcp-concurrency:
 
 Concurrency and safety
 ======================

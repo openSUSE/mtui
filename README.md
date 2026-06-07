@@ -17,7 +17,7 @@ In addition, MTUI provides convenience commands to help with maintenance update 
 - Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`, with SVN and Gitea checkout backends.
 - Reference-host discovery: HTTPS- or filesystem-resolved `refhosts.yml` with location-aware fallback and configurable cache expiry.
 - File transfer: `put` (glob upload to all hosts) and `get` (download with per-host filename suffix or recursive folder mode).
-- Interactive shell with readline completion, history search, per-command `--help`, configurable log level, optional desktop notifications (`notify` extra), and OS-keyring credential storage (`keyring` extra).
+- Interactive `prompt_toolkit`-based shell: tab completion over the live command registry, persistent history with reverse-search (Ctrl-R), autosuggest-from-history (right-arrow to accept), lexer-highlighted command tokens, a bottom toolbar showing the loaded RRID, per-command `--help`, configurable log level, optional desktop notifications (`notify` extra), and OS-keyring credential storage (`keyring` extra).
 - Shell-completion script via the `completion` extra (`register-python-argcomplete mtui`).
 - MCP server (`mtui-mcp`, optional `mcp` extra): exposes every non-interactive mtui command as a [Model Context Protocol](https://modelcontextprotocol.io) tool, plus dedicated `testreport_read` / `testreport_patch` / `testreport_write` tools, so LLM clients can drive a headless mtui session over `stdio` or `http`.
 
