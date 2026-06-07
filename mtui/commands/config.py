@@ -34,7 +34,7 @@ class Config(Command):
         """Displays the current configuration values."""
         attrs = self.args.attributes
         if not attrs:
-            attrs = sorted(x[0] for x in self.config.data)
+            attrs = sorted(opt.attr for opt in self.config.data)
 
         max_attr_len = len(max(attrs, key=len))
         for i in attrs:

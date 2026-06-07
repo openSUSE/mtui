@@ -7,5 +7,6 @@
    installation
    user
    developer
+   mcp
    support
    faq

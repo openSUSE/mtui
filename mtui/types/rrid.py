@@ -4,6 +4,8 @@ from collections.abc import Callable, Sequence
 from itertools import zip_longest
 from typing import Any, final
 
+from typing_extensions import override
+
 from .enums import RequestKind
 
 
@@ -76,10 +78,12 @@ class check_eq:
             raise ValueError(f"Expected: {self.x!r}, got: {y!r}")
         return y
 
+    @override
     def __repr__(self) -> str:
         """Returns a string representation of the `check_eq` object."""
         return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
 
+    @override
     def __str__(self) -> str:
         """Returns a string representation of the expected values."""
         return f"{self.x!r}"
@@ -126,10 +130,12 @@ class check_type:
         if err:
             raise ValueError(f"Expected {self.x!r}, got: {y!r}")
 
+    @override
     def __repr__(self) -> str:
         """Returns a string representation of the `check_type` object."""
         return f"<{self.__class__.__module__}.{self.__class__.__name__} {self.x!r}>"
 
+    @override
     def __str__(self) -> str:
         """Returns a string representation of the expected types."""
         return f"convertible to {self.x!r}"
@@ -169,24 +175,29 @@ class RequestReviewID:
 
         self.kind: RequestKind = RequestKind.from_token(raw_kind)
 
+    @override
     def __str__(self) -> str:
         """Returns a string representation of the `RequestReviewID` object."""
         return (
             f"{self.project}:{self.kind.value}:{self.maintenance_id}:{self.review_id}"
         )
 
+    @override
     def __repr__(self) -> str:
         """Returns a string representation of the `RequestReviewID` object."""
         return f"<RRID - {self.project}:{self.kind.value}:{self.maintenance_id}:{self.review_id}>"
 
+    @override
     def __hash__(self) -> int:
         """Returns the hash of the `RequestReviewID` object."""
         return hash(str(self))
 
+    @override
     def __eq__(self, other: object) -> bool:
         """Checks if two `RequestReviewID` objects are equal."""
         return str(self) == str(other)
 
+    @override
     def __ne__(self, other: object) -> bool:
         """Checks if two `RequestReviewID` objects are not equal."""
         return not self.__eq__(other)

@@ -8,6 +8,8 @@ from logging import getLogger
 from pathlib import Path
 from typing import TYPE_CHECKING, final
 
+from typing_extensions import override
+
 if TYPE_CHECKING:
     from ..cli.prompter import Prompter
 
@@ -194,6 +196,7 @@ class AutoOBSUpdateID(UpdateID):
 
         super().__init__(id_, self.tr_factory(id_), testreport_svn_checkout)
 
+    @override
     def make_testreport(
         self,
         config: Config,
@@ -277,6 +280,7 @@ class KernelOBSUpdateID(UpdateID):
         directory: Path = config.template_dir / str(self.id) / "results"
         directory.mkdir(parents=False, exist_ok=True)
 
+    @override
     def make_testreport(
         self,
         config: Config,

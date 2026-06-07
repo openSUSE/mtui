@@ -2,6 +2,8 @@
 
 from typing import final
 
+from typing_extensions import override
+
 from .rpmver import RPMVersion
 
 
@@ -86,14 +88,17 @@ class Package:
         else:
             self._current = None
 
+    @override
     def __str__(self) -> str:
         """Returns the name of the package."""
         return self.name
 
+    @override
     def __repr__(self) -> str:
         """Returns a string representation of the `Package` object."""
         return f"<Package: {self.name}>"
 
+    @override
     def __hash__(self) -> int:
         """Returns the hash of the package name."""
         return hash(self.name)

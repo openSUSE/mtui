@@ -10,11 +10,18 @@
 Introduction
 ============
 
-The MTUI shell is comparable to a bash shell as both use the readline
-backend for command processing.
+The MTUI shell is a ``prompt_toolkit``-based REPL. Command names and
+their arguments complete with TAB against the live command registry;
+known command tokens are highlighted by a syntax lexer as you type.
+Persistent shell history is shared across sessions and is reachable
+through reverse-incremental search (Ctrl-R) and forward search
+(Ctrl-S); a fish-style autosuggestion shows the closest history match
+in dim text and can be accepted with the right-arrow key.
 
-For all shell commands, autocompletion and line editing features are
-enabled, as well as command history and history searching.
+A bottom toolbar reflects session state — the RRID of the loaded test
+report when one is active, ``empty`` otherwise — so the prompt stays
+unambiguous when several mtui sessions are open in different
+terminals.
 
 For a short overview of procedures and help texts, the ``help`` command is
 also available (i.e. ``help add_host`` prints a short description of the

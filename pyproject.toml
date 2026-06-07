@@ -24,15 +24,18 @@ dependencies = [
   "prompt_toolkit",
   "pyxdg",
   "requests",
-  "ruamel.yaml"
+  "ruamel.yaml",
+  "typing-extensions>=4.5"
 ]
 dynamic = ["version"]
 
 [project.scripts]
 mtui = "mtui.main:main"
+mtui-mcp = "mtui.mcp.main:main"
 
 [project.optional-dependencies]
 keyring = ["keyring"]
+mcp = ["fastmcp>=3"]
 norpm = ["version_utils"]
 notify = ["notify"]
 rpm = ["rpm"]
@@ -111,6 +114,15 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S108", "ARG", "SLF001"]
 "Documentation/conf.py" = ["INP001", "ERA001", "A001", "D"]
+# Argparse exposes ``_actions`` and the per-action classes (``_StoreTrueAction``
+# etc.) only via private names; the MCP synthesis layer has to dispatch on them
+# to translate every command's parser into a tool schema.
+"mtui/mcp/_schema.py" = ["SLF001"]
+"mtui/mcp/_argv.py" = ["SLF001"]
+"mtui/mcp/tools.py" = ["SLF001"]
+# Hand-written testreport tools acquire the session-wide ``_lock`` to stay
+# coherent with concurrent ``run_command`` dispatch.
+"mtui/mcp/testreport_tools.py" = ["SLF001"]
 
 [tool.ty.environment]
 # Pin to the lowest version we support so we catch features that

@@ -65,7 +65,7 @@ Optional extras
 ===============
 
 The following extras can be combined (for example
-``pip install -e '.[norpm,keyring,notify,completion]'``):
+``pip install -e '.[norpm,keyring,notify,completion,mcp]'``):
 
 ``norpm``
     Pulls in `version_utils <https://pypi.org/project/version-utils/>`_
@@ -94,6 +94,16 @@ The following extras can be combined (for example
 
     Bash users additionally need the ``bash-completion`` package
     installed.
+
+``mcp``
+    Adds `fastmcp <https://pypi.org/project/fastmcp/>`_ to provide the
+    ``mtui-mcp`` console script — a `Model Context Protocol`_ server
+    that exposes every non-interactive mtui command as an MCP tool,
+    plus dedicated ``testreport_read`` / ``testreport_patch`` /
+    ``testreport_write`` tools for editing the loaded test report.
+    See :doc:`mcp` for the full reference.
+
+.. _Model Context Protocol: https://modelcontextprotocol.io
 
 System-package requirements
 ===========================
