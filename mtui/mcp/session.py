@@ -42,8 +42,8 @@ logger = getLogger("mtui.mcp.session")
 class McpCommandError(RuntimeError):
     """Raised by :meth:`McpSession.run_command` when a command fails.
 
-    Carries the streams captured during the failed run so the FastMCP
-    layer can surface them to the client:
+    Carries the streams captured during the failed run so the MCP
+    server layer can surface them to the client:
 
     * ``stdout`` — everything the command printed before failing.
     * ``stderr`` — argparse complaints, exception messages, etc.
@@ -51,7 +51,7 @@ class McpCommandError(RuntimeError):
       ``1`` for an unhandled exception.
 
     ``__str__`` returns a single-line summary plus the captured stderr
-    so the default FastMCP error envelope is human-readable.
+    so the default MCP error envelope is human-readable.
     """
 
     def __init__(self, stdout: str, stderr: str, exit_code: int) -> None:

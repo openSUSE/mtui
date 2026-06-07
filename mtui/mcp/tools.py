@@ -1,13 +1,14 @@
-"""Synthesise FastMCP tools from :class:`mtui.commands.Command` subclasses.
+"""Synthesise MCP tools from :class:`mtui.commands.Command` subclasses.
 
 For every concrete command registered in :attr:`Command.registry` that
-is not on the REPL-only deny-list, this module builds one FastMCP tool
+is not on the REPL-only deny-list, this module builds one MCP tool
 whose:
 
 * **name** matches the command's ``command`` attribute (e.g. ``run``).
 * **description** comes from the command's docstring.
-* **input schema** is inferred by FastMCP from a synthesised function
-  signature built by :func:`mtui.mcp._schema.build_parameters`.
+* **input schema** is inferred by :mod:`mcp.server.fastmcp` from a
+  synthesised function signature built by
+  :func:`mtui.mcp._schema.build_parameters`.
 * **handler** re-serialises kwargs to argv via
   :func:`mtui.mcp._argv.kwargs_to_argv` and dispatches through
   :meth:`McpSession.run_command`, which serialises calls behind the
@@ -40,7 +41,7 @@ from .session import McpCommandError
 if TYPE_CHECKING:
     import argparse
 
-    from fastmcp import FastMCP
+    from mcp.server.fastmcp import FastMCP
 
     from .session import McpSession
 
@@ -74,10 +75,11 @@ def _make_wrapper(
 ):
     """Build the async tool handler for ``cls``.
 
-    The returned coroutine carries the synthesised signature so FastMCP
-    can infer the input schema. ``argv_prefix`` is prepended to the
-    argv produced from kwargs; used by the subparser fan-out to inject
-    the subcommand name (``["show"]`` for ``config_show``).
+    The returned coroutine carries the synthesised signature so the
+    MCP server can infer the input schema. ``argv_prefix`` is
+    prepended to the argv produced from kwargs; used by the subparser
+    fan-out to inject the subcommand name (``["show"]`` for
+    ``config_show``).
     """
     params = build_parameters(parser)
     signature = inspect.Signature(
@@ -136,19 +138,22 @@ def _register_tool(
     argv_prefix: tuple[str, ...] = (),
     description: str | None = None,
 ) -> None:
-    """Build a wrapper, wrap it in a :class:`FunctionTool`, register it."""
-    from fastmcp.tools.function_tool import FunctionTool
+    """Build a wrapper and register it on ``mcp`` as a tool.
+
+    The SDK's :meth:`FastMCP.add_tool` accepts the callable directly
+    and synthesises the JSON Schema from its signature; there is no
+    separate ``FunctionTool`` wrapper to construct.
+    """
     from mcp.types import ToolAnnotations
 
     wrapper = _make_wrapper(cls, parser, session, argv_prefix=argv_prefix)
     desc = (description or cls.__doc__ or name).strip()
-    tool = FunctionTool.from_function(
-        fn=wrapper,
+    mcp.add_tool(
+        wrapper,
         name=name,
         description=desc,
         annotations=ToolAnnotations(readOnlyHint=_is_read_only(name)),
     )
-    mcp.add_tool(tool)
 
 
 def _fan_out_subparser(
@@ -196,7 +201,7 @@ def _fan_out_subparser(
 
 
 def build_tools(mcp: FastMCP, session: McpSession) -> list[str]:
-    """Register one FastMCP tool per non-denied :class:`Command` subclass.
+    """Register one MCP tool per non-denied :class:`Command` subclass.
 
     Subparser commands (``config`` today) are fanned out into one tool
     per subcommand. The deny-list intersection is asserted on entry so
@@ -204,8 +209,8 @@ def build_tools(mcp: FastMCP, session: McpSession) -> list[str]:
     silently exposing a REPL-only command as a tool.
 
     Args:
-        mcp: The :class:`fastmcp.FastMCP` server instance to register
-            tools on.
+        mcp: The :class:`mcp.server.fastmcp.FastMCP` server instance
+            to register tools on.
         session: The shared :class:`McpSession` every tool dispatches
             through.
 

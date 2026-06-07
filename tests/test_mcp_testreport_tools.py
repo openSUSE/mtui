@@ -273,8 +273,8 @@ def test_atomic_write_text_unlinks_tmp_on_failure(
 
 def test_register_testreport_tools_exposes_three_tools(tmp_path: Path) -> None:
     """Smoke-test: three tools registered, ``readOnlyHint`` set as expected."""
-    pytest.importorskip("fastmcp")
-    from fastmcp import FastMCP
+    pytest.importorskip("mcp")
+    from mcp.server.fastmcp import FastMCP
 
     sess = _null_session(tmp_path)
     mcp: FastMCP = FastMCP(name="test-mtui-mcp")
@@ -287,15 +287,11 @@ def test_register_testreport_tools_exposes_three_tools(tmp_path: Path) -> None:
         "testreport_write",
     ]
 
-    async def _fetch() -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        for n in names:
-            tool = await mcp.get_tool(n)
-            assert tool is not None, f"tool {n!r} missing after registration"
-            out[n] = tool
-        return out
-
-    tools = asyncio.run(_fetch())
+    tools: dict[str, Any] = {}
+    for n in names:
+        tool = mcp._tool_manager.get_tool(n)  # noqa: SLF001
+        assert tool is not None, f"tool {n!r} missing after registration"
+        tools[n] = tool
 
     read_tool = tools["testreport_read"]
     patch_tool = tools["testreport_patch"]

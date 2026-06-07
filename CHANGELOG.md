@@ -10,12 +10,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - New `mtui-mcp` console script (optional `mcp` extra) ships a
-  FastMCP server that exposes every non-interactive mtui command as
-  a Model Context Protocol tool, plus dedicated `testreport_read` /
-  `testreport_patch` / `testreport_write` tools, so LLM clients can
-  drive a headless mtui session over `stdio` or `http`. See
-  `Documentation/mcp.rst` for the deny-list, single-session caveat,
-  and a `read → patch → read` worked example.
+  Model Context Protocol server, built on the official `mcp` Python
+  SDK, that exposes every non-interactive mtui command as an MCP
+  tool, plus dedicated `testreport_read` / `testreport_patch` /
+  `testreport_write` tools, so LLM clients can drive a headless mtui
+  session over `stdio` or `http`. The `mcp` extra installs
+  `mcp[cli]>=1.2`; on openSUSE the SDK is packaged as
+  `python3-mcp`. See `Documentation/mcp.rst` for the deny-list,
+  single-session caveat, and a `read → patch → read` worked example.
 
 ### Fixed
 
@@ -62,8 +64,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `mtui-mcp`'s `config_show` tool) that omitted attribute names hit
   the error instead of getting the sorted option list.
 - `mtui-mcp` now shuts down cleanly on Ctrl-C. The previous handler
-  caught a bare `KeyboardInterrupt`, but FastMCP runs the server
-  under `anyio.run`, which on Python 3.11+ wraps a Ctrl-C delivered
+  caught a bare `KeyboardInterrupt`, but the MCP server runs under
+  `anyio.run`, which on Python 3.11+ wraps a Ctrl-C delivered
   to an active task group inside a `BaseExceptionGroup`. The group
   slipped past the handler and the user saw a multi-frame traceback
   instead of a graceful exit. The server now also catches

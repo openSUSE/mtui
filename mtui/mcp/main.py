@@ -1,11 +1,12 @@
 """The main entry point for the ``mtui-mcp`` MCP server.
 
 Parses CLI args, builds the same :class:`Config` the REPL does, runs
-:func:`detect_system`, lazily imports :mod:`fastmcp` so a missing
-``[mcp]`` extra produces a friendly hint instead of a traceback, then
-constructs an :class:`McpSession`, optionally preloads an update and
-autoconnects SUTs, registers every non-denied command plus the three
-testreport tools, and dispatches on the chosen transport.
+:func:`detect_system`, lazily imports :mod:`mcp.server.fastmcp` so a
+missing ``[mcp]`` extra produces a friendly hint instead of a
+traceback, then constructs an :class:`McpSession`, optionally preloads
+an update and autoconnects SUTs, registers every non-denied command
+plus the three testreport tools, and dispatches on the chosen
+transport.
 
 Preload and autoconnect both **log-and-continue** on failure: an MCP
 session is long-lived, the LLM has its own recovery paths
@@ -34,9 +35,10 @@ from .testreport_tools import register_testreport_tools
 from .tools import build_tools
 
 # Exception types that we treat as "user asked us to stop" rather than
-# as crashes. ``CancelledError`` shows up because FastMCP runs under
-# ``anyio.run``; when SIGINT cancels in-flight tasks anyio surfaces
-# cancellations alongside the KeyboardInterrupt inside a group.
+# as crashes. ``CancelledError`` shows up because the MCP server runs
+# under ``anyio.run``; when SIGINT cancels in-flight tasks anyio
+# surfaces cancellations alongside the KeyboardInterrupt inside a
+# group.
 _SHUTDOWN_LEAVES: tuple[type[BaseException], ...] = (
     KeyboardInterrupt,
     SystemExit,
@@ -47,7 +49,7 @@ _SHUTDOWN_LEAVES: tuple[type[BaseException], ...] = (
 def _is_clean_shutdown_group(exc: BaseException) -> bool:
     """Return True iff every leaf in ``exc`` is a shutdown sentinel.
 
-    ``anyio.run`` (used by :meth:`FastMCP.run`) wraps task-group failures
+    ``anyio.run`` (used by :meth:`mcp.server.fastmcp.FastMCP.run`) wraps task-group failures
     in :class:`BaseExceptionGroup` on Python 3.11+, so a bare
     ``except KeyboardInterrupt`` does not catch Ctrl-C delivered to an
     active task group. We walk the group recursively and only treat it
@@ -79,15 +81,15 @@ def main() -> int:
 
     if args.debug:
         logger.setLevel(level=logging.DEBUG)
-        # Also raise FastMCP's logger so protocol-level frames become
+        # Also raise the SDK's logger so protocol-level frames become
         # visible; without this `--debug` only surfaces mtui internals.
-        logging.getLogger("fastmcp").setLevel(logging.DEBUG)
+        logging.getLogger("mcp.server.fastmcp").setLevel(logging.DEBUG)
 
     try:
-        from fastmcp import FastMCP
+        from mcp.server.fastmcp import FastMCP
     except ImportError:
         logger.error(
-            "fastmcp is not installed; run `zypper in python3-fastmcp`"
+            "mcp is not installed; run `zypper in python3-mcp`"
             " or `uv sync --extra mcp` or `pip install 'mtui[mcp]'`."
         )
         return 2
@@ -151,13 +153,19 @@ def main() -> int:
                 logger.info("mtui-mcp: shutting down")
                 return 0
 
-    mcp = FastMCP(name="mtui")
+    # ``host``/``port`` are constructor-time settings in the SDK and
+    # only consulted under the ``streamable-http`` transport; passing
+    # them under stdio is a harmless no-op.
+    mcp = FastMCP(name="mtui", host=args.host, port=args.port)
     build_tools(mcp, session)
     register_testreport_tools(mcp, session)
 
     try:
         if args.transport == "http":
-            mcp.run(transport="http", host=args.host, port=args.port)
+            # ``--transport http`` is the user-facing flag we preserve
+            # from the standalone fastmcp era; the SDK names this
+            # transport ``streamable-http``.
+            mcp.run(transport="streamable-http")
         else:
             mcp.run()
     except KeyboardInterrupt:

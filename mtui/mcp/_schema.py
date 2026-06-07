@@ -1,11 +1,11 @@
-"""Translate :mod:`argparse` actions into typed parameters for FastMCP.
+"""Translate :mod:`argparse` actions into typed parameters for the MCP server.
 
-FastMCP infers a tool's JSON schema from the wrapper function's Python
-signature via :mod:`pydantic`. To synthesise tools from mtui's existing
-:class:`argparse.ArgumentParser` definitions we therefore build a real
-:class:`inspect.Signature` per command whose parameters carry typing
-:class:`~typing.Annotated` hints rich enough for the FastMCP schema
-extractor:
+:mod:`mcp.server.fastmcp` infers a tool's JSON schema from the wrapper
+function's Python signature via :mod:`pydantic`. To synthesise tools
+from mtui's existing :class:`argparse.ArgumentParser` definitions we
+therefore build a real :class:`inspect.Signature` per command whose
+parameters carry typing :class:`~typing.Annotated` hints rich enough
+for the SDK's schema extractor:
 
 * The base Python type — ``str``, ``int``, ``bool``, ``list[str]``,
   ``list[int]`` — comes from ``action.type`` and ``action.nargs``.
@@ -16,7 +16,7 @@ extractor:
 
 This module is intentionally pure: every entry point takes an
 :class:`argparse.Action` (or :class:`argparse.ArgumentParser`) and
-returns plain data. Side-effect handling (logging, FastMCP
+returns plain data. Side-effect handling (logging, MCP-server tool
 registration) lives in :mod:`mtui.mcp.tools`.
 """
 
@@ -87,7 +87,7 @@ def _wrap_nargs(base: Any, nargs: object) -> tuple[Any, bool]:
 
     Returns ``(annotation, is_list)``. ``is_list`` is reported so the
     caller can decide on the default — list-shaped fields default to
-    ``None`` (FastMCP renders the field as optional when a default is
+    ``None`` (the MCP server renders the field as optional when a default is
     present) while scalars use ``action.default`` directly.
     """
     if nargs is None or nargs == "?":
@@ -367,7 +367,7 @@ def _scan_shared_dest_groups(
                     )
                 else:
                     desc = f"{desc} (mutually exclusive with {sibling_flags})"
-                # ``Annotated[X | None, ...]`` makes the FastMCP schema
+                # ``Annotated[X | None, ...]`` makes the MCP server schema
                 # nullable. Widen to ``Any`` locally so ty does not flag
                 # the union expression as a runtime type value (same
                 # pattern as the optional-scalar branch above).

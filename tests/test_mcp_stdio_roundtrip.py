@@ -1,11 +1,12 @@
-"""End-to-end stdio roundtrip smoke test for ``mtui-mcp``.
+"""End-to-end in-memory roundtrip smoke test for ``mtui-mcp``.
 
-Uses FastMCP's in-memory :class:`fastmcp.Client` transport — no
-subprocess, no socket — to prove the wiring in :mod:`mtui.mcp.main`
-actually produces a working MCP server: tools list reflects the
-deny-list, the three testreport tools are present, and a real
-auto-generated tool (``whoami``) round-trips to the same ``User: …``
-line the REPL emits.
+Uses the official SDK's
+:func:`mcp.shared.memory.create_connected_server_and_client_session`
+helper — no subprocess, no socket — to prove the wiring in
+:mod:`mtui.mcp.main` actually produces a working MCP server: tools
+list reflects the deny-list, the three testreport tools are present,
+and a real auto-generated tool (``whoami``) round-trips to the same
+``User: ...`` line the REPL emits.
 
 Skipped when the ``[mcp]`` extra is not installed.
 """
@@ -19,9 +20,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-pytest.importorskip("fastmcp")
+pytest.importorskip("mcp")
 
-from fastmcp import Client, FastMCP  # noqa: E402
+from mcp.server.fastmcp import FastMCP  # noqa: E402
+from mcp.shared.memory import (  # noqa: E402
+    create_connected_server_and_client_session,
+)
 
 from mtui.mcp.session import McpSession  # noqa: E402
 from mtui.mcp.testreport_tools import register_testreport_tools  # noqa: E402
@@ -47,9 +51,9 @@ def _build_server(tmp_path: Path) -> FastMCP:
 
 
 def _result_text(result) -> str:
-    """Pull the human-readable text out of a FastMCP ``CallToolResult``.
+    """Pull the human-readable text out of a :class:`mcp.types.CallToolResult`.
 
-    FastMCP 3.x returns a ``CallToolResult`` whose ``content`` is a list
+    The SDK returns a ``CallToolResult`` whose ``content`` is a list
     of typed content blocks. We accept either ``.text`` on the first
     block or fall back to ``str(result)`` so the assert remains useful
     if the envelope shape shifts between minor versions.
@@ -63,14 +67,15 @@ def _result_text(result) -> str:
     return str(result)
 
 
-def test_stdio_roundtrip_lists_tools(tmp_path: Path) -> None:
+def test_inmemory_roundtrip_lists_tools(tmp_path: Path) -> None:
     """The in-memory client sees the synthesised tool set."""
     mcp = _build_server(tmp_path)
 
     async def driver() -> set[str]:
-        async with Client(mcp) as client:
-            tools = await client.list_tools()
-            return {t.name for t in tools}
+        async with create_connected_server_and_client_session(server=mcp) as session:
+            await session.initialize()
+            result = await session.list_tools()
+            return {t.name for t in result.tools}
 
     names = asyncio.run(driver())
 
@@ -89,13 +94,14 @@ def test_stdio_roundtrip_lists_tools(tmp_path: Path) -> None:
     assert "testreport_write" in names
 
 
-def test_stdio_roundtrip_calls_whoami(tmp_path: Path) -> None:
+def test_inmemory_roundtrip_calls_whoami(tmp_path: Path) -> None:
     """``call_tool('whoami')`` returns the same banner the REPL prints."""
     mcp = _build_server(tmp_path)
 
     async def driver() -> str:
-        async with Client(mcp) as client:
-            return _result_text(await client.call_tool("whoami", {}))
+        async with create_connected_server_and_client_session(server=mcp) as session:
+            await session.initialize()
+            return _result_text(await session.call_tool("whoami", {}))
 
     text = asyncio.run(driver())
     assert text.startswith("User: testuser, app pid: ")

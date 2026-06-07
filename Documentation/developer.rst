@@ -252,8 +252,10 @@ MCP server
 ##########
 
 The ``mtui-mcp`` console script (see :doc:`mcp` for the user-facing
-reference) auto-synthesises one FastMCP tool per non-denied entry in
+reference) auto-synthesises one MCP tool per non-denied entry in
 ``Command.registry`` and adds three hand-written testreport tools.
+Tool registration goes through the official SDK's
+:class:`mcp.server.fastmcp.FastMCP` server.
 This section covers smoke-testing and debugging the server itself —
 operator-facing client configuration lives in :doc:`mcp`.
 
@@ -280,9 +282,10 @@ Then launch the Inspector:
 In the UI: select transport ``Streamable HTTP``, set the URL to
 ``http://127.0.0.1:8765/mcp``, connect, and use the *Tools* tab to
 list every registered tool and call it with hand-crafted arguments.
-``--debug`` makes both the mtui logger and the ``fastmcp`` logger
-emit ``DEBUG``-level frames on stderr so JSON-RPC traffic and FastMCP
-routing decisions are visible alongside the Inspector interaction.
+``--debug`` makes both the mtui logger and the
+``mcp.server.fastmcp`` logger emit ``DEBUG``-level frames on stderr
+so JSON-RPC traffic and the MCP server's routing decisions are
+visible alongside the Inspector interaction.
 
 .. _MCP Inspector: https://github.com/modelcontextprotocol/inspector
 
@@ -331,10 +334,10 @@ Troubleshooting
   tool call blocks every concurrent client on the same server — that
   is by design, not a bug.
 * **Need to see the wire protocol.** Pass ``--debug`` to ``mtui-mcp``;
-  both the server logger and the ``fastmcp`` logger drop to
-  ``DEBUG``, surfacing JSON-RPC frames and FastMCP routing decisions
-  on stderr. Combine with the Inspector to see request and response
-  on both sides of the wire.
+  both the server logger and the ``mcp.server.fastmcp`` logger drop
+  to ``DEBUG``, surfacing JSON-RPC frames and MCP-server routing
+  decisions on stderr. Combine with the Inspector to see request and
+  response on both sides of the wire.
 * **A new command is missing from the MCP tool surface.** Check
   ``mtui/mcp/deny.py`` — only commands on the REPL-only deny-list are
   filtered. If the command is not denied and still not exposed, the

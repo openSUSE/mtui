@@ -35,7 +35,7 @@ mtui-mcp = "mtui.mcp.main:main"
 
 [project.optional-dependencies]
 keyring = ["keyring"]
-mcp = ["fastmcp>=3"]
+mcp = ["mcp[cli]>=1.2"]
 norpm = ["version_utils"]
 notify = ["notify"]
 rpm = ["rpm"]

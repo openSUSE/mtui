@@ -96,12 +96,14 @@ The following extras can be combined (for example
     installed.
 
 ``mcp``
-    Adds `fastmcp <https://pypi.org/project/fastmcp/>`_ to provide the
-    ``mtui-mcp`` console script — a `Model Context Protocol`_ server
-    that exposes every non-interactive mtui command as an MCP tool,
-    plus dedicated ``testreport_read`` / ``testreport_patch`` /
+    Adds the official `mcp <https://pypi.org/project/mcp/>`_ Python
+    SDK to provide the ``mtui-mcp`` console script — a `Model
+    Context Protocol`_ server that exposes every non-interactive
+    mtui command as an MCP tool, plus dedicated
+    ``testreport_read`` / ``testreport_patch`` /
     ``testreport_write`` tools for editing the loaded test report.
-    See :doc:`mcp` for the full reference.
+    On openSUSE the SDK ships as ``python3-mcp``. See :doc:`mcp` for
+    the full reference.
 
 .. _Model Context Protocol: https://modelcontextprotocol.io
 
