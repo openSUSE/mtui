@@ -20,7 +20,7 @@ class ShowDiff(Command):
         """Executes the `show_diff` command."""
         diff = self.metadata.report_wd() / "source.diff"
         text = diff.read_text().split("\n")
-        page(text, self.prompt.interactive)
+        page(text, self.prompt.interactive, writer=self.display.println)
 
 
 # TODO: this command needs some love, in current state is too brittle

@@ -10,6 +10,7 @@ import pytest
 
 from mtui.commands.run import Run
 from mtui.hosts.target.hostgroup import HostsGroup
+from mtui.hosts.target.locks import TargetLockedError
 from mtui.support.messages import NoRefhostsDefinedError
 
 
@@ -57,3 +58,33 @@ def test_run_empty_targets_raises(mock_config):
     args = Namespace(command=["x"], hosts=None)
     with pytest.raises(NoRefhostsDefinedError):
         Run(args, mock_config, MagicMock(), prompt)()
+
+
+def test_run_target_locked_returns_without_unbound_local(mock_config):
+    """A ``TargetLockedError`` during locking must not crash with ``UnboundLocalError``.
+
+    Pre-fix, ``output`` was assigned inside the ``with LockedTargets(...)``
+    block; when the context manager raised before assignment, the later
+    ``page(output, ...)`` call referenced an undefined local. The fix
+    lifts ``output: list[str] = []`` above the ``try:``, so this path
+    must now return cleanly.
+    """
+    t = _target("h1")
+    prompt = _prompt(HostsGroup([t]))
+    args = Namespace(command=["uname"], hosts=None)
+
+    @contextmanager
+    def boom_ctx(_):
+        raise TargetLockedError("locked by alice")
+        yield  # unreachable, makes this a generator
+
+    with (
+        patch("mtui.commands.run.LockedTargets", boom_ctx),
+        patch("mtui.commands.run.page") as page,
+    ):
+        # Must return cleanly (no UnboundLocalError, no re-raise).
+        result = Run(args, mock_config, MagicMock(), prompt)()
+
+    assert result is None
+    # Early return short-circuits before page() is reached.
+    page.assert_not_called()

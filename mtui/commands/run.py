@@ -51,14 +51,13 @@ class Run(Command):
             command += i + " "
 
         command = command.rstrip(" ")
+        output: list[str] = []
         try:
             with LockedTargets(list(targets.values())):
                 try:
                     targets.run(command)
                 except KeyboardInterrupt:
                     return
-
-                output = []
 
                 for target in targets:
                     output.append(
@@ -73,7 +72,7 @@ class Run(Command):
             logger.error("Target %s", e)
             return
 
-        page(output, self.prompt.interactive)
+        page(output, self.prompt.interactive, writer=self.display.println)
         logger.info("done")
 
     @staticmethod
