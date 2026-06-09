@@ -146,6 +146,10 @@ class McpSession:
 
         self.metadata = NullTestReport(config, prompter=self.prompter)
         self.targets = self.metadata.targets
+        # Mirror ``self.interactive`` onto the HostsGroup so long-running
+        # parallel actions (run, set_repo, sftp_*) skip the TTY spinner;
+        # MCP uses ``notifications/progress`` as its progress channel.
+        self.targets.interactive = False
         self.session: str | None = None
 
         # Snapshot of the registry so commands that introspect
@@ -245,6 +249,9 @@ class McpSession:
         )
         self.metadata = tr
         self.targets = tr.targets
+        # Re-apply the non-interactive flag after the testreport swap so
+        # the fresh HostsGroup inherits the session's headless mode.
+        self.targets.interactive = False
         self.set_prompt(None)
 
     # ------------------------------------------------------------------

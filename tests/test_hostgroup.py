@@ -850,3 +850,76 @@ def test_report_log_delegates():
     hg = HostsGroup([t1])
     hg.report_log(sink, "arg")
     t1.reporter.log.assert_called_once_with(sink, "arg")
+
+
+# --- Interactive flag propagation (MCP spinner suppression) ---
+
+
+def test_hostgroup_defaults_to_interactive():
+    """The REPL path constructs ``HostsGroup`` without the kwarg."""
+    hg = HostsGroup([])
+    assert hg.interactive is True
+
+
+def test_hostgroup_non_interactive_select_inherits_flag():
+    """A sub-group from ``select`` must carry the parent's ``interactive`` bit."""
+    t1 = _stub_target("h1")
+    t2 = _stub_target("h2")
+    t1.state = "enabled"
+    t2.state = "enabled"
+    hg = HostsGroup([t1, t2], interactive=False)
+
+    sub_all = hg.select()
+    sub_named = hg.select(["h1"])
+    sub_enabled = hg.select(enabled=True)
+
+    assert sub_all.interactive is False
+    assert sub_named.interactive is False
+    assert sub_enabled.interactive is False
+
+
+def test_hostgroup_non_interactive_passes_desc_none_to_run_parallel():
+    """``_fanout_set_repo`` on a headless group must pass ``desc=None``."""
+    t1 = _stub_target("h1")
+    hg = HostsGroup([t1], interactive=False)
+
+    with patch("mtui.hosts.target.hostgroup.run_parallel") as mock_rp:
+        hg._fanout_set_repo("add", MagicMock())  # noqa: SLF001
+
+    assert mock_rp.call_args.kwargs["desc"] is None
+
+
+def test_hostgroup_interactive_passes_desc_label_to_run_parallel():
+    """The REPL path keeps the descriptive spinner label."""
+    t1 = _stub_target("h1")
+    hg = HostsGroup([t1])  # interactive=True by default
+
+    with patch("mtui.hosts.target.hostgroup.run_parallel") as mock_rp:
+        hg._fanout_set_repo("add", MagicMock())  # noqa: SLF001
+
+    assert mock_rp.call_args.kwargs["desc"] == "set_repo add"
+
+
+def test_hostgroup_non_interactive_run_passes_through_to_runcommand():
+    """``HostsGroup.run`` forwards ``interactive`` into ``RunCommand``."""
+    from mtui.types import ExecutionMode
+
+    t1 = _stub_target("h1")
+    t1.mode = ExecutionMode.PARALLEL
+    hg = HostsGroup([t1], interactive=False)
+
+    with patch("mtui.hosts.target.hostgroup.RunCommand") as mock_rc:
+        hg.run("true")
+
+    assert mock_rc.call_args.kwargs["interactive"] is False
+
+
+def test_hostgroup_non_interactive_sftp_remove_forwards_flag():
+    """``sftp_remove`` constructs ``FileDelete(interactive=False)``."""
+    t1 = _stub_target("h1")
+    hg = HostsGroup([t1], interactive=False)
+
+    with patch("mtui.hosts.target.hostgroup.FileDelete") as mock_fd:
+        hg.sftp_remove(Path("/tmp/x"))
+
+    assert mock_fd.call_args.kwargs["interactive"] is False

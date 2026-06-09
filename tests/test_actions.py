@@ -170,3 +170,27 @@ def test_tty_spinner_is_silent_when_stderr_not_a_tty(capsys):
     assert captured.err == ""
     # Internal: no thread should have been spawned in non-TTY mode.
     assert s._thread is None  # noqa: SLF001
+
+
+def test_run_parallel_skips_spinner_when_desc_is_none_even_on_tty(capsys):
+    """``desc=None`` must skip the spinner unconditionally, even on a TTY.
+
+    The MCP server (and any other headless caller) declares itself
+    non-interactive so the ``HostsGroup`` layer passes ``desc=None``
+    to ``run_parallel``. If a future change ever re-enabled the
+    spinner for a ``desc=None`` call, this test would catch it: even
+    with ``sys.stderr.isatty()`` patched to True the worker must
+    finish without a single ``\\r`` frame on stderr.
+    """
+    from mtui.hosts.target.actions import run_parallel
+
+    fake_tty = MagicMock()
+    fake_tty.isatty.return_value = True
+    with patch("mtui.hosts.target.actions.sys.stderr", fake_tty):
+        run_parallel([(MagicMock(), ()), (MagicMock(), ())], desc=None)
+
+    # No spinner means no writes to the (faked) stderr at all.
+    fake_tty.write.assert_not_called()
+    # And the real captured stderr (pytest's) stays clean too.
+    captured = capsys.readouterr()
+    assert captured.err == ""
