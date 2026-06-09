@@ -392,3 +392,60 @@ Concurrency and safety
 * **HTTP is single-tenant by contract.** No auth, no TLS. Bind to
   loopback (the default) and front with the operator's preferred
   reverse-proxy if external access is required.
+
+
+Long-running tool calls
+=======================
+
+Many mtui commands legitimately take minutes rather than seconds —
+``run`` against a slow refhost, ``update``, ``set_repo``, ``commit``,
+``add_host`` against an SSH endpoint that takes its time to come up,
+``load_template`` against a fresh SVN checkout, anything that drives
+``osc``/``svn`` over the network. The MCP client's default JSON-RPC
+read timeout (often 30 s, matching the SDK's
+``MCP_DEFAULT_TIMEOUT``) used to cancel those calls before the
+server's worker thread returned.
+
+To keep clients patient, every ``mtui-mcp`` tool emits
+``notifications/progress`` every 10 seconds while its underlying
+command is running. MCP-spec-compliant clients (the official
+Inspector, Claude Desktop, opencode, Cursor, …) reset their read
+deadline on each frame, so a command that takes ten minutes still
+returns its captured stdout cleanly.
+
+The heartbeat is automatic and applies to every auto-generated tool
+plus the three testreport tools; no client configuration is required
+to benefit from it.
+
+Clients that ignore progress notifications
+------------------------------------------
+
+A small number of older / non-spec-compliant clients ignore
+``notifications/progress`` and enforce their own short read timeout.
+For those, raise the timeout in the client's own configuration:
+
+* **Claude Desktop** — per-server ``timeout`` field (milliseconds) in
+  ``mcpServers.<name>``:
+
+  .. code-block:: json
+
+      {
+        "mcpServers": {
+          "mtui": {
+            "command": "mtui-mcp",
+            "args": ["--transport", "stdio"],
+            "timeout": 600000
+          }
+        }
+      }
+
+* **opencode** — per-server ``timeout`` field on the MCP entry.
+
+* **Custom Python clients built on the SDK** — pass
+  ``read_timeout_seconds`` to ``ClientSession`` or
+  ``request_read_timeout_seconds`` to ``send_request``; the SDK's
+  ``MCP_DEFAULT_TIMEOUT = 30.0`` in ``mcp.shared._httpx_utils`` is
+  the lower-bound httpx default if you do not override it.
+
+The heartbeat itself never *caps* execution time; if your client
+honours progress it will simply wait as long as the server takes.
