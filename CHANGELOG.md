@@ -21,6 +21,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp` now emits MCP `notifications/progress` every 10 seconds
+  while a tool call is running, so spec-compliant MCP clients
+  (Inspector, Claude Desktop, opencode, …) no longer time out on
+  long-running commands such as `run`, `update`, `set_repo`, `commit`,
+  slow `add_host`, or `load_template`. The heartbeat is automatic and
+  applies to every auto-generated tool plus the three testreport
+  tools; clients that ignore progress notifications can raise their
+  own per-server timeout (see `Documentation/mcp.rst`).
 - `run`, `show_log`, and `show_diff` now return their output when
   invoked through `mtui-mcp`. The three commands routed results through
   the interactive pager (`page()`), which early-returned in

@@ -232,6 +232,67 @@ def test_config_set_schema_requires_attribute_and_value(
 # --------------------------------------------------------------------------- #
 
 
+def test_synthesised_wrapper_carries_context_parameter() -> None:
+    """The synthesised wrapper must expose a ``ctx: Context`` parameter.
+
+    FastMCP's :func:`find_context_parameter` reads
+    :func:`typing.get_type_hints` to locate the parameter to inject
+    the per-request :class:`Context` into; we therefore need both the
+    synthesised :class:`inspect.Signature` AND the ``__annotations__``
+    map to advertise ``ctx`` with the real ``Context`` annotation.
+    """
+    import inspect
+
+    from mcp.server.fastmcp import Context
+
+    from mtui.mcp.tools import _make_wrapper
+
+    session_stub = MagicMock()
+    parser = Command.registry["whoami"].argparser(__import__("sys"))
+    wrapper = _make_wrapper(Command.registry["whoami"], parser, session_stub)
+
+    sig = inspect.signature(wrapper)
+    assert "ctx" in sig.parameters
+    ctx_param = sig.parameters["ctx"]
+    assert ctx_param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert ctx_param.default is None
+    assert ctx_param.annotation is Context
+    # Annotations map must also resolve to the real class (not a
+    # string) so ``typing.get_type_hints`` succeeds without a
+    # ForwardRef lookup.
+    assert wrapper.__annotations__["ctx"] is Context
+
+
+def test_tool_schema_does_not_advertise_ctx(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """``ctx`` must be stripped from every tool's JSON schema.
+
+    FastMCP's tool registration calls ``func_metadata(fn,
+    skip_names=[context_kwarg])`` which excludes the Context-typed
+    parameter from the pydantic model used to build the JSON schema.
+    Asserted for a representative cross-section so a regression in
+    the SDK contract (e.g. a future version that no longer skips
+    Context params) surfaces loudly.
+    """
+    for name in (
+        "whoami",
+        "run",
+        "update",
+        "load_template",
+        "config_set",
+        "config_show",
+    ):
+        params = _params_of(mcp, name)
+        props = params.get("properties", {})
+        assert "ctx" not in props, (
+            f"tool {name!r} leaked a Context parameter into its JSON schema: "
+            f"{list(props)!r}"
+        )
+        required = params.get("required", [])
+        assert "ctx" not in required
+
+
 def test_read_only_heuristic_matches_allow_list() -> None:
     """The internal helper honours the prefix + exact allow-list."""
     assert _is_read_only("whoami")

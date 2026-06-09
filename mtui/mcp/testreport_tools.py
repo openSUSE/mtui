@@ -38,7 +38,7 @@ from ..test_reports.null_report import NullTestReport
 from .session import McpCommandError
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import Context, FastMCP
 
     from .session import McpSession
 
@@ -141,17 +141,39 @@ def _count_lines(text: str) -> int:
     return len(text.splitlines())
 
 
+async def _heartbeat(ctx: Context | None, message: str) -> None:
+    """Best-effort single progress frame for the testreport tools.
+
+    Disk I/O on these tools is typically sub-second so a heartbeat
+    loop would be overkill; we emit one frame *before* the I/O so
+    queued clients can see the call has been picked up. ``ctx`` is
+    optional (tests and direct coroutine callers pass ``None``); a
+    notification-send failure is swallowed so a flaky transport never
+    masks the actual tool outcome.
+    """
+    if ctx is None:
+        return
+    try:
+        await ctx.report_progress(progress=0.0, total=None, message=message)
+    except Exception as exc:  # noqa: BLE001 - never mask the tool result
+        logger.debug("progress notification failed: %s", exc)
+
+
 # --------------------------------------------------------------------------- #
 # Tools                                                                       #
 # --------------------------------------------------------------------------- #
 
 
-async def testreport_read(session: McpSession) -> dict[str, Any]:
+async def testreport_read(
+    session: McpSession,
+    ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+) -> dict[str, Any]:
     """Return the loaded testreport file's content and line count.
 
     Acquires ``session._lock`` so the snapshot is coherent with any
     in-flight command dispatch (e.g. a concurrent ``commit``).
     """
+    await _heartbeat(ctx, "testreport_read: waiting for session lock")
     async with session._lock:
         path = _resolve_testreport_path(session)
         content = path.read_text(encoding="utf-8", errors="replace")
@@ -167,6 +189,7 @@ async def testreport_patch(
     start_line: int,
     end_line: int,
     replacement: str,
+    ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """Replace an inclusive 1-indexed line range with ``replacement``.
 
@@ -177,6 +200,7 @@ async def testreport_patch(
     of the surrounding lines (which come from
     :meth:`str.splitlines` with ``keepends=True``).
     """
+    await _heartbeat(ctx, "testreport_patch: waiting for session lock")
     async with session._lock:
         path = _resolve_testreport_path(session)
         content = path.read_text(encoding="utf-8", errors="replace")
@@ -215,13 +239,18 @@ async def testreport_patch(
     }
 
 
-async def testreport_write(session: McpSession, content: str) -> dict[str, Any]:
+async def testreport_write(
+    session: McpSession,
+    content: str,
+    ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+) -> dict[str, Any]:
     """Overwrite the loaded testreport file with ``content`` atomically.
 
     Fallback for the case where line drift across patches makes
     :func:`testreport_patch` unreliable; the LLM resends the whole
     file in one shot.
     """
+    await _heartbeat(ctx, "testreport_write: waiting for session lock")
     async with session._lock:
         path = _resolve_testreport_path(session)
         bytes_written = _atomic_write_text(path, content)
@@ -252,18 +281,36 @@ def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
         and asserted in tests.
 
     """
+    # The trailing ``ctx: Context | None = None`` parameter is what
+    # FastMCP's ``find_context_parameter`` picks up via
+    # :func:`typing.get_type_hints` to (a) strip ``ctx`` from the
+    # tool's JSON schema and (b) inject the live per-request Context
+    # at call time. ``get_type_hints`` resolves the string annotation
+    # ``"Context | None"`` against the *module* globals (not the
+    # enclosing function's locals), so we inject ``Context`` into
+    # this module's globals lazily here rather than importing it at
+    # module top — keeping ``mtui.mcp.testreport_tools`` importable
+    # without the ``[mcp]`` extra.
+    from mcp.server.fastmcp import Context as _Context
     from mcp.types import ToolAnnotations
 
-    async def _read() -> dict[str, Any]:
-        return await testreport_read(session)
+    globals().setdefault("Context", _Context)
+
+    async def _read(ctx: Context | None = None) -> dict[str, Any]:
+        return await testreport_read(session, ctx=ctx)
 
     async def _patch(
-        start_line: int, end_line: int, replacement: str
+        start_line: int,
+        end_line: int,
+        replacement: str,
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
-        return await testreport_patch(session, start_line, end_line, replacement)
+        return await testreport_patch(
+            session, start_line, end_line, replacement, ctx=ctx
+        )
 
-    async def _write(content: str) -> dict[str, Any]:
-        return await testreport_write(session, content)
+    async def _write(content: str, ctx: Context | None = None) -> dict[str, Any]:
+        return await testreport_write(session, content, ctx=ctx)
 
     read_desc = (
         "Read the currently loaded testreport file. Returns the path, "

@@ -41,7 +41,10 @@ from .session import McpCommandError
 if TYPE_CHECKING:
     import argparse
 
-    from mcp.server.fastmcp import FastMCP
+    # ``Context`` is imported lazily inside ``_make_wrapper`` (it requires
+    # the optional ``mcp`` extra); the TYPE_CHECKING re-export is kept for
+    # editors/type-checkers, hence the ``noqa: F401``.
+    from mcp.server.fastmcp import Context, FastMCP  # noqa: F401
 
     from .session import McpSession
 
@@ -80,13 +83,42 @@ def _make_wrapper(
     prepended to the argv produced from kwargs; used by the subparser
     fan-out to inject the subcommand name (``["show"]`` for
     ``config_show``).
+
+    The synthesised signature also carries a trailing keyword-only
+    ``ctx`` parameter annotated as :class:`mcp.server.fastmcp.Context`.
+    FastMCP detects the ``Context`` annotation via
+    :func:`mcp.server.fastmcp.utilities.context_injection.find_context_parameter`
+    (which reads :func:`typing.get_type_hints`), strips the parameter
+    from the JSON schema via ``skip_names``, and injects the live
+    per-request :class:`Context` at call time. We forward it into
+    :meth:`McpSession.run_command` so the session can heartbeat
+    ``notifications/progress`` while the worker thread runs, which
+    keeps MCP clients from timing out on long-running commands.
     """
+    # Import lazily and only when actually building wrappers: callers
+    # outside the ``mtui[mcp]`` extra never reach this function (the
+    # MCP entrypoint already errored out with a friendly hint), but
+    # the lazy import keeps ``mtui.mcp.tools`` importable in
+    # documentation builds and unit tests that monkey-patch around
+    # the SDK.
+    from mcp.server.fastmcp import Context
+
     params = build_parameters(parser)
+    # Append the Context-typed parameter LAST so the existing required-
+    # before-optional ordering is preserved (``ctx`` has a default of
+    # ``None`` and is keyword-only).
+    ctx_param = inspect.Parameter(
+        "ctx",
+        inspect.Parameter.KEYWORD_ONLY,
+        default=None,
+        annotation=Context,
+    )
+    all_params = [*params, ctx_param]
     signature = inspect.Signature(
-        parameters=params,
+        parameters=all_params,
         return_annotation=str,
     )
-    annotations = {p.name: p.annotation for p in params}
+    annotations = {p.name: p.annotation for p in all_params}
     annotations["return"] = str
 
     # Synthetic-name mutex groups (load_template -a/-k) need a runtime
@@ -108,6 +140,11 @@ def _make_wrapper(
     )
 
     async def wrapper(**kwargs: Any) -> str:
+        # FastMCP injects ``ctx`` only when the client request carries
+        # a progress token (and even then, only because we annotated
+        # the parameter as Context); strip it before kwargs_to_argv so
+        # the encoder does not try to render it as a CLI flag.
+        ctx = kwargs.pop("ctx", None)
         if synthetic_required:
             supplied = [n for n in synthetic_names if kwargs.get(n) is not None]
             if len(supplied) != 1:
@@ -117,7 +154,7 @@ def _make_wrapper(
                 )
                 raise McpCommandError("", msg, 2)
         argv = list(argv_prefix) + kwargs_to_argv(parser, kwargs)
-        return await session.run_command(cls, argv)
+        return await session.run_command(cls, argv, ctx=ctx)
 
     # ``inspect.Signature`` lives on a dunder slot; ty does not model it
     # for nested ``async def``, hence the suppression.

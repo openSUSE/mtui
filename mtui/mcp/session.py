@@ -24,9 +24,10 @@ from __future__ import annotations
 import asyncio
 import io
 import shlex
+import time
 from logging import Logger, getLogger
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..cli.argparse import ArgsParseFailureError
 from ..cli.display import CommandPromptDisplay
@@ -37,6 +38,17 @@ if TYPE_CHECKING:
     from ..support.config import Config
 
 logger = getLogger("mtui.mcp.session")
+
+#: Default heartbeat interval, in seconds, between
+#: ``notifications/progress`` frames emitted while a long-running tool
+#: call is in flight. The MCP SDK's client-side httpx default is 30 s
+#: (``mcp.shared._httpx_utils.MCP_DEFAULT_TIMEOUT``) and most LLM
+#: clients (Claude Desktop, opencode, Inspector) sit in the same
+#: ballpark; 10 s sits comfortably under that floor while keeping wire
+#: traffic negligible for short calls (one frame every 10 s costs
+#: nothing on the wire and stops well-behaved clients from timing out
+#: on ``run`` / ``update`` / ``set_repo`` / ``commit`` etc.).
+DEFAULT_PROGRESS_INTERVAL_SECONDS: float = 10.0
 
 
 class McpCommandError(RuntimeError):
@@ -239,7 +251,14 @@ class McpSession:
     # Command dispatch
     # ------------------------------------------------------------------
 
-    async def run_command(self, cmd_cls: type[Command], argv: list[str]) -> str:
+    async def run_command(
+        self,
+        cmd_cls: type[Command],
+        argv: list[str],
+        ctx: Any | None = None,
+        *,
+        progress_interval: float = DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    ) -> str:
         """Runs a registered command and returns its captured stdout.
 
         The lock makes the call sequentially consistent with every
@@ -247,10 +266,27 @@ class McpSession:
         :func:`asyncio.to_thread` hop keeps blocking command bodies
         off the event loop.
 
+        When ``ctx`` is supplied (the synthesised tool wrappers in
+        :mod:`mtui.mcp.tools` and the testreport tools pass it through
+        from FastMCP), a heartbeat coroutine emits
+        ``notifications/progress`` every ``progress_interval`` seconds
+        while the worker thread runs, so MCP clients that honour the
+        protocol's progress contract do not time out on long-running
+        commands (``run``, ``update``, ``set_repo``, ``commit``, slow
+        ``add_host``, ``load_template``, ...). The notification is
+        addressed at the request's ``progressToken``; if the client
+        did not supply one the SDK's :meth:`Context.report_progress`
+        is a no-op, so the heartbeat costs nothing in that case.
+
         Args:
             cmd_cls: The :class:`Command` subclass to invoke.
             argv: The command-line tokens (already split, no shell
                 quoting required from the caller).
+            ctx: Optional FastMCP :class:`Context` for the in-flight
+                tool call. ``None`` skips the heartbeat (used by the
+                autoconnect path in :mod:`mtui.mcp.main` and by tests).
+            progress_interval: Seconds between heartbeat frames.
+                Defaults to :data:`DEFAULT_PROGRESS_INTERVAL_SECONDS`.
 
         Returns:
             The text the command wrote to stdout during the call.
@@ -262,7 +298,57 @@ class McpSession:
 
         """
         async with self._lock:
-            return await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+            if ctx is None:
+                return await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+            return await self._run_with_heartbeat(
+                ctx, cmd_cls, argv, interval=progress_interval
+            )
+
+    async def _run_with_heartbeat(
+        self,
+        ctx: Any,
+        cmd_cls: type[Command],
+        argv: list[str],
+        *,
+        interval: float,
+    ) -> str:
+        """Drive ``_run_sync`` in a worker thread while emitting heartbeats.
+
+        The worker task is created with :func:`asyncio.create_task` and
+        we wait on it with :func:`asyncio.wait` so the heartbeat loop
+        wakes every ``interval`` seconds regardless of how long the
+        underlying blocking body takes. ``ctx.report_progress`` is
+        ``await``-ed inside the loop; a notification-send failure is
+        logged at ``DEBUG`` and swallowed so a flaky transport never
+        masks the actual command outcome.
+        """
+        worker = asyncio.create_task(asyncio.to_thread(self._run_sync, cmd_cls, argv))
+        started = time.monotonic()
+        try:
+            while True:
+                done, _pending = await asyncio.wait({worker}, timeout=interval)
+                if worker in done:
+                    break
+                elapsed = time.monotonic() - started
+                try:
+                    await ctx.report_progress(
+                        progress=elapsed,
+                        total=None,
+                        message=f"{cmd_cls.command} running ({elapsed:.0f}s)…",
+                    )
+                except Exception as exc:  # noqa: BLE001 - never mask the command result
+                    logger.debug(
+                        "progress notification failed for %s: %s",
+                        cmd_cls.command,
+                        exc,
+                    )
+        except BaseException:
+            # The caller (or the surrounding task group) cancelled us.
+            # Cancel the worker too so we do not leak a background
+            # thread future; then re-raise.
+            worker.cancel()
+            raise
+        return worker.result()
 
     def _run_sync(self, cmd_cls: type[Command], argv: list[str]) -> str:
         """Synchronous core of :meth:`run_command`; runs in a worker thread."""

@@ -309,3 +309,88 @@ def test_register_testreport_tools_exposes_three_tools(tmp_path: Path) -> None:
     # The read-first warning is glued onto each description.
     for tool in (read_tool, patch_tool, write_tool):
         assert "testreport_read" in tool.description
+
+
+# --------------------------------------------------------------------------- #
+# Progress-notification heartbeat                                             #
+# --------------------------------------------------------------------------- #
+
+
+class _RecordingCtx:
+    """Stand-in for :class:`mcp.server.fastmcp.Context`.
+
+    Mirrors the one in ``tests/test_mcp_session_progress.py`` but
+    duplicated locally to keep the two test modules independent.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[float, float | None, str | None]] = []
+
+    async def report_progress(
+        self,
+        progress: float,
+        total: float | None = None,
+        message: str | None = None,
+    ) -> None:
+        self.calls.append((progress, total, message))
+
+
+def test_testreport_read_emits_heartbeat_when_ctx_supplied(tmp_path: Path) -> None:
+    """When called with a Context, ``testreport_read`` fires one progress frame."""
+    file = tmp_path / "report.txt"
+    file.write_text("x\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+    ctx = _RecordingCtx()
+
+    result = asyncio.run(tt.testreport_read(sess, ctx=ctx))  # ty: ignore[invalid-argument-type]
+
+    assert result["content"] == "x\n"
+    assert len(ctx.calls) == 1
+    _progress, _total, message = ctx.calls[0]
+    assert message is not None
+    assert "testreport_read" in message
+
+
+def test_testreport_write_emits_heartbeat_when_ctx_supplied(tmp_path: Path) -> None:
+    """``testreport_write`` also fires one progress frame for client patience."""
+    file = tmp_path / "report.txt"
+    file.write_text("orig\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+    ctx = _RecordingCtx()
+
+    asyncio.run(tt.testreport_write(sess, "new\n", ctx=ctx))  # ty: ignore[invalid-argument-type]
+
+    assert file.read_text(encoding="utf-8") == "new\n"
+    assert len(ctx.calls) == 1
+
+
+def test_testreport_patch_emits_heartbeat_when_ctx_supplied(tmp_path: Path) -> None:
+    """``testreport_patch`` fires one progress frame before the splice."""
+    file = tmp_path / "report.txt"
+    file.write_text("a\nb\nc\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+    ctx = _RecordingCtx()
+
+    asyncio.run(tt.testreport_patch(sess, 2, 2, "B\n", ctx=ctx))  # ty: ignore[invalid-argument-type]
+
+    assert file.read_text(encoding="utf-8") == "a\nB\nc\n"
+    assert len(ctx.calls) == 1
+
+
+def test_testreport_tools_strip_ctx_from_json_schema(tmp_path: Path) -> None:
+    """``ctx`` must not leak into the JSON schema of any testreport tool."""
+    pytest.importorskip("mcp")
+    from mcp.server.fastmcp import FastMCP
+
+    sess = _null_session(tmp_path)
+    mcp: FastMCP = FastMCP(name="test-mtui-mcp-schema")
+    tt.register_testreport_tools(mcp, sess)
+
+    for name in ("testreport_read", "testreport_patch", "testreport_write"):
+        tool = mcp._tool_manager.get_tool(name)  # noqa: SLF001
+        assert tool is not None
+        props = tool.parameters.get("properties", {})
+        assert "ctx" not in props, (
+            f"tool {name!r} leaked ctx into its JSON schema: {list(props)!r}"
+        )
+        assert "ctx" not in tool.parameters.get("required", [])
