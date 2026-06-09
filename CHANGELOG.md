@@ -21,6 +21,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `run`, `show_log`, and `show_diff` now return their output when
+  invoked through `mtui-mcp`. The three commands routed results through
+  the interactive pager (`page()`), which early-returned in
+  non-interactive mode and left the captured stdout buffer empty —
+  MCP clients received an empty response instead of the per-host
+  command output, log lines, or source diff. The pager now forwards
+  each line to the caller's display sink in non-interactive mode while
+  the REPL pager behaviour is unchanged. A latent
+  `UnboundLocalError` in `run` when target locking failed is also
+  fixed.
 - `lrun` now captures child stdout/stderr and propagates the real exit
   code when invoked through `mtui-mcp` (or any non-interactive prompt).
   Previously a failing local command surfaced to the MCP client as

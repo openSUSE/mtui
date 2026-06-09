@@ -120,7 +120,7 @@ class ListLog(Command):
         output: list[str] = []
         targets = self.parse_hosts()
         targets.report_log(self.display.show_log, output.append)
-        page(output, self.prompt.interactive)
+        page(output, self.prompt.interactive, writer=self.display.println)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

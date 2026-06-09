@@ -7,7 +7,7 @@ import pytest
 from mtui.cli import colors as colorctl
 from mtui.cli._history import default_history_path
 from mtui.cli.colors import green
-from mtui.cli.term import ask_user, filter_ansi, prompt_user
+from mtui.cli.term import ask_user, filter_ansi, page, prompt_user
 
 
 def _patch_prompt(response):
@@ -140,3 +140,25 @@ def test_ask_user_bailout_returns_empty(bail):
     """
     with _patch_prompt(bail):
         assert ask_user("Comment: ") == ""
+
+
+def test_page_non_interactive_no_writer_is_noop():
+    """Historical contract: non-interactive + no writer = no output, no error."""
+    # Must not call termsize() or print(); a list of "lines" is left
+    # untouched. Asserted indirectly via the absence of mutation and the
+    # absence of any exception.
+    text = ["a", "b", "c"]
+    page(text, interactive=False)
+    assert text == ["a", "b", "c"]  # not reversed by the pager body
+
+
+def test_page_non_interactive_writer_receives_each_line():
+    """Non-interactive callers (MCP) get each line forwarded to ``writer``.
+
+    Regression guard: the fix for the missing MCP run-command output
+    depends on this path delivering all lines, in order, with trailing
+    CR/LF stripped.
+    """
+    captured: list[str] = []
+    page(["alpha", "beta\n", "gamma\r\n"], interactive=False, writer=captured.append)
+    assert captured == ["alpha", "beta", "gamma"]

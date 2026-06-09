@@ -12,7 +12,7 @@ import os
 import re
 import struct
 import termios
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
@@ -160,15 +160,30 @@ def ask_user(text: str, interactive: bool = True) -> str:
         return ""
 
 
-def page(text: list[str], interactive: bool = True) -> None:
+def page(
+    text: list[str],
+    interactive: bool = True,
+    writer: Callable[[str], None] | None = None,
+) -> None:
     """Displays long text in a pager-like fashion.
 
     Args:
         text: A list of strings to display.
-        interactive: If False, the function does nothing.
+        interactive: If False and ``writer`` is None, the function does
+            nothing (preserves historical no-op behaviour). If False and
+            ``writer`` is provided, each line in ``text`` is forwarded
+            to ``writer`` without pagination or width-wrapping — used by
+            non-TTY transports (e.g. ``mtui-mcp``) that render their own
+            output.
+        writer: Optional per-line callback used in non-interactive mode
+            to route output into a caller-supplied sink (typically
+            ``self.display.println``).
 
     """
     if not interactive:
+        if writer is not None:
+            for line in text:
+                writer(line.rstrip("\r\n"))
         return
 
     prompt = "Press Enter to continue... (q to quit)"
