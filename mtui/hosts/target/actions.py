@@ -112,20 +112,31 @@ def run_parallel(
 class ThreadedTargetGroup(ABC):
     """An abstract base class for performing actions on a group of targets."""
 
-    def __init__(self, targets: list[Target] | ValuesView[Target]) -> None:
+    def __init__(
+        self,
+        targets: list[Target] | ValuesView[Target],
+        interactive: bool = True,
+    ) -> None:
         """Initializes the threaded target group.
 
         Args:
             targets: A list of targets to perform actions on.
+            interactive: Whether the surrounding session is interactive.
+                When False (e.g. ``mtui-mcp``), :meth:`run` passes
+                ``desc=None`` to :func:`run_parallel` so the TTY spinner
+                is skipped; MCP uses ``notifications/progress`` for
+                progress signalling instead. Defaults to True so the
+                interactive REPL keeps its spinner unchanged.
 
         """
         self.targets = targets
+        self.interactive = interactive
 
     def run(self) -> None:
         """Runs the action on every target in parallel."""
         run_parallel(
             [self.mk_cmd(t) for t in self.targets],
-            desc=type(self).__name__,
+            desc=type(self).__name__ if self.interactive else None,
         )
 
     @abstractmethod
@@ -136,15 +147,21 @@ class ThreadedTargetGroup(ABC):
 class FileDelete(ThreadedTargetGroup):
     """Deletes a file on a group of targets in parallel."""
 
-    def __init__(self, targets: list[Target] | ValuesView[Target], path: Path) -> None:
+    def __init__(
+        self,
+        targets: list[Target] | ValuesView[Target],
+        path: Path,
+        interactive: bool = True,
+    ) -> None:
         """Initializes the file delete action.
 
         Args:
             targets: A list of targets to delete the file from.
             path: The path to the file to delete.
+            interactive: See :class:`ThreadedTargetGroup`.
 
         """
-        super().__init__(targets)
+        super().__init__(targets, interactive=interactive)
         self.path = path
 
     def mk_cmd(self, t: Target) -> tuple[Callable[..., Any], tuple[Any, ...]]:
@@ -156,7 +173,11 @@ class FileUpload(ThreadedTargetGroup):
     """Uploads a file to a group of targets in parallel."""
 
     def __init__(
-        self, targets: list[Target] | ValuesView[Target], local: Path, remote: Path
+        self,
+        targets: list[Target] | ValuesView[Target],
+        local: Path,
+        remote: Path,
+        interactive: bool = True,
     ) -> None:
         """Initializes the file upload action.
 
@@ -164,9 +185,10 @@ class FileUpload(ThreadedTargetGroup):
             targets: A list of targets to upload the file to.
             local: The local path to the file to upload.
             remote: The remote path to upload the file to.
+            interactive: See :class:`ThreadedTargetGroup`.
 
         """
-        super().__init__(targets)
+        super().__init__(targets, interactive=interactive)
         self.local = local
         self.remote = remote
 
@@ -179,7 +201,11 @@ class FileDownload(ThreadedTargetGroup):
     """Downloads a file from a group of targets in parallel."""
 
     def __init__(
-        self, targets: list[Target] | ValuesView[Target], remote: Path, local: Path
+        self,
+        targets: list[Target] | ValuesView[Target],
+        remote: Path,
+        local: Path,
+        interactive: bool = True,
     ) -> None:
         """Initializes the file download action.
 
@@ -187,9 +213,10 @@ class FileDownload(ThreadedTargetGroup):
             targets: A list of targets to download the file from.
             remote: The remote path to the file to download.
             local: The local path to save the downloaded file to.
+            interactive: See :class:`ThreadedTargetGroup`.
 
         """
-        super().__init__(targets)
+        super().__init__(targets, interactive=interactive)
 
         self.remote = remote
         self.local = local
@@ -203,17 +230,26 @@ class RunCommand:
     """Runs a command on a group of targets, parallel or serial."""
 
     def __init__(
-        self, targets: dict[str, Target], command: str | dict[str, Any]
+        self,
+        targets: dict[str, Target],
+        command: str | dict[str, Any],
+        interactive: bool = True,
     ) -> None:
         """Initializes the run command action.
 
         Args:
             targets: A dictionary of targets to run the command on.
             command: The command to run.
+            interactive: Whether the surrounding session is interactive.
+                When False (e.g. ``mtui-mcp``), :meth:`run` passes
+                ``desc=None`` to :func:`run_parallel` so the TTY spinner
+                is skipped. Defaults to True so the REPL keeps its
+                spinner unchanged.
 
         """
         self.targets = targets
         self.command = command
+        self.interactive = interactive
 
     def _cmd_for(self, hostname: str) -> Any:
         """Resolve the per-host command, accepting a string or dict shape."""
@@ -234,7 +270,7 @@ class RunCommand:
         try:
             run_parallel(
                 [(t.run, (self._cmd_for(h), lock)) for h, t in parallel.items()],
-                desc="run",
+                desc="run" if self.interactive else None,
             )
 
             for h, t in serial.items():

@@ -21,6 +21,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp` no longer paints the interactive `|/-\` spinner to
+  stderr during long-running parallel actions (`run`, `set_repo`,
+  `sftp_*`). The spinner is a REPL-only progress channel; over MCP
+  the proper signal is `notifications/progress`. The REPL keeps its
+  spinner unchanged.
 - `mtui-mcp` now emits MCP `notifications/progress` every 10 seconds
   while a tool call is running, so spec-compliant MCP clients
   (Inspector, Claude Desktop, opencode, …) no longer time out on

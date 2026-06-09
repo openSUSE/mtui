@@ -46,14 +46,22 @@ class HostsGroup(UserDict[str, Target]):
 
     """
 
-    def __init__(self, hosts: list[Target]) -> None:
+    def __init__(self, hosts: list[Target], interactive: bool = True) -> None:
         """Initializes the `HostsGroup` object.
 
         Args:
             hosts: A list of `Target` objects.
+            interactive: Whether this group runs in an interactive
+                session. When False (e.g. ``mtui-mcp``), long-running
+                parallel actions skip the TTY spinner so headless
+                callers do not see ``\\r[|]`` frames bleed onto
+                stderr; MCP's ``notifications/progress`` heartbeat is
+                the proper progress channel there. Defaults to True
+                so the interactive REPL keeps its spinner unchanged.
 
         """
         super().__init__({h.hostname: h for h in hosts})
+        self.interactive = interactive
 
     def select(
         self, hosts: list[str] | None = None, enabled: bool = False
@@ -72,7 +80,8 @@ class HostsGroup(UserDict[str, Target]):
         if not hosts:
             if enabled:
                 return HostsGroup(
-                    [h for h in self.data.values() if h.state != "disabled"]
+                    [h for h in self.data.values() if h.state != "disabled"],
+                    interactive=self.interactive,
                 )
             return self
 
@@ -85,7 +94,8 @@ class HostsGroup(UserDict[str, Target]):
                 h
                 for hn, h in self.data.items()
                 if hn in hosts and ((not enabled) or h.state != "disabled")
-            ]
+            ],
+            interactive=self.interactive,
         )
 
     def unlock(self, *a, **kw) -> None:
@@ -140,7 +150,9 @@ class HostsGroup(UserDict[str, Target]):
             local: The local path to save the downloaded file to.
 
         """
-        return FileDownload(self.data.values(), remote, local).run()
+        return FileDownload(
+            self.data.values(), remote, local, interactive=self.interactive
+        ).run()
 
     def sftp_put(self, local: Path, remote: Path) -> None:
         """Uploads a file to all hosts in the group.
@@ -150,7 +162,9 @@ class HostsGroup(UserDict[str, Target]):
             remote: The remote path to upload the file to.
 
         """
-        return FileUpload(self.data.values(), local, remote).run()
+        return FileUpload(
+            self.data.values(), local, remote, interactive=self.interactive
+        ).run()
 
     def sftp_remove(self, path: Path) -> None:
         """Deletes a file from all hosts in the group.
@@ -159,7 +173,7 @@ class HostsGroup(UserDict[str, Target]):
             path: The path to the file to delete.
 
         """
-        return FileDelete(self.data.values(), path).run()
+        return FileDelete(self.data.values(), path, interactive=self.interactive).run()
 
     def run(self, cmd) -> None:
         """Runs a command on all hosts in the group.
@@ -177,7 +191,7 @@ class HostsGroup(UserDict[str, Target]):
             cmd: The command to run.
 
         """
-        return RunCommand(self.data, cmd).run()
+        return RunCommand(self.data, cmd, interactive=self.interactive).run()
 
     def _reboot(self, reboot: dict[str, str]) -> None:
         """Reboots all transactional hosts in the group.
@@ -294,7 +308,7 @@ class HostsGroup(UserDict[str, Target]):
         """Fan ``Target.repo_manager.set(operation, testreport)`` out across every host."""
         run_parallel(
             [(t.repo_manager.set, (operation, testreport)) for t in self.data.values()],
-            desc=f"set_repo {operation}",
+            desc=f"set_repo {operation}" if self.interactive else None,
         )
 
     def perform_install(self, packages: list[str]) -> None:
