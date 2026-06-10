@@ -12,10 +12,13 @@ directly on the file path tracked by ``session.metadata.path``:
   written atomically via ``NamedTemporaryFile`` + :func:`os.replace`.
 * :func:`testreport_write` — full-file overwrite, also atomic.
 
-All three are ``async def`` and acquire ``session._lock`` so they are
-serialised against concurrent :meth:`McpSession.run_command` calls
-under the http transport (matches the risk-section commitment in
-PLAN.md).
+All three are ``async def``. The registered tool closures resolve the
+caller's own :class:`McpSession` from the
+:class:`mtui.mcp.registry.SessionProvider` (keyed on the request
+session under http, a single session under stdio) and then acquire
+*that session's* ``_lock``, so each client serialises only against its
+own concurrent :meth:`McpSession.run_command` calls and patches **only
+its own** loaded testreport file — no cross-client interference.
 
 Refusal is uniform: when ``session.metadata`` is a
 :class:`NullTestReport` or ``metadata.path`` is ``None``, every tool
@@ -35,11 +38,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..test_reports.null_report import NullTestReport
+from .registry import resolve_session
 from .session import McpCommandError
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import Context, FastMCP
 
+    from .registry import SessionProvider
     from .session import McpSession
 
 logger = getLogger("mtui.mcp.testreport_tools")
@@ -266,7 +271,7 @@ async def testreport_write(
 # --------------------------------------------------------------------------- #
 
 
-def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
+def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
     """Register the three testreport tools on ``mcp``.
 
     Mirrors the registration shape used by :func:`mtui.mcp.tools.build_tools`
@@ -274,7 +279,11 @@ def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
 
     Args:
         mcp: The :class:`mcp.server.fastmcp.FastMCP` server.
-        session: The shared :class:`McpSession` bound into each closure.
+        provider: The :class:`mtui.mcp.registry.SessionProvider` each
+            tool resolves its per-call :class:`McpSession` through, so
+            under http every client patches **only its own** loaded
+            testreport file. Under stdio this is a single
+            :class:`McpSession`.
 
     Returns:
         Sorted list of registered tool names — used by the boot log
@@ -297,6 +306,7 @@ def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
     globals().setdefault("Context", _Context)
 
     async def _read(ctx: Context | None = None) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx)
         return await testreport_read(session, ctx=ctx)
 
     async def _patch(
@@ -305,11 +315,13 @@ def register_testreport_tools(mcp: FastMCP, session: McpSession) -> list[str]:
         replacement: str,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx)
         return await testreport_patch(
             session, start_line, end_line, replacement, ctx=ctx
         )
 
     async def _write(content: str, ctx: Context | None = None) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx)
         return await testreport_write(session, content, ctx=ctx)
 
     read_desc = (

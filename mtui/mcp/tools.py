@@ -36,6 +36,7 @@ from ..commands import Command
 from ._argv import kwargs_to_argv
 from ._schema import build_parameters
 from .deny import REPL_ONLY
+from .registry import resolve_session
 from .session import McpCommandError
 
 if TYPE_CHECKING:
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
     # editors/type-checkers, hence the ``noqa: F401``.
     from mcp.server.fastmcp import Context, FastMCP  # noqa: F401
 
-    from .session import McpSession
+    from .registry import SessionProvider
 
 logger = getLogger("mtui.mcp.tools")
 
@@ -73,7 +74,7 @@ def _is_read_only(name: str) -> bool:
 def _make_wrapper(
     cls: type[Command],
     parser: argparse.ArgumentParser,
-    session: McpSession,
+    provider: SessionProvider,
     argv_prefix: tuple[str, ...] = (),
 ):
     """Build the async tool handler for ``cls``.
@@ -90,10 +91,13 @@ def _make_wrapper(
     :func:`mcp.server.fastmcp.utilities.context_injection.find_context_parameter`
     (which reads :func:`typing.get_type_hints`), strips the parameter
     from the JSON schema via ``skip_names``, and injects the live
-    per-request :class:`Context` at call time. We forward it into
-    :meth:`McpSession.run_command` so the session can heartbeat
-    ``notifications/progress`` while the worker thread runs, which
-    keeps MCP clients from timing out on long-running commands.
+    per-request :class:`Context` at call time. We use it twice: to
+    resolve the caller's isolated :class:`McpSession` from ``provider``
+    (keyed on the request session — see
+    :func:`mtui.mcp.registry.resolve_session`) and to let
+    :meth:`McpSession.run_command` heartbeat ``notifications/progress``
+    while the worker thread runs, which keeps MCP clients from timing
+    out on long-running commands.
     """
     # Import lazily and only when actually building wrappers: callers
     # outside the ``mtui[mcp]`` extra never reach this function (the
@@ -154,6 +158,7 @@ def _make_wrapper(
                 )
                 raise McpCommandError("", msg, 2)
         argv = list(argv_prefix) + kwargs_to_argv(parser, kwargs)
+        session = await resolve_session(provider, ctx)
         return await session.run_command(cls, argv, ctx=ctx)
 
     # ``inspect.Signature`` lives on a dunder slot; ty does not model it
@@ -171,7 +176,7 @@ def _register_tool(
     name: str,
     cls: type[Command],
     parser: argparse.ArgumentParser,
-    session: McpSession,
+    provider: SessionProvider,
     argv_prefix: tuple[str, ...] = (),
     description: str | None = None,
 ) -> None:
@@ -183,7 +188,7 @@ def _register_tool(
     """
     from mcp.types import ToolAnnotations
 
-    wrapper = _make_wrapper(cls, parser, session, argv_prefix=argv_prefix)
+    wrapper = _make_wrapper(cls, parser, provider, argv_prefix=argv_prefix)
     desc = (description or cls.__doc__ or name).strip()
     mcp.add_tool(
         wrapper,
@@ -196,7 +201,7 @@ def _register_tool(
 def _fan_out_subparser(
     mcp: FastMCP,
     cls: type[Command],
-    session: McpSession,
+    provider: SessionProvider,
 ) -> list[str]:
     """Register one tool per subcommand of a parser using ``add_subparsers``.
 
@@ -229,7 +234,7 @@ def _fan_out_subparser(
             name=tool_name,
             cls=cls,
             parser=sub_parser,
-            session=session,
+            provider=provider,
             argv_prefix=(subname,),
             description=desc.splitlines()[0] if desc else tool_name,
         )
@@ -237,7 +242,7 @@ def _fan_out_subparser(
     return names
 
 
-def build_tools(mcp: FastMCP, session: McpSession) -> list[str]:
+def build_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
     """Register one MCP tool per non-denied :class:`Command` subclass.
 
     Subparser commands (``config`` today) are fanned out into one tool
@@ -248,8 +253,11 @@ def build_tools(mcp: FastMCP, session: McpSession) -> list[str]:
     Args:
         mcp: The :class:`mcp.server.fastmcp.FastMCP` server instance
             to register tools on.
-        session: The shared :class:`McpSession` every tool dispatches
-            through.
+        provider: The :class:`mtui.mcp.registry.SessionProvider` every
+            tool resolves its per-call :class:`McpSession` through —
+            a :class:`mtui.mcp.registry.SessionRegistry` under http
+            (one isolated session per client) or a single
+            :class:`McpSession` under stdio.
 
     Returns:
         Sorted list of registered tool names (used by the boot log and
@@ -272,7 +280,7 @@ def build_tools(mcp: FastMCP, session: McpSession) -> list[str]:
         if name in REPL_ONLY:
             continue
         if name in SUBPARSER_COMMANDS:
-            registered.extend(_fan_out_subparser(mcp, cls, session))
+            registered.extend(_fan_out_subparser(mcp, cls, provider))
             continue
         parser = cls.argparser(__import__("sys"))
         _register_tool(
@@ -280,7 +288,7 @@ def build_tools(mcp: FastMCP, session: McpSession) -> list[str]:
             name=name,
             cls=cls,
             parser=parser,
-            session=session,
+            provider=provider,
         )
         registered.append(name)
 

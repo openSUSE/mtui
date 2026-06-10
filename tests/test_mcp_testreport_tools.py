@@ -394,3 +394,71 @@ def test_testreport_tools_strip_ctx_from_json_schema(tmp_path: Path) -> None:
             f"tool {name!r} leaked ctx into its JSON schema: {list(props)!r}"
         )
         assert "ctx" not in tool.parameters.get("required", [])
+
+
+# --------------------------------------------------------------------------- #
+# Per-client isolation (http): two ctx keys -> two templates                  #
+# --------------------------------------------------------------------------- #
+
+
+def test_two_ctx_keys_read_their_own_template(tmp_path: Path) -> None:
+    """Distinct request sessions must each ``testreport_read`` only their own file.
+
+    The registered ``testreport_read`` closure resolves the per-call
+    session from the provider keyed on ``id(ctx.session)``. We drive it
+    with two contexts whose ``.session`` objects differ; a real
+    :class:`SessionRegistry` mints one isolated session per key, and we
+    seed each with its own loaded testreport path. If the closure
+    leaked a shared session, both reads would return the same file.
+    """
+    pytest.importorskip("mcp")
+    from mcp.server.fastmcp import FastMCP
+
+    from mtui.mcp.registry import SessionRegistry
+
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("alpha\n", encoding="utf-8")
+    file_b = tmp_path / "b.txt"
+    file_b.write_text("beta\nbeta2\n", encoding="utf-8")
+
+    # Each minted session is a real McpSession, then re-pointed at its
+    # own loaded testreport (NullTestReport -> a SimpleNamespace path).
+    seeds = [file_a, file_b]
+
+    def seeding_factory(cfg: object, log: object) -> McpSession:
+        session = _null_session(tmp_path)
+        session.metadata = SimpleNamespace(path=str(seeds.pop(0)))
+        return session
+
+    registry = SessionRegistry(
+        seeding_factory,
+        _config(tmp_path),
+        logging.getLogger("test.mcp.testreport"),
+    )
+    mcp: FastMCP = FastMCP(name="test-mtui-mcp-isolation")
+    tt.register_testreport_tools(mcp, registry)
+
+    read_tool = mcp._tool_manager.get_tool("testreport_read")  # noqa: SLF001
+    assert read_tool is not None
+    read = read_tool.fn
+
+    # Two distinct request sessions -> two distinct registry keys.
+    ctx_a = SimpleNamespace(session=object())
+    ctx_b = SimpleNamespace(session=object())
+
+    async def driver() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        # Interleave to prove the resolution is per-ctx, not first-wins.
+        first = await read(ctx=ctx_a)
+        second = await read(ctx=ctx_b)
+        third = await read(ctx=ctx_a)  # ctx_a again -> still its own file
+        return first, second, third
+
+    first, second, third = asyncio.run(driver())
+
+    assert first["content"] == "alpha\n"
+    assert first["path"] == str(file_a)
+    assert second["content"] == "beta\nbeta2\n"
+    assert second["path"] == str(file_b)
+    # Re-reading ctx_a must still hit file_a (cached session, not file_b).
+    assert third["content"] == "alpha\n"
+    assert third["path"] == str(file_a)
