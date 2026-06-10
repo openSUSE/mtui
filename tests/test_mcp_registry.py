@@ -31,7 +31,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.mcp.main import build_session
-from mtui.mcp.registry import SessionRegistry, _log_label, _session_key
+from mtui.mcp.registry import (
+    SessionRegistry,
+    SessionRegistryFullError,
+    _log_label,
+    _session_key,
+)
 from mtui.mcp.session import McpSession
 
 if TYPE_CHECKING:
@@ -58,9 +63,22 @@ def _config(tmp_path: Path) -> MagicMock:
     return cfg
 
 
-def _registry(tmp_path: Path) -> SessionRegistry:
-    """A registry wired to the real :func:`build_session` factory."""
-    return SessionRegistry(build_session, _config(tmp_path), _LOG)
+def _registry(
+    tmp_path: Path, *, idle_timeout: float = 0.0, max_sessions: int = 32
+) -> SessionRegistry:
+    """A registry wired to the real :func:`build_session` factory.
+
+    ``idle_timeout`` defaults to ``0`` (sweeper disabled) so the common
+    keying/isolation tests do not spawn a background task; the
+    sweeper-specific tests opt in with a small positive value.
+    """
+    return SessionRegistry(
+        build_session,
+        _config(tmp_path),
+        _LOG,
+        max_sessions=max_sessions,
+        idle_timeout=idle_timeout,
+    )
 
 
 def _ctx_with_session(obj: object) -> SimpleNamespace:
@@ -176,7 +194,7 @@ def test_get_or_create_concurrent_first_calls_mint_one(tmp_path: Path) -> None:
         calls["n"] += 1
         return build_session(cfg, log)
 
-    reg = SessionRegistry(counting_factory, _config(tmp_path), _LOG)
+    reg = SessionRegistry(counting_factory, _config(tmp_path), _LOG, idle_timeout=0.0)
 
     async def driver() -> list[McpSession]:
         return await asyncio.gather(*(reg.get_or_create("dup") for _ in range(25)))
@@ -217,7 +235,7 @@ def test_evict_awaits_close_when_present(tmp_path: Path) -> None:
         async def _close() -> None:
             closed["n"] += 1
 
-        session.close = _close  # ty: ignore[unresolved-attribute]
+        session.close = _close  # ty: ignore[invalid-assignment]
         await reg.evict("k1")
 
     asyncio.run(driver())
@@ -234,7 +252,167 @@ def test_evict_swallows_close_errors(tmp_path: Path) -> None:
         async def _close() -> None:
             raise RuntimeError("boom")
 
-        session.close = _close  # ty: ignore[unresolved-attribute]
+        session.close = _close  # ty: ignore[invalid-assignment]
         await reg.evict("k1")  # must not raise
 
     asyncio.run(driver())
+
+
+def test_evict_calls_real_session_close_and_removes_key(tmp_path: Path) -> None:
+    """``evict`` invokes the real :meth:`McpSession.close` and drops the key.
+
+    Spies on the minted session's ``close`` (a real coroutine on
+    McpSession now) to prove eviction both tears the session down and
+    removes it from the registry.
+    """
+    reg = _registry(tmp_path)
+    closed = {"n": 0}
+
+    async def driver() -> bool:
+        session = await reg.get_or_create("k1")
+        real_close = session.close
+
+        async def _spy() -> None:
+            closed["n"] += 1
+            await real_close()
+
+        session.close = _spy  # ty: ignore[invalid-assignment]
+        await reg.evict("k1")
+        # Key gone -> a refetch mints a brand-new session.
+        again = await reg.get_or_create("k1")
+        return again is session
+
+    refetch_is_same = asyncio.run(driver())
+    assert closed["n"] == 1
+    assert refetch_is_same is False
+
+
+# --------------------------------------------------------------------------- #
+# Session cap (DoS guard)                                                     #
+# --------------------------------------------------------------------------- #
+
+
+def test_cap_refuses_creation_past_limit(tmp_path: Path) -> None:
+    """Creating one session past ``max_sessions`` raises the documented error."""
+    reg = _registry(tmp_path, max_sessions=2)
+
+    async def driver() -> None:
+        await reg.get_or_create("k1")
+        await reg.get_or_create("k2")
+        # Third distinct key would exceed the cap of 2.
+        await reg.get_or_create("k3")
+
+    with pytest.raises(SessionRegistryFullError, match="session registry full"):
+        asyncio.run(driver())
+
+
+def test_cap_does_not_count_existing_keys(tmp_path: Path) -> None:
+    """Re-requesting an existing key never trips the cap."""
+    reg = _registry(tmp_path, max_sessions=1)
+
+    async def driver() -> McpSession:
+        first = await reg.get_or_create("k1")
+        # Same key, many times: must not raise even at cap == 1.
+        for _ in range(5):
+            again = await reg.get_or_create("k1")
+            assert again is first
+        return first
+
+    assert isinstance(asyncio.run(driver()), McpSession)
+
+
+def test_cap_frees_a_slot_after_evict(tmp_path: Path) -> None:
+    """Evicting a session frees a slot so a new key can be created."""
+    reg = _registry(tmp_path, max_sessions=1)
+
+    async def driver() -> McpSession:
+        await reg.get_or_create("k1")
+        await reg.evict("k1")
+        # Slot freed -> a different key now fits.
+        return await reg.get_or_create("k2")
+
+    assert isinstance(asyncio.run(driver()), McpSession)
+
+
+# --------------------------------------------------------------------------- #
+# Idle-TTL sweeper                                                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_idle_sweeper_evicts_stale_session(tmp_path: Path) -> None:
+    """A session untouched past a short TTL is swept and closed automatically.
+
+    Uses a tiny ``idle_timeout`` so the sweeper (wake interval = ttl/2,
+    floored at 1s) reaps within a couple of seconds. We spy on the
+    session's ``close`` to confirm teardown fired, then assert the key
+    is gone.
+    """
+    reg = _registry(tmp_path, idle_timeout=1.0)
+    closed = {"n": 0}
+
+    async def driver() -> int:
+        session = await reg.get_or_create("k1")
+        real_close = session.close
+
+        async def _spy() -> None:
+            closed["n"] += 1
+            await real_close()
+
+        session.close = _spy  # ty: ignore[invalid-assignment]
+
+        # Wait long enough for one sweep cycle (interval == max(1, ttl/2)
+        # == 1s) plus the ttl to elapse with margin.
+        for _ in range(40):
+            await asyncio.sleep(0.1)
+            if "k1" not in reg._sessions:  # noqa: SLF001
+                break
+        await reg.aclose()
+        return closed["n"]
+
+    n_closed = asyncio.run(driver())
+    assert n_closed == 1
+
+
+def test_fresh_activity_keeps_session_alive(tmp_path: Path) -> None:
+    """Touching a session within the TTL prevents it from being swept."""
+    reg = _registry(tmp_path, idle_timeout=1.0)
+
+    async def driver() -> bool:
+        first = await reg.get_or_create("k1")
+        # Keep touching it under the TTL for ~1.5s of wall time.
+        for _ in range(15):
+            await asyncio.sleep(0.1)
+            again = await reg.get_or_create("k1")
+            assert again is first
+        alive = "k1" in reg._sessions  # noqa: SLF001
+        await reg.aclose()
+        return alive
+
+    assert asyncio.run(driver()) is True
+
+
+def test_sweeper_disabled_when_idle_timeout_zero(tmp_path: Path) -> None:
+    """``idle_timeout <= 0`` starts no sweeper task."""
+    reg = _registry(tmp_path, idle_timeout=0.0)
+
+    async def driver() -> object:
+        await reg.get_or_create("k1")
+        return reg._sweeper  # noqa: SLF001
+
+    assert asyncio.run(driver()) is None
+
+
+def test_aclose_cancels_sweeper_and_closes_all(tmp_path: Path) -> None:
+    """``aclose`` cancels the sweeper task and evicts every live session."""
+    reg = _registry(tmp_path, idle_timeout=30.0)
+
+    async def driver() -> tuple[bool, int]:
+        await reg.get_or_create("k1")
+        await reg.get_or_create("k2")
+        sweeper_running = reg._sweeper is not None  # noqa: SLF001
+        await reg.aclose()
+        return sweeper_running, len(reg._sessions)
+
+    sweeper_running, live_after = asyncio.run(driver())
+    assert sweeper_running is True
+    assert live_after == 0

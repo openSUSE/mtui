@@ -140,8 +140,19 @@ def main() -> int:
     # ``build_tools`` / ``register_testreport_tools`` only see the
     # ``get_or_create`` shape, so they stay transport-agnostic.
     if args.transport == "http":
-        provider: SessionProvider = SessionRegistry(build_session, cfg, logger)
-        logger.info("mtui-mcp: http transport — per-client session isolation enabled")
+        provider: SessionProvider = SessionRegistry(
+            build_session,
+            cfg,
+            logger,
+            max_sessions=cfg.mcp_session_cap,
+            idle_timeout=cfg.mcp_session_idle_timeout,
+        )
+        logger.info(
+            "mtui-mcp: http transport — per-client session isolation "
+            "(cap=%d, idle_timeout=%ss)",
+            cfg.mcp_session_cap,
+            cfg.mcp_session_idle_timeout,
+        )
     else:
         provider = build_session(cfg, logger)
 

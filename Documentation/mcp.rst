@@ -16,11 +16,13 @@ command is auto-exposed as an MCP tool, and three dedicated tools
 (``testreport_read``, ``testreport_patch``, ``testreport_write``)
 replace the REPL's ``$EDITOR``-based ``edit`` flow.
 
-The server is **single-session** and **single-tenant** by contract:
-one process holds one ``Config``, one loaded test report, and one set
-of connected hosts. A process-wide ``asyncio.Lock`` serialises every
-tool invocation so the HTTP transport can accept concurrent clients
-without interleaving mutations of ``metadata`` / ``targets``.
+Session state is isolated per client. Under ``stdio`` one process
+serves one client, so there is exactly one ``Config`` / loaded test
+report / set of connected hosts. Under ``http`` each connected client
+gets its **own** isolated session — its own ``metadata`` and
+``targets`` — so concurrent clients never see each other's loaded
+template or hosts (see :ref:`mcp-concurrency`). Clients load their own
+state at runtime via the ``load_template`` and ``add_host`` tools.
 
 .. _Model Context Protocol: https://modelcontextprotocol.io
 
@@ -98,20 +100,19 @@ Flags mirror :doc:`cli` for the configuration surface that
 ``-l, --location``, ``-t, --template_dir``, ``-g, --gitea_token``, ``-w, --connection_timeout``
     Configuration overrides identical to ``mtui``.
 
-``-s, --sut HOST[,HOST...]``
-    Cumulative list of refhosts to autoconnect on boot. Failures are
-    logged and the server keeps running (a long-lived MCP session
-    has its own recovery paths via the ``add_host`` tool).
-
-``-a, --auto-review-id ID`` / ``-k, --kernel-review-id ID``
-    Preload an auto- or kernel-update test report on boot.
-    Mutually exclusive. Failures are logged and the server keeps
-    running with a :class:`NullTestReport`; the LLM can recover by
-    calling the ``load_template`` tool.
-
 ``-V, --version``
     Print mtui, Python, paramiko and openqa-client versions, then
     exit.
+
+.. note::
+
+   ``mtui-mcp`` takes **no** boot-time test-report or host flags.
+   Earlier versions accepted ``-a``/``-k`` (preload an RRID) and
+   ``-s``/``--sut`` (autoconnect hosts); these were removed when the
+   HTTP transport gained per-client isolation, because a single
+   boot-time seed cannot belong to any one client. Each client loads
+   its own state at runtime with the ``load_template`` and
+   ``add_host`` tools.
 
 
 Connecting an LLM client
@@ -167,9 +168,10 @@ is not on the client's ``PATH``, give the absolute path
       }
     }
 
-Preload a test report on boot by appending the matching CLI flag to
-``args`` — ``-a``/``-k`` for the RRID, ``-s`` for autoconnect hosts,
-``-c`` for a custom config:
+Point the server at a custom config with ``-c`` if needed; the test
+report and hosts are **not** seeded from CLI flags — the client loads
+them at runtime by calling the ``load_template`` and ``add_host``
+tools:
 
 .. code-block:: json
 
@@ -179,8 +181,7 @@ Preload a test report on boot by appending the matching CLI flag to
           "command": "mtui-mcp",
           "args": [
             "--transport", "stdio",
-            "-a", "SUSE:Maintenance:12345:67890",
-            "-s", "host1.example.com,host2.example.com"
+            "-c", "/etc/mtui/qam.cfg"
           ]
         }
       }
@@ -231,11 +232,11 @@ which avoids the long-lived server process entirely:
       }
     }
 
-The HTTP transport is single-tenant by contract (see
-:ref:`mcp-concurrency`). Bind to loopback (the default) and front
-with the operator's reverse-proxy of choice if remote access is
-required — ``mtui-mcp`` itself does not terminate TLS or authenticate
-callers.
+The HTTP transport isolates state per client but does **not**
+authenticate them (see :ref:`mcp-concurrency`). Bind to loopback (the
+default) and front with the operator's reverse-proxy of choice if
+remote access is required — ``mtui-mcp`` itself does not terminate TLS
+or authenticate callers.
 
 
 Tool coverage
@@ -374,24 +375,55 @@ re-read to confirm the new line count:
 Concurrency and safety
 ======================
 
-* **Single session per process.** The HTTP transport accepts
-  concurrent clients, but they all share the same ``McpSession`` and
-  therefore the same ``Config``, ``metadata``, and ``targets``.
-* **Process-wide ``asyncio.Lock``.** Every tool invocation —
-  auto-generated and testreport-editing alike — acquires the same
-  lock, so mutations of ``metadata`` / ``targets`` cannot interleave.
-* **Atomic file writes.** ``testreport_patch`` and
-  ``testreport_write`` swap via ``os.replace`` after ``fsync``; the
-  on-disk file is always either fully old or fully new, never torn.
-* **Concurrent writers are not detected.** The lock prevents
-  interleaving within one process, but two MCP clients reading the
-  file, computing patches against the same line numbers, then
-  applying them sequentially will still cause the second one to
-  land at stale offsets. A future ``expected_sha256`` round-trip
-  field on ``patch``/``write`` is the planned mitigation.
-* **HTTP is single-tenant by contract.** No auth, no TLS. Bind to
-  loopback (the default) and front with the operator's preferred
-  reverse-proxy if external access is required.
+* **One isolated session per client (HTTP).** Under ``--transport
+  http`` each connected client gets its own :class:`McpSession` — its
+  own ``Config`` view, ``metadata``, and ``targets``. One client's
+  ``load_template`` / ``add_host`` is invisible to every other client,
+  so concurrent reviewers never collide. Under ``stdio`` there is one
+  client and therefore one session.
+* **Sessions are keyed on the MCP session.** The registry keys each
+  session on the identity of the request's ``ServerSession`` object
+  (``id(ctx.session)``), which the SDK keeps 1:1 with the MCP session
+  for the connection's lifetime. The ``Mcp-Session-Id`` header is used
+  for log lines only, never to route state.
+* **Per-session ``asyncio.Lock``.** Within a single session every tool
+  invocation — auto-generated and testreport-editing alike — acquires
+  *that session's* lock, so one client's calls cannot interleave
+  mutations of its own ``metadata`` / ``targets``. Calls from different
+  clients hold different locks and run concurrently.
+* **Bounded session count.** The HTTP registry refuses to create more
+  than ``[mcp] session_cap`` concurrent sessions (default ``32``),
+  failing the offending tool call with a clear error rather than
+  spawning unbounded SSH connections and worker threads. Raise the cap
+  in config if you genuinely need more simultaneous clients.
+* **Idle sessions are reaped.** A session that receives no tool calls
+  for ``[mcp] session_idle_timeout`` seconds (default ``1800``) is
+  evicted and its hosts disconnected. Because the MCP SDK gives the
+  application no per-session teardown callback, this sweep is what
+  releases the SSH connections of a client that simply disconnected;
+  set the timeout to ``0`` to disable it. (A client that reconnects
+  after eviction simply re-loads its template and hosts.)
+* **Atomic file writes.** ``testreport_patch`` and ``testreport_write``
+  swap via ``os.replace`` after ``fsync``; the on-disk file is always
+  either fully old or fully new, never torn.
+* **Concurrent writers within one session are not detected.** The
+  per-session lock prevents interleaving, but if one client reads the
+  file, computes two patches against the same line numbers, then
+  applies them sequentially, the second still lands at stale offsets.
+  A future ``expected_sha256`` round-trip field on ``patch`` /
+  ``write`` is the planned mitigation.
+* **No auth, no TLS.** Isolation is not authentication: ``mtui-mcp``
+  does not identify callers. Bind to loopback (the default) and front
+  with the operator's preferred reverse-proxy if external access is
+  required.
+
+These knobs live in the ``[mcp]`` section of the mtui config file:
+
+.. code-block:: ini
+
+    [mcp]
+    session_cap = 32
+    session_idle_timeout = 1800
 
 
 Long-running tool calls

@@ -21,14 +21,21 @@ provider used by stdio), so :mod:`mtui.mcp.tools` and
 :mod:`mtui.mcp.testreport_tools` resolve a session per call without
 caring which transport they run under.
 
-Lifecycle (idle-TTL eviction, session cap) and :meth:`McpSession.close`
-land in Phase C; :meth:`evict` is already best-effort
-``close()``-aware so wiring it in is additive.
+Lifecycle is registry-owned because the MCP SDK gives no per-session
+teardown callback we can reach through :meth:`FastMCP.run` (its
+``streamable-http`` path exposes no ``session_idle_timeout``, and a
+``ServerSession`` has no close hook): a background idle-TTL sweeper
+evicts sessions that have gone quiet for ``idle_timeout`` seconds and
+:meth:`McpSession.close`-es their hosts, and a ``max_sessions`` cap
+refuses new-session creation past the bound (DoS guard) rather than
+spawning unbounded ``targets`` / threads.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -48,6 +55,25 @@ logger = getLogger("mtui.mcp.registry")
 #: ignores the key) and yields one shared fallback session under the
 #: http :class:`SessionRegistry`.
 DEFAULT_SESSION_KEY: str = "<default>"
+
+#: Default ceiling on concurrent client sessions (DoS guard). Overridden
+#: from ``[mcp] session_cap`` via :func:`mtui.mcp.main.main`.
+DEFAULT_MAX_SESSIONS: int = 32
+
+#: Default idle-TTL, in seconds, after which a quiet session is swept.
+#: Overridden from ``[mcp] session_idle_timeout``. ``0`` disables the
+#: sweeper.
+DEFAULT_IDLE_TIMEOUT_SECONDS: float = 1800.0
+
+
+class SessionRegistryFullError(RuntimeError):
+    """Raised when creating a new session would exceed ``max_sessions``.
+
+    Surfaced to the client as the failing tool call's error so a
+    misbehaving or runaway fleet of clients gets a clear, bounded
+    refusal instead of silently exhausting the server's SSH/thread
+    budget.
+    """
 
 
 class SessionProvider(Protocol):
@@ -158,6 +184,14 @@ class SessionRegistry:
     the per-session lock. Creation is guarded by a registry-wide
     :class:`asyncio.Lock` with a double-checked read so a burst of
     concurrent first-calls for the same key mints exactly one session.
+
+    Two safety bounds:
+
+    * ``max_sessions`` caps how many sessions may coexist; creating one
+      past the cap raises :class:`SessionRegistryFullError` (DoS guard).
+    * ``idle_timeout`` drives a lazily-started background sweeper that
+      evicts (and :meth:`McpSession.close`-es) any session untouched
+      for that many seconds. A non-positive timeout disables sweeping.
     """
 
     def __init__(
@@ -165,21 +199,32 @@ class SessionRegistry:
         factory: Callable[[Config, Logger], McpSession],
         cfg: Config,
         log: Logger,
+        *,
+        max_sessions: int = DEFAULT_MAX_SESSIONS,
+        idle_timeout: float = DEFAULT_IDLE_TIMEOUT_SECONDS,
     ) -> None:
-        """Store the session factory and the base ``cfg`` / ``log``.
+        """Store the session factory, base ``cfg`` / ``log``, and bounds.
 
         Args:
             factory: Callable that mints a fresh session from
                 ``(cfg, log)`` — :func:`mtui.mcp.main.build_session`.
             cfg: The base configuration handed to every minted session.
             log: The server logger handed to every minted session.
+            max_sessions: Ceiling on concurrent sessions; exceeding it
+                raises :class:`SessionRegistryFullError`.
+            idle_timeout: Seconds of inactivity before a session is
+                swept; ``<= 0`` disables the sweeper.
 
         """
         self._factory = factory
         self._cfg = cfg
         self._log = log
+        self._max_sessions = max_sessions
+        self._idle_timeout = idle_timeout
         self._sessions: dict[str, McpSession] = {}
+        self._last_touch: dict[str, float] = {}
         self._lock = asyncio.Lock()
+        self._sweeper: asyncio.Task[None] | None = None
 
     async def get_or_create(self, key: str) -> McpSession:
         """Return the session for ``key``, minting one on first use.
@@ -188,7 +233,10 @@ class SessionRegistry:
         present) reads the dict without contending on the registry
         lock; only a miss takes the lock, re-checks, and creates. So a
         flurry of concurrent first-calls for one key produces exactly
-        one session.
+        one session. Every call refreshes the key's last-touch
+        timestamp so the idle sweeper only reaps genuinely quiet
+        sessions, and the first call lazily starts the sweeper (we are
+        guaranteed to be inside the event loop here).
 
         Args:
             key: The per-client session key from :func:`_session_key`.
@@ -196,13 +244,25 @@ class SessionRegistry:
         Returns:
             The :class:`McpSession` bound to ``key``.
 
+        Raises:
+            SessionRegistryFullError: If a new session is required but the
+                registry already holds ``max_sessions`` sessions.
+
         """
+        self._ensure_sweeper()
         session = self._sessions.get(key)
         if session is not None:
+            self._last_touch[key] = time.monotonic()
             return session
         async with self._lock:
             session = self._sessions.get(key)
             if session is None:
+                if len(self._sessions) >= self._max_sessions:
+                    raise SessionRegistryFullError(
+                        f"session registry full: {self._max_sessions} concurrent "
+                        "client sessions already active; retry once a session is "
+                        "released or raise [mcp] session_cap"
+                    )
                 session = self._factory(self._cfg, self._log)
                 self._sessions[key] = session
                 logger.info(
@@ -210,13 +270,14 @@ class SessionRegistry:
                     key,
                     len(self._sessions),
                 )
+            self._last_touch[key] = time.monotonic()
             return session
 
     async def evict(self, key: str) -> None:
         """Drop ``key`` from the registry and best-effort close it.
 
-        Pops the session (no-op if absent) and, when it carries a
-        ``close`` coroutine (added in Phase C), awaits it under
+        Pops the session (no-op if absent), drops its last-touch
+        bookkeeping, and awaits :meth:`McpSession.close` under
         suppression so a teardown error never propagates. Safe to call
         more than once for the same key.
 
@@ -225,6 +286,7 @@ class SessionRegistry:
 
         """
         session = self._sessions.pop(key, None)
+        self._last_touch.pop(key, None)
         if session is None:
             return
         close = getattr(session, "close", None)
@@ -234,3 +296,55 @@ class SessionRegistry:
             except Exception as exc:  # noqa: BLE001 - teardown is best-effort
                 logger.warning("error closing session %s: %s", key, exc)
         logger.info("evicted MCP session (key=%s, live=%d)", key, len(self._sessions))
+
+    def _ensure_sweeper(self) -> None:
+        """Lazily start the idle-TTL sweeper task on first use.
+
+        Started from :meth:`get_or_create` (always inside the running
+        loop) rather than ``__init__`` (which runs before
+        :meth:`FastMCP.run` enters the loop). A non-positive
+        ``idle_timeout`` disables sweeping entirely.
+        """
+        if self._idle_timeout <= 0 or self._sweeper is not None:
+            return
+        self._sweeper = asyncio.create_task(self._sweep_loop())
+
+    async def _sweep_loop(self) -> None:
+        """Periodically evict sessions idle past ``idle_timeout``.
+
+        Wakes every ``idle_timeout / 2`` seconds (bounded to a sane
+        floor), collects keys whose last-touch is older than the
+        timeout, and evicts each outside the registry lock (so a slow
+        :meth:`McpSession.close` cannot stall fresh
+        :meth:`get_or_create` calls). Runs until cancelled by
+        :meth:`aclose`.
+        """
+        interval = max(1.0, self._idle_timeout / 2)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                now = time.monotonic()
+                stale = [
+                    key
+                    for key, touched in self._last_touch.items()
+                    if now - touched >= self._idle_timeout
+                ]
+                for key in stale:
+                    logger.info("sweeping idle MCP session (key=%s)", key)
+                    await self.evict(key)
+        except asyncio.CancelledError:
+            raise
+
+    async def aclose(self) -> None:
+        """Cancel the sweeper and close every live session.
+
+        Used for graceful shutdown and by tests to avoid leaking a
+        background task. Idempotent.
+        """
+        if self._sweeper is not None:
+            self._sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._sweeper
+            self._sweeper = None
+        for key in list(self._sessions):
+            await self.evict(key)
