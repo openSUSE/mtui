@@ -3,18 +3,29 @@
 Parses CLI args, builds the same :class:`Config` the REPL does, runs
 :func:`detect_system`, lazily imports :mod:`mcp.server.fastmcp` so a
 missing ``[mcp]`` extra produces a friendly hint instead of a
-traceback, then constructs an :class:`McpSession`, registers every
-non-denied command plus the three testreport tools, and dispatches on
-the chosen transport.
+traceback, then selects a session provider, registers every non-denied
+command plus the three testreport tools, and dispatches on the chosen
+transport.
+
+The provider choice is the per-client isolation contract: under
+``--transport http`` a :class:`mtui.mcp.registry.SessionRegistry` mints
+one fully isolated :class:`McpSession` per client (keyed on the request
+session), so concurrent clients never share ``metadata`` / ``targets``;
+under stdio (one process == one session) a single eagerly-built
+:class:`McpSession` doubles as the degenerate single-entry provider.
 
 Templates and hosts are loaded per session at runtime via the
 ``load_template`` and ``add_host`` tools; the server performs no
 boot-time preload or SUT autoconnect.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import sys
+from logging import Logger
+from typing import TYPE_CHECKING
 
 from ..cli.argparse import ArgsParseFailureError
 from ..cli.colors import create_logger
@@ -22,9 +33,14 @@ from ..cli.colors import set_mode as set_color_mode
 from ..support.config import Config
 from ..support.systemcheck import detect_system
 from .args import get_parser
+from .registry import SessionRegistry
 from .session import McpSession
 from .testreport_tools import register_testreport_tools
 from .tools import build_tools
+
+if TYPE_CHECKING:
+    from .registry import SessionProvider
+
 
 # Exception types that we treat as "user asked us to stop" rather than
 # as crashes. ``CancelledError`` shows up because the MCP server runs
@@ -52,6 +68,31 @@ def _is_clean_shutdown_group(exc: BaseException) -> bool:
     if isinstance(exc, BaseExceptionGroup):
         return all(_is_clean_shutdown_group(e) for e in exc.exceptions)
     return isinstance(exc, _SHUTDOWN_LEAVES)
+
+
+def build_session(cfg: Config, log: Logger) -> McpSession:
+    """Construct a fresh :class:`McpSession` from ``cfg`` and ``log``.
+
+    A deliberately thin factory: with boot-time preload/autoconnect
+    gone (Phase A), minting a session is just calling the constructor.
+    It exists so the http :class:`mtui.mcp.registry.SessionRegistry`
+    can lazily mint a fresh, fully isolated session per client and the
+    stdio path can mint one eagerly — both through the same call — so
+    every session is born identically regardless of transport.
+
+    Args:
+        cfg: The application configuration (already merged with CLI
+            args and populated with ``detect_system`` results by
+            :func:`main`).
+        log: The configured server logger, reused by commands that
+            touch ``self.prompt.log``.
+
+    Returns:
+        A new :class:`McpSession` with its own ``metadata`` /
+        ``targets`` / lock.
+
+    """
+    return McpSession(cfg, log)
 
 
 def main() -> int:
@@ -90,14 +131,26 @@ def main() -> int:
     cfg.merge_args(args)
     cfg.distro, cfg.distro_ver, cfg.distro_kernel = detect_system()
 
-    session = McpSession(cfg, logger)
+    # Provider selection is the whole of the per-client isolation
+    # contract: under http each client gets its own isolated
+    # ``McpSession`` minted lazily by the registry (keyed on the
+    # request session); under stdio one process == one session, so a
+    # single eagerly-built session doubles as the degenerate
+    # single-entry provider (its ``get_or_create`` returns ``self``).
+    # ``build_tools`` / ``register_testreport_tools`` only see the
+    # ``get_or_create`` shape, so they stay transport-agnostic.
+    if args.transport == "http":
+        provider: SessionProvider = SessionRegistry(build_session, cfg, logger)
+        logger.info("mtui-mcp: http transport — per-client session isolation enabled")
+    else:
+        provider = build_session(cfg, logger)
 
     # ``host``/``port`` are constructor-time settings in the SDK and
     # only consulted under the ``streamable-http`` transport; passing
     # them under stdio is a harmless no-op.
     mcp = FastMCP(name="mtui", host=args.host, port=args.port)
-    build_tools(mcp, session)
-    register_testreport_tools(mcp, session)
+    build_tools(mcp, provider)
+    register_testreport_tools(mcp, provider)
 
     try:
         if args.transport == "http":

@@ -258,6 +258,27 @@ class McpSession:
     # Command dispatch
     # ------------------------------------------------------------------
 
+    async def get_or_create(self, key: str) -> McpSession:
+        """Return ``self`` regardless of ``key`` (single-entry provider).
+
+        :class:`McpSession` doubles as the degenerate one-session
+        "provider" used by the stdio transport (one process == one
+        session) and by direct-call tests. It exposes the same
+        ``async get_or_create(key) -> McpSession`` shape as
+        :class:`mtui.mcp.registry.SessionRegistry` so
+        :mod:`mtui.mcp.tools` and :mod:`mtui.mcp.testreport_tools` can
+        resolve a session per call without caring which transport they
+        run under. The ``key`` is accepted and ignored.
+
+        Args:
+            key: The per-client session key (ignored here).
+
+        Returns:
+            This session instance.
+
+        """
+        return self
+
     async def run_command(
         self,
         cmd_cls: type[Command],
