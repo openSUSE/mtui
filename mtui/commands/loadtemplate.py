@@ -52,11 +52,12 @@ class LoadTemplate(Command):
     def __call__(self):
         """Executes the `load_template` command."""
         if self.metadata:
-            msg = "Should i owerwrite already loaded session {}? (y/N) "
+            msg = "Should i owerwrite already loaded session {}? (Y/n) "
             if not prompt_user(
                 msg.format(self.metadata.id),
                 ["y", "Y", "yes", "YES", "Yes"],
                 self.prompt.interactive,
+                default=True,
             ):
                 return
 

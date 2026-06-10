@@ -55,9 +55,17 @@ def test_prompt_user_default_on_empty_input(response, default, expected):
         assert prompt_user("? ", ["yes", "y"], True, default=default) is expected
 
 
-def test_prompt_user_non_interactive_ignores_default():
-    """Non-interactive mode never auto-confirms, even with default=True."""
-    assert prompt_user("? ", ["yes", "y"], False, default=True) is False
+def test_prompt_user_non_interactive_returns_default():
+    """Non-interactive mode returns the ``default`` argument.
+
+    Unlike interactive mode (where an empty response falls back to
+    ``default``), non-interactive mode *always* returns ``default``
+    regardless of what the user types — there is no stdin read.  This
+    lets callers control whether a scripted run auto-confirms or
+    always cancels.
+    """
+    assert prompt_user("? ", ["yes", "y"], False, default=True) is True
+    assert prompt_user("? ", ["yes", "y"], False, default=False) is False
 
 
 def test_prompt_user_pops_history_after_answer():

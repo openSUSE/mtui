@@ -107,7 +107,7 @@ def prompt_user(
 
     if not interactive:
         print(text)  # noqa: T201
-        return False
+        return default
 
     try:
         response = _read_line(text).lower()

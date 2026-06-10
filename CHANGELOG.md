@@ -99,3 +99,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`-a` / `-k` testreport load) or autoconnect (`-s` SUT loop)
   is handled the same way. Groups containing a real error still hit
   the existing crash path (`mtui-mcp crashed`, exit 1).
+
+### Changed
+
+- Non-interactive calls to `prompt_user` now return the ``default``
+  argument instead of always returning ``False``. Callers that pass
+  ``default=True`` (``load_template`` — overwrites an already-loaded
+  session; ``updateid.py`` — deletes a checked-out template) now
+  auto-confirm in non-interactive mode (MCP, scripts). All other
+  callers pass no ``default`` and are unaffected. The docstring for
+  ``prompt_user`` was updated to document this contract.
