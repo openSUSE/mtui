@@ -4,8 +4,6 @@ from pathlib import Path
 
 from ..cli.argparse import ArgumentParser
 from ..cli.args import _VerboseVersionAction
-from ..support.misc import SUTParse
-from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 
 
 def get_parser(sys) -> ArgumentParser:
@@ -13,11 +11,14 @@ def get_parser(sys) -> ArgumentParser:
 
     The parser intentionally mirrors :func:`mtui.cli.args.get_parser` for
     the flags that ``Config.merge_args`` and the testreport-loading code
-    care about (``-l``, ``-t``, ``-c``, ``-g``, ``-s``, ``-a``, ``-k``,
-    ``--color``, ``--debug``, ``-V``) so the same ``Namespace`` shape can
-    be reused. REPL-only flags (``-p/--prerun``, ``-n/--noninteractive``)
-    are dropped, and three MCP-server flags (``--transport``, ``--host``,
-    ``--port``) are added.
+    care about (``-l``, ``-t``, ``-c``, ``-g``, ``--color``, ``--debug``,
+    ``-V``) so the same ``Namespace`` shape can be reused. REPL-only flags
+    (``-p/--prerun``, ``-n/--noninteractive``) are dropped, and three
+    MCP-server flags (``--transport``, ``--host``, ``--port``) are added.
+
+    Templates and hosts are loaded per session at runtime via the
+    ``load_template`` and ``add_host`` tools, so the server takes no
+    boot-time update/SUT flags.
 
     Args:
         sys: The ``sys`` module, used for stdout/stderr.
@@ -32,14 +33,6 @@ def get_parser(sys) -> ArgumentParser:
     )
     parser.add_argument(
         "-t", "--template_dir", type=Path, help="override config mtui.template_dir"
-    )
-    parser.add_argument(
-        "-s",
-        "--sut",
-        type=SUTParse,
-        action="append",
-        help="cumulatively override default hosts from template "
-        "(format: hostname,hostname2)",
     )
     parser.add_argument(
         "-w",
@@ -88,23 +81,6 @@ def get_parser(sys) -> ArgumentParser:
         type=int,
         default=8000,
         help="bind port for --transport http (default: 8000)",
-    )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "-a",
-        "--auto-review-id",
-        metavar="RequestReviewID",
-        type=AutoOBSUpdateID,
-        help="OBS request review id (example: SUSE:Maintenance:1:1)",
-        dest="update",
-    )
-    group.add_argument(
-        "-k",
-        "--kernel-review-id",
-        metavar="RequestReviewID",
-        type=KernelOBSUpdateID,
-        help="OBS kernel/live-patch request review id (example: SUSE:Maintenance:1:1)",
-        dest="update",
     )
 
     return parser

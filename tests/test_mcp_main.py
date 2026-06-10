@@ -11,9 +11,7 @@ Focused on the Ctrl-C / graceful shutdown contract:
   an active task group this way, so a bare ``except KeyboardInterrupt``
   would miss it;
 * a :class:`BaseExceptionGroup` containing a real error still hits the
-  crash path (``return 1``, ``mtui-mcp crashed`` logged);
-* a ``KeyboardInterrupt`` during preload (``session.load_update``) is
-  caught before the server is reached and exits ``0`` cleanly.
+  crash path (``return 1``, ``mtui-mcp crashed`` logged).
 
 The tests stub out :class:`Config`, :func:`detect_system`, the
 :class:`McpSession` constructor, and ``build_tools`` /
@@ -46,8 +44,6 @@ def stub_environment(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
     or swap in side effects (e.g. make ``load_update`` raise).
     """
     cfg = MagicMock(name="Config")
-    cfg.kernel = False
-    cfg.auto = False
     config_cls = MagicMock(name="Config_cls", return_value=cfg)
     detect = MagicMock(name="detect_system", return_value=("sles", "15", "5.14"))
     session = MagicMock(name="McpSession")
@@ -227,98 +223,6 @@ def test_main_returns_one_on_plain_exception(
     rc, _ = _run_with_fake_fastmcp(monkeypatch, RuntimeError("kaboom"))
     assert rc == 1
     assert any("crashed" in r.message for r in caplog.records)
-
-
-# --------------------------------------------------------------------------- #
-# Pre-server Ctrl-C (preload)                                                 #
-# --------------------------------------------------------------------------- #
-
-
-def test_main_returns_zero_on_keyboardinterrupt_during_preload(
-    monkeypatch: pytest.MonkeyPatch,
-    stub_environment: dict[str, MagicMock],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Ctrl-C while ``load_update`` is running exits 0 without starting the server."""
-    caplog.set_level(logging.INFO, logger="mtui-mcp")
-
-    stub_environment["session"].load_update.side_effect = KeyboardInterrupt
-
-    # Build a Namespace-like object so we can bypass argparse (the real
-    # parser would need a valid OBS review id for ``-a``).
-    fake_args = MagicMock(
-        config=None,
-        color="never",
-        debug=False,
-        sut=None,
-        transport="stdio",
-        host="127.0.0.1",
-        port=8000,
-    )
-    # ``update`` has to walk the ``kind`` branch; give it a stub.
-    fake_update = MagicMock()
-    fake_update.kind = "auto"
-    fake_args.update = fake_update
-
-    parser = MagicMock(name="parser")
-    parser.parse_args.return_value = fake_args
-    monkeypatch.setattr(mcp_main, "get_parser", lambda _sys: parser)
-
-    fastmcp_cls, fastmcp_instance = _install_fake_fastmcp(monkeypatch)
-
-    rc = mcp_main.main()
-
-    assert rc == 0
-    assert any("shutting down" in r.message for r in caplog.records)
-    # Server must never have been constructed or run.
-    assert not fastmcp_cls.called
-    assert not fastmcp_instance.run.called
-
-
-def test_main_returns_zero_on_keyboardinterrupt_during_autoconnect(
-    monkeypatch: pytest.MonkeyPatch,
-    stub_environment: dict[str, MagicMock],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Ctrl-C while iterating the autoconnect SUT list exits 0 cleanly."""
-    caplog.set_level(logging.INFO, logger="mtui-mcp")
-
-    # Force the add_host command lookup to succeed with a stub, then
-    # make session._run_sync raise KI on the first invocation.
-    fake_add_host_cls = MagicMock(name="add_host_cls")
-    monkeypatch.setattr(
-        mcp_main.Command,
-        "registry",
-        {"add_host": fake_add_host_cls},
-    )
-    stub_environment["session"]._run_sync.side_effect = KeyboardInterrupt
-
-    fake_sut = MagicMock()
-    fake_sut.print_args.return_value = "host1.example.com"
-
-    fake_args = MagicMock(
-        config=None,
-        color="never",
-        debug=False,
-        sut=[fake_sut],
-        update=None,
-        transport="stdio",
-        host="127.0.0.1",
-        port=8000,
-    )
-
-    parser = MagicMock(name="parser")
-    parser.parse_args.return_value = fake_args
-    monkeypatch.setattr(mcp_main, "get_parser", lambda _sys: parser)
-
-    fastmcp_cls, fastmcp_instance = _install_fake_fastmcp(monkeypatch)
-
-    rc = mcp_main.main()
-
-    assert rc == 0
-    assert any("shutting down" in r.message for r in caplog.records)
-    assert not fastmcp_cls.called
-    assert not fastmcp_instance.run.called
 
 
 # --------------------------------------------------------------------------- #
