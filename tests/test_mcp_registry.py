@@ -63,6 +63,25 @@ def _config(tmp_path: Path) -> MagicMock:
     return cfg
 
 
+class _RealishConfig:
+    """Minimal plain-object config that ``copy.copy`` duplicates faithfully.
+
+    A ``MagicMock`` cannot stand in here: ``copy.copy(MagicMock())``
+    yields another mock whose ``.auto`` attribute is a truthy ``Mock``,
+    masking the ``False`` seeding :func:`build_session` performs. This
+    plain class behaves like the real :class:`mtui.support.config.Config`
+    for the handful of attributes the session constructor and
+    ``build_session`` touch, while staying cheap to instantiate.
+    """
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.template_dir = tmp_path
+        self.target_tempdir = tmp_path / "target"
+        self.chdir_to_template_dir = False
+        self.connection_timeout = 30
+        self.session_user = "testuser"
+
+
 def _registry(
     tmp_path: Path, *, idle_timeout: float = 0.0, max_sessions: int = 32
 ) -> SessionRegistry:
@@ -416,3 +435,64 @@ def test_aclose_cancels_sweeper_and_closes_all(tmp_path: Path) -> None:
     sweeper_running, live_after = asyncio.run(driver())
     assert sweeper_running is True
     assert live_after == 0
+
+
+# --------------------------------------------------------------------------- #
+# build_session: workflow-flag seeding + per-session config isolation         #
+# --------------------------------------------------------------------------- #
+
+
+def test_build_session_seeds_workflow_flags_false(tmp_path: Path) -> None:
+    """A fresh session must expose ``config.auto`` / ``config.kernel`` as False.
+
+    Regression guard: ``add_host`` (and other commands) read
+    ``config.auto`` *before* any ``load_template`` runs. Phase A removed
+    the boot-time defaults, which made ``add_host`` on a fresh MCP
+    session raise ``AttributeError: 'Config' object has no attribute
+    'auto'``. ``build_session`` now seeds both flags.
+    """
+    session = build_session(_RealishConfig(tmp_path), _LOG)  # ty: ignore[invalid-argument-type]
+    assert session.config.auto is False
+    assert session.config.kernel is False
+
+
+def test_build_session_copies_config_per_session(tmp_path: Path) -> None:
+    """Each session gets its own config copy; workflow flips don't leak.
+
+    Under http every session is minted from one base ``cfg``; a shallow
+    copy per session keeps the mutable workflow flags
+    (``auto``/``kernel``/``location``) independent so one client's
+    ``load_template`` cannot flip another client's workflow mode.
+    """
+    base = _RealishConfig(tmp_path)
+    a = build_session(base, _LOG)  # ty: ignore[invalid-argument-type]
+    b = build_session(base, _LOG)  # ty: ignore[invalid-argument-type]
+
+    assert a.config is not b.config
+    # Simulate client A loading a kernel template.
+    a.config.auto = True
+    a.config.kernel = True
+    # Client B must be unaffected.
+    assert b.config.auto is False
+    assert b.config.kernel is False
+    # And the shared base config must never have been mutated.
+    assert not hasattr(base, "auto")
+    assert not hasattr(base, "kernel")
+
+
+def test_registry_sessions_have_independent_config(tmp_path: Path) -> None:
+    """Two registry-minted sessions for distinct keys carry independent configs."""
+    reg = SessionRegistry(
+        build_session,
+        _RealishConfig(tmp_path),  # ty: ignore[invalid-argument-type]
+        _LOG,
+        idle_timeout=0.0,
+    )
+
+    async def driver() -> tuple[McpSession, McpSession]:
+        return await reg.get_or_create("k1"), await reg.get_or_create("k2")
+
+    a, b = asyncio.run(driver())
+    assert a.config is not b.config
+    a.config.kernel = True
+    assert b.config.kernel is False

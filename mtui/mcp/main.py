@@ -22,6 +22,7 @@ boot-time preload or SUT autoconnect.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import sys
 from logging import Logger
@@ -73,26 +74,39 @@ def _is_clean_shutdown_group(exc: BaseException) -> bool:
 def build_session(cfg: Config, log: Logger) -> McpSession:
     """Construct a fresh :class:`McpSession` from ``cfg`` and ``log``.
 
-    A deliberately thin factory: with boot-time preload/autoconnect
-    gone (Phase A), minting a session is just calling the constructor.
-    It exists so the http :class:`mtui.mcp.registry.SessionRegistry`
-    can lazily mint a fresh, fully isolated session per client and the
-    stdio path can mint one eagerly — both through the same call — so
-    every session is born identically regardless of transport.
+    Each session gets its **own** shallow copy of ``cfg`` so the
+    per-client isolation extends to the mutable workflow flags that
+    commands flip in place — ``config.auto`` / ``config.kernel`` (set
+    by ``load_template`` / ``add_host`` / ``set_mode``) and
+    ``config.location`` (``set_location``). A shallow copy is the right
+    tool: those attributes are scalars, so each session rebinds its own
+    while the heavy read-only members (the parsed ``ConfigParser``, the
+    refhosts factory) stay shared. Without the copy, every http client
+    would share one ``Config`` and clobber each other's workflow mode.
+
+    The workflow flags are seeded to ``False`` here, matching the REPL's
+    boot defaults in :func:`mtui.main.main`: ``add_host`` (and other
+    commands) read ``config.auto`` *before* any ``load_template`` runs,
+    so an unset attribute would raise ``AttributeError``.
 
     Args:
-        cfg: The application configuration (already merged with CLI
-            args and populated with ``detect_system`` results by
-            :func:`main`).
+        cfg: The base application configuration (already merged with
+            CLI args and populated with ``detect_system`` results by
+            :func:`main`); copied, never mutated.
         log: The configured server logger, reused by commands that
             touch ``self.prompt.log``.
 
     Returns:
-        A new :class:`McpSession` with its own ``metadata`` /
-        ``targets`` / lock.
+        A new :class:`McpSession` with its own ``config`` copy,
+        ``metadata`` / ``targets`` / lock.
 
     """
-    return McpSession(cfg, log)
+    session_cfg = copy.copy(cfg)
+    # Match the REPL boot defaults (mtui.main.main); commands read these
+    # before any template is loaded.
+    session_cfg.kernel = False
+    session_cfg.auto = False
+    return McpSession(session_cfg, log)
 
 
 def main() -> int:
