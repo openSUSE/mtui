@@ -309,9 +309,9 @@ the response envelope. From a fresh server:
     > whoami()
     User: <username>, Session PID: <pid>
 
-If a test report was preloaded with ``-a`` / ``-k``,
-``testreport_read`` returns its current contents. Otherwise the
-editing tools refuse cleanly with
+Once a test report has been loaded for the session (via the
+``load_template`` tool), ``testreport_read`` returns its current
+contents. Before that the editing tools refuse cleanly with
 ``no testreport loaded; run `load_template` first`` — that is the
 correct refusal path and exercises
 :class:`~mtui.support.messages.UserError` handling.
@@ -329,10 +329,10 @@ Troubleshooting
   URL the client is configured with.
 * **Tool calls time out under HTTP.** mtui's network-bound commands
   (``update``, ``prepare``, ``checkout``) can run for minutes against
-  real refhosts. Raise the client's per-tool timeout. The
-  process-wide ``asyncio.Lock`` serialises invocations, so a long
-  tool call blocks every concurrent client on the same server — that
-  is by design, not a bug.
+  real refhosts. Raise the client's per-tool timeout. Each HTTP client
+  has its own isolated session and lock, so a long tool call blocks
+  only that client's own subsequent calls — other clients run
+  concurrently against their own sessions.
 * **Need to see the wire protocol.** Pass ``--debug`` to ``mtui-mcp``;
   both the server logger and the ``mcp.server.fastmcp`` logger drop
   to ``DEBUG``, surfacing JSON-RPC frames and MCP-server routing

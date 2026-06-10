@@ -17,7 +17,27 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   session over `stdio` or `http`. The `mcp` extra installs
   `mcp[cli]>=1.2`; on openSUSE the SDK is packaged as
   `python3-mcp`. See `Documentation/mcp.rst` for the deny-list,
-  single-session caveat, and a `read → patch → read` worked example.
+  per-client isolation model, and a `read → patch → read` worked
+  example.
+- `mtui-mcp`'s `http` transport now isolates session state **per
+  client**: each connected client gets its own loaded test report and
+  set of SSH hosts, keyed on the MCP session, so concurrent clients no
+  longer share (or clobber) one another's `load_template` / `add_host`
+  state and run without cross-session serialisation. The number of
+  concurrent sessions is bounded by `[mcp] session_cap` (default 32)
+  and idle sessions are reaped after `[mcp] session_idle_timeout`
+  seconds (default 1800), disconnecting their hosts. `stdio` is
+  unchanged (one process, one session).
+
+### Changed
+
+- `mtui-mcp` no longer accepts boot-time test-report or host flags
+  (`-a`/`--auto-review-id`, `-k`/`--kernel-review-id`, `-s`/`--sut`);
+  passing them now errors as unknown arguments. A single boot-time
+  seed cannot belong to any one client under the new per-client
+  isolation, so each client loads its own state at runtime via the
+  `load_template` and `add_host` tools instead. (The REPL `mtui`
+  keeps these flags.)
 
 ### Fixed
 

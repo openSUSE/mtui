@@ -87,6 +87,10 @@ class Config:
     lock_stale_age: int
     lock_pi_autolock: bool
 
+    # -- mtui-mcp server (http transport) per-client session registry --
+    mcp_session_cap: int
+    mcp_session_idle_timeout: int
+
     # -- Attributes set externally in main.py --
     kernel: bool
     auto: bool
@@ -401,6 +405,27 @@ class Config:
                 True,
                 bool,
                 getboolean,
+            ),
+            # ``mtui-mcp`` http transport isolates state per client in a
+            # session registry (see mtui.mcp.registry). ``session_cap``
+            # bounds how many concurrent client sessions may exist at
+            # once (DoS guard against unbounded targets/threads);
+            # ``session_idle_timeout`` is the seconds of inactivity
+            # after which an idle session is swept and its hosts
+            # disconnected. Both are ignored under the stdio transport.
+            ConfigOption(
+                "mcp_session_cap",
+                ("mcp", "session_cap"),
+                32,
+                int,
+                getint,
+            ),
+            ConfigOption(
+                "mcp_session_idle_timeout",
+                ("mcp", "session_idle_timeout"),
+                1800,
+                int,
+                getint,
             ),
         ]
 

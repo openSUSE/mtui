@@ -6,12 +6,24 @@ surface :class:`mtui.commands._command.Command` instances read from
 ``self.prompt``. There is no :mod:`prompt_toolkit`, no history file, no
 bottom toolbar, no ``do_<name>`` setattr loop.
 
-One :class:`McpSession` lives per ``mtui-mcp`` server process; every
-:meth:`McpSession.run_command` call is serialised through a single
-:class:`asyncio.Lock` so HTTP-transport concurrency cannot interleave
-mutations of ``metadata`` / ``targets``. Blocking command bodies (SSH,
-subprocess) run inside :func:`asyncio.to_thread` so they do not stall
-the event loop.
+Session lifetime depends on transport. Under **stdio** one process
+serves one client, so a single :class:`McpSession` lives per process.
+Under **http** :class:`mtui.mcp.registry.SessionRegistry` mints one
+isolated :class:`McpSession` **per client** — keyed on
+``id(ctx.session)`` (the request's ``ServerSession``, 1:1 with the MCP
+session) — so concurrent clients never share ``metadata`` / ``targets``
+and each has its own lock. Idle http sessions are swept after a
+configurable TTL (``[mcp] session_idle_timeout``) and their hosts
+disconnected via :meth:`McpSession.close`; the number of concurrent
+sessions is bounded by ``[mcp] session_cap``.
+
+Within a single session, every :meth:`McpSession.run_command` call is
+serialised through that session's :class:`asyncio.Lock`, so two
+concurrent tool calls from the *same* client cannot interleave
+mutations of its ``metadata`` / ``targets``; calls from *different*
+clients run concurrently against their own sessions. Blocking command
+bodies (SSH, subprocess) run inside :func:`asyncio.to_thread` so they
+do not stall the event loop.
 
 Stdout / stderr produced by a command are captured per-call via a
 fresh :class:`io.StringIO`; stdout is returned to the caller, stderr
@@ -22,6 +34,7 @@ WARNING on a clean return.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import io
 import shlex
 import time
@@ -114,13 +127,19 @@ class _FakeSys(SimpleNamespace):
 
 
 class McpSession:
-    """Headless mtui session shared by every ``mtui-mcp`` tool call.
+    """Headless mtui session backing one ``mtui-mcp`` client.
 
     Holds the same mutable state as :class:`CommandPrompt` — ``config``,
     ``metadata``, ``targets``, ``session`` — so that the existing
     ``Command`` ABI works unchanged. Stateless per-call concerns
     (``display``, ``sys``) are constructed inside :meth:`run_command`
     and torn down after the call returns.
+
+    Under stdio one instance serves the single client; under http
+    :class:`mtui.mcp.registry.SessionRegistry` owns one instance per
+    client and reaps it (via :meth:`close`) on idle-TTL or eviction.
+    It also doubles as the degenerate single-entry session provider —
+    see :meth:`get_or_create`.
     """
 
     def __init__(self, config: Config, log: Logger) -> None:
@@ -162,11 +181,13 @@ class McpSession:
         # silently misbehaving.
         self._history = None
 
-        # Single process-wide serialiser. Concurrent HTTP-transport
-        # clients queue here; the lock is held across the
-        # ``to_thread`` worker so re-entrant calls (a Command's body
-        # touching ``self.prompt.load_update``) execute on the same
-        # thread without re-acquiring.
+        # Per-session serialiser. Concurrent tool calls from the *same*
+        # client queue here so they cannot interleave mutations of this
+        # session's ``metadata`` / ``targets``; calls from *other* http
+        # clients hold their own session's lock and run concurrently.
+        # The lock is held across the ``to_thread`` worker so re-entrant
+        # calls (a Command's body touching ``self.prompt.load_update``)
+        # execute on the same thread without re-acquiring.
         self._lock = asyncio.Lock()
 
         # Per-call stdout pointer. ``println`` falls back to ``log``
@@ -278,6 +299,52 @@ class McpSession:
 
         """
         return self
+
+    async def close(self) -> None:
+        """Disconnect every connected host; safe to call more than once.
+
+        Owned by the http :class:`mtui.mcp.registry.SessionRegistry`,
+        which calls this when it evicts a session (idle-TTL sweep or
+        explicit eviction). Mirrors the REPL ``quit`` disconnect path —
+        ``Target.close()`` per host, in parallel — but **without** the
+        ``sys.exit`` / history-flush tail, since the process keeps
+        serving other clients.
+
+        The blocking paramiko closes run in a worker thread (via
+        :func:`asyncio.to_thread`) so the event loop is never stalled,
+        matching :meth:`run_command`'s threading discipline. The whole
+        teardown is best-effort: a per-host close failure is logged and
+        swallowed so one wedged connection cannot block reaping the
+        rest, and ``targets`` is emptied either way so a second call is
+        a cheap no-op.
+        """
+        targets = self.targets
+        if not targets:
+            return
+        await asyncio.to_thread(self._disconnect_targets)
+
+    def _disconnect_targets(self) -> None:
+        """Synchronous parallel host-disconnect core for :meth:`close`.
+
+        Runs in a worker thread. Closes each :class:`Target` on its own
+        pool thread (paramiko teardown is blocking) with a bounded
+        wait, then clears ``targets`` regardless of individual
+        outcomes. Per-host errors are logged at WARNING, never raised.
+        """
+        targets = self.targets
+        hostnames = list(targets)
+
+        def _close_one(name: str) -> None:
+            try:
+                targets[name].close()
+            except Exception as exc:  # noqa: BLE001 - best-effort teardown
+                self.log.warning("error disconnecting host %s: %s", name, exc)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(_close_one, name) for name in hostnames]
+            concurrent.futures.wait(futures, timeout=45)
+
+        targets.clear()
 
     async def run_command(
         self,
