@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from logging import getLogger
 from pathlib import Path
 
+from ...support.http import resolve_verify
 from .store import Refhosts
 
 logger = getLogger("mtui.refhost")
@@ -51,7 +52,10 @@ class HttpsResolver(Resolver):
         Args:
             time_now_getter: Callable returning the current epoch time.
             statter: Callable returning file stats (``os.stat``).
-            urlopener: Callable returning an HTTP response object.
+            urlopener: Callable ``(uri, verify) -> response`` returning an
+                object with a ``.read()`` method yielding the payload
+                bytes. ``verify`` is the :data:`~mtui.support.http.VerifyPolicy`
+                to apply to the request.
             file_writer: Callable ``(bytes, path) -> None`` to persist
                 the downloaded payload.
             cache_path: On-disk cache path for the downloaded YAML.
@@ -71,7 +75,10 @@ class HttpsResolver(Resolver):
 
     def _refresh_if_needed(self, config) -> None:
         if self._is_refresh_needed(config.refhosts_https_expiration):
-            self._refresh(config.refhosts_https_uri)
+            # refhosts.yml is served from an internal SUSE host; verify by
+            # default but let the global [mtui] ssl_verify policy override.
+            verify = resolve_verify(True, config.ssl_verify)
+            self._refresh(config.refhosts_https_uri, verify)
 
     def _is_refresh_needed(self, expiration: int) -> bool:
         try:
@@ -83,5 +90,5 @@ class HttpsResolver(Resolver):
 
         return self._time_now() - statinfo.st_mtime > expiration
 
-    def _refresh(self, uri: str) -> None:
-        self._write_file(self._urlopen(uri).read(), self.cache_path)
+    def _refresh(self, uri: str, verify) -> None:
+        self._write_file(self._urlopen(uri, verify).read(), self.cache_path)
