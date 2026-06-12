@@ -2,9 +2,7 @@
 
 from logging import getLogger
 from os.path import join
-from typing import Self
-
-from typing_extensions import override
+from typing import Self, override
 
 from ...types.urls import URLs
 from .base import OpenQA

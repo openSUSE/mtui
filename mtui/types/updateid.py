@@ -6,9 +6,7 @@ from collections.abc import Callable
 from errno import ENOENT
 from logging import getLogger
 from pathlib import Path
-from typing import TYPE_CHECKING, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, final, override
 
 if TYPE_CHECKING:
     from ..cli.prompter import Prompter

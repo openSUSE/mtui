@@ -10,11 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import total_ordering
 from logging import getLogger
-from typing import Any, final
+from typing import Any, final, override
 
 import requests
 import urllib3
-from typing_extensions import override
 from urllib3.exceptions import InsecureRequestWarning
 
 # The 'Config' object has dynamically generated attributes, so we must
