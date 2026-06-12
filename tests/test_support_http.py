@@ -106,3 +106,69 @@ def test_disable_insecure_warnings_is_idempotent(monkeypatch):
 )
 def test_parse_ssl_verify(raw, expected):
     assert _parse_ssl_verify(raw) == expected
+
+
+# ---------------------------------------------------------------------------
+# get_bytes
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    def __init__(self, content: bytes, *, raise_exc: Exception | None = None) -> None:
+        self.content = content
+        self._raise_exc = raise_exc
+
+    def raise_for_status(self) -> None:
+        if self._raise_exc is not None:
+            raise self._raise_exc
+
+
+class _FakeSession:
+    def __init__(self, response: _FakeResponse) -> None:
+        self._response = response
+        self.get_calls: list[tuple[str, dict]] = []
+
+    def get(self, url: str, **kwargs):
+        self.get_calls.append((url, kwargs))
+        return self._response
+
+
+def test_get_bytes_returns_response_content(monkeypatch):
+    session = _FakeSession(_FakeResponse(b"payload-bytes"))
+    monkeypatch.setattr(_http, "build_session", lambda verify: session)
+
+    out = _http.get_bytes("https://h/file", verify=True)
+
+    assert out == b"payload-bytes"
+
+
+def test_get_bytes_passes_shared_timeout_by_default(monkeypatch):
+    session = _FakeSession(_FakeResponse(b""))
+    monkeypatch.setattr(_http, "build_session", lambda verify: session)
+
+    _http.get_bytes("https://h/file", verify=False)
+
+    assert session.get_calls[0][1]["timeout"] == _http.HTTP_TIMEOUT
+
+
+def test_get_bytes_honors_verify_argument(monkeypatch):
+    captured = {}
+
+    def fake_build_session(verify):
+        captured["verify"] = verify
+        return _FakeSession(_FakeResponse(b""))
+
+    monkeypatch.setattr(_http, "build_session", fake_build_session)
+
+    _http.get_bytes("https://h/file", verify="/etc/ssl/ca.pem")
+
+    assert captured["verify"] == "/etc/ssl/ca.pem"
+
+
+def test_get_bytes_raises_on_http_error_status(monkeypatch):
+    err = _http.requests.exceptions.HTTPError("404")
+    session = _FakeSession(_FakeResponse(b"", raise_exc=err))
+    monkeypatch.setattr(_http, "build_session", lambda verify: session)
+
+    with pytest.raises(_http.requests.exceptions.HTTPError):
+        _http.get_bytes("https://h/file", verify=True)

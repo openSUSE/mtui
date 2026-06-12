@@ -1,22 +1,16 @@
 """An exporter for the automatic workflow."""
 
-import ssl
-from http.client import RemoteDisconnected
 from itertools import zip_longest
 from logging import getLogger
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
 
+import requests
+
+from ...support.http import HTTP_TIMEOUT, build_session, resolve_verify
 from ...types import FileList
 from .base import BaseExport
 
 logger = getLogger("mtui.export.auto")
-
-# TODO: migrate this raw-urllib log download to the shared requests-based
-# helper in mtui.support.http so TLS verification follows the global
-# [mtui] ssl_verify policy instead of this hard-coded unverified context.
-no_verify = ssl._create_unverified_context()  # noqa: SLF001
 
 
 class AutoExport(BaseExport):
@@ -117,33 +111,52 @@ class AutoExport(BaseExport):
 
         return filenames
 
-    @staticmethod
-    def _openqa_installog_to_template(url) -> list[str]:
-        """Converts an openQA install log to a template.
+    def _openqa_installog_to_template(self, url) -> list[str]:
+        """Download an openQA install log and return its lines.
 
         Args:
-            url: The URL of the log to convert.
+            url: A ``URLs`` instance whose ``url`` attribute points at the
+                install log to fetch.
 
         Returns:
-            A list of strings representing the log content.
+            The log content as a list of lines (with trailing newlines),
+            or an empty list if the download failed.
+
+        TLS verification follows the global ``[mtui] ssl_verify`` policy.
+        When that policy is unset this preserves the historical
+        behaviour of trying verified first and falling back to an
+        unverified retry on a certificate error -- most openQA hosts use
+        an internal CA the system trust store may not know about. When
+        ``ssl_verify`` is set explicitly the user's choice is honoured
+        with no insecure fallback.
 
         """
-        # input is URLs instance
+        verify = resolve_verify(True, self.config.ssl_verify)
         try:
-            with urlopen(url.url) as log:
-                t = log.readlines()
-            return [x.decode() for x in t]
-        except (RemoteDisconnected, HTTPError):
-            logger.error("log %s failed to download", url.url)
-            return []
-        except URLError:
-            try:
-                with urlopen(url.url, context=no_verify) as log:
-                    t = log.readlines()
-                return [x.decode() for x in t]
-            except (RemoteDisconnected, HTTPError, URLError):
+            response = build_session(verify).get(url.url, timeout=HTTP_TIMEOUT)
+            response.raise_for_status()
+            return response.text.splitlines(keepends=True)
+        except requests.exceptions.SSLError:
+            if self.config.ssl_verify is not None:
+                # User explicitly chose a verification policy; do not
+                # silently downgrade to an unverified connection.
                 logger.error("log %s failed to download", url.url)
                 return []
+            logger.debug(
+                "verified fetch of %s failed on TLS; retrying unverified", url.url
+            )
+            try:
+                response = build_session(verify=False).get(
+                    url.url, timeout=HTTP_TIMEOUT
+                )
+                response.raise_for_status()
+                return response.text.splitlines(keepends=True)
+            except requests.exceptions.RequestException:
+                logger.error("log %s failed to download", url.url)
+                return []
+        except requests.exceptions.RequestException:
+            logger.error("log %s failed to download", url.url)
+            return []
 
     def run(self, *args, **kwds) -> FileList | list[str]:
         """Runs the exporter.
