@@ -39,6 +39,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   verification (`true`/`false`, or a path to a CA bundle); when unset,
   each call site keeps its previous default. The Gitea client now also
   applies the shared request timeout (it previously had none).
+- The remaining raw-`urllib` download paths now route through
+  `mtui.support.http` too: the openQA install-log export, the
+  result/install-log downloader, and the `refhosts.yml` fetch all use
+  the shared `(connect, read)` timeout and honor `[mtui] ssl_verify`.
+  The install-log export keeps its historical "verify, then fall back
+  to unverified on a TLS error" default when `ssl_verify` is unset; the
+  refhosts and downloader paths remain verify-on by default.
 - MTUI now requires Python 3.13 or newer (previously 3.11). The
   minimum supported interpreter, the packaging classifiers, and the
   `ruff`/`ty` configuration were all raised to 3.13, and the

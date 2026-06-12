@@ -419,6 +419,7 @@ def _make_config(**overrides):
         "refhosts_https_uri": "https://example.invalid/refhosts.yml",
         "refhosts_https_expiration": 3600,
         "location": "default",
+        "ssl_verify": None,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -498,8 +499,8 @@ class TestHttpsResolver:
             file_writer=file_writer,
             cache_path=Path("/dst"),
         )
-        resolver._refresh("https://x/refhosts.yml")
-        urlopener.assert_called_once_with("https://x/refhosts.yml")
+        resolver._refresh("https://x/refhosts.yml", True)
+        urlopener.assert_called_once_with("https://x/refhosts.yml", True)
         file_writer.assert_called_once_with(b"yaml-bytes", Path("/dst"))
 
     def test_refresh_if_needed_skips_when_fresh(self):
@@ -524,8 +525,24 @@ class TestHttpsResolver:
             cache_path=Path("/x"),
         )
         resolver._refresh_if_needed(_make_config())
-        urlopener.assert_called_once()
+        # ssl_verify unset -> per-site default True flows to the opener.
+        urlopener.assert_called_once_with("https://example.invalid/refhosts.yml", True)
         file_writer.assert_called_once_with(b"payload", Path("/x"))
+
+    def test_refresh_if_needed_honors_ssl_verify_override(self):
+        statter = MagicMock(return_value=SimpleNamespace(st_mtime=0))
+        url_resp = MagicMock()
+        url_resp.read.return_value = b"payload"
+        urlopener = MagicMock(return_value=url_resp)
+        resolver = _make_https_resolver(
+            statter=statter,
+            time_now_getter=MagicMock(return_value=1_000_000),
+            urlopener=urlopener,
+            file_writer=MagicMock(),
+            cache_path=Path("/x"),
+        )
+        resolver._refresh_if_needed(_make_config(ssl_verify=False))
+        urlopener.assert_called_once_with("https://example.invalid/refhosts.yml", False)
 
 
 class TestRefhostsFactory:
