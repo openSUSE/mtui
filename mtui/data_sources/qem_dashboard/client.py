@@ -5,6 +5,8 @@ from typing import Any
 
 import requests
 
+from ...support.http import HTTP_TIMEOUT
+
 logger = getLogger("mtui.connector.qem_dashboard")
 
 # Job result statuses that should be reported individually in the exported
@@ -12,12 +14,9 @@ logger = getLogger("mtui.connector.qem_dashboard")
 # per-group summary count to keep the report short and reviewable.
 FAILED_RESULTS: frozenset[str] = frozenset({"failed", "incomplete", "timeout_exceeded"})
 
-# (connect, read) timeout for every dashboard HTTP call. Bounds a stuck
-# socket so a broken network can't hang mtui startup indefinitely.
-_HTTP_TIMEOUT: tuple[float, float] = (5.0, 30.0)
 # Wall-clock cap per future in the parallel fan-out. Defense-in-depth on
-# top of the per-request timeout above; a stuck worker won't block the
-# whole batch.
+# top of the shared per-request HTTP_TIMEOUT; a stuck worker won't block
+# the whole batch.
 _FUTURE_TIMEOUT: float = 60.0
 
 
@@ -33,7 +32,7 @@ class QEMDashboardClient:
                 f"{self.apiurl}/{path.lstrip('/')}",
                 params=params or None,
                 headers={"Accept": "application/json"},
-                timeout=_HTTP_TIMEOUT,
+                timeout=HTTP_TIMEOUT,
             )
             response.raise_for_status()
             return response.json()

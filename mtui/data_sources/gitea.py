@@ -13,8 +13,6 @@ from logging import getLogger
 from typing import Any, final, override
 
 import requests
-import urllib3
-from urllib3.exceptions import InsecureRequestWarning
 
 # The 'Config' object has dynamically generated attributes, so we must
 # ignore type checker warnings when accessing them.
@@ -25,12 +23,10 @@ from ..support.exceptions import (
     GiteaNoReviewError,
     MissingGiteaTokenError,
 )
+from ..support.http import HTTP_TIMEOUT, VerifyPolicy, build_session, resolve_verify
 from ..types import assignment, method
 
 logger = getLogger("mtui.connector.gitea")
-
-# Suppress insecure request warnings for unverified HTTPS requests.
-urllib3.disable_warnings(category=InsecureRequestWarning)
 
 
 @dataclass
@@ -112,6 +108,15 @@ class Gitea:
         self.headers = {"Authorization": f"token {config.gitea_token}"}
         self.group = group
 
+        # Resolve the TLS verification policy once: historically Gitea
+        # ran against an internal host with verification disabled, so the
+        # per-site default stays ``False``; a user can flip it on (or pass
+        # a CA bundle) globally via ``[mtui] ssl_verify``. The shared
+        # session also silences the InsecureRequestWarning when verify is
+        # off. (Resolves the long-standing "control verify from config".)
+        self._verify: VerifyPolicy = resolve_verify(False, config.ssl_verify)
+        self._session = build_session(self._verify)
+
         # Construct the necessary API endpoints from the base PR URL.
         self.pr = giteaprapi
         self.prissues = giteaprapi.replace("pulls", "issues") + "/comments"
@@ -123,8 +128,6 @@ class Gitea:
         params: dict | None = None,
         data: dict | None = None,
         json: dict | None = None,
-        # TODO: enable control of verify from config
-        verify: bool = False,
     ) -> Any:
         """A private wrapper for making requests to the Gitea API.
 
@@ -134,7 +137,6 @@ class Gitea:
             params: URL parameters for the request.
             data: Form data for the request body.
             json: JSON data for the request body.
-            verify: If True, verifies SSL certificates.
 
         Returns:
             The JSON response from the API.
@@ -145,14 +147,14 @@ class Gitea:
         """
         try:
             logger.debug("Requesting %s on %s", method, url)
-            rsp = requests.request(
+            rsp = self._session.request(
                 method,
                 url,
                 headers=self.headers,
                 params=params,
                 data=data,
                 json=json,
-                verify=verify,
+                timeout=HTTP_TIMEOUT,
             )
         except requests.exceptions.RequestException as e:
             logger.exception("API call to Gitea failed: %s", e)
