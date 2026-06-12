@@ -31,6 +31,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- Outbound HTTP calls (Gitea PR client, QEM Dashboard client, openQA /
+  QAM Dashboard search) now share a single source of truth for the
+  `(connect, read)` timeout and TLS-certificate-verification policy in
+  `mtui.support.http`, replacing three independent, inconsistent
+  copies. A new `[mtui] ssl_verify` option globally overrides
+  verification (`true`/`false`, or a path to a CA bundle); when unset,
+  each call site keeps its previous default. The Gitea client now also
+  applies the shared request timeout (it previously had none).
 - MTUI now requires Python 3.13 or newer (previously 3.11). The
   minimum supported interpreter, the packaging classifiers, and the
   `ruff`/`ty` configuration were all raised to 3.13, and the

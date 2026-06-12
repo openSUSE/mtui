@@ -45,6 +45,7 @@ def mock_config():
     config.template_dir = Path("/tmp/templates")
     config.qem_dashboard_api = "https://dashboard.example.com/api"
     config.gitea_token = "test-token-123"
+    config.ssl_verify = None
     config.location = "nuremberg"
     config.auto = False
     config.chdir_to_template_dir = False

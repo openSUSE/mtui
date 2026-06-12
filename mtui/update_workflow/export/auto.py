@@ -13,6 +13,9 @@ from .base import BaseExport
 
 logger = getLogger("mtui.export.auto")
 
+# TODO: migrate this raw-urllib log download to the shared requests-based
+# helper in mtui.support.http so TLS verification follows the global
+# [mtui] ssl_verify policy instead of this hard-coded unverified context.
 no_verify = ssl._create_unverified_context()  # noqa: SLF001
 
 

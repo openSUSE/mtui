@@ -588,9 +588,9 @@ def test_get_passes_timeout_to_requests(monkeypatch):
     client = QEMDashboardClient("https://dashboard.example.com/api")
     assert client.incident(123) == {"ok": True}
 
-    assert captured["kwargs"]["timeout"] == _qem_client._HTTP_TIMEOUT
+    assert captured["kwargs"]["timeout"] == _qem_client.HTTP_TIMEOUT
     # Sanity: the constant is a (connect, read) tuple of positive floats.
-    connect, read = _qem_client._HTTP_TIMEOUT
+    connect, read = _qem_client.HTTP_TIMEOUT
     assert connect > 0
     assert read > 0
 
