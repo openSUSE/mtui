@@ -5,7 +5,7 @@ from typing import Any
 
 import requests
 
-from ...support.http import HTTP_TIMEOUT
+from ...support.http import HTTP_TIMEOUT, VerifyPolicy, build_session
 
 logger = getLogger("mtui.connector.qem_dashboard")
 
@@ -23,12 +23,25 @@ _FUTURE_TIMEOUT: float = 60.0
 class QEMDashboardClient:
     """Small read-only client for the QEM Dashboard API."""
 
-    def __init__(self, apiurl: str) -> None:
+    def __init__(self, apiurl: str, verify: VerifyPolicy = True) -> None:
+        """Initialize the client.
+
+        Args:
+            apiurl: Base URL of the QEM Dashboard API.
+            verify: TLS verification policy (the resolved ``[mtui]
+                ssl_verify`` value). Defaults to ``True`` so the client
+                verifies certificates unless the user opted out.
+
+        """
         self.apiurl = apiurl.rstrip("/")
+        # A shared session pins the verify policy (and silences the
+        # InsecureRequestWarning once when verification is disabled),
+        # so every request honors the global ssl_verify config.
+        self._session = build_session(verify)
 
     def _get(self, path: str, **params) -> Any | None:
         try:
-            response = requests.get(
+            response = self._session.get(
                 f"{self.apiurl}/{path.lstrip('/')}",
                 params=params or None,
                 headers={"Accept": "application/json"},

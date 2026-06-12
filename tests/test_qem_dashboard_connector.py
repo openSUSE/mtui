@@ -583,9 +583,10 @@ def test_get_passes_timeout_to_requests(monkeypatch):
         captured["kwargs"] = kwargs
         return _FakeResponse()
 
-    monkeypatch.setattr(_qem_client.requests, "get", _fake_get)
-
     client = QEMDashboardClient("https://dashboard.example.com/api")
+    # The client routes every request through its shared session so the
+    # configured ssl_verify policy is applied; patch that session's get.
+    monkeypatch.setattr(client._session, "get", _fake_get)
     assert client.incident(123) == {"ok": True}
 
     assert captured["kwargs"]["timeout"] == _qem_client.HTTP_TIMEOUT
@@ -593,6 +594,16 @@ def test_get_passes_timeout_to_requests(monkeypatch):
     connect, read = _qem_client.HTTP_TIMEOUT
     assert connect > 0
     assert read > 0
+
+
+def test_client_session_honors_verify_policy():
+    """QEMDashboardClient pins the verify policy on its shared session."""
+    assert QEMDashboardClient("https://d/api")._session.verify is True
+    assert QEMDashboardClient("https://d/api", verify=False)._session.verify is False
+    assert (
+        QEMDashboardClient("https://d/api", verify="/ca.pem")._session.verify
+        == "/ca.pem"
+    )
 
 
 def test_load_jobs_skips_timed_out_per_setting_future(monkeypatch, mock_config, caplog):

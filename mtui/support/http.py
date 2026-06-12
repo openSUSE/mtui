@@ -10,9 +10,9 @@ verification. This module centralises both:
 - :data:`HTTP_TIMEOUT` is the one ``(connect, read)`` timeout tuple
   shared by all callers. It bounds a stuck socket so a broken network
   cannot hang mtui indefinitely.
-- :func:`resolve_verify` turns a per-call-site default plus an optional
-  user override (``[mtui] ssl_verify`` in the config) into the
-  effective ``verify`` value passed to :mod:`requests`.
+- :func:`resolve_verify` turns the user's ``[mtui] ssl_verify`` config
+  value into the effective ``verify`` passed to :mod:`requests`,
+  defaulting to ``True`` (verify) when the value is unset.
 - :func:`build_session` / :func:`disable_insecure_warnings` make the
   ``urllib3`` ``InsecureRequestWarning`` suppression happen in exactly
   one place, and only when verification is actually disabled.
@@ -20,12 +20,12 @@ verification. This module centralises both:
   download sites that previously reached for raw ``urllib`` (which had
   no shared timeout and a hard-coded TLS posture).
 
-Most internal SUSE hosts (openqa.suse.de, dashboard.qam.suse.de,
-qam.suse.de, internal mirrors) present self-signed or internal-CA
-certificates that the user's system trust store does not know about,
-so several call sites disable verification by default. A user who has
-the SUSE CA installed can flip verification back on globally by setting
-``[mtui] ssl_verify = true`` (or point at a CA bundle with
+Verification is **on by default for every call site**. Several internal
+SUSE hosts (openqa.suse.de, dashboard.qam.suse.de, qam.suse.de,
+internal mirrors) present internal-CA certificates, so reaching them
+out of the box requires the SUSE CA in the system trust store. A user
+who cannot install that CA can disable verification globally with
+``[mtui] ssl_verify = false`` (or point at a CA bundle with
 ``ssl_verify = /path/to/ca.pem``).
 """
 
@@ -68,8 +68,9 @@ def resolve_verify(
     """Pick the effective ``verify`` value for a request.
 
     Args:
-        default: The call site's own default (preserves historical
-            per-host behaviour when the user has set no global policy).
+        default: The fallback used when ``override`` is ``None``. Call
+            sites pass ``True`` so verification is on whenever the user
+            has expressed no preference.
         override: The user's global ``[mtui] ssl_verify`` setting, or
             ``None`` when unset. When not ``None`` it wins over
             ``default``.

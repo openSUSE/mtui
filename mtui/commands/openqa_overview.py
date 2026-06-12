@@ -23,6 +23,7 @@ from ..cli.argparse import ArgumentParser
 from ..cli.colors import blue, green, red, yellow
 from ..cli.completion import complete_choices
 from ..data_sources import oqa_search as oqa
+from ..support.http import resolve_verify
 from ..support.misc import requires_update
 from ..types import FileList, OpenQAOverviewResult
 from ..update_workflow.export.overview_inject import inject_overview
@@ -165,6 +166,11 @@ class OpenQAOverview(Command):
         Also prints colourised output to the REPL as the data arrives.
         """
         rrid = self.metadata.rrid
+
+        # Pin the global TLS verify policy on the search session before any
+        # network call so the openQA / Dashboard search honors
+        # ``[mtui] ssl_verify`` (defaulting to verify).
+        oqa.set_verify(resolve_verify(True, self.config.ssl_verify))
 
         url_openqa = self.args.url_openqa or self.config.openqa_instance
         url_dashboard_qam = self.args.url_dashboard_qam or self._derive_dashboard_url(

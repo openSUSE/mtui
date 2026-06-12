@@ -108,13 +108,11 @@ class Gitea:
         self.headers = {"Authorization": f"token {config.gitea_token}"}
         self.group = group
 
-        # Resolve the TLS verification policy once: historically Gitea
-        # ran against an internal host with verification disabled, so the
-        # per-site default stays ``False``; a user can flip it on (or pass
-        # a CA bundle) globally via ``[mtui] ssl_verify``. The shared
-        # session also silences the InsecureRequestWarning when verify is
-        # off. (Resolves the long-standing "control verify from config".)
-        self._verify: VerifyPolicy = resolve_verify(False, config.ssl_verify)
+        # Resolve the TLS verification policy once: verify by default and
+        # let the global ``[mtui] ssl_verify`` policy override (disable
+        # verification or point at a CA bundle). The shared session
+        # silences the InsecureRequestWarning when verification is off.
+        self._verify: VerifyPolicy = resolve_verify(True, config.ssl_verify)
         self._session = build_session(self._verify)
 
         # Construct the necessary API endpoints from the base PR URL.

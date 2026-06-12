@@ -7,6 +7,7 @@ from typing import ClassVar, Self
 import openqa_client.exceptions
 from openqa_client.client import OpenQA_Client as oqa
 
+from ...support.http import disable_insecure_warnings, resolve_verify
 from ...types import RequestKind, RequestReviewID, Test, URLs
 
 logger = getLogger("mtui.connector.openqa")
@@ -42,6 +43,16 @@ class OpenQA(ABC):
         )
 
         self.client = oqa(host)
+        # ``OpenQA_Client`` exposes its ``requests.Session`` but takes no
+        # verify argument; pin the global ``[mtui] ssl_verify`` policy on
+        # the session so openQA requests honor it too. ``do_request``
+        # passes ``verify=None`` per call, which falls back to this
+        # session value. Defaults to verifying; silence the insecure
+        # warning once if the user disabled verification.
+        verify = resolve_verify(True, config.ssl_verify)
+        self.client.session.verify = verify
+        if not verify:
+            disable_insecure_warnings()
         self.pp: list[str] = []
         self.results: list[URLs] | list[Test] | None = None
 

@@ -58,28 +58,31 @@ def test_download_success_returns_decoded_lines(mock_config):
         out = exporter._openqa_installog_to_template(_url())
 
     assert out == ["line1\n", "line2\n"]
-    # ssl_verify is None in mock_config -> per-site default True.
+    # ssl_verify unset in mock_config resolves to the default: verify=True.
     bs.assert_called_once_with(True)
     assert session.get.call_args.kwargs["timeout"] == HTTP_TIMEOUT
 
 
-def test_download_default_falls_back_to_unverified_on_sslerror(mock_config):
+def test_download_sslerror_returns_empty_no_insecure_retry(mock_config, caplog):
+    """An SSL error is a hard failure: no silent downgrade to unverified.
+
+    ``ssl_verify`` defaults to ``True``; a certificate failure returns an
+    empty result and logs an error instead of retrying without
+    verification.
+    """
     exporter = _make_exporter(mock_config)
-    good = _fake_session(get_return=_ok_response("recovered\n"))
     bad = _fake_session(get_side_effect=requests.exceptions.SSLError("cert"))
 
-    # First build_session() (verify=True) yields the failing session;
-    # the fallback build_session(verify=False) yields the good one.
-    with patch(
-        "mtui.update_workflow.export.auto.build_session",
-        side_effect=[bad, good],
-    ) as bs:
+    with (
+        patch("mtui.update_workflow.export.auto.build_session", return_value=bad) as bs,
+        caplog.at_level("ERROR", logger="mtui.export.auto"),
+    ):
         out = exporter._openqa_installog_to_template(_url())
 
-    assert out == ["recovered\n"]
-    assert bs.call_count == 2
-    assert bs.call_args_list[0].args == (True,)
-    assert bs.call_args_list[1].kwargs == {"verify": False}
+    assert out == []
+    # Exactly one attempt with the default verify=True -- no insecure retry.
+    bs.assert_called_once_with(True)
+    assert any("failed to download" in r.message for r in caplog.records)
 
 
 def test_download_ssl_verify_true_does_not_fall_back(mock_config, caplog):
