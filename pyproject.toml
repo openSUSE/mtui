@@ -12,20 +12,17 @@ classifiers = [
   "Environment :: Console",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Programming Language :: Python :: 3.14"
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
   "openqa-client",
   "paramiko",
   "prompt_toolkit",
   "pyxdg",
   "requests",
-  "ruamel.yaml",
-  "typing-extensions>=4.5"
+  "ruamel.yaml"
 ]
 dynamic = ["version"]
 
@@ -69,7 +66,7 @@ markers = [
 ]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = [
@@ -127,8 +124,8 @@ ignore = [
 [tool.ty.environment]
 # Pin to the lowest version we support so we catch features that
 # would only work on newer interpreters; the CI matrix exercises
-# 3.11-3.14 separately.
-python-version = "3.11"
+# 3.13-3.14 separately.
+python-version = "3.13"
 
 [tool.ty.terminal]
 # Promote warnings to errors so 'ty check' is a hard gate.

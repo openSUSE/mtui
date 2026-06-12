@@ -31,6 +31,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- MTUI now requires Python 3.13 or newer (previously 3.11). The
+  minimum supported interpreter, the packaging classifiers, and the
+  `ruff`/`ty` configuration were all raised to 3.13, and the
+  `typing-extensions` backport dependency was dropped now that
+  `typing.override` is available in the standard library.
 - `mtui-mcp` no longer accepts boot-time test-report or host flags
   (`-a`/`--auto-review-id`, `-k`/`--kernel-review-id`, `-s`/`--sut`);
   passing them now errors as unknown arguments. A single boot-time

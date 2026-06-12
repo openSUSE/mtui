@@ -14,10 +14,8 @@ from datetime import datetime, timedelta
 from functools import lru_cache
 from html.parser import HTMLParser
 from logging import getLogger
-from typing import Any, Final
+from typing import Any, Final, override
 from urllib.parse import quote, unquote
-
-from typing_extensions import override
 
 from .heuristics import (
     AGGREGATED_EXCLUDED_VERSIONS,
