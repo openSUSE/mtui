@@ -392,17 +392,17 @@ class Config:
                 getenv("GITEA_TOKEN", ""),
                 getter=get,
             ),
-            # Global override for TLS certificate verification on outbound
-            # HTTP calls (see mtui.support.http). Unset (the default) means
-            # each call site keeps its own historical default -- several
-            # internal SUSE hosts present self-signed/internal-CA certs and
-            # disable verification out of the box. Set ``ssl_verify = true``
-            # to verify everywhere (requires the SUSE CA in the trust store),
-            # ``false`` to skip everywhere, or a path to a CA bundle file.
+            # Global policy for TLS certificate verification on every
+            # outbound HTTP call (see mtui.support.http). Defaults to
+            # ``True`` so mtui verifies certificates everywhere out of the
+            # box; this requires the SUSE CA in the system trust store to
+            # reach internal hosts that present an internal-CA certificate.
+            # Set ``ssl_verify = false`` to skip verification everywhere, or
+            # point at a CA bundle file with ``ssl_verify = /path/to/ca.pem``.
             ConfigOption(
                 "ssl_verify",
                 ("mtui", "ssl_verify"),
-                None,
+                True,
                 _parse_ssl_verify,
                 get,
             ),

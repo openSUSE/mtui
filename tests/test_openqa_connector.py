@@ -1,5 +1,6 @@
 """Tests for the mtui connector openqa modules."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -240,3 +241,44 @@ class TestAutoOpenQABool:
         auto_oqa.results = [MagicMock()]
         auto_oqa.pp = []
         assert bool(auto_oqa) is True
+
+
+# --- OpenQA client honors the global ssl_verify policy ---
+
+
+class TestOpenQAClientVerifyPolicy:
+    """The third-party OpenQA_Client session must carry the ssl_verify policy."""
+
+    @staticmethod
+    def _build(mock_config, mock_rrid, mock_incident):
+        # Give the patched client a plain object as its session so we can
+        # read back the verify attribute the connector sets on it.
+        with patch("mtui.data_sources.openqa.base.oqa") as oqa_cls:
+            client = MagicMock()
+            client.session = SimpleNamespace()
+            oqa_cls.return_value = client
+            return AutoOpenQA(
+                mock_config, "https://openqa.example.com", mock_incident, mock_rrid
+            )
+
+    def test_defaults_to_verify_true(self, mock_config, mock_rrid, mock_incident):
+        mock_config.ssl_verify = True
+        oqa = self._build(mock_config, mock_rrid, mock_incident)
+        assert oqa.client.session.verify is True
+
+    def test_unset_resolves_to_verify_true(self, mock_config, mock_rrid, mock_incident):
+        mock_config.ssl_verify = None
+        oqa = self._build(mock_config, mock_rrid, mock_incident)
+        assert oqa.client.session.verify is True
+
+    def test_disabled_when_config_false(self, mock_config, mock_rrid, mock_incident):
+        mock_config.ssl_verify = False
+        oqa = self._build(mock_config, mock_rrid, mock_incident)
+        assert oqa.client.session.verify is False
+
+    def test_ca_bundle_path_is_passed_through(
+        self, mock_config, mock_rrid, mock_incident
+    ):
+        mock_config.ssl_verify = "/etc/ssl/ca.pem"
+        oqa = self._build(mock_config, mock_rrid, mock_incident)
+        assert oqa.client.session.verify == "/etc/ssl/ca.pem"

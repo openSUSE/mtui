@@ -122,13 +122,11 @@ class AutoExport(BaseExport):
             The log content as a list of lines (with trailing newlines),
             or an empty list if the download failed.
 
-        TLS verification follows the global ``[mtui] ssl_verify`` policy.
-        When that policy is unset this preserves the historical
-        behaviour of trying verified first and falling back to an
-        unverified retry on a certificate error -- most openQA hosts use
-        an internal CA the system trust store may not know about. When
-        ``ssl_verify`` is set explicitly the user's choice is honoured
-        with no insecure fallback.
+        TLS verification follows the global ``[mtui] ssl_verify`` policy,
+        which defaults to verifying. Reaching openQA hosts that present
+        an internal-CA certificate therefore requires the SUSE CA in the
+        system trust store, or ``ssl_verify`` set to ``false`` / a CA
+        bundle path.
 
         """
         verify = resolve_verify(True, self.config.ssl_verify)
@@ -136,24 +134,6 @@ class AutoExport(BaseExport):
             response = build_session(verify).get(url.url, timeout=HTTP_TIMEOUT)
             response.raise_for_status()
             return response.text.splitlines(keepends=True)
-        except requests.exceptions.SSLError:
-            if self.config.ssl_verify is not None:
-                # User explicitly chose a verification policy; do not
-                # silently downgrade to an unverified connection.
-                logger.error("log %s failed to download", url.url)
-                return []
-            logger.debug(
-                "verified fetch of %s failed on TLS; retrying unverified", url.url
-            )
-            try:
-                response = build_session(verify=False).get(
-                    url.url, timeout=HTTP_TIMEOUT
-                )
-                response.raise_for_status()
-                return response.text.splitlines(keepends=True)
-            except requests.exceptions.RequestException:
-                logger.error("log %s failed to download", url.url)
-                return []
         except requests.exceptions.RequestException:
             logger.error("log %s failed to download", url.url)
             return []

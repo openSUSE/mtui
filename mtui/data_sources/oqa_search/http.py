@@ -6,23 +6,42 @@ from typing import Any
 
 import requests
 
-from ...support.http import HTTP_TIMEOUT, build_session
+from ...support.http import HTTP_TIMEOUT, VerifyPolicy, build_session
 
 logger = getLogger("mtui.connector.oqa_search")
+
+# Effective TLS verification policy for this module's shared session.
+# Defaults to verifying; the command layer overrides it from the global
+# ``[mtui] ssl_verify`` config via :func:`set_verify` before searching.
+_verify: VerifyPolicy = True
+
+
+def set_verify(verify: VerifyPolicy) -> None:
+    """Set the TLS verification policy for the shared search session.
+
+    Resets the cached session when the policy actually changes so the
+    next request rebuilds it with the new ``verify`` value. The command
+    layer calls this with the resolved ``[mtui] ssl_verify`` value so
+    the openQA / Dashboard search honors the global policy.
+    """
+    global _verify
+    if verify != _verify:
+        _verify = verify
+        _session.cache_clear()
 
 
 @lru_cache(maxsize=1)
 def _session() -> requests.Session:
-    """Lazy shared session with TLS verification disabled.
+    """Lazy shared session honoring the configured TLS verify policy.
 
     Internal SUSE hosts (openqa.suse.de, dashboard.qam.suse.de,
-    qam.suse.de) frequently present self-signed or internal-CA certs
-    that the user's system trust store does not validate. Disable
-    verification on the session so the command works out of the box;
-    :func:`mtui.support.http.build_session` silences the resulting
-    InsecureRequestWarning.
+    qam.suse.de) present internal-CA certs that require the SUSE CA in
+    the system trust store. Verification defaults to on; a user can
+    disable it (or point at a CA bundle) globally via ``[mtui]
+    ssl_verify`` -- :func:`mtui.support.http.build_session` silences the
+    InsecureRequestWarning when verification is off.
     """
-    return build_session(verify=False)
+    return build_session(_verify)
 
 
 class _HTTPError(RuntimeError):
