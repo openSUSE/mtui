@@ -5,6 +5,7 @@ from logging import getLogger
 from pathlib import Path
 
 from ...support.fileops import ensure_dir_exists
+from ...support.http import resolve_verify
 from ...types import FileList
 from .base import BaseExport
 from .downloader import download_logs
@@ -31,7 +32,8 @@ class KernelExport(BaseExport):
         ensure_dir_exists(res_path)
         oqa = (result for result in self.openqa.kernel)
         # TODO: configurable errormode
-        download_logs(oqa, res_path, in_path, "tolerant")
+        verify = resolve_verify(True, self.config.ssl_verify)
+        download_logs(oqa, res_path, in_path, "tolerant", verify)
 
         return [fn.name for fn in in_path.glob("*.log")]
 
