@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from ...support.http import VerifyPolicy
 from ...types import RequestKind, RequestReviewID
 from .client import QEMDashboardClient
 
@@ -9,10 +10,22 @@ from .client import QEMDashboardClient
 class QEMIncident:
     """Incident metadata from QEM Dashboard."""
 
-    def __init__(self, rrid: RequestReviewID, apiurl: str) -> None:
+    def __init__(
+        self, rrid: RequestReviewID, apiurl: str, verify: VerifyPolicy = True
+    ) -> None:
+        """Initialize incident metadata.
+
+        Args:
+            rrid: The request/review id of the incident.
+            apiurl: Base URL of the QEM Dashboard API.
+            verify: TLS verification policy (the resolved ``[mtui]
+                ssl_verify`` value) forwarded to the dashboard client.
+                Defaults to ``True``.
+
+        """
         self.rrid = rrid
         self.incident_number = self._incident_number(rrid)
-        self.client = QEMDashboardClient(apiurl)
+        self.client = QEMDashboardClient(apiurl, verify)
         self.data: dict[str, Any] | None = self.client.incident(self.incident_number)
 
     @staticmethod

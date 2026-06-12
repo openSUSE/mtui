@@ -59,7 +59,7 @@ def _is_clean_shutdown_group(exc: BaseException) -> bool:
     """Return True iff every leaf in ``exc`` is a shutdown sentinel.
 
     ``anyio.run`` (used by :meth:`mcp.server.fastmcp.FastMCP.run`) wraps task-group failures
-    in :class:`BaseExceptionGroup` on Python 3.11+, so a bare
+    in :class:`BaseExceptionGroup`, so a bare
     ``except KeyboardInterrupt`` does not catch Ctrl-C delivered to an
     active task group. We walk the group recursively and only treat it
     as a clean shutdown when *every* leaf is one of

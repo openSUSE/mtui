@@ -711,3 +711,52 @@ def test_extract_test_results_rust_folds_via_summarize():
     # the totals must be > 0 for passed.
     assert "0 passed" not in summary
     assert "0 failed" in summary
+
+
+# --- set_verify: TLS policy for the shared search session ---
+
+
+@pytest.fixture
+def oqa_http_module():
+    """Yield the oqa_search http module, restoring its verify policy after."""
+    from mtui.data_sources.oqa_search import http as _oqa_http
+
+    original = _oqa_http._verify
+    yield _oqa_http
+    _oqa_http._verify = original
+    _oqa_http._session.cache_clear()
+
+
+def test_session_verifies_by_default(oqa_http_module):
+    """The shared search session verifies TLS unless told otherwise."""
+    _oqa_http = oqa_http_module
+    _oqa_http.set_verify(True)
+    assert _oqa_http._session().verify is True
+
+
+def test_set_verify_rebuilds_session_with_new_policy(oqa_http_module):
+    """Changing the policy clears the cache so the session is rebuilt."""
+    _oqa_http = oqa_http_module
+
+    _oqa_http.set_verify(True)
+    first = _oqa_http._session()
+    assert first.verify is True
+
+    _oqa_http.set_verify(False)
+    second = _oqa_http._session()
+    # A new session object with the new policy (cache was cleared).
+    assert second is not first
+    assert second.verify is False
+
+    # A CA-bundle path is honored verbatim.
+    _oqa_http.set_verify("/etc/ssl/ca.pem")
+    assert _oqa_http._session().verify == "/etc/ssl/ca.pem"
+
+
+def test_set_verify_same_value_keeps_cached_session(oqa_http_module):
+    """Setting the same policy does not rebuild the cached session."""
+    _oqa_http = oqa_http_module
+    _oqa_http.set_verify(True)
+    first = _oqa_http._session()
+    _oqa_http.set_verify(True)
+    assert _oqa_http._session() is first

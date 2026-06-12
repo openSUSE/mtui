@@ -6,9 +6,7 @@ from collections.abc import Callable
 from errno import ENOENT
 from logging import getLogger
 from pathlib import Path
-from typing import TYPE_CHECKING, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, final, override
 
 if TYPE_CHECKING:
     from ..cli.prompter import Prompter
@@ -22,6 +20,7 @@ from ..support.exceptions import (
     InvalidGiteaHashError,
     MissingGiteaTokenError,
 )
+from ..support.http import resolve_verify
 from ..support.messages import (
     SvnCheckoutFailed,
     SvnCheckoutInterruptedError,
@@ -223,7 +222,11 @@ class AutoOBSUpdateID(UpdateID):
             return NullTestReport(config, prompter=prompter)
 
         self._create_installogs_dir(config)
-        tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
+        tr.incident = QEMIncident(
+            self.id,
+            config.qem_dashboard_api,
+            resolve_verify(True, config.ssl_verify),
+        )
 
         logger.info("Getting data from QEM Dashboard")
         tr.openqa.auto = DashboardAutoOpenQA(
@@ -308,7 +311,11 @@ class KernelOBSUpdateID(UpdateID):
 
         self._create_installogs_dir(config)
         self.create_results_dir(config)
-        tr.incident = QEMIncident(self.id, config.qem_dashboard_api)
+        tr.incident = QEMIncident(
+            self.id,
+            config.qem_dashboard_api,
+            resolve_verify(True, config.ssl_verify),
+        )
         tr.openqa.auto = DashboardAutoOpenQA(
             config,
             config.openqa_instance,

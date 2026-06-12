@@ -26,6 +26,26 @@ def _identity(x: Any) -> Any:
     return x
 
 
+_TRUE_STRINGS = frozenset({"1", "yes", "true", "on"})
+_FALSE_STRINGS = frozenset({"0", "no", "false", "off"})
+
+
+def _parse_ssl_verify(raw: str) -> bool | str:
+    """Coerce the ``[mtui] ssl_verify`` value into a ``requests`` ``verify``.
+
+    Accepts the usual boolean spellings (``true``/``false``/``yes``/...)
+    and otherwise treats the value as a path to a CA bundle file, which
+    :mod:`requests` accepts directly as ``verify``.
+    """
+    token = raw.strip()
+    lowered = token.lower()
+    if lowered in _TRUE_STRINGS:
+        return True
+    if lowered in _FALSE_STRINGS:
+        return False
+    return token
+
+
 @dataclass(frozen=True, slots=True)
 class ConfigOption:
     """Declarative description of a single configuration option.
@@ -82,6 +102,7 @@ class Config:
     openqa_kernel_install_logs: str
     threshold: int
     gitea_token: str
+    ssl_verify: bool | str | None
     ssh_strict_host_key_checking: str
     lock_reap_stale: bool
     lock_stale_age: int
@@ -370,6 +391,20 @@ class Config:
                 ("gitea", "token"),
                 getenv("GITEA_TOKEN", ""),
                 getter=get,
+            ),
+            # Global policy for TLS certificate verification on every
+            # outbound HTTP call (see mtui.support.http). Defaults to
+            # ``True`` so mtui verifies certificates everywhere out of the
+            # box; this requires the SUSE CA in the system trust store to
+            # reach internal hosts that present an internal-CA certificate.
+            # Set ``ssl_verify = false`` to skip verification everywhere, or
+            # point at a CA bundle file with ``ssl_verify = /path/to/ca.pem``.
+            ConfigOption(
+                "ssl_verify",
+                ("mtui", "ssl_verify"),
+                True,
+                _parse_ssl_verify,
+                get,
             ),
             ConfigOption(
                 "ssh_strict_host_key_checking",

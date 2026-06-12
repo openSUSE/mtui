@@ -1,6 +1,6 @@
 """A class for representing the system information of a target host."""
 
-from typing_extensions import override
+from typing import override
 
 from . import Product
 

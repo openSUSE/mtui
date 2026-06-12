@@ -1,9 +1,7 @@
 """A connector for the kernel openQA workflow."""
 
 from logging import getLogger
-from typing import Self
-
-from typing_extensions import override
+from typing import Self, override
 
 from ...types.test import Test
 from .base import OpenQA

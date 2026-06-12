@@ -1,8 +1,6 @@
 """A class for representing a software package and its versions."""
 
-from typing import final
-
-from typing_extensions import override
+from typing import final, override
 
 from .rpmver import RPMVersion
 

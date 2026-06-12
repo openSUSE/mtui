@@ -384,6 +384,26 @@ Gitea API access token, this config has higher prio than environment
 variable. Token must have full access to the issue API.
 
 
+``mtui.ssl_verify``
+~~~~~~~~~~~~~~~~~~~
+
+  | **type**
+  |     bool or string (path)
+  | **default**
+  |     ``True``
+
+Global TLS certificate-verification policy for every outbound HTTP
+call (Gitea PR client, QEM Dashboard client, openQA job client, the
+openQA / QAM Dashboard search, the log downloads, and the
+``refhosts.yml`` fetch). Defaults to ``True``, so MTUI verifies
+certificates everywhere out of the box; reaching internal hosts that
+present an internal-CA certificate therefore requires the SUSE CA in
+the system trust store. Set ``ssl_verify = false`` to disable
+verification everywhere, or set it to a filesystem path
+(``ssl_verify = /path/to/ca-bundle.pem``) to verify against a custom CA
+bundle.
+
+
 ``lock.reap_stale``
 ~~~~~~~~~~~~~~~~~~~
 

@@ -1,8 +1,6 @@
 """A class for comparing RPM version strings."""
 
-from typing import ClassVar, final
-
-from typing_extensions import override
+from typing import ClassVar, final, override
 
 try:
     import rpm  # type: ignore[import-not-found]  # ty: ignore[unresolved-import]

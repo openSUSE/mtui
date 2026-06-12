@@ -43,7 +43,7 @@ from .heuristics import (
     TESTSUITE_VISUAL_SEPARATORS,
     TESTSUITE_WORDS_BLOCKLIST,
 )
-from .http import _HTTP_TIMEOUT, _fetch_url_content, _get_json, _HTTPError, _session
+from .http import _fetch_url_content, _get_json, _HTTPError, _session, set_verify
 from .results import BuildCheckResult, GroupResult, VersionResult
 from .search import (
     OVERVIEW_BEGIN_MARKER,
@@ -96,7 +96,6 @@ __all__ = [
     "LogFileLinkParser",
     "VersionResult",
     "_HTTPError",
-    "_HTTP_TIMEOUT",
     "_extract_aggregated_name",
     "_extract_version",
     "_fallback_build",
@@ -123,6 +122,7 @@ __all__ = [
     "get_incident_groups",
     "get_incident_info",
     "render_overview",
+    "set_verify",
     "single_incidents",
     "summarize_test_results",
 ]

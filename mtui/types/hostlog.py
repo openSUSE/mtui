@@ -1,6 +1,6 @@
 """A list-like object for storing command log entries."""
 
-from typing_extensions import override
+from typing import override
 
 from . import CommandLog
 

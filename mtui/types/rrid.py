@@ -2,9 +2,7 @@
 
 from collections.abc import Callable, Sequence
 from itertools import zip_longest
-from typing import Any, final
-
-from typing_extensions import override
+from typing import Any, final, override
 
 from .enums import RequestKind
 

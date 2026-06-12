@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from mtui.support.messages import ResultsMissingError
 from mtui.update_workflow.export.downloader import (
@@ -23,15 +23,43 @@ from mtui.update_workflow.export.downloader import (
 
 
 def test_subdl_success() -> None:
-    with patch("mtui.update_workflow.export.downloader.urlretrieve") as urlretrieve:
+    with (
+        patch(
+            "mtui.update_workflow.export.downloader.get_bytes",
+            return_value=b"log-bytes",
+        ) as get_bytes,
+        patch("mtui.update_workflow.export.downloader.atomic_write_file") as write_file,
+    ):
         _subdl("http://h/file", "/tmp/x", {"name": "t", "arch": "x"}, "tolerant")
-    urlretrieve.assert_called_once_with("http://h/file", "/tmp/x")
+    get_bytes.assert_called_once_with("http://h/file", verify=True)
+    # The downloaded bytes are written to the requested local path.
+    args, _ = write_file.call_args
+    assert args[0] == b"log-bytes"
+    assert str(args[1]) == "/tmp/x"
+
+
+def test_subdl_passes_verify_policy() -> None:
+    with (
+        patch(
+            "mtui.update_workflow.export.downloader.get_bytes",
+            return_value=b"",
+        ) as get_bytes,
+        patch("mtui.update_workflow.export.downloader.atomic_write_file"),
+    ):
+        _subdl(
+            "http://h/file",
+            "/tmp/x",
+            {"name": "t", "arch": "x"},
+            "tolerant",
+            verify=False,
+        )
+    get_bytes.assert_called_once_with("http://h/file", verify=False)
 
 
 def test_subdl_http_error_tolerant_logs_no_raise(caplog) -> None:
-    err = urllib.error.HTTPError("http://h", 404, "no", {}, None)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    err = requests.exceptions.HTTPError("404")
     with (
-        patch("mtui.update_workflow.export.downloader.urlretrieve", side_effect=err),
+        patch("mtui.update_workflow.export.downloader.get_bytes", side_effect=err),
         caplog.at_level("ERROR", logger="mtui.export.downloader"),
     ):
         _subdl("http://h/file", "/tmp/x", {"name": "t", "arch": "x"}, "tolerant")
@@ -39,9 +67,9 @@ def test_subdl_http_error_tolerant_logs_no_raise(caplog) -> None:
 
 
 def test_subdl_http_error_full_raises_results_missing() -> None:
-    err = urllib.error.HTTPError("http://h", 404, "no", {}, None)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    err = requests.exceptions.HTTPError("404")
     with (
-        patch("mtui.update_workflow.export.downloader.urlretrieve", side_effect=err),
+        patch("mtui.update_workflow.export.downloader.get_bytes", side_effect=err),
         pytest.raises(ResultsMissingError),
     ):
         _subdl("http://h/file", "/tmp/x", {"name": "t", "arch": "x"}, "full")
