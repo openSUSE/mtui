@@ -1,13 +1,13 @@
 .. vim: tw=72 sts=2 sw=2 et
 
 ########################################################################
-                             Configuration
+                            Configuration
 ########################################################################
 
 .. contents::
 
 Files
-=====
+======
 
 MTUI reads `INI-formatted`_ configuration from two optional files,
 ``/etc/mtui.cfg`` and ``~/.mtuirc``, with the values found in the latter
@@ -15,16 +15,63 @@ overriding those from the former.
 
 Values found in configuration files can be overridden using command line options.
 
-.. _`INI-formatted`: https://docs.python.org/3/library/configparser.html
-
 Directives
 ==========
 
 This text refers to configuration properties using their section-qualified names.
 
+``gitea.token``
+~~~~~~~~~~~~~~~
+  | **type**
+  |     string
+  | **default**
+  |     `os.getenv('GITEA_TOKEN','')`__
+
+.. __: https://docs.python.org/3/library/os.html#os.getenv
+
+Gitea API access token, this config has higher prio than environment
+variable. Token must have full access to the issue API.
+
+``lock.lock.pi_autolock``
+~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     bool
+  | **default**
+  |     ``True``
+
+When testing a Product Increment (PI), automatically lock all reference
+hosts on ``assign`` with a comment naming the request, and unlock this
+session's locks at the end of testing (``unassign`` / ``approve`` /
+``reject``). Reference hosts added with ``add_host`` while the
+assignment is active are locked too. Set to ``false`` to disable.
+
+``lock.reap_stale``
+~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     bool
+  | **default**
+  |     ``True``
+
+When connecting to a reference host, force-remove a pre-existing
+``/var/lock/mtui.lock`` that is older than ``lock.stale_age`` regardless
+of which user or session created it (including exclusive, commented
+locks). Such a lock is almost always left over from a crashed or
+abandoned session. Set to ``false`` to only warn about pre-existing
+locks, as in older releases. Fresh locks are never removed.
+
+``lock.stale_age``
+~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     86400
+
+Age, in seconds, beyond which a remote lock is considered stale and
+eligible for automatic removal (see ``lock.reap_stale``). A value of
+``0`` disables reaping.
+
 ``mtui.chdir_to_template_dir``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     enum: ``False``, ``True``
   | **default**
@@ -41,7 +88,6 @@ If set to ``True``, MTUI will ``chdir(2)`` into the test report checkout directo
 
 ``mtui.connection_timeout``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     seconds
   | **default**
@@ -55,9 +101,19 @@ command to return or to proceed with the next one.
 To disable the timeout set it to ``0``.
 
 
+``mtui.install_logs``
+~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     string
+  | **default**
+  |     install_logs
+
+Name of directory for storing install logs
+Please don't change it
+
+
 ``mtui.location``
 ~~~~~~~~~~~~~~~~~
-
   | **type**
   |     enum: locations defined in `refhosts.yml`_
   | **default**
@@ -78,7 +134,6 @@ from ``default``.
 
 ``mtui.report_bug_url``
 ~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     URL
   | **default**
@@ -91,7 +146,6 @@ MTUI bugs are reported via this URL. Used by the `report-bug`_ MTUI command.
 
 ``mtui.ssh_strict_host_key_checking``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     enum: ``auto_add``, ``warn``, ``reject``
   | **default**
@@ -119,9 +173,27 @@ Unknown values are reported with a warning and fall back to the default
 ``auto_add`` behaviour.
 
 
+``mtui.ssl_verify``
+~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     bool or string (path)
+  | **default**
+  |     ``True``
+
+Global TLS certificate-verification policy for every outbound HTTP
+call (Gitea PR client, QEM Dashboard client, openQA job client, the
+openQA / QAM Dashboard search, the log downloads, and the
+``refhosts.yml`` fetch). Defaults to ``True``, so MTUI verifies
+certificates everywhere out of the box; reaching internal hosts that
+present an internal-CA certificate therefore requires the SUSE CA in
+the system trust store. Set ``ssl_verify = false`` to disable
+verification everywhere, or set it to a filesystem path
+(``ssl_verify = /path/to/ca-bundle.pem``) to verify against a custom CA
+bundle.
+
+
 ``mtui.tempdir``
 ~~~~~~~~~~~~~~~~
-
   | **type**
   |     pathname
   | **default**
@@ -132,7 +204,6 @@ Temporary local directory for package source checkouts.
 
 ``mtui.template_dir``
 ~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     pathname
   | **default**
@@ -153,7 +224,6 @@ both are given.
 
 ``mtui.use_keyring``
 ~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     enum: ``False``, ``True``
   | **default**
@@ -166,7 +236,6 @@ MTUI will retrieve it from the user's keyring.
 
 ``mtui.user``
 ~~~~~~~~~~~~~
-
   | **type**
   |     string
   | **default**
@@ -177,32 +246,8 @@ Used e.g. in lock files.
 .. __: https://docs.python.org/2/library/getpass.html#getpass.getuser
 
 
-``mtui.install_logs``
-~~~~~~~~~~~~~~~~~~~~~
-
- | **type**
- |     string
- | **default**
- |     install_logs
-
-Name of directory for storing install logs
-Please don't change it
-
-
-``openqa.openqa``
-~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     URL
-  | **default**
-  |     https://openqa.suse.de 
-
-URL of openqa instance
-
-
 ``openqa.baremetal``
 ~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     URL
   | **default**
@@ -211,21 +256,8 @@ URL of openqa instance
 URL of baremetal openqa instance
 
 
-``qem_dashboard.api``
-~~~~~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     URL
-  | **default**
-  |     http://dashboard.qam.suse.de/api
-
-URL of the QEM Dashboard API used for incident, aggregate, and auto openQA job discovery.
-Kernel workflow still uses openQA directly.
-
-
 ``openqa.distri``
 ~~~~~~~~~~~~~~~~~
-
   | **type**
   |     string
   | **default**
@@ -234,10 +266,8 @@ Kernel workflow still uses openQA directly.
 Default 'DISTRI' value for openqa jobs
 
 
-
 ``openqa.install_logfile``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     string
   | **default**
@@ -248,7 +278,6 @@ Name of automatic installation test logfile
 
 ``openqa.kernel_install_logfile``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     string
   | **default**
@@ -257,9 +286,29 @@ Name of automatic installation test logfile
 Name of kernel installation test logfile
 
 
+``openqa.openqa``
+~~~~~~~~~~~~~~~~~
+  | **type**
+  |     URL
+  | **default**
+  |     https://openqa.suse.de 
+
+URL of openqa instance
+
+
+``qem_dashboard.api``
+~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     URL
+  | **default**
+  |     http://dashboard.qam.suse.de/api
+
+URL of the QEM Dashboard API used for incident, aggregate, and auto openQA job discovery.
+Kernel workflow still uses openQA directly.
+
+
 ``refhosts.https_expiration``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     seconds
   | **default**
@@ -271,7 +320,6 @@ update it from ``refhosts.https_uri`` if the ``https`` resolver is used.
 
 ``refhosts.https_uri``
 ~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     URL
   | **default**
@@ -282,7 +330,6 @@ The ``https`` resolver fetches the refhost database from this URL.
 
 ``refhosts.path``
 ~~~~~~~~~~~~~~~~~
-
   | **type**
   |     pathname
   | **default**
@@ -293,7 +340,6 @@ The ``path`` resolver uses the refhost database at this location.
 
 ``refhosts.resolvers``
 ~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     list: {https|path}[,...]
   | **default**
@@ -305,7 +351,6 @@ Resolvers are tried left-to-right.
 
 ``svn.path``
 ~~~~~~~~~~~~
-
   | **type**
   |      URL
   | **default**
@@ -317,7 +362,6 @@ MTUI checks out the testreport from, and commits it to,
 
 ``target.tempdir``
 ~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     pathname
   | **default**
@@ -326,7 +370,6 @@ MTUI checks out the testreport from, and commits it to,
 
 ``target.testsuitedir``
 ~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     pathname
   | **default**
@@ -337,7 +380,6 @@ MTUI uses testsuites in this directory in refhosts.
 
 ``template.smelt_threshold``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     int 
   | **default**
@@ -349,7 +391,6 @@ Default is first 10 lines in template.
 
 ``url.bugzilla``
 ~~~~~~~~~~~~~~~~
-
   | **type**
   |     URL
   | **default**
@@ -360,7 +401,6 @@ Used to construct URLs in Bugzilla-related commands.
 
 ``url.testreports``
 ~~~~~~~~~~~~~~~~~~~
-
   | **type**
   |     URL
   | **default**
@@ -369,110 +409,37 @@ Used to construct URLs in Bugzilla-related commands.
 Prefix to the ``Testreport`` field value in ``list_metadata``
 command output.
 
-
-``gitea.token``
-~~~~~~~~~~~~~~~
-
-  | **type**
-  |     string
-  | **default**
-  |     `os.getenv('GITEA_TOKEN','')`__
-
-.. __: https://docs.python.org/3/library/os.html#os.getenv
-
-Gitea API access token, this config has higher prio than environment
-variable. Token must have full access to the issue API.
-
-
-``mtui.ssl_verify``
-~~~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     bool or string (path)
-  | **default**
-  |     ``True``
-
-Global TLS certificate-verification policy for every outbound HTTP
-call (Gitea PR client, QEM Dashboard client, openQA job client, the
-openQA / QAM Dashboard search, the log downloads, and the
-``refhosts.yml`` fetch). Defaults to ``True``, so MTUI verifies
-certificates everywhere out of the box; reaching internal hosts that
-present an internal-CA certificate therefore requires the SUSE CA in
-the system trust store. Set ``ssl_verify = false`` to disable
-verification everywhere, or set it to a filesystem path
-(``ssl_verify = /path/to/ca-bundle.pem``) to verify against a custom CA
-bundle.
-
-
-``lock.reap_stale``
-~~~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     bool
-  | **default**
-  |     ``True``
-
-When connecting to a reference host, force-remove a pre-existing
-``/var/lock/mtui.lock`` that is older than ``lock.stale_age`` regardless
-of which user or session created it (including exclusive, commented
-locks). Such a lock is almost always left over from a crashed or
-abandoned session. Set to ``false`` to only warn about pre-existing
-locks, as in older releases. Fresh locks are never removed.
-
-
-``lock.stale_age``
-~~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     int (seconds)
-  | **default**
-  |     86400
-
-Age, in seconds, beyond which a remote lock is considered stale and
-eligible for automatic removal (see ``lock.reap_stale``). A value of
-``0`` disables reaping.
-
-
-``lock.pi_autolock``
-~~~~~~~~~~~~~~~~~~~~
-
-  | **type**
-  |     bool
-  | **default**
-  |     ``True``
-
-When testing a Product Increment (PI), automatically lock all reference
-hosts on ``assign`` with a comment naming the request, and unlock this
-session's locks at the end of testing (``unassign`` / ``approve`` /
-``reject``). Reference hosts added with ``add_host`` while the
-assignment is active are locked too. Set to ``false`` to disable.
-
-
 Example
 =======
 
 ::
 
-  [mtui]
-  user = <your username>
-  location = <your location>
-  template_dir = /path/to/where/you/want/to/store/test-reports
-
-  [refhosts]
-  resolvers = https
-  https_uri = https://qam.suse.de/refhosts/refhosts.yml
-  path = /usr/share/qam-metadata/refhosts.yml
-
-  [url]
-  bugzilla = https://bugzilla.suse.com
-
-  [openqa]
-  openqa = https://openqa.suse.de
-
   [gitea]
   token = s3cr3t_token
+  
 
   [lock]
   reap_stale = true
   stale_age = 86400
   pi_autolock = true
+  
+
+  [mtui]
+  user = <your username>
+  location = <your location>
+  template_dir = /path/to/where/you/want/to/store/test-reports
+  
+
+  [openqa]
+  openqa = https://openqa.suse.de
+  
+
+  [refhosts]
+  resolvers = https
+  https_uri = https://qam.suse.de/refhosts/refhosts.yml
+  path = /usr/share/qam-metadata/refhosts.yml
+  
+
+  [url]
+  bugzilla = https://bugzilla.suse.com
+  
