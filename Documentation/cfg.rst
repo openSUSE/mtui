@@ -15,6 +15,8 @@ overriding those from the former.
 
 Values found in configuration files can be overridden using command line options.
 
+.. _`INI-formatted`: https://docs.python.org/3/library/configparser.html
+
 Directives
 ==========
 
@@ -33,7 +35,7 @@ Gitea API access token, this config has higher prio than environment
 variable. Token must have full access to the issue API.
 
 ``lock.lock.pi_autolock``
-~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~
   | **type**
   |     bool
   | **default**
