@@ -72,12 +72,6 @@ class SystemCommandError(ErrorMessage):
         return self._message + f" rc = {self.rc} Command: {self.command!r}"
 
 
-class UnexpectedlyFastCleanExitFromXdgOpen(UserMessage):
-    """A message for when `xdg-open` exits suspiciously fast."""
-
-    message = "xdg-open finished successfully but suspiciously too fast"
-
-
 class SvnCheckoutInterruptedError(ErrorMessage):
     """Raised when an SVN checkout is interrupted."""
 

@@ -134,18 +134,6 @@ If a required system cannot be found in ``mtui.location``, it will be loaded
 from ``default``.
 
 
-``mtui.report_bug_url``
-~~~~~~~~~~~~~~~~~~~~~~~
-  | **type**
-  |     URL
-  | **default**
-  |     https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&component=MTUI&submit=Use+This+Product
-
-MTUI bugs are reported via this URL. Used by the `report-bug`_ MTUI command.
-
-.. _report-bug: http://qam.suse.de/projects/mtui/latest/iui.html#report-bug
-
-
 ``mtui.ssh_strict_host_key_checking``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   | **type**

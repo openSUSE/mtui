@@ -901,22 +901,6 @@ available commands if no parameter is given.
   The MTUI command to print help for.
 
 
-report-bug
-++++++++++
-
-::
-
-  report-bug [-p]
-
-Opens bugzilla with pre-populated fields relevant for all MTUI bugs.
-
-**Options:**
-
-.. option:: -p, --print-url
-
-  Just prints the bugzilla url to the stdout, without opening the bug editor.
-
-
 whoami
 ++++++
 

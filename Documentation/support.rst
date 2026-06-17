@@ -5,13 +5,8 @@ Support
 Bug reports
 ###########
 
-Whenever you encounter any bugs, please report them MTUI's `github`_, or use
-`bugzilla.suse.com`_,
-
-.. hint:: MTUI conveniently provides the ``report-bug`` command to point your
-  browser to the appropriate location.
-
-.. _bugzilla.suse.com: https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI
+Whenever you encounter any bugs, please report them on MTUI's `github`_, or in
+`progress`_.
 
 .. _github: https://github.com/openSUSE/mtui
 

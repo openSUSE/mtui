@@ -68,6 +68,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `load_template` and `add_host` tools instead. (The REPL `mtui`
   keeps these flags.)
 
+### Removed
+
+- Removed the interactive `report-bug` command, which opened a
+  pre-populated bugzilla form via `xdg-open`, along with its
+  `[mtui] report_bug_url` configuration option. Report bugs on
+  MTUI's GitHub (https://github.com/openSUSE/mtui) or via the
+  project tracker at https://progress.opensuse.org. Any
+  `report_bug_url` key left in a config file is now ignored.
+
 ### Fixed
 
 - `mtui-mcp` no longer paints the interactive `|/-\` spinner to

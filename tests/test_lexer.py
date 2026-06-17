@@ -113,9 +113,9 @@ def test_leading_whitespace_does_not_misclassify_first_token():
 
 
 def test_dash_in_command_name_round_trips():
-    """Names containing ``-`` (e.g. ``report-bug``) still match the command set."""
-    lexer = MtuiCommandLexer(_make_prompt(["report-bug"]))
-    assert _style(lexer, "report-bug") == [(_STYLE_KNOWN, "report-bug")]
+    """Names containing ``-`` (e.g. ``dash-cmd``) still match the command set."""
+    lexer = MtuiCommandLexer(_make_prompt(["dash-cmd"]))
+    assert _style(lexer, "dash-cmd") == [(_STYLE_KNOWN, "dash-cmd")]
 
 
 # --------------------------------------------------------------------------- #
