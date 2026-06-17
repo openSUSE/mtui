@@ -94,7 +94,6 @@ class Config:
     refhosts_https_expiration: int
     refhosts_path: Path
     use_keyring: bool
-    report_bug_url: str
     openqa_instance: str
     openqa_instance_baremetal: str
     openqa_install_distri: str
@@ -332,12 +331,6 @@ class Config:
                 False,
                 bool,
                 getboolean,
-            ),
-            ConfigOption(
-                "report_bug_url",
-                ("mtui", "report_bug_url"),
-                "https://bugzilla.suse.com/enter_bug.cgi?classification=40&product=Testenvironment&submit=Use+This+Product&component=MTUI",
-                getter=get,
             ),
             # openQA connector
             ConfigOption(

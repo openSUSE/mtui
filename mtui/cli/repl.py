@@ -303,7 +303,7 @@ class CommandPrompt:
         instance attributes so that normal Python attribute lookup
         resolves them directly. ``setattr`` accepts attribute names that
         aren't valid Python identifiers, so command names containing
-        ``-`` (e.g. ``report-bug``) work the same way as the
+        ``-`` (e.g. ``dash-cmd``) work the same way as the
         underscore-only ones.
 
         Args:

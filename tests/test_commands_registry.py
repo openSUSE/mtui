@@ -56,7 +56,6 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
         ("reload_openqa", "mtui.commands.reloadoqa", "ReloadOpenQA"),
         ("reload_products", "mtui.commands.reload", "ReloadProducts"),
         ("remove_host", "mtui.commands.removehost", "RemoveHost"),
-        ("report-bug", "mtui.commands.reportbug", "ReportBug"),
         ("run", "mtui.commands.run", "Run"),
         ("set_host_state", "mtui.commands.hoststate", "HostState"),
         ("set_location", "mtui.commands.simpleset", "SetLocation"),

@@ -153,7 +153,7 @@ def test_add_subcommand_binds_methods_to_instance():
 
 
 def test_dash_in_command_name_dispatches():
-    """Command names containing ``-`` (e.g. ``report-bug``) round-trip."""
+    """Command names containing ``-`` (e.g. ``dash-cmd``) round-trip."""
     p = _make_prompt()
     cmd = MagicMock()
     cmd.command = "dash-cmd"

@@ -85,10 +85,6 @@ def test_messages():
     # Test messages with no arguments
     assert str(messages.NoRefhostsDefinedError()) == "No refhosts defined"
     assert (
-        str(messages.UnexpectedlyFastCleanExitFromXdgOpen())
-        == "xdg-open finished successfully but suspiciously too fast"
-    )
-    assert (
         str(messages.MissingPackagesError())
         == "Missing packages: TestReport not loaded and no -p given."
     )
