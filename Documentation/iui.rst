@@ -278,6 +278,60 @@ only the current run matters.
   ``config.qem_dashboard_api``).
 
 
+smelt_update
+++++++++++++
+
+::
+
+    smelt_update
+
+Prints the loaded update's SMELT detail — priority, deadline, status, category,
+rating and packages. SLFO updates are read from SMELT's REST v2 API; classic
+Maintenance updates from its GraphQL API. Requires the SMELT base URL in
+``[smelt] url``.
+
+
+smelt_checkers
+++++++++++++++
+
+::
+
+    smelt_checkers
+
+Prints the checker (build-check) result runs for the loaded SLFO update — per run
+the checker type and pass/fail/warn/error/running counts. SLFO only.
+
+
+smelt_updates
++++++++++++++
+
+::
+
+    smelt_updates [--status STATUS] [--review-group GROUP]
+                  [--pending GROUP] [--limit N]
+
+Enumerates the SLFO update queue (highest priority first), one line per update.
+
+**Options:**
+
+.. option:: --status STATUS
+
+  Only updates with this status (e.g. ``testing``).
+
+.. option:: --review-group GROUP
+
+  Narrow to updates assigned to this review group.
+
+.. option:: --pending GROUP
+
+  Only updates whose review by ``GROUP`` is not yet ``APPROVED`` (e.g.
+  ``qam-sle-review`` — the actionable queue).
+
+.. option:: --limit N
+
+  Cap the number of rows.
+
+
 set_workflow
 ++++++++++++
 
