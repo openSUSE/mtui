@@ -55,6 +55,24 @@ def test_override_default_config(tmpdir):
     assert cfg.connection_timeout == 600
 
 
+def test_connection_timeout_from_connection_section(tmpdir):
+    """connection_timeout is read from the [connection] section."""
+    config_file = Path(tmpdir.join("test.cfg"))
+    config_file.write_text("[connection]\nconnection_timeout = 45\n")
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    assert cfg.connection_timeout == 45
+
+
+def test_connection_timeout_connection_section_wins(tmpdir):
+    """[connection] takes precedence over the legacy [mtui] location."""
+    config_file = Path(tmpdir.join("test.cfg"))
+    config_file.write_text(
+        "[mtui]\nconnection_timeout = 600\n[connection]\nconnection_timeout = 45\n"
+    )
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    assert cfg.connection_timeout == 45
+
+
 def test_smelt_url_defaults_empty_and_overrides(tmpdir):
     """smelt_url has no default (off unless configured) and reads [smelt] url."""
     empty = Path(tmpdir.join("empty.cfg"))

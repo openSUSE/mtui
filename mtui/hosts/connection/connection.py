@@ -70,7 +70,8 @@ class Connection:
         Args:
             hostname: The hostname or IP address of the remote host.
             port: The port number to connect to.
-            timeout: The timeout for remote commands.
+            timeout: Timeout in seconds for both establishing the connection
+                (TCP connect, SSH banner, auth) and remote command execution.
             missing_host_key_policy: paramiko policy applied to unknown
                 host keys. ``None`` (the default) preserves the legacy
                 behaviour of ``AutoAddPolicy``.
@@ -156,6 +157,9 @@ class Connection:
                     if "proxycommand" in opts
                     else None
                 ),
+                timeout=self.timeout,
+                banner_timeout=self.timeout,
+                auth_timeout=self.timeout,
             )
 
         except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
@@ -185,6 +189,9 @@ class Connection:
                         if "proxycommand" in opts
                         else None
                     ),
+                    timeout=self.timeout,
+                    banner_timeout=self.timeout,
+                    auth_timeout=self.timeout,
                 )
             except paramiko.AuthenticationException:
                 # if a wrong password was set, don't connect to the host and
