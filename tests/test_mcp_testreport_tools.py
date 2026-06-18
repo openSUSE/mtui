@@ -271,8 +271,8 @@ def test_atomic_write_text_unlinks_tmp_on_failure(
 # --------------------------------------------------------------------------- #
 
 
-def test_register_testreport_tools_exposes_three_tools(tmp_path: Path) -> None:
-    """Smoke-test: three tools registered, ``readOnlyHint`` set as expected."""
+def test_register_testreport_tools_exposes_all_tools(tmp_path: Path) -> None:
+    """Smoke-test: all tools registered, ``readOnlyHint`` set as expected."""
     pytest.importorskip("mcp")
     from mcp.server.fastmcp import FastMCP
 
@@ -282,8 +282,10 @@ def test_register_testreport_tools_exposes_three_tools(tmp_path: Path) -> None:
     names = tt.register_testreport_tools(mcp, sess)
 
     assert names == [
+        "testreport_logs",
         "testreport_patch",
         "testreport_read",
+        "testreport_read_file",
         "testreport_write",
     ]
 
@@ -293,22 +295,71 @@ def test_register_testreport_tools_exposes_three_tools(tmp_path: Path) -> None:
         assert tool is not None, f"tool {n!r} missing after registration"
         tools[n] = tool
 
-    read_tool = tools["testreport_read"]
-    patch_tool = tools["testreport_patch"]
-    write_tool = tools["testreport_write"]
+    # The read-only tools advertise it; the mutating ones must not.
+    for n in ("testreport_read", "testreport_logs", "testreport_read_file"):
+        assert tools[n].annotations is not None
+        assert tools[n].annotations.readOnlyHint is True
+        assert tools[n].annotations.idempotentHint is True
+    for n in ("testreport_patch", "testreport_write"):
+        if tools[n].annotations is not None:
+            assert tools[n].annotations.readOnlyHint is not True
 
-    assert read_tool.annotations is not None
-    assert read_tool.annotations.readOnlyHint is True
-    assert read_tool.annotations.idempotentHint is True
+    # The read-first warning is glued onto each edit-flow description.
+    for n in ("testreport_read", "testreport_patch", "testreport_write"):
+        assert "testreport_read" in tools[n].description
 
-    # Patch/write must NOT be marked read-only.
-    for tool in (patch_tool, write_tool):
-        if tool.annotations is not None:
-            assert tool.annotations.readOnlyHint is not True
 
-    # The read-first warning is glued onto each description.
-    for tool in (read_tool, patch_tool, write_tool):
-        assert "testreport_read" in tool.description
+# --------------------------------------------------------------------------- #
+# Auxiliary checkout files: testreport_logs / testreport_read_file            #
+# --------------------------------------------------------------------------- #
+
+
+def test_logs_and_read_file_roundtrip(tmp_path: Path) -> None:
+    """``testreport_logs`` inventories the subdirs; ``read_file`` returns one."""
+    (tmp_path / "build_checks").mkdir()
+    (tmp_path / "install_logs").mkdir()
+    (tmp_path / "build_checks" / "libica.s390x.log").write_text("ok\nfine\n")
+    (tmp_path / "install_logs" / "host1.log").write_text("zypper\n")
+    sess = _loaded_session(tmp_path, tmp_path / "log")
+
+    logs = asyncio.run(tt.testreport_logs(sess))  # ty: ignore[invalid-argument-type]
+    assert [f["name"] for f in logs["build_checks"]] == ["libica.s390x.log"]
+    assert [f["name"] for f in logs["install_logs"]] == ["host1.log"]
+
+    out = asyncio.run(
+        tt.testreport_read_file(sess, "build_checks/libica.s390x.log")  # ty: ignore[invalid-argument-type]
+    )
+    assert out["content"] == "ok\nfine\n"
+    assert out["line_count"] == 2
+
+
+def test_logs_empty_when_subdirs_absent(tmp_path: Path) -> None:
+    sess = _loaded_session(tmp_path, tmp_path / "log")
+    logs = asyncio.run(tt.testreport_logs(sess))  # ty: ignore[invalid-argument-type]
+    assert logs["build_checks"] == []
+    assert logs["install_logs"] == []
+
+
+def test_read_file_missing_raises(tmp_path: Path) -> None:
+    sess = _loaded_session(tmp_path, tmp_path / "log")
+    with pytest.raises(McpCommandError, match="no such file"):
+        asyncio.run(tt.testreport_read_file(sess, "build_checks/nope.log"))  # ty: ignore[invalid-argument-type]
+
+
+def test_read_file_rejects_traversal(tmp_path: Path) -> None:
+    """A relative path escaping the checkout dir is refused."""
+    (tmp_path.parent / "secret.txt").write_text("nope\n")
+    sess = _loaded_session(tmp_path, tmp_path / "log")
+    with pytest.raises(McpCommandError, match="escapes"):
+        asyncio.run(tt.testreport_read_file(sess, "../secret.txt"))  # ty: ignore[invalid-argument-type]
+
+
+def test_logs_and_read_file_refuse_without_loaded_report(tmp_path: Path) -> None:
+    sess = _null_session(tmp_path)
+    with pytest.raises(McpCommandError):
+        asyncio.run(tt.testreport_logs(sess))
+    with pytest.raises(McpCommandError):
+        asyncio.run(tt.testreport_read_file(sess, "source.diff"))
 
 
 # --------------------------------------------------------------------------- #

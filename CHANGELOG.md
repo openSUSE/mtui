@@ -9,12 +9,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `list_bugs` now resolves the bug and Jira *titles* from the checkout's
+  `patchinfo.xml` instead of showing "Description not available" for
+  updates whose JSON metadata carries only ids (the git/SLFO and PI
+  workflows). A missing or malformed `patchinfo.xml` is ignored.
 - New `mtui-mcp` console script (optional `mcp` extra) ships a
   Model Context Protocol server, built on the official `mcp` Python
   SDK, that exposes every non-interactive mtui command as an MCP
-  tool, plus dedicated `testreport_read` / `testreport_patch` /
-  `testreport_write` tools, so LLM clients can drive a headless mtui
-  session over `stdio` or `http`. The `mcp` extra installs
+  tool, plus dedicated testreport tools — `testreport_read` /
+  `testreport_patch` / `testreport_write` to edit the report, and
+  `testreport_logs` / `testreport_read_file` to inspect the rest of the
+  checkout (the `build_checks/` and `install_logs/` files, `source.diff`,
+  `patchinfo.xml`) that the `log` file does not cover — so LLM clients
+  can drive a headless mtui session over `stdio` or `http`. The `mcp` extra installs
   `mcp[cli]>=1.2`; on openSUSE the SDK is packaged as
   `python3-mcp`. See `Documentation/mcp.rst` for the deny-list,
   per-client isolation model, and a `read → patch → read` worked

@@ -12,6 +12,14 @@ directly on the file path tracked by ``session.metadata.path``:
   written atomically via ``NamedTemporaryFile`` + :func:`os.replace`.
 * :func:`testreport_write` — full-file overwrite, also atomic.
 
+Two further read-only tools expose the rest of the checkout that the
+``log`` file does not cover:
+
+* :func:`testreport_logs` — list the ``build_checks/`` and
+  ``install_logs/`` files (name + size).
+* :func:`testreport_read_file` — read any file under the checkout
+  directory by relative path (traversal-guarded).
+
 All three are ``async def``. The registered tool closures resolve the
 caller's own :class:`McpSession` from the
 :class:`mtui.mcp.registry.SessionProvider` (keyed on the request
@@ -90,6 +98,34 @@ def _resolve_testreport_path(session: McpSession) -> Path:
             1,
         )
     return Path(metadata.path)
+
+
+def _resolve_template_dir(session: McpSession) -> Path:
+    """Return the loaded testreport's checkout directory.
+
+    This is the parent of the ``log`` file (``metadata.path``) — the directory
+    holding ``metadata.json``, ``source.diff``, ``patchinfo.xml`` and the
+    ``build_checks/`` and ``install_logs/`` subdirectories. Raises the same
+    refusal as :func:`_resolve_testreport_path` when nothing is loaded.
+    """
+    return _resolve_testreport_path(session).parent
+
+
+def _safe_template_file(base: Path, relpath: str) -> Path:
+    """Resolve ``relpath`` under ``base``, refusing anything that escapes it.
+
+    Guards against ``..`` traversal and absolute paths so a tool call can only
+    read files inside the loaded checkout directory.
+    """
+    base_resolved = base.resolve()
+    target = (base_resolved / relpath).resolve()
+    if target != base_resolved and base_resolved not in target.parents:
+        raise McpCommandError(
+            "",
+            f"path {relpath!r} escapes the testreport directory",
+            1,
+        )
+    return target
 
 
 def _atomic_write_text(path: Path, text: str) -> int:
@@ -189,6 +225,69 @@ async def testreport_read(
     }
 
 
+async def testreport_logs(
+    session: McpSession,
+    ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+) -> dict[str, Any]:
+    """List the auxiliary log files in the loaded testreport's checkout.
+
+    The build-check logs (per source package and arch) and the per-refhost
+    install logs live in ``build_checks/`` and ``install_logs/`` next to the
+    testreport, but are not part of the ``log`` file. This returns their
+    names (and byte sizes) so a caller can then fetch one with
+    :func:`testreport_read_file`.
+    """
+    await _heartbeat(ctx, "testreport_logs: waiting for session lock")
+    async with session._lock:
+        base = _resolve_template_dir(session)
+
+        def listing(sub: str) -> list[dict[str, Any]]:
+            d = base / sub
+            if not d.is_dir():
+                return []
+            return [
+                {"name": p.name, "size": p.stat().st_size}
+                for p in sorted(d.iterdir())
+                if p.is_file()
+            ]
+
+        return {
+            "path": str(base),
+            "build_checks": listing("build_checks"),
+            "install_logs": listing("install_logs"),
+        }
+
+
+async def testreport_read_file(
+    session: McpSession,
+    relpath: str,
+    ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+) -> dict[str, Any]:
+    """Read a file from the loaded testreport's checkout by relative path.
+
+    Complements :func:`testreport_read` (which only returns the ``log``):
+    use this for ``build_checks/<pkg>.<arch>.log``, ``install_logs/<host>.log``,
+    ``source.diff``, ``patchinfo.xml`` and the like. ``relpath`` is resolved
+    under the checkout directory and may not escape it.
+    """
+    await _heartbeat(ctx, "testreport_read_file: waiting for session lock")
+    async with session._lock:
+        base = _resolve_template_dir(session)
+        target = _safe_template_file(base, relpath)
+        if not target.is_file():
+            raise McpCommandError(
+                "",
+                f"no such file in testreport checkout: {relpath}",
+                1,
+            )
+        content = target.read_text(encoding="utf-8", errors="replace")
+    return {
+        "path": str(target),
+        "line_count": _count_lines(content),
+        "content": content,
+    }
+
+
 async def testreport_patch(
     session: McpSession,
     start_line: int,
@@ -272,7 +371,7 @@ async def testreport_write(
 
 
 def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
-    """Register the three testreport tools on ``mcp``.
+    """Register the testreport tools on ``mcp``.
 
     Mirrors the registration shape used by :func:`mtui.mcp.tools.build_tools`
     so the boot log entries look uniform.
@@ -309,6 +408,14 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         session = await resolve_session(provider, ctx)
         return await testreport_read(session, ctx=ctx)
 
+    async def _logs(ctx: Context | None = None) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx)
+        return await testreport_logs(session, ctx=ctx)
+
+    async def _read_file(relpath: str, ctx: Context | None = None) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx)
+        return await testreport_read_file(session, relpath, ctx=ctx)
+
     async def _patch(
         start_line: int,
         end_line: int,
@@ -340,12 +447,36 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         "content. Atomic. Use this as the fallback when patching would "
         f"require tracking line-number drift across many edits. {_READ_FIRST_WARNING}"
     )
+    logs_desc = (
+        "List the auxiliary log files in the loaded testreport's checkout: the "
+        "per-package/arch build-check logs (build_checks/) and the per-refhost "
+        "install logs (install_logs/). Returns each file's name and size; fetch "
+        "one with testreport_read_file."
+    )
+    read_file_desc = (
+        "Read a file from the loaded testreport's checkout by relative path, "
+        "e.g. 'build_checks/<pkg>.<arch>.log', 'install_logs/<host>.log', "
+        "'source.diff' or 'patchinfo.xml'. The path may not escape the checkout "
+        "directory. Returns path, line count and full content."
+    )
 
     specs = (
         (
             "testreport_read",
             _read,
             read_desc,
+            ToolAnnotations(readOnlyHint=True, idempotentHint=True),
+        ),
+        (
+            "testreport_logs",
+            _logs,
+            logs_desc,
+            ToolAnnotations(readOnlyHint=True, idempotentHint=True),
+        ),
+        (
+            "testreport_read_file",
+            _read_file,
+            read_file_desc,
             ToolAnnotations(readOnlyHint=True, idempotentHint=True),
         ),
         (
