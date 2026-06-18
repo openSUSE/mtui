@@ -235,6 +235,49 @@ reuse.
   normal fetch).
 
 
+openqa_jobs
++++++++++++
+
+::
+
+  openqa_jobs [--all] [--failed] [--arch ARCH]
+              [--url-openqa URL] [--url-dashboard-qam URL]
+
+Lists the **individual** openQA jobs for the loaded update's incident build,
+so you can see *which* scenarios passed or failed (and judge whether a failure
+relates to the package under test) rather than only the per-version
+PASSED/FAILED/RUNNING summary that `openqa_overview`_ prints. Prints a per-result
+count summary followed by one colourised line per job (``result``, ``arch``,
+scenario, job URL).
+
+By default ``obsoleted`` jobs (superseded by a later retrigger) are dropped —
+only the current run matters.
+
+**Options:**
+
+.. option:: --all
+
+  Include ``obsoleted`` (superseded) jobs.
+
+.. option:: --failed
+
+  Show only non-passing jobs (``failed`` / ``parallel_failed`` / ``incomplete``;
+  ``passed``/``softfailed``/``skipped``/``obsoleted`` are hidden).
+
+.. option:: --arch ARCH
+
+  Only jobs for this architecture.
+
+.. option:: --url-openqa URL
+
+  Override the openQA host (otherwise ``config.openqa_instance``).
+
+.. option:: --url-dashboard-qam URL
+
+  Override the QAM Dashboard base URL (otherwise derived from
+  ``config.qem_dashboard_api``).
+
+
 set_workflow
 ++++++++++++
 

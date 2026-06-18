@@ -35,3 +35,22 @@ class BuildCheckResult:
     url: str
     matches: list[str] = field(default_factory=list)
     summary: str = ""
+
+
+@dataclass
+class JobResult:
+    """One openQA job for an incident build.
+
+    ``result`` is openQA's job result: ``passed``, ``softfailed``,
+    ``failed``, ``parallel_failed``, ``incomplete``, ``skipped`` or
+    ``obsoleted`` (superseded by a retrigger). ``test`` is the scenario
+    name (the meaningful field for judging relevance — unlike the full
+    job name it does not embed the build string).
+    """
+
+    job_id: int
+    test: str
+    arch: str
+    result: str
+    group: str = ""
+    url: str = ""

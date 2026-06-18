@@ -33,7 +33,7 @@ from .heuristics import (
     TESTSUITE_WORDS_BLOCKLIST,
 )
 from .http import _fetch_url_content, _get_json, _HTTPError
-from .results import BuildCheckResult, GroupResult, VersionResult
+from .results import BuildCheckResult, GroupResult, JobResult, VersionResult
 
 logger = getLogger("mtui.connector.oqa_search")
 
@@ -75,6 +75,53 @@ def get_incident_info(
     versions = sorted(raw_versions)
 
     return build, versions or None
+
+
+def incident_jobs(
+    build: str, url_openqa: str, *, include_obsoleted: bool = False
+) -> list[JobResult]:
+    """List the individual openQA jobs for an incident ``build``.
+
+    Complements :func:`single_incidents` (which collapses jobs into a
+    per-version PASSED/FAILED/RUNNING summary) by returning one
+    :class:`JobResult` per job, so callers can judge *which* scenarios
+    failed and whether they relate to the package under test.
+
+    ``obsoleted`` jobs (superseded by a later retrigger) are dropped
+    unless ``include_obsoleted`` is set — only the current run matters.
+
+    Args:
+        build: The incident build name (from :func:`get_incident_info`).
+        url_openqa: Base openQA URL.
+        include_obsoleted: Keep superseded jobs in the result.
+
+    Returns:
+        The jobs, sorted by result then arch then scenario. Empty when
+        ``build`` is falsy or no jobs exist.
+
+    """
+    if not build:
+        return []
+    data = _get_json(f"{url_openqa}/api/v1/jobs?build={quote(build, safe='')}")
+    jobs = data.get("jobs", []) if isinstance(data, dict) else []
+    rows: list[JobResult] = []
+    for job in jobs:
+        result = job.get("result", "")
+        if result == "obsoleted" and not include_obsoleted:
+            continue
+        settings = job.get("settings") or {}
+        rows.append(
+            JobResult(
+                job_id=job.get("id", 0),
+                test=job.get("test") or job.get("name", ""),
+                arch=settings.get("ARCH") or job.get("arch", ""),
+                result=result,
+                group=job.get("group", ""),
+                url=f"{url_openqa.rstrip('/')}/t{job.get('id', '')}",
+            )
+        )
+    rows.sort(key=lambda r: (r.result, r.arch, r.test))
+    return rows
 
 
 def _fallback_build(url_dashboard_qam: str, incident_id: int | str) -> str:

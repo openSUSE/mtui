@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New `openqa_jobs` command (auto-exposed over MCP as `mcp__mtui__openqa_jobs`)
+  lists the **individual** openQA jobs for the loaded update's incident build —
+  scenario, arch, result and job URL — so testers can see *which* jobs failed and
+  judge whether a failure relates to the package under test, rather than only the
+  per-version summary `openqa_overview` gives. `obsoleted` (superseded) jobs are
+  dropped by default; `--all` keeps them, `--failed` shows only non-passing jobs,
+  `--arch` filters by architecture.
 - `list_bugs` now resolves the bug and Jira *titles* from the checkout's
   `patchinfo.xml` instead of showing "Description not available" for
   updates whose JSON metadata carries only ids (the git/SLFO and PI
