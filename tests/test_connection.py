@@ -55,7 +55,14 @@ def test_connection_init_success(mock_ssh_client, mock_ssh_config, mock_path):
     mock_ssh_client.load_system_host_keys.assert_called_once()
     mock_ssh_client.set_missing_host_key_policy.assert_called_once()
     mock_ssh_client.connect.assert_called_once_with(
-        hostname="test_host", port=22, username="root", key_filename=None, sock=None
+        hostname="test_host",
+        port=22,
+        username="root",
+        key_filename=None,
+        sock=None,
+        timeout=300,
+        banner_timeout=300,
+        auth_timeout=300,
     )
     assert conn.hostname == "test_host"
     assert conn.port == 22
@@ -74,7 +81,14 @@ def test_connection_init_auth_fallback(mock_ssh_client, mock_ssh_config, mock_pa
         assert mock_getpass.call_count == 1
         assert mock_ssh_client.connect.call_count == 2
         mock_ssh_client.connect.assert_any_call(
-            hostname="test_host", port=22, username="root", key_filename=None, sock=None
+            hostname="test_host",
+            port=22,
+            username="root",
+            key_filename=None,
+            sock=None,
+            timeout=300,
+            banner_timeout=300,
+            auth_timeout=300,
         )
         mock_ssh_client.connect.assert_any_call(
             hostname="test_host",
@@ -82,6 +96,9 @@ def test_connection_init_auth_fallback(mock_ssh_client, mock_ssh_config, mock_pa
             username="root",
             password="password",
             sock=None,
+            timeout=300,
+            banner_timeout=300,
+            auth_timeout=300,
         )
 
 

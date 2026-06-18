@@ -219,6 +219,14 @@ class Config:
         getint = self.config.getint
         getboolean = self.config.getboolean
 
+        def get_connection_timeout(section: str, option: str) -> str:
+            # Read from the [connection] section, falling back to the legacy
+            # [mtui] location so existing configs keep working.
+            try:
+                return self.config.get(section, option)
+            except (configparser.NoSectionError, configparser.NoOptionError):
+                return self.config.get("mtui", option)
+
         self.data: list[ConfigOption] = [
             ConfigOption(
                 "template_dir",
@@ -247,15 +255,15 @@ class Config:
                 Path,
                 get,
             ),
-            # connection.timeout appears to be in units of seconds as
-            # indicated by
-            # http://www.lag.net/paramiko/docs/paramiko.Channel-class.html#gettimeout
+            # Seconds. Bounds both establishing the SSH connection (TCP
+            # connect / banner / auth) and remote command execution. Read
+            # from [connection], falling back to the legacy [mtui] section.
             ConfigOption(
                 "connection_timeout",
-                ("mtui", "connection_timeout"),
+                ("connection", "connection_timeout"),
                 300,
                 int,
-                get,
+                get_connection_timeout,
             ),
             ConfigOption(
                 "svn_path",
