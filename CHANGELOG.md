@@ -5,6 +5,17 @@ All notable user-visible changes to MTUI are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `smelt_updates` gains `--unassigned` and `--show-assignment` (with `--group`,
+  default `qam-sle`) to surface each SLFO update's current assignee, read from the
+  PR's mtui assign/unassign comments via Gitea. The lookup is lazy and
+  highest-priority-first, so `smelt_updates --pending qam-sle-review --unassigned
+  --limit 1` returns the top unassigned update in a few calls; without the flags
+  the listing stays a single SMELT call.
+
 ## [18.0.1] - 2026-06-18
 
 ### Added

@@ -308,9 +308,12 @@ smelt_updates
 ::
 
     smelt_updates [--status STATUS] [--review-group GROUP]
-                  [--pending GROUP] [--limit N]
+                  [--pending GROUP] [--group GROUP]
+                  [--unassigned] [--show-assignment] [--limit N]
 
 Enumerates the SLFO update queue (highest priority first), one line per update.
+With ``--unassigned`` / ``--show-assignment`` it also resolves each update's
+current assignee from the pull request's mtui assign/unassign comments.
 
 **Options:**
 
@@ -326,6 +329,23 @@ Enumerates the SLFO update queue (highest priority first), one line per update.
 
   Only updates whose review by ``GROUP`` is not yet ``APPROVED`` (e.g.
   ``qam-sle-review`` — the actionable queue).
+
+.. option:: --group GROUP
+
+  Review group for the assignment lookup (default ``qam-sle``); used by
+  ``--unassigned`` and ``--show-assignment``.
+
+.. option:: --unassigned
+
+  Only updates with no current assignee for ``--group``. Assignment is read from
+  the PR's mtui assign/unassign comments via Gitea — one call per row, evaluated
+  highest-priority first and short-circuited by ``--limit``, so
+  ``--pending qam-sle-review --unassigned --limit 1`` finds the top unassigned
+  update cheaply. Needs a Gitea token; ignored with a hint if none is set.
+
+.. option:: --show-assignment
+
+  Add a column with each update's current assignee (or ``unassigned``).
 
 .. option:: --limit N
 

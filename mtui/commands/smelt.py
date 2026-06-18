@@ -5,7 +5,9 @@
 * ``smelt_checkers`` — checker (build-check) result runs for the loaded SLFO
   update.
 * ``smelt_updates`` — enumerate the SLFO (new) update queue with filters, e.g.
-  the testing updates still pending ``qam-sle-review``.
+  the testing updates still pending ``qam-sle-review``; ``--unassigned`` /
+  ``--show-assignment`` annotate each with the current assignee (read from the
+  PR's mtui comments via Gitea).
 * ``smelt_requests`` — enumerate the classic Maintenance (old) review-request
   queue, e.g. those pending ``qam-sle``.
 
@@ -18,7 +20,9 @@ from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
 from ..data_sources import Smelt
+from ..data_sources.gitea import Gitea, pr_api_url
 from ..data_sources.smelt import slfo_update_id
+from ..support.exceptions import FailedGiteaCallError, MissingGiteaTokenError
 from ..support.misc import requires_update
 from ..types import RequestKind
 from . import Command
@@ -192,7 +196,16 @@ class SmeltRequests(Command):
 
 
 class SmeltUpdates(Command):
-    """Enumerate the SLFO update queue (with filters)."""
+    """Enumerate the SLFO update queue (with filters).
+
+    ``--unassigned`` keeps only updates nobody has picked up for ``--group``
+    (default ``qam-sle``); ``--show-assignment`` adds an assignee column.
+    Both derive the assignee from the PR's mtui assign/unassign comments via
+    Gitea, so they need a Gitea token. The lookup is one Gitea call per row
+    and runs lazily, highest-priority first, so e.g. ``--pending
+    qam-sle-review --unassigned --limit 1`` finds the top unassigned update in
+    only a few calls.
+    """
 
     command = "smelt_updates"
 
@@ -212,8 +225,40 @@ class SmeltUpdates(Command):
             help="only updates whose review by this group is not yet APPROVED",
         )
         parser.add_argument(
+            "--group",
+            default="qam-sle",
+            help="review group for assignment lookup (default: qam-sle)",
+        )
+        parser.add_argument(
+            "--unassigned",
+            action="store_true",
+            help="only updates not currently assigned to anyone for --group "
+            "(assignment is read from the PR's mtui comments)",
+        )
+        parser.add_argument(
+            "--show-assignment",
+            action="store_true",
+            help="show the current assignee column (per-PR Gitea lookup)",
+        )
+        parser.add_argument(
             "--limit", type=int, default=0, help="cap the number of rows (0 = all)"
         )
+
+    def _assignee(self, item: dict) -> str | None:
+        """Current assignee for ``item``'s PR and ``--group``, or ``None``.
+
+        Best-effort: a malformed URL or a Gitea hiccup logs at debug and
+        yields ``None`` (treated as unassigned) so one bad row never aborts
+        the listing.
+        """
+        url = item.get("external_url")
+        if not url:
+            return None
+        try:
+            return Gitea(self.config, pr_api_url(url), group=self.args.group).assignee()
+        except (ValueError, FailedGiteaCallError, MissingGiteaTokenError) as e:
+            logger.debug("assignee lookup failed for %s: %s", url, e)
+            return None
 
     def __call__(self) -> None:
         """Print the filtered SLFO update queue, highest priority first."""
@@ -238,15 +283,36 @@ class SmeltUpdates(Command):
                     continue
             out.append(it)
         out.sort(key=lambda x: -(x.get("priority") or 0))
-        if self.args.limit:
-            out = out[: self.args.limit]
+
+        want_assignment = self.args.unassigned or self.args.show_assignment
+        if want_assignment and not self.config.gitea_token:
+            self.println(
+                "assignment lookup needs a Gitea token ([gitea] token); "
+                "ignoring --unassigned/--show-assignment"
+            )
+            want_assignment = False
+
+        # Compute the assignee lazily, highest priority first, and stop as soon
+        # as --limit rows are collected — so --unassigned --limit 1 is cheap.
+        rows: list[tuple[dict, str | None]] = []
         for it in out:
+            assignee = self._assignee(it) if want_assignment else None
+            if self.args.unassigned and assignee is not None:
+                continue
+            rows.append((it, assignee))
+            if self.args.limit and len(rows) >= self.args.limit:
+                break
+
+        for it, assignee in rows:
             pkgs = [
                 p.get("name") for p in (it.get("packages") or []) if isinstance(p, dict)
             ]
-            self.println(
+            line = (
                 f"{str(it.get('human_readable_id', '')):20} "
                 f"{str(it.get('status')):16} prio={it.get('priority')}  "
-                f"{','.join(pkgs)[:50]}"
             )
-        self.println(f"\n{len(out)} update(s)")
+            if want_assignment:
+                line += f"{str(assignee or 'unassigned'):16} "
+            line += f"{','.join(pkgs)[:50]}"
+            self.println(line)
+        self.println(f"\n{len(rows)} update(s)")
