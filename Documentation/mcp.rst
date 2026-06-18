@@ -12,9 +12,11 @@ Synopsis
 
 ``mtui-mcp`` is a `Model Context Protocol`_ server that exposes a
 headless mtui session to LLM clients. Every non-interactive mtui
-command is auto-exposed as an MCP tool, and three dedicated tools
+command is auto-exposed as an MCP tool, and dedicated testreport tools
 (``testreport_read``, ``testreport_patch``, ``testreport_write``)
-replace the REPL's ``$EDITOR``-based ``edit`` flow.
+replace the REPL's ``$EDITOR``-based ``edit`` flow, with
+``testreport_logs`` and ``testreport_read_file`` exposing the rest of
+the checkout (build-check and install logs, ``source.diff``, …).
 
 Session state is isolated per client. Under ``stdio`` one process
 serves one client, so there is exactly one ``Config`` / loaded test
@@ -337,6 +339,22 @@ report is loaded.
     Full-file overwrite, same atomic-rename routine. Returns
     ``{"path", "bytes_written", "line_count"}``. Use this when line
     drift makes patching unreliable.
+
+``testreport_logs() -> dict``
+    Lists the auxiliary log files in the loaded testreport's checkout
+    that the ``log`` file does not cover: the per-package/arch
+    build-check logs (``build_checks/``) and the per-refhost install
+    logs (``install_logs/``). Returns ``{"path": str, "build_checks":
+    [{"name", "size"}], "install_logs": [{"name", "size"}]}``. Marked
+    ``readOnlyHint=True``.
+
+``testreport_read_file(relpath: str) -> dict``
+    Reads any file in the checkout by path relative to the checkout
+    directory — e.g. ``build_checks/<pkg>.<arch>.log``,
+    ``install_logs/<host>.log``, ``source.diff`` or ``patchinfo.xml``.
+    The path is resolved under the checkout and may **not** escape it
+    (``..`` traversal and absolute paths are refused). Returns
+    ``{"path", "line_count", "content"}``. Marked ``readOnlyHint=True``.
 
 .. warning::
 
