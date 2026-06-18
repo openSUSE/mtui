@@ -332,6 +332,36 @@ Enumerates the SLFO update queue (highest priority first), one line per update.
   Cap the number of rows.
 
 
+smelt_requests
+++++++++++++++
+
+::
+
+    smelt_requests [--group GROUP] [--pending] [--status STATUS] [--limit N]
+
+Enumerates the classic Maintenance review-request queue (GraphQL) — the
+old-SMELT counterpart of `smelt_updates`_. Unlike the SLFO feed it shows the
+per-request assignee.
+
+**Options:**
+
+.. option:: --group GROUP
+
+  Review assigned-by group (default ``qam-sle``).
+
+.. option:: --pending
+
+  Only requests whose ``GROUP`` review is still ``new``.
+
+.. option:: --status STATUS
+
+  Request status (e.g. ``review``).
+
+.. option:: --limit N
+
+  Cap the number of rows.
+
+
 set_workflow
 ++++++++++++
 

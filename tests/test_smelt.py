@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import responses
 
 from mtui.data_sources.smelt import Smelt, slfo_update_id
+from mtui.support.config import Config
 from mtui.types import RequestReviewID
 
 SMELT = "https://smelt.example.com"
 V2 = f"{SMELT}/api/experimental/v2"
 
 
-def _cfg(url: str = SMELT) -> SimpleNamespace:
+def _cfg(url: str = SMELT) -> Config:
     """Minimal stand-in for Config — Smelt only reads smelt_url + ssl_verify."""
-    return SimpleNamespace(smelt_url=url, ssl_verify=True)
+    return cast("Config", SimpleNamespace(smelt_url=url, ssl_verify=True))
 
 
 def test_slfo_update_id_builds_from_host():
@@ -44,6 +46,7 @@ def test_update_returns_detail():
     )
     s = Smelt(_cfg())
     d = s.update("src.suse.de:products:SLFO:5137")
+    assert d is not None
     assert d["priority"] == 637
 
 
@@ -75,7 +78,7 @@ def test_unreleased_passes_review_group():
     )
     rows = Smelt(_cfg()).unreleased(review_group="qam-sle-review")
     assert len(rows) == 1
-    assert responses.calls[0].request.params["review_group"] == "qam-sle-review"
+    assert "review_group=qam-sle-review" in (responses.calls[0].request.url or "")
 
 
 @responses.activate
@@ -117,3 +120,28 @@ def test_priority_deadline_maintenance_via_graphql():
 def test_v2_transport_error_returns_none():
     responses.add(responses.GET, f"{V2}/updates/x", status=500)
     assert Smelt(_cfg()).update("x") is None
+
+
+@responses.activate
+def test_requests_returns_nodes():
+    responses.add(
+        responses.POST,
+        f"{SMELT}/graphql/",
+        json={
+            "data": {
+                "requests": {
+                    "edges": [
+                        {
+                            "node": {
+                                "requestId": 414206,
+                                "incident": {"incidentId": 44861},
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        status=200,
+    )
+    nodes = Smelt(_cfg()).review_requests(group="qam-sle", status="review")
+    assert nodes[0]["requestId"] == 414206
