@@ -79,6 +79,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `openqa_overview` now matches flavored Python binary packages to their
+  source-named `build_checks` logs. The package list carries names like
+  `python313-ecdsa`, but the build_checks index names logs after the
+  source package (`python-ecdsa`), so a plain substring match dropped
+  them; the `pythonNNN-` flavor prefix is now normalized before matching.
 - `openqa_overview` now builds the correct QAM `build_checks` URL for
   SLFO updates. It previously used the openQA Dashboard
   `effective_incident_id` (the request id) when constructing the
