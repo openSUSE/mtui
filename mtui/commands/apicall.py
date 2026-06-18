@@ -14,7 +14,7 @@ from typing import ClassVar, final
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
 from ..cli.term import ask_user
-from ..data_sources import OSC, Gitea
+from ..data_sources import OSC, Gitea, Smelt
 from ..support.exceptions import GiteaError
 from ..support.misc import requires_update
 from ..types import RequestKind
@@ -63,6 +63,29 @@ class BaseApiCall(Command, ABC):
         else:
             self.osc()
         self._pi_autolock()
+        self._after()
+
+    def _after(self) -> None:
+        """Hook run after the API action; overridden by subclasses (no-op here)."""
+
+    def _show_smelt_priority_deadline(self) -> None:
+        """Print the loaded update's SMELT priority and deadline, if available.
+
+        Best-effort context for the tester picking up an update: silent when
+        SMELT isn't configured (``[smelt] url``) or has nothing for this request.
+        """
+        smelt = Smelt(self.config)
+        if not smelt.configured:
+            return
+        priority, deadline = smelt.priority_deadline(
+            self.metadata.rrid, getattr(self.metadata, "giteapr", None)
+        )
+        if priority is None and deadline is None:
+            return
+        self.println(
+            f"SMELT: priority {priority if priority is not None else '?'}, "
+            f"deadline {deadline or '?'}"
+        )
 
     def _pi_autolock(self) -> None:
         """Locks/unlocks reference hosts around PI testing.
@@ -115,6 +138,10 @@ class Assign(BaseApiCall):
 
     command = "assign"
     _pi_action = "lock"
+
+    def _after(self) -> None:
+        """Surface the update's SMELT priority + deadline when picking it up."""
+        self._show_smelt_priority_deadline()
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:

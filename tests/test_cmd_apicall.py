@@ -137,3 +137,69 @@ def test_comment_gitea_reads_body_through_ask_user(mock_config):
 
     ask.assert_called_once_with("Comment: ")
     gitea_cls.return_value.comment.assert_called_once_with("ack")
+
+
+# ---------------------------------------------------------------------------
+# assign surfaces SMELT priority + deadline
+# ---------------------------------------------------------------------------
+
+
+def _sysmock():
+    import io
+
+    s = MagicMock()
+    s.stdout = io.StringIO()
+    return s
+
+
+def test_assign_shows_smelt_priority_deadline(mock_config):
+    prompt = _prompt()
+    prompt.metadata.giteapr = None
+    args = Namespace(group=["qam-sle"], user="", force=False)
+    sysmock = _sysmock()
+
+    with (
+        patch("mtui.commands.apicall.OSC"),
+        patch("mtui.commands.apicall.Smelt") as smelt_cls,
+    ):
+        smelt = smelt_cls.return_value
+        smelt.configured = True
+        smelt.priority_deadline.return_value = (637, "2026-07-06")
+        Assign(args, mock_config, sysmock, prompt)()
+
+    smelt.priority_deadline.assert_called_once()
+    out = sysmock.stdout.getvalue()
+    assert "priority 637" in out
+    assert "2026-07-06" in out
+
+
+def test_assign_silent_when_smelt_not_configured(mock_config):
+    prompt = _prompt()
+    args = Namespace(group=["qam-sle"], user="", force=False)
+    sysmock = _sysmock()
+
+    with (
+        patch("mtui.commands.apicall.OSC"),
+        patch("mtui.commands.apicall.Smelt") as smelt_cls,
+    ):
+        smelt = smelt_cls.return_value
+        smelt.configured = False
+        Assign(args, mock_config, sysmock, prompt)()
+
+    smelt.priority_deadline.assert_not_called()
+    assert "SMELT" not in sysmock.stdout.getvalue()
+
+
+def test_unassign_does_not_show_smelt(mock_config):
+    """Only assign surfaces SMELT info; other api-calls don't."""
+    prompt = _prompt()
+    args = Namespace(group=["qam-sle"], user="")
+    sysmock = _sysmock()
+
+    with (
+        patch("mtui.commands.apicall.OSC"),
+        patch("mtui.commands.apicall.Smelt") as smelt_cls,
+    ):
+        Unassign(args, mock_config, sysmock, prompt)()
+
+    smelt_cls.return_value.priority_deadline.assert_not_called()

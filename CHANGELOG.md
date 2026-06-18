@@ -9,6 +9,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `assign` now prints the update's **priority and deadline** from SMELT when
+  picking it up, so the tester sees the urgency. Read-only and best-effort: it is
+  silent unless the SMELT base URL is configured via `[smelt] url` and SMELT has
+  data for the request. Backed by the new `mtui.data_sources.Smelt` connector
+  (SMELT REST v2 for SLFO updates, GraphQL for classic Maintenance incidents).
 - New `openqa_jobs` command (auto-exposed over MCP as `mcp__mtui__openqa_jobs`)
   lists the **individual** openQA jobs for the loaded update's incident build —
   scenario, arch, result and job URL — so testers can see *which* jobs failed and
