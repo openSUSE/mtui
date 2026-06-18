@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 import responses
 
-from mtui.data_sources.gitea import Comment, Gitea
+from mtui.data_sources.gitea import Comment, Gitea, pr_api_url
 from mtui.support.exceptions import (
     FailedGiteaCallError,
     GiteaAssignInvalidError,
@@ -389,3 +389,91 @@ class TestAssignmentStateMachine:
 
         result = gitea._Gitea__check_assign("testuser")
         assert result == assignment.UNASSIGNED
+
+
+# --- PR web URL -> API URL conversion ---
+
+
+class TestPrApiUrl:
+    def test_converts_web_to_api(self):
+        """A Gitea PR web URL is rewritten to the REST API form."""
+        assert (
+            pr_api_url("https://src.example.de/products/SLFO/pulls/4919")
+            == "https://src.example.de/api/v1/repos/products/SLFO/pulls/4919"
+        )
+
+    def test_trailing_slash_ok(self):
+        """A trailing slash does not break parsing."""
+        assert (
+            pr_api_url("https://h.example/owner/repo/pulls/1/")
+            == "https://h.example/api/v1/repos/owner/repo/pulls/1"
+        )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "https://h.example/owner/repo/issues/1",  # not a pulls URL
+            "https://h.example/owner/repo",  # too short
+            "not a url",
+        ],
+    )
+    def test_invalid_raises(self, bad):
+        """A non-PR URL raises ValueError."""
+        with pytest.raises(ValueError, match="not a Gitea PR URL"):
+            pr_api_url(bad)
+
+
+# --- Public assignee() and the static comment parser ---
+
+
+class TestAssignee:
+    @pytest.fixture
+    def gitea(self, mock_config):
+        api_url = "https://gitea.example.com/api/v1/repos/owner/repo/pulls/1"
+        return Gitea(mock_config, api_url)  # type: ignore[arg-type]
+
+    def _c(self, serial, body, date):
+        return Comment(serial, body, datetime(2024, 1, date))
+
+    def test_parser_last_marker_wins(self):
+        """The last assign/unassign marker for the group decides the assignee."""
+        comments = [
+            self._c(1, Gitea.ASSIGN_TEMPLATE % ("alice", "qam-sle"), 1),
+            self._c(2, Gitea.ASSIGN_TEMPLATE % ("bob", "qam-sle"), 2),
+        ]
+        assert Gitea._assignee_from_comments(comments, "qam-sle") == "bob"
+
+    def test_parser_unassign_clears(self):
+        """An unassign marker after an assign clears the assignee."""
+        comments = [
+            self._c(1, Gitea.ASSIGN_TEMPLATE % ("alice", "qam-sle"), 1),
+            self._c(2, Gitea.UNASSIGN_TEMPLATE % ("alice", "qam-sle"), 2),
+        ]
+        assert Gitea._assignee_from_comments(comments, "qam-sle") is None
+
+    def test_parser_is_group_scoped(self):
+        """Markers for another group do not affect this group's assignee."""
+        comments = [
+            self._c(1, Gitea.ASSIGN_TEMPLATE % ("bob", "qam-openqa"), 1),
+        ]
+        assert Gitea._assignee_from_comments(comments, "qam-sle") is None
+        assert Gitea._assignee_from_comments(comments, "qam-openqa") == "bob"
+
+    @responses.activate
+    def test_assignee_returns_user(self, gitea):
+        """assignee() reads comments and returns the current assignee."""
+        comments = [
+            {
+                "id": 1,
+                "body": Gitea.ASSIGN_TEMPLATE % ("alice", "qam-sle"),
+                "updated_at": "2024-01-01T00:00:00+00:00",
+            },
+        ]
+        responses.add(responses.GET, gitea.prissues, json=comments, status=200)
+        assert gitea.assignee() == "alice"
+
+    @responses.activate
+    def test_assignee_none_when_unassigned(self, gitea):
+        """assignee() returns None when there is no marker."""
+        responses.add(responses.GET, gitea.prissues, json=[], status=200)
+        assert gitea.assignee() is None
