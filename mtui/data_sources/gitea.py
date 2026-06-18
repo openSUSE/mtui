@@ -123,9 +123,9 @@ class Gitea:
         self,
         method: method,
         url: str,
-        params: dict | None = None,
-        data: dict | None = None,
-        json: dict | None = None,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
     ) -> Any:
         """A private wrapper for making requests to the Gitea API.
 

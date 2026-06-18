@@ -20,7 +20,7 @@ def to_string(item: str | bytes) -> str:
     return item
 
 
-class HostLog(list):
+class HostLog(list[CommandLog]):
     """A list-like object for storing command log entries."""
 
     log = CommandLog

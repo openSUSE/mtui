@@ -447,11 +447,12 @@ class Target:
         except IndexError:
             return ""
 
-    def lastexit(self) -> str:
+    def lastexit(self) -> int | str:
         """Returns the last exit code from a command.
 
         Returns:
-            The last exit code from a command.
+            The last exit code from a command, or ``""`` if no command
+            has run yet.
 
         """
         try:
