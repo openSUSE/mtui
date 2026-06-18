@@ -10,7 +10,7 @@ from ..support.fileops import atomic_write_file
 logger = getLogger("mtui.types.filelist")
 
 
-class FileList(UserList):
+class FileList(UserList[str]):
     """A list-like object that can be loaded from and saved to a file."""
 
     __slots__ = ["_file", "_hash", "data"]
