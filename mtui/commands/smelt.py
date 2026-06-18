@@ -4,8 +4,10 @@
   loaded update; dispatches SLFO -> REST v2, Maintenance -> GraphQL.
 * ``smelt_checkers`` — checker (build-check) result runs for the loaded SLFO
   update.
-* ``smelt_updates`` — enumerate the SLFO update queue with filters, e.g. the
-  testing updates still pending a review group.
+* ``smelt_updates`` — enumerate the SLFO (new) update queue with filters, e.g.
+  the testing updates still pending ``qam-sle-review``.
+* ``smelt_requests`` — enumerate the classic Maintenance (old) review-request
+  queue, e.g. those pending ``qam-sle``.
 
 All are read-only and require ``[smelt] url`` to be configured.
 """
@@ -112,6 +114,81 @@ class SmeltCheckers(Command):
                 f"running={r.get('running_count', 0)}  "
                 f"{r.get('finished') or r.get('started') or ''}"
             )
+
+
+class SmeltRequests(Command):
+    """Enumerate the classic Maintenance review-request queue (GraphQL).
+
+    The old-SMELT counterpart of ``smelt_updates``: lists requests assigned to a
+    review group (default ``qam-sle``), with ``--pending`` for those whose group
+    review is still ``new``. Shows the per-request assignee, which the SLFO feed
+    does not expose.
+    """
+
+    command = "smelt_requests"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Register filters for the classic request queue."""
+        parser.add_argument(
+            "--group",
+            default="qam-sle",
+            help="review assigned-by group (default: qam-sle)",
+        )
+        parser.add_argument(
+            "--pending",
+            action="store_true",
+            help="only requests whose group review is still 'new'",
+        )
+        parser.add_argument("--status", help="request status, e.g. review / accepted")
+        parser.add_argument(
+            "--limit", type=int, default=0, help="cap the number of rows (0 = all)"
+        )
+
+    def __call__(self) -> None:
+        """Print the filtered classic request queue, highest priority first."""
+        smelt = _smelt(self)
+        if smelt is None:
+            return
+        nodes = smelt.review_requests(group=self.args.group, status=self.args.status)
+        rows = []
+        for n in nodes:
+            mine = next(
+                (
+                    e["node"]
+                    for e in n["reviewSet"]["edges"]
+                    if (e["node"].get("assignedByGroup") or {}).get("name")
+                    == self.args.group
+                ),
+                None,
+            )
+            if self.args.pending and (
+                not mine or (mine.get("status") or {}).get("name") != "new"
+            ):
+                continue
+            inc = n.get("incident") or {}
+            pkgs = [e["node"]["name"] for e in inc.get("packages", {}).get("edges", [])]
+            rows.append(
+                {
+                    "priority": inc.get("priority") or 0,
+                    "request": n.get("requestId"),
+                    "incident": inc.get("incidentId"),
+                    "assignee": (mine.get("assignedTo") or {}).get("username")
+                    if mine
+                    else None,
+                    "packages": ", ".join(pkgs),
+                }
+            )
+        rows.sort(key=lambda r: -(r["priority"] or 0))
+        if self.args.limit:
+            rows = rows[: self.args.limit]
+        for r in rows:
+            self.println(
+                f"req {str(r['request']):8} inc {str(r['incident']):8} "
+                f"prio={str(r['priority']):<5} {str(r['assignee'] or 'unassigned'):14} "
+                f"{str(r['packages'])[:40]}"
+            )
+        self.println(f"\n{len(rows)} request(s)")
 
 
 class SmeltUpdates(Command):

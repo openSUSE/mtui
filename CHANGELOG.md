@@ -14,7 +14,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Maintenance via GraphQL), `smelt_checkers` (checker/build-check result runs for
   the loaded SLFO update), and `smelt_updates` (enumerate the SLFO update queue
   with `--status` / `--review-group` / `--pending` filters, e.g. the testing
-  updates still pending `qam-sle-review`). Require `[smelt] url`.
+  updates still pending `qam-sle-review`), and `smelt_requests` (the classic
+  Maintenance review-request queue, e.g. pending `qam-sle`). Require `[smelt] url`.
 - `assign` now prints the update's **priority and deadline** from SMELT when
   picking it up, so the tester sees the urgency. Read-only and best-effort: it is
   silent unless the SMELT base URL is configured via `[smelt] url` and SMELT has

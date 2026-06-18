@@ -130,6 +130,45 @@ class Smelt:
         edges = (data.get("incidents") or {}).get("edges") or []
         return edges[0]["node"] if edges else None
 
+    def review_requests(
+        self,
+        *,
+        group: str | None = None,
+        status: str | None = None,
+        kind: str | None = None,
+        first: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Classic Maintenance review requests (GraphQL), as raw nodes.
+
+        Filters map to SMELT's Django-ORM arguments: ``group`` ->
+        ``review_AssignedByGroup_Name_Iexact``, ``status`` ->
+        ``status_Name_Iexact``. Each node carries its incident (priority,
+        packages) and review set (per-group status + assignee).
+        """
+        import json as _json
+
+        parts = ["first:" + str(int(first))]
+        for key, value in (
+            ("review_AssignedByGroup_Name_Iexact", group),
+            ("status_Name_Iexact", status),
+            ("kind", kind),
+        ):
+            if value:
+                parts.append(key + ":" + _json.dumps(value))
+        query = (
+            "{requests(" + ", ".join(parts) + "){edges{node{requestId kind "
+            "status{name} category{name} "
+            "incident{incidentId priority rating{name} "
+            "packages(first:8){edges{node{name}}}} "
+            "reviewSet(first:40){edges{node{status{name} assignedByGroup{name} "
+            "assignedTo{username}}}}}}}}"
+        )
+        data = self._graphql(query)
+        if not data:
+            return []
+        edges = (data.get("requests") or {}).get("edges") or []
+        return [e["node"] for e in edges]
+
     # --- high-level ------------------------------------------------------- #
 
     def priority_deadline(

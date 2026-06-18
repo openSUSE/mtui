@@ -92,3 +92,58 @@ def test_smelt_updates_pending_filter(mock_config):
     assert "products/SLFO #2" not in out
     assert "products/SLFO #3" not in out
     assert "1 update(s)" in out
+
+
+def test_smelt_requests_pending_filter(mock_config):
+    from mtui.commands.smelt import SmeltRequests
+
+    sysmock = _sysmock()
+    args = Namespace(group="qam-sle", pending=True, status=None, limit=0)
+    nodes = [
+        {  # kept: qam-sle review still 'new'
+            "requestId": 1,
+            "kind": "RR",
+            "incident": {
+                "incidentId": 100,
+                "priority": 637,
+                "packages": {"edges": [{"node": {"name": "libarchive"}}]},
+            },
+            "reviewSet": {
+                "edges": [
+                    {
+                        "node": {
+                            "status": {"name": "new"},
+                            "assignedByGroup": {"name": "qam-sle"},
+                            "assignedTo": None,
+                        }
+                    }
+                ]
+            },
+        },
+        {  # dropped: qam-sle review accepted
+            "requestId": 2,
+            "kind": "RR",
+            "incident": {"incidentId": 101, "priority": 500, "packages": {"edges": []}},
+            "reviewSet": {
+                "edges": [
+                    {
+                        "node": {
+                            "status": {"name": "accepted"},
+                            "assignedByGroup": {"name": "qam-sle"},
+                            "assignedTo": {"username": "mdonis"},
+                        }
+                    }
+                ]
+            },
+        },
+    ]
+    with patch("mtui.commands.smelt.Smelt") as cls:
+        smelt = cls.return_value
+        smelt.configured = True
+        smelt.review_requests.return_value = nodes
+        SmeltRequests(args, mock_config, sysmock, MagicMock())()
+    out = sysmock.stdout.getvalue()
+    assert "req 1" in out
+    assert "libarchive" in out
+    assert "req 2" not in out
+    assert "1 request(s)" in out
