@@ -288,7 +288,7 @@ smelt_update
 Prints the loaded update's SMELT detail — priority, deadline, status, category,
 rating and packages. SLFO updates are read from SMELT's REST v2 API; classic
 Maintenance updates from its GraphQL API. Requires the SMELT base URL in
-``[smelt] url``.
+``[smelt] url`` (see :doc:`cfg`).
 
 
 smelt_checkers
@@ -299,7 +299,8 @@ smelt_checkers
     smelt_checkers
 
 Prints the checker (build-check) result runs for the loaded SLFO update — per run
-the checker type and pass/fail/warn/error/running counts. SLFO only.
+the checker type and pass/fail/warn/error/running counts. SLFO only. Requires the
+SMELT base URL in ``[smelt] url`` (see :doc:`cfg`).
 
 
 smelt_updates
@@ -313,7 +314,8 @@ smelt_updates
 
 Enumerates the SLFO update queue (highest priority first), one line per update.
 With ``--unassigned`` / ``--show-assignment`` it also resolves each update's
-current assignee from the pull request's mtui assign/unassign comments.
+current assignee from the pull request's mtui assign/unassign comments. Requires
+the SMELT base URL in ``[smelt] url`` (see :doc:`cfg`).
 
 **Options:**
 
@@ -361,7 +363,8 @@ smelt_requests
 
 Enumerates the classic Maintenance review-request queue (GraphQL) — the
 old-SMELT counterpart of `smelt_updates`_. Unlike the SLFO feed it shows the
-per-request assignee.
+per-request assignee. Requires the SMELT base URL in ``[smelt] url`` (see
+:doc:`cfg`).
 
 **Options:**
 

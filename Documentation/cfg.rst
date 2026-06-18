@@ -339,6 +339,19 @@ This property takes a comma-separated list of resolver types.
 Resolvers are tried left-to-right.
 
 
+``smelt.url``
+~~~~~~~~~~~~~
+  | **type**
+  |     URL
+  | **default**
+  |     none (unset)
+
+Base URL of the SMELT instance used by the ``smelt_*`` commands and by
+``assign`` to show an update's priority and deadline. There is no built-in
+default: when it is unset the SMELT-backed features are silently skipped. Set it
+to ``https://smelt.suse.de`` to enable them.
+
+
 ``svn.path``
 ~~~~~~~~~~~~
   | **type**
