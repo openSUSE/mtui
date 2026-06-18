@@ -193,3 +193,29 @@ def test_obsrepoparse(tmpdir):
     # we except repos has product key with exact value
     product = Product("SLES", "15", "x86_64")
     assert repos[product] == "https://example.com/SLE-15-x86_64"
+
+
+def test_patchinfo_titles(tmp_path):
+    """patchinfo_titles maps issue ids to their titles from patchinfo.xml."""
+    (tmp_path / "patchinfo.xml").write_text(
+        """<patchinfo>
+          <issue tracker="bnc" id="1260938">Deprecate SHA1</issue>
+          <issue tracker="bnc" id="1265607">All-Zero HMAC Key Detected</issue>
+          <issue tracker="jsc" id="PED-1">A feature</issue>
+        </patchinfo>"""
+    )
+    titles = metadata_parsers.patchinfo_titles(tmp_path)
+    assert titles["1260938"] == "Deprecate SHA1"
+    assert titles["1265607"] == "All-Zero HMAC Key Detected"
+    assert titles["PED-1"] == "A feature"
+
+
+def test_patchinfo_titles_absent(tmp_path):
+    """No patchinfo.xml -> empty mapping (best effort, never raises)."""
+    assert metadata_parsers.patchinfo_titles(tmp_path) == {}
+
+
+def test_patchinfo_titles_malformed(tmp_path):
+    """Unparseable patchinfo.xml -> empty mapping rather than an exception."""
+    (tmp_path / "patchinfo.xml").write_text("<patchinfo><issue ")
+    assert metadata_parsers.patchinfo_titles(tmp_path) == {}
