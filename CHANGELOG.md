@@ -79,6 +79,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `openqa_overview` now builds the correct QAM `build_checks` URL for
+  SLFO updates. It previously used the openQA Dashboard
+  `effective_incident_id` (the request id) when constructing the
+  `qam.suse.de/testreports/...` URL, yielding e.g.
+  `SUSE:SLFO:5348:5348` and a 404 instead of `SUSE:SLFO:1.2:5348`.
+  The actual `maintenance_id` is now passed to `build_checks()`.
 - `mtui-mcp` no longer paints the interactive `|/-\` spinner to
   stderr during long-running parallel actions (`run`, `set_repo`,
   `sftp_*`). The spinner is a REPL-only progress channel; over MCP
