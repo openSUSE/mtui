@@ -368,6 +368,61 @@ def test_build_checks_filters_multiple_packages():
     assert len(out) == 3
 
 
+@responses.activate
+def test_build_checks_matches_flavored_python_package_to_source_log():
+    """``pythonNNN-foo`` binary packages match their ``python-foo`` source log.
+
+    Regression: the build_checks index names logs after the *source*
+    package (``python-ecdsa``), but the update's package list contains the
+    flavored binary names (``python313-ecdsa``). A plain substring check
+    missed them; the normalized match recovers the log.
+    """
+    responses.add(
+        responses.GET,
+        f"{QAM}/testreports/SUSE:Maintenance:12358:199773/build_checks",
+        body='<a href="python-ecdsa.x86_64.log">x</a>',
+        status=200,
+        content_type="text/html",
+    )
+    responses.add(
+        responses.GET,
+        f"{QAM}/testreports/SUSE:Maintenance:12358:199773/build_checks/"
+        "python-ecdsa.x86_64.log",
+        body=_LOG_SHORT,
+        status=200,
+    )
+
+    out = oqa_search.build_checks(
+        "Maintenance", 12358, 199773, ["python313-ecdsa"], QAM, None
+    )
+
+    assert len(out) == 1
+    assert out[0].url.endswith("python-ecdsa.x86_64.log")
+
+
+@pytest.mark.parametrize(
+    ("log", "packages", "expected"),
+    [
+        # Exact substring match (no flavor involved).
+        ("bash.x86_64.log", ["bash"], True),
+        # Flavored Python binary -> source-named log (2 and 3 digit flavors).
+        ("python-ecdsa.x86_64.log", ["python313-ecdsa"], True),
+        ("python-ecdsa.log", ["python38-ecdsa"], True),
+        # Any package in the list may match.
+        ("python-ecdsa.log", ["bash", "python311-ecdsa"], True),
+        # Unrelated package does not match.
+        ("python-ecdsa.log", ["python-rsa"], False),
+        # `python3-foo` (single digit) is not a flavor and is not normalized.
+        ("python-foo.log", ["python3-foo"], False),
+        # Empty package list never matches.
+        ("python-ecdsa.log", [], False),
+    ],
+)
+def test_log_matches_package(log, packages, expected):
+    """``log_matches_package`` normalizes flavored Python names before matching."""
+    assert oqa_search.log_matches_package(log, packages) is expected
+
+
 def test_extract_test_results_custom_pattern_overrides_heuristics():
     """A user-supplied regex bypasses the heuristic blocklist."""
     log = "the syntax of make matters\nfoo: 3 widgets\nbar: 7 widgets"

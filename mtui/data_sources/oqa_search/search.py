@@ -24,6 +24,7 @@ from .heuristics import (
     EXCLUDED_GROUPS,
     MICRO_TEMPLATE_IDENTIFIER,
     OQA_QUERY_STRINGS,
+    PYTHON_FLAVOR_RE,
     SINGLE_INCIDENTS_TERMS,
     TESTSUITE_NUMBERS_PATTERN,
     TESTSUITE_SUMMARY_KEYWORDS,
@@ -339,6 +340,19 @@ def summarize_test_results(lines: list[str]) -> str:
     )
 
 
+def log_matches_package(log: str, packages: list[str]) -> bool:
+    """Return ``True`` if ``log`` belongs to any package in ``packages``.
+
+    Besides the plain substring check this also tries a normalized form of
+    each package name (``pythonNNN-foo`` -> ``python-foo``) so the flavored
+    Python binary packages still match their source-named build_checks log.
+    """
+    for pkg in packages:
+        if pkg in log or PYTHON_FLAVOR_RE.sub("python-", pkg) in log:
+            return True
+    return False
+
+
 # --- Public entry points used by the command layer ---
 
 
@@ -498,7 +512,7 @@ def build_checks(
     parser.feed(html_text)
 
     # Filter .log files to those matching any package in this update
-    logfiles = [log for log in parser.log_files if any(pkg in log for pkg in packages)]
+    logfiles = [log for log in parser.log_files if log_matches_package(log, packages)]
 
     logger.debug(
         "Found %d .log files in build_checks index, %d match packages %r",
