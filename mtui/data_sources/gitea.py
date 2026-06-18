@@ -11,6 +11,7 @@ from datetime import datetime
 from functools import total_ordering
 from logging import getLogger
 from typing import Any, final, override
+from urllib.parse import urlparse
 
 import requests
 
@@ -27,6 +28,29 @@ from ..support.http import HTTP_TIMEOUT, VerifyPolicy, build_session, resolve_ve
 from ..types import assignment, method
 
 logger = getLogger("mtui.connector.gitea")
+
+
+def pr_api_url(web_url: str) -> str:
+    """Convert a Gitea PR *web* URL to its REST *API* URL.
+
+    ``https://<host>/<owner>/<repo>/pulls/<n>`` becomes
+    ``https://<host>/api/v1/repos/<owner>/<repo>/pulls/<n>`` — the form the
+    :class:`Gitea` constructor expects. The SLFO update feed only carries the
+    web form (an update's ``external_url``), so callers that build a client
+    straight from the feed need this conversion.
+
+    Raises:
+        ValueError: If ``web_url`` is not a recognisable Gitea PR URL.
+
+    """
+    parsed = urlparse(web_url)
+    parts = parsed.path.strip("/").split("/")
+    if len(parts) < 4 or parts[-2] != "pulls":
+        raise ValueError(f"not a Gitea PR URL: {web_url}")
+    owner, repo, _, number = parts[-4:]
+    return (
+        f"{parsed.scheme}://{parsed.netloc}/api/v1/repos/{owner}/{repo}/pulls/{number}"
+    )
 
 
 @dataclass
@@ -185,12 +209,42 @@ class Gitea:
             for c in cmts
         ]
 
+    @classmethod
+    def _assignee_from_comments(cls, comments: list[Comment], group: str) -> str | None:
+        """Replay assign/unassign markers and return the current assignee.
+
+        Simulates a state machine over the comments for ``group``: the last
+        valid assignment or unassignment marker wins. Returns the assignee's
+        username, or ``None`` when the group is currently unassigned.
+
+        Args:
+            comments: PR comments sorted chronologically (oldest first).
+            group: The review group whose markers to honour.
+
+        """
+        assignee: str | None = None
+        for c in comments:
+            if (match := cls.ASSIGN_RE.match(c.body)) and match.group("group") == group:
+                assignee = match.group("user")  # This user is now the assignee.
+            elif (match := cls.UNASSIGN_RE.match(c.body)) and match.group(
+                "group"
+            ) == group:
+                assignee = None  # The PR is now unassigned for this group.
+        return assignee
+
+    def assignee(self) -> str | None:
+        """Return the current assignee for this PR's group, or ``None``.
+
+        Reloads the comments and replays the assign/unassign markers (see
+        :meth:`_assignee_from_comments`). ``None`` means the group is
+        unassigned — no marker, or the last marker is an unassignment.
+        """
+        return self._assignee_from_comments(
+            sorted(self.__get_all_comments()), self.group
+        )
+
     def __check_assign(self, check_user: str | None = None) -> assignment:
         """Determines the current assignment state by parsing PR comments.
-
-        This method reads all comments, sorts them chronologically, and
-        simulates a state machine. The last valid assignment or unassignment
-        comment for the configured group determines the final state.
 
         Args:
             check_user: The user to check the assignment status for.
@@ -199,21 +253,7 @@ class Gitea:
             The assignment state.
 
         """
-        # Always reload comments to get the most up-to-date state.
-        comments = sorted(self.__get_all_comments())
-        assignee: str | None = None
-
-        # Iterate through comments chronologically to find the last state update.
-        for c in comments:
-            if match := self.ASSIGN_RE.match(c.body):
-                user, group = match.groups()
-                if group == self.group:
-                    assignee = user  # This user is now the assignee.
-            elif match := self.UNASSIGN_RE.match(c.body):
-                user, group = match.groups()
-                if group == self.group:
-                    assignee = None  # The PR is now unassigned for this group.
-
+        assignee = self.assignee()
         if assignee is None:
             return assignment.UNASSIGNED
         if assignee == check_user:
