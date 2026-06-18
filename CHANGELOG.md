@@ -16,6 +16,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   --limit 1` returns the top unassigned update in a few calls; without the flags
   the listing stays a single SMELT call.
 
+### Fixed
+
+- The SSH connection setup now honours `connection_timeout` for the TCP
+  connect, SSH banner, and authentication (previously only remote command
+  execution was bounded, so a dead/firewalled refhost stalled on the OS TCP
+  timeout — making a bulk `add_host` appear to hang for minutes).
+- `connection_timeout` is now read from the `[connection]` section (falling
+  back to the legacy `[mtui]` section), matching where it is documented to live.
+
 ## [18.0.1] - 2026-06-18
 
 ### Added
