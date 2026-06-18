@@ -11,6 +11,8 @@ from __future__ import annotations
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from mtui.commands.openqa_overview import OpenQAOverview
 from mtui.data_sources.oqa_search import (
     BuildCheckResult,
@@ -152,6 +154,78 @@ def test_openqa_overview_no_versions_skips_openqa_sections(mock_config):
     au.assert_not_called()
     # build_checks still runs (it's independent of openQA versions).
     bc.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    (
+        "rrid",
+        "expected_product",
+        "expected_incident_id",
+        "expected_request_id",
+        "expected_url",
+    ),
+    [
+        (
+            "SUSE:SLFO:1.2:5348",
+            "SLFO",
+            "1.2",
+            5348,
+            "https://qam.example.com/testreports/SUSE:SLFO:1.2:5348/build_checks",
+        ),
+        (
+            "SUSE:Maintenance:12345:67891",
+            "Maintenance",
+            12345,
+            67891,
+            "https://qam.example.com/testreports/"
+            "SUSE:Maintenance:12345:67891/build_checks",
+        ),
+    ],
+)
+def test_openqa_overview_passes_maintenance_id_and_builds_correct_url(
+    mock_config,
+    rrid,
+    expected_product,
+    expected_incident_id,
+    expected_request_id,
+    expected_url,
+):
+    """The command passes the maintenance_id (not the request id) to
+    build_checks, yielding the correct QAM URL for both SLFO and Maintenance.
+
+    Regression: for ``SUSE:SLFO:1.2:5348`` the command previously passed the
+    Dashboard ``effective_incident_id`` (the request id ``5348``) as the
+    incident id, so the QAM URL became ``SUSE:SLFO:5348:5348`` (a 404)
+    instead of ``SUSE:SLFO:1.2:5348``. The Maintenance case must keep working.
+    """
+    prompt = _build_prompt()
+    prompt.metadata.id = rrid
+    prompt.metadata.rrid = RequestReviewID(rrid)
+    mock_config.reports_url = "https://qam.example.com/testreports"
+
+    with (
+        patch(
+            "mtui.commands.openqa_overview.oqa.get_incident_info",
+            # None versions -> single/aggregated sections are skipped.
+            return_value=(f":{expected_request_id}:bash", None),
+        ),
+        patch("mtui.commands.openqa_overview.oqa.single_incidents", return_value=[]),
+        patch("mtui.commands.openqa_overview.oqa.aggregated_updates", return_value=[]),
+        patch("mtui.commands.openqa_overview.oqa.build_checks", return_value=[]) as bc,
+    ):
+        OpenQAOverview(_args(), mock_config, MagicMock(), prompt)()
+
+    bc.assert_called_once()
+
+    product, incident_id, request_id, _packages, url_qam = bc.call_args.args[:5]
+    assert product == expected_product
+    assert incident_id == expected_incident_id
+    assert request_id == expected_request_id
+
+    base_url = (
+        f"{url_qam}/testreports/SUSE:{product}:{incident_id}:{request_id}/build_checks"
+    )
+    assert base_url == expected_url
 
 
 def test_openqa_overview_cli_overrides_take_precedence_over_config(mock_config):

@@ -247,7 +247,7 @@ class OpenQAOverview(Command):
             packages = [build.split(":")[-1]]
         overview.build_checks = oqa.build_checks(
             product,
-            effective_incident_id,
+            incident_id,
             request_id,
             packages,
             url_qam,
