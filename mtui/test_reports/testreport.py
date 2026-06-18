@@ -26,6 +26,7 @@ from ..support.fileops import ensure_dir_exists
 from ..support.messages import MetadataNotLoadedError
 from ..support.paths import scripts_path
 from ..types import OpenQAResults, Product, TargetMeta
+from .metadata_parsers import patchinfo_titles
 from .svn_io import (
     TemplateFormatError,
     TemplateIOError,
@@ -177,6 +178,24 @@ class TestReport(ABC):
             raise MetadataNotLoadedError
 
         self._parse_json(data, tpl)
+        self._enrich_issue_titles(path.parent)
+
+    def _enrich_issue_titles(self, directory: Path) -> None:
+        """Fill in real bug/jira titles from the checkout's ``patchinfo.xml``.
+
+        The JSON metadata only carries ids, so :class:`JSONParser` leaves a
+        placeholder description. ``patchinfo.xml`` (in the same checkout) has
+        the titles; here we overlay them onto the ids we already know about,
+        leaving the id set authoritative and untouched when no title is found.
+        """
+        titles = patchinfo_titles(directory)
+        if not titles:
+            return
+        for iid, title in titles.items():
+            if iid in self.bugs:
+                self.bugs[iid] = title
+            elif iid in self.jira:
+                self.jira[iid] = title
 
     def read(self, path: Path) -> None:
         """Reads a test report file.

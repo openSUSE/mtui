@@ -102,6 +102,43 @@ class JSONParser:
         results.packages = packages
 
 
+def patchinfo_titles(directory: Path) -> dict[str, str]:
+    """Map issue id -> title from a checkout's ``patchinfo.xml``.
+
+    The JSON metadata envelope only carries bare bug/jira *ids*, so
+    :class:`JSONParser` fills their descriptions with a placeholder. The
+    human-readable titles do exist in the checkout's ``patchinfo.xml``
+    (the same source the server uses to build the report's ``BUGS SUMMARY``),
+    as ``<issue tracker="bnc" id="123">title</issue>`` elements. This reads
+    them so callers can enrich the ids with real titles.
+
+    Best-effort: a missing or unparseable ``patchinfo.xml`` yields ``{}`` —
+    not every report kind ships one, and a malformed file must never break
+    loading.
+
+    Args:
+        directory: The checkout directory (where ``patchinfo.xml`` lives).
+
+    Returns:
+        A mapping of issue id to its title, empty when none are available.
+
+    """
+    pi = directory / "patchinfo.xml"
+    if not pi.is_file():
+        return {}
+    try:
+        root = ET.fromstring(pi.read_text(errors="replace"))
+    except ET.ParseError:
+        return {}
+    titles: dict[str, str] = {}
+    for issue in root.findall("issue"):
+        iid = (issue.get("id") or "").strip()
+        title = (issue.text or "").strip()
+        if iid and title:
+            titles[iid] = title
+    return titles
+
+
 # ---------------------------------------------------------------------------
 # Repository-information parsers (was mtui/repoparse.py).
 # ---------------------------------------------------------------------------
