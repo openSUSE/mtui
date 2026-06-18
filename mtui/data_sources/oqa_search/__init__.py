@@ -44,7 +44,7 @@ from .heuristics import (
     TESTSUITE_WORDS_BLOCKLIST,
 )
 from .http import _fetch_url_content, _get_json, _HTTPError, _session, set_verify
-from .results import BuildCheckResult, GroupResult, VersionResult
+from .results import BuildCheckResult, GroupResult, JobResult, VersionResult
 from .search import (
     OVERVIEW_BEGIN_MARKER,
     OVERVIEW_END_MARKER,
@@ -71,6 +71,7 @@ from .search import (
     get_aggregated_groups,
     get_incident_groups,
     get_incident_info,
+    incident_jobs,
     log_matches_package,
     render_overview,
     single_incidents,
@@ -94,6 +95,7 @@ __all__ = [
     "TESTSUITE_WORDS_BLOCKLIST",
     "BuildCheckResult",
     "GroupResult",
+    "JobResult",
     "LogFileLinkParser",
     "VersionResult",
     "_HTTPError",
@@ -122,6 +124,7 @@ __all__ = [
     "get_aggregated_groups",
     "get_incident_groups",
     "get_incident_info",
+    "incident_jobs",
     "log_matches_package",
     "render_overview",
     "set_verify",

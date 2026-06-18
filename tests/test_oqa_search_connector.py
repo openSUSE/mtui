@@ -815,3 +815,70 @@ def test_set_verify_same_value_keeps_cached_session(oqa_http_module):
     first = _oqa_http._session()
     _oqa_http.set_verify(True)
     assert _oqa_http._session() is first
+
+
+@responses.activate
+def test_incident_jobs_drops_obsoleted_by_default():
+    """obsoleted jobs are dropped unless include_obsoleted is set."""
+    responses.add(
+        responses.GET,
+        f"{OPENQA}/api/v1/jobs",
+        json={
+            "jobs": [
+                {
+                    "id": 1,
+                    "test": "fips_smoke",
+                    "result": "passed",
+                    "settings": {"ARCH": "s390x"},
+                },
+                {
+                    "id": 2,
+                    "test": "ha_2nodes",
+                    "result": "failed",
+                    "settings": {"ARCH": "s390x"},
+                },
+                {
+                    "id": 3,
+                    "test": "old_run",
+                    "result": "obsoleted",
+                    "settings": {"ARCH": "x86_64"},
+                },
+            ]
+        },
+        status=200,
+    )
+
+    rows = oqa_search.incident_jobs(":git:5137:libica", OPENQA)
+
+    assert [r.result for r in rows] == ["failed", "passed"]  # sorted, no obsoleted
+    failed = next(r for r in rows if r.result == "failed")
+    assert failed.test == "ha_2nodes"
+    assert failed.arch == "s390x"
+    assert failed.url == f"{OPENQA}/t2"
+
+
+@responses.activate
+def test_incident_jobs_include_obsoleted():
+    responses.add(
+        responses.GET,
+        f"{OPENQA}/api/v1/jobs",
+        json={
+            "jobs": [
+                {
+                    "id": 3,
+                    "test": "x",
+                    "result": "obsoleted",
+                    "settings": {"ARCH": "x86_64"},
+                }
+            ]
+        },
+        status=200,
+    )
+    rows = oqa_search.incident_jobs(":b", OPENQA, include_obsoleted=True)
+    assert len(rows) == 1
+    assert rows[0].result == "obsoleted"
+
+
+def test_incident_jobs_empty_build_makes_no_request():
+    """A falsy build short-circuits with no HTTP call."""
+    assert oqa_search.incident_jobs("", OPENQA) == []
