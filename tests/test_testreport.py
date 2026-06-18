@@ -251,14 +251,34 @@ def test_perform_update_happy_path(tmp_path: Path) -> None:
     targets.perform_update.assert_called_once_with(r, ["--quiet"])
 
 
-def test_perform_update_rolls_back_on_update_error(tmp_path: Path) -> None:
+def test_perform_update_rolls_back_then_reraises_on_update_error(
+    tmp_path: Path,
+) -> None:
     r = _make(tmp_path)
     r.packages = {"v": ["bash"]}
     targets = MagicMock()
     targets.perform_update.side_effect = UpdateError("boom", "h")
-    r.perform_update(targets, [])  # ty: ignore[invalid-argument-type]
+    # The update error is surfaced to the caller even though we roll back.
+    with pytest.raises(UpdateError, match="boom"):
+        r.perform_update(targets, [])  # ty: ignore[invalid-argument-type]
     # add_history called twice: once for update, once for the rollback
     assert targets.add_history.call_count == 2
+    targets.perform_downgrade.assert_called_once()
+
+
+def test_perform_update_reraises_update_error_even_if_rollback_fails(
+    tmp_path: Path,
+) -> None:
+    """A failed rollback must not mask the original update error."""
+    r = _make(tmp_path)
+    r.packages = {"v": ["bash"]}
+    targets = MagicMock()
+    targets.perform_update.side_effect = UpdateError("dependency error", "h1")
+    # Rollback blows up (e.g. the historical KeyError) — the caller must still
+    # see the original UpdateError, not the rollback exception.
+    targets.perform_downgrade.side_effect = KeyError("h2")
+    with pytest.raises(UpdateError, match="dependency error"):
+        r.perform_update(targets, [])  # ty: ignore[invalid-argument-type]
     targets.perform_downgrade.assert_called_once()
 
 

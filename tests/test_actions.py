@@ -51,6 +51,31 @@ def test_run_command_run_propagates_worker_exception():
         cmd.run()
 
 
+def test_run_command_dict_skips_targets_without_a_command():
+    """A per-host command dict missing a host must not KeyError on it.
+
+    The downgrade rollback builds a command for only the hosts that have a
+    recorded previous version; ``run`` must act on the covered hosts and skip
+    the rest rather than raising ``KeyError`` in ``_cmd_for``.
+    """
+    from mtui.hosts.target.actions import RunCommand
+    from mtui.types import ExecutionMode
+
+    covered = MagicMock()
+    covered.hostname = "h1"
+    covered.mode = ExecutionMode.PARALLEL
+    uncovered = MagicMock()
+    uncovered.hostname = "h2"
+    uncovered.mode = ExecutionMode.PARALLEL
+
+    # command dict covers only h1; h2 is in the group but has no command.
+    cmd = RunCommand({"h1": covered, "h2": uncovered}, {"h1": "true"})  # type: ignore[dict-item]  # ty: ignore[invalid-argument-type]
+    cmd.run()  # must not raise KeyError("h2")
+
+    covered.run.assert_called_once()
+    uncovered.run.assert_not_called()
+
+
 def test_run_parallel_no_work_is_noop():
     """``run_parallel([])`` must not allocate an executor."""
     from mtui.hosts.target.actions import run_parallel
