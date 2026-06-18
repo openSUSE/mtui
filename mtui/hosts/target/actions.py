@@ -259,12 +259,19 @@ class RunCommand:
 
     def run(self) -> None:
         """Runs the command: parallel hosts in a pool, serial hosts one at a time."""
+        # When the command is a per-host dict, act only on the hosts it
+        # actually covers. Some callers build a command for a subset of the
+        # group (e.g. the downgrade rollback only targets hosts with a
+        # recorded previous version); running it against the rest would
+        # KeyError in ``_cmd_for``. A plain string command applies to all.
+        if isinstance(self.command, dict):
+            targets = {h: t for h, t in self.targets.items() if h in self.command}
+        else:
+            targets = self.targets
         parallel = {
-            h: t for h, t in self.targets.items() if t.mode is not ExecutionMode.SERIAL
+            h: t for h, t in targets.items() if t.mode is not ExecutionMode.SERIAL
         }
-        serial = {
-            h: t for h, t in self.targets.items() if t.mode is ExecutionMode.SERIAL
-        }
+        serial = {h: t for h, t in targets.items() if t.mode is ExecutionMode.SERIAL}
         lock = Lock()
 
         try:

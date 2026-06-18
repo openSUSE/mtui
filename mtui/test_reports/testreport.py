@@ -354,7 +354,19 @@ class TestReport(ABC):
         except UpdateError:
             logger.error("Update failed")
             logger.warning("Error while updating. Rolling back changes")
-            self.perform_downgrade(targets)
+            try:
+                self.perform_downgrade(targets)
+            except Exception:
+                # A failure during rollback must not bury the original update
+                # error: log it and still re-raise the UpdateError below so the
+                # real reason (e.g. a dependency error) is what the user sees.
+                logger.error(
+                    "Rollback after the failed update did not complete cleanly"
+                )
+                logger.debug(format_exc())
+            # Surface the original update failure to the caller — the update did
+            # not apply, even though we attempted to roll back.
+            raise
 
     def perform_downgrade(self, targets):
         """Performs a `downgrade` operation.
