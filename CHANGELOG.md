@@ -18,6 +18,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A failed `update` no longer crashes with `KeyError(<hostname>)` during its
+  automatic rollback. The downgrade builds a command only for hosts with a
+  recorded previous version, but `RunCommand` ran it against the whole group;
+  it now acts only on the hosts a per-host command dict actually covers.
+- A failed `update` now surfaces the original `UpdateError` (e.g. a dependency
+  error) to the caller even when the rollback itself raises — previously a
+  rollback error masked the real reason the update failed, and a clean rollback
+  silently swallowed it.
 - The SSH connection setup now honours `connection_timeout` for the TCP
   connect, SSH banner, and authentication (previously only remote command
   execution was bounded, so a dead/firewalled refhost stalled on the OS TCP
