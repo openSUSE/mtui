@@ -55,6 +55,20 @@ def test_override_default_config(tmpdir):
     assert cfg.connection_timeout == 600
 
 
+def test_smelt_url_defaults_empty_and_overrides(tmpdir):
+    """smelt_url has no default (off unless configured) and reads [smelt] url."""
+    empty = Path(tmpdir.join("empty.cfg"))
+    empty.write_text("")
+    assert config.Config(empty, refhosts=MockRefhosts).smelt_url == ""
+
+    configured = Path(tmpdir.join("smelt.cfg"))
+    configured.write_text("[smelt]\nurl = https://smelt.example.com\n")
+    assert (
+        config.Config(configured, refhosts=MockRefhosts).smelt_url
+        == "https://smelt.example.com"
+    )
+
+
 def test_merge_args(tmpdir):
     """Test merge_args."""
     config_file = Path(tmpdir.join("test.cfg"))
