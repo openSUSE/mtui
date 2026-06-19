@@ -18,6 +18,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Running under MCP (`mtui-mcp`) no longer hangs when a refhost's SSH key
+  authentication fails. Previously the connect path fell back to an interactive
+  `getpass` root-password prompt, which has no TTY in MCP mode (stdin is the
+  JSON-RPC pipe) and blocked the session indefinitely. Non-interactive sessions
+  now skip the prompt and fail fast with a single actionable WARNING naming the
+  fix (set up working SSH key auth, verify with `ssh root@<host>`); the affected
+  host is reported as unreachable instead of stalling the whole client.
 - A failed Gitea API call caused by TLS certificate verification (common when
   the SUSE root CA is not in the system trust store) now logs a single,
   actionable message naming the two remedies — install the SUSE CA or set

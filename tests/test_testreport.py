@@ -325,6 +325,36 @@ def test_connect_target_exception_returns_false_false(tmp_path: Path) -> None:
     assert out == (False, False)
 
 
+def test_connect_target_noninteractive_when_no_prompter(tmp_path: Path) -> None:
+    """No prompter (MCP / headless) -> Target built with interactive=False.
+
+    This is the ``add_host`` path that previously hung: a key-auth failure
+    must not drop into an invisible ``getpass`` prompt under MCP.
+    """
+    r = _make(tmp_path)
+    assert r._prompter is None
+    fake_target = MagicMock()
+    fake_target.system = "sles15"
+    with patch(
+        "mtui.test_reports.testreport.Target", return_value=fake_target
+    ) as target_cls:
+        r.connect_target("h1")
+    assert target_cls.call_args.kwargs["interactive"] is False
+
+
+def test_connect_target_interactive_when_prompter_present(tmp_path: Path) -> None:
+    """A real prompter (REPL) -> Target built with interactive=True."""
+    r = _make(tmp_path)
+    r._prompter = MagicMock()
+    fake_target = MagicMock()
+    fake_target.system = "sles15"
+    with patch(
+        "mtui.test_reports.testreport.Target", return_value=fake_target
+    ) as target_cls:
+        r.connect_target("h1")
+    assert target_cls.call_args.kwargs["interactive"] is True
+
+
 # ---------------------------------------------------------------------------
 # add_target
 # ---------------------------------------------------------------------------
@@ -338,6 +368,24 @@ def test_add_target_already_connected_warns_and_returns(tmp_path: Path, caplog) 
     with caplog.at_level(logging.WARNING, logger="mtui.template.testreport"):
         r.add_target("h1")
     assert any("already connected" in rec.message for rec in caplog.records)
+
+
+def test_add_target_noninteractive_when_no_prompter(tmp_path: Path) -> None:
+    """``add_host -t <host>`` under MCP builds the Target with interactive=False.
+
+    ``AddHost.__call__`` dispatches to ``TestReport.add_target`` for each
+    ``--target``; with no prompter the connection must skip the password
+    prompt instead of blocking (the homer.qam.suse.cz hang).
+    """
+    r = _make(tmp_path)
+    assert r._prompter is None
+    fake_target = MagicMock()
+    fake_target.system = "sles15"
+    with patch(
+        "mtui.test_reports.testreport.Target", return_value=fake_target
+    ) as target_cls:
+        r.add_target("h1")
+    assert target_cls.call_args.kwargs["interactive"] is False
 
 
 # ---------------------------------------------------------------------------
