@@ -6,13 +6,14 @@ import sys
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, ValuesView
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 from contextlib import suppress
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from ...cli.term import prompt_user
+from ...support.concurrency import ContextExecutor
 from ...types import ExecutionMode
 from . import Target
 
@@ -94,7 +95,7 @@ def run_parallel(
     spinner = _TtySpinner(desc) if desc else None
     if spinner is not None:
         spinner.start()
-    ex = ThreadPoolExecutor(max_workers=len(work))
+    ex = ContextExecutor(max_workers=len(work))
     try:
         futures = [ex.submit(fn, *args) for fn, args in work]
         for f in as_completed(futures):

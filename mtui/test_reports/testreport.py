@@ -22,6 +22,7 @@ from ..hosts.refhost import Attributes, RefhostsFactory, RefhostsResolveFailedEr
 from ..hosts.refhost import verify as product_verify
 from ..hosts.target import Target, TargetLockedError
 from ..hosts.target.hostgroup import HostsGroup
+from ..support.concurrency import ContextExecutor
 from ..support.config import Config
 from ..support.exceptions import InvalidGiteaHashError, UpdateError
 from ..support.fileops import ensure_dir_exists
@@ -599,7 +600,7 @@ class TestReport(ABC):
         """Connects to all targets."""
         targets: dict[str, Target] = {}
         new_systems: dict[str, str] = {}
-        executor = concurrent.futures.ThreadPoolExecutor()
+        executor = ContextExecutor()
         hosts: set[str] = {host for host in self.hostnames if host not in self.targets}
 
         if hosts:

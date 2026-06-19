@@ -499,3 +499,37 @@ For those, raise the timeout in the client's own configuration:
 
 The heartbeat itself never *caps* execution time; if your client
 honours progress it will simply wait as long as the server takes.
+
+
+Command output and logging
+===========================
+
+A tool call returns the text the command wrote to **stdout**. In
+addition, any log record a command emits through the ``mtui`` logger
+tree (``mtui.commands.*``, ``mtui.template.*``, ``mtui.checks.*``, …) at
+``INFO`` level or above *while it runs* is captured and appended to that
+same reply, prefixed with its level (``WARNING: …``, ``ERROR: …``). This
+means conditions a command reports by logging rather than printing — for
+example the product-drift warnings emitted when ``add_host`` connects a
+reference host whose installed products disagree with ``refhosts.yml`` —
+reach the client even though they never touched stdout.
+
+The capture is deliberately scoped:
+
+* **``INFO`` and above only.** ``DEBUG`` records stay out of the reply
+  (use ``--debug`` to see them on the server's stderr).
+* **Per call, by capture token.** A unique token is set for the duration
+  of one command and the capturing handler admits only records tagged
+  with it. The token rides along into any worker threads the command
+  fans out to — MTUI's thread pools are
+  :class:`~mtui.support.concurrency.ContextExecutor` instances that copy
+  the caller's :mod:`contextvars` context into each task — so a
+  command's own background work is captured too (for example the
+  product-drift warnings logged on ``add_host``'s connect pool). Records
+  produced under a *different* token, including a concurrent
+  ``--transport http`` client's call, never bleed into this reply.
+* **The server's own bookkeeping is excluded.** Lines the session logs
+  about a call (e.g. "command … wrote to stderr") go through the
+  ``mtui-mcp`` logger, which is outside the captured ``mtui`` subtree and
+  therefore never echoed back into the reply.
+

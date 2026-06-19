@@ -5,6 +5,7 @@ from logging import getLogger
 from os.path import join
 from typing import Any, Self
 
+from ...support.concurrency import ContextExecutor
 from ...types import RequestReviewID, URLs
 from .client import _FUTURE_TIMEOUT, FAILED_RESULTS
 from .incident import QEMIncident
@@ -33,7 +34,7 @@ class DashboardAutoOpenQA:
         # Fetch the two top-level settings lists concurrently; they are
         # independent of each other.
         incident_number = self.incident.incident_number
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with ContextExecutor() as executor:
             incident_settings_future = executor.submit(
                 self.client.incident_settings, incident_number
             )
@@ -74,7 +75,7 @@ class DashboardAutoOpenQA:
                 return self.client.incident_jobs(setting_id)
             return self.client.update_jobs(setting_id)
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with ContextExecutor() as executor:
             futures = [
                 executor.submit(_fetch, source, setting_id)
                 for source, _, setting_id in tasks

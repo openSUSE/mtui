@@ -4,6 +4,7 @@ import concurrent.futures
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
+from ..support.concurrency import ContextExecutor
 from . import Command
 
 
@@ -39,7 +40,7 @@ class RemoveHost(Command):
         """Executes the `remove_host` command."""
         targets = list(self.parse_hosts(enabled=False).keys())
         # for target in targets:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with ContextExecutor() as executor:
             conn = [executor.submit(self._remove_target, target) for target in targets]
             concurrent.futures.wait(conn, timeout=30)
 

@@ -1,6 +1,5 @@
 """Functions for downloading logs from openQA."""
 
-import concurrent.futures
 import os.path
 from collections.abc import Callable
 from logging import getLogger
@@ -8,6 +7,7 @@ from pathlib import Path
 
 import requests
 
+from ...support.concurrency import ContextExecutor
 from ...support.fileops import atomic_write_file
 from ...support.http import VerifyPolicy, get_bytes
 from ...support.messages import ResultsMissingError
@@ -128,7 +128,7 @@ def download_logs(
                 (host.host, x.name, x.test_id, x.arch) for x in host.results
             ]
 
-    with concurrent.futures.ThreadPoolExecutor() as e:
+    with ContextExecutor() as e:
         for host, name, test_id, arch in results_matrix:
             test = {"name": name, "test_id": test_id, "arch": arch}
             dl = downloader.get(name.split("_")[0], _emptylog)

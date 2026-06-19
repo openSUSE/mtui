@@ -9,15 +9,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Connecting a reference host now verifies that its installed products matchV
+- Connecting a reference host now verifies that its installed products match
   what `refhosts.yml` records for that host. On any drift — wrong or
   wrong-version base product, wrong architecture, addons that are missing,
   unexpected, or at a different version, or a dangling
-  `/etc/products.d/baseproduct` symlink — `add_host` prints a `WARNING` per
-  drift class and keeps the host (the check never aborts a connect). `qa` is
-  ignored on both sides to match the products mtui already skips. This catches
-  validating an update on a host that is not the system its metadata claims;
-  hosts absent from `refhosts.yml` are skipped silently.
+  `/etc/products.d/baseproduct` symlink — mtui logs a `WARNING` per drift class
+  and keeps the host (the check never aborts a connect). `qa` is ignored on both
+  sides to match the products mtui already skips. This catches validating an
+  update on a host that is not the system its metadata claims; hosts absent from
+  `refhosts.yml` are skipped silently.
+- Under `mtui-mcp`, a command's own `mtui` log records (`INFO` and above) emitted
+  while it runs are now included in the tool reply, not just what it prints to
+  stdout. The capture follows the command into the worker threads it fans out to
+  (MTUI's thread pools now propagate context), so warnings logged off the main
+  thread — such as the per-host product-drift report above, emitted on
+  `add_host`'s connect pool — reach MCP clients directly; `add_host` no longer
+  re-echoes them to stdout.
 
 ## 18.1.0 - 2026-06-19
 
