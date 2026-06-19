@@ -298,6 +298,34 @@ class TestGiteaOperations:
         with pytest.raises(FailedGiteaCallError):
             gitea.get_hash()
 
+    @responses.activate
+    def test_ssl_error_logs_actionable_hint_without_traceback(self, gitea, caplog):
+        """A TLS cert failure logs a concise remedy at ERROR, no traceback."""
+        import ssl
+
+        import requests
+
+        cause = ssl.SSLCertVerificationError(
+            1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+        )
+        exc = requests.exceptions.SSLError("verify failed")
+        exc.__cause__ = cause
+        responses.add(responses.GET, gitea.pr, body=exc)
+
+        with (
+            caplog.at_level("ERROR", logger="mtui.connector.gitea"),
+            pytest.raises(FailedGiteaCallError),
+        ):
+            gitea.get_hash()
+
+        error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert error_records, "expected an ERROR log for the SSL failure"
+        msg = error_records[0].getMessage()
+        assert "ssl_verify = false" in msg
+        assert "certificate" in msg.lower()
+        # The actionable ERROR must not carry a traceback (that stays at DEBUG).
+        assert all(r.exc_info is None for r in error_records)
+
     def test_repr(self, gitea):
         """Test Gitea repr."""
         result = repr(gitea)

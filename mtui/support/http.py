@@ -31,6 +31,8 @@ who cannot install that CA can disable verification globally with
 
 from __future__ import annotations
 
+import ssl
+
 import requests
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
@@ -127,3 +129,43 @@ def get_bytes(
     response = session.get(url, timeout=timeout)
     response.raise_for_status()
     return response.content
+
+
+def is_ssl_verification_error(exc: BaseException) -> bool:
+    """Return ``True`` if ``exc`` is (or was caused by) a TLS cert failure.
+
+    ``requests`` wraps the underlying :class:`ssl.SSLCertVerificationError`
+    several layers deep (``requests.exceptions.SSLError`` ->
+    ``urllib3`` ``MaxRetryError`` -> ``ssl`` error), so this walks the
+    ``__cause__``/``__context__`` chain and also matches by message as a
+    last resort for transports that stringify the cause.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        if isinstance(current, requests.exceptions.SSLError):
+            return True
+        current = current.__cause__ or current.__context__
+    return "CERTIFICATE_VERIFY_FAILED" in str(exc)
+
+
+def ssl_verification_hint(host: str | None = None) -> str:
+    """A short, actionable message for a TLS certificate-verification failure.
+
+    Aimed at non-technical users who hit an internal-CA host without the
+    SUSE CA installed: it names the two concrete remedies instead of
+    dumping a multi-frame traceback.
+    """
+    where = f" to {host}" if host else ""
+    return (
+        f"TLS certificate verification failed{where}. The server's "
+        "certificate could not be verified against your system's trust "
+        "store. To fix this, either install the SUSE root CA in your "
+        "system trust store, or disable verification by setting "
+        "'ssl_verify = false' under the [mtui] section of your mtui config "
+        "(e.g. ~/.mtuirc). You can also point 'ssl_verify' at a CA bundle "
+        "file: 'ssl_verify = /path/to/ca.pem'."
+    )
