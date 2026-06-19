@@ -260,3 +260,95 @@ def test_main_happy_path_http_transport(
     )
     assert rc == 0
     fastmcp_instance.run.assert_called_once_with(transport="streamable-http")
+
+
+# --------------------------------------------------------------------------- #
+# Boot-time InsecureRequestWarning suppression                                #
+# --------------------------------------------------------------------------- #
+
+
+def test_main_suppresses_insecure_warning_when_verify_off(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_environment: dict[str, MagicMock],
+) -> None:
+    """``ssl_verify = false`` -> the urllib3 warning is silenced at boot.
+
+    The MCP SDK wraps every request handler in
+    ``warnings.catch_warnings(record=True)``, which snapshots and
+    restores ``warnings.filters`` per request. Installing the ignore
+    filter lazily on the first request loses it on that request's exit
+    (and the helper's idempotency guard then blocks re-installation),
+    so it must be installed before the server loop starts.
+    """
+    disable = MagicMock(name="disable_insecure_warnings")
+    monkeypatch.setattr(mcp_main, "disable_insecure_warnings", disable)
+    stub_environment["config"].ssl_verify = False
+
+    rc, _ = _run_with_fake_fastmcp(monkeypatch, lambda: None)
+
+    assert rc == 0
+    disable.assert_called_once_with()
+
+
+@pytest.mark.parametrize("ssl_verify", [True, None, "/etc/ssl/ca-bundle.pem"])
+def test_main_keeps_insecure_warning_when_verifying(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_environment: dict[str, MagicMock],
+    ssl_verify: object,
+) -> None:
+    """When verification is on (or a CA bundle), the warning stays active.
+
+    A truthy ``ssl_verify`` (``True`` or a CA-bundle path) and the
+    unset default (``None`` -> resolves to ``True``) all keep the
+    insecure-request warning, so a genuine misconfiguration is never
+    masked.
+    """
+    disable = MagicMock(name="disable_insecure_warnings")
+    monkeypatch.setattr(mcp_main, "disable_insecure_warnings", disable)
+    stub_environment["config"].ssl_verify = ssl_verify
+
+    rc, _ = _run_with_fake_fastmcp(monkeypatch, lambda: None)
+
+    assert rc == 0
+    disable.assert_not_called()
+
+
+def test_boot_suppression_survives_sdk_catch_warnings_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_environment: dict[str, MagicMock],
+) -> None:
+    """End-to-end: the real suppression survives per-request snapshots.
+
+    This drives the *actual* ``disable_insecure_warnings`` (not a mock)
+    through ``main()`` with verification off, then simulates the SDK's
+    ``warnings.catch_warnings(record=True)`` request wrapper twice. The
+    bug was that a filter installed inside the first request is
+    discarded on its exit, so the second request re-records the warning;
+    installing it at boot means both requests record nothing.
+    """
+    import warnings
+
+    from urllib3.exceptions import InsecureRequestWarning
+
+    from mtui.support import http as _http
+
+    # Reset the helper's module-level idempotency guard so this test's
+    # boot install is the one that takes effect, not a leftover from an
+    # earlier test in the session.
+    monkeypatch.setattr(_http, "_warnings_disabled", False)
+    stub_environment["config"].ssl_verify = False
+
+    rc, _ = _run_with_fake_fastmcp(monkeypatch, lambda: None)
+    assert rc == 0
+
+    def simulated_request() -> int:
+        # Mirror mcp/server/lowlevel/server.py: each handler runs inside
+        # ``catch_warnings(record=True)`` and re-emits what it recorded.
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.warn(
+                "Unverified HTTPS request", InsecureRequestWarning, stacklevel=2
+            )
+            return len(recorded)
+
+    assert simulated_request() == 0
+    assert simulated_request() == 0
