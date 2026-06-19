@@ -24,7 +24,14 @@ from ..support.exceptions import (
     GiteaNoReviewError,
     MissingGiteaTokenError,
 )
-from ..support.http import HTTP_TIMEOUT, VerifyPolicy, build_session, resolve_verify
+from ..support.http import (
+    HTTP_TIMEOUT,
+    VerifyPolicy,
+    build_session,
+    is_ssl_verification_error,
+    resolve_verify,
+    ssl_verification_hint,
+)
 from ..types import assignment, method
 
 logger = getLogger("mtui.connector.gitea")
@@ -179,7 +186,14 @@ class Gitea:
                 timeout=HTTP_TIMEOUT,
             )
         except requests.exceptions.RequestException as e:
-            logger.exception("API call to Gitea failed: %s", e)
+            if is_ssl_verification_error(e):
+                # Non-technical users hit this against internal-CA hosts
+                # without the SUSE CA installed. Surface the actionable
+                # remedy at ERROR instead of a multi-frame traceback.
+                logger.error(ssl_verification_hint(urlparse(url).hostname))
+                logger.debug("Gitea TLS error detail: %s", e)
+            else:
+                logger.exception("API call to Gitea failed: %s", e)
             raise FailedGiteaCallError(f"{method} - {url}") from e
 
         if not rsp.ok:

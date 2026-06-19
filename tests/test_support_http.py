@@ -1,5 +1,7 @@
 """Tests for the centralized HTTP timeout / TLS-verification helper."""
 
+import ssl
+
 import pytest
 
 from mtui.support import http as _http
@@ -172,3 +174,65 @@ def test_get_bytes_raises_on_http_error_status(monkeypatch):
 
     with pytest.raises(_http.requests.exceptions.HTTPError):
         _http.get_bytes("https://h/file", verify=True)
+
+
+# ---------------------------------------------------------------------------
+# is_ssl_verification_error / ssl_verification_hint
+# ---------------------------------------------------------------------------
+
+
+def test_is_ssl_verification_error_detects_wrapped_cert_error():
+    inner = ssl.SSLCertVerificationError(
+        1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+    )
+    outer = _http.requests.exceptions.SSLError("wrapped")
+    outer.__cause__ = inner
+    assert _http.is_ssl_verification_error(outer) is True
+
+
+def test_is_ssl_verification_error_detects_requests_sslerror():
+    assert (
+        _http.is_ssl_verification_error(_http.requests.exceptions.SSLError("boom"))
+        is True
+    )
+
+
+def test_is_ssl_verification_error_matches_message_fallback():
+    # A generic error whose text mentions the cert failure still matches.
+    assert (
+        _http.is_ssl_verification_error(
+            RuntimeError("... CERTIFICATE_VERIFY_FAILED ...")
+        )
+        is True
+    )
+
+
+def test_is_ssl_verification_error_false_for_other_errors():
+    assert (
+        _http.is_ssl_verification_error(
+            _http.requests.exceptions.ConnectTimeout("timed out")
+        )
+        is False
+    )
+    assert _http.is_ssl_verification_error(ValueError("nope")) is False
+
+
+def test_is_ssl_verification_error_handles_cause_cycle():
+    # A self-referential cause must not loop forever.
+    a = RuntimeError("a")
+    b = RuntimeError("b")
+    a.__cause__ = b
+    b.__cause__ = a
+    assert _http.is_ssl_verification_error(a) is False
+
+
+def test_ssl_verification_hint_mentions_remedies():
+    msg = _http.ssl_verification_hint("src.suse.de")
+    assert "src.suse.de" in msg
+    assert "ssl_verify = false" in msg
+    assert "CA" in msg
+
+
+def test_ssl_verification_hint_without_host():
+    msg = _http.ssl_verification_hint()
+    assert "ssl_verify = false" in msg

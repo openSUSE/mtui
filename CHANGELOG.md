@@ -18,6 +18,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A failed Gitea API call caused by TLS certificate verification (common when
+  the SUSE root CA is not in the system trust store) now logs a single,
+  actionable message naming the two remedies — install the SUSE CA or set
+  `ssl_verify = false` (or a CA-bundle path) under `[mtui]` — instead of dumping
+  a multi-frame `SSLCertVerificationError` traceback. The full traceback is
+  still available at debug level.
 - The HTTPS refhosts resolver no longer fails silently when its on-disk cache
   directory (e.g. `~/.cache/mtui`) does not exist: the cache write now creates
   the destination directory. Previously the download succeeded but persisting it
