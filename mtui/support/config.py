@@ -251,7 +251,7 @@ class Config:
                 "install_logs",
                 ("mtui", "install_logs"),
                 Path("install_logs"),
-                Path,
+                expanduser,
                 get,
             ),
             # Seconds. Bounds both establishing the SSH connection (TCP
@@ -307,7 +307,7 @@ class Config:
                 "target_tempdir",
                 ("target", "tempdir"),
                 Path("/tmp"),
-                Path,
+                expanduser,
                 get,
             ),
             ConfigOption(
@@ -339,7 +339,7 @@ class Config:
                 "refhosts_path",
                 ("refhosts", "path"),
                 Path("/usr/share/qam-metadata/refhosts.yml"),
-                Path,
+                expanduser,
                 get,
             ),
             ConfigOption(
