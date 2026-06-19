@@ -568,6 +568,26 @@ class TestRefhostsFactory:
         assert rh is working.resolve.return_value
         assert any("resolver https failed" in r.message for r in caplog.records)
 
+    def test_call_logs_real_exception_cause(self, caplog):
+        """The resolver's actual exception message is surfaced, not just a
+        generic 'failed' line, so HTTPS failures are debuggable."""
+        failing = MagicMock(spec=refhost.Resolver)
+        failing.resolve.side_effect = FileNotFoundError(
+            2, "No such file or directory", "/home/u/.cache/mtui/refhosts.yml"
+        )
+        factory = refhost._RefhostsFactory({"https": failing})
+        cfg = _make_config(refhosts_resolvers="https")
+        with (
+            caplog.at_level("WARNING", logger="mtui.refhost"),
+            pytest.raises(refhost.RefhostsResolveFailedError),
+        ):
+            factory(cfg)
+        assert any(
+            "resolver https failed" in r.message
+            and "No such file or directory" in r.message
+            for r in caplog.records
+        )
+
     def test_call_raises_when_all_resolvers_fail(self):
         failing = MagicMock(spec=refhost.Resolver)
         failing.resolve.side_effect = RuntimeError("boom")

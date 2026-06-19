@@ -78,6 +78,15 @@ def test_atomic_write(create_temp):
     atomic_write_file(data.encode(), Path(path) / "bytes")
 
 
+def test_atomic_write_creates_missing_parent(create_temp):
+    """The destination directory is created if absent (e.g. ~/.cache/mtui)."""
+    target = Path(create_temp) / "missing" / "nested" / "refhosts.yml"
+    assert not target.parent.exists()
+    atomic_write_file(b"data: 1\n", target)
+    assert target.exists()
+    assert target.read_text() == "data: 1\n"
+
+
 def test_timestamp():
     """Test timestamp."""
     assert isinstance(int(timestamp()), int)
