@@ -35,22 +35,38 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextvars
 import io
+import logging
 import shlex
 import time
-from logging import Logger, getLogger
+from logging import Handler, Logger, LogRecord, getLogger
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 from ..cli.argparse import ArgsParseFailureError
 from ..cli.display import CommandPromptDisplay
 from ..commands import Command
+from ..support.concurrency import ContextExecutor
 from ..test_reports.null_report import NullTestReport
 
 if TYPE_CHECKING:
     from ..support.config import Config
 
 logger = getLogger("mtui.mcp.session")
+
+#: Per-call capture token. ``_run_sync`` sets this to a unique object for
+#: the duration of one command (and, via
+#: :class:`mtui.support.concurrency.ContextExecutor`, the value propagates
+#: into any worker threads the command fans out to). Each
+#: :class:`_LogCaptureHandler` admits only records whose ambient token
+#: matches its own, so concurrent sessions never capture each other's log
+#: lines. Default ``None`` means "no command in flight" -> nothing
+#: captured.
+_capture_token: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+    "mtui_mcp_capture_token", default=None
+)
+
 
 #: Default heartbeat interval, in seconds, between
 #: ``notifications/progress`` frames emitted while a long-running tool
@@ -62,6 +78,69 @@ logger = getLogger("mtui.mcp.session")
 #: nothing on the wire and stops well-behaved clients from timing out
 #: on ``run`` / ``update`` / ``set_repo`` / ``commit`` etc.).
 DEFAULT_PROGRESS_INTERVAL_SECONDS: float = 10.0
+
+
+class _LogCaptureHandler(Handler):
+    """Tee ``mtui`` log records emitted *during a command* into its stdout.
+
+    The MCP layer hands the client only what a command wrote to its
+    per-call :class:`io.StringIO` (see :meth:`McpSession._run_sync`).
+    Records logged through the standard library — e.g. the product-drift
+    ``logger.warning`` lines from
+    :meth:`mtui.test_reports.testreport.TestReport._verify_target_products`
+    — never touch that buffer, so without this handler MCP clients would
+    miss them.
+
+    Two scoping rules keep the capture tight:
+
+    * **Level.** Only ``INFO`` and above is teed in; ``DEBUG`` stays out.
+    * **Capture token.** :meth:`filter` admits only records whose ambient
+      :data:`_capture_token` matches this handler's token. The token is
+      set per call by :meth:`McpSession._run_sync` and propagates into
+      worker threads via :class:`mtui.support.concurrency.ContextExecutor`,
+      so a command's own fan-out (e.g. the connect thread pool that emits
+      product-drift warnings) is captured while concurrent sessions —
+      each with a different token — never bleed into one another's reply.
+
+    Installed on the ``mtui`` logger (not ``mtui-mcp``) for the duration
+    of a single ``_run_sync`` call and removed in its ``finally`` — so a
+    session's own bookkeeping (``mtui-mcp``: the per-call "wrote to
+    stderr" notice, ``notify:`` lines) is *not* captured.
+    """
+
+    def __init__(self, stream: io.StringIO, token: object) -> None:
+        """Bind the handler to one call's stdout buffer and capture token.
+
+        Args:
+            stream: The per-call :class:`io.StringIO` to tee records into.
+            token: The unique per-call object stored in
+                :data:`_capture_token`; only records emitted while that
+                same token is the ambient value are captured.
+
+        """
+        super().__init__(level=logging.INFO)
+        self._stream = stream
+        self._token = token
+
+    def filter(self, record: LogRecord) -> bool:
+        """Admit only records whose ambient capture token is this call's."""
+        return _capture_token.get() is self._token
+
+    def emit(self, record: LogRecord) -> None:
+        """Write the record as ``LEVEL: message`` into the bound stream.
+
+        The level label is derived from ``record.levelno`` rather than
+        ``record.levelname`` because mtui's :class:`ColorFormatter`
+        mutates ``levelname`` in place (lowercasing/colourising it) when
+        another handler on the same logger formats the shared record
+        first; reading ``levelno`` keeps this output stable and
+        uncoloured regardless of handler ordering.
+        """
+        try:
+            level = logging.getLevelName(record.levelno)
+            self._stream.write(f"{level}: {record.getMessage()}\n")
+        except Exception:  # noqa: BLE001 - logging must never raise into callers
+            self.handleError(record)
 
 
 class McpCommandError(RuntimeError):
@@ -239,7 +318,8 @@ class McpSession:
         ``load_update``) call ``self.prompt.println`` directly. While a
         command is running the per-call StringIO is active and the
         write lands in the captured output; outside a call we have
-        nowhere to put the text, so it goes to the log at INFO.
+        nowhere to put the text, so it goes to the log at WARNING (it is
+        addressed at a human, not routine status).
 
         Args:
             msg: The string to print.
@@ -249,7 +329,7 @@ class McpSession:
         if self._current_stdout is not None:
             self._current_stdout.write(msg + eol)
         else:
-            self.log.info(msg)
+            self.log.warning(msg)
 
     def load_update(self, update, autoconnect: bool) -> None:
         """Loads an update and swaps in the resulting TestReport.
@@ -340,7 +420,7 @@ class McpSession:
             except Exception as exc:  # noqa: BLE001 - best-effort teardown
                 self.log.warning("error disconnecting host %s: %s", name, exc)
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with ContextExecutor() as executor:
             futures = [executor.submit(_close_one, name) for name in hostnames]
             concurrent.futures.wait(futures, timeout=45)
 
@@ -454,6 +534,34 @@ class McpSession:
         prev_stdout = self._current_stdout
         self.display = display
         self._current_stdout = fake_sys.stdout
+
+        # Tee the command's own ``mtui.*`` log records (INFO+) into the
+        # captured stdout so MCP clients see warnings/errors the command
+        # logs rather than prints — e.g. product-drift warnings emitted
+        # by ``TestReport._verify_target_products``. Scoped by a per-call
+        # capture token (set in this context and propagated into worker
+        # threads via ``ContextExecutor``) so a command's own fan-out is
+        # captured while concurrent http sessions never cross-pollute, and
+        # bound to the ``mtui`` logger (not ``self.log``/``mtui-mcp``) so
+        # the session's own bookkeeping below is not echoed back.
+        #
+        # The ``mtui`` logger defaults to an effective level of WARNING
+        # (inherited from root), which would drop INFO records before any
+        # handler sees them, so temporarily lower it to INFO for the call
+        # when it is currently stricter. The raw level is saved and
+        # restored in ``finally`` so a user's ``set_log_level`` choice is
+        # left untouched (under MCP that command targets the separate
+        # ``mtui-mcp`` logger, but restoring the exact prior value keeps
+        # this safe regardless).
+        cap_logger = getLogger("mtui")
+        cap_token = object()
+        cap_handler = _LogCaptureHandler(fake_sys.stdout, cap_token)
+        token_reset = _capture_token.set(cap_token)
+        prev_cap_level = cap_logger.level
+        lowered_cap_level = cap_logger.getEffectiveLevel() > logging.INFO
+        if lowered_cap_level:
+            cap_logger.setLevel(logging.INFO)
+        cap_logger.addHandler(cap_handler)
         try:
             try:
                 args_ns = cmd_cls.parse_args(shlex.join(argv), fake_sys)
@@ -499,5 +607,9 @@ class McpSession:
 
             return fake_sys.stdout.getvalue()
         finally:
+            cap_logger.removeHandler(cap_handler)
+            _capture_token.reset(token_reset)
+            if lowered_cap_level:
+                cap_logger.setLevel(prev_cap_level)
             self.display = prev_display
             self._current_stdout = prev_stdout

@@ -41,7 +41,7 @@ def test_remove_host_happy_closes_and_pops(mock_config):
         return MagicMock()
 
     with (
-        patch("mtui.commands.removehost.concurrent.futures.ThreadPoolExecutor") as tpe,
+        patch("mtui.commands.removehost.ContextExecutor") as tpe,
         patch("mtui.commands.removehost.concurrent.futures.wait"),
     ):
         executor = MagicMock()

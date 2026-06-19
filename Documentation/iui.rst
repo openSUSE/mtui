@@ -68,7 +68,7 @@ When a host connects, mtui checks that the products actually installed on
 it (from ``/etc/products.d``) match what ``refhosts.yml`` records for that
 host. Any drift — a wrong or wrong-version base product, a wrong
 architecture, addons that are missing, unexpected, or at a different
-version, or a dangling ``/etc/products.d/baseproduct`` symlink — is printed
+version, or a dangling ``/etc/products.d/baseproduct`` symlink — is logged
 as a ``WARNING`` and the host is kept (the check never aborts a connect).
 The ``qa`` product is ignored, and hosts not listed in ``refhosts.yml`` are
 skipped silently.

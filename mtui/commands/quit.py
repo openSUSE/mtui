@@ -5,6 +5,7 @@ from contextlib import suppress
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
+from ..support.concurrency import ContextExecutor
 from . import Command
 
 
@@ -41,7 +42,7 @@ class Quit(Command):
         """Executes the `quit` command."""
         args_ = [self.args.bootarg] if self.args.bootarg else []
 
-        with concurrent.futures.ThreadPoolExecutor() as executor:
+        with ContextExecutor() as executor:
             targets = [
                 executor.submit(self._close_target, target, args_)
                 for target in set(self.targets)

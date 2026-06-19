@@ -4,6 +4,7 @@ import concurrent.futures
 from logging import getLogger
 
 from ..cli.completion import complete_choices
+from ..support.concurrency import ContextExecutor
 from . import Command
 
 logger = getLogger("mtui.commands.addhost")
@@ -45,34 +46,17 @@ class AddHost(Command):
             self.config.kernel = False
             self.prompt.set_prompt(self.prompt.session)
 
-        before = set(self.metadata.targets)
-
         if not self.args.target:
             for tp in self.metadata.testplatforms:
                 self.metadata.refhosts_from_tp(tp)
             self.metadata.connect_targets()
         else:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
+            with ContextExecutor() as executor:
                 connections = [
                     executor.submit(self.metadata.add_target, hostname)
                     for hostname in self.args.target
                 ]
                 concurrent.futures.wait(connections)
-
-        self._report_product_warnings(before)
-
-    def _report_product_warnings(self, before: set) -> None:
-        """Print any product-drift warnings for hosts added by this call.
-
-        :meth:`TestReport._verify_target_products` records drift versus
-        ``refhosts.yml`` in ``metadata.product_warnings`` and logs it, but
-        MCP clients only see command stdout -- so echo the warnings via
-        ``println`` for the hosts that were just connected.
-        """
-        added = sorted(set(self.metadata.targets) - before)
-        for host in added:
-            for line in self.metadata.product_warnings.get(host, []):
-                self.println(f"WARNING: {host}: {line}")
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

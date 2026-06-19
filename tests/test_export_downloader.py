@@ -151,7 +151,7 @@ def test_download_logs_dispatches_via_thread_pool() -> None:
     fake_executor.__enter__.return_value = fake_executor
     fake_executor.__exit__.return_value = False
     with patch(
-        "mtui.update_workflow.export.downloader.concurrent.futures.ThreadPoolExecutor",
+        "mtui.update_workflow.export.downloader.ContextExecutor",
         return_value=fake_executor,
     ):
         download_logs([host], "/r", "/i", "tolerant")
