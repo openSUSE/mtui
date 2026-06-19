@@ -107,6 +107,36 @@ def test_path_options_expand_tilde(tmpdir):
     )
 
 
+def test_ssl_verify_available_when_location_resolves_during_parse(tmpdir):
+    """Parsing ``location`` triggers the resolve, which reads ``ssl_verify``.
+
+    Regression: ``location`` was parsed before ``ssl_verify``, so the resolve
+    fired by the ``location`` setter raised ``AttributeError: 'Config' object
+    has no attribute 'ssl_verify'``. ``location`` must be parsed last so every
+    option the resolve depends on is already set.
+    """
+    seen: dict[str, object] = {}
+
+    class SslReadingRefhosts:
+        def __init__(self, cfg):
+            self._cfg = cfg
+
+        def check_location_sanity(self, location):
+            # Reading these must not raise during config parsing.
+            seen["ssl_verify"] = self._cfg.ssl_verify
+            seen["refhosts_resolvers"] = self._cfg.refhosts_resolvers
+
+        def __call__(self, cfg):
+            return SslReadingRefhosts(cfg)
+
+    cfg_file = Path(tmpdir.join("test.cfg"))
+    cfg_file.write_text("[mtui]\nlocation = nuremberg\nssl_verify = false\n")
+    cfg = config.Config(cfg_file, refhosts=SslReadingRefhosts(None))
+    assert cfg.location == "nuremberg"
+    assert cfg.ssl_verify is False
+    assert seen["ssl_verify"] is False
+
+
 def test_merge_args(tmpdir):
     """Test merge_args."""
     config_file = Path(tmpdir.join("test.cfg"))
