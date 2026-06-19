@@ -86,11 +86,13 @@ dependency management.
 
 .. code-block:: sh
 
-    uv sync --extra norpm --group dev
+    uv sync --extra norpm --extra mcp --group dev
 
 This creates ``.venv/`` with mtui in editable mode plus the test and
 lint tooling. The ``norpm`` extra pulls in ``version_utils`` so the
-test suite runs without the system ``rpm`` Python bindings.
+test suite runs without the system ``rpm`` Python bindings. The ``mcp``
+extra pulls in ``mcp``/``pydantic``, without which the ``test_mcp_*``
+suites fail to import.
 
 To run mtui from the checkout:
 

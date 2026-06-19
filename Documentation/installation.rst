@@ -48,7 +48,7 @@ and pins dependencies via ``uv.lock``.
 
     git clone https://github.com/openSUSE/mtui.git
     cd mtui
-    uv sync --extra norpm --group dev
+    uv sync --extra norpm --extra mcp --group dev
     uv run mtui --help
 
 With pip
