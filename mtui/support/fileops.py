@@ -67,6 +67,12 @@ def atomic_write_file(data: bytes | str, path: Path) -> None:
     """
     if isinstance(data, bytes):
         data = data.decode("utf-8")
+    # Ensure the destination directory exists; ``mkstemp(dir=...)`` and the
+    # final ``move`` both require it. Cache locations such as
+    # ``~/.cache/mtui`` may be absent on a fresh checkout, which otherwise
+    # makes the write (e.g. the refhosts.yml HTTPS download) fail with a
+    # ``FileNotFoundError`` that masks the real reason for the resolve.
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, fname = mkstemp(dir=path.parent)
 
     with os.fdopen(fd, "w") as f:

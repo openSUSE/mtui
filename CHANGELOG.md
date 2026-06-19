@@ -18,6 +18,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The HTTPS refhosts resolver no longer fails silently when its on-disk cache
+  directory (e.g. `~/.cache/mtui`) does not exist: the cache write now creates
+  the destination directory. Previously the download succeeded but persisting it
+  raised a `FileNotFoundError` that the resolver chain swallowed, making the
+  fetch appear to fail regardless of the `ssl_verify` setting.
+- A failing refhosts resolver now logs the real reason for the failure (e.g. the
+  underlying connection, file, or TLS error) at WARNING instead of only a
+  generic "resolver X failed" line, so refhosts download problems are
+  diagnosable without enabling debug logging.
 - A `~`-prefixed `[refhosts] path` (and `[mtui] install_logs`, `[target]
   tempdir`) is now expanded to the user's home directory instead of being used
   as a literal relative path, so a home-relative `refhosts.yml` location loads

@@ -181,8 +181,8 @@ class _RefhostsFactory:
                 continue
             try:
                 return resolver.resolve(config)
-            except Exception:
-                logger.warning("Refhosts: resolver %s failed", name)
+            except Exception as e:
+                logger.warning("Refhosts: resolver %s failed: %s", name, e)
                 logger.debug(format_exc())
 
         raise RefhostsResolveFailedError()
