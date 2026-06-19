@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from argparse import Namespace
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.addhost import AddHost
@@ -99,6 +100,53 @@ def test_add_host_keep_mode_stays_automatic(mock_config):
     prompt.set_prompt.assert_not_called()
     # The hosts are still added.
     prompt.metadata.connect_targets.assert_called_once_with()
+
+
+def test_add_host_prints_product_warnings_for_new_hosts(mock_config):
+    """Product-drift warnings recorded during connect are echoed to stdout so
+    MCP clients (which only see command stdout) can see them."""
+    prompt = _prompt()
+    prompt.metadata.targets = {}  # nothing connected yet
+    prompt.metadata.product_warnings = {"h1": ["arch 'x86_64' != 'aarch64' (metadata)"]}
+    args = Namespace(target=["h1"], keep_mode=False)
+
+    fake_sys = MagicMock()
+    fake_sys.stdout = StringIO()
+
+    def _connect(*_a, **_k):
+        # Simulate add_target connecting h1 between the before/after snapshot.
+        prompt.metadata.targets["h1"] = MagicMock()
+
+    with (
+        patch("mtui.commands.addhost.concurrent.futures.ThreadPoolExecutor"),
+        patch("mtui.commands.addhost.concurrent.futures.wait", side_effect=_connect),
+    ):
+        AddHost(args, mock_config, fake_sys, prompt)()
+
+    output = fake_sys.stdout.getvalue()
+    assert "WARNING: h1: arch 'x86_64' != 'aarch64' (metadata)" in output
+
+
+def test_add_host_no_warnings_prints_nothing(mock_config):
+    """A clean connect with no drift prints nothing extra."""
+    prompt = _prompt()
+    prompt.metadata.targets = {}
+    prompt.metadata.product_warnings = {}
+    args = Namespace(target=["h1"], keep_mode=False)
+
+    fake_sys = MagicMock()
+    fake_sys.stdout = StringIO()
+
+    def _connect(*_a, **_k):
+        prompt.metadata.targets["h1"] = MagicMock()
+
+    with (
+        patch("mtui.commands.addhost.concurrent.futures.ThreadPoolExecutor"),
+        patch("mtui.commands.addhost.concurrent.futures.wait", side_effect=_connect),
+    ):
+        AddHost(args, mock_config, fake_sys, prompt)()
+
+    assert fake_sys.stdout.getvalue() == ""
 
 
 def test_add_host_in_manual_mode_does_not_switch(mock_config):

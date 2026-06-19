@@ -144,6 +144,23 @@ class Refhosts:
                 return False
         return True
 
+    def host_by_name(self, name: str) -> Host | None:
+        """Return the refhosts entry whose ``name`` matches, or ``None``.
+
+        Searches the configured location first, then ``default``, then any
+        remaining locations, so a connected host maps back to the metadata
+        row mtui would use for it. Returns ``None`` if no row matches.
+        """
+        ordered: list[str] = []
+        for loc in (self.location, self._default_location, *self.data):
+            if loc not in ordered:
+                ordered.append(loc)
+        for loc in ordered:
+            for candidate in self.data.get(loc, []):
+                if candidate.name == name:
+                    return candidate
+        return None
+
     def check_location_sanity(self, location: str) -> None:
         """Raise :class:`InvalidLocationError` if ``location`` is unknown."""
         if location not in self.data:

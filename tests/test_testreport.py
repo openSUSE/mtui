@@ -83,6 +83,88 @@ def test_get_package_list_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# _verify_target_products: drift check against refhosts.yml
+# ---------------------------------------------------------------------------
+
+
+def _target_with_system(hostname, base, addons=(), dangling=False) -> MagicMock:
+    from mtui.types import Product as DetectedProduct
+    from mtui.types.systems import System
+
+    target = MagicMock()
+    target.hostname = hostname
+    target.system = System(
+        DetectedProduct(*base),
+        {DetectedProduct(*a) for a in addons},
+        dangling_base=dangling,
+    )
+    return target
+
+
+def _refhost(name, arch, product, addons=()):
+    from mtui.hosts.refhost.models import Addon, Host, Product, Version
+
+    pname, major, minor = product
+    return Host(
+        name=name,
+        arch=arch,
+        product=Product(name=pname, version=Version(major=major, minor=minor)),
+        addons=tuple(
+            Addon(name=n, version=Version(major=amaj, minor=amin))
+            for n, amaj, amin in addons
+        ),
+    )
+
+
+def _stub_store(r: OBSTestReport, host) -> MagicMock:
+    """Wire a pre-built refhosts store whose host_by_name returns ``host``."""
+    store = MagicMock()
+    store.host_by_name.return_value = host
+    r._refhosts_store = store
+    r._refhosts_store_built = True
+    return store
+
+
+def test_verify_target_products_warns_on_drift(tmp_path: Path, caplog) -> None:
+    r = _make(tmp_path)
+    target = _target_with_system("h1", ("SLES", "16.0", "x86_64"))
+    # Metadata says aarch64 -> arch drift.
+    _stub_store(r, _refhost("h1", "aarch64", ("SLES", 16, 0)))
+    with caplog.at_level(logging.WARNING, logger="mtui.template.testreport"):
+        r._verify_target_products(target)
+    assert "h1" in r.product_warnings
+    assert any("refhosts.yml" in rec.message for rec in caplog.records)
+
+
+def test_verify_target_products_clears_stale_warning_on_match(tmp_path: Path) -> None:
+    r = _make(tmp_path)
+    target = _target_with_system("h1", ("SLES", "16.0", "x86_64"))
+    _stub_store(r, _refhost("h1", "x86_64", ("SLES", 16, 0)))
+    r.product_warnings["h1"] = ["stale"]
+    r._verify_target_products(target)
+    assert "h1" not in r.product_warnings
+
+
+def test_verify_target_products_skips_host_not_in_metadata(tmp_path: Path) -> None:
+    r = _make(tmp_path)
+    target = _target_with_system("h1", ("SLES", "16.0", "x86_64"))
+    _stub_store(r, None)
+    r._verify_target_products(target)
+    assert r.product_warnings == {}
+
+
+def test_verify_target_products_is_best_effort(tmp_path: Path) -> None:
+    """A failure in the check never propagates out of the connect path."""
+    r = _make(tmp_path)
+    target = _target_with_system("h1", ("SLES", "16.0", "x86_64"))
+    store = _stub_store(r, None)
+    store.host_by_name.side_effect = RuntimeError("boom")
+    # Must not raise.
+    r._verify_target_products(target)
+    assert r.product_warnings == {}
+
+
+# ---------------------------------------------------------------------------
 # _warn_missing_fields
 # ---------------------------------------------------------------------------
 
