@@ -381,17 +381,6 @@ MTUI checks out the testreport from, and commits it to,
 MTUI uses testsuites in this directory in refhosts.
 
 
-``template.smelt_threshold``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  | **type**
-  |     int 
-  | **default**
-  |     10 
-
-Set text wrapping for smelt checkers results.
-Default is first 10 lines in template.
-
-
 ``url.bugzilla``
 ~~~~~~~~~~~~~~~~
   | **type**

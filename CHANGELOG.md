@@ -33,6 +33,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `connection_timeout` is now read from the `[connection]` section (falling
   back to the legacy `[mtui]` section), matching where it is documented to live.
 
+### Removed
+
+- Removed the `template.smelt_threshold` config option. It was parsed and
+  documented but never consumed by any command (intended to limit smelt-checkers
+  output in the template, never wired up).
+
 ## [18.0.1] - 2026-06-18
 
 ### Added
