@@ -87,6 +87,26 @@ def test_smelt_url_defaults_empty_and_overrides(tmpdir):
     )
 
 
+def test_path_options_expand_tilde(tmpdir):
+    """``~``-prefixed path options expand to the user's home directory."""
+    config_file = Path(tmpdir.join("test.cfg"))
+    config_file.write_text(
+        "[refhosts]\npath = ~/qam/refhosts.yml\n"
+        "[mtui]\ninstall_logs = ~/logs\n"
+        "[target]\ntempdir = ~/scratch\n"
+    )
+    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    assert cfg.refhosts_path == Path.home() / "qam/refhosts.yml"
+    assert cfg.install_logs == Path.home() / "logs"
+    assert cfg.target_tempdir == Path.home() / "scratch"
+    # An absolute path is passed through unchanged.
+    abs_cfg = Path(tmpdir.join("abs.cfg"))
+    abs_cfg.write_text("[refhosts]\npath = /usr/share/refhosts.yml\n")
+    assert config.Config(abs_cfg, refhosts=MockRefhosts).refhosts_path == Path(
+        "/usr/share/refhosts.yml"
+    )
+
+
 def test_merge_args(tmpdir):
     """Test merge_args."""
     config_file = Path(tmpdir.join("test.cfg"))

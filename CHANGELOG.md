@@ -18,6 +18,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- A `~`-prefixed `[refhosts] path` (and `[mtui] install_logs`, `[target]
+  tempdir`) is now expanded to the user's home directory instead of being used
+  as a literal relative path, so a home-relative `refhosts.yml` location loads
+  correctly.
 - A failed `update` no longer crashes with `KeyError(<hostname>)` during its
   automatic rollback. The downgrade builds a command only for hosts with a
   recorded previous version, but `RunCommand` ran it against the whole group;
