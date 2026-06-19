@@ -380,14 +380,6 @@ class Config:
                 "update_kernel-zypper.log",
                 getter=get,
             ),
-            # process location last as that needs to access
-            # RefhostsFactory which need access to parts of config.
-            ConfigOption(
-                "location",
-                ("mtui", "location"),
-                "default",
-                getter=get,
-            ),
             ConfigOption(
                 "gitea_token",
                 ("gitea", "token"),
@@ -463,6 +455,19 @@ class Config:
                 1800,
                 int,
                 getint,
+            ),
+            # ``location`` MUST be parsed last. Assigning it goes through the
+            # ``location`` property setter, which resolves refhosts to validate
+            # the location -- and the resolve reads ``ssl_verify`` and the
+            # ``refhosts_*`` options. Those must already be set on ``self``, so
+            # this option stays at the end of the list. Reordering it earlier
+            # reintroduces ``AttributeError: 'Config' object has no attribute
+            # 'ssl_verify'`` during config parsing.
+            ConfigOption(
+                "location",
+                ("mtui", "location"),
+                "default",
+                getter=get,
             ),
         ]
 

@@ -31,6 +31,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   tempdir`) is now expanded to the user's home directory instead of being used
   as a literal relative path, so a home-relative `refhosts.yml` location loads
   correctly.
+- Setting `[mtui] location` no longer breaks refhosts resolution during config
+  parsing with `'Config' object has no attribute 'ssl_verify'`. The `location`
+  option is now parsed after the `ssl_verify` and `refhosts_*` options it
+  depends on, so the validation resolve triggered by setting a location reads a
+  fully-populated config.
 - A failed `update` no longer crashes with `KeyError(<hostname>)` during its
   automatic rollback. The downgrade builds a command only for hosts with a
   recorded previous version, but `RunCommand` ran it against the whole group;
