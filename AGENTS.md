@@ -11,7 +11,7 @@
 - Config is INI from `MTUI_CONF`, explicit `--config`, or `/etc/mtui.cfg` plus `~/.mtuirc`; `TEMPLATE_DIR`, `TMPDIR`, and `GITEA_TOKEN` are also read.
 
 ## Development Commands
-- Setup: `uv sync --extra norpm --group dev`. The `norpm` extra avoids requiring system `rpm` Python bindings by using `version_utils`.
+- Setup: `uv sync --extra norpm --extra mcp --group dev` (matches CI). The `norpm` extra avoids requiring system `rpm` Python bindings by using `version_utils`; the `mcp` extra provides `mcp`/`pydantic`, without which the `test_mcp_*` suites fail to import.
 - Full local gates matching CI: `uv run ruff format --check .`, `uv run ruff check .`, `uv run ty check`, `uv run pytest`.
 - Auto-fix style: `uv run ruff format .` then `uv run ruff check --fix .`.
 - Coverage run: `uv run pytest -v --cov=./mtui --cov-report=xml --cov-report=term`.

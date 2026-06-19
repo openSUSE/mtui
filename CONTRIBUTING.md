@@ -33,13 +33,14 @@ The project uses [`uv`](https://docs.astral.sh/uv/) for environment and
 dependency management.
 
 ```sh
-uv sync --extra norpm --group dev
+uv sync --extra norpm --extra mcp --group dev
 ```
 
 This creates a virtualenv under `.venv/` containing mtui in editable
 mode plus the test and lint tooling. The `norpm` extra pulls in
 `version_utils` so the test suite runs without the system `rpm` Python
-bindings.
+bindings. The `mcp` extra pulls in `mcp`/`pydantic`, without which the
+`test_mcp_*` suites fail to import.
 
 To run mtui from the checkout:
 
