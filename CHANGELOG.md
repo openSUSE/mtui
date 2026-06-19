@@ -5,6 +5,20 @@ All notable user-visible changes to MTUI are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Connecting a reference host now verifies that its installed products matchV
+  what `refhosts.yml` records for that host. On any drift — wrong or
+  wrong-version base product, wrong architecture, addons that are missing,
+  unexpected, or at a different version, or a dangling
+  `/etc/products.d/baseproduct` symlink — `add_host` prints a `WARNING` per
+  drift class and keeps the host (the check never aborts a connect). `qa` is
+  ignored on both sides to match the products mtui already skips. This catches
+  validating an update on a host that is not the system its metadata claims;
+  hosts absent from `refhosts.yml` are skipped silently.
+
 ## 18.1.0 - 2026-06-19
 
 ### Added

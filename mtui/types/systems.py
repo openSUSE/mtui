@@ -16,12 +16,21 @@ class System:
     used for pretty-printing and for correct update handling.
     """
 
-    def __init__(self, base: Product, addons: set[Product] | None = None) -> None:
+    def __init__(
+        self,
+        base: Product,
+        addons: set[Product] | None = None,
+        dangling_base: bool = False,
+    ) -> None:
         """Initializes the `System` object.
 
         Args:
             base: The base product of the system.
             addons: A set of addons for the system.
+            dangling_base: True when ``/etc/products.d/baseproduct`` is a
+                dangling symlink (its target product file is missing), so
+                ``base`` is a best-effort guess derived from the symlink
+                target name rather than a parsed product file.
 
         """
         # TODO: check for correctness of base and addons types
@@ -29,6 +38,7 @@ class System:
             addons = set()
         self.__base = base
         self.__addons = addons
+        self.dangling_base = dangling_base
 
     def get_release(self) -> str:
         """Gets the release of the system.

@@ -304,6 +304,57 @@ class TestParseSystem:
         assert ("sle-ha", "12-SP5") in addons
 
     @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_dangling_baseproduct_symlink(self, mock_product_module):
+        """A dangling baseproduct symlink warns and degrades, not crash.
+
+        ``readlink`` resolves to ``SLES.prod`` but opening it raises
+        ``OSError`` (the target file is gone). parse_system must not crash:
+        it flags ``dangling_base`` and derives a best-effort base name from
+        the symlink target.
+        """
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = ["SLES.prod"]
+        sftp.readlink.return_value = "SLES.prod"
+
+        def _open(path, *args, **kwargs):
+            p = str(path)
+            if p == "/etc/products.d/SLES.prod":
+                raise OSError("dangling symlink target missing")
+            if "transactional-update.conf" in p:
+                raise FileNotFoundError(p)
+            return MagicMock()
+
+        sftp.open.side_effect = _open
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        system, transactional = parse_system(conn)
+
+        assert system.dangling_base is True
+        # Best-effort base name from the symlink target ("SLES.prod").
+        assert system.get_base().name == "SLES"
+        assert system.get_base().version == ""
+        assert transactional is False
+        # The missing base file was never handed to parse_product.
+        mock_product_module.parse_product.assert_not_called()
+
+    @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_missing_baseproduct_symlink(self, mock_product_module):
+        """An absent/empty baseproduct symlink degrades instead of crashing."""
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = []
+        sftp.readlink.return_value = ""
+        sftp.open.side_effect = _dispatch_open(transactional=False)
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        system, transactional = parse_system(conn)
+
+        assert system.dangling_base is True
+        assert system.get_base().name == "unknown"
+        assert transactional is False
+
+    @patch("mtui.hosts.target.parsers.system.product")
     def test_parse_sles_sap_16_adds_ha_addon(self, mock_product_module):
         """SLES_SAP 16 implicitly carries the sle-ha repo (workaround)."""
         conn, sftp = _mock_connection_with_sftp()

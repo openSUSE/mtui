@@ -301,6 +301,24 @@ class TestRefhosts:
         )
         assert rh.search(attrs) == []
 
+    def test_host_by_name_finds_in_default(self):
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
+        host = rh.host_by_name("host-default-x86")
+        assert host is not None
+        assert host.name == "host-default-x86"
+        assert host.product.name == "sles"
+
+    def test_host_by_name_finds_in_other_location(self):
+        """A host living only under ``nuremberg`` is still found from default."""
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)  # default location
+        host = rh.host_by_name("host-nbg-only-here")
+        assert host is not None
+        assert host.arch == "ppc64le"
+
+    def test_host_by_name_unknown_returns_none(self):
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
+        assert rh.host_by_name("no-such-host") is None
+
 
 class TestIsCandidateMatch:
     """Direct tests of the matcher to cover its branches."""

@@ -48,13 +48,37 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
                 return (System(Product("rhel", "6", "x86_64")), False)
             return (System(Product(name, version, arch)), False)
 
-        if basefile := sftp.readlink("/etc/products.d/baseproduct"):
+        basefile = sftp.readlink("/etc/products.d/baseproduct")
+        if basefile and basefile in files:
             files.remove(basefile)
 
-        with sftp.open(f"/etc/products.d/{basefile}") as f:
-            logger.debug("Parsing basefile")
-            name, version, arch = product.parse_product(f)
-            base = Product(name, version, arch)
+        dangling_base = False
+        if not basefile:
+            # /etc/products.d/baseproduct is missing or not a symlink.
+            logger.warning(
+                "%s: /etc/products.d/baseproduct is missing or not a symlink",
+                connection.hostname,
+            )
+            dangling_base = True
+            base = Product("unknown", "", "")
+        else:
+            try:
+                with sftp.open(f"/etc/products.d/{basefile}") as f:
+                    logger.debug("Parsing basefile")
+                    name, version, arch = product.parse_product(f)
+                    base = Product(name, version, arch)
+            except OSError:
+                # Dangling symlink: the target product file is gone. Don't
+                # crash the connect; warn and fall back to a best-effort
+                # base derived from the symlink target name.
+                logger.warning(
+                    "%s: /etc/products.d/baseproduct -> %s is a dangling "
+                    "symlink (target product file missing)",
+                    connection.hostname,
+                    basefile,
+                )
+                dangling_base = True
+                base = Product(basefile.removesuffix(".prod"), "", "")
 
         addons: set[Product] = set()
         for x in files:
@@ -89,4 +113,4 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
             logger.info("Host: %s is transactional system", connection.hostname)
             break
 
-    return (System(base, addons), transactional)
+    return (System(base, addons, dangling_base=dangling_base), transactional)

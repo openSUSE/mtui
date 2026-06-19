@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import stat
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from contextlib import suppress
@@ -18,6 +19,7 @@ from traceback import format_exc
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..hosts.refhost import Attributes, RefhostsFactory, RefhostsResolveFailedError
+from ..hosts.refhost import verify as product_verify
 from ..hosts.target import Target, TargetLockedError
 from ..hosts.target.hostgroup import HostsGroup
 from ..support.config import Config
@@ -145,6 +147,16 @@ class TestReport(ABC):
         """
 
         self.openqa: OpenQAResults = OpenQAResults()
+
+        # hostname -> product-drift warning lines from the last connect
+        # (see _verify_target_products); commands print these so they
+        # reach MCP clients, which only see command stdout (not logs).
+        self.product_warnings: dict[str, list[str]] = {}
+        # Lazily-built, cached refhosts store for the product check, with
+        # a lock because connect_targets runs connect_target concurrently.
+        self._refhosts_store: Any = None
+        self._refhosts_store_built = False
+        self._refhosts_store_lock = threading.Lock()
 
     @property
     @abstractmethod
@@ -477,6 +489,75 @@ class TestReport(ABC):
         with suppress(TargetLockedError):
             target.lock(self.lock_comment)
 
+    def _get_refhosts_store(self):
+        """Build (once, thread-safe) the refhosts store, or None on failure.
+
+        connect_targets fans connect_target out across threads, so the
+        first lookup may race; guard the one-time build with a lock and
+        cache the (possibly ``None``) result.
+        """
+        if self._refhosts_store_built:
+            return self._refhosts_store
+        with self._refhosts_store_lock:
+            if not self._refhosts_store_built:
+                try:
+                    self._refhosts_store = self.refhostsFactory(self.config)
+                except Exception:
+                    logger.debug(
+                        "refhosts store unavailable for product check:\n%s",
+                        format_exc(),
+                    )
+                    self._refhosts_store = None
+                self._refhosts_store_built = True
+        return self._refhosts_store
+
+    def _verify_target_products(self, target) -> None:
+        """Warn if a connected host's products drift from ``refhosts.yml``.
+
+        Compares the host's detected :class:`~mtui.types.systems.System`
+        against its ``refhosts.yml`` :class:`Host` row (wrong/wrong-version
+        base, wrong arch, missing/extra/mismatched addons, dangling
+        baseproduct symlink). Drift is recorded in
+        :attr:`product_warnings` and logged at WARNING; the host is kept.
+
+        Best-effort: any failure is swallowed (logged at DEBUG) so the
+        check never breaks a connect. Hosts absent from ``refhosts.yml``
+        are skipped silently (DEBUG).
+        """
+        try:
+            system = getattr(target, "system", None)
+            if system is None:
+                return
+            store = self._get_refhosts_store()
+            if store is None:
+                return
+            meta = store.host_by_name(target.hostname)
+            if meta is None:
+                logger.debug(
+                    "refhosts.yml has no entry for %s; skipping product check",
+                    target.hostname,
+                )
+                self.product_warnings.pop(target.hostname, None)
+                return
+            diff = product_verify.compare(system, meta)
+            if diff.ok:
+                self.product_warnings.pop(target.hostname, None)
+                return
+            lines = diff.warnings()
+            self.product_warnings[target.hostname] = lines
+            for line in lines:
+                logger.warning(
+                    "%s: products differ from refhosts.yml metadata: %s",
+                    target.hostname,
+                    line,
+                )
+        except Exception:
+            logger.debug(
+                "product verification failed for %s:\n%s",
+                getattr(target, "hostname", "?"),
+                format_exc(),
+            )
+
     def connect_target(
         self, host
     ) -> tuple[Target, str] | tuple[Literal[False], Literal[False]]:
@@ -501,6 +582,7 @@ class TestReport(ABC):
             )
             target.connect()
             new_system = str(target.system)
+            self._verify_target_products(target)
             self._autolock_new_target(target)
         except KeyboardInterrupt:
             logger.warning("Connection to %s canceled by user", host)
@@ -585,6 +667,7 @@ class TestReport(ABC):
             if self:
                 self.systems[hostname] = str(self.targets[hostname].system)
 
+            self._verify_target_products(self.targets[hostname])
             self._autolock_new_target(self.targets[hostname])
 
         except Exception:
