@@ -533,3 +533,14 @@ The capture is deliberately scoped:
   ``mtui-mcp`` logger, which is outside the captured ``mtui`` subtree and
   therefore never echoed back into the reply.
 
+.. note::
+
+   When TLS verification is disabled (``ssl_verify = false``), the
+   server silences urllib3's ``InsecureRequestWarning`` **once at
+   start-up**. The MCP SDK records and re-emits every Python warning
+   raised while it handles a request, so without this the warning would
+   otherwise reappear on the server log for *every* request to an
+   internal host reached without verification (openQA, the QAM
+   Dashboard, …). Suppression happens only when verification is off, so
+   a real certificate problem is still surfaced when it is on.
+

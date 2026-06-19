@@ -26,6 +26,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `add_host`'s connect pool — reach MCP clients directly; `add_host` no longer
   re-echoes them to stdout.
 
+### Fixed
+
+- `mtui-mcp` no longer floods its log with a repeated
+  `Warning: InsecureRequestWarning: Unverified HTTPS request ...` line — one per
+  openQA (or other internal-host) request — when TLS verification is disabled
+  via `ssl_verify = false`. The MCP SDK records and re-emits warnings raised
+  while handling each request, which defeated the per-request suppression; the
+  warning is now silenced once at server start-up (only when verification is
+  off), so a genuine certificate problem is still reported when verification is
+  on.
+
 ## 18.1.0 - 2026-06-19
 
 ### Added

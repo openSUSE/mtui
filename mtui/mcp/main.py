@@ -32,6 +32,7 @@ from ..cli.argparse import ArgsParseFailureError
 from ..cli.colors import create_logger
 from ..cli.colors import set_mode as set_color_mode
 from ..support.config import Config
+from ..support.http import disable_insecure_warnings, resolve_verify
 from ..support.systemcheck import detect_system
 from .args import get_parser
 from .registry import SessionRegistry
@@ -144,6 +145,22 @@ def main() -> int:
     cfg = Config(args.config)
     cfg.merge_args(args)
     cfg.distro, cfg.distro_ver, cfg.distro_kernel = detect_system()
+
+    # Suppress urllib3's InsecureRequestWarning here, at boot, when the user
+    # has disabled TLS verification — *before* FastMCP starts serving. The
+    # MCP SDK wraps every request handler in
+    # ``warnings.catch_warnings(record=True)``, which snapshots and restores
+    # ``warnings.filters`` per request and re-emits any recorded warning as
+    # ``logger.info("Warning: ...")``. A filter installed lazily on the first
+    # request (as ``disable_insecure_warnings`` does in the REPL path) is
+    # discarded when that request's ``catch_warnings`` block exits, and the
+    # helper's module-level idempotency guard then blocks re-installation, so
+    # the warning re-fires on every subsequent openQA request. Installing it
+    # before the first request means every per-request snapshot includes it,
+    # so it survives. Only when verification is actually off, mirroring the
+    # per-call-site contract.
+    if not resolve_verify(True, cfg.ssl_verify):
+        disable_insecure_warnings()
 
     # Provider selection is the whole of the per-client isolation
     # contract: under http each client gets its own isolated
