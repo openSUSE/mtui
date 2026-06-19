@@ -6,6 +6,11 @@ internal leaf-module split.
 """
 
 from .connection import Connection
-from .timeout import CommandTimeoutError, policy_from_config
+from .timeout import CommandTimeoutError, NonInteractiveAuthRequired, policy_from_config
 
-__all__ = ["CommandTimeoutError", "Connection", "policy_from_config"]
+__all__ = [
+    "CommandTimeoutError",
+    "Connection",
+    "NonInteractiveAuthRequired",
+    "policy_from_config",
+]

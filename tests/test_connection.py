@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 import paramiko
 import pytest
 
-from mtui.hosts.connection import CommandTimeoutError, Connection, policy_from_config
+from mtui.hosts.connection import (
+    CommandTimeoutError,
+    Connection,
+    NonInteractiveAuthRequired,
+    policy_from_config,
+)
 
 
 @pytest.fixture
@@ -100,6 +105,47 @@ def test_connection_init_auth_fallback(mock_ssh_client, mock_ssh_config, mock_pa
             banner_timeout=300,
             auth_timeout=300,
         )
+
+
+def test_connection_noninteractive_auth_fail_raises_without_getpass(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """Non-interactive: a key-auth failure must NOT prompt for a password.
+
+    Under ``mtui-mcp`` there is no TTY, so ``getpass.getpass`` would block
+    forever on an invisible prompt. With ``interactive=False`` the
+    fallback is skipped entirely and ``NonInteractiveAuthRequired`` is
+    raised instead (the original hang reported against homer.qam.suse.cz).
+    """
+    mock_ssh_client.connect.side_effect = paramiko.AuthenticationException
+
+    with patch("getpass.getpass") as mock_getpass:
+        with pytest.raises(NonInteractiveAuthRequired):
+            Connection("test_host", 22, 300, interactive=False)
+
+        mock_getpass.assert_not_called()
+        # Only the initial key-auth attempt happened; no password retry.
+        assert mock_ssh_client.connect.call_count == 1
+
+
+def test_connection_noninteractive_bad_host_key_raises_without_getpass(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """A BadHostKeyException is treated the same as auth failure when headless."""
+    mock_ssh_client.connect.side_effect = paramiko.BadHostKeyException(
+        "test_host", MagicMock(), MagicMock()
+    )
+
+    with patch("getpass.getpass") as mock_getpass:
+        with pytest.raises(NonInteractiveAuthRequired):
+            Connection("test_host", 22, 300, interactive=False)
+
+        mock_getpass.assert_not_called()
+
+
+def test_connection_noninteractive_auth_fail_is_paramiko_auth_subclass():
+    """The raised error stays catchable by existing AuthenticationException handlers."""
+    assert issubclass(NonInteractiveAuthRequired, paramiko.AuthenticationException)
 
 
 def test_run_command_success(mock_ssh_client, mock_ssh_config, mock_path):

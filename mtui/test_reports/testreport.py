@@ -497,6 +497,7 @@ class TestReport(ABC):
                 self.packages,
                 timeout=self.config.connection_timeout,
                 prompter=self._prompter,
+                interactive=self._prompter is not None,
             )
             target.connect()
             new_system = str(target.system)
@@ -577,6 +578,7 @@ class TestReport(ABC):
                 hostname,
                 self.packages,
                 prompter=self._prompter,
+                interactive=self._prompter is not None,
             )
             self.targets[hostname].connect()
 

@@ -85,6 +85,7 @@ class Target:
         lock: type[TargetLock] = TargetLock,
         connection: type[Connection] = Connection,
         prompter: "Prompter | None" = None,
+        interactive: bool = True,
     ) -> None:
         """Initializes the `Target` object.
 
@@ -103,6 +104,11 @@ class Target:
                 cross-thread serialisation. ``None`` means "no prompt,
                 silently wait on timeout" — see
                 :class:`mtui.connection.Connection`.
+            interactive: Whether a TTY-backed user can answer an SSH
+                password prompt if key auth fails. Forwarded to
+                :class:`mtui.connection.Connection`; ``False`` (headless,
+                e.g. ``mtui-mcp``) makes a key-auth failure raise rather
+                than block on an invisible password prompt.
 
         """
         self.config = config
@@ -114,6 +120,7 @@ class Target:
         self.TargetLock = lock
         self.Connection = connection
         self._prompter = prompter
+        self._interactive = interactive
 
         self.state: TargetState | str = TargetState(state)
         # default timeout for target, used only on connecting/reconnecting Target
@@ -160,6 +167,7 @@ class Target:
                 self._timeout,
                 missing_host_key_policy=policy_from_config(policy_name),
                 timeout_prompt=self._prompter.ask if self._prompter else None,
+                interactive=self._interactive,
             )
         except Exception as e:
             logger.critical(messages.ConnectingTargetFailedMessage(self.hostname, e))
