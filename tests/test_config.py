@@ -222,7 +222,6 @@ def test_fixup_failure_logs_and_falls_back_to_default(
         # ``getint`` raises inside ``_get_option`` → caught in ``_parse_config``
         # → ERROR logged → default applied.
         ("refhosts", "https_expiration", "xyz", "refhosts_https_expiration", 3600 * 12),
-        ("template", "smelt_threshold", "nope", "threshold", 10),
         # ``getboolean`` raises inside ``_get_option`` → same path.
         ("mtui", "chdir_to_template_dir", "maybe", "chdir_to_template_dir", False),
         ("mtui", "use_keyring", "perhaps", "use_keyring", False),

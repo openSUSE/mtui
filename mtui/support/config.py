@@ -100,7 +100,6 @@ class Config:
     openqa_install_distri: str
     openqa_install_logs: str
     openqa_kernel_install_logs: str
-    threshold: int
     gitea_token: str
     ssl_verify: bool | str | None
     ssh_strict_host_key_checking: str
@@ -380,14 +379,6 @@ class Config:
                 ("openqa", "kernel_install_logfile"),
                 "update_kernel-zypper.log",
                 getter=get,
-            ),
-            # config for template export
-            ConfigOption(
-                "threshold",
-                ("template", "smelt_threshold"),
-                10,
-                int,
-                getint,
             ),
             # process location last as that needs to access
             # RefhostsFactory which need access to parts of config.
