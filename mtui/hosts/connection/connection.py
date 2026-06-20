@@ -441,6 +441,23 @@ class Connection:
                         f"Session lost during command execution on {self.hostname}"
                     )
 
+                # Non-interactive (e.g. mtui-mcp): there is no human to ask
+                # whether to keep waiting, so a command that produced no output
+                # for the whole timeout window is treated as stuck and aborted,
+                # rather than looping forever (which previously wedged the run
+                # until the session was killed). The window is
+                # ``connection_timeout`` (default 300s); raise it in config for
+                # legitimately long, fully silent commands.
+                if not self._interactive:
+                    logger.warning(
+                        'command "%s" timed out on %s after %ss with no output; '
+                        "aborting (non-interactive session)",
+                        command,
+                        self.hostname,
+                        self.timeout,
+                    )
+                    raise CommandTimeoutError
+
                 # No prompt callback wired: silently wait. Matches the
                 # long-standing Enter / Y default but emits a WARNING
                 # so the silence is observable in logs.

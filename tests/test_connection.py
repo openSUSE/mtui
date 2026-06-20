@@ -322,6 +322,24 @@ def test_run_command_timeout_no_callback_waits_silently(
     ), [rec.message for rec in caplog.records]
 
 
+def test_run_command_timeout_noninteractive_aborts(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """Non-interactive session (mtui-mcp): an inactivity timeout aborts with
+    CommandTimeoutError instead of looping forever. Distinct from the
+    interactive default, which waits silently."""
+    conn = Connection("test_host", 22, 300, interactive=False)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+
+    with (
+        patch("select.select", return_value=([], [], [])),
+        pytest.raises(CommandTimeoutError),
+    ):
+        conn.run("sleep infinity")
+
+
 def test_run_command_timeout_callback_runs_on_calling_thread(
     mock_ssh_client, mock_ssh_config, mock_path
 ):
