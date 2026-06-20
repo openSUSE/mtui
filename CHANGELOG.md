@@ -36,6 +36,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   warning is now silenced once at server start-up (only when verification is
   off), so a genuine certificate problem is still reported when verification is
   on.
+- `run` now closes the write half of the SSH channel after dispatching the
+  command, sending EOF to the remote command's stdin. A command that reads input
+  (an interactive prompt, `read`, `cat` with no redirect) previously blocked
+  forever waiting for input that never came; it now receives EOF and
+  proceeds/aborts instead of hanging the session.
 
 ## 18.1.0 - 2026-06-19
 

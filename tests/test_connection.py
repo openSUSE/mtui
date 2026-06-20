@@ -172,6 +172,46 @@ def test_run_command_success(mock_ssh_client, mock_ssh_config, mock_path):
     mock_session.exec_command.assert_called_once_with("ls -l")
 
 
+def test_run_closes_stdin_after_exec(mock_ssh_client, mock_ssh_config, mock_path):
+    """run() must close the channel's write half so the remote command's
+    stdin gets EOF and can't block forever waiting for input."""
+    conn = Connection("test_host", 22, 300)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+    mock_session.recv_exit_status.return_value = 0
+    mock_session.recv.side_effect = [b"", b""]
+    mock_session.recv_ready.side_effect = [False, False]
+    mock_session.recv_stderr_ready.side_effect = [False, False]
+
+    with patch("select.select", return_value=([mock_session], [], [])):
+        conn.run("read x")
+
+    mock_session.exec_command.assert_called_once_with("read x")
+    mock_session.shutdown_write.assert_called_once_with()
+
+
+def test_run_survives_shutdown_write_failure(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """A channel that can't shutdown_write must not break run()."""
+    conn = Connection("test_host", 22, 300)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+    mock_session.shutdown_write.side_effect = OSError("no write half")
+    mock_session.recv_exit_status.return_value = 0
+    mock_session.recv.side_effect = [b"ok", b""]
+    mock_session.recv_ready.side_effect = [True, False]
+    mock_session.recv_stderr_ready.side_effect = [False, False]
+
+    with patch("select.select", return_value=([mock_session], [], [])):
+        exit_code = conn.run("true")
+
+    assert exit_code == 0
+    assert conn.stdout == "ok"
+
+
 def test_run_command_timeout(mock_ssh_client, mock_ssh_config, mock_path):
     """Timeout + callback returning 'n' must raise ``CommandTimeoutError``.
 
