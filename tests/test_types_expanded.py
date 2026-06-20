@@ -205,6 +205,16 @@ class TestHostLog:
         with pytest.raises(ValueError, match="it need 5 args"):
             hl.append(["too", "few"])
 
+    def test_append_positional_wrong_count_raises_valueerror(self):
+        """Wrong positional-arg count raises ValueError, not a TypeError.
+
+        Regression: the error path did ``len(*args)`` which unpacks args into
+        ``len()`` and raised ``TypeError`` instead of the intended ValueError.
+        """
+        hl = HostLog()
+        with pytest.raises(ValueError, match="it need 5 args, got 3"):
+            hl.append("a", "b", "c")
+
     def test_append_bytes_conversion(self):
         """Test appending converts bytes to strings."""
         hl = HostLog()

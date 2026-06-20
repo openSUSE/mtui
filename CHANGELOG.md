@@ -81,6 +81,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   as a dict key) no longer raises `RecursionError`. `__hash__` returned
   `hash(self)`, which called itself forever; it now hashes `str(self)`, matching
   the existing `__eq__`.
+- `HostLog.append`/`insert` now raise the intended `ValueError` ("it need 5
+  args, got N") when given the wrong number of positional arguments, instead of
+  a confusing `TypeError` from `len(*args)` (which unpacked the args into
+  `len()`).
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
