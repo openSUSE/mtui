@@ -27,6 +27,41 @@ class ExportProbe(BaseExport):
         return self.template
 
 
+def test_installlogs_lines_dedups_only_after_untracked_marker(mock_config):
+    """Dedup of install-log links is scoped to after the HAS_UNTRACKED marker.
+
+    Regression: ``o += 1`` sat outside the marker-search loop, so ``o`` was
+    always 1 and the dedup scanned from index 1. A URL that merely happens to
+    appear before the marker would then wrongly suppress adding the real link in
+    the links section.
+    """
+    url = (
+        f"{mock_config.reports_url}/SUSE:Maintenance:1:1/"
+        f"{mock_config.install_logs}/x.log\n"
+    )
+    template = FileList(
+        [
+            "intro\n",
+            url,  # coincidental occurrence BEFORE the marker
+            "HAS_UNTRACKED_CHANGES: NO\n",
+            "## export MTUI:1 by tester\n",
+        ]
+    )
+    exporter = ExportProbe(
+        mock_config,
+        OpenQAResults(),
+        template,
+        False,
+        "SUSE:Maintenance:1:1",
+        False,
+    )
+    exporter.installlogs_lines(["x.log"])
+    links_at = exporter.template.index("Links for update logs:\n")
+    # The link must be present in the links section, not suppressed by the
+    # pre-marker occurrence.
+    assert url in exporter.template[links_at:]
+
+
 def test_inject_openqa_replaces_dashboard_results(mock_config):
     openqa = MagicMock()
     openqa.__bool__.return_value = True
