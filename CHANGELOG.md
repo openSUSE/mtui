@@ -41,6 +41,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   allow-list (no such command exists — it is `list_products`, already covered by
   the `list_` prefix). Corrects the advisory hint shown to MCP clients; no
   behavioural change to the commands themselves.
+- A failed `update` no longer strips the test update repositories from the
+  affected hosts. The repo cleanup used to run unconditionally (in a `finally`),
+  so a host whose update failed was left with no issue repo — retrying or
+  diagnosing it (`zypper patches`) then saw nothing and the repo had to be
+  re-added by hand. The repos are now removed only on a successful update; on
+  failure they are kept (with a WARNING) for retry/diagnosis and removed by the
+  next successful update or an explicit `set_repo --remove`. The hosts are still
+  unlocked on failure as before.
 - `mtui-mcp` no longer floods its log with a repeated
   `Warning: InsecureRequestWarning: Unverified HTTPS request ...` line — one per
   openQA (or other internal-host) request — when TLS verification is disabled

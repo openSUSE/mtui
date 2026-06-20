@@ -788,8 +788,9 @@ def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
 
 @patch.object(HostsGroup, "_fanout_set_repo")
 @patch("mtui.hosts.target.hostgroup.RunCommand")
-def test_perform_update_removes_repos_even_when_run_fails(mock_run, mock_fanout):
-    """Repo cleanup runs even when the updater command itself raises."""
+def test_perform_update_keeps_repos_when_run_fails(mock_run, mock_fanout):
+    """On a failed update the test repos are KEPT (not stripped) so the host
+    can be retried/diagnosed without re-adding them."""
     t1 = _stub_target("h1")
     t1.packages = {}
     t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
@@ -805,7 +806,11 @@ def test_perform_update_removes_repos_even_when_run_fails(mock_run, mock_fanout)
         hg.perform_update(testreport, ["noprepare", "noscript"])
 
     operations = [c.args[0] for c in mock_fanout.call_args_list]
-    assert "remove" in operations
+    # Repo was added, but NOT removed on failure.
+    assert operations == ["add"]
+    assert "remove" not in operations
+    # The host is still unlocked despite keeping the repo.
+    t1.unlock.assert_called()
 
 
 # ---------------------------------------------------------------------------

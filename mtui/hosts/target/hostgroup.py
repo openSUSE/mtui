@@ -602,23 +602,35 @@ class HostsGroup(UserDict[str, Target]):
             if "noscript" not in params and not testreport.config.auto:
                 testreport.run_scripts(PostScript, self)
                 testreport.run_scripts(CompareScript, self)
-        finally:
-            # Always remove the test update repositories that were added above,
-            # even if the update / scripts raised. Repo metadata changes are
-            # not transactional, so no reboot is required for transactional
-            # systems here.
+        except BaseException:
+            # The update (or its scripts) failed: KEEP the test update
+            # repositories in place. Stripping them here — as the old
+            # unconditional cleanup did — left a failed host with no issue repo,
+            # so retrying or diagnosing it (e.g. `zypper patches`) saw nothing
+            # and the repo had to be re-added by hand. The caller rolls the
+            # packages back (downgrade); the repos are removed by the next
+            # successful update or an explicit `set_repo --remove`.
+            logger.warning(
+                "update did not complete; leaving the test update repositories in "
+                "place for retry/diagnosis (remove later with `set_repo --remove`)"
+            )
+            raise
+
+        # Success: remove the test update repositories we added above. Repo
+        # metadata changes are not transactional, so no reboot is required for
+        # transactional systems here.
+        try:
+            self.update_lock()
+        except UpdateError:
+            logger.warning(
+                "Could not lock hosts to remove update repositories; "
+                "skipping repo cleanup."
+            )
+        else:
             try:
-                self.update_lock()
-            except UpdateError:
-                logger.warning(
-                    "Could not lock hosts to remove update repositories; "
-                    "skipping repo cleanup."
-                )
-            else:
-                try:
-                    self._fanout_set_repo("remove", testreport)
-                finally:
-                    self.unlock()
+                self._fanout_set_repo("remove", testreport)
+            finally:
+                self.unlock()
 
     def report_self(self, sink):
         """Reports the status of all hosts in the group.
