@@ -46,6 +46,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (an interactive prompt, `read`, `cat` with no redirect) previously blocked
   forever waiting for input that never came; it now receives EOF and
   proceeds/aborts instead of hanging the session.
+- A command run over a non-interactive session (`mtui-mcp`) that produces no
+  output for the whole `connection_timeout` window (default 300s) now aborts
+  with a command-timeout instead of looping forever. There is no human to ask
+  "keep waiting?" in that context, so a silent/stuck command previously wedged
+  the call until the session was killed. Interactive sessions are unchanged
+  (they still prompt, or silently wait when no prompter is wired); raise
+  `connection_timeout` for legitimately long, fully silent commands.
 
 ## 18.1.0 - 2026-06-19
 
