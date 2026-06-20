@@ -350,6 +350,32 @@ def test_remainder_positional_appended_after_flags() -> None:
     assert parsed.hosts == ["h1"]
 
 
+def test_append_remainder_flag_round_trip_commit() -> None:
+    """``commit -m`` (append + REMAINDER) re-emits the flag once, not per token.
+
+    Regression: the append encoder used to emit ``-m a -m b``; with REMAINDER
+    the second ``-m`` is swallowed as a value, so the command's
+    ``" ".join(self.args.msg[0])`` produced ``"a -m b"`` instead of ``"a b"``.
+    """
+    parser = Command.registry["commit"].argparser(__import__("sys"))
+    argv = kwargs_to_argv(parser, {"msg": ["a", "b"]})
+    assert argv == ["--msg", "a", "b"]
+    parsed = parser.parse_args(argv)
+    assert parsed.msg == [["a", "b"]]
+    assert " ".join(parsed.msg[0]) == "a b"
+
+
+def test_append_remainder_flag_round_trip_lock_with_target() -> None:
+    """``lock -t h1 -c ...`` keeps the REMAINDER comment last and intact."""
+    parser = Command.registry["lock"].argparser(__import__("sys"))
+    argv = kwargs_to_argv(parser, {"hosts": ["h1"], "comment": ["busy", "testing"]})
+    # target must precede the REMAINDER comment so it isn't swallowed.
+    assert argv == ["--target", "h1", "--comment", "busy", "testing"]
+    parsed = parser.parse_args(argv)
+    assert parsed.hosts == ["h1"]
+    assert " ".join(parsed.comment[0]) == "busy testing"
+
+
 def test_store_const_flag_round_trip() -> None:
     """``update --noscript`` round-trips both ways."""
     parser = Command.registry["update"].argparser(__import__("sys"))
