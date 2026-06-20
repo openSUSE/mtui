@@ -16,7 +16,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `export` and otherwise overflowed the reply — using the same 1-indexed line
   numbers `testreport_patch` consumes; the reply still reports the file's total
   `line_count` (plus `offset`/`returned_lines` when a window is requested).
-
 - Connecting a reference host now verifies that its installed products match
   what `refhosts.yml` records for that host. On any drift — wrong or
   wrong-version base product, wrong architecture, addons that are missing,
@@ -67,6 +66,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `%s` placeholders, the other passed one too many. The exception arguments and
   the log-call arities are now correct (matching the `update` check), so a lock is
   attributed to the right host and the diagnostic prints real values.
+- `mtui-mcp` no longer corrupts the message for `commit` and the comment for
+  `lock` when given more than one word. Both options are `append` + `REMAINDER`,
+  and the kwargs→argv encoder emitted the flag once per token (`-m a -m b`); with
+  `REMAINDER` the second flag is swallowed as a value, so the committed message
+  became e.g. `"a -m b"`. The encoder now emits an `append`+remainder/multi-`nargs`
+  flag once followed by all its tokens, so the message/comment round-trips intact.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by

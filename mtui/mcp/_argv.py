@@ -8,7 +8,11 @@ inverse of :func:`mtui.mcp._schema.action_to_parameter`:
 
 * ``store_true`` / ``store_false`` / ``store_const`` → emit the long
   flag iff the value is the "on" side.
-* ``append`` → emit ``[flag, item]`` per element of the list value.
+* ``append`` → emit ``[flag, item]`` per element of the list value, EXCEPT
+  when the action's ``nargs`` consumes a remainder/multi
+  (``REMAINDER``/``*``/``+``/integer ``N`` — e.g. ``commit -m``, ``lock -c``):
+  there the flag is emitted once followed by every token, so argparse rebuilds
+  ``[[v1, v2, ...]]`` instead of swallowing a repeated flag as a value.
 * Positional ``nargs=REMAINDER``/``*``/``+`` → append elements verbatim
   at the end (after every flag-shaped argument), preserving order.
 * Optional scalar → emit ``[long_flag, str(value)]``.
@@ -171,8 +175,20 @@ def kwargs_to_argv(
             if not value:
                 continue
             flag = _long_flag(action)
-            for item in value:
-                flag_tokens.extend([flag, str(item)])
+            if action.nargs in (argparse.REMAINDER, "*", "+") or isinstance(
+                action.nargs, int
+            ):
+                # append + a remainder/multi nargs (commit -m, lock -c) stores
+                # ONE sub-list per flag occurrence and the command reads
+                # value[0]. Emit the flag once followed by every token so
+                # argparse rebuilds ``[[v1, v2, ...]]``; ``--flag v1 --flag v2``
+                # would let REMAINDER swallow the second ``--flag`` as a value,
+                # producing ``[[v1, '--flag', v2]]`` and a corrupted message.
+                flag_tokens.append(flag)
+                flag_tokens.extend(str(item) for item in value)
+            else:
+                for item in value:
+                    flag_tokens.extend([flag, str(item)])
             continue
 
         # ---- positional ----------------------------------------------
