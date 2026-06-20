@@ -22,7 +22,7 @@ def zypper_prepare(force: bool = False, testing: bool = False) -> dict[str, Temp
     return {
         "command": Template(f"zypper -n in -y -l {parameter} $package"),
         "installed_only": Template(
-            f"if $(rpm -q $package &>/dev/null); then zypper -n -y -l {parameter} $package ; fi"
+            f"if $(rpm -q $package &>/dev/null); then zypper -n in -y -l {parameter} $package ; fi"
         ),
     }
 
@@ -44,7 +44,7 @@ def yum_prepare(force: bool = False, testing: bool = False) -> dict[str, Templat
     return {
         "command": Template(f"yum -y {parameter} install $package"),
         "installed_only": Template(
-            f"rpm -q $package &>/dev/null && yum {parameter} -y $package"
+            f"rpm -q $package &>/dev/null && yum {parameter} -y install $package"
         ),
     }
 

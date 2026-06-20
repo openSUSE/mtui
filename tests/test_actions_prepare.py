@@ -52,6 +52,25 @@ def test_zypper_prepare_force_adds_force_resolution() -> None:
     )
 
 
+def test_zypper_installed_only_actually_installs() -> None:
+    """The ``installed_only`` zypper command must carry the ``in`` subcommand;
+    otherwise ``prepare --installed`` runs an invalid zypper call that updates
+    nothing. It should behave like ``command``, just gated on the package being
+    already installed."""
+    cmds = zypper_prepare()
+    sub = cmds["installed_only"].safe_substitute(package="bash")
+    assert "zypper -n in " in sub
+    assert "rpm -q bash" in sub  # still gated on already-installed
+
+
+def test_yum_installed_only_actually_installs() -> None:
+    """The ``installed_only`` yum command must carry the ``install`` verb."""
+    cmds = yum_prepare()
+    sub = cmds["installed_only"].safe_substitute(package="bash")
+    assert "install bash" in sub
+    assert "rpm -q bash" in sub
+
+
 def test_preparer_dispatch_known_key() -> None:
     """The ``preparer`` registry returns ``zypper_prepare`` for known keys."""
     fn = preparer[("15", False)]
