@@ -87,11 +87,16 @@ class BaseExport(ABC):
             filenames: A list of filenames to add.
 
         """
+        # Index just past the HAS_UNTRACKED marker; the install-log links are
+        # deduplicated against the template from there on. The ``o += 1`` used
+        # to sit outside the loop, so ``o`` was always 1 and the marker search
+        # was dead. If the marker is absent, scan the whole template so dups are
+        # still caught.
         o = 0
-        for line in self.template:
+        for i, line in enumerate(self.template):
             if "HAS_UNTRACKED" in line:
+                o = i + 1
                 break
-        o += 1
 
         index = len(self.template)
         if "## export MTUI:" in self.template[-1]:

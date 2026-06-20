@@ -85,6 +85,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   args, got N") when given the wrong number of positional arguments, instead of
   a confusing `TypeError` from `len(*args)` (which unpacked the args into
   `len()`).
+- `export` now deduplicates install-log links against the correct part of the
+  template. The loop meant to find the `HAS_UNTRACKED` marker had its `o += 1`
+  outside the loop body, so the index was always `1` and the marker search was
+  dead; a URL appearing anywhere earlier in the template could wrongly suppress
+  adding the real link. The dedup is now scoped to the lines after the marker.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
