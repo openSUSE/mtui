@@ -379,6 +379,19 @@ class Connection:
         try:
             if session := self.new_session():
                 session.exec_command(command)
+                # run() never feeds stdin to the remote command, so close the
+                # write half of the channel right away. This sends EOF to the
+                # command's stdin: one that reads input (an interactive prompt,
+                # `read`, `cat`, ...) gets EOF and proceeds/aborts instead of
+                # blocking forever waiting for input that will never arrive.
+                try:
+                    session.shutdown_write()
+                except Exception:
+                    logger.debug(
+                        "shutdown_write failed on %s; continuing",
+                        self.hostname,
+                        exc_info=True,
+                    )
             else:
                 return None
         except (paramiko.ChannelException, paramiko.SSHException):
