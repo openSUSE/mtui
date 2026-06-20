@@ -122,7 +122,7 @@ class KernelOpenQA(OpenQA):
                     test.name, "-", test.arch, test.result
                 )
                 if test.result == "failed":
-                    text.replace("failed", "failed:")
+                    text = text.replace("failed", "failed:")
                     for module in test.modules:
                         if test.modules[module] == "failed":
                             text += f"\n      {module}: ...\n"

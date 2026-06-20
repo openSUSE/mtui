@@ -90,6 +90,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   outside the loop body, so the index was always `1` and the marker search was
   dead; a URL appearing anywhere earlier in the template could wrongly suppress
   adding the real link. The dedup is now scoped to the lines after the marker.
+- The kernel openQA result matrix now annotates a failed `ltp_` test's
+  `result: failed` line as intended. The annotation used `text.replace(...)`
+  without assigning the result back (strings are immutable), so it was a no-op.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
