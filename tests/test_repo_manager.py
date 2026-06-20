@@ -108,3 +108,53 @@ def test_run_zypper_skips_products_not_in_flattened_system(mock_target, mock_rri
     assert any("https://wanted/repo" in c for c in commands)
     assert not any("https://other/repo" in c for c in commands)
     assert commands[-1] == "zypper -n ref"
+
+
+def test_run_zypper_warns_when_no_product_matches(mock_target, mock_rrid, caplog):
+    """No repo product matches the host's system: warn instead of silent no-op.
+
+    Reproduces the observed bug where ``set_repo --add`` returned success but
+    added nothing because none of the update's products matched the host's
+    (drifted) installed products. Only ``zypper -n ref`` runs; a WARNING fires.
+    """
+    import logging
+
+    mock_target.state = "enabled"
+    mock_target.connection.run.return_value = 0
+    mock_target.connection.stdout = ""
+    mock_target.connection.stderr = ""
+    mock_target.system = MagicMock()
+    mock_target.system.flatten.return_value = {Product("SLES", "16.0", "x86_64")}
+    repos = {Product("opensuse", "15.4", "x86_64"): "https://other/repo"}
+
+    with caplog.at_level(logging.WARNING, logger="mtui.target.repo_manager"):
+        mock_target.repo_manager.run_zypper("ar", repos, mock_rrid)
+
+    commands = [c[0][0] for c in mock_target.connection.run.call_args_list]
+    assert not any("zypper ar" in c for c in commands)
+    assert commands == ["zypper -n ref"]
+    assert any(
+        "did nothing" in r.message and "host1.example.com" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]
+
+
+def test_run_zypper_ar_warns_on_zypper_failure(mock_target, mock_rrid, caplog):
+    """A non-zero ``zypper ar`` exit is surfaced as a WARNING, not swallowed."""
+    import logging
+
+    mock_target.state = "enabled"
+    mock_target.connection.run.return_value = 4  # zypper add failed
+    mock_target.connection.stdout = ""
+    mock_target.connection.stderr = "Repository already exists."
+    mock_target.system = MagicMock()
+    mock_target.system.flatten.return_value = {Product("SLES", "15-SP5", "x86_64")}
+    repos = {Product("SLES", "15-SP5", "x86_64"): "https://example/repo"}
+
+    with caplog.at_level(logging.WARNING, logger="mtui.target.repo_manager"):
+        mock_target.repo_manager.run_zypper("ar", repos, mock_rrid)
+
+    assert any(
+        "failed: zypper exited 4" in r.message and "issue-SLES" in r.message
+        for r in caplog.records
+    ), [r.message for r in caplog.records]

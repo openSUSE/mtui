@@ -53,6 +53,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the call until the session was killed. Interactive sessions are unchanged
   (they still prompt, or silently wait when no prompter is wired); raise
   `connection_timeout` for legitimately long, fully silent commands.
+- `set_repo` no longer returns silent success when it does nothing. If none of
+  the update's products match a host's installed products (e.g. the host's parsed
+  products drifted from what the update targets), no repo was ever registered;
+  this now logs a `WARNING` naming the host and the mismatched product sets
+  instead of appearing to succeed. A failed `zypper ar` (non-zero exit) is also
+  surfaced as a `WARNING` rather than ignored.
 
 ## 18.1.0 - 2026-06-19
 

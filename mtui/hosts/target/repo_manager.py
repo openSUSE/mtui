@@ -62,15 +62,43 @@ class RepoManager:
         def name(product, rrid) -> str:
             return f"issue-{product.name}:{product.version}:p={rrid.maintenance_id}:{rrid.review_id}"
 
+        matched = 0
         for x, y in ur:
+            matched += 1
             if "ar" in cmd:
                 logger.info("Adding repo %s on %s", y, t.hostname)
                 t.run(f"zypper {cmd} {name(x, rrid)} {y} {name(x, rrid)}")
+                # Surface a failed add instead of returning silent success: a
+                # non-zero zypper exit here means the repo was NOT registered.
+                if t.lastexit() not in (0, "0"):
+                    err = t.lasterr().strip() or t.lastout().strip()
+                    logger.warning(
+                        "adding repo %s on %s failed: zypper exited %s%s",
+                        name(x, rrid),
+                        t.hostname,
+                        t.lastexit(),
+                        f" ({err.splitlines()[-1]})" if err else "",
+                    )
             elif "rr" in cmd:
                 logger.info("Removing repo %s on %s", y, t.hostname)
                 t.run(f"zypper {cmd} {y}")
             else:
                 t.unlock(force=True)
                 raise ValueError
+
+        # No product/repo matched the host's installed products, so nothing was
+        # (un)registered. Previously this returned silent "success" — warn so the
+        # no-op is visible (e.g. a host whose parsed products drifted from what
+        # the update targets, the cause of an add that mysteriously did nothing).
+        if matched == 0:
+            op = "add" if "ar" in cmd else "remove" if "rr" in cmd else cmd
+            logger.warning(
+                "set_repo %s on %s did nothing: none of the update's products %s "
+                "match the host's installed products %s",
+                op,
+                t.hostname,
+                sorted(str(p) for p in repos),
+                sorted(str(p) for p in t.system.flatten()),
+            )
 
         t.run("zypper -n ref")
