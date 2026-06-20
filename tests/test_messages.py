@@ -90,3 +90,15 @@ def test_messages():
     )
     assert str(messages.TestReportNotLoadedError()) == "TestReport not loaded"
     assert str(messages.MetadataNotLoadedError()) == "Metadata not found"
+
+
+def test_usermessage_is_hashable_and_consistent_with_eq():
+    """Hashing a UserMessage must not recurse and must agree with __eq__."""
+    a = messages.HostIsNotConnectedError("h")
+    b = messages.HostIsNotConnectedError("h")
+    # Previously __hash__ returned hash(self) -> RecursionError.
+    assert hash(a) == hash(str(a))
+    # __eq__ compares on str(self); equal objects must hash equal so they
+    # behave in sets/dicts.
+    assert a == b
+    assert len({a, b}) == 1

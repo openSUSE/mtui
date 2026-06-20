@@ -77,6 +77,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the last dash (`rsplit("-", 1)`) — the release field never contains a dash, but
   the version field can (e.g. a Debian-style `upstream-debrev` arriving through
   the dpkg querier).
+- Hashing a `UserMessage`/`UserError` (e.g. putting one in a `set` or using it
+  as a dict key) no longer raises `RecursionError`. `__hash__` returned
+  `hash(self)`, which called itself forever; it now hashes `str(self)`, matching
+  the existing `__eq__`.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by

@@ -21,7 +21,9 @@ class UserMessage(BaseException, ABC):
         return str(self) == str(x)
 
     def __hash__(self) -> int:
-        return hash(self)
+        # Must mirror __eq__ (which compares on str(self)); hashing self
+        # here would recurse forever.
+        return hash(str(self))
 
 
 class ErrorMessage(UserMessage, RuntimeError):  # noqa: N818
