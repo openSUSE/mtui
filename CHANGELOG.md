@@ -43,6 +43,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   success/failure summary, and raises an error naming **all** failed hosts (a
   single-host failure still re-raises that host's original error unchanged). No
   reboot is attempted when any host failed.
+- `prepare --installed` (`-i`) now actually installs/updates the already-installed
+  packages. The `installed_only` zypper and yum command templates were missing
+  the install verb (`zypper -n -y -l $pkg` / `yum -y $pkg`), so the gated command
+  ran an invalid no-op and prepared nothing. They now run `zypper -n in …` /
+  `yum -y install …`, matching the non-`--installed` path (just limited to
+  packages already present). The slmicro template was already correct.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
