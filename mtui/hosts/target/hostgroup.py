@@ -584,10 +584,40 @@ class HostsGroup(UserDict[str, Target]):
         try:
             try:
                 self.run(commands)
+                # Check every host, collecting failures rather than aborting on
+                # the first one — otherwise a parallel update that failed on
+                # several hosts surfaced only the first host's UpdateError and
+                # the rest went unreported. The per-host outcome is logged below.
+                failures: list[UpdateError] = []
                 for t in self.data.values():
-                    t.check("updater")(
-                        t.hostname, t.lastout(), t.lastin(), t.lasterr(), t.lastexit()
-                    )
+                    try:
+                        t.check("updater")(
+                            t.hostname,
+                            t.lastout(),
+                            t.lastin(),
+                            t.lasterr(),
+                            t.lastexit(),
+                        )
+                    except UpdateError as e:
+                        if e.host is None:
+                            e.host = t.hostname
+                        failures.append(e)
+
+                failed_hosts = {e.host for e in failures}
+                ok_hosts = sorted(hn for hn in self.data if hn not in failed_hosts)
+                if ok_hosts:
+                    logger.info("update succeeded on: %s", ", ".join(ok_hosts))
+                for e in failures:
+                    logger.error("update failed on %s", e)
+
+                if len(failures) == 1:
+                    # Preserve the exact single-host error the caller used to get.
+                    raise failures[0]
+                if failures:
+                    hosts = ", ".join(sorted(str(e.host) for e in failures))
+                    detail = "; ".join(str(e) for e in failures)
+                    raise UpdateError(f"update failed on {hosts} ({detail})")
+
                 self._reboot(reboot)
             finally:
                 self.unlock()
