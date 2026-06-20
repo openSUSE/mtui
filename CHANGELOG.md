@@ -59,6 +59,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   group was locked but outside the `try/finally` that unlocks it; the doer lookup
   now runs before locking (matching `prepare`), so the early return cannot strand
   the locks.
+- The post-`prepare` and post-`downgrade` zypper checks now report a detected
+  package-manager lock correctly. The `UpdateError` raised on "ZYpp transaction
+  already in progress" had its `(reason, host)` arguments swapped (so `.host`
+  became the literal reason and the message read backwards), and the matching
+  `downgrade` log calls were malformed — one passed **no** arguments for its four
+  `%s` placeholders, the other passed one too many. The exception arguments and
+  the log-call arities are now correct (matching the `update` check), so a lock is
+  attributed to the right host and the diagnostic prints real values.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
