@@ -72,6 +72,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `REMAINDER` the second flag is swallowed as a value, so the committed message
   became e.g. `"a -m b"`. The encoder now emits an `append`+remainder/multi-`nargs`
   flag once followed by all its tokens, so the message/comment round-trips intact.
+- `RPMVersion` no longer raises `ValueError: too many values to unpack` when a
+  version string contains more than one dash. The version/release split now uses
+  the last dash (`rsplit("-", 1)`) — the release field never contains a dash, but
+  the version field can (e.g. a Debian-style `upstream-debrev` arriving through
+  the dpkg querier).
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by

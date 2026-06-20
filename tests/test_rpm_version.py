@@ -55,6 +55,18 @@ def test_version_none():
         RPMVersion(None)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
 
 
+def test_version_with_multiple_dashes_splits_on_last():
+    """A version field that itself contains a dash splits on the LAST dash.
+
+    Regression: ``rsplit("-")`` without maxsplit raised "too many values to
+    unpack" for such strings (reachable via the dpkg/ubuntu querier).
+    """
+    v = RPMVersion("1.2-3-4")
+    assert v.ver == "1.2-3"
+    assert v.rel == "4"
+    assert str(v) == "1.2-3-4"
+
+
 @pytest.mark.parametrize(
     ("version", "s"), [("1.2.3-7.3", "1.2.3-7.3"), ("2.3", "2.3"), ("0.8+1-0", "0.8+1")]
 )

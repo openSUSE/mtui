@@ -49,8 +49,12 @@ class RPMVersion:
             ver = ver.replace("." + x, "")
 
         if "-" in ver:
-            # split rpm version string into version and release string
-            (self.ver, self.rel) = ver.rsplit("-")
+            # Split the rpm version string into version and release on the
+            # LAST dash: the release field never contains a dash, but the
+            # version field can (e.g. Debian-style "upstream-debrev" coming
+            # through the dpkg querier). Without maxsplit, such a string
+            # raised "too many values to unpack".
+            (self.ver, self.rel) = ver.rsplit("-", 1)
         else:
             self.ver = ver
             self.rel = "0"
