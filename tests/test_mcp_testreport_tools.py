@@ -119,6 +119,67 @@ def test_read_returns_file_contents(tmp_path: Path) -> None:
     assert result["path"] == str(file)
     assert result["line_count"] == 5
     assert result["content"] == body
+    # Default (no window) reply keeps its original shape.
+    assert "offset" not in result
+    assert "returned_lines" not in result
+
+
+def test_read_window_offset_and_limit(tmp_path: Path) -> None:
+    """``offset``/``limit`` return a 1-indexed line window (matches patch numbering)."""
+    file = tmp_path / "report.txt"
+    file.write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+
+    result: dict[str, Any] = asyncio.run(
+        tt.testreport_read(sess, offset=2, limit=2)  # ty: ignore[invalid-argument-type]
+    )
+
+    assert result["content"] == "b\nc\n"
+    assert result["line_count"] == 5  # total, not the window size
+    assert result["offset"] == 2
+    assert result["returned_lines"] == 2
+
+
+def test_read_window_offset_to_end(tmp_path: Path) -> None:
+    """``offset`` with no ``limit`` reads to end of file."""
+    file = tmp_path / "report.txt"
+    file.write_text("a\nb\nc\nd\ne\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+
+    result: dict[str, Any] = asyncio.run(
+        tt.testreport_read(sess, offset=4)  # ty: ignore[invalid-argument-type]
+    )
+
+    assert result["content"] == "d\ne\n"
+    assert result["returned_lines"] == 2
+    assert result["line_count"] == 5
+
+
+def test_read_window_offset_past_end_is_empty(tmp_path: Path) -> None:
+    """An offset beyond the file yields empty content, not an error."""
+    file = tmp_path / "report.txt"
+    file.write_text("a\nb\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+
+    result: dict[str, Any] = asyncio.run(
+        tt.testreport_read(sess, offset=99)  # ty: ignore[invalid-argument-type]
+    )
+
+    assert result["content"] == ""
+    assert result["returned_lines"] == 0
+    assert result["line_count"] == 2
+
+
+def test_read_window_rejects_bad_offset_and_limit(tmp_path: Path) -> None:
+    """``offset < 1`` and ``limit < 0`` are rejected with McpCommandError."""
+    file = tmp_path / "report.txt"
+    file.write_text("a\nb\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+
+    with pytest.raises(tt.McpCommandError):
+        asyncio.run(tt.testreport_read(sess, offset=0))  # ty: ignore[invalid-argument-type]
+    with pytest.raises(tt.McpCommandError):
+        asyncio.run(tt.testreport_read(sess, limit=-1))  # ty: ignore[invalid-argument-type]
 
 
 # --------------------------------------------------------------------------- #

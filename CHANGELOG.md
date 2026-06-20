@@ -9,6 +9,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- The `testreport_read` MCP tool accepts optional `offset` (1-based first line)
+  and `limit` (max lines) to return a line window instead of the whole file.
+  Without them the behaviour is unchanged (full file). This lets a caller page a
+  large report — a Product Increment `log` runs to thousands of lines after
+  `export` and otherwise overflowed the reply — using the same 1-indexed line
+  numbers `testreport_patch` consumes; the reply still reports the file's total
+  `line_count` (plus `offset`/`returned_lines` when a window is requested).
+
 - Connecting a reference host now verifies that its installed products match
   what `refhosts.yml` records for that host. On any drift — wrong or
   wrong-version base product, wrong architecture, addons that are missing,
