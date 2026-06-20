@@ -30,7 +30,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
             stdout,
             stderr,
         )
-        raise UpdateError(hostname, "update stack locked")
+        raise UpdateError("update stack locked", hostname)
     if "System management is locked" in stderr:
         logger.critical(
             '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',

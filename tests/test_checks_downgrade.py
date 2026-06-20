@@ -29,9 +29,25 @@ def test_zypper_clean_run_returns_none() -> None:
 
 
 def test_zypper_zypp_lock_raises() -> None:
-    """A ZYpp transaction lock in stderr raises ``UpdateError``."""
-    with pytest.raises(UpdateError):
+    """A ZYpp transaction lock in stderr raises ``UpdateError(reason, host)``."""
+    with pytest.raises(UpdateError) as ei:
         zypper("h", "", "in pkg", "A ZYpp transaction is already in progress.", 0)
+    # Args must be (reason, host) -- previously swapped.
+    assert ei.value.reason == "update stack locked"
+    assert ei.value.host == "h"
+
+
+def test_zypper_lock_branches_logging_is_well_formed(monkeypatch) -> None:
+    """Both lock branches log with matching %-args (no zero-arg / extra-arg bug).
+
+    With ``logging.raiseExceptions`` re-enabled a wrong arg count would raise a
+    ``TypeError`` in ``handleError`` instead of the intended ``UpdateError``.
+    """
+    monkeypatch.setattr(logging, "raiseExceptions", True)
+    with pytest.raises(UpdateError):
+        zypper("h", "out", "in pkg", "A ZYpp transaction is already in progress.", 0)
+    with pytest.raises(UpdateError):
+        zypper("h", "out", "in pkg", "System management is locked", 0)
 
 
 def test_zypper_system_management_locked_raises() -> None:

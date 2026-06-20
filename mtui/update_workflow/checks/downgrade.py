@@ -25,16 +25,19 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
     if "A ZYpp transaction is already in progress." in stderr:
         logger.critical(
             '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
-        )
-        raise UpdateError(hostname, "update stack locked")
-    if "System management is locked" in stderr:
-        logger.critical(
-            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
             stderr,
-            exitcode,
+        )
+        raise UpdateError("update stack locked", hostname)
+    if "System management is locked" in stderr:
+        logger.critical(
+            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            hostname,
+            stdin,
+            stdout,
+            stderr,
         )
         raise UpdateError("update stack locked", hostname)
     if "(c): c" in stdout:
