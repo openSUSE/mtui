@@ -8,6 +8,8 @@ directly on the file path tracked by ``session.metadata.path``:
 
 * :func:`testreport_read` — return the file's bytes plus a line count
   computed with the same convention :func:`testreport_patch` consumes.
+  Optional ``offset``/``limit`` read a 1-indexed line window so a large
+  report (a Product Increment log) can be paged instead of overflowing.
 * :func:`testreport_patch` — splice an inclusive 1-indexed line range,
   written atomically via ``NamedTemporaryFile`` + :func:`os.replace`.
 * :func:`testreport_write` — full-file overwrite, also atomic.
@@ -207,21 +209,52 @@ async def _heartbeat(ctx: Context | None, message: str) -> None:
 
 async def testreport_read(
     session: McpSession,
+    offset: int = 1,  # noqa: PT028 - tool entrypoint, not a pytest test
+    limit: int | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """Return the loaded testreport file's content and line count.
 
+    By default the whole file is returned. ``offset``/``limit`` request a
+    1-indexed inclusive line window — the same numbering ``testreport_patch``
+    consumes — so a large report (a Product Increment ``log`` runs to thousands
+    of lines after ``export``) can be paged instead of overflowing the caller.
+    ``offset`` is the first line to return (1-based, default 1); ``limit`` caps
+    how many lines to return (default: to end of file). ``line_count`` is always
+    the file's *total* line count so the caller can page; when a window was
+    requested the reply also carries ``offset`` and ``returned_lines``.
+
     Acquires ``session._lock`` so the snapshot is coherent with any
     in-flight command dispatch (e.g. a concurrent ``commit``).
     """
+    if offset < 1:
+        raise McpCommandError("", f"offset must be >= 1 (got {offset})", 1)
+    if limit is not None and limit < 0:
+        raise McpCommandError("", f"limit must be >= 0 (got {limit})", 1)
+
     await _heartbeat(ctx, "testreport_read: waiting for session lock")
     async with session._lock:
         path = _resolve_testreport_path(session)
         content = path.read_text(encoding="utf-8", errors="replace")
+
+    windowed = offset != 1 or limit is not None
+    if not windowed:
+        return {
+            "path": str(path),
+            "line_count": _count_lines(content),
+            "content": content,
+        }
+
+    # 1-indexed line slicing matching testreport_patch's numbering.
+    lines = content.splitlines(keepends=True)
+    start = offset - 1
+    sliced = lines[start:] if limit is None else lines[start : start + limit]
     return {
         "path": str(path),
-        "line_count": _count_lines(content),
-        "content": content,
+        "line_count": len(lines),
+        "offset": offset,
+        "returned_lines": len(sliced),
+        "content": "".join(sliced),
     }
 
 
@@ -404,9 +437,13 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
 
     globals().setdefault("Context", _Context)
 
-    async def _read(ctx: Context | None = None) -> dict[str, Any]:
+    async def _read(
+        offset: int = 1,
+        limit: int | None = None,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
-        return await testreport_read(session, ctx=ctx)
+        return await testreport_read(session, offset=offset, limit=limit, ctx=ctx)
 
     async def _logs(ctx: Context | None = None) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
@@ -432,8 +469,11 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         return await testreport_write(session, content, ctx=ctx)
 
     read_desc = (
-        "Read the currently loaded testreport file. Returns the path, "
-        "line count, and full content (utf-8, errors replaced). "
+        "Read the currently loaded testreport file. Returns the path, total "
+        "line count, and content (utf-8, errors replaced). By default returns "
+        "the whole file; pass `offset` (1-based first line) and/or `limit` (max "
+        "lines) to read a line window instead — use this to page a large report "
+        "(a Product Increment log can be thousands of lines) without overflowing. "
         f"{_READ_FIRST_WARNING}"
     )
     patch_desc = (
