@@ -46,8 +46,16 @@ class TestEnsureDirExists:
             pytest.fail("ensure_dir_exists raised unexpectedly")
 
         os.chmod(subdir, 0)
-        with pytest.raises(PermissionError):
-            ensure_dir_exists(Path(subdir) / "bar")
+        try:
+            with pytest.raises(PermissionError):
+                ensure_dir_exists(Path(subdir) / "bar")
+        finally:
+            # Restore write/exec so pytest's tmpdir teardown can remove subdir.
+            # Without this the mode-0 directory is undeletable; pytest renames it
+            # to garbage-<uuid> and the leftovers pile up under
+            # /tmp/pytest-of-<user>/ across runs, emitting an rm_rf warning each
+            # time it retries.
+            os.chmod(subdir, 0o755)
 
     def test_on_create(self, create_temp):
         d = self.mkpath(create_temp, "c")
