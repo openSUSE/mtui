@@ -764,6 +764,79 @@ def test_perform_update_unlocks_when_run_fails(mock_run):
     t1.unlock.assert_called()
 
 
+@patch.object(HostsGroup, "_reboot")
+@patch.object(HostsGroup, "_fanout_set_repo")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_update_reports_all_host_failures(
+    mock_run, mock_fanout, mock_reboot, caplog
+):
+    """Every host is checked and reported; the raised error names all failed
+    hosts, not just the first, and no reboot happens on failure."""
+    t1 = _stub_target("h1")
+    t1.packages = {}
+    t2 = _stub_target("h2")
+    t2.packages = {}
+    for t, host in ((t1, "h1"), (t2, "h2")):
+        t.doer.return_value = _doer_dict(command="zypper up", reboot="")
+        t.check.return_value = MagicMock(
+            side_effect=UpdateError("Dependency Error", host)
+        )
+    testreport = MagicMock()
+    testreport.config.auto = False
+    testreport.get_package_list.return_value = ["pkg"]
+    testreport.rrid.maintenance_id = "1"
+    testreport.rrid.review_id = "2"
+    hg = HostsGroup([t1, t2])
+
+    with (
+        caplog.at_level(logging.ERROR, logger="mtui.target.hostgroup"),
+        pytest.raises(UpdateError) as ei,
+    ):
+        hg.perform_update(testreport, ["noprepare", "noscript"])
+
+    msg = str(ei.value)
+    assert "h1" in msg  # aggregated, not just the first
+    assert "h2" in msg
+    logged = " ".join(r.message for r in caplog.records)
+    assert "h1" in logged  # both logged per-host
+    assert "h2" in logged
+    mock_reboot.assert_not_called()  # no reboot on failure
+    t1.unlock.assert_called()
+    t2.unlock.assert_called()
+
+
+@patch.object(HostsGroup, "_reboot")
+@patch.object(HostsGroup, "_fanout_set_repo")
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_update_single_failure_reraises_original(
+    mock_run, mock_fanout, mock_reboot
+):
+    """A single failing host re-raises that host's original UpdateError unchanged
+    (backward compatible); the passing host is not reported as failed."""
+    t1 = _stub_target("h1")
+    t1.packages = {}
+    t2 = _stub_target("h2")
+    t2.packages = {}
+    t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
+    t2.doer.return_value = _doer_dict(command="zypper up", reboot="")
+    orig = UpdateError("Dependency Error", "h1")
+    t1.check.return_value = MagicMock(side_effect=orig)
+    t2.check.return_value = MagicMock()  # h2 passes
+    testreport = MagicMock()
+    testreport.config.auto = False
+    testreport.get_package_list.return_value = ["pkg"]
+    testreport.rrid.maintenance_id = "1"
+    testreport.rrid.review_id = "2"
+    hg = HostsGroup([t1, t2])
+
+    with pytest.raises(UpdateError) as ei:
+        hg.perform_update(testreport, ["noprepare", "noscript"])
+
+    assert ei.value is orig  # exact original error, unchanged
+    assert str(ei.value) == "h1: Dependency Error"
+    mock_reboot.assert_not_called()
+
+
 @patch.object(HostsGroup, "_fanout_set_repo")
 @patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
