@@ -676,6 +676,38 @@ def test_perform_downgrade_picks_highest_version_then_runs(mock_run):
 
 
 @patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_downgrade_host_without_versions_does_not_keyerror(mock_run):
+    """A host whose list_command yields no versions is skipped, not a KeyError."""
+    t1 = _stub_target("h1")
+    t1.lastout.return_value = ""  # nothing parses -> no entry in `versions`
+    t1.doer.return_value = {
+        **_doer_dict(reboot="", init_snapshot=""),
+        "list_command": MagicMock(safe_substitute=MagicMock(return_value="rpm -qa")),
+        "command": MagicMock(safe_substitute=MagicMock(return_value="x")),
+    }
+    t1.check.return_value = MagicMock()
+    hg = HostsGroup([t1])
+    # Must not raise KeyError('h1'); the package is simply skipped.
+    hg.perform_downgrade(["pkg-a"], MagicMock())
+    t1.doer.return_value["command"].safe_substitute.assert_not_called()
+    t1.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_downgrade_missing_downgrader_does_not_lock(mock_run):
+    """A missing downgrader returns early without leaving hosts locked."""
+    from mtui.support.messages import MissingDowngraderError
+
+    t1 = _stub_target("h1", transactional=True)
+    t1.doer.side_effect = MissingDowngraderError("16")
+    hg = HostsGroup([t1])
+    hg.perform_downgrade(["pkg-a"], MagicMock())
+    # The early return happens before update_lock(), so the host is never
+    # locked (and therefore never stuck locked).
+    t1.lock.assert_not_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
 def test_perform_downgrade_unlocks_on_error(mock_run):
     t1 = _stub_target("h1")
     t1.lastout.return_value = ""

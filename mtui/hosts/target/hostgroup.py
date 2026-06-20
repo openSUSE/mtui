@@ -411,8 +411,10 @@ class HostsGroup(UserDict[str, Target]):
         """
         ver_re = re.compile(r"(.*) = (.*)")
         versions: dict[str, dict[str, str]] = {}
-        self.update_lock()
 
+        # Resolve the per-host doer commands *before* taking the lock: if a host
+        # has no downgrader the early return below must not leave the group
+        # locked (the finally that unlocks only guards the second try block).
         try:
             reboot = {
                 t.hostname: t.doer("downgrader")["reboot"].substitute()
@@ -427,6 +429,8 @@ class HostsGroup(UserDict[str, Target]):
         except MissingDowngraderError as e:
             logger.error("%s", e)
             return
+
+        self.update_lock()
 
         try:
             self._fanout_set_repo("remove", testreport)
@@ -467,7 +471,7 @@ class HostsGroup(UserDict[str, Target]):
                         package=package, version=versions[h][package]
                     )
                     for h, t in self.data.items()
-                    if package in versions[h]
+                    if h in versions and package in versions[h]
                 }
                 if cmd:
                     self.run(cmd)

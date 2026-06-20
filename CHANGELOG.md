@@ -49,6 +49,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   ran an invalid no-op and prepared nothing. They now run `zypper -n in …` /
   `yum -y install …`, matching the non-`--installed` path (just limited to
   packages already present). The slmicro template was already correct.
+- `downgrade` (the rollback after a failed `update`, and the standalone command)
+  no longer crashes with `KeyError(<hostname>)` when one host in a multi-host
+  group reports no downgradable versions (package not installed, or the list
+  command produced no output): that host is now simply skipped for the package
+  instead of aborting the whole downgrade.
+- `downgrade` no longer leaves every host locked when a host has no downgrader
+  for its product. The `MissingDowngraderError` early-return happened after the
+  group was locked but outside the `try/finally` that unlocks it; the doer lookup
+  now runs before locking (matching `prepare`), so the early return cannot strand
+  the locks.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
