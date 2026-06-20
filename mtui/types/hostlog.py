@@ -49,7 +49,7 @@ class HostLog(list[CommandLog]):
             runtime = int(items[4])
         else:
             if len(args) != 5:
-                raise ValueError(f"it need 5 args, got {len(*args)}")
+                raise ValueError(f"it need 5 args, got {len(args)}")
             command = to_string(args[0])
             stdout = to_string(args[1])
             stderr = to_string(args[2])
@@ -86,7 +86,7 @@ class HostLog(list[CommandLog]):
             runtime = int(args[0][4])
         else:
             if len(args) != 5:
-                raise ValueError(f"it need 5 args, got {len(*args)}")
+                raise ValueError(f"it need 5 args, got {len(args)}")
             command = to_string(args[0])
             stdout = to_string(args[1])
             stderr = to_string(args[2])
