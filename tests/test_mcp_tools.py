@@ -297,12 +297,15 @@ def test_read_only_heuristic_matches_allow_list() -> None:
     """The internal helper honours the prefix + exact allow-list."""
     assert _is_read_only("whoami")
     assert _is_read_only("list_hosts")
+    assert _is_read_only("list_products")  # covered by the list_ prefix
     assert _is_read_only("show_log")
     assert _is_read_only("openqa_overview")
-    assert _is_read_only("products")
+    assert _is_read_only("openqa_jobs")  # exact: only queries openQA
     assert not _is_read_only("update")
     assert not _is_read_only("approve")
     assert not _is_read_only("config_set")
+    # reload_products re-reads products from the hosts -> NOT read-only.
+    assert not _is_read_only("reload_products")
 
 
 def test_read_only_annotation_set_for_known_safe_tools(

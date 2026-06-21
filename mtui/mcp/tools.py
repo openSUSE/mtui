@@ -61,7 +61,11 @@ SUBPARSER_COMMANDS: frozenset[str] = frozenset({"config"})
 _READ_ONLY_PREFIXES: tuple[str, ...] = ("list_", "show_")
 
 #: Exact names that escape the prefix rule but are still side-effect-free.
-_READ_ONLY_EXACT: frozenset[str] = frozenset({"whoami", "products", "openqa_overview"})
+#: (``openqa_overview`` and ``openqa_jobs`` only query openQA; ``reload_products``
+#: is intentionally absent — it re-reads products from the hosts, a side effect.)
+_READ_ONLY_EXACT: frozenset[str] = frozenset(
+    {"whoami", "openqa_overview", "openqa_jobs"}
+)
 
 
 def _is_read_only(name: str) -> bool:
