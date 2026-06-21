@@ -689,3 +689,33 @@ def test_load_jobs_top_level_settings_timeout_returns_empty(
     assert any(
         "update_settings fetch timed out" in rec.message for rec in caplog.records
     )
+
+
+def test_has_passed_install_jobs_tolerates_missing_test_field(mock_config):
+    """A job whose ``test`` is None must be skipped, not crash the filter.
+
+    Regression: ``"qam-incidentinstall" in job.get("test")`` raised TypeError
+    when ``test`` was None (a normalized job with no ``name``).
+    """
+    jobs = [
+        {"test": None, "result": "passed"},  # would TypeError on `in None`
+        {"test": "qam-incidentinstall", "result": "passed"},
+    ]
+    assert DashboardAutoOpenQA._has_passed_install_jobs(jobs) is True
+
+
+def test_get_logs_url_tolerates_missing_test_field(mock_config):
+    """``_get_logs_url`` skips a None-``test`` job instead of crashing."""
+    dashboard = _make_dashboard(mock_config)
+    jobs = [
+        {"test": None, "result": "passed", "id": 1, "settings": {}},
+        {
+            "test": "qam-incidentinstall",
+            "result": "passed",
+            "id": 2,
+            "settings": {"DISTRI": "sle", "ARCH": "x86_64", "VERSION": "15-SP5"},
+        },
+    ]
+    urls = dashboard._get_logs_url(jobs)
+    assert urls is not None
+    assert len(urls) == 1  # only the matching job, no crash on the None one

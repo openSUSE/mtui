@@ -99,6 +99,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   bad value aborted the whole lock-acquisition walk (blocking `update`/`prepare`/
   `downgrade`). `time()` now returns `"unknown"` on a bad timestamp, mirroring the
   already-hardened `age_seconds`.
+- The QEM-dashboard openQA accounting no longer crashes with `TypeError` when a
+  dashboard job has no `test`/`name`. `_has_passed_install_jobs` and
+  `_get_logs_url` tested `"qam-incidentinstall" in job.get("test")`, which raised
+  on a `None` value (a normalized job whose `name` was absent); they now use
+  `job.get("test", "")`, matching the defensive pattern already used elsewhere
+  in the connector, so one odd job no longer aborts the whole install-result
+  summary during `export`.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by

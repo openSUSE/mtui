@@ -129,7 +129,7 @@ class DashboardAutoOpenQA:
     def _normalize_job(
         job: dict[str, Any], source: str, setting: dict[str, Any]
     ) -> dict[str, Any]:
-        settings = setting.get("settings") or {}
+        settings = setting.get("settings", {}) or {}
         normalized = {
             "id": job.get("job_id"),
             "test": job.get("name"),
@@ -165,7 +165,7 @@ class DashboardAutoOpenQA:
         return all(
             cls._normalize_result(job.get("result"))
             for job in jobs
-            if "qam-incidentinstall" in job.get("test")
+            if "qam-incidentinstall" in (job.get("test", "") or "")
         )
 
     def _get_logs_url(self, jobs) -> list[URLs] | None:
@@ -184,12 +184,12 @@ class DashboardAutoOpenQA:
                     "file",
                     self.config.openqa_install_logs,
                 ),
-                str(job.get("result") or ""),
+                str(job.get("result", "") or ""),
             )
             for job in jobs
             if (
-                "qam-incidentinstall" in job.get("test")
-                and "SLFO" not in job.get("test")
+                "qam-incidentinstall" in (job.get("test", "") or "")
+                and "SLFO" not in (job.get("test", "") or "")
                 and self._normalize_result(job.get("result"))
             )
         ]
@@ -328,7 +328,7 @@ class DashboardAutoOpenQA:
         hoisted_build: str | None = None
         if source == "aggregate":
             builds = {
-                self._val((job.get("settings") or {}).get("BUILD"))
+                self._val((job.get("settings", {}) or {}).get("BUILD"))
                 for job in section_jobs
             }
             if len(builds) == 1:
