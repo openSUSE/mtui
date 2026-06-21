@@ -84,5 +84,8 @@ class SFTPGet(Command):
 
     def __call__(self) -> None:
         """Executes the `get` command."""
-        self.metadata.perform_get(self.targets, self.args.filename[0])
+        # Work only on enabled hosts, matching `put` and the docstring (a
+        # disabled host has been deliberately parked and must not be contacted).
+        targets = self.targets.select(enabled=True)
+        self.metadata.perform_get(targets, self.args.filename[0])
         logger.info("downloaded %s", self.args.filename[0])

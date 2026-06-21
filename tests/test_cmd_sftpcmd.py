@@ -1,4 +1,4 @@
-"""Tests for the `put` (SFTPPut) command."""
+"""Tests for the `put` (SFTPPut) and `get` (SFTPGet) commands."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from mtui.commands.sftpcmd import SFTPPut
+from mtui.commands.sftpcmd import SFTPGet, SFTPPut
 from mtui.hosts.target.hostgroup import HostsGroup
 
 
@@ -64,3 +64,18 @@ def test_sftp_put_missing_file_logs_error(mock_config, caplog):
     SFTPPut(args, mock_config, MagicMock(), prompt)()
 
     assert any("not found" in r.message for r in caplog.records)
+
+
+def test_sftp_get_only_targets_enabled_hosts(mock_config):
+    """`get` must skip disabled hosts (parity with `put` and the docstring)."""
+    enabled = _target("h1")
+    disabled = _target("h2")
+    disabled.state = "disabled"
+    prompt = _prompt(HostsGroup([enabled, disabled]))
+    args = Namespace(filename=[Path("/remote/file")])
+
+    SFTPGet(args, mock_config, MagicMock(), prompt)()
+
+    # perform_get receives a group containing only the enabled host.
+    targets = prompt.metadata.perform_get.call_args.args[0]
+    assert targets.names() == ["h1"]
