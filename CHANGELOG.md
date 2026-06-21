@@ -106,6 +106,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `job.get("test", "")`, matching the defensive pattern already used elsewhere
   in the connector, so one odd job no longer aborts the whole install-result
   summary during `export`.
+- `get` now downloads only from **enabled** hosts, matching `put` and its own
+  docstring. It previously contacted every connected host, including ones the
+  tester had deliberately disabled (e.g. a refhost parked during a batch).
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
