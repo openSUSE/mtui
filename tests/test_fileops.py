@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import ClassVar
+from unittest.mock import patch
 
 import pytest
 
@@ -93,6 +94,22 @@ def test_atomic_write_creates_missing_parent(create_temp):
     atomic_write_file(b"data: 1\n", target)
     assert target.exists()
     assert target.read_text() == "data: 1\n"
+
+
+def test_atomic_write_cleans_temp_on_move_failure(create_temp):
+    """A failed move must not leave the mkstemp temp file behind."""
+    target = Path(create_temp) / "out"
+    before = set(os.listdir(create_temp))
+
+    with (
+        patch("mtui.support.fileops.move", side_effect=OSError("boom")),
+        pytest.raises(OSError, match="boom"),
+    ):
+        atomic_write_file("data", target)
+
+    # No temp file leaked into the destination directory, and no partial target.
+    assert set(os.listdir(create_temp)) == before
+    assert not target.exists()
 
 
 def test_timestamp():

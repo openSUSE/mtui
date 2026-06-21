@@ -10,6 +10,7 @@ import os
 import time
 from collections.abc import Callable
 from contextlib import chdir as chdir  # noqa: PLC0414  # re-exported for callers
+from contextlib import suppress
 from pathlib import Path
 from shutil import move
 from tempfile import mkstemp
@@ -75,7 +76,13 @@ def atomic_write_file(data: bytes | str, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, fname = mkstemp(dir=path.parent)
 
-    with os.fdopen(fd, "w") as f:
-        f.write(data)
-
-    move(fname, path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(data)
+        move(fname, path)
+    except BaseException:
+        # Don't leave the temp file littering the destination directory if the
+        # write or the move failed (on a successful move it is already gone).
+        with suppress(OSError):
+            os.unlink(fname)
+        raise
