@@ -255,6 +255,26 @@ class TestTargetLock:
         result = lock.time()
         assert "UTC" in result
 
+    def test_time_malformed_timestamp_returns_unknown(self, lock):
+        """A non-numeric timestamp must not raise (mirrors age_seconds).
+
+        time() is called from update_lock while reporting a foreign lock; a
+        bad timestamp there must not abort the whole lock-acquisition walk.
+        """
+        mock_file = MagicMock()
+        mock_file.readline.return_value = "notanumber:otheruser:99999"
+        lock.connection.sftp_open.return_value = mock_file
+
+        assert lock.time() == "unknown"
+
+    def test_time_empty_timestamp_returns_unknown(self, lock):
+        """An empty timestamp field is handled gracefully too."""
+        mock_file = MagicMock()
+        mock_file.readline.return_value = ":otheruser:99999"
+        lock.connection.sftp_open.return_value = mock_file
+
+        assert lock.time() == "unknown"
+
 
 # --- Stale lock reaping ---
 
