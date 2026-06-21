@@ -122,6 +122,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   iterated `data.get("jira")` / `get("bugs")` / `get("packages").items()` with no
   default, so a partial/malformed metadata blob crashed the parse; these now fall
   back to empty, matching the existing handling of `repositories`.
+- `atomic_write_file` no longer leaves its temporary file behind in the
+  destination directory when the write or the final `move` fails. The `mkstemp`
+  temp file is now unlinked on any error before the exception propagates.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
