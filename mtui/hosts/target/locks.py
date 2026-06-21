@@ -288,12 +288,24 @@ class TargetLock:
         """Returns the time the lock was created.
 
         Returns:
-            The time the lock was created.
+            The time the lock was created, or ``"unknown"`` when the stored
+            timestamp is missing or malformed. This mirrors ``age_seconds``:
+            a bad timestamp must not raise (this is called from
+            ``update_lock`` while reporting a foreign lock, where an exception
+            would abort the whole lock-acquisition walk).
 
         """
         self.load()
-        time = datetime.fromtimestamp(float(self._lock.timestamp))
-        return time.strftime(r"%A, %d.%m.%Y %H:%M UTC")
+        try:
+            ts = datetime.fromtimestamp(float(self._lock.timestamp))
+        except (ValueError, OverflowError, OSError):
+            logger.debug(
+                "%s: malformed lock timestamp %r",
+                self.connection.hostname,
+                self._lock.timestamp,
+            )
+            return "unknown"
+        return ts.strftime(r"%A, %d.%m.%Y %H:%M UTC")
 
     def unlock(self, force: bool = False) -> None:
         """Unlocks the target system.

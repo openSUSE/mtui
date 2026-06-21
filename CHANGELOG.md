@@ -93,6 +93,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The kernel openQA result matrix now annotates a failed `ltp_` test's
   `result: failed` line as intended. The annotation used `text.replace(...)`
   without assigning the result back (strings are immutable), so it was a no-op.
+- Acquiring an update lock no longer crashes with `ValueError` when another
+  session's lockfile has a malformed or empty timestamp. `update_lock` reports a
+  foreign lock via `TargetLock.time()`, which did `float(timestamp)` unguarded; a
+  bad value aborted the whole lock-acquisition walk (blocking `update`/`prepare`/
+  `downgrade`). `time()` now returns `"unknown"` on a bad timestamp, mirroring the
+  already-hardened `age_seconds`.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
