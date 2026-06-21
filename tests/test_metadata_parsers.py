@@ -138,6 +138,25 @@ def test_json_parser_parse():
     assert results.repositories == frozenset(["test_repo"])
 
 
+def test_json_parser_parse_tolerates_missing_optional_keys():
+    """Absent/null jira, bugs and packages keys must not raise (use defaults)."""
+    results = MagicMock()
+    results.jira = {}
+    results.bugs = {}
+
+    # Minimal metadata: the list/dict-shaped keys are absent entirely, and one
+    # is explicitly null. Previously `.get()` returned None and iterating /
+    # `.items()` raised TypeError.
+    data = {"rrid": "SUSE:Maintenance:1:1", "packages": None}
+
+    JSONParser.parse(results, data)
+
+    assert results.jira == {}
+    assert results.bugs == {}
+    assert results.packages == {}
+    assert results.repositories == frozenset()
+
+
 # ---------------------------------------------------------------------------
 # *repoparse unit tests (was tests/test_repoparse.py).
 # ---------------------------------------------------------------------------
