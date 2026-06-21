@@ -76,10 +76,10 @@ class JSONParser:
             data: The JSON object to parse.
 
         """
-        for i in data.get("jira"):
+        for i in data.get("jira") or []:
             results.jira[i] = "Description not available"
 
-        for i in data.get("bugs"):
+        for i in data.get("bugs") or []:
             results.bugs[i] = "Description not available"
 
         results.rrid = RequestReviewID(data.get("rrid"))
@@ -95,7 +95,7 @@ class JSONParser:
         results.giteacohash = data.get("gitea_commit_hash")
 
         packages = {}
-        for prod, pkgvers in data.get("packages").items():
+        for prod, pkgvers in (data.get("packages") or {}).items():
             pkgs = {pkg: ver for pkg, _, ver in (p.split() for p in pkgvers)}
             packages[prod] = pkgs
         results.repositories = frozenset(data.get("repositories", []))

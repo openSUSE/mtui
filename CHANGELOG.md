@@ -117,6 +117,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   re-raises the `OSError` so the `ConnectingTargetFailedMessage` handler runs; the
   reconnect path (host rebooting) still swallows it and relies on its own
   `is_active()` give-up check.
+- Parsing a testreport's JSON metadata no longer raises `TypeError` when the
+  `jira`, `bugs`, or `packages` keys are absent or null. `JSONParser.parse`
+  iterated `data.get("jira")` / `get("bugs")` / `get("packages").items()` with no
+  default, so a partial/malformed metadata blob crashed the parse; these now fall
+  back to empty, matching the existing handling of `repositories`.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by
