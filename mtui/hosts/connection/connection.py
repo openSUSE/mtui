@@ -238,11 +238,19 @@ class Connection:
 
         except OSError:
             if quiet:
+                # Reconnect path (e.g. host rebooting): an unreachable host is
+                # expected; swallow and let reconnect()'s is_active() check
+                # decide when to give up.
                 logger.debug(
                     "No valid connection to %s:%s (yet)", self.hostname, self.port
                 )
             else:
+                # Initial/explicit connect: re-raise so the caller
+                # (Target.connect) reports ConnectingTargetFailedMessage instead
+                # of proceeding with a dead transport and failing later in
+                # is_locked()/parse_system() with an opaque error.
                 logger.error("No valid connection to %s:%s", self.hostname, self.port)
+                raise
         except Exception as e:
             # general Exception
             logger.debug("%s: %s", self.hostname, e)

@@ -109,6 +109,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `get` now downloads only from **enabled** hosts, matching `put` and its own
   docstring. It previously contacted every connected host, including ones the
   tester had deliberately disabled (e.g. a refhost parked during a batch).
+- Connecting to an unreachable host now reports the clean "connecting to <host>
+  failed: <reason>" message instead of a confusing downstream crash. A network
+  `OSError` on the initial connect was logged but swallowed, so `Connection`
+  returned a dead transport and `Target.connect` then blew up in
+  `is_locked()`/`parse_system()` with an opaque error. The initial connect now
+  re-raises the `OSError` so the `ConnectingTargetFailedMessage` handler runs; the
+  reconnect path (host rebooting) still swallows it and relies on its own
+  `is_active()` give-up check.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
   allow-list (no such command exists — it is `list_products`, already covered by

@@ -524,12 +524,21 @@ def test_connect_sshexception_propagates(
         Connection("test_host", 22, 300)
 
 
-def test_connect_oserror_is_logged_not_raised(
+def test_connect_oserror_is_logged_and_raised(
     mock_ssh_client, mock_ssh_config, mock_path, caplog
 ):
-    """Network-level OSError on connect is logged but not re-raised."""
+    """A network-level OSError on the *initial* connect is logged AND re-raised.
+
+    Re-raising lets the caller (Target.connect) report the clean
+    ConnectingTargetFailedMessage instead of proceeding with a dead transport
+    and crashing later in is_locked()/parse_system(). The reconnect path
+    (quiet=True) still swallows it -- see the next test.
+    """
     mock_ssh_client.connect.side_effect = OSError("network")
-    with caplog.at_level("ERROR", logger="mtui.connection"):
+    with (
+        caplog.at_level("ERROR", logger="mtui.connection"),
+        pytest.raises(OSError, match="network"),
+    ):
         Connection("test_host", 22, 300)
     assert any("No valid connection" in r.message for r in caplog.records)
 

@@ -513,6 +513,30 @@ def test_connect_success_wires_up_lock_and_system(mock_config, monkeypatch):
     assert target.transactional is False
 
 
+def test_connect_failure_surfaces_connecting_failed_message(mock_config, caplog):
+    """A connection error is reported as ConnectingTargetFailedMessage + re-raised.
+
+    Relies on Connection() propagating the failure (e.g. a network OSError) so
+    Target.connect's handler can run, rather than returning a dead transport.
+    """
+    conn_class = MagicMock()
+    conn_class.side_effect = OSError("network")
+    target = Target(  # type: ignore[arg-type]
+        mock_config,
+        "host.example.com",
+        connection=conn_class,  # ty: ignore[invalid-argument-type]
+        lock=MagicMock(),  # ty: ignore[invalid-argument-type]
+    )
+    with (
+        caplog.at_level("CRITICAL", logger="mtui.target"),
+        pytest.raises(OSError, match="network"),
+    ):
+        target.connect()
+    assert any(
+        "connecting to host.example.com failed" in r.message for r in caplog.records
+    )
+
+
 def test_connect_warns_when_already_locked(mock_config, monkeypatch, caplog):
     """A fresh pre-existing lock is logged at warning but does not abort connect."""
     conn_class = MagicMock()
