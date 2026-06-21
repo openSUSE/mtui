@@ -28,6 +28,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
+  only queries openQA) and drops a stale `"products"` entry from the read-only
+  allow-list (no such command exists — it is `list_products`, already covered by
+  the `list_` prefix). Corrects the advisory hint shown to MCP clients; no
+  behavioural change to the commands themselves.
 - `mtui-mcp` no longer floods its log with a repeated
   `Warning: InsecureRequestWarning: Unverified HTTPS request ...` line — one per
   openQA (or other internal-host) request — when TLS verification is disabled
