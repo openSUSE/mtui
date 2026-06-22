@@ -503,21 +503,35 @@ Three composable features make that possible; together they let one client
     wait = 0          ; seconds to wait for a busy refhost (0 = fail fast)
     wait_poll = 15    ; poll interval while waiting
 
-* **Refhost pool selection (different agents, different hosts).** When
-  ``refhosts.yml`` lists several interchangeable hosts for the same **test
-  target** and ``[refhosts] pool_select`` is on, ``add_host`` connects just
-  **one free** host per target instead of the whole matching matrix: it
-  tries candidates in turn, skips any already locked by another agent, and
-  **claims** (locks) the one it takes, so parallel agents drawing from the
-  same pool land on different hosts. If every candidate is busy it falls
-  back to the first and the ``[lock] wait`` policy above governs the wait.
-  The "target" is the full ``product + version + arch + addons`` the update
-  asks for, **not** just the arch — so an update spanning, say, all arches of
-  SLE15-SP5 *and* SP7 still gets a host for every (service-pack, arch) pair;
-  only genuine duplicates (several hosts for the very same target) collapse
-  to one. The pool is searched across **all** locations (location is ignored
-  for pool candidates). Off by default, so a one-host-per-target
+* **Refhost pool selection (different workspaces/agents, different hosts).**
+  When ``refhosts.yml`` lists several interchangeable hosts for the same
+  **test target** and ``[refhosts] pool_select`` is on, ``add_host`` connects
+  just **one free** host per target instead of the whole matching matrix: it
+  tries candidates in turn, skips any already in use, and **claims** the one
+  it takes, so parallel workspaces/agents drawing from the same pool land on
+  different hosts. The "target" is the full ``product + version + arch +
+  addons`` the update asks for, **not** just the arch — so an update spanning,
+  say, all arches of SLE15-SP5 *and* SP7 still gets a host for every
+  (service-pack, arch) pair; only genuine duplicates collapse to one. The pool
+  is searched across **all** locations. Off by default, so a one-host-per-target
   ``refhosts.yml`` behaves exactly as before.
+
+  "In use" is judged on two levels so the pool is safe both within and across
+  processes:
+
+  - **Within one ``mtui-mcp`` process** an in-process *host arbiter* tracks
+    which workspace owns which host — necessary because all workspaces share
+    the OS pid, so the remote lock alone cannot tell them apart. A candidate
+    owned by another workspace is skipped; if every candidate is owned, the
+    claim **queues** up to ``[lock] wait`` seconds for one to be released
+    (multiple workspaces queueing on a shared pool).
+  - **Across processes / manual users** the claim also takes the **remote**
+    ``/var/lock/mtui.lock`` with an identifying comment
+    (``mtui-mcp pool <RRID> [<owner>]``), so other ``mtui-mcp`` servers and
+    people running ``mtui`` see the host busy and by what. Closing the
+    workspace removes that remote lock (so the host shows free again), and a
+    crashed server's pool locks are recovered by the normal stale-lock reaping
+    (``[lock] reap_stale``; the identifying comment does not exempt them).
 
 .. code-block:: ini
 
@@ -538,11 +552,13 @@ client) keep several updates moving.
 
 .. note::
 
-   Workspaces inside *one* ``mtui-mcp`` process share the OS pid, so the
-   refhost lock (keyed on user+pid) treats them as the same owner and they
-   never block each other on a host — coordinate same-process workspaces so
-   they do not drive the *same* host destructively at once. ``[lock] wait``
-   matters across *separate* processes/agents, where the pids differ.
+   Workspaces inside *one* ``mtui-mcp`` process share the OS pid, so the remote
+   refhost lock (keyed on user+pid) cannot tell them apart. The in-process host
+   arbiter (above) is what keeps two same-process workspaces off the same pool
+   host; ``[lock] wait`` then governs queueing both within the process (arbiter)
+   and across separate processes/agents (remote lock). Without ``pool_select``
+   (a single host per arch), still serialise the host phase per host — only the
+   pool makes concurrent host-lanes safe.
 
 
 Long-running tool calls
