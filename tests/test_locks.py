@@ -397,3 +397,72 @@ class TestLockedTargets:
             raise ValueError("test error")
 
         t1.unlock.assert_called_once()
+
+
+class TestTargetLockWait:
+    """lock_wait: queue on a foreign-locked host instead of failing fast."""
+
+    @pytest.fixture
+    def lock(self, mock_config):
+        mock_config.session_user = "testuser"
+        mock_config.lock_reap_stale = False
+        mock_config.lock_stale_age = 86400
+        conn = MagicMock()
+        conn.hostname = "host1.example.com"
+        return TargetLock(conn, mock_config)
+
+    @staticmethod
+    def _fake_clock(monkeypatch):
+        """Patch the locks module clock so waits don't take real time."""
+        import mtui.hosts.target.locks as locks_mod
+
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(locks_mod.time, "time", lambda: clock["t"])
+        monkeypatch.setattr(
+            locks_mod.time,
+            "sleep",
+            lambda s: clock.__setitem__("t", clock["t"] + (s or 1)),
+        )
+        return clock
+
+    def test_lock_wait_disabled_fails_fast(self, lock):
+        """lock_wait <= 0 keeps the immediate TargetLockedError."""
+        lock.config.lock_wait = 0
+        mock_file = MagicMock()
+        mock_file.readline.return_value = "1700000000:otheruser:99999"
+        lock.connection.sftp_open.return_value = mock_file
+        with pytest.raises(TargetLockedError):
+            lock.lock()
+
+    def test_lock_waits_then_succeeds_when_released(self, lock, monkeypatch):
+        """A foreign lock released during polling lets the lock proceed."""
+        self._fake_clock(monkeypatch)
+        lock.config.lock_wait = 30
+        lock.config.lock_wait_poll = 1
+        mock_file = MagicMock()
+        # initial is_locked -> locked by other; after one poll -> released.
+        mock_file.readline.side_effect = [
+            "1700000000:otheruser:99999",
+            "",
+        ]
+        lock.connection.sftp_open.return_value = mock_file
+
+        lock.lock("mine now")  # must not raise
+
+        # the final write happened in "w+" mode
+        assert any(
+            c[0][1] == "w+"
+            for c in lock.connection.sftp_open.call_args_list
+            if len(c[0]) > 1
+        )
+
+    def test_lock_waits_then_times_out(self, lock, monkeypatch):
+        """Still locked after the budget -> TargetLockedError."""
+        self._fake_clock(monkeypatch)
+        lock.config.lock_wait = 2
+        lock.config.lock_wait_poll = 1
+        mock_file = MagicMock()
+        mock_file.readline.return_value = "1700000000:otheruser:99999"
+        lock.connection.sftp_open.return_value = mock_file
+        with pytest.raises(TargetLockedError):
+            lock.lock()

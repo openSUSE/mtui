@@ -105,6 +105,8 @@ class Config:
     ssh_strict_host_key_checking: str
     lock_reap_stale: bool
     lock_stale_age: int
+    lock_wait: int
+    lock_wait_poll: int
     lock_pi_autolock: bool
 
     # -- mtui-mcp server (http transport) per-client session registry --
@@ -419,6 +421,27 @@ class Config:
                 "lock_stale_age",
                 ("lock", "stale_age"),
                 86400,
+                int,
+                getint,
+            ),
+            # When a host is locked by *another* session/agent, wait up to
+            # ``lock_wait`` seconds for it to be released before giving up
+            # (polling every ``lock_wait_poll`` seconds) instead of failing
+            # immediately. ``0`` (default) keeps the fail-fast behaviour, so
+            # nothing changes unless a parallel-agent setup opts in. Lets
+            # several agents share a refhost pool by queueing on a busy host
+            # rather than erroring out.
+            ConfigOption(
+                "lock_wait",
+                ("lock", "wait"),
+                0,
+                int,
+                getint,
+            ),
+            ConfigOption(
+                "lock_wait_poll",
+                ("lock", "wait_poll"),
+                15,
                 int,
                 getint,
             ),

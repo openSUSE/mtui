@@ -234,7 +234,12 @@ class TargetLock:
         # NOTE: let the code pass through if is_mine() as
         # setting a different comment may be desired.
         if self.is_locked() and not self.is_mine():
-            raise TargetLockedError(self.locked_by_msg())
+            # Locked by another session/agent. With ``lock_wait`` enabled,
+            # queue on the busy host (poll until it frees) instead of
+            # failing immediately, so several agents can share a refhost
+            # pool. Default (``lock_wait = 0``) keeps the fail-fast path.
+            if not self._wait_for_release():
+                raise TargetLockedError(self.locked_by_msg())
 
         logger.debug("%s: setting lock", self.connection.hostname)
 
@@ -253,6 +258,66 @@ class TargetLock:
             raise
 
         self._lock = rl
+
+    def _wait_for_release(self) -> bool:
+        """Wait for a foreign lock to be released, up to ``config.lock_wait`` s.
+
+        Polls every ``config.lock_wait_poll`` seconds until the remote lock
+        is gone (or has become ours, or is reaped as stale), or the
+        ``config.lock_wait`` budget runs out.
+
+        A warning is always logged when the wait starts — so a REPL user
+        still sees that the host is locked (matching the connect-time
+        warning) and that mtui is now waiting rather than erroring — and
+        again on timeout.
+
+        Returns:
+            True if the lock became free within the budget (caller may now
+            take it); False on timeout or when waiting is disabled
+            (``lock_wait <= 0``), in which case the caller raises
+            :class:`TargetLockedError` as before.
+
+        """
+        wait = self._int_cfg("lock_wait", 0)
+        if wait <= 0:
+            return False
+        poll = max(1, self._int_cfg("lock_wait_poll", 15))
+        logger.warning(
+            "%s: %s waiting up to %ds for it to be released",
+            self.connection.hostname,
+            self._lock,
+            wait,
+        )
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            time.sleep(min(poll, max(0.0, deadline - time.time())))
+            # ``is_locked`` reloads remote state; short-circuit keeps the
+            # ``is_mine``/``reap_if_stale`` calls (which assume a loaded
+            # lock) off the no-longer-locked path.
+            if not self.is_locked() or self.is_mine() or self.reap_if_stale():
+                logger.info(
+                    "%s: lock released, proceeding", self.connection.hostname
+                )
+                return True
+        logger.warning(
+            "%s: still locked after waiting %ds, giving up",
+            self.connection.hostname,
+            wait,
+        )
+        return False
+
+    def _int_cfg(self, name: str, default: int) -> int:
+        """Read an int config option, tolerating a missing/non-int value.
+
+        Keeps the lock path robust against partially-populated configs:
+        only a genuine number is accepted (a ``MagicMock`` attribute, as
+        used in tests, falls back to ``default`` — ``MagicMock.__int__``
+        would otherwise coerce to ``1`` and silently enable waiting).
+        """
+        val = getattr(self.config, name, default)
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            return default
+        return int(val)
 
     def locked_by_msg(self) -> str:
         """Returns a "locked by" message suitable for display to the user.
