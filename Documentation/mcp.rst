@@ -19,12 +19,14 @@ replace the REPL's ``$EDITOR``-based ``edit`` flow, with
 the checkout (build-check and install logs, ``source.diff``, …).
 
 Session state is isolated per client. Under ``stdio`` one process
-serves one client, so there is exactly one ``Config`` / loaded test
-report / set of connected hosts. Under ``http`` each connected client
-gets its **own** isolated session — its own ``metadata`` and
-``targets`` — so concurrent clients never see each other's loaded
-template or hosts (see :ref:`mcp-concurrency`). Clients load their own
-state at runtime via the ``load_template`` and ``add_host`` tools.
+serves one client; under ``http`` each connected client gets its
+**own** isolated session — its own ``metadata`` and ``targets`` — so
+concurrent clients never see each other's loaded template or hosts
+(see :ref:`mcp-concurrency`). Either way a single client can hold
+several **named workspaces** (the ``workspace`` argument on every tool),
+each an independent loaded template + set of hosts, to drive more than
+one update at once (see :ref:`mcp-parallel-updates`). Clients load their
+own state at runtime via the ``load_template`` and ``add_host`` tools.
 
 .. _Model Context Protocol: https://modelcontextprotocol.io
 
@@ -450,6 +452,64 @@ These knobs live in the ``[mcp]`` section of the mtui config file:
     [mcp]
     session_cap = 32
     session_idle_timeout = 1800
+
+
+.. _mcp-parallel-updates:
+
+Working on several updates in parallel
+======================================
+
+Validating a queue of updates is faster when the independent parts overlap.
+Three composable features make that possible; together they let one client
+(or several agents) keep more than one update moving at once.
+
+* **Named workspaces (one client, several updates).** Every tool takes an
+  optional ``workspace`` argument (default ``"default"``). Each distinct
+  name resolves to its own isolated :class:`McpSession` — own loaded
+  template, own ``targets``, own lock — so a single ``stdio`` client can
+  ``load_template`` update A in workspace ``a`` and update B in workspace
+  ``b`` and drive both without one's ``load_template`` tearing the other's
+  hosts down. Because the lock is per-session, calls in *different*
+  workspaces run concurrently. ``list_workspaces`` shows the caller's
+  workspaces (their loaded template and hosts); ``close_workspace``
+  disconnects one and drops it. (Under ``stdio`` the idle sweeper is
+  disabled, so a workspace left quiet while you work another keeps its
+  hosts.)
+
+* **Background jobs (don't block on a slow host op).** The slow host
+  commands — ``run``, ``update``, ``downgrade``, ``prepare``, ``install``,
+  ``uninstall``, ``set_repo``, ``reboot`` — take ``background=true``: the
+  call returns a job id immediately instead of holding the request open for
+  the minutes the operation takes, while the command runs in the
+  background (still under the workspace's lock, so it serialises against
+  that workspace's other mutating calls). Poll with ``job_status`` and
+  fetch output with ``job_result`` (``job_list`` / ``job_cancel`` round it
+  out); pass the same ``workspace``. So one workspace's ``update`` can run
+  on the hosts while you advance another workspace's review.
+
+* **Waiting for a busy refhost (sharing a pool across agents).** Several
+  *agents* are separate processes, so a refhost lock genuinely excludes
+  them and one would otherwise fail with "locked by …". Set ``[lock] wait``
+  to a number of seconds to make ``lock`` **queue** on a busy host —
+  polling every ``[lock] wait_poll`` seconds until it is released (or
+  reaped as stale, or becomes yours) — rather than erroring. A warning is
+  still logged when the wait starts (and on timeout), so a REPL user sees
+  the host is busy. The default ``0`` keeps the immediate-failure
+  behaviour.
+
+.. code-block:: ini
+
+    [lock]
+    wait = 0          ; seconds to wait for a busy refhost (0 = fail fast)
+    wait_poll = 15    ; poll interval while waiting
+
+.. note::
+
+   Workspaces inside *one* ``mtui-mcp`` process share the OS pid, so the
+   refhost lock (keyed on user+pid) treats them as the same owner and they
+   never block each other on a host — coordinate same-process workspaces so
+   they do not drive the *same* host destructively at once. ``[lock] wait``
+   matters across *separate* processes/agents, where the pids differ.
 
 
 Long-running tool calls
