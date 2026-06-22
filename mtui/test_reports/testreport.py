@@ -121,6 +121,14 @@ class TestReport(ABC):
                  repository = str
         """
         self.hostnames: set[str] = set()
+        # Selection slot of each candidate gathered by ``refhosts_from_tp`` —
+        # only under refhost-pool selection. The slot is the full
+        # test-target identity (product + version + arch + addons), NOT just
+        # arch: two hosts are interchangeable (poolable down to one) only
+        # when they are the same product/version/arch/addons. Distinct
+        # service packs (e.g. SLE15-SP5 vs SP7) on the same arch are
+        # different slots and each still gets a host.
+        self._candidate_slots: dict[str, str] = {}
         # When non-empty, newly connected reference hosts are locked with
         # this comment (set while a PI assignment is active). See
         # ``mtui.commands.apicall`` and ``lock_pi_autolock``.
@@ -601,6 +609,14 @@ class TestReport(ABC):
 
     def connect_targets(self) -> None:
         """Connects to all targets."""
+        # Refhost-pool selection: where several candidates share an arch,
+        # connect+claim one free host and drop the rest from the pending
+        # set, so the matrix below only connects a single host per arch.
+        # No-op (and no behaviour change) unless [refhosts] pool_select is on
+        # and an arch actually has more than one candidate.
+        if getattr(self.config, "refhost_pool_select", False) is True:
+            self._claim_pool_candidates()
+
         targets: dict[str, Target] = {}
         new_systems: dict[str, str] = {}
         executor = ContextExecutor()
@@ -650,6 +666,104 @@ class TestReport(ABC):
             {host: target for host, target in targets.items() if target}
         )
 
+    def _claim_pool_candidates(self) -> None:
+        """Reduce each multi-candidate slot to one connected, claimed host.
+
+        A "slot" is a full test target (product + version + arch + addons,
+        see :meth:`_slot_key`), not just an arch — so distinct service packs
+        on the same arch are *separate* slots and each still gets a host.
+        For every slot that has more than one pending candidate (gathered by
+        :meth:`refhosts_from_tp` under pool selection), connect the
+        candidates in turn and claim the first one that is **not** locked by
+        another agent — claiming = taking its mtui lock, so concurrent
+        agents drawing from the same pool end up on different hosts. The
+        non-chosen candidates are dropped from :attr:`hostnames` so the
+        normal connect path does not also connect them. Slots with a single
+        candidate are left untouched (connected normally below).
+        """
+        pending = {h for h in self.hostnames if h not in self.targets}
+        by_slot: dict[str, list[str]] = {}
+        for name in pending:
+            slot = self._candidate_slots.get(name)
+            if slot is None:
+                continue  # unknown slot -> leave to the normal connect path
+            by_slot.setdefault(slot, []).append(name)
+
+        for slot, names in by_slot.items():
+            if len(names) <= 1:
+                continue  # nothing to choose from
+            chosen = self._claim_first_free(slot, sorted(names))
+            for name in names:
+                if name != chosen:
+                    self.hostnames.discard(name)
+
+    def _claim_first_free(self, slot: str, names: list[str]) -> str | None:
+        """Connect candidates for ``slot`` in order; claim the first free one.
+
+        Returns the chosen hostname (now connected and locked), or — if every
+        candidate is already locked by someone else or unreachable — the
+        first candidate connected without a claim, so the caller still has a
+        host for the slot and the normal ``[lock] wait`` policy governs the
+        later host operations. Returns ``None`` only if none could even be
+        connected.
+        """
+        first_connected: str | None = None
+        for name in names:
+            self.add_target(name)
+            target = self.targets.get(name)
+            if target is None:
+                continue  # connect failed; try the next candidate
+            if first_connected is None:
+                first_connected = name
+            try:
+                busy = (
+                    target.is_locked()
+                    and not target._lock.is_mine()
+                    and not target._lock.reap_if_stale()
+                )
+            except Exception:  # noqa: BLE001 - a lock probe error must not strand us
+                busy = False
+            if busy:
+                logger.info(
+                    "refhost pool: %s is busy (%s), trying next candidate for %s",
+                    name,
+                    target._lock.locked_by(),
+                    slot,
+                )
+                if name != first_connected:
+                    self._disconnect_candidate(name)
+                continue
+            try:
+                target.lock("mtui: refhost pool claim")
+            except TargetLockedError:
+                # Lost the race to another agent between probe and claim.
+                if name != first_connected:
+                    self._disconnect_candidate(name)
+                continue
+            logger.info("refhost pool: claimed %s for %s", name, slot)
+            if first_connected is not None and first_connected != name:
+                self._disconnect_candidate(first_connected)
+            return name
+
+        if first_connected is not None:
+            logger.warning(
+                "refhost pool: all candidates for %s are busy; using %s and "
+                "relying on the lock-wait policy",
+                slot,
+                first_connected,
+            )
+        return first_connected
+
+    def _disconnect_candidate(self, hostname: str) -> None:
+        """Drop a connected-but-not-chosen pool candidate."""
+        target = self.targets.pop(hostname, None)
+        self.systems.pop(hostname, None)
+        if target is not None:
+            try:
+                target.close()
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                logger.debug("error disconnecting pool candidate %s", hostname)
+
     def add_target(self, hostname: str) -> None:
         """Adds a target to the test report.
 
@@ -698,8 +812,21 @@ class TestReport(ABC):
         except RefhostsResolveFailedError:
             return
 
+        # ``is True`` (not ``bool(...)``): a MagicMock config attribute is
+        # truthy, so coerce strictly to keep the default path under tests.
+        pool = getattr(self.config, "refhost_pool_select", False) is True
         try:
-            hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
+            attrs = Attributes.from_testplatform(testplatform)
+            if pool:
+                # Pool mode: gather every matching candidate across ALL
+                # locations and remember each one's arch so connect_targets
+                # can pick one free host per arch.
+                pool_hosts = refhosts.search_pool(attrs, all_locations=True)
+                hostnames = [h.name for h, _slot in pool_hosts]
+                for h, slot in pool_hosts:
+                    self._candidate_slots[h.name] = slot
+            else:
+                hostnames = refhosts.search(attrs)
         except (ValueError, KeyError):
             hostnames = []
             msg = "failed to parse testplatform {0!r}"

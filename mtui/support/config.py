@@ -91,6 +91,7 @@ class Config:
     target_tempdir: Path
     chdir_to_template_dir: bool
     refhosts_resolvers: str
+    refhost_pool_select: bool
     refhosts_https_uri: str
     refhosts_https_expiration: int
     refhosts_path: Path
@@ -341,6 +342,20 @@ class Config:
                 Path("/usr/share/qam-metadata/refhosts.yml"),
                 expanduser,
                 get,
+            ),
+            # Refhost-pool selection: when several refhosts match the same
+            # arch, connect just ONE free candidate (skipping hosts locked
+            # by another agent and claiming the chosen one) instead of the
+            # whole matching matrix. Lets parallel agents draw distinct
+            # hosts from a shared pool. The pool is searched across ALL
+            # locations (location is ignored for pool candidates). Off by
+            # default -> unchanged single-host-per-arch behaviour.
+            ConfigOption(
+                "refhost_pool_select",
+                ("refhosts", "pool_select"),
+                False,
+                bool,
+                getboolean,
             ),
             ConfigOption(
                 "use_keyring",

@@ -86,6 +86,50 @@ class Refhosts:
 
         return results
 
+    def search_pool(
+        self, attributes: list[Attributes], all_locations: bool = False
+    ) -> list[tuple[Host, str]]:
+        """Return ``(host, slot)`` pairs for refhost-pool selection.
+
+        ``slot`` is ``str(attribute)`` of the **first** query attribute the
+        host matches — i.e. the test-target identity (product + version +
+        arch + addons *as requested*). Hosts that satisfy the same target are
+        therefore poolable down to one even if a candidate carries extra
+        addons, while distinct service packs / arches are distinct slots and
+        each keeps a host. Results are de-duplicated by host name (a host is
+        bound to the first slot it matches), preserving first-seen order.
+
+        With ``all_locations=True`` every location is scanned (location is
+        ignored) so the pool draws the widest set of candidates; otherwise
+        the per-attribute location/default fallback of :meth:`search`
+        applies.
+        """
+        seen: set[str] = set()
+        results: list[tuple[Host, str]] = []
+
+        def _add(hosts: list[Host], attribute: Attributes, slot: str) -> int:
+            added = 0
+            for candidate in hosts:
+                if candidate.name in seen:
+                    continue
+                if self.is_candidate_match(candidate, attribute):
+                    seen.add(candidate.name)
+                    results.append((candidate, slot))
+                    added += 1
+            return added
+
+        for attribute in attributes:
+            slot = str(attribute)
+            if all_locations:
+                for hosts in self.data.values():
+                    _add(hosts, attribute, slot)
+                continue
+            added = _add(self.data.get(self.location, []), attribute, slot)
+            if added == 0 and self.location != self._default_location:
+                _add(self.data.get(self._default_location, []), attribute, slot)
+
+        return results
+
     def is_candidate_match(self, candidate: Host, attribute: Attributes) -> bool:
         """Return True iff ``candidate`` satisfies all set fields of ``attribute``."""
         if attribute.arch and attribute.arch != candidate.arch:

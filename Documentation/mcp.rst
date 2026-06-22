@@ -503,6 +503,39 @@ Three composable features make that possible; together they let one client
     wait = 0          ; seconds to wait for a busy refhost (0 = fail fast)
     wait_poll = 15    ; poll interval while waiting
 
+* **Refhost pool selection (different agents, different hosts).** When
+  ``refhosts.yml`` lists several interchangeable hosts for the same **test
+  target** and ``[refhosts] pool_select`` is on, ``add_host`` connects just
+  **one free** host per target instead of the whole matching matrix: it
+  tries candidates in turn, skips any already locked by another agent, and
+  **claims** (locks) the one it takes, so parallel agents drawing from the
+  same pool land on different hosts. If every candidate is busy it falls
+  back to the first and the ``[lock] wait`` policy above governs the wait.
+  The "target" is the full ``product + version + arch + addons`` the update
+  asks for, **not** just the arch — so an update spanning, say, all arches of
+  SLE15-SP5 *and* SP7 still gets a host for every (service-pack, arch) pair;
+  only genuine duplicates (several hosts for the very same target) collapse
+  to one. The pool is searched across **all** locations (location is ignored
+  for pool candidates). Off by default, so a one-host-per-target
+  ``refhosts.yml`` behaves exactly as before.
+
+.. code-block:: ini
+
+    [refhosts]
+    pool_select = false   ; true: pick one free host per arch from the pool
+
+Together these compose: a pool (``pool_select``) gives several agents
+distinct hosts; ``lock wait`` makes them queue politely when the pool is
+exhausted; workspaces and background jobs let each agent (or a single
+client) keep several updates moving.
+
+.. note::
+
+   ``location`` is optional. With no ``[mtui] location`` configured and none
+   set interactively or over MCP it defaults to ``default`` — the
+   ``default`` bucket of ``refhosts.yml`` — so a plain setup needs no
+   location at all. Pool selection ignores location entirely regardless.
+
 .. note::
 
    Workspaces inside *one* ``mtui-mcp`` process share the OS pid, so the
