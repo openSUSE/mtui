@@ -243,6 +243,14 @@ class McpSession:
         # waits, matching the non-interactive contract above.
         self.prompter = None
 
+        # Refhost-pool arbiter + this session's owner key, bound by the
+        # registry via :meth:`bind_arbiter` right after construction. Until
+        # then they are ``None`` (no arbitration — single-session/REPL-like
+        # behaviour). Propagated onto every loaded testreport so its pool
+        # selection skips hosts held by other workspaces in this process.
+        self._host_arbiter: Any | None = None
+        self._owner_key: str | None = None
+
         self.metadata = NullTestReport(config, prompter=self.prompter)
         self.targets = self.metadata.targets
         # Mirror ``self.interactive`` onto the HostsGroup so long-running
@@ -291,6 +299,29 @@ class McpSession:
         # whole session and its table with it.
         self._jobs: dict[str, dict[str, Any]] = {}
         self._job_counter = 0
+
+    # ------------------------------------------------------------------
+    # Refhost-pool arbitration (in-process, cross-workspace)
+    # ------------------------------------------------------------------
+
+    def bind_arbiter(self, arbiter: Any, owner_key: str) -> None:
+        """Bind this session to the shared host arbiter under ``owner_key``.
+
+        Called by :class:`mtui.mcp.registry.SessionRegistry` right after the
+        session is minted. Records the arbiter + this session's owner identity
+        and pushes them onto the current testreport so refhost-pool selection
+        is workspace-aware.
+        """
+        self._host_arbiter = arbiter
+        self._owner_key = owner_key
+        self._apply_arbiter()
+
+    def _apply_arbiter(self) -> None:
+        """Push the bound arbiter + owner key onto the current testreport."""
+        md = self.metadata
+        if md is not None:
+            md._host_arbiter = self._host_arbiter  # noqa: SLF001 - designed hook
+            md._host_owner = self._owner_key  # noqa: SLF001 - designed hook
 
     # ------------------------------------------------------------------
     # CommandPrompt-compatible surface
@@ -368,6 +399,8 @@ class McpSession:
         # Re-apply the non-interactive flag after the testreport swap so
         # the fresh HostsGroup inherits the session's headless mode.
         self.targets.interactive = False
+        # Make the new testreport's refhost-pool selection workspace-aware.
+        self._apply_arbiter()
         self.set_prompt(None)
 
     # ------------------------------------------------------------------
@@ -413,6 +446,17 @@ class McpSession:
         rest, and ``targets`` is emptied either way so a second call is
         a cheap no-op.
         """
+        # Release this workspace's refhost-pool claims so queued workspaces —
+        # and other mtui-mcp servers / manual users — can take the hosts. This
+        # removes the *remote* mtui lock (visible to everyone) as well as the
+        # in-process arbiter ownership. Runs in a worker thread (it SSHes to
+        # unlock). Done first so it always runs even if the disconnect raises.
+        if self._host_arbiter is not None and self._owner_key is not None:
+            release = getattr(self.metadata, "release_pool_claims", None)
+            if release is not None:
+                await asyncio.to_thread(release)
+            else:
+                self._host_arbiter.release_owner(self._owner_key)
         targets = self.targets
         if not targets:
             return

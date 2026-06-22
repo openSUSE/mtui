@@ -331,6 +331,22 @@ class TestTargetLockReaping:
         assert lock.reap_if_stale() is True
         lock.connection.sftp_remove.assert_called_once()
 
+    def test_reap_removes_stale_mcp_pool_lock(self, lock):
+        """A stale mtui-mcp refhost-pool lock is reaped like any other.
+
+        Pool claims write an identifying comment (``mtui-mcp pool <RRID>
+        [<owner>]``); reaping must not exempt it, so an abandoned/crashed
+        mcp server's pool locks are recovered once stale.
+        """
+        stale = int(time.time()) - 200000
+        self._set_lockfile(
+            lock,
+            f"{stale}:testuser:4242:mtui-mcp pool SUSE:SLFO:1.2:5503 [12345\x1ftrivy]",
+        )
+
+        assert lock.reap_if_stale() is True
+        lock.connection.sftp_remove.assert_called_once()
+
     def test_reap_keeps_fresh_lock(self, lock):
         """A lock younger than the threshold is left untouched."""
         fresh = int(time.time()) - 60

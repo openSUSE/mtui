@@ -39,6 +39,7 @@ import time
 from logging import getLogger
 from typing import TYPE_CHECKING, Any, Protocol
 
+from .host_arbiter import HostArbiter
 from .session import McpSession
 
 if TYPE_CHECKING:
@@ -273,6 +274,11 @@ class SessionRegistry:
         self._last_touch: dict[str, float] = {}
         self._lock = asyncio.Lock()
         self._sweeper: asyncio.Task[None] | None = None
+        # One process-global host arbiter shared by every session, so the
+        # refhost pool is divided safely across this client's workspaces
+        # (same-pid sessions the remote lock cannot tell apart). Each session
+        # is bound to it under its own registry key (the "owner").
+        self._arbiter = HostArbiter()
 
     async def get_or_create(self, key: str) -> McpSession:
         """Return the session for ``key``, minting one on first use.
@@ -312,6 +318,7 @@ class SessionRegistry:
                         "released or raise [mcp] session_cap"
                     )
                 session = self._factory(self._cfg, self._log)
+                session.bind_arbiter(self._arbiter, key)
                 self._sessions[key] = session
                 logger.info(
                     "minted new MCP session (key=%s, live=%d)",

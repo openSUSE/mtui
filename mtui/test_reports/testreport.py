@@ -129,6 +129,12 @@ class TestReport(ABC):
         # service packs (e.g. SLE15-SP5 vs SP7) on the same arch are
         # different slots and each still gets a host.
         self._candidate_slots: dict[str, str] = {}
+        # Optional in-process refhost arbiter + this report's owner key, set by
+        # the mtui-mcp layer (``McpSession.bind_arbiter``). When present, pool
+        # selection skips/queues hosts another workspace in the same process
+        # holds; ``None`` (REPL, single session) keeps the prior behaviour.
+        self._host_arbiter: Any | None = None
+        self._host_owner: str | None = None
         # When non-empty, newly connected reference hosts are locked with
         # this comment (set while a PI assignment is active). See
         # ``mtui.commands.apicall`` and ``lock_pi_autolock``.
@@ -697,8 +703,108 @@ class TestReport(ABC):
                 if name != chosen:
                     self.hostnames.discard(name)
 
+    def _int_cfg(self, name: str, default: int) -> int:
+        """Read an int config option, tolerating a missing/non-int value."""
+        val = getattr(self.config, name, default)
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            return default
+        return int(val)
+
+    def _pool_lock_comment(self) -> str:
+        """The mtui-lock comment a pool claim writes on a refhost.
+
+        Carries the update RRID and the owning workspace so the lock is
+        *informative* to other mtui-mcp servers and manual ``mtui`` users who
+        inspect the host (``list_locks`` / the connect-time "locked by …"
+        warning) — not just an opaque "in use".
+        """
+        owner = self._host_owner
+        base = f"mtui-mcp pool {self.id}"
+        return f"{base} [{owner}]" if owner else base
+
+    def release_pool_claims(self) -> None:
+        """Unlock + release every refhost this report pool-claimed.
+
+        Removes the **remote** mtui lock (so other mtui-mcp servers / manual
+        ``mtui`` users immediately see the host free again) and drops the
+        in-process arbiter ownership, for each connected host this owner holds.
+        Best-effort per host. No-op without a bound arbiter (REPL / single
+        session, where pool claims are not used). Call before disconnecting on
+        workspace close so claimed hosts do not leak as locked.
+        """
+        arb = self._host_arbiter
+        owner = self._host_owner
+        if arb is None or owner is None:
+            return
+        for host in list(self.targets):
+            if arb.owner_of(host) != owner:
+                continue
+            target = self.targets.get(host)
+            if target is not None:
+                try:
+                    target.unlock()
+                except Exception:  # noqa: BLE001 - best-effort lock release
+                    logger.debug("error unlocking pool host %s", host, exc_info=True)
+            arb.release(host, owner)
+        arb.release_owner(owner)
+
     def _claim_first_free(self, slot: str, names: list[str]) -> str | None:
-        """Connect candidates for ``slot`` in order; claim the first free one.
+        """Connect a candidate for ``slot`` and claim it; pick the first free.
+
+        With an in-process host arbiter bound (``mtui-mcp`` with named
+        workspaces), this is workspace-aware: a candidate held by *another*
+        workspace in this process is skipped, and if every candidate is held
+        the call queues for up to ``[lock] wait`` seconds for one to be
+        released (a refhost pool shared across this client's workspaces).
+        Without an arbiter (REPL / single session) it falls back to the
+        remote-lock-only behaviour.
+        """
+        arb = self._host_arbiter
+        owner = self._host_owner
+        if arb is None or owner is None:
+            return self._claim_first_free_remote(slot, names)
+
+        wait = self._int_cfg("lock_wait", 0)
+        poll = max(1, self._int_cfg("lock_wait_poll", 15))
+        remaining = list(names)
+        while remaining:
+            # Reserve a candidate no other workspace in this process holds
+            # (queueing up to ``wait`` if they all do).
+            host = arb.acquire_any(remaining, owner, timeout=wait, poll=poll)
+            if host is None:
+                logger.warning(
+                    "refhost pool: every candidate for %s is held by another "
+                    "workspace (waited %ss); leaving the slot unconnected - close "
+                    "a finished workspace or raise [lock] wait",
+                    slot,
+                    wait,
+                )
+                return None
+            self.add_target(host)
+            target = self.targets.get(host)
+            if target is None:  # connect failed; drop the in-process reservation
+                arb.release(host, owner)
+                remaining.remove(host)
+                continue
+            # Now take the *remote* lock (guards against other processes/users,
+            # and is visible to them with an identifying comment).
+            if not target.try_claim(self._pool_lock_comment()):
+                logger.info(
+                    "refhost pool: %s remote-locked (%s); next candidate for %s",
+                    host,
+                    target.locked_by(),
+                    slot,
+                )
+                arb.release(host, owner)
+                self._disconnect_candidate(host)
+                remaining.remove(host)
+                continue
+            logger.info("refhost pool: claimed %s for %s", host, slot)
+            return host
+        return None
+
+    def _claim_first_free_remote(self, slot: str, names: list[str]) -> str | None:
+        """Remote-lock-only claim (no in-process arbiter): pick the first free.
 
         Returns the chosen hostname (now connected and locked), or — if every
         candidate is already locked by someone else or unreachable — the
@@ -717,7 +823,7 @@ class TestReport(ABC):
                 first_connected = name
             # try_claim reserves the host's lock if free (skipping/rereaping
             # as needed); False means another agent holds it -> next candidate.
-            if not target.try_claim("mtui: refhost pool claim"):
+            if not target.try_claim(self._pool_lock_comment()):
                 logger.info(
                     "refhost pool: %s is busy (%s), trying next candidate for %s",
                     name,
@@ -745,6 +851,10 @@ class TestReport(ABC):
         """Drop a connected-but-not-chosen pool candidate."""
         target = self.targets.pop(hostname, None)
         self.systems.pop(hostname, None)
+        # Release any in-process pool reservation so a queued workspace can take
+        # this host (no-op without an arbiter or if we never owned it).
+        if self._host_arbiter is not None and self._host_owner is not None:
+            self._host_arbiter.release(hostname, self._host_owner)
         if target is not None:
             try:
                 target.close()
