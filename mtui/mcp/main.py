@@ -38,7 +38,7 @@ from .args import get_parser
 from .registry import SessionRegistry
 from .session import McpSession
 from .testreport_tools import register_testreport_tools
-from .tools import build_tools, register_job_tools
+from .tools import build_tools, register_job_tools, register_workspace_tools
 
 if TYPE_CHECKING:
     from .registry import SessionProvider
@@ -179,7 +179,29 @@ def main() -> int:
             cfg.mcp_session_idle_timeout,
         )
     else:
-        provider = build_session(cfg, logger)
+        # stdio is one process == one client, but a registry still earns
+        # its keep: it lets that single client hold several **named
+        # workspaces** (``load_template`` per workspace), each its own
+        # isolated ``McpSession`` with its own loaded template + targets +
+        # lock, so independent updates can be driven concurrently from one
+        # connection. The idle sweeper is disabled (``idle_timeout=0``):
+        # under stdio a workspace left quiet while the operator works
+        # another must keep its host connections, not be reaped from under
+        # them. The default workspace is minted lazily on first call, so a
+        # caller that never names a workspace sees the prior single-session
+        # behaviour unchanged.
+        provider = SessionRegistry(
+            build_session,
+            cfg,
+            logger,
+            max_sessions=cfg.mcp_session_cap,
+            idle_timeout=0,
+        )
+        logger.info(
+            "mtui-mcp: stdio transport — named-workspace multiplexing "
+            "(cap=%d, idle sweeper disabled)",
+            cfg.mcp_session_cap,
+        )
 
     # ``host``/``port`` are constructor-time settings in the SDK and
     # only consulted under the ``streamable-http`` transport; passing
@@ -187,6 +209,7 @@ def main() -> int:
     mcp = FastMCP(name="mtui", host=args.host, port=args.port)
     build_tools(mcp, provider)
     register_testreport_tools(mcp, provider)
+    register_workspace_tools(mcp, provider)
     register_job_tools(mcp, provider)
 
     try:

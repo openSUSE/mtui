@@ -32,10 +32,14 @@ import pytest
 
 from mtui.mcp.main import build_session
 from mtui.mcp.registry import (
+    WORKSPACE_DEFAULT,
     SessionRegistry,
     SessionRegistryFullError,
     _log_label,
     _session_key,
+    resolve_session,
+    split_workspace_key,
+    workspace_key,
 )
 from mtui.mcp.session import McpSession
 from mtui.types import Workflow
@@ -498,3 +502,98 @@ def test_registry_sessions_have_independent_config(tmp_path: Path) -> None:
     assert a.config is not b.config
     a.config.location = "prague"
     assert b.config.location == "nuremberg"
+
+
+# --------------------------------------------------------------------------- #
+# Named workspaces (P1: one client, several isolated sessions)                #
+# --------------------------------------------------------------------------- #
+
+
+def test_workspace_key_roundtrips() -> None:
+    """``workspace_key`` / ``split_workspace_key`` are inverse."""
+    key = workspace_key("12345", "alpha")
+    assert split_workspace_key(key) == ("12345", "alpha")
+
+
+def test_split_workspace_key_legacy_key_defaults() -> None:
+    """A key without the separator reads back as the default workspace."""
+    assert split_workspace_key("12345") == ("12345", WORKSPACE_DEFAULT)
+
+
+def test_resolve_session_distinct_workspaces_are_isolated(tmp_path: Path) -> None:
+    """Same client, two workspace names -> two independent sessions."""
+    reg = _registry(tmp_path)
+    ctx = _ctx_with_session(object())
+
+    async def driver() -> tuple[McpSession, McpSession]:
+        return (
+            await resolve_session(reg, ctx, "a"),
+            await resolve_session(reg, ctx, "b"),
+        )
+
+    a, b = asyncio.run(driver())
+    assert a is not b
+    assert a.targets is not b.targets
+
+
+def test_resolve_session_same_workspace_is_stable(tmp_path: Path) -> None:
+    """Same client + same workspace name -> the same session instance."""
+    reg = _registry(tmp_path)
+    ctx = _ctx_with_session(object())
+
+    async def driver() -> tuple[McpSession, McpSession]:
+        return (
+            await resolve_session(reg, ctx, "a"),
+            await resolve_session(reg, ctx, "a"),
+        )
+
+    first, again = asyncio.run(driver())
+    assert first is again
+
+
+def test_resolve_session_default_workspace_matches_bare_key(tmp_path: Path) -> None:
+    """Omitting the workspace lands in the ``default`` workspace key."""
+    reg = _registry(tmp_path)
+    ctx = _ctx_with_session(object())
+
+    async def driver() -> tuple[McpSession, McpSession]:
+        implicit = await resolve_session(reg, ctx)
+        explicit = await resolve_session(reg, ctx, WORKSPACE_DEFAULT)
+        return implicit, explicit
+
+    implicit, explicit = asyncio.run(driver())
+    assert implicit is explicit
+
+
+def test_resolve_session_workspaces_isolated_across_clients(tmp_path: Path) -> None:
+    """The same workspace name under two clients stays isolated."""
+    reg = _registry(tmp_path)
+    ctx1 = _ctx_with_session(object())
+    ctx2 = _ctx_with_session(object())
+
+    async def driver() -> tuple[McpSession, McpSession]:
+        return (
+            await resolve_session(reg, ctx1, "shared"),
+            await resolve_session(reg, ctx2, "shared"),
+        )
+
+    a, b = asyncio.run(driver())
+    assert a is not b
+
+
+def test_live_sessions_snapshot_lists_created_keys(tmp_path: Path) -> None:
+    """``live_sessions`` exposes a copy of the live key->session map."""
+    reg = _registry(tmp_path)
+    ctx = _ctx_with_session(object())
+
+    async def driver() -> dict[str, McpSession]:
+        await resolve_session(reg, ctx, "a")
+        await resolve_session(reg, ctx, "b")
+        return reg.live_sessions()
+
+    live = asyncio.run(driver())
+    workspaces = {split_workspace_key(k)[1] for k in live}
+    assert {"a", "b"} <= workspaces
+    # snapshot is a copy: mutating it does not touch the registry
+    live.clear()
+    assert reg.live_sessions()

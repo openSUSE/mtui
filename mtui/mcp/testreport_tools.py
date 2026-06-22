@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..test_reports.null_report import NullTestReport
-from .registry import resolve_session
+from .registry import WORKSPACE_DEFAULT, resolve_session
 from .session import McpCommandError
 
 if TYPE_CHECKING:
@@ -565,32 +565,44 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
     async def _read(
         offset: int = 1,
         limit: int | None = None,
+        workspace: str = WORKSPACE_DEFAULT,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        session = await resolve_session(provider, ctx)
+        session = await resolve_session(provider, ctx, workspace)
         return await testreport_read(session, offset=offset, limit=limit, ctx=ctx)
 
-    async def _logs(ctx: Context | None = None) -> dict[str, Any]:
-        session = await resolve_session(provider, ctx)
+    async def _logs(
+        workspace: str = WORKSPACE_DEFAULT, ctx: Context | None = None
+    ) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx, workspace)
         return await testreport_logs(session, ctx=ctx)
 
-    async def _read_file(relpath: str, ctx: Context | None = None) -> dict[str, Any]:
-        session = await resolve_session(provider, ctx)
+    async def _read_file(
+        relpath: str,
+        workspace: str = WORKSPACE_DEFAULT,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx, workspace)
         return await testreport_read_file(session, relpath, ctx=ctx)
 
     async def _patch(
         start_line: int,
         end_line: int,
         replacement: str,
+        workspace: str = WORKSPACE_DEFAULT,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        session = await resolve_session(provider, ctx)
+        session = await resolve_session(provider, ctx, workspace)
         return await testreport_patch(
             session, start_line, end_line, replacement, ctx=ctx
         )
 
-    async def _write(content: str, ctx: Context | None = None) -> dict[str, Any]:
-        session = await resolve_session(provider, ctx)
+    async def _write(
+        content: str,
+        workspace: str = WORKSPACE_DEFAULT,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx, workspace)
         return await testreport_write(session, content, ctx=ctx)
 
     async def _fill(

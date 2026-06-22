@@ -33,10 +33,18 @@ from logging import getLogger
 from typing import TYPE_CHECKING, Any
 
 from ..commands import Command
+from ..test_reports.null_report import NullTestReport
 from ._argv import kwargs_to_argv
 from ._schema import build_parameters
 from .deny import REPL_ONLY
-from .registry import resolve_session
+from .registry import (
+    DEFAULT_SESSION_KEY,
+    WORKSPACE_DEFAULT,
+    _session_key,
+    resolve_session,
+    split_workspace_key,
+    workspace_key,
+)
 from .session import McpCommandError
 
 if TYPE_CHECKING:
@@ -130,6 +138,19 @@ def _make_wrapper(
     from mcp.server.fastmcp import Context
 
     params = build_parameters(parser)
+    # A ``workspace`` selector so one client can drive several independent
+    # updates at once: each distinct name resolves to its own isolated
+    # McpSession (own loaded template + targets + lock). Keyword-only with
+    # a default, so it stays in the JSON schema (the LLM can target a
+    # workspace) yet every existing call that omits it lands in the
+    # ``default`` workspace — unchanged behaviour. Encoded out before
+    # ``kwargs_to_argv`` so it never leaks into the command's argv.
+    workspace_param = inspect.Parameter(
+        "workspace",
+        inspect.Parameter.KEYWORD_ONLY,
+        default=WORKSPACE_DEFAULT,
+        annotation=str,
+    )
     # Append the Context-typed parameter LAST so the existing required-
     # before-optional ordering is preserved (``ctx`` has a default of
     # ``None`` and is keyword-only).
@@ -154,7 +175,7 @@ def _make_wrapper(
                 annotation=bool,
             )
         )
-    all_params = [*params, *extra_params, ctx_param]
+    all_params = [*params, *extra_params, workspace_param, ctx_param]
     signature = inspect.Signature(
         parameters=all_params,
         return_annotation=str,
@@ -184,8 +205,11 @@ def _make_wrapper(
         # FastMCP injects ``ctx`` only when the client request carries
         # a progress token (and even then, only because we annotated
         # the parameter as Context); strip it before kwargs_to_argv so
-        # the encoder does not try to render it as a CLI flag.
+        # the encoder does not try to render it as a CLI flag. ``workspace``
+        # is likewise popped here (never a CLI flag) and steers which
+        # isolated session this call dispatches through.
         ctx = kwargs.pop("ctx", None)
+        workspace = kwargs.pop("workspace", None) or WORKSPACE_DEFAULT
         background = bool(kwargs.pop("background", False)) if is_slow else False
         if synthetic_required:
             supplied = [n for n in synthetic_names if kwargs.get(n) is not None]
@@ -196,14 +220,15 @@ def _make_wrapper(
                 )
                 raise McpCommandError("", msg, 2)
         argv = list(argv_prefix) + kwargs_to_argv(parser, kwargs)
-        session = await resolve_session(provider, ctx)
+        session = await resolve_session(provider, ctx, workspace)
         if background:
             job_id = await session.start_job(cls, argv, ctx=ctx)
             return (
-                f"started background job {job_id!r} for `{cls.command}`; it "
-                f"runs on the hosts while you work elsewhere. Poll "
-                f"job_status(job_id={job_id!r}) and fetch output with "
-                f"job_result(job_id={job_id!r})."
+                f"started background job {job_id!r} for `{cls.command}` in "
+                f"workspace {workspace!r}; it runs on the hosts while you work "
+                f"elsewhere. Poll job_status(job_id={job_id!r}, "
+                f"workspace={workspace!r}) and fetch output with "
+                f"job_result(job_id={job_id!r}, workspace={workspace!r})."
             )
         return await session.run_command(cls, argv, ctx=ctx)
 
@@ -458,3 +483,102 @@ def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
     )
     logger.info("registered 4 job tools: job_cancel, job_list, job_result, job_status")
     return ["job_cancel", "job_list", "job_result", "job_status"]
+
+
+def register_workspace_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
+    """Register the ``list_workspaces`` / ``close_workspace`` tools.
+
+    These expose the named-workspace multiplexing that every other tool's
+    ``workspace`` parameter drives: ``list_workspaces`` reports the caller's
+    own live workspaces (the loaded template + connected hosts of each), and
+    ``close_workspace`` disconnects one workspace's hosts and drops it.
+
+    Both operate only on the *calling client's* workspaces — the per-client
+    base key is recomputed here and used to filter / address the registry —
+    so under http one client can neither see nor close another's. They no-op
+    gracefully (a one-line message) under a provider that is not a
+    :class:`~mtui.mcp.registry.SessionRegistry` (e.g. a direct single
+    :class:`~mtui.mcp.session.McpSession` in tests).
+
+    Args:
+        mcp: The :class:`mcp.server.fastmcp.FastMCP` server.
+        provider: The session provider every workspace resolves through.
+
+    Returns:
+        The registered tool names.
+
+    """
+    from mcp.server.fastmcp import Context
+    from mcp.types import ToolAnnotations
+
+    def _base_key(ctx: Context | None) -> str:
+        return DEFAULT_SESSION_KEY if ctx is None else _session_key(ctx)
+
+    async def list_workspaces(ctx: Context | None = None) -> str:
+        """List this client's named workspaces and what each holds."""
+        live = getattr(provider, "live_sessions", None)
+        if live is None:
+            return "workspaces are not supported by this server configuration"
+        base = _base_key(ctx)
+        rows: list[str] = []
+        for key, sess in live().items():
+            kbase, ws = split_workspace_key(key)
+            if kbase != base:
+                continue
+            md = sess.metadata
+            if isinstance(md, NullTestReport):
+                state = "empty (no template loaded)"
+            else:
+                rrid = getattr(md, "id", None) or sess.session or "?"
+                state = f"loaded {rrid}"
+            hosts = ", ".join(sorted(sess.targets)) or "none"
+            rows.append(f"- {ws}: {state}; hosts: {hosts}")
+        if not rows:
+            return (
+                f"no workspaces yet; the {WORKSPACE_DEFAULT!r} workspace is "
+                "created on the first tool call"
+            )
+        rows.sort()
+        return "workspaces (this client):\n" + "\n".join(rows)
+
+    async def close_workspace(workspace: str, ctx: Context | None = None) -> str:
+        """Disconnect a workspace's hosts and drop it from this client."""
+        evict = getattr(provider, "evict", None)
+        live = getattr(provider, "live_sessions", None)
+        if evict is None or live is None:
+            return "workspaces are not supported by this server configuration"
+        base = _base_key(ctx)
+        key = workspace_key(base, workspace)
+        if key not in live():
+            return f"no such workspace: {workspace!r}"
+        await evict(key)
+        return f"closed workspace {workspace!r} (hosts disconnected, state dropped)"
+
+    list_desc = (
+        "List the named workspaces for the current client. Each workspace is "
+        "an isolated mtui session with its own loaded template and connected "
+        "hosts; pass a `workspace` argument to any other tool to drive a "
+        "specific one (default workspace is 'default'). Use this to run "
+        "several updates in parallel from one connection."
+    )
+    close_desc = (
+        "Close a named workspace: disconnect its reference hosts and drop its "
+        "loaded template/state. Use when an update is finished to free its "
+        "host connections. Closing 'default' is allowed; it is re-created "
+        "empty on the next call."
+    )
+
+    mcp.add_tool(
+        list_workspaces,
+        name="list_workspaces",
+        description=list_desc,
+        annotations=ToolAnnotations(readOnlyHint=True, idempotentHint=True),
+    )
+    mcp.add_tool(
+        close_workspace,
+        name="close_workspace",
+        description=close_desc,
+        annotations=ToolAnnotations(),
+    )
+    logger.info("registered 2 workspace tools: close_workspace, list_workspaces")
+    return ["close_workspace", "list_workspaces"]

@@ -56,6 +56,38 @@ logger = getLogger("mtui.mcp.registry")
 #: http :class:`SessionRegistry`.
 DEFAULT_SESSION_KEY: str = "<default>"
 
+#: The workspace name a tool call uses when the caller does not pass one.
+#: A single ``default`` workspace reproduces the pre-workspace behaviour
+#: (one loaded template per client), so every existing call keeps working.
+WORKSPACE_DEFAULT: str = "default"
+
+#: Separator joining the per-client base key and the workspace name into
+#: the registry key. ``\x1f`` (ASCII unit separator) cannot appear in the
+#: numeric ``id()`` base nor, in practice, in a workspace name, so the
+#: composite key round-trips unambiguously (see :func:`split_workspace_key`).
+_WORKSPACE_SEP: str = "\x1f"
+
+
+def workspace_key(base: str, workspace: str) -> str:
+    """Compose the registry key for ``workspace`` under client ``base``.
+
+    The base is the per-client key (``id(ctx.session)`` under http, or
+    :data:`DEFAULT_SESSION_KEY` for context-less calls); appending the
+    workspace name lets one client hold several independent sessions —
+    each its own loaded template + ``targets`` — addressed by name.
+    """
+    return f"{base}{_WORKSPACE_SEP}{workspace}"
+
+
+def split_workspace_key(key: str) -> tuple[str, str]:
+    """Inverse of :func:`workspace_key`: ``key`` -> ``(base, workspace)``.
+
+    A key without the separator (legacy/non-workspace) is returned as
+    ``(key, WORKSPACE_DEFAULT)`` so callers can treat it uniformly.
+    """
+    base, sep, ws = key.partition(_WORKSPACE_SEP)
+    return (base, ws) if sep else (key, WORKSPACE_DEFAULT)
+
 #: Default ceiling on concurrent client sessions (DoS guard). Overridden
 #: from ``[mcp] session_cap`` via :func:`mtui.mcp.main.main`.
 DEFAULT_MAX_SESSIONS: int = 32
@@ -90,7 +122,11 @@ class SessionProvider(Protocol):
         ...
 
 
-async def resolve_session(provider: SessionProvider, ctx: Any | None) -> McpSession:
+async def resolve_session(
+    provider: SessionProvider,
+    ctx: Any | None,
+    workspace: str = WORKSPACE_DEFAULT,
+) -> McpSession:
     """Resolve the per-call session from ``provider`` for request ``ctx``.
 
     Routes the ``ctx is None`` case (direct-call tests, non-request
@@ -98,17 +134,28 @@ async def resolve_session(provider: SessionProvider, ctx: Any | None) -> McpSess
     key off a missing context, so the existing direct-call tests keep
     working unchanged. Otherwise keys on :func:`_session_key`.
 
+    ``workspace`` lets a single client hold several independent sessions
+    (each its own loaded template + ``targets``): the per-client base key
+    is combined with the workspace name via :func:`workspace_key`. The
+    default ``"default"`` reproduces the one-session-per-client behaviour,
+    so callers that do not pass a workspace are unaffected. Under the
+    static single-entry provider (:meth:`McpSession.get_or_create`) the
+    composite key is ignored, so stdio without a workspace registry still
+    returns the one session.
+
     Args:
         provider: The session provider (registry or static session).
         ctx: The FastMCP :class:`~mcp.server.fastmcp.Context`, or
             ``None``.
+        workspace: The named workspace within this client (default
+            :data:`WORKSPACE_DEFAULT`).
 
     Returns:
         The :class:`McpSession` to dispatch this call through.
 
     """
-    key = DEFAULT_SESSION_KEY if ctx is None else _session_key(ctx)
-    return await provider.get_or_create(key)
+    base = DEFAULT_SESSION_KEY if ctx is None else _session_key(ctx)
+    return await provider.get_or_create(workspace_key(base, workspace))
 
 
 def _session_key(ctx: Any | None) -> str:
@@ -272,6 +319,15 @@ class SessionRegistry:
                 )
             self._last_touch[key] = time.monotonic()
             return session
+
+    def live_sessions(self) -> dict[str, McpSession]:
+        """Return a snapshot ``{key: session}`` of the live sessions.
+
+        A shallow copy so the caller (the ``list_workspaces`` tool) can
+        iterate without racing concurrent :meth:`get_or_create` /
+        :meth:`evict` mutations of the underlying dict.
+        """
+        return dict(self._sessions)
 
     async def evict(self, key: str) -> None:
         """Drop ``key`` from the registry and best-effort close it.
