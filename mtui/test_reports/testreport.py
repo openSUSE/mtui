@@ -715,28 +715,15 @@ class TestReport(ABC):
                 continue  # connect failed; try the next candidate
             if first_connected is None:
                 first_connected = name
-            try:
-                busy = (
-                    target.is_locked()
-                    and not target._lock.is_mine()
-                    and not target._lock.reap_if_stale()
-                )
-            except Exception:  # noqa: BLE001 - a lock probe error must not strand us
-                busy = False
-            if busy:
+            # try_claim reserves the host's lock if free (skipping/rereaping
+            # as needed); False means another agent holds it -> next candidate.
+            if not target.try_claim("mtui: refhost pool claim"):
                 logger.info(
                     "refhost pool: %s is busy (%s), trying next candidate for %s",
                     name,
-                    target._lock.locked_by(),
+                    target.locked_by(),
                     slot,
                 )
-                if name != first_connected:
-                    self._disconnect_candidate(name)
-                continue
-            try:
-                target.lock("mtui: refhost pool claim")
-            except TargetLockedError:
-                # Lost the race to another agent between probe and claim.
                 if name != first_connected:
                     self._disconnect_candidate(name)
                 continue

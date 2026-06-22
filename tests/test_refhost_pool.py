@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 from mtui.hosts import refhost
-from mtui.hosts.target import TargetLockedError
 from mtui.test_reports.testreport import TestReport
 
 REFHOSTS_FIXTURE = Path(__file__).parent / "fixtures" / "refhosts.yml"
@@ -123,16 +123,26 @@ class _FakeTarget:
     def is_locked(self) -> bool:
         return self._locked
 
-    def lock(self, comment: str = "") -> None:
+    def locked_by(self) -> str:
+        return self._lock.locked_by()
+
+    def try_claim(self, comment: str = "") -> bool:
+        # Mirrors Target.try_claim against the fake's flags.
+        if self._locked and not self._lock.is_mine() and not self._lock.reap_if_stale():
+            return False
         if self._lock_raises:
-            raise TargetLockedError("lost the race")
+            return False
         self.lock_calls.append(comment)
+        return True
 
     def close(self) -> None:
         self.closed = True
 
 
-def _fake_report(targets_map: dict[str, _FakeTarget]) -> SimpleNamespace:
+def _fake_report(targets_map: dict[str, _FakeTarget]) -> TestReport:
+    # A duck-typed stand-in: the methods under test only touch add_target /
+    # targets / systems / _disconnect_candidate. Cast so the unbound
+    # TestReport methods accept it (ty) without building a real TestReport.
     self = SimpleNamespace(targets={}, systems={})
 
     def add_target(name: str) -> None:
@@ -140,8 +150,10 @@ def _fake_report(targets_map: dict[str, _FakeTarget]) -> SimpleNamespace:
             self.targets[name] = targets_map[name]
 
     self.add_target = add_target
-    self._disconnect_candidate = lambda n: TestReport._disconnect_candidate(self, n)
-    return self
+    self._disconnect_candidate = lambda n: TestReport._disconnect_candidate(
+        cast("TestReport", self), n
+    )
+    return cast("TestReport", self)
 
 
 def test_claim_first_free_picks_first_unlocked_and_claims_it() -> None:
@@ -215,7 +227,7 @@ def test_claim_pool_candidates_reduces_only_within_a_slot() -> None:
     )
     rep._claim_first_free = lambda slot, names: names[0]
 
-    TestReport._claim_pool_candidates(rep)
+    TestReport._claim_pool_candidates(cast("TestReport", rep))
 
     assert "a2" not in rep.hostnames  # collapsed into a1
     # one host per distinct slot survives; c1 (different SP) is NOT dropped

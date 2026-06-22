@@ -233,13 +233,12 @@ class TargetLock:
         # the locking really atomic.
         # NOTE: let the code pass through if is_mine() as
         # setting a different comment may be desired.
-        if self.is_locked() and not self.is_mine():
-            # Locked by another session/agent. With ``lock_wait`` enabled,
-            # queue on the busy host (poll until it frees) instead of
-            # failing immediately, so several agents can share a refhost
-            # pool. Default (``lock_wait = 0``) keeps the fail-fast path.
-            if not self._wait_for_release():
-                raise TargetLockedError(self.locked_by_msg())
+        # Locked by another session/agent: with ``lock_wait`` enabled, queue
+        # on the busy host (poll until it frees) instead of failing
+        # immediately, so several agents can share a refhost pool. Default
+        # (``lock_wait = 0``) keeps the fail-fast path.
+        if self.is_locked() and not self.is_mine() and not self._wait_for_release():
+            raise TargetLockedError(self.locked_by_msg())
 
         logger.debug("%s: setting lock", self.connection.hostname)
 
@@ -295,9 +294,7 @@ class TargetLock:
             # ``is_mine``/``reap_if_stale`` calls (which assume a loaded
             # lock) off the no-longer-locked path.
             if not self.is_locked() or self.is_mine() or self.reap_if_stale():
-                logger.info(
-                    "%s: lock released, proceeding", self.connection.hostname
-                )
+                logger.info("%s: lock released, proceeding", self.connection.hostname)
                 return True
         logger.warning(
             "%s: still locked after waiting %ds, giving up",

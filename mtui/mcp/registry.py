@@ -88,6 +88,7 @@ def split_workspace_key(key: str) -> tuple[str, str]:
     base, sep, ws = key.partition(_WORKSPACE_SEP)
     return (base, ws) if sep else (key, WORKSPACE_DEFAULT)
 
+
 #: Default ceiling on concurrent client sessions (DoS guard). Overridden
 #: from ``[mcp] session_cap`` via :func:`mtui.mcp.main.main`.
 DEFAULT_MAX_SESSIONS: int = 32

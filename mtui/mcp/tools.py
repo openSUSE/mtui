@@ -368,123 +368,6 @@ def build_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
     return registered
 
 
-def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
-    """Register the background-job control tools (the async slow-op path).
-
-    Slow host commands (``run``/``update``/``downgrade``/...) accept a
-    ``background=true`` flag that returns a job id immediately instead of
-    blocking; these tools then drive that job:
-
-    * ``job_list`` — every job in the session and its state;
-    * ``job_status`` — one job's state + elapsed time;
-    * ``job_result`` — a finished job's output (errors if still running, or
-      surfaces the command's failure envelope if it failed);
-    * ``job_cancel`` — cancel a running job.
-
-    They address the per-call session's job table, resolved through
-    ``provider`` exactly as every other tool resolves its session, so they
-    stay transport-agnostic (one session under stdio; the caller's isolated
-    session under http).
-
-    Args:
-        mcp: The :class:`mcp.server.fastmcp.FastMCP` server.
-        provider: The session provider each call resolves through.
-
-    Returns:
-        The registered tool names.
-
-    """
-    # The trailing ``ctx: Context | None = None`` parameter on each tool
-    # is what FastMCP's ``find_context_parameter`` picks up via
-    # :func:`typing.get_type_hints` to strip ``ctx`` from the JSON schema
-    # and inject the live per-request Context. ``get_type_hints`` (and
-    # FastMCP's ``inspect.signature(fn, eval_str=True)``) resolve the
-    # string annotation ``"Context | None"`` against this *module's*
-    # globals, not the enclosing function's locals, so bind ``Context``
-    # here rather than importing it at module top — keeping
-    # ``mtui.mcp.tools`` importable without the ``[mcp]`` extra. Bind
-    # unconditionally (not ``setdefault``) so a stale stand-in left in
-    # globals by an earlier caller never shadows the real SDK type.
-    from mcp.server.fastmcp import Context as _Context
-    from mcp.types import ToolAnnotations
-
-    globals()["Context"] = _Context
-
-    async def job_list(ctx: Context | None = None) -> str:
-        """List background jobs in this session and their state."""
-        session = await resolve_session(provider, ctx)
-        jobs = session.job_list()
-        if not jobs:
-            return "no background jobs"
-        return "\n".join(
-            f"- {j['id']}: {j['state']} ({j['elapsed_s']}s) [{j['command']}]"
-            for j in jobs
-        )
-
-    async def job_status(job_id: str, ctx: Context | None = None) -> str:
-        """Report one background job's state and elapsed time."""
-        session = await resolve_session(provider, ctx)
-        j = session.job_status(job_id)
-        return f"{j['id']}: {j['state']} ({j['elapsed_s']}s) [{j['command']}]"
-
-    async def job_result(job_id: str, ctx: Context | None = None) -> str:
-        """Return a finished job's output (error if not yet done)."""
-        session = await resolve_session(provider, ctx)
-        return session.job_result(job_id)
-
-    async def job_cancel(job_id: str, ctx: Context | None = None) -> str:
-        """Cancel a running background job."""
-        session = await resolve_session(provider, ctx)
-        return await session.job_cancel(job_id)
-
-    list_desc = (
-        "List background jobs in this session (started by calling a slow host "
-        "command — run/update/downgrade/prepare/install/uninstall/set_repo/"
-        "reboot — with background=true) and their state."
-    )
-    status_desc = (
-        "Report a background job's state (running/done/failed/cancelled) and "
-        "elapsed time. Poll this after starting a slow command with "
-        "background=true."
-    )
-    result_desc = (
-        "Return a finished background job's output. Errors if the job is still "
-        "running (poll job_status first) or surfaces the command's failure if "
-        "it failed."
-    )
-    cancel_desc = (
-        "Cancel a running background job. Note: a job already executing on a "
-        "host (SSH/subprocess) may keep running on the host even after cancel."
-    )
-
-    mcp.add_tool(
-        job_list,
-        name="job_list",
-        description=list_desc,
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    mcp.add_tool(
-        job_status,
-        name="job_status",
-        description=status_desc,
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    mcp.add_tool(
-        job_result,
-        name="job_result",
-        description=result_desc,
-        annotations=ToolAnnotations(readOnlyHint=True),
-    )
-    mcp.add_tool(
-        job_cancel,
-        name="job_cancel",
-        description=cancel_desc,
-        annotations=ToolAnnotations(readOnlyHint=False),
-    )
-    logger.info("registered 4 job tools: job_cancel, job_list, job_result, job_status")
-    return ["job_cancel", "job_list", "job_result", "job_status"]
-
-
 def register_workspace_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
     """Register the ``list_workspaces`` / ``close_workspace`` tools.
 
@@ -510,6 +393,13 @@ def register_workspace_tools(mcp: FastMCP, provider: SessionProvider) -> list[st
     """
     from mcp.server.fastmcp import Context
     from mcp.types import ToolAnnotations
+
+    # Make ``Context`` resolvable in module globals so FastMCP's
+    # ``find_context_parameter`` (which runs ``get_type_hints`` against the
+    # module, with ``from __future__ import annotations`` in effect) can
+    # resolve the string annotation ``"Context | None"`` on the tool
+    # closures below and inject the live request Context.
+    globals().setdefault("Context", Context)
 
     def _base_key(ctx: Context | None) -> str:
         return DEFAULT_SESSION_KEY if ctx is None else _session_key(ctx)
@@ -582,3 +472,107 @@ def register_workspace_tools(mcp: FastMCP, provider: SessionProvider) -> list[st
     )
     logger.info("registered 2 workspace tools: close_workspace, list_workspaces")
     return ["close_workspace", "list_workspaces"]
+
+
+def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
+    """Register the background-job control tools (the async slow-op path).
+
+    Slow host commands (``run``/``update``/``downgrade``/...) accept a
+    ``background=true`` flag that returns a job id immediately instead of
+    blocking; these tools then drive that job:
+
+    * ``job_list`` — every job in the workspace and its state;
+    * ``job_status`` — one job's state + elapsed time;
+    * ``job_result`` — a finished job's output (errors if still running, or
+      surfaces the command's failure envelope if it failed);
+    * ``job_cancel`` — cancel a running job.
+
+    All take the same ``workspace`` selector as the slow command did, so
+    they address that workspace's job table.
+
+    Args:
+        mcp: The :class:`mcp.server.fastmcp.FastMCP` server.
+        provider: The session provider each call resolves through.
+
+    Returns:
+        The registered tool names.
+
+    """
+    from mcp.server.fastmcp import Context
+    from mcp.types import ToolAnnotations
+
+    # See register_workspace_tools: keep ``Context`` in module globals so
+    # FastMCP can resolve the closures' string annotations and inject ctx.
+    globals().setdefault("Context", Context)
+
+    async def job_list(
+        workspace: str = WORKSPACE_DEFAULT, ctx: Context | None = None
+    ) -> str:
+        """List background jobs in this workspace and their state."""
+        session = await resolve_session(provider, ctx, workspace)
+        jobs = session.job_list()
+        if not jobs:
+            return f"no background jobs in workspace {workspace!r}"
+        return "\n".join(
+            f"- {j['id']}: {j['state']} ({j['elapsed_s']}s) [{j['command']}]"
+            for j in jobs
+        )
+
+    async def job_status(
+        job_id: str, workspace: str = WORKSPACE_DEFAULT, ctx: Context | None = None
+    ) -> str:
+        """Report one background job's state and elapsed time."""
+        session = await resolve_session(provider, ctx, workspace)
+        j = session.job_status(job_id)
+        return f"{j['id']}: {j['state']} ({j['elapsed_s']}s) [{j['command']}]"
+
+    async def job_result(
+        job_id: str, workspace: str = WORKSPACE_DEFAULT, ctx: Context | None = None
+    ) -> str:
+        """Return a finished job's output (error if not yet done)."""
+        session = await resolve_session(provider, ctx, workspace)
+        return session.job_result(job_id)
+
+    async def job_cancel(
+        job_id: str, workspace: str = WORKSPACE_DEFAULT, ctx: Context | None = None
+    ) -> str:
+        """Cancel a running background job."""
+        session = await resolve_session(provider, ctx, workspace)
+        return await session.job_cancel(job_id)
+
+    list_desc = (
+        "List background jobs in a workspace (started by calling a slow host "
+        "command — run/update/downgrade/prepare/install/uninstall/set_repo/"
+        "reboot — with background=true) and their state."
+    )
+    status_desc = (
+        "Report a background job's state (running/done/failed/cancelled) and "
+        "elapsed time. Poll this after starting a slow command with "
+        "background=true; pass the same workspace."
+    )
+    result_desc = (
+        "Return a finished background job's output. Errors if the job is still "
+        "running (poll job_status first) or surfaces the command's failure if "
+        "it failed. Pass the same workspace the job was started in."
+    )
+    cancel_desc = (
+        "Cancel a running background job. Note: a job already executing on a "
+        "host (SSH/subprocess) may keep running on the host even after cancel."
+    )
+
+    mcp.add_tool(
+        job_list,
+        name="job_list",
+        description=list_desc,
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    mcp.add_tool(
+        job_status,
+        name="job_status",
+        description=status_desc,
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    mcp.add_tool(job_result, name="job_result", description=result_desc)
+    mcp.add_tool(job_cancel, name="job_cancel", description=cancel_desc)
+    logger.info("registered 4 job tools: job_cancel, job_list, job_result, job_status")
+    return ["job_cancel", "job_list", "job_result", "job_status"]

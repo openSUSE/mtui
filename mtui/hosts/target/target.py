@@ -500,6 +500,39 @@ class Target:
             logger.warning(e)
             raise
 
+    def locked_by(self) -> str:
+        """Return the user currently holding the lock (``""`` if unlocked)."""
+        return self._lock.locked_by()
+
+    def try_claim(self, comment: str = "") -> bool:
+        """Claim the host's lock if it is free; report whether we got it.
+
+        Used by refhost-pool selection to reserve a candidate against other
+        agents. Returns ``False`` (without raising) when the host is locked
+        by someone else and the lock is neither ours nor reapable as stale,
+        or when the claim loses the race — so the caller can try the next
+        candidate. A stale lock is reaped and then claimed.
+
+        Args:
+            comment: Optional comment recorded on the lock.
+
+        Returns:
+            ``True`` if the lock is now held by us, ``False`` if the host is
+            busy.
+
+        """
+        if (
+            self.is_locked()
+            and not self._lock.is_mine()
+            and not self._lock.reap_if_stale()
+        ):
+            return False
+        try:
+            self.lock(comment)
+        except TargetLockedError:
+            return False
+        return True
+
     def add_history(self, comment: str) -> None:
         """Adds a history entry to the target.
 
