@@ -215,6 +215,12 @@ class TestHostLog:
         with pytest.raises(ValueError, match="it need 5 args, got 3"):
             hl.append("a", "b", "c")
 
+    def test_insert_positional_wrong_count_raises_valueerror(self):
+        """insert() has the same wrong-arg-count guard as append() (len(args))."""
+        hl = HostLog()
+        with pytest.raises(ValueError, match="it need 5 args, got 3"):
+            hl.insert(0, "a", "b", "c")
+
     def test_append_bytes_conversion(self):
         """Test appending converts bytes to strings."""
         hl = HostLog()
