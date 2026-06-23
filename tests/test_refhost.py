@@ -630,3 +630,65 @@ class TestRefhostsFactory:
         cfg = _make_config(refhosts_resolvers="invalid_a,invalid_b")
         with pytest.raises(refhost.RefhostsResolveFailedError):
             factory(cfg)
+
+
+# ---------------------------------------------------------------------------
+# base=<extension> matching (SLES-LTSS / sle-ha / SLES_SAP carried as addons)
+# ---------------------------------------------------------------------------
+
+
+class TestExtensionBaseMatching:
+    """A ``base=<extension>`` testplatform resolves to hosts carrying the
+    extension as an addon.
+
+    Extension products (SLES-LTSS, sle-ha, SLES_SAP, SLE_RT, …) ship on a
+    SLES/SLED base and are recorded as addons in the refhosts-ng schema, so a
+    single host can only have one base. ``base=SLES-LTSS`` must therefore match
+    a SLES host that has the SLES-LTSS extension installed — previously only the
+    base product was checked, yielding "No refhosts to add" for every
+    LTSS/HA/SAP incident.
+    """
+
+    @staticmethod
+    def _attr(testplatform):
+        return refhost.Attributes.from_testplatform(testplatform)[0]
+
+    @staticmethod
+    def _host(*, base_minor="SP6", ltss_minor="SP6", with_ltss=True):
+        addons = ()
+        if with_ltss:
+            addons = (
+                refhost.Addon(
+                    name="SLES-LTSS",
+                    version=refhost.Version(major=15, minor=ltss_minor),
+                ),
+            )
+        return refhost.Host(
+            name="ltss-x86",
+            arch="x86_64",
+            product=refhost.Product(
+                name="SLES", version=refhost.Version(major=15, minor=base_minor)
+            ),
+            addons=addons,
+        )
+
+    def test_base_extension_matches_host_with_addon(self):
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
+        attr = self._attr("base=SLES-LTSS(major=15,minor=SP6);arch=[x86_64]")
+        assert rh.is_candidate_match(self._host(), attr)
+
+    def test_base_extension_no_match_when_addon_absent(self):
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
+        attr = self._attr("base=SLES-LTSS(major=15,minor=SP6);arch=[x86_64]")
+        assert not rh.is_candidate_match(self._host(with_ltss=False), attr)
+
+    def test_base_extension_version_must_match_addon(self):
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
+        attr = self._attr("base=SLES-LTSS(major=15,minor=SP6);arch=[x86_64]")
+        assert not rh.is_candidate_match(self._host(ltss_minor="SP5"), attr)
+
+    def test_base_still_matches_real_base_product(self):
+        """The addon fallback must not regress plain base-product matching."""
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
+        attr = self._attr("base=SLES(major=15,minor=SP6);arch=[x86_64]")
+        assert rh.is_candidate_match(self._host(), attr)

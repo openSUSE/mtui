@@ -91,14 +91,37 @@ class Refhosts:
         if attribute.arch and attribute.arch != candidate.arch:
             return False
 
-        if attribute.product is not None and not self._product_matches(
-            candidate.product, attribute.product
+        if attribute.product is not None and not self._product_satisfied(
+            candidate, attribute.product
         ):
             return False
 
         return not (
             attribute.addons
             and not self._addons_match(candidate.addons, attribute.addons)
+        )
+
+    @staticmethod
+    def _product_satisfied(candidate: Host, query: Product) -> bool:
+        """Return True iff ``candidate`` provides the queried base product.
+
+        A testplatform ``base=<name>`` is satisfied when the host's base
+        product matches, **or** when the host carries that product as an
+        addon. Extension products (``SLES-LTSS``, ``sle-ha``, ``SLES_SAP``,
+        ``SLE_RT``, …) ship on a ``SLES``/``SLED`` base and are recorded as
+        addons in the refhosts-ng schema — one physical host can only have a
+        single base, so e.g. ``base=SLES-LTSS`` must still resolve to a
+        ``SLES`` host that has the ``SLES-LTSS`` extension installed.
+        """
+        if Refhosts._product_matches(candidate.product, query):
+            return True
+        return any(
+            addon.name == query.name
+            and (
+                query.version is None
+                or Refhosts._version_matches(addon.version, query.version)
+            )
+            for addon in candidate.addons
         )
 
     @staticmethod

@@ -5,6 +5,18 @@ All notable user-visible changes to MTUI are documented in this file.
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]:
+
+### Fixed
+
+- A testplatform `base=<extension>` (e.g. `base=SLES-LTSS`, `base=sle-ha`,
+  `base=SLES_SAP`, `base=SLE_RT`) now resolves to refhosts that carry that
+  product as an **addon** on a SLES/SLED base, not only to hosts whose base
+  product is literally that name. In the refhosts-ng schema a single host has
+  one base (`SLES`) with LTSS/HA/SAP recorded as addons, so the previous
+  base-only match found nothing — `add_host` reported "No refhosts to add" for
+  every LTSS/HA/SAP incident even though matching hosts existed.
+
 ## 18.2.0 - 2026-06-23
 
 ### Added
