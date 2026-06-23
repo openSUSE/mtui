@@ -151,6 +151,76 @@ reload_products
 Refresh informations about installed products on selected or all host.
 
 
+list_refhosts
++++++++++++++
+
+::
+
+  list_refhosts [-T QUERY] [-n GLOB] [-a ARCH] [-p PRODUCT]
+                [--version VERSION] [--addon ADDON] [-l LOCATION]
+                [--pool] [--json] [--free] [-v]
+
+Queries and searches the reference-host inventory **offline** — no SSH
+connection, no lock, and no loaded test report. It reads the same source
+`add_host`_ resolves through (``RefhostsFactory``), so fleet maintenance and
+manual users can find refhosts through mtui instead of parsing
+``refhosts.yml`` by hand.
+
+With no filters, every known refhost is listed. Location is **not** used to
+scope the search by default: every location is searched and results are
+de-duplicated by host name. Only ``--free`` goes on the wire — it probes each
+matched host's live mtui-lock state.
+
+**Options:**
+
+.. option:: -T QUERY, --testplatform QUERY
+
+  Match a SMELT testplatform query, e.g.
+  ``base=sles(major=15,minor=6);arch=[x86_64]``.
+
+.. option:: -n GLOB, --name GLOB
+
+  Hostname glob, e.g. ``whale-*`` or ``*.qam.suse.cz``.
+
+.. option:: -a ARCH, --arch ARCH
+
+  Architecture filter: ``x86_64``, ``aarch64``, ``ppc64le`` or ``s390x``.
+  Can be used multiple times.
+
+.. option:: -p PRODUCT, --product PRODUCT
+
+  Base-product substring, e.g. ``sles``, ``sled`` or ``SLE_HPC``.
+
+.. option:: --version VERSION
+
+  Product version: ``15-SP6``, ``15.6`` or ``15`` (SP optional).
+
+.. option:: --addon ADDON
+
+  Addon-name substring. Can be used multiple times.
+
+.. option:: -l LOCATION, --location LOCATION
+
+  Restrict to a single location (the default searches all locations).
+
+.. option:: --pool
+
+  Group the result by test-target slot (product, version, arch and addons).
+
+.. option:: --json
+
+  Emit structured JSON instead of the aligned table.
+
+.. option:: --free
+
+  Also probe each matched host's live mtui-lock state. This is the only part
+  of the command that connects to the hosts.
+
+.. option:: -v, --verbose
+
+  Include addons in the output.
+
+
 reload_openqa
 +++++++++++++
 
