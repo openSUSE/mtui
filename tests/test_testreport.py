@@ -32,6 +32,19 @@ def _make(tmp_path: Path) -> OBSTestReport:
 
 
 # ---------------------------------------------------------------------------
+# Workflow mode is per-report (previously global config.auto / config.kernel)
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_mode_defaults_to_manual(tmp_path: Path) -> None:
+    """A freshly built report's workflow defaults to manual."""
+    from mtui.types import Workflow
+
+    r = _make(tmp_path)
+    assert r.workflow is Workflow.MANUAL
+
+
+# ---------------------------------------------------------------------------
 # Package list aggregation + dedup
 # ---------------------------------------------------------------------------
 

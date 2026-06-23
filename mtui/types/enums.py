@@ -52,6 +52,24 @@ class ExecutionMode(Enum):
     SERIAL = "serial"
 
 
+class Workflow(StrEnum):
+    """Per-report update workflow mode.
+
+    Replaces the previous pair of mutually-dependent booleans
+    (``report.auto`` / ``report.kernel``), making the three modes
+    mutually exclusive by construction -- there is no longer an
+    invalid ``auto and kernel`` state to represent.
+
+    :class:`StrEnum` so the values match ``set_workflow``'s CLI choices
+    (``auto`` / ``manual`` / ``kernel``) and any string comparison or
+    serialization stays byte-identical.
+    """
+
+    AUTO = "auto"
+    MANUAL = "manual"
+    KERNEL = "kernel"
+
+
 class RequestKind(Enum):
     """Kind component of an OBS Request Review ID.
 

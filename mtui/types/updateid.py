@@ -33,7 +33,7 @@ from ..test_reports.sl_report import SLTestReport
 from ..test_reports.svn_io import TemplateIOError, testreport_svn_checkout
 from ..test_reports.testreport import TestReport
 from . import RequestReviewID
-from .enums import RequestKind
+from .enums import RequestKind, Workflow
 
 logger = getLogger("mtui.types.updateid")
 
@@ -221,6 +221,8 @@ class AutoOBSUpdateID(UpdateID):
         except TestReportNotLoadedError:
             return NullTestReport(config, prompter=prompter)
 
+        tr.workflow = Workflow.AUTO
+
         self._create_installogs_dir(config)
         tr.incident = QEMIncident(
             self.id,
@@ -239,7 +241,7 @@ class AutoOBSUpdateID(UpdateID):
         if tr.openqa.auto.results is None:
             logger.warning("No install jobs or install jobs failed")
             logger.info("Switch mode to manual")
-            tr.config.auto = False
+            tr.workflow = Workflow.MANUAL
 
             if autoconnect:
                 logger.info("Connect refhosts from testreport")
@@ -308,6 +310,8 @@ class KernelOBSUpdateID(UpdateID):
             tr = self._checkout(config, interactive, prompter=prompter)
         except TestReportNotLoadedError:
             return NullTestReport(config, prompter=prompter)
+
+        tr.workflow = Workflow.KERNEL
 
         self._create_installogs_dir(config)
         self.create_results_dir(config)

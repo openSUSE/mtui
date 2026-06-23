@@ -10,6 +10,7 @@ from mtui.hosts.target.hostgroup import HostsGroup
 from mtui.hosts.target.locks import TargetLockedError
 from mtui.support.exceptions import UpdateError
 from mtui.support.messages import HostIsNotConnectedError
+from mtui.types import Workflow
 
 
 def _stub_target(
@@ -736,7 +737,7 @@ def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
     t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
     t1.check.return_value = MagicMock()
     testreport = MagicMock()
-    testreport.config.auto = False
+    testreport.workflow = Workflow.MANUAL
     testreport.get_package_list.return_value = ["pkg"]
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
@@ -766,7 +767,7 @@ def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
     t1.check.return_value = MagicMock()
     t1.lasterr.return_value = ""
     testreport = MagicMock()
-    testreport.config.auto = False
+    testreport.workflow = Workflow.MANUAL
     testreport.get_package_list.return_value = ["pkg"]
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
@@ -785,7 +786,7 @@ def test_perform_update_unlocks_when_run_fails(mock_run):
     t1.packages = {}
     t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
     testreport = MagicMock()
-    testreport.config.auto = False
+    testreport.workflow = Workflow.MANUAL
     testreport.get_package_list.return_value = ["pkg"]
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
@@ -814,7 +815,7 @@ def test_perform_update_reports_all_host_failures(
             side_effect=UpdateError("Dependency Error", host)
         )
     testreport = MagicMock()
-    testreport.config.auto = False
+    testreport.workflow = Workflow.MANUAL
     testreport.get_package_list.return_value = ["pkg"]
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
@@ -855,7 +856,7 @@ def test_perform_update_single_failure_reraises_original(
     t1.check.return_value = MagicMock(side_effect=orig)
     t2.check.return_value = MagicMock()  # h2 passes
     testreport = MagicMock()
-    testreport.config.auto = False
+    testreport.workflow = Workflow.MANUAL
     testreport.get_package_list.return_value = ["pkg"]
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
@@ -878,7 +879,7 @@ def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
     t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
     t1.check.return_value = MagicMock()
     testreport = MagicMock()
-    testreport.config.auto = False
+    testreport.workflow = Workflow.MANUAL
     testreport.get_package_list.return_value = ["pkg"]
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
@@ -900,7 +901,7 @@ def test_perform_update_keeps_repos_when_run_fails(mock_run, mock_fanout):
     t1.packages = {}
     t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
     testreport = MagicMock()
-    testreport.config.auto = False
+    testreport.workflow = Workflow.MANUAL
     testreport.get_package_list.return_value = ["pkg"]
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"

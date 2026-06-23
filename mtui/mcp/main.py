@@ -76,19 +76,17 @@ def build_session(cfg: Config, log: Logger) -> McpSession:
     """Construct a fresh :class:`McpSession` from ``cfg`` and ``log``.
 
     Each session gets its **own** shallow copy of ``cfg`` so the
-    per-client isolation extends to the mutable workflow flags that
-    commands flip in place — ``config.auto`` / ``config.kernel`` (set
-    by ``load_template`` / ``add_host`` / ``set_mode``) and
-    ``config.location`` (``set_location``). A shallow copy is the right
-    tool: those attributes are scalars, so each session rebinds its own
-    while the heavy read-only members (the parsed ``ConfigParser``, the
-    refhosts factory) stay shared. Without the copy, every http client
-    would share one ``Config`` and clobber each other's workflow mode.
+    per-client isolation extends to the mutable scalars that commands
+    flip in place — notably ``config.location`` (``set_location``). A
+    shallow copy is the right tool: those attributes are scalars, so
+    each session rebinds its own while the heavy read-only members (the
+    parsed ``ConfigParser``, the refhosts factory) stay shared. Without
+    the copy, every http client would share one ``Config`` and clobber
+    each other's mutable state.
 
-    The workflow flags are seeded to ``False`` here, matching the REPL's
-    boot defaults in :func:`mtui.main.main`: ``add_host`` (and other
-    commands) read ``config.auto`` *before* any ``load_template`` runs,
-    so an unset attribute would raise ``AttributeError``.
+    Workflow mode (``auto`` / ``kernel``) now lives on the loaded
+    :class:`TestReport`, not on ``config``, so no per-session seeding of
+    those flags is needed here.
 
     Args:
         cfg: The base application configuration (already merged with
@@ -103,10 +101,6 @@ def build_session(cfg: Config, log: Logger) -> McpSession:
 
     """
     session_cfg = copy.copy(cfg)
-    # Match the REPL boot defaults (mtui.main.main); commands read these
-    # before any template is loaded.
-    session_cfg.kernel = False
-    session_cfg.auto = False
     return McpSession(session_cfg, log)
 
 

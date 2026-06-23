@@ -10,7 +10,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.reloadoqa import ReloadOpenQA
-from mtui.types import OpenQAResults, RequestReviewID
+from mtui.types import OpenQAResults, RequestReviewID, Workflow
 
 
 def _build_prompt() -> MagicMock:
@@ -21,6 +21,7 @@ def _build_prompt() -> MagicMock:
     prompt.metadata.id = "SUSE:Maintenance:12358:199773"
     prompt.metadata.rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
     prompt.metadata.incident = MagicMock()
+    prompt.metadata.workflow = Workflow.MANUAL
     prompt.metadata.openqa = OpenQAResults()
     prompt.display = MagicMock()
     prompt.targets = MagicMock()
@@ -35,7 +36,7 @@ def test_reload_openqa_kernel_first_call_appends_both_to_kernel_list(mock_config
     `KernelOBSUpdateID.make_testreport` does).
     """
     prompt = _build_prompt()
-    mock_config.kernel = True
+    prompt.metadata.workflow = Workflow.KERNEL
     mock_config.openqa_instance = "https://openqa.example.com"
     mock_config.openqa_instance_baremetal = "https://baremetal.example.com"
     args = Namespace()
@@ -74,7 +75,7 @@ def test_reload_openqa_kernel_refresh_calls_run_on_existing(mock_config):
     existing_b = MagicMock(name="existing_b")
     prompt.metadata.openqa.kernel = [existing_a, existing_b]
     prompt.metadata.openqa.auto = MagicMock(name="existing_auto")
-    mock_config.kernel = True
+    prompt.metadata.workflow = Workflow.KERNEL
     args = Namespace()
 
     with (
@@ -94,7 +95,7 @@ def test_reload_openqa_kernel_refresh_calls_run_on_existing(mock_config):
 def test_reload_openqa_auto_only_when_kernel_disabled(mock_config):
     """With kernel disabled, only the auto branch runs."""
     prompt = _build_prompt()
-    mock_config.kernel = False
+    prompt.metadata.workflow = Workflow.MANUAL
     args = Namespace()
 
     with (

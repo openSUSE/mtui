@@ -61,8 +61,6 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
         logger.setLevel(level=logging.DEBUG)
 
     config.merge_args(args)
-    config.kernel = False
-    config.auto = False
 
     config.distro, config.distro_ver, config.distro_kernel = detect_system()
 
@@ -72,14 +70,8 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
     prompter = Prompter()
     prompt = CommandPrompt(config, logger, sys, CommandPromptDisplay, prompter=prompter)
     if args.update:
-        if args.update.kind == "kernel":
-            config.kernel = True
-            config.auto = False
-        elif args.update.kind == "auto":
-            config.auto = True
-            config.kernel = False
-        else:
-            pass
+        # Workflow mode (auto/kernel) is now seeded onto the TestReport by
+        # make_testreport when load_update runs; no global config flags here.
         try:
             prompt.load_update(args.update, autoconnect=not bool(args.sut))
         except (

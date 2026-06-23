@@ -2,7 +2,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.simpleset import SetLocation, SetWorkflow
-from mtui.types import OpenQAResults, RequestReviewID
+from mtui.types import OpenQAResults, RequestReviewID, Workflow
 
 
 class _FakeConfig:
@@ -48,12 +48,11 @@ def test_set_workflow_auto_uses_rrid(mock_config):
     prompt.metadata.rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
     prompt.metadata.incident = MagicMock()
     prompt.metadata.openqa = OpenQAResults()
+    prompt.metadata.workflow = Workflow.MANUAL
     prompt.display = MagicMock()
     prompt.targets = MagicMock()
 
     args = Namespace(workflow="auto")
-    mock_config.auto = False
-    mock_config.kernel = False
 
     with patch("mtui.commands.simpleset.DashboardAutoOpenQA") as dashboard:
         dashboard.return_value.run.return_value.results = []

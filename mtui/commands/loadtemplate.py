@@ -66,15 +66,11 @@ class LoadTemplate(Command):
             self.targets[target].close()
             del self.targets[target]
 
-        if self.args.update.kind == "kernel":
-            self.config.kernel = True
-            self.config.auto = False
-        elif self.args.update.kind == "auto":
-            self.config.kernel = False
-            self.config.auto = True
-        else:
+        if self.args.update.kind not in ("kernel", "auto"):
             raise TestReportNotLoadedError
 
+        # Workflow mode (auto/kernel) is seeded onto the TestReport by
+        # make_testreport when load_update runs below.
         self.prompt.load_update(self.args.update, autoconnect=True)
 
         # Reload hosts to which we already have a connection

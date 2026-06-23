@@ -38,6 +38,7 @@ from mtui.mcp.registry import (
     _session_key,
 )
 from mtui.mcp.session import McpSession
+from mtui.types import Workflow
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -80,6 +81,7 @@ class _RealishConfig:
         self.chdir_to_template_dir = False
         self.connection_timeout = 30
         self.session_user = "testuser"
+        self.location = "nuremberg"
 
 
 def _registry(
@@ -438,46 +440,46 @@ def test_aclose_cancels_sweeper_and_closes_all(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# build_session: workflow-flag seeding + per-session config isolation         #
+# build_session: default workflow mode + per-session config isolation         #
 # --------------------------------------------------------------------------- #
 
 
-def test_build_session_seeds_workflow_flags_false(tmp_path: Path) -> None:
-    """A fresh session must expose ``config.auto`` / ``config.kernel`` as False.
+def test_build_session_defaults_to_manual_mode(tmp_path: Path) -> None:
+    """A fresh session's (null) report defaults to manual workflow.
 
-    Regression guard: ``add_host`` (and other commands) read
-    ``config.auto`` *before* any ``load_template`` runs. Phase A removed
-    the boot-time defaults, which made ``add_host`` on a fresh MCP
-    session raise ``AttributeError: 'Config' object has no attribute
-    'auto'``. ``build_session`` now seeds both flags.
+    Workflow mode now lives on the loaded :class:`TestReport` as a
+    :class:`~mtui.types.Workflow` enum, not on ``config``. A fresh
+    session holds a ``NullTestReport`` whose ``workflow`` defaults to
+    ``Workflow.MANUAL``, and ``build_session`` no longer seeds any mode
+    flags onto ``config``.
     """
     session = build_session(_RealishConfig(tmp_path), _LOG)  # ty: ignore[invalid-argument-type]
-    assert session.config.auto is False
-    assert session.config.kernel is False
+    assert session.metadata.workflow is Workflow.MANUAL
+    # The mode is no longer carried by config.
+    assert not hasattr(session.config, "auto")
+    assert not hasattr(session.config, "kernel")
+    assert not hasattr(session.config, "workflow")
 
 
 def test_build_session_copies_config_per_session(tmp_path: Path) -> None:
-    """Each session gets its own config copy; workflow flips don't leak.
+    """Each session gets its own config copy; mutable scalars don't leak.
 
     Under http every session is minted from one base ``cfg``; a shallow
-    copy per session keeps the mutable workflow flags
-    (``auto``/``kernel``/``location``) independent so one client's
-    ``load_template`` cannot flip another client's workflow mode.
+    copy per session keeps mutable scalars (such as ``location``)
+    independent so one client's ``set_location`` cannot change another
+    client's location.
     """
     base = _RealishConfig(tmp_path)
     a = build_session(base, _LOG)  # ty: ignore[invalid-argument-type]
     b = build_session(base, _LOG)  # ty: ignore[invalid-argument-type]
 
     assert a.config is not b.config
-    # Simulate client A loading a kernel template.
-    a.config.auto = True
-    a.config.kernel = True
+    # Simulate client A changing its location.
+    a.config.location = "prague"
     # Client B must be unaffected.
-    assert b.config.auto is False
-    assert b.config.kernel is False
+    assert b.config.location == "nuremberg"
     # And the shared base config must never have been mutated.
-    assert not hasattr(base, "auto")
-    assert not hasattr(base, "kernel")
+    assert base.location == "nuremberg"
 
 
 def test_registry_sessions_have_independent_config(tmp_path: Path) -> None:
@@ -494,5 +496,5 @@ def test_registry_sessions_have_independent_config(tmp_path: Path) -> None:
 
     a, b = asyncio.run(driver())
     assert a.config is not b.config
-    a.config.kernel = True
-    assert b.config.kernel is False
+    a.config.location = "prague"
+    assert b.config.location == "nuremberg"

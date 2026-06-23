@@ -112,8 +112,6 @@ class Config:
     mcp_session_idle_timeout: int
 
     # -- Attributes set externally in main.py --
-    kernel: bool
-    auto: bool
     distro: str
     distro_ver: str
     distro_kernel: str

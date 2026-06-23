@@ -7,6 +7,7 @@ from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices_filelist
 from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..support.misc import requires_update
+from ..types import Workflow
 from ..types.filelist import FileList
 from ..update_workflow.export import AutoExport, KernelExport, ManualExport
 from ..update_workflow.export.base import BaseExport
@@ -46,12 +47,12 @@ class Export(Command):
         """Executes the `export` command."""
         targets: list[str] = list(self.parse_hosts().keys())
         filename = self.args.filename or Path(self.metadata.path)
-        exporters: dict[tuple[bool, bool], type[BaseExport]] = {
-            (True, False): AutoExport,
-            (False, True): KernelExport,
-            (False, False): ManualExport,
+        exporters: dict[Workflow, type[BaseExport]] = {
+            Workflow.AUTO: AutoExport,
+            Workflow.KERNEL: KernelExport,
+            Workflow.MANUAL: ManualExport,
         }
-        exporter = exporters[(self.config.auto, self.config.kernel)]
+        exporter = exporters[self.metadata.workflow]
         if issubclass(exporter, ManualExport) and not self.metadata.openqa.auto:
             self.metadata.openqa.auto = DashboardAutoOpenQA(
                 self.config,

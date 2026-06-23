@@ -5,7 +5,14 @@ throughout the application.
 """
 
 from .commandlog import CommandLog
-from .enums import ExecutionMode, RequestKind, TargetState, assignment, method
+from .enums import (
+    ExecutionMode,
+    RequestKind,
+    TargetState,
+    Workflow,
+    assignment,
+    method,
+)
 from .filelist import FileList
 from .hostlog import HostLog
 from .oqaresults import OpenQAOverviewResult, OpenQAResult, OpenQAResults
@@ -36,6 +43,7 @@ __all__ = [
     "TargetState",
     "Test",
     "URLs",
+    "Workflow",
     "assignment",
     "method",
 ]

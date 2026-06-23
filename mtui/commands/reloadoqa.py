@@ -5,6 +5,7 @@ from logging import getLogger
 from ..data_sources.openqa import KernelOpenQA
 from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..support.misc import requires_update
+from ..types import Workflow
 from . import Command
 
 logger = getLogger("mtui.commands.reloadopenqa")
@@ -18,7 +19,7 @@ class ReloadOpenQA(Command):
     @requires_update
     def __call__(self) -> None:
         """Executes the `reload_openqa` command."""
-        if self.config.kernel:
+        if self.metadata.workflow is Workflow.KERNEL:
             if self.metadata.openqa.kernel == []:
                 logger.info("Getting data from kernel openQA")
                 self.metadata.openqa.kernel.append(

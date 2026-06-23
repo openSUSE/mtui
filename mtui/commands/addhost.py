@@ -5,6 +5,7 @@ from logging import getLogger
 
 from ..cli.completion import complete_choices
 from ..support.concurrency import ContextExecutor
+from ..types import Workflow
 from . import Command
 
 logger = getLogger("mtui.commands.addhost")
@@ -40,10 +41,9 @@ class AddHost(Command):
         # automatic mode the user almost certainly meant to test manually
         # (and just forgot to switch), so move to the manual workflow --
         # unless --keep-mode was given.
-        if self.config.auto and not self.args.keep_mode:
+        if self.metadata.workflow is Workflow.AUTO and not self.args.keep_mode:
             logger.info("add_host: switching from automatic to manual workflow")
-            self.config.auto = False
-            self.config.kernel = False
+            self.metadata.workflow = Workflow.MANUAL
             self.prompt.set_prompt(self.prompt.session)
 
         if not self.args.target:
