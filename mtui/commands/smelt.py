@@ -86,7 +86,9 @@ class SmeltUpdate(Command):
             self.println(f"status   : {(node.get('status') or {}).get('name')}")
             self.println(f"rating   : {(node.get('rating') or {}).get('name')}")
             self.println(f"priority : {node.get('priority')}")
+            self.println(f"deadline : {node.get('crd') or node.get('prd')}")
             self.println(f"crd      : {node.get('crd')}")
+            self.println(f"prd      : {node.get('prd')}")
         else:
             self.println("SMELT detail is not available for this request kind")
 

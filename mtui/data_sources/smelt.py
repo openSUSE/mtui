@@ -177,8 +177,11 @@ class Smelt:
         """Return ``(priority, deadline)`` for a request, dispatching on kind.
 
         SLFO uses the REST v2 update (``priority``/``deadline``); classic
-        Maintenance uses the GraphQL incident (``priority``/``crd``). Anything
-        else, or any lookup failure, yields ``(None, None)``.
+        Maintenance uses the GraphQL incident (``priority`` and, for the
+        deadline, ``crd`` when a customer-required date is set, else ``prd``,
+        the planned release date SMELT shows as the deadline — ``crd`` is null
+        for most incidents). Anything else, or any lookup failure, yields
+        ``(None, None)``.
         """
         if not self.configured:
             return None, None
@@ -192,5 +195,5 @@ class Smelt:
             node = self.incident(rrid.maintenance_id)
             if not node:
                 return None, None
-            return node.get("priority"), node.get("crd")
+            return node.get("priority"), node.get("crd") or node.get("prd")
         return None, None
