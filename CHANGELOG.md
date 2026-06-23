@@ -9,6 +9,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Desktop notifications (the `notify` extra) work again. They imported the
+  long-dead `pynotify` PyGTK binding, which is unavailable on Python 3.13+, so
+  the REPL's update-finished/update-failed toasts were a silent no-op; the
+  extra also pinned an unrelated, Python 2-only package literally named
+  `notify`. Notifications are now backed by
+  [notify-py](https://pypi.org/project/notify-py/) (pure-Python DBus on Linux,
+  no system GTK/libnotify needed), fire only in an interactive desktop REPL
+  session (piped/cron/CI/MCP runs are skipped), and the notification class is
+  no longer mistakenly passed as the icon name.
 - `reject -m <message>` no longer aborts with `TypeError: expected string or
   bytes-like object, got 'list'` before the rejection is sent. `--message` uses
   `nargs=REMAINDER`, so it arrives as a list of words; `reject` passed it

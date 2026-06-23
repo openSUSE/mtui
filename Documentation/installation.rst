@@ -82,8 +82,11 @@ The following extras can be combined (for example
     storing credentials in the OS keyring instead of plain text.
 
 ``notify``
-    Adds `notify <https://pypi.org/project/notify/>`_ for desktop
-    notifications.
+    Adds `notify-py <https://pypi.org/project/notify-py/>`_ for desktop
+    notifications in the interactive REPL. On Linux it talks to the
+    freedesktop DBus notification service via pure-Python ``jeepney``, so no
+    system GTK/libnotify bindings are required. Notifications are skipped
+    automatically when not attached to an interactive desktop session.
 
 ``completion``
     Adds `argcomplete <https://pypi.org/project/argcomplete/>`_ to

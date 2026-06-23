@@ -34,7 +34,7 @@ mtui-mcp = "mtui.mcp.main:main"
 keyring = ["keyring"]
 mcp = ["mcp[cli]>=1.2"]
 norpm = ["version_utils"]
-notify = ["notify"]
+notify = ["notify-py"]
 rpm = ["rpm"]
 completion = ["argcomplete>=3.0"]
 
@@ -138,6 +138,17 @@ include = ["mtui/types/**", "mtui/data_sources/**"]
 
 [tool.ty.overrides.rules]
 all = "error"
+
+# Desktop notifications are an optional extra (`notify-py`). CI runs `ty`
+# without that extra installed, so the lazy ``from notifypy import Notify``
+# is legitimately unresolved and needs ``# ty: ignore[unresolved-import]``.
+# When a developer *does* install the extra the module resolves and the
+# suppression becomes "unused"; don't let that flip the gate red.
+[[tool.ty.overrides]]
+include = ["mtui/cli/notification.py"]
+
+[tool.ty.overrides.rules]
+unused-ignore-comment = "ignore"
 
 [tool.setuptools.packages.find]
 where = ["."]
