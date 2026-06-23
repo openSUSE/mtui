@@ -8,6 +8,7 @@ the YAML source; the bound :data:`RefhostsFactory` singleton lives in
 the concrete resolvers without a circular import.
 """
 
+import fnmatch
 from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
@@ -160,6 +161,86 @@ class Refhosts:
                 if candidate.name == name:
                     return candidate
         return None
+
+    def query(
+        self,
+        *,
+        attributes: "list[Attributes] | None" = None,
+        name: str | None = None,
+        arch: "list[str] | None" = None,
+        product: str | None = None,
+        version: str | None = None,
+        addon: "list[str] | None" = None,
+        location: str | None = None,
+    ) -> list[tuple[Host, str]]:
+        """Return ``(host, location)`` for refhosts matching the filters.
+
+        Location is **not** used to scope the search by default (it is being
+        retired): every location is scanned and results are de-duplicated by
+        host name (first location wins, preserving first-seen order). Pass
+        ``location`` to restrict to a single one.
+
+        ``attributes`` (parsed from a ``testplatform``) and the field filters
+        (``name`` glob, ``arch``, ``product`` substring, ``version``,
+        ``addon`` substring) are alternatives — when ``attributes`` is given
+        the field filters are ignored. With neither, every host is returned.
+        """
+        locs = [location] if location is not None else list(self.data)
+        seen: set[str] = set()
+        out: list[tuple[Host, str]] = []
+        for loc in locs:
+            for host in self.data.get(loc, []):
+                if host.name in seen:
+                    continue
+                if attributes is not None:
+                    if not any(self.is_candidate_match(host, a) for a in attributes):
+                        continue
+                elif not self._field_match(host, name, arch, product, version, addon):
+                    continue
+                seen.add(host.name)
+                out.append((host, loc))
+        return out
+
+    @staticmethod
+    def _field_match(
+        host: Host,
+        name: str | None,
+        arch: "list[str] | None",
+        product: str | None,
+        version: str | None,
+        addon: "list[str] | None",
+    ) -> bool:
+        """True iff ``host`` satisfies every supplied ad-hoc field filter."""
+        if name and not fnmatch.fnmatch(host.name, name):
+            return False
+        if arch and host.arch not in arch:
+            return False
+        if product and product.lower() not in host.product.name.lower():
+            return False
+        if version and not Refhosts._version_str_match(host.product.version, version):
+            return False
+        if addon:
+            have = [a.name.lower() for a in host.addons]
+            if not all(any(want.lower() in n for n in have) for want in addon):
+                return False
+        return True
+
+    @staticmethod
+    def _version_str_match(hostver: "Version | None", want: str) -> bool:
+        """Loosely match a host version against ``15-SP6`` / ``15.6`` / ``15``.
+
+        ``SP`` is optional and case-insensitive; a bare major matches any
+        minor. A host with no version never matches a versioned query.
+        """
+        if hostver is None:
+            return False
+        parts = want.replace(".", "-").lower().split("-", 1)
+        if str(hostver.major).lower() != parts[0]:
+            return False
+        if len(parts) == 2 and parts[1]:
+            host_minor = "" if hostver.minor is None else str(hostver.minor).lower()
+            return host_minor.replace("sp", "") == parts[1].replace("sp", "")
+        return True
 
     def check_location_sanity(self, location: str) -> None:
         """Raise :class:`InvalidLocationError` if ``location`` is unknown."""

@@ -9,6 +9,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New `list_refhosts` command (and `mcp__mtui__list_refhosts` tool) to query and
+  search the reference-host inventory **without connecting** — no SSH, no lock,
+  no loaded template. Reads the same source `add_host` resolves through
+  (`RefhostsFactory`) and filters by hostname glob (`--name`), arch (`--arch`),
+  base product (`--product`), version (`--version`, `15-SP6`/`15.6`/`15`), addon
+  (`--addon`), or a full `--testplatform` query; `--pool` groups by test-target
+  slot, `--json` emits structured output, and `--free` additionally probes each
+  matched host's live mtui-lock state (the only part that goes on the wire).
+  **Location is not used to scope the search** (it is being retired): every
+  location is searched and results are de-duplicated by host name, with
+  `--location` to restrict to one. Lets fleet maintenance and manual users find
+  refhosts through mtui instead of parsing `refhosts.yml` by hand.
 - The `testreport_read` MCP tool accepts optional `offset` (1-based first line)
   and `limit` (max lines) to return a line window instead of the whole file.
   Without them the behaviour is unchanged (full file). This lets a caller page a
