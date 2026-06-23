@@ -12,9 +12,9 @@ def get_parser(sys) -> ArgumentParser:
     The parser intentionally mirrors :func:`mtui.cli.args.get_parser` for
     the flags that ``Config.merge_args`` and the testreport-loading code
     care about (``-l``, ``-t``, ``-c``, ``-g``, ``--color``, ``--debug``,
-    ``-V``) so the same ``Namespace`` shape can be reused. REPL-only flags
-    (``-p/--prerun``, ``-n/--noninteractive``) are dropped, and three
-    MCP-server flags (``--transport``, ``--host``, ``--port``) are added.
+    ``-V``) so the same ``Namespace`` shape can be reused. The REPL-only
+    update/SUT flags are omitted, and three MCP-server flags
+    (``--transport``, ``--host``, ``--port``) are added.
 
     Templates and hosts are loaded per session at runtime via the
     ``load_template`` and ``add_host`` tools, so the server takes no

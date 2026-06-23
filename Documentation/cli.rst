@@ -87,22 +87,6 @@ and exit.
 Overrides the ``mtui.location`` configuration.
 
 
-``-n, --noninteractive``
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-When set, MTUI is run in a non interactive mode without a command shell.
-MTUI automatically applies the update and exports the results to the
-maintenance template before it quits. User input is not required.
-
-
-``-p FILE, --prerun FILE``
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Runs a script with a set of MTUI commands prior to starting the interactive shell
-or the update process. User input is not required if in non interactive mode
-(``-n`` parameter).
-
-
 ``-s SPEC, --sut SPEC``
 ~~~~~~~~~~~~~~~~~~~~~~~
 

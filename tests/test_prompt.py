@@ -84,19 +84,8 @@ def test_command_prompt_init():
 
 
 # --------------------------------------------------------------------------- #
-# CmdQueue                                                                    #
+# Command registration                                                        #
 # --------------------------------------------------------------------------- #
-
-
-def test_cmd_queue_pop_echoes():
-    """``CmdQueue.pop`` echoes the prompt + popped line to the terminal."""
-    term = MagicMock()
-    queue = repl.CmdQueue(["test_cmd"], "mtui> ", term)
-
-    val = queue.pop(0)
-
-    assert val == "test_cmd"
-    term.stdout.write.assert_called_with("mtui> test_cmd\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -202,65 +191,6 @@ def test_get_names_includes_registered_commands():
 
 
 # --------------------------------------------------------------------------- #
-# Queue + non-interactive behaviour                                           #
-# --------------------------------------------------------------------------- #
-
-
-def test_set_cmdqueue_interactive_keeps_queue_as_is():
-    """Interactive sessions must not get an auto-appended ``quit``."""
-    p = _make_prompt()
-    p.interactive = True
-    p.set_cmdqueue(["a", "b"])
-    assert list(p.cmdqueue) == ["a", "b"]
-    assert isinstance(p.cmdqueue, repl.CmdQueue)
-
-
-def test_set_cmdqueue_non_interactive_appends_quit():
-    """Non-interactive sessions terminate by appending ``quit``."""
-    p = _make_prompt()
-    p.interactive = False
-    p.set_cmdqueue(["a", "b"])
-    assert list(p.cmdqueue) == ["a", "b", "quit"]
-
-
-def test_cmdloop_non_interactive_drains_queue_without_session(monkeypatch):
-    """Non-interactive cmdloop drains the queue without touching PromptSession.
-
-    Locks in PLAN.md Risk #3: ``PromptSession.prompt`` raises on non-TTY
-    stdin, so the loop must read from ``cmdqueue`` exclusively when
-    ``interactive=False``. We assert ``_session.prompt`` is never
-    invoked.
-    """
-    p = _make_prompt()
-    p.interactive = False
-
-    do_foo = MagicMock()
-    do_quit = MagicMock()
-    _bind_do(p, "foo", do_foo)
-    _bind_do(p, "quit", do_quit)
-
-    session_prompt = MagicMock()
-    monkeypatch.setattr(p._session, "prompt", session_prompt)
-
-    p.set_cmdqueue(["foo"])  # auto-appends "quit"
-    p.cmdloop()
-
-    do_foo.assert_called_once_with("")
-    do_quit.assert_called_once_with("")
-    session_prompt.assert_not_called()
-
-
-def test_cmdloop_non_interactive_empty_queue_returns(monkeypatch):
-    """An empty queue + non-interactive session exits without prompting."""
-    p = _make_prompt()
-    p.interactive = False
-    session_prompt = MagicMock()
-    monkeypatch.setattr(p._session, "prompt", session_prompt)
-    p.cmdloop()
-    session_prompt.assert_not_called()
-
-
-# --------------------------------------------------------------------------- #
 # cmdloop control flow                                                        #
 # --------------------------------------------------------------------------- #
 
@@ -291,28 +221,24 @@ def _mock_prompt(monkeypatch, p: repl.CommandPrompt, lines: list[Any]) -> MagicM
     return mock
 
 
-def test_cmdloop_keyboard_interrupt_resets_state(monkeypatch):
-    """``KeyboardInterrupt`` clears the queue and forces interactive mode.
+def test_cmdloop_keyboard_interrupt_reprompts(monkeypatch):
+    """``KeyboardInterrupt`` at the prompt clears the line and reprompts.
 
-    Mimics the prerun → ctrl-C → interactive-mode drop documented in
-    PLAN.md step 6: ``KeyboardInterrupt`` flips ``interactive`` back to
-    ``True``, drops any remaining prerun lines, and reprompts.
+    Ctrl-C on a partial input line must not tear down the REPL: the
+    input phase raises ``_LoopContinueError`` so the loop skips dispatch
+    and reads the next line. We feed Ctrl-C then ``"quit"`` and assert
+    the prompt was asked twice (i.e. the loop survived the interrupt).
     """
     p = _make_prompt()
     _seed_quit(p)
     # First prompt call raises Ctrl-C; second returns "quit" to exit.
-    # The Ctrl-C handler must clear the queue and force interactive=True.
-    _mock_prompt(monkeypatch, p, [KeyboardInterrupt, "quit"])
+    mock = _mock_prompt(monkeypatch, p, [KeyboardInterrupt, "quit"])
 
-    # Pretend we entered cmdloop with a queue and non-interactive mode
-    # AFTER the first prompt call has already happened (e.g. the user
-    # cleared the queue manually); we cannot truly seed the queue here
-    # because the first iteration would pop from it instead of calling
-    # session.prompt. So just observe the post-Ctrl-C state.
     p.cmdloop()
 
+    # Two prompt reads: the interrupted one and the one that returns quit.
+    assert mock.call_count == 2
     assert p.interactive is True
-    assert p.cmdqueue == []
 
 
 def test_cmdloop_keyboard_interrupt_during_command_returns_to_prompt(

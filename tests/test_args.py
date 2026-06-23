@@ -35,7 +35,6 @@ def test_get_parser_args():
             "host1,host2",
             "-w",
             "600",
-            "-n",
             "-d",
             "-c",
             "/test/config",
@@ -50,7 +49,6 @@ def test_get_parser_args():
     assert parsed_args.template_dir == Path("/test/template_dir")
     assert parsed_args.sut[0].print_args() == "-t host1 -t host2"
     assert parsed_args.connection_timeout == 600
-    assert parsed_args.noninteractive is True
     assert parsed_args.debug is True
     assert parsed_args.config == Path("/test/config")
     assert parsed_args.gitea_token == "test_gitea_token"
@@ -67,7 +65,6 @@ def test_get_parser_args():
             "host3,host4",
             "--connection_timeout",
             "1200",
-            "--noninteractive",
             "--debug",
             "--config",
             "/test/config_long",
@@ -82,7 +79,6 @@ def test_get_parser_args():
     assert parsed_args.template_dir == Path("/test/template_dir_long")
     assert parsed_args.sut[0].print_args() == "-t host3 -t host4"
     assert parsed_args.connection_timeout == 1200
-    assert parsed_args.noninteractive is True
     assert parsed_args.debug is True
     assert parsed_args.config == Path("/test/config_long")
     assert parsed_args.gitea_token == "test_gitea_token_long"

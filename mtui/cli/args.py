@@ -79,23 +79,10 @@ def get_parser(sys) -> ArgumentParser:
         "(format: hostname,hostname2)",
     )
     parser.add_argument(
-        "-p",
-        "--prerun",
-        type=Path,
-        help="script with a set of MTUI commands to run at start",
-    )
-    parser.add_argument(
         "-w",
         "--connection_timeout",
         type=int,
         help="override config mtui.connection_timeout",
-    )
-    parser.add_argument(
-        "-n",
-        "--noninteractive",
-        action="store_true",
-        default=False,
-        help="noninteractive update shell",
     )
     parser.add_argument(
         "-d",
