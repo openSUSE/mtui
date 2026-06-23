@@ -35,9 +35,11 @@ from mtui.mcp._schema import build_parameters  # noqa: E402
 from mtui.mcp.deny import REPL_ONLY  # noqa: E402
 from mtui.mcp.session import McpSession  # noqa: E402
 from mtui.mcp.tools import (  # noqa: E402
+    SLOW_COMMANDS,
     SUBPARSER_COMMANDS,
     _is_read_only,
     build_tools,
+    register_job_tools,
 )
 
 if TYPE_CHECKING:
@@ -648,3 +650,110 @@ def test_loadtemplate_rejects_both_review_ids(
         asyncio.run(_call())
     assert ei.value.exit_code == 2
     assert "exactly one" in ei.value.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Background-job tool layer                                                    #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def job_tool_names(mcp: FastMCP, session: McpSession) -> list[str]:
+    """Tool names registered by :func:`register_job_tools` against ``mcp``."""
+    return register_job_tools(mcp, session)
+
+
+def test_register_job_tools_registers_four_tools(
+    job_tool_names: list[str],
+) -> None:
+    """The four background-job control tools must be registered."""
+    assert sorted(job_tool_names) == [
+        "job_cancel",
+        "job_list",
+        "job_result",
+        "job_status",
+    ]
+
+
+def test_job_read_tools_are_read_only(mcp: FastMCP, job_tool_names: list[str]) -> None:
+    """``job_list`` / ``job_status`` / ``job_result`` are side-effect-free."""
+    for name in ("job_list", "job_status", "job_result"):
+        assert _annotations_of(mcp, name).readOnlyHint is True
+    # cancel mutates job state -> no read-only hint.
+    assert _annotations_of(mcp, "job_cancel").readOnlyHint is False
+
+
+def test_job_tools_schema_has_no_workspace_param(
+    mcp: FastMCP, job_tool_names: list[str]
+) -> None:
+    """Jobs are session-scoped; no ``workspace`` selector leaks into the schema."""
+    for name in ("job_status", "job_result", "job_cancel"):
+        props = _params_of(mcp, name).get("properties", {})
+        assert "workspace" not in props
+        assert "job_id" in props
+
+
+def test_slow_command_schema_exposes_background_boolean(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """Every SLOW_COMMANDS tool gains an optional ``background`` boolean."""
+    for name in sorted(SLOW_COMMANDS):
+        params = _params_of(mcp, name)
+        props = params["properties"]
+        assert props["background"]["type"] == "boolean"
+        assert props["background"].get("default") is False
+        # Optional: must not be in the required list.
+        assert "background" not in params.get("required", [])
+
+
+def test_non_slow_command_schema_has_no_background(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """Read-only / instant tools keep a clean schema (no ``background``)."""
+    for name in ("whoami", "list_hosts", "add_host"):
+        props = _params_of(mcp, name).get("properties", {})
+        assert "background" not in props
+
+
+def test_make_wrapper_adds_background_param_only_for_slow_commands() -> None:
+    """The synthesised signature carries ``background`` iff the command is slow."""
+    import inspect
+
+    from mtui.mcp.tools import _make_wrapper
+
+    session_stub = MagicMock()
+
+    run_parser = Command.registry["run"].argparser(__import__("sys"))
+    run_wrapper = _make_wrapper(Command.registry["run"], run_parser, session_stub)
+    run_sig = inspect.signature(run_wrapper)
+    assert "background" in run_sig.parameters
+    bg = run_sig.parameters["background"]
+    assert bg.kind is inspect.Parameter.KEYWORD_ONLY
+    assert bg.default is False
+    assert bg.annotation is bool
+
+    who_parser = Command.registry["whoami"].argparser(__import__("sys"))
+    who_wrapper = _make_wrapper(Command.registry["whoami"], who_parser, session_stub)
+    assert "background" not in inspect.signature(who_wrapper).parameters
+
+
+def test_slow_command_background_true_starts_job(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """Calling a slow tool with ``background=True`` returns a job-id message.
+
+    The backgrounded ``run`` starts an asyncio task; the wrapper returns
+    immediately with a poll/fetch hint instead of the command's stdout.
+    Driven with no hosts so the underlying ``run`` finishes fast.
+    """
+    tool = mcp._tool_manager.get_tool("run")  # noqa: SLF001
+    assert tool is not None
+
+    async def _call() -> str:
+        return await tool.fn(command=["true"], hosts=[], background=True)
+
+    out = asyncio.run(_call())
+    assert "started background job" in out
+    assert "run-1" in out
+    assert "job_status" in out
+    assert "job_result" in out

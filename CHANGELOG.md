@@ -9,6 +9,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Under `mtui-mcp`, the slow host commands (`run`, `update`, `downgrade`,
+  `prepare`, `install`, `uninstall`, `set_repo`, `reboot`) accept a
+  `background=true` flag: instead of holding the request open for the minutes
+  the operation takes, the call returns a job id immediately and runs the
+  command in the background under the session lock. Four new tools drive the
+  job — `job_list` (every job in the session and its state), `job_status`
+  (one job's state and elapsed time), `job_result` (a finished job's output,
+  erroring while it still runs and surfacing the command's failure envelope if
+  it failed), and `job_cancel`. Jobs are scoped to the session (one process
+  under stdio; the caller's isolated session under http), so a client can fire
+  off a slow host op and keep issuing other calls while it runs. A cancelled
+  job already executing on a host may keep running there to completion — the
+  same caveat as interrupting a foreground `run`.
 - New `list_refhosts` command (and `mcp__mtui__list_refhosts` tool) to query and
   search the reference-host inventory **without connecting** — no SSH, no lock,
   no loaded template. Reads the same source `add_host` resolves through

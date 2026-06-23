@@ -500,6 +500,52 @@ For those, raise the timeout in the client's own configuration:
 The heartbeat itself never *caps* execution time; if your client
 honours progress it will simply wait as long as the server takes.
 
+Background jobs (don't block on a slow host op)
+-----------------------------------------------
+
+The heartbeat keeps a *synchronous* call alive, but the client is
+still parked on that one request until the command finishes. When you
+would rather fire off a slow host operation and keep working, the eight
+slow host commands —
+``run``, ``update``, ``downgrade``, ``prepare``, ``install``,
+``uninstall``, ``set_repo``, ``reboot`` — accept a ``background=true``
+flag. Instead of holding the request open for the minutes the op takes,
+the call returns **immediately** with a job id::
+
+    run(command=["zypper", "-n", "patch"], background=true)
+    -> "started background job 'run-1' for `run`; it runs on the hosts
+        while you work elsewhere. Poll job_status(job_id='run-1') and
+        fetch output with job_result(job_id='run-1')."
+
+The command still runs under the session lock for its whole duration —
+so it serialises against the session's other mutating calls exactly
+like a foreground call — but you are free to issue other (read-only)
+tool calls meanwhile and poll the job:
+
+* ``job_list`` — every job in the session and its state;
+* ``job_status(job_id=…)`` — one job's state
+  (``running`` / ``done`` / ``failed`` / ``cancelled``) and elapsed
+  time;
+* ``job_result(job_id=…)`` — a finished job's captured stdout. It
+  *errors* while the job is still running (poll ``job_status`` first)
+  and surfaces the command's failure envelope (stdout, error, exit
+  code) if it failed — exactly as a foreground failure would have;
+* ``job_cancel(job_id=…)`` — cancel a running job.
+
+Jobs are scoped to the session: under stdio that is the single process;
+under http it is the caller's isolated session, so one client never
+sees another's jobs. The job table lives in memory and persists for the
+session's lifetime — finished records are not evicted — but under http
+the registry's idle-TTL sweep drops the whole session (and its jobs)
+once it goes quiet.
+
+.. note::
+
+   Cancellation detaches the awaiter, but a job already executing on a
+   host (an SSH command or subprocess) may keep running to completion
+   on that host even after ``job_cancel`` returns — the same caveat as
+   interrupting a foreground ``run`` with Ctrl-C.
+
 
 Command output and logging
 ===========================

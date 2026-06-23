@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import contextvars
 import io
 import logging
@@ -276,6 +277,20 @@ class McpSession:
         # ``Command.__init__`` picks up the right StringIO-bound
         # writer. ``None`` outside a call.
         self.display: CommandPromptDisplay | None = None
+
+        # Background-job table for the async ("don't block on a slow host
+        # op") path. A backgrounded command still acquires this session's
+        # ``_lock`` for its whole duration — so it serialises against the
+        # session's other mutating calls exactly like a foreground call —
+        # but ``start_job`` returns a handle immediately instead of
+        # holding the request open. Polled via ``job_status`` /
+        # ``job_result`` (which read this table and need no lock), so the
+        # client can meanwhile issue other (read-only) calls. Keyed by job
+        # id. Records persist for the session's lifetime (finished jobs are
+        # never evicted); under http the registry's idle sweep drops the
+        # whole session and its table with it.
+        self._jobs: dict[str, dict[str, Any]] = {}
+        self._job_counter = 0
 
     # ------------------------------------------------------------------
     # CommandPrompt-compatible surface
@@ -613,3 +628,151 @@ class McpSession:
                 cap_logger.setLevel(prev_cap_level)
             self.display = prev_display
             self._current_stdout = prev_stdout
+
+    # ------------------------------------------------------------------
+    # Background jobs (async path for slow host operations)
+    # ------------------------------------------------------------------
+
+    async def start_job(
+        self,
+        cmd_cls: type[Command],
+        argv: list[str],
+        *,
+        ctx: Any | None = None,
+    ) -> str:
+        """Start ``cmd_cls`` in the background and return its job id.
+
+        The command runs in an :func:`asyncio.create_task` worker that
+        acquires this session's ``_lock`` for its whole duration (so it
+        serialises against the session's other mutating calls exactly
+        like :meth:`run_command`) and executes the body in
+        :func:`asyncio.to_thread`. Unlike :meth:`run_command` this
+        returns **immediately** with a handle, so the client is not held
+        on one request for the minutes a ``run`` / ``update`` /
+        ``downgrade`` can take and can meanwhile issue other calls.
+
+        Outcome is recorded on the job record and read back via
+        :meth:`job_status` / :meth:`job_result`. ``ctx`` is accepted for
+        signature parity but no heartbeat is emitted (the call returns at
+        once; there is nothing to keep alive).
+
+        Args:
+            cmd_cls: The :class:`Command` subclass to run.
+            argv: Already-split command-line tokens.
+            ctx: Unused; accepted for caller parity.
+
+        Returns:
+            The new job id (``"<command>-<n>"``).
+
+        """
+        self._job_counter += 1
+        job_id = f"{cmd_cls.command}-{self._job_counter}"
+        job: dict[str, Any] = {
+            "id": job_id,
+            "command": cmd_cls.command,
+            "argv": list(argv),
+            "state": "running",
+            "started": time.monotonic(),
+            "finished": None,
+            "result": None,
+            "error": None,
+            "exit_code": None,
+            "task": None,
+        }
+        self._jobs[job_id] = job
+
+        async def _runner() -> None:
+            try:
+                async with self._lock:
+                    out = await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+                job["result"] = out
+                job["state"] = "done"
+            except McpCommandError as exc:
+                job["state"] = "failed"
+                job["error"] = str(exc)
+                job["result"] = exc.stdout
+                job["exit_code"] = exc.exit_code
+            except asyncio.CancelledError:
+                job["state"] = "cancelled"
+                raise
+            except Exception as exc:  # noqa: BLE001 - record, never crash the loop
+                job["state"] = "failed"
+                job["error"] = repr(exc)
+            finally:
+                job["finished"] = time.monotonic()
+
+        job["task"] = asyncio.create_task(_runner())
+        return job_id
+
+    def _job_view(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Public-facing snapshot of ``job`` (no asyncio Task object)."""
+        end = job["finished"] if job["finished"] is not None else time.monotonic()
+        return {
+            "id": job["id"],
+            "command": job["command"],
+            "state": job["state"],
+            "elapsed_s": round(end - job["started"], 1),
+        }
+
+    def job_list(self) -> list[dict[str, Any]]:
+        """Return a view of every job started in this session."""
+        return [self._job_view(j) for j in self._jobs.values()]
+
+    def job_status(self, job_id: str) -> dict[str, Any]:
+        """Return ``job_id``'s state view, or raise if unknown."""
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise McpCommandError("", f"no such job: {job_id}", 1)
+        return self._job_view(job)
+
+    def job_result(self, job_id: str) -> str:
+        """Return a finished job's stdout, or raise the right envelope.
+
+        * unknown id -> :class:`McpCommandError` (exit 1)
+        * still running -> :class:`McpCommandError` telling the caller to
+          poll ``job_status`` (the job keeps running)
+        * failed -> :class:`McpCommandError` carrying the command's
+          captured stdout / error / exit code, exactly as a foreground
+          failure would have surfaced
+        * cancelled -> :class:`McpCommandError` (exit 1)
+        * done -> the captured stdout string
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise McpCommandError("", f"no such job: {job_id}", 1)
+        state = job["state"]
+        if state == "running":
+            elapsed = round(time.monotonic() - job["started"], 1)
+            raise McpCommandError(
+                "",
+                f"job {job_id} still running ({elapsed}s); poll job_status",
+                1,
+            )
+        if state == "failed":
+            raise McpCommandError(
+                job["result"] or "",
+                job["error"] or "job failed",
+                job["exit_code"] or 1,
+            )
+        if state == "cancelled":
+            raise McpCommandError("", f"job {job_id} was cancelled", 1)
+        return job["result"] or ""
+
+    async def job_cancel(self, job_id: str) -> str:
+        """Cancel a running job; raise if the id is unknown.
+
+        Cancels the worker task. NOTE: if the job is mid
+        :func:`asyncio.to_thread` (an SSH/subprocess body), cancellation
+        detaches the awaiter but the underlying host operation may keep
+        running to completion — the same caveat as interrupting a
+        foreground ``run``. A finished job is a no-op.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise McpCommandError("", f"no such job: {job_id}", 1)
+        task = job.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        return f"cancelled job {job_id}"

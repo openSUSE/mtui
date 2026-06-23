@@ -38,7 +38,7 @@ from .args import get_parser
 from .registry import SessionRegistry
 from .session import McpSession
 from .testreport_tools import register_testreport_tools
-from .tools import build_tools
+from .tools import build_tools, register_job_tools
 
 if TYPE_CHECKING:
     from .registry import SessionProvider
@@ -193,6 +193,7 @@ def main() -> int:
     mcp = FastMCP(name="mtui", host=args.host, port=args.port)
     build_tools(mcp, provider)
     register_testreport_tools(mcp, provider)
+    register_job_tools(mcp, provider)
 
     try:
         if args.transport == "http":
