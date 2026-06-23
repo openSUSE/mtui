@@ -111,26 +111,28 @@ class ListRefhosts(Command):
         """Resolve refhosts and return the matched records (offline)."""
         refhosts = RefhostsFactory(self.config)
         a = self.args
-        records: list[dict] = []
         if a.testplatform:
-            attrs = Attributes.from_testplatform(a.testplatform)
-            if a.pool:
-                for host, slot in refhosts.search_pool(attrs, all_locations=True):
-                    records.append(self._record(host, None, slot))
-            else:
-                for host, loc in refhosts.query(attributes=attrs, location=a.location):
-                    records.append(self._record(host, loc, None))
+            hits = refhosts.query(
+                attributes=Attributes.from_testplatform(a.testplatform),
+                location=a.location,
+            )
         else:
-            for host, loc in refhosts.query(
+            hits = refhosts.query(
                 name=a.name,
                 arch=a.arch,
                 product=a.product,
                 version=a.version,
                 addon=a.addon,
                 location=a.location,
-            ):
-                slot = f"{host.product.name}-{self._ver_str(host.product.version)} {host.arch}"
-                records.append(self._record(host, loc, slot if a.pool else None))
+            )
+        records: list[dict] = []
+        for host, loc in hits:
+            slot = (
+                f"{host.product.name}-{self._ver_str(host.product.version)} {host.arch}"
+                if a.pool
+                else None
+            )
+            records.append(self._record(host, loc, slot))
         return records
 
     def _probe_locks(self, records: list[dict]) -> None:
@@ -142,8 +144,7 @@ class ListRefhosts(Command):
             target = Target(self.config, name, interactive=False)
             try:
                 target.connect()
-                holder = target.locked_by()
-                return name, f"locked: {holder}" if holder else "free"
+                return name, "locked" if target.is_locked() else "free"
             except Exception:  # noqa: BLE001 - best-effort probe
                 return name, "unreachable"
             finally:
