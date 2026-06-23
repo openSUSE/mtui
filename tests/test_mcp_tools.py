@@ -683,13 +683,13 @@ def test_job_read_tools_are_read_only(mcp: FastMCP, job_tool_names: list[str]) -
     assert _annotations_of(mcp, "job_cancel").readOnlyHint is False
 
 
-def test_job_tools_schema_has_no_workspace_param(
+def test_job_tools_schema_has_workspace_param(
     mcp: FastMCP, job_tool_names: list[str]
 ) -> None:
-    """Jobs are session-scoped; no ``workspace`` selector leaks into the schema."""
+    """Jobs are workspace-scoped; the ``workspace`` selector is in the schema."""
     for name in ("job_status", "job_result", "job_cancel"):
         props = _params_of(mcp, name).get("properties", {})
-        assert "workspace" not in props
+        assert "workspace" in props
         assert "job_id" in props
 
 

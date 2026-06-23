@@ -572,7 +572,17 @@ def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
         description=status_desc,
         annotations=ToolAnnotations(readOnlyHint=True),
     )
-    mcp.add_tool(job_result, name="job_result", description=result_desc)
-    mcp.add_tool(job_cancel, name="job_cancel", description=cancel_desc)
+    mcp.add_tool(
+        job_result,
+        name="job_result",
+        description=result_desc,
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    mcp.add_tool(
+        job_cancel,
+        name="job_cancel",
+        description=cancel_desc,
+        annotations=ToolAnnotations(readOnlyHint=False),
+    )
     logger.info("registered 4 job tools: job_cancel, job_list, job_result, job_status")
     return ["job_cancel", "job_list", "job_result", "job_status"]
