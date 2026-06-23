@@ -405,12 +405,21 @@ def test_cmdloop_drives_real_session_via_pipe_input(monkeypatch):
 
 
 def test_notify_user_calls_notification_display(monkeypatch):
-    """``notify_user`` is a thin wrapper around ``notification.display``."""
+    """``notify_user`` wraps ``notification.display``; a plain class has no icon."""
     p = _make_prompt()
     display = MagicMock()
     monkeypatch.setattr(repl.notification, "display", display)
     p.notify_user("hello", class_="info")
-    display.assert_called_once_with("MTUI", "hello", "info")
+    display.assert_called_once_with("MTUI", "hello", None)
+
+
+def test_notify_user_maps_error_class_to_icon(monkeypatch):
+    """The historical error class maps to a freedesktop icon name."""
+    p = _make_prompt()
+    display = MagicMock()
+    monkeypatch.setattr(repl.notification, "display", display)
+    p.notify_user("boom", class_="stock_dialog-error")
+    display.assert_called_once_with("MTUI", "boom", "dialog-error")
 
 
 def test_postcmd_short_circuits_for_null_test_report():

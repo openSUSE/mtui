@@ -225,10 +225,13 @@ class CommandPrompt:
 
         Args:
             msg: The message to display.
-            class_: The notification class.
+            class_: The notification class. ``"stock_dialog-error"`` (the
+                historical error class) maps to the freedesktop ``dialog-error``
+                icon; any other value uses the default icon.
 
         """
-        notification.display("MTUI", msg, class_)
+        icon = "dialog-error" if class_ == "stock_dialog-error" else None
+        notification.display("MTUI", msg, icon)
 
     def println(self, msg: str = "", eol: str = "\n") -> None:
         """Prints a message to the output stream.
