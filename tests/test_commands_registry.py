@@ -40,6 +40,7 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
         ("list_metadata", "mtui.commands.simplelists", "ListMetadata"),
         ("list_packages", "mtui.commands.listpackages", "ListPackages"),
         ("list_products", "mtui.commands.products", "ListProducts"),
+        ("list_refhosts", "mtui.commands.list_refhosts", "ListRefhosts"),
         ("list_sessions", "mtui.commands.simplelists", "ListSessions"),
         ("list_timeout", "mtui.commands.simplelists", "ListTimeout"),
         ("list_update_commands", "mtui.commands.simplelists", "ListUpdateCommands"),
