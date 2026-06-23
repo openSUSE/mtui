@@ -56,6 +56,24 @@ logger = getLogger("mtui.mcp.tools")
 #: list is stable and visible in code review.
 SUBPARSER_COMMANDS: frozenset[str] = frozenset({"config"})
 
+#: Commands that touch the reference hosts and can run for minutes. These
+#: gain a ``background`` parameter: when true the call returns a job id at
+#: once (see :meth:`McpSession.start_job`) instead of holding the request
+#: open, so a slow host op does not stop the client from issuing other
+#: calls. Polled via the ``job_status`` / ``job_result`` tools.
+SLOW_COMMANDS: frozenset[str] = frozenset(
+    {
+        "run",
+        "update",
+        "downgrade",
+        "prepare",
+        "install",
+        "uninstall",
+        "set_repo",
+        "reboot",
+    }
+)
+
 #: A command becomes ``readOnlyHint=True`` if its name starts with one
 #: of these prefixes. Strict allow-list per Q2 in PLAN step 7.
 _READ_ONLY_PREFIXES: tuple[str, ...] = ("list_", "show_")
@@ -121,7 +139,22 @@ def _make_wrapper(
         default=None,
         annotation=Context,
     )
-    all_params = [*params, ctx_param]
+    # Slow host commands gain a ``background`` flag: when true the call
+    # returns a job id immediately instead of blocking (see
+    # ``McpSession.start_job``). Only added for SLOW_COMMANDS so read-only
+    # / instant tools keep a clean schema.
+    is_slow = cls.command in SLOW_COMMANDS
+    extra_params: list[inspect.Parameter] = []
+    if is_slow:
+        extra_params.append(
+            inspect.Parameter(
+                "background",
+                inspect.Parameter.KEYWORD_ONLY,
+                default=False,
+                annotation=bool,
+            )
+        )
+    all_params = [*params, *extra_params, ctx_param]
     signature = inspect.Signature(
         parameters=all_params,
         return_annotation=str,
@@ -153,6 +186,7 @@ def _make_wrapper(
         # the parameter as Context); strip it before kwargs_to_argv so
         # the encoder does not try to render it as a CLI flag.
         ctx = kwargs.pop("ctx", None)
+        background = bool(kwargs.pop("background", False)) if is_slow else False
         if synthetic_required:
             supplied = [n for n in synthetic_names if kwargs.get(n) is not None]
             if len(supplied) != 1:
@@ -163,6 +197,14 @@ def _make_wrapper(
                 raise McpCommandError("", msg, 2)
         argv = list(argv_prefix) + kwargs_to_argv(parser, kwargs)
         session = await resolve_session(provider, ctx)
+        if background:
+            job_id = await session.start_job(cls, argv, ctx=ctx)
+            return (
+                f"started background job {job_id!r} for `{cls.command}`; it "
+                f"runs on the hosts while you work elsewhere. Poll "
+                f"job_status(job_id={job_id!r}) and fetch output with "
+                f"job_result(job_id={job_id!r})."
+            )
         return await session.run_command(cls, argv, ctx=ctx)
 
     # ``inspect.Signature`` lives on a dunder slot; ty does not model it
@@ -299,3 +341,120 @@ def build_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
     registered.sort()
     logger.info("registered %d MCP tools: %s", len(registered), ", ".join(registered))
     return registered
+
+
+def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
+    """Register the background-job control tools (the async slow-op path).
+
+    Slow host commands (``run``/``update``/``downgrade``/...) accept a
+    ``background=true`` flag that returns a job id immediately instead of
+    blocking; these tools then drive that job:
+
+    * ``job_list`` — every job in the session and its state;
+    * ``job_status`` — one job's state + elapsed time;
+    * ``job_result`` — a finished job's output (errors if still running, or
+      surfaces the command's failure envelope if it failed);
+    * ``job_cancel`` — cancel a running job.
+
+    They address the per-call session's job table, resolved through
+    ``provider`` exactly as every other tool resolves its session, so they
+    stay transport-agnostic (one session under stdio; the caller's isolated
+    session under http).
+
+    Args:
+        mcp: The :class:`mcp.server.fastmcp.FastMCP` server.
+        provider: The session provider each call resolves through.
+
+    Returns:
+        The registered tool names.
+
+    """
+    # The trailing ``ctx: Context | None = None`` parameter on each tool
+    # is what FastMCP's ``find_context_parameter`` picks up via
+    # :func:`typing.get_type_hints` to strip ``ctx`` from the JSON schema
+    # and inject the live per-request Context. ``get_type_hints`` (and
+    # FastMCP's ``inspect.signature(fn, eval_str=True)``) resolve the
+    # string annotation ``"Context | None"`` against this *module's*
+    # globals, not the enclosing function's locals, so bind ``Context``
+    # here rather than importing it at module top — keeping
+    # ``mtui.mcp.tools`` importable without the ``[mcp]`` extra. Bind
+    # unconditionally (not ``setdefault``) so a stale stand-in left in
+    # globals by an earlier caller never shadows the real SDK type.
+    from mcp.server.fastmcp import Context as _Context
+    from mcp.types import ToolAnnotations
+
+    globals()["Context"] = _Context
+
+    async def job_list(ctx: Context | None = None) -> str:
+        """List background jobs in this session and their state."""
+        session = await resolve_session(provider, ctx)
+        jobs = session.job_list()
+        if not jobs:
+            return "no background jobs"
+        return "\n".join(
+            f"- {j['id']}: {j['state']} ({j['elapsed_s']}s) [{j['command']}]"
+            for j in jobs
+        )
+
+    async def job_status(job_id: str, ctx: Context | None = None) -> str:
+        """Report one background job's state and elapsed time."""
+        session = await resolve_session(provider, ctx)
+        j = session.job_status(job_id)
+        return f"{j['id']}: {j['state']} ({j['elapsed_s']}s) [{j['command']}]"
+
+    async def job_result(job_id: str, ctx: Context | None = None) -> str:
+        """Return a finished job's output (error if not yet done)."""
+        session = await resolve_session(provider, ctx)
+        return session.job_result(job_id)
+
+    async def job_cancel(job_id: str, ctx: Context | None = None) -> str:
+        """Cancel a running background job."""
+        session = await resolve_session(provider, ctx)
+        return await session.job_cancel(job_id)
+
+    list_desc = (
+        "List background jobs in this session (started by calling a slow host "
+        "command — run/update/downgrade/prepare/install/uninstall/set_repo/"
+        "reboot — with background=true) and their state."
+    )
+    status_desc = (
+        "Report a background job's state (running/done/failed/cancelled) and "
+        "elapsed time. Poll this after starting a slow command with "
+        "background=true."
+    )
+    result_desc = (
+        "Return a finished background job's output. Errors if the job is still "
+        "running (poll job_status first) or surfaces the command's failure if "
+        "it failed."
+    )
+    cancel_desc = (
+        "Cancel a running background job. Note: a job already executing on a "
+        "host (SSH/subprocess) may keep running on the host even after cancel."
+    )
+
+    mcp.add_tool(
+        job_list,
+        name="job_list",
+        description=list_desc,
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    mcp.add_tool(
+        job_status,
+        name="job_status",
+        description=status_desc,
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    mcp.add_tool(
+        job_result,
+        name="job_result",
+        description=result_desc,
+        annotations=ToolAnnotations(readOnlyHint=True),
+    )
+    mcp.add_tool(
+        job_cancel,
+        name="job_cancel",
+        description=cancel_desc,
+        annotations=ToolAnnotations(readOnlyHint=False),
+    )
+    logger.info("registered 4 job tools: job_cancel, job_list, job_result, job_status")
+    return ["job_cancel", "job_list", "job_result", "job_status"]
