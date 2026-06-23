@@ -93,6 +93,61 @@ def test_end_of_testing_pi_unlocks(mock_config, cls, extra):
 
 
 # ---------------------------------------------------------------------------
+# reject joins its REMAINDER --message into a single string before sending it.
+# A bare list reaches shlex.quote() in oscqam.__operation and aborts the reject
+# with TypeError("expected string or bytes-like object, got 'list'").
+# ---------------------------------------------------------------------------
+
+
+def test_reject_osc_joins_message_into_string(mock_config):
+    mock_config.lock_pi_autolock = False
+    prompt = _prompt()  # MAINTENANCE -> osc path
+    args = Namespace(
+        group=["qam-sle"],
+        reason="build_problem",
+        message=["dependency", "issues", "bsc#1234"],
+        user="",
+    )
+
+    with patch("mtui.commands.apicall.OSC") as osc_cls:
+        Reject(args, mock_config, MagicMock(), prompt)()
+
+    osc_cls.return_value.reject.assert_called_once_with(
+        ["qam-sle"], "build_problem", "dependency issues bsc#1234"
+    )
+
+
+def test_reject_gitea_joins_message_into_string(mock_config):
+    mock_config.lock_pi_autolock = False
+    prompt = _prompt()
+    prompt.metadata.rrid.kind = RequestKind.SLFO  # -> gitea path
+    args = Namespace(
+        group=["qam-sle"],
+        reason="build_problem",
+        message=["dependency", "issues"],
+        user="someone",
+    )
+
+    with patch("mtui.commands.apicall.Gitea") as gitea_cls:
+        Reject(args, mock_config, MagicMock(), prompt)()
+
+    gitea_cls.return_value.reject.assert_called_once_with(
+        "build_problem", "someone", "dependency issues"
+    )
+
+
+def test_reject_without_message_sends_empty_string(mock_config):
+    mock_config.lock_pi_autolock = False
+    prompt = _prompt()
+    args = Namespace(group=["qam-sle"], reason="admin", message=None, user="")
+
+    with patch("mtui.commands.apicall.OSC") as osc_cls:
+        Reject(args, mock_config, MagicMock(), prompt)()
+
+    osc_cls.return_value.reject.assert_called_once_with(["qam-sle"], "admin", "")
+
+
+# ---------------------------------------------------------------------------
 # Comment reads the body through ask_user (not the bare input() that
 # would block / echo ^M between two prompt_toolkit sessions)
 # ---------------------------------------------------------------------------

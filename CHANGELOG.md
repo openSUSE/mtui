@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `reject -m <message>` no longer aborts with `TypeError: expected string or
+  bytes-like object, got 'list'` before the rejection is sent. `--message` uses
+  `nargs=REMAINDER`, so it arrives as a list of words; `reject` passed it
+  unjoined to `osc.reject`/`gitea.reject`, which hand it to `shlex.quote` (a
+  list crashes it). The message is now joined to a single string first (matching
+  `commit`), so a reject reason actually reaches the maintainer. Rejecting with a
+  bare reason and no message was unaffected.
 - The SMELT deadline shown for a **classic Maintenance** incident (on `assign`
   pickup and in `smelt_update`) no longer prints `?` when a real deadline
   exists. mtui read the incident's `crd` (customer-required date), which is
