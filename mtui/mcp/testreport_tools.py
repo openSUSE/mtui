@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import tempfile
 from logging import getLogger
 from pathlib import Path
@@ -399,6 +400,130 @@ async def testreport_write(
 
 
 # --------------------------------------------------------------------------- #
+# Bulk placeholder fill                                                        #
+# --------------------------------------------------------------------------- #
+
+#: The exact placeholder tokens the QAM testreport template ships with, one per
+#: line, that a tester otherwise has to flip one `testreport_patch` at a time.
+#: Each regex captures the label+padding as ``pre`` so the replacement keeps the
+#: template's column alignment; the value part is matched verbatim so an
+#: already-filled line (e.g. ``STATUS:             SKIPPED``) is never touched —
+#: the fill is idempotent and safe to re-run.
+_SUMMARY_PLACEHOLDER = re.compile(r"^(?P<pre>\s*SUMMARY:\s*)PASSED/FAILED\s*$")
+_REPRODUCER_PLACEHOLDER = re.compile(r"^(?P<pre>\s*REPRODUCER_PRESENT:\s*)YES/NO\s*$")
+_STATUS_PLACEHOLDER = re.compile(
+    r"^(?P<pre>\s*STATUS:\s*)"
+    r"FIXED/NOT_FIXED/HYPOTHETICAL/NOT_REPRODUCIBLE/"
+    r"NO_ENVIRONMENT/TOO_COMPLEX/SKIPPED/OTHER\s*$"
+)
+
+#: Valid single-value codes for the per-bug ``STATUS:`` field.
+_STATUS_CODES = frozenset(
+    {
+        "FIXED",
+        "NOT_FIXED",
+        "HYPOTHETICAL",
+        "NOT_REPRODUCIBLE",
+        "NO_ENVIRONMENT",
+        "TOO_COMPLEX",
+        "SKIPPED",
+        "OTHER",
+    }
+)
+
+
+async def testreport_fill(
+    session: McpSession,
+    reproducer: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+    status: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+    summary: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+    ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+) -> dict[str, Any]:
+    """Bulk-fill the repetitive placeholder tokens left by ``export``.
+
+    A freshly exported QAM testreport carries one ``REPRODUCER_PRESENT: YES/NO``
+    + ``STATUS: FIXED/.../OTHER`` placeholder per referenced bug (a CVE-heavy
+    update can have 15+), plus the top ``SUMMARY: PASSED/FAILED``. Flipping each
+    by hand with :func:`testreport_patch` is slow and error-prone on a live
+    report. This sets them all in one atomic write.
+
+    Only the **exact** template placeholder strings are replaced, so the call is
+    idempotent and never clobbers a value you already filled in (e.g. a bug you
+    set to ``REPRODUCER_PRESENT: YES`` / ``STATUS: FIXED`` by hand stays put).
+    Typical use on a security update: ``reproducer="NO", status="SKIPPED",
+    summary="PASSED"`` to clear every CVE placeholder at once, then override the
+    handful of non-security bugs individually with :func:`testreport_patch`. The
+    regression / build-log / source sections are still filled separately.
+
+    Args:
+        reproducer: ``YES`` or ``NO`` to set every unfilled
+            ``REPRODUCER_PRESENT:`` line; ``None`` leaves them.
+        status: a single ``STATUS:`` code (see :data:`_STATUS_CODES`) to set
+            every unfilled templated ``STATUS:`` line; ``None`` leaves them.
+        summary: ``PASSED`` or ``FAILED`` for the top ``SUMMARY:`` line;
+            ``None`` leaves it.
+
+    Returns:
+        ``path``, a ``filled`` breakdown (how many of each token were set),
+        ``bytes_written`` and ``line_count``.
+
+    """
+    if reproducer is not None and reproducer not in ("YES", "NO"):
+        raise McpCommandError(
+            "", f"reproducer must be YES or NO, got {reproducer!r}", 1
+        )
+    if status is not None and status not in _STATUS_CODES:
+        raise McpCommandError(
+            "", f"status must be one of {sorted(_STATUS_CODES)}, got {status!r}", 1
+        )
+    if summary is not None and summary not in ("PASSED", "FAILED"):
+        raise McpCommandError(
+            "", f"summary must be PASSED or FAILED, got {summary!r}", 1
+        )
+    if reproducer is None and status is None and summary is None:
+        raise McpCommandError(
+            "", "nothing to fill: pass at least one of reproducer/status/summary", 1
+        )
+
+    await _heartbeat(ctx, "testreport_fill: waiting for session lock")
+    async with session._lock:
+        path = _resolve_testreport_path(session)
+        content = path.read_text(encoding="utf-8", errors="replace")
+        lines = content.splitlines(keepends=True)
+        counts = {"summary": 0, "reproducer": 0, "status": 0}
+        for i, line in enumerate(lines):
+            nl = "\n" if line.endswith("\n") else ""
+            body = line[:-1] if nl else line
+            if summary is not None:
+                m = _SUMMARY_PLACEHOLDER.match(body)
+                if m:
+                    lines[i] = f"{m.group('pre')}{summary}{nl}"
+                    counts["summary"] += 1
+                    continue
+            if reproducer is not None:
+                m = _REPRODUCER_PLACEHOLDER.match(body)
+                if m:
+                    lines[i] = f"{m.group('pre')}{reproducer}{nl}"
+                    counts["reproducer"] += 1
+                    continue
+            if status is not None:
+                m = _STATUS_PLACEHOLDER.match(body)
+                if m:
+                    lines[i] = f"{m.group('pre')}{status}{nl}"
+                    counts["status"] += 1
+                    continue
+        new_text = "".join(lines)
+        bytes_written = _atomic_write_text(path, new_text)
+
+    return {
+        "path": str(path),
+        "filled": counts,
+        "bytes_written": bytes_written,
+        "line_count": _count_lines(new_text),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Registration                                                                #
 # --------------------------------------------------------------------------- #
 
@@ -468,6 +593,17 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         session = await resolve_session(provider, ctx)
         return await testreport_write(session, content, ctx=ctx)
 
+    async def _fill(
+        reproducer: str | None = None,
+        status: str | None = None,
+        summary: str | None = None,
+        ctx: Context | None = None,
+    ) -> dict[str, Any]:
+        session = await resolve_session(provider, ctx)
+        return await testreport_fill(
+            session, reproducer=reproducer, status=status, summary=summary, ctx=ctx
+        )
+
     read_desc = (
         "Read the currently loaded testreport file. Returns the path, total "
         "line count, and content (utf-8, errors replaced). By default returns "
@@ -498,6 +634,19 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         "e.g. 'build_checks/<pkg>.<arch>.log', 'install_logs/<host>.log', "
         "'source.diff' or 'patchinfo.xml'. The path may not escape the checkout "
         "directory. Returns path, line count and full content."
+    )
+    fill_desc = (
+        "Bulk-set the repetitive per-bug placeholder tokens an exported "
+        "testreport ships with, in one atomic write. `reproducer` (YES/NO) sets "
+        "every unfilled `REPRODUCER_PRESENT:` line; `status` (one of FIXED, "
+        "NOT_FIXED, HYPOTHETICAL, NOT_REPRODUCIBLE, NO_ENVIRONMENT, TOO_COMPLEX, "
+        "SKIPPED, OTHER) sets every unfilled templated `STATUS:` line; `summary` "
+        "(PASSED/FAILED) sets the top `SUMMARY:` line. Only exact template "
+        "placeholders are touched, so it is idempotent and never overwrites a "
+        "value you already set by hand. Ideal for CVE-heavy updates: call with "
+        "reproducer=NO, status=SKIPPED (security policy), then override any "
+        "non-security bug individually with testreport_patch. Returns a `filled` "
+        "count per token. Still fill regression/build-log/source sections yourself."
     )
 
     specs = (
@@ -530,6 +679,12 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
             _write,
             write_desc,
             ToolAnnotations(),
+        ),
+        (
+            "testreport_fill",
+            _fill,
+            fill_desc,
+            ToolAnnotations(idempotentHint=True),
         ),
     )
 

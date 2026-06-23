@@ -343,6 +343,7 @@ def test_register_testreport_tools_exposes_all_tools(tmp_path: Path) -> None:
     names = tt.register_testreport_tools(mcp, sess)
 
     assert names == [
+        "testreport_fill",
         "testreport_logs",
         "testreport_patch",
         "testreport_read",
@@ -361,7 +362,7 @@ def test_register_testreport_tools_exposes_all_tools(tmp_path: Path) -> None:
         assert tools[n].annotations is not None
         assert tools[n].annotations.readOnlyHint is True
         assert tools[n].annotations.idempotentHint is True
-    for n in ("testreport_patch", "testreport_write"):
+    for n in ("testreport_patch", "testreport_write", "testreport_fill"):
         if tools[n].annotations is not None:
             assert tools[n].annotations.readOnlyHint is not True
 
@@ -574,3 +575,100 @@ def test_two_ctx_keys_read_their_own_template(tmp_path: Path) -> None:
     # Re-reading ctx_a must still hit file_a (cached session, not file_b).
     assert third["content"] == "alpha\n"
     assert third["path"] == str(file_a)
+
+
+# --------------------------------------------------------------------------- #
+# testreport_fill — bulk placeholder fill                                     #
+# --------------------------------------------------------------------------- #
+
+_FILL_TEMPLATE = (
+    "SUMMARY: PASSED/FAILED\n"
+    "\n"
+    'bnc#1 ("a"):\n'
+    "REPRODUCER_PRESENT: YES/NO\n"
+    "STATUS:             FIXED/NOT_FIXED/HYPOTHETICAL/NOT_REPRODUCIBLE/"
+    "NO_ENVIRONMENT/TOO_COMPLEX/SKIPPED/OTHER\n"
+    "\n"
+    'bnc#2 ("b"):\n'
+    "REPRODUCER_PRESENT: YES/NO\n"
+    "STATUS:             SKIPPED\n"  # already filled -> must stay
+    "\n"
+    'bnc#3 ("c"):\n'
+    "REPRODUCER_PRESENT: YES\n"  # already filled -> must stay
+    "STATUS:             FIXED/NOT_FIXED/HYPOTHETICAL/NOT_REPRODUCIBLE/"
+    "NO_ENVIRONMENT/TOO_COMPLEX/SKIPPED/OTHER\n"
+)
+
+
+def test_fill_sets_unfilled_placeholders_only(tmp_path: Path) -> None:
+    """Fill flips every *unfilled* token; already-set values are untouched."""
+    file = tmp_path / "report.txt"
+    file.write_text(_FILL_TEMPLATE, encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+
+    res = asyncio.run(
+        tt.testreport_fill(sess, reproducer="NO", status="SKIPPED", summary="PASSED")  # ty: ignore[invalid-argument-type]
+    )
+    # summary x1; the two unfilled REPRODUCER lines; the two templated STATUS lines.
+    assert res["filled"] == {"summary": 1, "reproducer": 2, "status": 2}
+
+    out = file.read_text(encoding="utf-8")
+    assert out.startswith("SUMMARY: PASSED\n")
+    assert "PASSED/FAILED" not in out
+    assert "YES/NO" not in out
+    assert "FIXED/NOT_FIXED/" not in out
+    # bug#3's hand-set REPRODUCER stays YES; bug#2's hand-set STATUS stays SKIPPED.
+    assert "REPRODUCER_PRESENT: YES\n" in out
+    # column alignment of STATUS is preserved.
+    assert "STATUS:             SKIPPED\n" in out
+
+
+def test_fill_is_idempotent(tmp_path: Path) -> None:
+    """A second identical fill changes nothing (no placeholders left)."""
+    file = tmp_path / "report.txt"
+    file.write_text(_FILL_TEMPLATE, encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+    asyncio.run(
+        tt.testreport_fill(sess, reproducer="NO", status="SKIPPED", summary="PASSED")  # ty: ignore[invalid-argument-type]
+    )
+    after_first = file.read_text(encoding="utf-8")
+    res2 = asyncio.run(
+        tt.testreport_fill(sess, reproducer="NO", status="SKIPPED", summary="PASSED")  # ty: ignore[invalid-argument-type]
+    )
+    assert res2["filled"] == {"summary": 0, "reproducer": 0, "status": 0}
+    assert file.read_text(encoding="utf-8") == after_first
+
+
+def test_fill_partial_only_requested_tokens(tmp_path: Path) -> None:
+    """Passing only `reproducer` leaves SUMMARY and STATUS placeholders alone."""
+    file = tmp_path / "report.txt"
+    file.write_text(_FILL_TEMPLATE, encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+    res = asyncio.run(tt.testreport_fill(sess, reproducer="NO"))  # ty: ignore[invalid-argument-type]
+    assert res["filled"] == {"summary": 0, "reproducer": 2, "status": 0}
+    out = file.read_text(encoding="utf-8")
+    assert "SUMMARY: PASSED/FAILED\n" in out  # untouched
+    assert "FIXED/NOT_FIXED/" in out  # untouched
+
+
+def test_fill_rejects_bad_values(tmp_path: Path) -> None:
+    """Invalid enum values and an empty call are rejected with a message."""
+    file = tmp_path / "report.txt"
+    file.write_text(_FILL_TEMPLATE, encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+    with pytest.raises(McpCommandError):
+        asyncio.run(tt.testreport_fill(sess, reproducer="MAYBE"))  # ty: ignore[invalid-argument-type]
+    with pytest.raises(McpCommandError):
+        asyncio.run(tt.testreport_fill(sess, status="DONE"))  # ty: ignore[invalid-argument-type]
+    with pytest.raises(McpCommandError):
+        asyncio.run(tt.testreport_fill(sess, summary="OK"))  # ty: ignore[invalid-argument-type]
+    with pytest.raises(McpCommandError):
+        # nothing to fill
+        asyncio.run(tt.testreport_fill(sess))  # ty: ignore[invalid-argument-type]
+
+
+def test_fill_refuses_without_loaded_report(tmp_path: Path) -> None:
+    """``testreport_fill`` raises on a NullTestReport session."""
+    sess = _null_session(tmp_path)
+    with pytest.raises(McpCommandError):
+        asyncio.run(tt.testreport_fill(sess, reproducer="NO"))
