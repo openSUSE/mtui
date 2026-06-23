@@ -14,6 +14,7 @@ from mtui.types import (
     OpenQAResults,
     RequestReviewID,
     URLs,
+    Workflow,
 )
 from mtui.update_workflow.export.auto import AutoExport
 from mtui.update_workflow.export.base import BaseExport
@@ -100,13 +101,12 @@ def test_manual_export_loads_dashboard_results_before_export(mock_config, tmp_pa
     prompt.metadata.incident = MagicMock()
     prompt.metadata.openqa = OpenQAResults()
     prompt.metadata.path = filename
+    prompt.metadata.workflow = Workflow.MANUAL
     prompt.metadata.report_results.return_value = []
     prompt.display = MagicMock()
     prompt.targets.select.return_value.values.return_value = []
 
     args = Namespace(filename=Path(filename), force=False, hosts=None)
-    mock_config.auto = False
-    mock_config.kernel = False
 
     with patch("mtui.commands.export.DashboardAutoOpenQA") as dashboard:
         dashboard.return_value.run.return_value = MagicMock()

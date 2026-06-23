@@ -9,6 +9,7 @@ from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..hosts.refhost import RefhostsFactory
 from ..support import messages
 from ..support.misc import requires_update
+from ..types import Workflow
 from . import Command
 
 logger = logging.getLogger("mtui.commands.simplesets")
@@ -190,15 +191,14 @@ class SetWorkflow(Command):
         state: str = self.args.workflow
 
         if state == "kernel":
-            if self.config.kernel:
+            if self.metadata.workflow is Workflow.KERNEL:
                 logger.info("Desired workflow %s is same as current", state)
                 self.metadata.openqa.auto.run()
                 for oq in self.metadata.openqa.kernel:
                     oq.run()
                 return
             logger.info("Setting workflow to '%s'", state)
-            self.config.auto = False
-            self.config.kernel = True
+            self.metadata.workflow = Workflow.KERNEL
             self.metadata.openqa.auto = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
@@ -224,13 +224,12 @@ class SetWorkflow(Command):
             )
             return
         if state == "auto":
-            if self.config.auto:
+            if self.metadata.workflow is Workflow.AUTO:
                 logger.info("Desired workflow %s is same as current", state)
                 self.metadata.openqa.auto.run()
                 return
             logger.info("Setting workflow to '%s'", state)
-            self.config.auto = True
-            self.config.kernel = False
+            self.metadata.workflow = Workflow.AUTO
             self.metadata.openqa.auto = DashboardAutoOpenQA(
                 self.config,
                 self.config.openqa_instance,
@@ -241,15 +240,14 @@ class SetWorkflow(Command):
             if self.metadata.openqa.auto.results is None:
                 logger.warning("No install jobs or install jobs failed")
                 logger.info("Switch mode to manual")
-                self.config.auto = False
+                self.metadata.workflow = Workflow.MANUAL
             return
-        if not self.config.auto and not self.config.kernel:
+        if self.metadata.workflow is Workflow.MANUAL:
             logger.info("Desired workflow %s is same as current", state)
             self.metadata.openqa.auto.run()
             return
         logger.info("Setting workflow to '%s'", state)
-        self.config.auto = False
-        self.config.kernel = False
+        self.metadata.workflow = Workflow.MANUAL
         self.metadata.openqa.auto.run()
         self.metadata.openqa.kernel = []
         return

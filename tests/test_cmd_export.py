@@ -11,12 +11,14 @@ import pytest
 
 from mtui.commands.export import Export
 from mtui.support.messages import TestReportNotLoadedError
+from mtui.types import Workflow
 
 
 def _prompt() -> MagicMock:
     p = MagicMock()
     p.metadata = MagicMock()
     p.metadata.__bool__ = lambda self: True
+    p.metadata.workflow = Workflow.MANUAL
     p.metadata.path = "/tmp/log"
     p.metadata.openqa = MagicMock()
     p.metadata.openqa.auto = MagicMock()  # truthy -> skips DashboardAutoOpenQA branch
@@ -38,8 +40,6 @@ def _filelist_ctx() -> MagicMock:
 
 def test_export_manual_branch_instantiates_manual_exporter(mock_config):
     prompt = _prompt()
-    mock_config.auto = False
-    mock_config.kernel = False
     args = Namespace(filename=None, hosts=None, force=False)
 
     # ManualExport must be a real class so the `issubclass()` check inside
@@ -65,8 +65,6 @@ def test_export_manual_branch_instantiates_manual_exporter(mock_config):
 def test_export_logs_exception_on_filelist_failure(mock_config, caplog):
     """Inner-block exceptions are caught and `logger.exception` logs them."""
     prompt = _prompt()
-    mock_config.auto = False
-    mock_config.kernel = False
     args = Namespace(filename=Path("/nonexistent"), hosts=None, force=False)
     caplog.set_level(logging.ERROR, logger="mtui.commands.export")
 

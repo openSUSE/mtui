@@ -8,11 +8,13 @@ from io import StringIO
 from unittest.mock import MagicMock, patch
 
 from mtui.commands.addhost import AddHost
+from mtui.types import Workflow
 
 
 def _prompt() -> MagicMock:
     p = MagicMock()
     p.metadata = MagicMock()
+    p.metadata.workflow = Workflow.MANUAL
     p.metadata.testplatforms = ["base=sles(major=15);arch=[x86_64]"]
     p.display = MagicMock()
     p.targets = MagicMock()
@@ -72,15 +74,13 @@ def test_add_host_without_targets_uses_testplatforms(mock_config):
 
 def test_add_host_in_automatic_mode_switches_to_manual(mock_config):
     """Running add_host while in automatic mode switches to the manual workflow."""
-    mock_config.auto = True
-    mock_config.kernel = False
     prompt = _prompt()
+    prompt.metadata.workflow = Workflow.AUTO
     args = Namespace(target=None, keep_mode=False)
 
     AddHost(args, mock_config, MagicMock(), prompt)()
 
-    assert mock_config.auto is False
-    assert mock_config.kernel is False
+    assert prompt.metadata.workflow is Workflow.MANUAL
     # Prompt indicator refreshed (drops the "-auto" marker).
     prompt.set_prompt.assert_called_once_with(prompt.session)
     # The hosts are still added.
@@ -89,14 +89,13 @@ def test_add_host_in_automatic_mode_switches_to_manual(mock_config):
 
 def test_add_host_keep_mode_stays_automatic(mock_config):
     """--keep-mode leaves automatic mode untouched even though a host is added."""
-    mock_config.auto = True
-    mock_config.kernel = False
     prompt = _prompt()
+    prompt.metadata.workflow = Workflow.AUTO
     args = Namespace(target=None, keep_mode=True)
 
     AddHost(args, mock_config, MagicMock(), prompt)()
 
-    assert mock_config.auto is True  # still automatic
+    assert prompt.metadata.workflow is Workflow.AUTO  # still automatic
     prompt.set_prompt.assert_not_called()
     # The hosts are still added.
     prompt.metadata.connect_targets.assert_called_once_with()
@@ -135,8 +134,8 @@ def test_add_host_does_not_echo_product_warnings_to_stdout(mock_config):
 
 def test_add_host_in_manual_mode_does_not_switch(mock_config):
     """In manual mode add_host leaves the workflow untouched."""
-    mock_config.auto = False
     prompt = _prompt()
+    prompt.metadata.workflow = Workflow.MANUAL
     args = Namespace(target=None, keep_mode=False)
 
     AddHost(args, mock_config, MagicMock(), prompt)()

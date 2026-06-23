@@ -28,7 +28,7 @@ from ..support.exceptions import InvalidGiteaHashError, UpdateError
 from ..support.fileops import ensure_dir_exists
 from ..support.messages import MetadataNotLoadedError
 from ..support.paths import scripts_path
-from ..types import OpenQAResults, Product, TargetMeta
+from ..types import OpenQAResults, Product, TargetMeta, Workflow
 from .metadata_parsers import patchinfo_titles
 from .svn_io import (
     TemplateFormatError,
@@ -88,6 +88,9 @@ class TestReport(ABC):
         """
         self.config: Config = config
         self._prompter = prompter
+
+        # Per-report workflow mode (previously global config.auto / config.kernel).
+        self.workflow: Workflow = Workflow.MANUAL
 
         self._scripts_src_dir: Path = scripts_src_dir or scripts_path()
 

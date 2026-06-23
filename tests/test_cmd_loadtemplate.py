@@ -20,8 +20,12 @@ def _prompt(metadata_truthy: bool = False) -> MagicMock:
     return p
 
 
-def test_load_template_auto_kind_sets_config_and_loads(mock_config):
-    """No prior metadata, kind=auto -> config.auto=True and prompt.load_update."""
+def test_load_template_auto_kind_loads(mock_config):
+    """No prior metadata, kind=auto -> prompt.load_update is called.
+
+    Workflow mode (auto/kernel) is now seeded onto the TestReport by
+    ``make_testreport`` during ``load_update``, not by this command.
+    """
     prompt = _prompt(metadata_truthy=False)
     update = MagicMock()
     update.kind = "auto"
@@ -29,8 +33,6 @@ def test_load_template_auto_kind_sets_config_and_loads(mock_config):
 
     LoadTemplate(args, mock_config, MagicMock(), prompt)()
 
-    assert mock_config.auto is True
-    assert mock_config.kernel is False
     prompt.load_update.assert_called_once_with(update, autoconnect=True)
 
 

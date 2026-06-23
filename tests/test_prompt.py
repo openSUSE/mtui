@@ -19,6 +19,7 @@ from mtui.cli import repl
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.support import messages
 from mtui.test_reports.null_report import NullTestReport
+from mtui.types import Workflow
 
 
 def _bind_do(p: repl.CommandPrompt, name: str, handler: Any) -> None:
@@ -34,8 +35,7 @@ def _bind_do(p: repl.CommandPrompt, name: str, handler: Any) -> None:
 
 def _make_prompt(
     *,
-    auto: bool = False,
-    kernel: bool = False,
+    workflow: Workflow = Workflow.MANUAL,
     pipe_input=None,
 ) -> repl.CommandPrompt:
     """Build a ``CommandPrompt`` with stock magic-mocked collaborators.
@@ -45,12 +45,10 @@ def _make_prompt(
     session machinery without touching the controlling TTY.
     """
     config = MagicMock()
-    config.auto = auto
-    config.kernel = kernel
     log = MagicMock()
     sys = MagicMock()
     display_factory = MagicMock()
-    return repl.CommandPrompt(
+    p = repl.CommandPrompt(
         config,
         log,
         sys,
@@ -58,6 +56,9 @@ def _make_prompt(
         _input=pipe_input,
         _output=DummyOutput() if pipe_input is not None else None,
     )
+    # Workflow mode now lives on the active TestReport, not on config.
+    p.metadata.workflow = workflow
+    return p
 
 
 # --------------------------------------------------------------------------- #
@@ -425,6 +426,7 @@ def test_postcmd_updates_prompt_when_metadata_loaded():
     """With a real test report, ``postcmd`` refreshes the prompt with the session."""
     p = _make_prompt()
     p.metadata = MagicMock()  # not a NullTestReport
+    p.metadata.workflow = Workflow.MANUAL
     p.session = "sess1"
     p.postcmd(False, "noop")
     assert p.prompt == "mtui:sess1> "
@@ -444,15 +446,15 @@ def test_set_prompt_normal_mode():
 
 
 def test_set_prompt_auto_mode():
-    """``config.auto`` (and not kernel) renders the ``mtui-auto`` prefix."""
-    p = _make_prompt(auto=True, kernel=False)
+    """``Workflow.AUTO`` renders the ``mtui-auto`` prefix."""
+    p = _make_prompt(workflow=Workflow.AUTO)
     p.set_prompt("s1")
     assert p.prompt == "mtui-auto:s1> "
 
 
 def test_set_prompt_kernel_mode():
-    """``config.kernel`` overrides auto-mode and renders ``mtui-kernel``."""
-    p = _make_prompt(auto=True, kernel=True)
+    """``Workflow.KERNEL`` renders the ``mtui-kernel`` prefix."""
+    p = _make_prompt(workflow=Workflow.KERNEL)
     p.set_prompt(None)
     assert p.prompt == "mtui-kernel> "
 
@@ -470,15 +472,15 @@ def test_bottom_toolbar_manual_mode_empty_session_zero_hosts():
     assert p._bottom_toolbar() == " mode: manual  session: empty  hosts: 0 "
 
 
-def test_bottom_toolbar_kernel_mode_takes_precedence_over_auto():
-    """``config.kernel`` wins the mode coin-flip even when auto is also set."""
-    p = _make_prompt(auto=True, kernel=True)
+def test_bottom_toolbar_kernel_mode():
+    """``Workflow.KERNEL`` renders the ``kernel`` mode label."""
+    p = _make_prompt(workflow=Workflow.KERNEL)
     assert " mode: kernel " in p._bottom_toolbar()
 
 
 def test_bottom_toolbar_auto_mode():
-    """``config.auto`` (without kernel) renders the ``auto`` label."""
-    p = _make_prompt(auto=True, kernel=False)
+    """``Workflow.AUTO`` renders the ``auto`` mode label."""
+    p = _make_prompt(workflow=Workflow.AUTO)
     assert " mode: auto " in p._bottom_toolbar()
 
 

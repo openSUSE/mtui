@@ -14,7 +14,7 @@ from ...support.messages import (
     MissingPreparerError,
     MissingUpdaterError,
 )
-from ...types import Package
+from ...types import Package, Workflow
 from ...types.rpmver import RPMVersion
 from ...update_workflow.hooks import CompareScript, PostScript, PreScript
 from . import Target
@@ -560,7 +560,7 @@ class HostsGroup(UserDict[str, Target]):
 
         package_check()
 
-        if "noscript" not in params and not testreport.config.auto:
+        if "noscript" not in params and testreport.workflow is not Workflow.AUTO:
             testreport.run_scripts(PreScript, self)
 
         self.update_lock()
@@ -633,7 +633,7 @@ class HostsGroup(UserDict[str, Target]):
 
             package_check(True)
 
-            if "noscript" not in params and not testreport.config.auto:
+            if "noscript" not in params and testreport.workflow is not Workflow.AUTO:
                 testreport.run_scripts(PostScript, self)
                 testreport.run_scripts(CompareScript, self)
         except BaseException:

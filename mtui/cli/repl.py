@@ -25,6 +25,7 @@ from .. import commands
 from ..commands import Command, CommandAlreadyBoundError
 from ..support import messages
 from ..test_reports.null_report import NullTestReport
+from ..types import Workflow
 from . import notification
 from ._completer import MtuiCompleter
 from ._history import default_history_path, get_history
@@ -180,9 +181,9 @@ class CommandPrompt:
 
         Rendered fields:
 
-        * ``mode`` — ``kernel`` when :attr:`config.kernel` is set
-          (kernel-update workflow), ``auto`` when only :attr:`config.auto`
-          is set (automatic-update workflow), ``manual`` otherwise.
+        * ``mode`` — the active report's :attr:`workflow`
+          (:class:`~mtui.types.Workflow`): ``kernel``, ``auto``, or
+          ``manual``.
         * ``session`` — resolved in precedence order: an explicit name
           set via ``set_session_name`` (:attr:`self.session`) wins; else
           the loaded test report's :attr:`id` (its RRID); else the
@@ -205,12 +206,7 @@ class CommandPrompt:
             spaces so it reads naturally inside the reverse-video bar.
 
         """
-        if self.config.kernel:
-            mode = "kernel"
-        elif self.config.auto:
-            mode = "auto"
-        else:
-            mode = "manual"
+        mode = self.metadata.workflow.value
 
         sess = self.session if getattr(self, "session", None) else ""
         if not sess:
@@ -436,10 +432,8 @@ class CommandPrompt:
         self.session = session
         session = ":" + str(session) if session else ""
         mode = "mtui"
-        if self.config.auto and not self.config.kernel:
-            mode += "-auto"
-        elif self.config.kernel:
-            mode += "-kernel"
+        if self.metadata.workflow is not Workflow.MANUAL:
+            mode += f"-{self.metadata.workflow.value}"
         self.prompt = f"{mode}{session}> "
 
     if TYPE_CHECKING:
