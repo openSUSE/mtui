@@ -320,10 +320,18 @@ Three hand-written tools operate on the path tracked by
 ``no testreport loaded; run `load_template` first`` when no test
 report is loaded.
 
-``testreport_read() -> dict``
+``testreport_read(offset: int = None, limit: int = None) -> dict``
     Returns ``{"path": str, "line_count": int, "content": str}``.
     Reads the file as UTF-8 with ``errors="replace"``. Marked
     ``readOnlyHint=True`` and ``idempotentHint=True``.
+
+    ``offset`` (1-based first line) and ``limit`` (max lines) return a
+    line window instead of the whole file, using the same 1-indexed
+    line numbers ``testreport_patch`` consumes — useful for paging a
+    large report whose ``log`` runs to thousands of lines after
+    ``export``. Without them the full file is returned. The reply
+    always reports the file's total ``line_count``, and adds
+    ``offset`` and ``returned_lines`` when a window is requested.
 
 ``testreport_patch(start_line: int, end_line: int, replacement: str) -> dict``
     Splices an **inclusive, 1-indexed** line range. ``end_line ==
