@@ -47,7 +47,7 @@ def test_pi_set_repo_add_uses_ar_form(tmp_path: Path) -> None:
     r.rrid = RequestReviewID("SUSE:PI:42:99")
     r.update_repos = {}
     target = MagicMock()
-    r.set_repo(target, "add")  # ty: ignore[invalid-argument-type]
+    r.set_repo(target, "add")
     args, _ = target.repo_manager.run_zypper.call_args
     assert "ar" in args[0]
 
@@ -57,7 +57,7 @@ def test_pi_set_repo_remove(tmp_path: Path) -> None:
     r.rrid = RequestReviewID("SUSE:PI:42:99")
     r.update_repos = {}
     target = MagicMock()
-    r.set_repo(target, "remove")  # ty: ignore[invalid-argument-type]
+    r.set_repo(target, "remove")
     args, _ = target.repo_manager.run_zypper.call_args
     assert args[0] == "-n rr"
 
@@ -67,7 +67,7 @@ def test_pi_set_repo_unknown_raises(tmp_path: Path) -> None:
     r.rrid = RequestReviewID("SUSE:PI:42:99")
     r.update_repos = {}
     with pytest.raises(ValueError, match="Not supported"):
-        r.set_repo(MagicMock(), "nope")  # ty: ignore[invalid-argument-type]
+        r.set_repo(MagicMock(), "nope")
 
 
 def test_pi_check_hash_always_true(tmp_path: Path) -> None:

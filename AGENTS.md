@@ -24,7 +24,7 @@
 - CLI smoke tests invoke `python -m mtui`; keep that path working when touching entrypoint or argument parsing code.
 
 ## Type And Style Quirks
-- Supported Python is 3.11 through 3.14; `ty` is pinned to 3.11 (lowest supported) and treats warnings as errors. CI runs the pytest matrix across all four versions but only one ty job.
+- Supported Python is 3.13 and 3.14 (`requires-python = ">=3.13"`); `ty` is pinned to 3.13 (lowest supported) and treats warnings as errors. CI runs the pytest matrix across both versions but only one ty job.
 - `mtui/types/**` and `mtui/data_sources/**` have stricter `ty` rules (`all = "error"`).
 - Ruff enforces import sorting, pyupgrade for py311+, no `print`, and specific `# ty: ignore[...]` codes via `PGH003`.
 - Tests have relaxed Ruff ignores for asserts/private access; do not copy those assumptions into package code.

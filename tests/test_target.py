@@ -72,8 +72,8 @@ def _build_custom_classes_target(mock_config):
     t = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        lock=lock_class,  # ty: ignore[invalid-argument-type]
-        connection=conn_class,  # ty: ignore[invalid-argument-type]
+        lock=lock_class,
+        connection=conn_class,
     )
     # Smuggle the expected classes into the instance so the shared check fn
     # can compare without leaking the parametrise builder's locals.
@@ -503,8 +503,8 @@ def test_connect_success_wires_up_lock_and_system(mock_config, monkeypatch):
     target = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        connection=conn_class,  # ty: ignore[invalid-argument-type]
-        lock=lock_class,  # ty: ignore[invalid-argument-type]
+        connection=conn_class,
+        lock=lock_class,
     )
     target.connect()
     conn_class.assert_called_once()
@@ -524,8 +524,8 @@ def test_connect_failure_surfaces_connecting_failed_message(mock_config, caplog)
     target = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        connection=conn_class,  # ty: ignore[invalid-argument-type]
-        lock=MagicMock(),  # ty: ignore[invalid-argument-type]
+        connection=conn_class,
+        lock=MagicMock(),
     )
     with (
         caplog.at_level("CRITICAL", logger="mtui.target"),
@@ -552,8 +552,8 @@ def test_connect_warns_when_already_locked(mock_config, monkeypatch, caplog):
     target = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        connection=conn_class,  # ty: ignore[invalid-argument-type]
-        lock=lock_class,  # ty: ignore[invalid-argument-type]
+        connection=conn_class,
+        lock=lock_class,
     )
     with caplog.at_level("WARNING", logger="mtui.target"):
         target.connect()
@@ -574,8 +574,8 @@ def test_connect_reaps_stale_lock_without_warning(mock_config, monkeypatch, capl
     target = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        connection=conn_class,  # ty: ignore[invalid-argument-type]
-        lock=lock_class,  # ty: ignore[invalid-argument-type]
+        connection=conn_class,
+        lock=lock_class,
     )
     with caplog.at_level("WARNING", logger="mtui.target"):
         target.connect()
@@ -590,7 +590,7 @@ def test_connect_failure_logs_critical_and_reraises(mock_config, caplog):
     target = Target(  # type: ignore[arg-type]
         mock_config,
         "host.example.com",
-        connection=conn_class,  # ty: ignore[invalid-argument-type]
+        connection=conn_class,
     )
     with (
         caplog.at_level("CRITICAL", logger="mtui.target"),

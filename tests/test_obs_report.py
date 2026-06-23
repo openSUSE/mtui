@@ -52,7 +52,7 @@ def test_obs_set_repo_add_invokes_zypper_add(tmp_path: Path) -> None:
     r.rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
     r.update_repos = {}
     target = MagicMock()
-    r.set_repo(target, "add")  # ty: ignore[invalid-argument-type]
+    r.set_repo(target, "add")
     target.repo_manager.run_zypper.assert_called_once()
     args, _ = target.repo_manager.run_zypper.call_args
     assert "ar" in args[0]
@@ -63,7 +63,7 @@ def test_obs_set_repo_remove_invokes_zypper_rr(tmp_path: Path) -> None:
     r.rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
     r.update_repos = {}
     target = MagicMock()
-    r.set_repo(target, "remove")  # ty: ignore[invalid-argument-type]
+    r.set_repo(target, "remove")
     target.repo_manager.run_zypper.assert_called_once()
     args, _ = target.repo_manager.run_zypper.call_args
     assert args[0] == "-n rr"
@@ -74,7 +74,7 @@ def test_obs_set_repo_unknown_op_raises(tmp_path: Path) -> None:
     r.rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
     r.update_repos = {}
     with pytest.raises(ValueError, match="Not supported"):
-        r.set_repo(MagicMock(), "bogus")  # ty: ignore[invalid-argument-type]
+        r.set_repo(MagicMock(), "bogus")
 
 
 def test_obs_check_hash_always_true(tmp_path: Path) -> None:

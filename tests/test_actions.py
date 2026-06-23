@@ -31,7 +31,7 @@ def test_threaded_target_group_run_propagates_worker_exception():
     target.hostname = "h1"
     target.sftp_remove.side_effect = RuntimeError("delete failed")
 
-    action = FileDelete([target], Path("/tmp/x"))  # type: ignore[list-item]  # ty: ignore[invalid-argument-type]
+    action = FileDelete([target], Path("/tmp/x"))  # type: ignore[list-item]
     with pytest.raises(RuntimeError, match="delete failed"):
         action.run()
 
@@ -46,7 +46,7 @@ def test_run_command_run_propagates_worker_exception():
     target.mode = ExecutionMode.PARALLEL
     target.run.side_effect = RuntimeError("ssh broke")
 
-    cmd = RunCommand({"h1": target}, "true")  # type: ignore[dict-item]  # ty: ignore[invalid-argument-type]
+    cmd = RunCommand({"h1": target}, "true")  # type: ignore[dict-item]
     with pytest.raises(RuntimeError, match="ssh broke"):
         cmd.run()
 
@@ -69,7 +69,7 @@ def test_run_command_dict_skips_targets_without_a_command():
     uncovered.mode = ExecutionMode.PARALLEL
 
     # command dict covers only h1; h2 is in the group but has no command.
-    cmd = RunCommand({"h1": covered, "h2": uncovered}, {"h1": "true"})  # type: ignore[dict-item]  # ty: ignore[invalid-argument-type]
+    cmd = RunCommand({"h1": covered, "h2": uncovered}, {"h1": "true"})  # type: ignore[dict-item]
     cmd.run()  # must not raise KeyError("h2")
 
     covered.run.assert_called_once()
@@ -107,7 +107,7 @@ def test_run_command_serial_runs_sequentially_after_prompt():
     t2.hostname = "h2"
     t2.mode = ExecutionMode.SERIAL
 
-    cmd = RunCommand({"h1": t1, "h2": t2}, "echo hi")  # type: ignore[dict-item]  # ty: ignore[invalid-argument-type]
+    cmd = RunCommand({"h1": t1, "h2": t2}, "echo hi")  # type: ignore[dict-item]
     with patch("mtui.hosts.target.actions.prompt_user") as mock_prompt:
         cmd.run()
 

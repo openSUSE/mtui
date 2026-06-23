@@ -154,7 +154,7 @@ def test_run_trailing_space_offers_host_names():
     p = _make_prompt()
     hosts = MagicMock()
     hosts.names.return_value = ["alpha.example", "beta.example"]
-    p.targets.select = MagicMock(return_value=hosts)  # ty: ignore[invalid-assignment]
+    p.targets.select = MagicMock(return_value=hosts)
 
     out = set(_completions(p, "run -t "))
     assert {"alpha.example", "beta.example"}.issubset(out)
@@ -203,7 +203,7 @@ def test_adapter_matches_complete_choices_for_run():
     p = _make_prompt()
     hosts = MagicMock()
     hosts.names.return_value = []
-    p.targets.select = MagicMock(return_value=hosts)  # ty: ignore[invalid-assignment]
+    p.targets.select = MagicMock(return_value=hosts)
     expected = set(complete_choices([("-t", "--target")], "run -", "-", []))
     actual = set(_completions(p, "run -"))
     assert actual == expected

@@ -29,7 +29,7 @@ def _bind_do(p: repl.CommandPrompt, name: str, handler: Any) -> None:
     ``invalid-assignment`` warnings live in exactly one place.
     """
     setattr(p, f"do_{name}", handler)
-    p.commands[name] = MagicMock()  # ty: ignore[invalid-assignment]
+    p.commands[name] = MagicMock()
 
 
 def _make_prompt(
@@ -102,7 +102,7 @@ def test_dispatching():
     mock_argparser = MagicMock()
     mock_command.argparser.return_value = mock_argparser
 
-    p._add_subcommand(mock_command)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p._add_subcommand(mock_command)  # type: ignore[arg-type]
 
     # do_
     p.do_test_command("test_args")
@@ -125,9 +125,9 @@ def test_add_subcommand_duplicate_raises():
     cmd_a.command = "dup"
     cmd_b = MagicMock()
     cmd_b.command = "dup"
-    p._add_subcommand(cmd_a)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p._add_subcommand(cmd_a)  # type: ignore[arg-type]
     with pytest.raises(repl.CommandAlreadyBoundError, match="dup"):
-        p._add_subcommand(cmd_b)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        p._add_subcommand(cmd_b)  # type: ignore[arg-type]
 
 
 def test_add_subcommand_binds_methods_to_instance():
@@ -135,7 +135,7 @@ def test_add_subcommand_binds_methods_to_instance():
     p = _make_prompt()
     cmd = MagicMock()
     cmd.command = "alpha"
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p._add_subcommand(cmd)  # type: ignore[arg-type]
     assert "do_alpha" in p.__dict__
     assert "help_alpha" in p.__dict__
     assert "complete_alpha" in p.__dict__
@@ -146,7 +146,7 @@ def test_dash_in_command_name_dispatches():
     p = _make_prompt()
     cmd = MagicMock()
     cmd.command = "dash-cmd"
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p._add_subcommand(cmd)  # type: ignore[arg-type]
     do = getattr(p, "do_dash-cmd")
     do("args")
     cmd.parse_args.assert_called_with("args", p.sys)
@@ -159,7 +159,7 @@ def test_do_handles_argsparse_failure():
     cmd = MagicMock()
     cmd.command = "boom"
     cmd.parse_args.side_effect = ArgsParseFailureError()
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p._add_subcommand(cmd)  # type: ignore[arg-type]
     p.do_boom("--bad")
     cmd.assert_not_called()
 
@@ -170,7 +170,7 @@ def test_complete_logs_and_reraises(caplog):
     cmd = MagicMock()
     cmd.command = "alpha"
     cmd.complete.side_effect = RuntimeError("comp-fail")
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p._add_subcommand(cmd)  # type: ignore[arg-type]
     with (
         caplog.at_level("ERROR", logger="mtui.prompt"),
         pytest.raises(RuntimeError, match="comp-fail"),
@@ -184,7 +184,7 @@ def test_get_names_includes_registered_commands():
     p = _make_prompt()
     cmd = MagicMock()
     cmd.command = "alpha"
-    p._add_subcommand(cmd)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    p._add_subcommand(cmd)  # type: ignore[arg-type]
     names = p.get_names()
     assert "do_alpha" in names
     assert "help_alpha" in names
