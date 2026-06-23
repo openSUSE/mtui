@@ -117,6 +117,60 @@ def test_priority_deadline_maintenance_via_graphql():
 
 
 @responses.activate
+def test_priority_deadline_maintenance_falls_back_to_prd():
+    """``crd`` is null on most incidents; the deadline then comes from ``prd``
+    (the planned release date SMELT shows), not ``?``.
+    """
+    responses.add(
+        responses.POST,
+        f"{SMELT}/graphql/",
+        json={
+            "data": {
+                "incidents": {
+                    "edges": [
+                        {"node": {"priority": 357, "crd": None, "prd": "2026-07-06"}}
+                    ]
+                }
+            }
+        },
+        status=200,
+    )
+    s = Smelt(_cfg())
+    prio, deadline = s.priority_deadline(
+        RequestReviewID("SUSE:Maintenance:44997:414920")
+    )
+    assert (prio, deadline) == (357, "2026-07-06")
+
+
+@responses.activate
+def test_priority_deadline_maintenance_prefers_crd_over_prd():
+    """A set customer-required date takes precedence over the planned date."""
+    responses.add(
+        responses.POST,
+        f"{SMELT}/graphql/",
+        json={
+            "data": {
+                "incidents": {
+                    "edges": [
+                        {
+                            "node": {
+                                "priority": 9,
+                                "crd": "2026-08-01",
+                                "prd": "2026-09-01",
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        status=200,
+    )
+    s = Smelt(_cfg())
+    prio, deadline = s.priority_deadline(RequestReviewID("SUSE:Maintenance:1:2"))
+    assert (prio, deadline) == (9, "2026-08-01")
+
+
+@responses.activate
 def test_v2_transport_error_returns_none():
     responses.add(responses.GET, f"{V2}/updates/x", status=500)
     assert Smelt(_cfg()).update("x") is None
