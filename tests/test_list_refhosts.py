@@ -200,8 +200,8 @@ def test_call_free_probes_lock_state(monkeypatch: pytest.MonkeyPatch) -> None:
         def connect(self) -> None:
             pass
 
-        def locked_by(self) -> str:
-            return "bob" if "nbg" in self.name else ""
+        def is_locked(self) -> bool:
+            return "nbg" in self.name
 
         def close(self) -> None:
             pass
@@ -210,5 +210,5 @@ def test_call_free_probes_lock_state(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = _cmd(arch=["x86_64"], as_json=True, free=True)
     cmd()
     data = {r["name"]: r["lock"] for r in _json.loads(_out(cmd))}
-    assert data["host-nbg-x86"] == "locked: bob"
+    assert data["host-nbg-x86"] == "locked"
     assert data["host-default-x86"] == "free"
