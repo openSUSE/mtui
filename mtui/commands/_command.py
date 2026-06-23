@@ -46,6 +46,7 @@ class Command(ABC):
         "prompt",
         "sys",
         "targets",
+        "templates",
     ]
     _check_subparser: str = ""
     """
@@ -90,6 +91,7 @@ class Command(ABC):
         self.sys = sys
         self.config = config
         self.prompt = prompt
+        self.templates = prompt.templates
         self.metadata = prompt.metadata
         self.display = prompt.display
         self.targets: HostsGroup = prompt.targets
