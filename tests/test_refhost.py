@@ -454,13 +454,13 @@ def _make_https_resolver(**overrides) -> refhost.HttpsResolver:
         "refhosts_factory": MagicMock(),
     }
     defaults.update(overrides)
-    return refhost.HttpsResolver(**defaults)  # ty: ignore[invalid-argument-type]
+    return refhost.HttpsResolver(**defaults)
 
 
 class TestPathResolver:
     def test_resolve_uses_configured_path(self):
         factory_mock = MagicMock()
-        resolver = refhost.PathResolver(refhosts_factory=factory_mock)  # ty: ignore[invalid-argument-type]
+        resolver = refhost.PathResolver(refhosts_factory=factory_mock)
         cfg = _make_config(location="nuremberg")
         rh = resolver.resolve(cfg)
         factory_mock.assert_called_once_with(REFHOSTS_FIXTURE, "nuremberg")

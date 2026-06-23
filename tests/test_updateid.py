@@ -51,7 +51,7 @@ def _make_updateid() -> tuple[AutoOBSUpdateID, MagicMock]:
     uid = AutoOBSUpdateID(RRID)
     tr_mock = MagicMock(name="testreport")
     tr_mock.read.side_effect = InvalidGiteaHashError(uid.id, "oldhash", "newhash")
-    uid.testreport_factory = MagicMock(return_value=tr_mock)  # ty: ignore[invalid-assignment]
+    uid.testreport_factory = MagicMock(return_value=tr_mock)
     return uid, tr_mock
 
 
@@ -71,7 +71,7 @@ def _make_updateid_with_checkout_retry(
     tr_mock = MagicMock(name="testreport")
     enoent = TemplateIOError(ENOENT, "No such file or directory", "log")
     tr_mock.read.side_effect = [enoent, second_read_error]
-    uid.testreport_factory = MagicMock(return_value=tr_mock)  # ty: ignore[invalid-assignment]
+    uid.testreport_factory = MagicMock(return_value=tr_mock)
     vcs_mock = MagicMock(name="vcs_checkout")
     uid._vcs_checkout = vcs_mock  # noqa: SLF001
     return uid, tr_mock, vcs_mock

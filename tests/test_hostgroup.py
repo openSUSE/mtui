@@ -51,7 +51,7 @@ def test_hostgroup_init():
     t1.hostname = "host1.example.com"
     t2.hostname = "host2.example.com"
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
 
     assert len(hg) == 2
     assert "host1.example.com" in hg
@@ -70,7 +70,7 @@ def test_hostgroup_select_all():
     """Test select() with no args returns self."""
     t1 = MagicMock()
     t1.hostname = "h1"
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
 
     selected = hg.select()
     assert selected is hg
@@ -85,7 +85,7 @@ def test_hostgroup_select_enabled_only():
     t1.state = "enabled"
     t2.state = "disabled"
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
     selected = hg.select(enabled=True)
 
     assert len(selected) == 1
@@ -100,7 +100,7 @@ def test_hostgroup_select_by_hostname():
     t1.hostname = "h1"
     t2.hostname = "h2"
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
     selected = hg.select(["h1"])
 
     assert len(selected) == 1
@@ -111,7 +111,7 @@ def test_hostgroup_select_nonexistent_host_raises():
     """Test select() with unknown hostname raises HostIsNotConnectedError."""
     t1 = MagicMock()
     t1.hostname = "h1"
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
 
     with pytest.raises(HostIsNotConnectedError):
         hg.select(["unknown-host"])
@@ -126,7 +126,7 @@ def test_hostgroup_select_enabled_and_by_hostname():
     t1.state = "disabled"
     t2.state = "enabled"
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
     selected = hg.select(["h1", "h2"], enabled=True)
 
     assert len(selected) == 1
@@ -143,7 +143,7 @@ def test_hostgroup_unlock_delegates():
     t1.hostname = "h1"
     t2.hostname = "h2"
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
     hg.unlock("test_comment")
 
     t1.unlock.assert_called_once_with("test_comment")
@@ -156,7 +156,7 @@ def test_hostgroup_unlock_suppresses_target_locked_error():
     t1.hostname = "h1"
     t1.unlock.side_effect = TargetLockedError("locked by someone")
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.unlock()  # should not raise
 
 
@@ -167,7 +167,7 @@ def test_hostgroup_lock_delegates():
     t1.hostname = "h1"
     t2.hostname = "h2"
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
     hg.lock("comment")
 
     t1.lock.assert_called_once_with("comment")
@@ -180,7 +180,7 @@ def test_hostgroup_lock_suppresses_target_locked_error():
     t1.hostname = "h1"
     t1.lock.side_effect = TargetLockedError("locked")
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.lock()  # should not raise
 
 
@@ -196,7 +196,7 @@ def test_hostgroup_query_versions():
     t1.query_package_versions.return_value = {"pkg": "1.0"}
     t2.query_package_versions.return_value = {"pkg": "2.0"}
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
     result = hg.query_versions(["pkg"])
 
     assert len(result) == 2
@@ -209,7 +209,7 @@ def test_hostgroup_add_history():
     t1 = MagicMock()
     t1.hostname = "h1"
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.add_history("data")
 
     t1.add_history.assert_called_once_with("data")
@@ -222,7 +222,7 @@ def test_hostgroup_names():
     t1.hostname = "alpha"
     t2.hostname = "beta"
 
-    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1, t2])  # type: ignore[arg-type]
     names = hg.names()
 
     assert set(names) == {"alpha", "beta"}
@@ -237,7 +237,7 @@ def test_update_lock_locks_unlocked_hosts():
     t1.hostname = "h1"
     t1.is_locked.return_value = False
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.update_lock()
 
     t1.lock.assert_called_once()
@@ -257,7 +257,7 @@ def test_update_lock_raises_when_locked_by_other():
     mock_lock.comment.return_value = ""
     type(t1)._lock = PropertyMock(return_value=mock_lock)
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
 
     with pytest.raises(UpdateError, match="Hosts locked"):
         hg.update_lock()
@@ -279,7 +279,7 @@ def test_perform_install_runs_and_unlocks(mock_run):
     }
     t1.check.return_value = MagicMock()
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.perform_install(["pkg"])
 
     # Verify unlock was called (cleanup always happens)
@@ -298,7 +298,7 @@ def test_perform_install_unlocks_on_error(mock_run):
         "reboot": MagicMock(substitute=MagicMock(return_value="")),
     }
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     # Make run raise
     mock_run.return_value.run.side_effect = RuntimeError("connection lost")
 
@@ -323,7 +323,7 @@ def test_perform_prepare_dependency_error_logged_without_traceback(
     # The preparer check raises the expected dependency error.
     t1.check.return_value = MagicMock(side_effect=UpdateError("Dependency Error", "h1"))
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
 
     with caplog.at_level(logging.ERROR, logger="mtui.hosts.target.hostgroup"):
         hg.perform_prepare(
@@ -355,7 +355,7 @@ def test_report_self_delegates():
     t1.hostname = "h1"
     sink = MagicMock()
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.report_self(sink)
 
     t1.reporter.self_.assert_called_once_with(sink)
@@ -367,7 +367,7 @@ def test_report_locks_delegates():
     t1.hostname = "h1"
     sink = MagicMock()
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.report_locks(sink)
 
     t1.reporter.locks.assert_called_once_with(sink)
@@ -379,7 +379,7 @@ def test_report_timeout_delegates():
     t1.hostname = "h1"
     sink = MagicMock()
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.report_timeout(sink)
 
     t1.reporter.timeout.assert_called_once_with(sink)
@@ -391,7 +391,7 @@ def test_report_products_delegates():
     t1.hostname = "h1"
     sink = MagicMock()
 
-    hg = HostsGroup([t1])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.report_products(sink)
 
     t1.reporter.products.assert_called_once_with(sink)

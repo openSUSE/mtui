@@ -52,7 +52,7 @@ def test_autolock_new_target_locks_when_comment_set(tmp_path: Path) -> None:
     r = _make(tmp_path)
     r.lock_comment = "testing of SUSE:PI:34556:1"
     target = MagicMock()
-    r._autolock_new_target(target)  # ty: ignore[invalid-argument-type]
+    r._autolock_new_target(target)
     target.lock.assert_called_once_with("testing of SUSE:PI:34556:1")
 
 
@@ -60,7 +60,7 @@ def test_autolock_new_target_noop_without_comment(tmp_path: Path) -> None:
     r = _make(tmp_path)
     assert r.lock_comment == ""
     target = MagicMock()
-    r._autolock_new_target(target)  # ty: ignore[invalid-argument-type]
+    r._autolock_new_target(target)
     target.lock.assert_not_called()
 
 
@@ -72,7 +72,7 @@ def test_autolock_new_target_suppresses_foreign_lock(tmp_path: Path) -> None:
     target = MagicMock()
     target.lock.side_effect = TargetLockedError("locked by someone else")
     # A host already locked by another user must not abort the connect flow.
-    r._autolock_new_target(target)  # ty: ignore[invalid-argument-type]
+    r._autolock_new_target(target)
     target.lock.assert_called_once()
 
 
@@ -283,7 +283,7 @@ def test_perform_get_invokes_sftp_get(tmp_path: Path) -> None:
     r.path = tmp_path / "fake.tpl"
     r.path.write_text("hi")
     targets = MagicMock()
-    r.perform_get(targets, Path("/remote/file.txt"))  # ty: ignore[invalid-argument-type]
+    r.perform_get(targets, Path("/remote/file.txt"))
     targets.sftp_get.assert_called_once()
 
 
@@ -291,7 +291,7 @@ def test_perform_prepare_delegates_with_package_list(tmp_path: Path) -> None:
     r = _make(tmp_path)
     r.packages = {"v": ["bash"]}
     targets = MagicMock()
-    r.perform_prepare(targets, force=True)  # ty: ignore[invalid-argument-type]
+    r.perform_prepare(targets, force=True)
     targets.perform_prepare.assert_called_once()
     args, kwargs = targets.perform_prepare.call_args
     assert "bash" in args[0]
@@ -302,7 +302,7 @@ def test_perform_prepare_delegates_with_package_list(tmp_path: Path) -> None:
 def test_perform_install_records_history_and_delegates(tmp_path: Path) -> None:
     r = _make(tmp_path)
     targets = MagicMock()
-    r.perform_install(targets, ["bash"])  # ty: ignore[invalid-argument-type]
+    r.perform_install(targets, ["bash"])
     targets.add_history.assert_called_once()
     targets.perform_install.assert_called_once_with(["bash"])
 
@@ -310,7 +310,7 @@ def test_perform_install_records_history_and_delegates(tmp_path: Path) -> None:
 def test_perform_uninstall_records_history_and_delegates(tmp_path: Path) -> None:
     r = _make(tmp_path)
     targets = MagicMock()
-    r.perform_uninstall(targets, ["bash"])  # ty: ignore[invalid-argument-type]
+    r.perform_uninstall(targets, ["bash"])
     targets.add_history.assert_called_once()
     targets.perform_uninstall.assert_called_once_with(["bash"])
 
@@ -328,7 +328,7 @@ def test_perform_update_happy_path(tmp_path: Path) -> None:
     r = _make(tmp_path)
     r.packages = {"v": ["bash"]}
     targets = MagicMock()
-    r.perform_update(targets, ["--quiet"])  # ty: ignore[invalid-argument-type]
+    r.perform_update(targets, ["--quiet"])
     targets.add_history.assert_called_once()
     targets.perform_update.assert_called_once_with(r, ["--quiet"])
 
@@ -342,7 +342,7 @@ def test_perform_update_rolls_back_then_reraises_on_update_error(
     targets.perform_update.side_effect = UpdateError("boom", "h")
     # The update error is surfaced to the caller even though we roll back.
     with pytest.raises(UpdateError, match="boom"):
-        r.perform_update(targets, [])  # ty: ignore[invalid-argument-type]
+        r.perform_update(targets, [])
     # add_history called twice: once for update, once for the rollback
     assert targets.add_history.call_count == 2
     targets.perform_downgrade.assert_called_once()
@@ -360,7 +360,7 @@ def test_perform_update_reraises_update_error_even_if_rollback_fails(
     # see the original UpdateError, not the rollback exception.
     targets.perform_downgrade.side_effect = KeyError("h2")
     with pytest.raises(UpdateError, match="dependency error"):
-        r.perform_update(targets, [])  # ty: ignore[invalid-argument-type]
+        r.perform_update(targets, [])
     targets.perform_downgrade.assert_called_once()
 
 
@@ -376,7 +376,7 @@ def test_report_results_returns_target_meta_list(tmp_path: Path) -> None:
     t.system = "sles15"
     t.packages = {"bash": MagicMock()}
     t.out = []
-    out = r.report_results([t])  # ty: ignore[invalid-argument-type]
+    out = r.report_results([t])
     assert len(out) == 1
     assert out[0].hostname == "h1"
     assert out[0].system == "sles15"
@@ -446,7 +446,7 @@ def test_add_target_already_connected_warns_and_returns(tmp_path: Path, caplog) 
     r = _make(tmp_path)
     existing = MagicMock()
     existing.hostname = "h1"
-    r.targets["h1"] = existing  # ty: ignore[invalid-assignment]
+    r.targets["h1"] = existing
     with caplog.at_level(logging.WARNING, logger="mtui.template.testreport"):
         r.add_target("h1")
     assert any("already connected" in rec.message for rec in caplog.records)
@@ -558,7 +558,7 @@ def test_connect_targets_drops_inactive_existing_targets(tmp_path: Path) -> None
     r = _make(tmp_path)
     inactive = MagicMock()
     inactive.connection.is_active.return_value = False
-    r.targets["dead"] = inactive  # ty: ignore[invalid-assignment]
+    r.targets["dead"] = inactive
     r.connect_targets()
     assert "dead" not in r.targets
 
@@ -599,7 +599,7 @@ def test_list_versions_aggregates_by_host_then_package(tmp_path: Path) -> None:
     t.lastout.return_value = "bash 5.1\nopenssl 3.0"
     targets.items.return_value = [("h1", t)]
     sink = MagicMock(return_value="ok")
-    out = r.list_versions(sink, targets, ["bash"])  # ty: ignore[invalid-argument-type]
+    out = r.list_versions(sink, targets, ["bash"])
     assert out == "ok"
     sink.assert_called_once()
     targets.run.assert_called_once()

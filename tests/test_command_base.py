@@ -146,7 +146,7 @@ class TestParseHosts:
         t1.state = "enabled"
         t2.state = "enabled"
 
-        prompt.targets = HostsGroup([t1, t2])  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+        prompt.targets = HostsGroup([t1, t2])  # type: ignore[arg-type]
         prompt.metadata = MagicMock()
         prompt.display = MagicMock()
 

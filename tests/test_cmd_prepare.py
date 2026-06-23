@@ -25,7 +25,7 @@ def test_prepare_happy_calls_perform_prepare(mock_config):
     t = MagicMock()
     t.hostname = "h1"
     t.state = "enabled"
-    prompt = _prompt(HostsGroup([t]))  # ty: ignore[invalid-argument-type]
+    prompt = _prompt(HostsGroup([t]))
     args = Namespace(force=None, installed=None, update=None, hosts=None)
 
     Prepare(args, mock_config, MagicMock(), prompt)()

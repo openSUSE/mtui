@@ -616,8 +616,12 @@ class TestReport(ABC):
             done, _ = concurrent.futures.wait(connections)
             for future in done:
                 host = connections[future]
-                # TODO: how to type annatate this or how to change it to be compactible with type hints?
-                targets[host], new_systems[host] = future.result()
+                target, new_system = future.result()
+                # connect_target returns (False, False) on failure; skip those
+                # so the typed dicts only ever hold successful connections.
+                if target is False or new_system is False:
+                    continue
+                targets[host], new_systems[host] = target, new_system
         except KeyboardInterrupt:
             for future in connections:
                 future.cancel()

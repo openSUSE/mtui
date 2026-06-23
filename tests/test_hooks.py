@@ -28,7 +28,7 @@ def test_pre_script(monkeypatch):
 
     path = Path("/tmp/pre_script.sh")
     script = hooks.PreScript(tr, path)  # type: ignore[arg-type]
-    script._run(targets)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    script._run(targets)  # type: ignore[arg-type]
 
     targets.sftp_put.assert_any_call(path, "remote_path")
     targets.run.assert_called_once()
@@ -45,6 +45,6 @@ def test_compare_script(mock_run):
 
     path = Path("/tmp/compare_script.sh")
     script = hooks.CompareScript(tr, path)  # type: ignore[arg-type]
-    script._run_single_target(target)  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
+    script._run_single_target(target)  # type: ignore[arg-type]
 
     mock_run.assert_called_once()
