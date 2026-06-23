@@ -234,18 +234,30 @@ class Reject(BaseApiCall):
             + "Always as last of command, it takes remainder of command",
         )
 
+    @property
+    def _message(self) -> str:
+        """The rejection message as a single string.
+
+        ``--message`` uses ``nargs=REMAINDER``, so ``self.args.message`` is a
+        list of words (or ``None`` when omitted). It must be joined before it
+        reaches ``osc.reject``/``gitea.reject``, which pass it to
+        ``shlex.quote`` — handing those a list raises ``TypeError`` and aborts
+        the reject before it is sent.
+        """
+        return " ".join(self.args.message) if self.args.message else ""
+
     def osc(self) -> None:
         """Rejects the request in OSC."""
         logger.info("Reject request %s", self.metadata.rrid.review_id)
         osc = OSC(self.config, self.metadata.rrid)
-        osc.reject(self.args.group, self.args.reason, self.args.message)
+        osc.reject(self.args.group, self.args.reason, self._message)
 
     def gitea(self) -> None:
         """Rejects the pull request in Gitea."""
         logger.info("Reject PR %s", self.metadata.id)
         try:
             gitea = Gitea(self.config, self.metadata.giteaprapi)
-            gitea.reject(self.args.reason, self.args.user, self.args.message)
+            gitea.reject(self.args.reason, self.args.user, self._message)
         except GiteaError as e:
             logger.error(e)
 
