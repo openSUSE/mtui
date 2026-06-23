@@ -40,11 +40,6 @@ def main() -> int:
 
     set_color_mode(args.color)
 
-    if args.noninteractive and not args.prerun:
-        logger.error("--noninteractive makes no sense without --prerun")
-        p.print_help()
-        sys.exit(1)
-
     cfg = Config(args.config)
 
     sys.exit(run_mtui(cfg, logger, args))
@@ -76,7 +71,6 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
     # the user one at a time (no stdin races, no interleaved prompt text).
     prompter = Prompter()
     prompt = CommandPrompt(config, logger, sys, CommandPromptDisplay, prompter=prompter)
-    prompt.interactive = not args.noninteractive
     if args.update:
         if args.update.kind == "kernel":
             config.kernel = True
@@ -111,18 +105,6 @@ def run_mtui(config: Config, logger: logging.Logger, args: Namespace) -> Literal
                 prompt.do_add_host(x.print_args())
             except ArgsParseFailureError as e:
                 logger.error("failed to add host %s: %s", x, e)
-
-    if args.prerun:
-        if args.prerun.is_file():
-            prompt.set_cmdqueue(
-                [
-                    x.rstrip()
-                    for x in args.prerun.read_text().splitlines()
-                    if not x.startswith("#")
-                ]
-            )
-        else:
-            logger.error("Prerun command file %s isn't file", str(args.prerun))
 
     prompt.cmdloop(intro="Maintenance Test Update Installer")
     return 0

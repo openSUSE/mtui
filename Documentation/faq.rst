@@ -10,49 +10,6 @@
 Running MTUI
 ############
 
-Can I run MTUI in non-interactive mode?
-=======================================
-
-To simply run an update on the testhosts and export the log, it is
-sufficient to pass the ``-n`` or ``--non-interactive`` option to MTUI.
-However, there is an extension to this when also setting a prerun script
-with the ``-p`` (``--prerun``) option. MTUI then runs a user-defined,
-non-interactive session.
-
-Example::
-
-  # cat prerun.example
-  # this is a prerun example file
-  run uname -a
-  list_hosts
-
-  # mtui -n -p prerun.example -a SUSE:Maintenance:3601:126030
-  info: connecting to edna.qam.suse.cz
-  info: connecting to s390vsl048.suse.de
-  info: connecting to moe.qam.suse.cz
-
-  mtui> run uname -a
-  edna.qam.suse.cz:-> uname -a [0]
-  Linux edna 3.12.61-52.66-default #1 SMP Tue Jan 24 12:54:04 UTC 2017 (20041c8/kGraft-98c9d05) x86_64 x86_64 x86_64 GNU/Linux
-
-  s390vsl048.suse.de:-> uname -a [0]
-  Linux s390vsl048 3.12.61-52.69-default #1 SMP Thu Mar 23 15:48:05 UTC 2017 (08269c9) s390x s390x s390x GNU/Linux
-
-  moe.qam.suse.cz:-> uname -a [0]
-  Linux moe 3.12.61-52.66-default #1 SMP Tue Jan 24 12:54:04 UTC 2017 (20041c8/kGraft-98c9d05) x86_64 x86_64 x86_64 GNU/Linux
-
-  info: done
-
-  mtui> list_hosts
-  edna.qam.suse.cz     (sles12_module-x86_64): Enabled (parallel)
-  moe.qam.suse.cz      (sles12_module-x86_64): Enabled (parallel)
-  s390vsl048.suse.de   (sles12_module-s390x): Enabled (parallel)
-
-  mtui> quit
-  info: closing connection to edna.qam.suse.cz
-  info: closing connection to s390vsl048.suse.de
-  info: closing connection to moe.qam.suse.cz
-
 How do I change the default refhosts location?
 ==============================================
 

@@ -3,7 +3,7 @@
 Replaces the historical :mod:`cmd`-based prompt. The previous
 implementation inherited from :class:`cmd.Cmd` and relied on GNU
 ``readline`` for line editing, history, and tab completion. This module
-exposes ``CommandPrompt``, ``CmdQueue``, ``QuitLoopError``, and
+exposes ``CommandPrompt``, ``QuitLoopError``, and
 ``CommandAlreadyBoundError``; the input loop is driven by
 :class:`prompt_toolkit.PromptSession` and history goes through the shared
 :mod:`mtui.cli._history` backend.
@@ -59,60 +59,12 @@ class QuitLoopError(RuntimeError):
     """Exception raised to exit the command loop."""
 
 
-class _LoopExitError(Exception):
-    """Internal sentinel: input phase requests :meth:`cmdloop` to return."""
-
-
 class _LoopContinueError(Exception):
     """Internal sentinel: input phase requests :meth:`cmdloop` to reprompt.
 
     Used by the ``KeyboardInterrupt`` handler so the loop skips dispatch
     and goes straight to the next read cycle.
     """
-
-
-class CmdQueue(list):
-    """A list-like object that supports prerun commands.
-
-    This class echoes the prompt with the command that's being popped
-    and is about to be executed.
-    """
-
-    def __init__(self, iterable, prompt, term) -> None:
-        """Initializes the command queue.
-
-        Args:
-            iterable: An iterable of commands.
-            prompt: The command prompt string.
-            term: The terminal object.
-
-        """
-        self.prompt = prompt
-        self.term = term
-        list.__init__(self, iterable)
-
-    def pop(self, i=-1, /) -> Any:  # type: ignore[override]
-        """Pops a command from the queue and echoes it to the terminal.
-
-        Args:
-            i: The index of the command to pop.
-
-        Returns:
-            The popped command.
-
-        """
-        val = list.pop(self, i)
-        self.echo_prompt(val)
-        return val
-
-    def echo_prompt(self, val) -> None:
-        """Echoes the prompt and a command to the terminal.
-
-        Args:
-            val: The command to echo.
-
-        """
-        self.term.stdout.write(f"{self.prompt}{val}\n")
 
 
 class CommandPrompt:
@@ -178,10 +130,6 @@ class CommandPrompt:
         # mtui.cli.term.prompt_user and mtui.commands.quit so the file
         # is not raced.
         self._history = get_history(default_history_path())
-
-        # cmdqueue stays a plain list until set_cmdqueue wraps it in a
-        # CmdQueue (preserving the prerun echo behaviour).
-        self.cmdqueue: list[str] = []
 
         self.commands: dict[str, type[Command]] = {}
 
@@ -346,19 +294,6 @@ class CommandPrompt:
         setattr(self, f"help_{name}", help)
         setattr(self, f"complete_{name}", complete)
 
-    def set_cmdqueue(self, queue: list[str]) -> None:
-        """Sets the command queue for prerun commands.
-
-        Args:
-            queue: A list of commands to run.
-
-        """
-        q = queue[:]
-        if not self.interactive:
-            q.append("quit")
-
-        self.cmdqueue = CmdQueue(q, self.prompt, self.sys)
-
     def _dispatch(self, line: str) -> None:
         """Parse ``line`` and invoke the matching ``do_<name>`` closure.
 
@@ -369,7 +304,7 @@ class CommandPrompt:
         previous ``cmd.Cmd.default`` behaviour.
 
         ``postcmd`` is invoked here (rather than in the loop) so every
-        dispatch path — interactive prompt, prerun queue drain, and the
+        dispatch path — interactive prompt and the
         ``EOFError → "EOF"`` shortcut — gets the same post-command hook
         treatment.
         """
@@ -388,12 +323,8 @@ class CommandPrompt:
     def cmdloop(self, intro: str | None = None) -> None:
         """Run the main command loop.
 
-        Drains :attr:`cmdqueue` first (so prerun commands run without
-        needing a TTY-attached :class:`PromptSession`); only when the
-        queue is empty *and* the session is interactive do we ask
-        :class:`PromptSession` for a new line. Non-interactive sessions
-        with an empty queue exit immediately, matching the previous
-        behaviour of appending ``quit`` to the prerun queue.
+        Asks :class:`PromptSession` for a new line each iteration and
+        dispatches it.
 
         Args:
             intro: Optional banner string printed before the first
@@ -407,8 +338,6 @@ class CommandPrompt:
         while True:
             try:
                 line = self._read_next_line()
-            except _LoopExitError:
-                return
             except _LoopContinueError:
                 continue
 
@@ -439,35 +368,22 @@ class CommandPrompt:
     def _read_next_line(self) -> str:
         """Acquire the next line for dispatch.
 
-        Centralises queue-drain → PromptSession → control-key handling
-        so :meth:`cmdloop` only deals with dispatch-phase exceptions.
+        Centralises PromptSession → control-key handling so
+        :meth:`cmdloop` only deals with dispatch-phase exceptions.
 
         Returns:
             The raw input line (still un-stripped; :meth:`_dispatch`
             normalises it).
 
         Raises:
-            _LoopExitError: when the loop must return (non-interactive
-                session with an empty queue, or any unexpected input
-                error logged through the normal dispatch error path).
             _LoopContinueError: when the loop must skip dispatch and
                 reprompt (Ctrl-C / ``KeyboardInterrupt``).
 
         """
         try:
-            if self.cmdqueue:
-                return self.cmdqueue.pop(0)
-            if not self.interactive:
-                # Non-interactive with an empty queue: we are done.
-                # Touching PromptSession on a non-TTY stdin would raise.
-                raise _LoopExitError
             return self._session.prompt(self.prompt)
         except KeyboardInterrupt:
-            # Drop to interactive mode. Effective only if we were in
-            # prerun; for an already-interactive session it just clears
-            # the partial input and reprompts.
-            self.interactive = True
-            self.cmdqueue = []
+            # Ctrl-C on a partial input line clears it and reprompts.
             self.println()
             raise _LoopContinueError from None
         except EOFError:

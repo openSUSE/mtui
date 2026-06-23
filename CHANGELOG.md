@@ -45,6 +45,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `add_host`'s connect pool — reach MCP clients directly; `add_host` no longer
   re-echoes them to stdout.
 
+### Removed
+
+- The `-p`/`--prerun` option and the `-n`/`--noninteractive` option are gone,
+  along with the prerun command-queue machinery they drove. A prerun script was
+  the only thing `--noninteractive` supported (mtui refused `-n` without `-p`),
+  so both flags are retired together. Drive mtui through its interactive prompt
+  (or the `mtui-mcp` server) instead; existing invocations that passed `-p` or
+  `-n` must drop those flags.
+
 ### Fixed
 
 - A failed `update` now reports the outcome of **every** host instead of only the
