@@ -33,6 +33,28 @@ def _bind_do(p: repl.CommandPrompt, name: str, handler: Any) -> None:
     p.commands[name] = MagicMock()
 
 
+def _load_mock_report(
+    p: repl.CommandPrompt,
+    *,
+    rrid: str = "SUSE:Maintenance:1:1",
+    workflow: Workflow = Workflow.MANUAL,
+    targets: Any = None,
+) -> MagicMock:
+    """Load a mock (non-null) TestReport into the prompt's registry.
+
+    ``metadata`` / ``targets`` are read-only properties resolving through the
+    :class:`TemplateRegistry`, so tests inject a report by adding it to the
+    registry instead of assigning ``p.metadata`` directly.
+    """
+    report = MagicMock()
+    report.id = rrid
+    report.workflow = workflow
+    report.targets = MagicMock() if targets is None else targets
+    p.templates.add(report)
+    p.templates.set_active(rrid)
+    return report
+
+
 def _make_prompt(
     *,
     workflow: Workflow = Workflow.MANUAL,
@@ -434,8 +456,7 @@ def test_postcmd_short_circuits_for_null_test_report():
 def test_postcmd_updates_prompt_when_metadata_loaded():
     """With a real test report, ``postcmd`` refreshes the prompt with the session."""
     p = _make_prompt()
-    p.metadata = MagicMock()  # not a NullTestReport
-    p.metadata.workflow = Workflow.MANUAL
+    _load_mock_report(p, workflow=Workflow.MANUAL)  # not a NullTestReport
     p.session = "sess1"
     p.postcmd(False, "noop")
     assert p.prompt == "mtui:sess1> "
@@ -503,8 +524,9 @@ def test_bottom_toolbar_renders_session_name_after_set_prompt():
 def test_bottom_toolbar_renders_host_count():
     """``len(self.targets)`` is reflected in the ``hosts:`` field."""
     p = _make_prompt()
-    p.targets = MagicMock()
-    p.targets.__len__ = MagicMock(return_value=3)
+    targets = MagicMock()
+    targets.__len__ = MagicMock(return_value=3)
+    _load_mock_report(p, targets=targets)
     assert " hosts: 3 " in p._bottom_toolbar()
 
 
@@ -515,7 +537,7 @@ def test_bottom_toolbar_handles_targets_without_len():
     class _NoLen:
         pass
 
-    p.targets = _NoLen()
+    _load_mock_report(p, targets=_NoLen())
     assert " hosts: ? " in p._bottom_toolbar()
 
 
@@ -534,16 +556,14 @@ def test_bottom_toolbar_falls_back_to_metadata_id_when_no_session():
     p = _make_prompt()
     # No explicit session set; metadata is a real (non-null) report with an id.
     assert not hasattr(p, "session")
-    p.metadata = MagicMock()
-    p.metadata.id = "SUSE:Maintenance:12345:67890"
+    _load_mock_report(p, rrid="SUSE:Maintenance:12345:67890")
     assert " session: SUSE:Maintenance:12345:67890 " in p._bottom_toolbar()
 
 
 def test_bottom_toolbar_manual_session_overrides_metadata_id():
     """``set_session_name`` wins over the loaded report's RRID."""
     p = _make_prompt()
-    p.metadata = MagicMock()
-    p.metadata.id = "SUSE:Maintenance:12345:67890"
+    _load_mock_report(p, rrid="SUSE:Maintenance:12345:67890")
     p.session = "my-debug-session"
     assert " session: my-debug-session " in p._bottom_toolbar()
 

@@ -540,7 +540,15 @@ def test_two_ctx_keys_read_their_own_template(tmp_path: Path) -> None:
 
     def seeding_factory(cfg: object, log: object) -> McpSession:
         session = _null_session(tmp_path)
-        session.metadata = SimpleNamespace(path=str(seeds.pop(0)))
+        # metadata/targets resolve through the TemplateRegistry now, so load
+        # the fake report into the registry instead of assigning directly.
+        report = SimpleNamespace(
+            id=str(seeds[0]),
+            path=str(seeds.pop(0)),
+            targets={},
+        )
+        session.templates.add(report)  # ty: ignore[invalid-argument-type]
+        session.templates.set_active(report.id)
         return session
 
     registry = SessionRegistry(

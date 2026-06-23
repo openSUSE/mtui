@@ -49,6 +49,7 @@ from ..cli.argparse import ArgsParseFailureError
 from ..cli.display import CommandPromptDisplay
 from ..commands import Command
 from ..support.concurrency import ContextExecutor
+from ..template_registry import TemplateRegistry
 from ..test_reports.null_report import NullTestReport
 
 if TYPE_CHECKING:
@@ -243,8 +244,10 @@ class McpSession:
         # waits, matching the non-interactive contract above.
         self.prompter = None
 
-        self.metadata = NullTestReport(config, prompter=self.prompter)
-        self.targets = self.metadata.targets
+        self.templates = TemplateRegistry(
+            config,
+            null_factory=lambda: NullTestReport(config, prompter=self.prompter),
+        )
         # Mirror ``self.interactive`` onto the HostsGroup so long-running
         # parallel actions (run, set_repo, sftp_*) skip the TTY spinner;
         # MCP uses ``notifications/progress`` as its progress channel.
@@ -291,6 +294,16 @@ class McpSession:
         # whole session and its table with it.
         self._jobs: dict[str, dict[str, Any]] = {}
         self._job_counter = 0
+
+    @property
+    def metadata(self):
+        """The active template's :class:`TestReport` (or NullTestReport)."""
+        return self.templates.active
+
+    @property
+    def targets(self):
+        """The active template's :class:`HostsGroup`."""
+        return self.templates.active.targets
 
     # ------------------------------------------------------------------
     # CommandPrompt-compatible surface
@@ -363,8 +376,8 @@ class McpSession:
             self.interactive,
             prompter=self.prompter,
         )
-        self.metadata = tr
-        self.targets = tr.targets
+        self.templates.add(tr)
+        self.templates.set_active(str(tr.id))
         # Re-apply the non-interactive flag after the testreport swap so
         # the fresh HostsGroup inherits the session's headless mode.
         self.targets.interactive = False

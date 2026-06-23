@@ -24,6 +24,7 @@ from prompt_toolkit.styles import Style
 from .. import commands
 from ..commands import Command, CommandAlreadyBoundError
 from ..support import messages
+from ..template_registry import TemplateRegistry
 from ..test_reports.null_report import NullTestReport
 from ..types import Workflow
 from . import notification
@@ -117,11 +118,10 @@ class CommandPrompt:
 
         self.interactive: bool = True
         self.display = display_factory(self.sys.stdout)
-        self.metadata = NullTestReport(config, prompter=prompter)
-        self.targets = self.metadata.targets
-        """
-        alias to ease refactoring
-        """
+        self.templates = TemplateRegistry(
+            config,
+            null_factory=lambda: NullTestReport(config, prompter=prompter),
+        )
 
         self.homedir = Path("~").expanduser()
         self.config = config
@@ -175,6 +175,16 @@ class CommandPrompt:
         # report is loaded.
         self.stdout = self.sys.stdout
         self.prompt: str = "mtui-empty>"
+
+    @property
+    def metadata(self):
+        """The active template's :class:`TestReport` (or NullTestReport)."""
+        return self.templates.active
+
+    @property
+    def targets(self):
+        """The active template's :class:`HostsGroup`."""
+        return self.templates.active.targets
 
     def _bottom_toolbar(self) -> str:
         """Build the bottom status line shown beneath the prompt.
@@ -463,6 +473,6 @@ class CommandPrompt:
             self.interactive,
             prompter=self.prompter,
         )
-        self.metadata = tr
-        self.targets = tr.targets
+        self.templates.add(tr)
+        self.templates.set_active(str(tr.id))
         self.set_prompt(None)
