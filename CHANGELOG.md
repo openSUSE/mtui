@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The SMELT deadline shown for a **classic Maintenance** incident (on `assign`
+  pickup and in `smelt_update`) no longer prints `?` when a real deadline
+  exists. mtui read the incident's `crd` (customer-required date), which is
+  `null` for most incidents, instead of `prd` (the planned release date SMELT
+  displays as the deadline). It now uses `crd` when set and falls back to
+  `prd`, and `smelt_update` shows both raw dates. SLFO updates were already
+  correct — the REST v2 API exposes a dedicated `deadline` field.
 - A testplatform `base=<extension>` (e.g. `base=SLES-LTSS`, `base=sle-ha`,
   `base=SLES_SAP`, `base=SLE_RT`) now resolves to refhosts that carry that
   product as an **addon** on a SLES/SLED base, not only to hosts whose base
@@ -81,13 +88,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
-- The SMELT deadline shown for a **classic Maintenance** incident (on `assign`
-  pickup and in `smelt_update`) no longer prints `?` when a real deadline
-  exists. mtui read the incident's `crd` (customer-required date), which is
-  `null` for most incidents, instead of `prd` (the planned release date SMELT
-  displays as the deadline). It now uses `crd` when set and falls back to
-  `prd`, and `smelt_update` shows both raw dates. SLFO updates were already
-  correct — the REST v2 API exposes a dedicated `deadline` field.
 - A failed `update` now reports the outcome of **every** host instead of only the
   first failure. The post-update check aborted on the first host that failed, so a
   parallel update that broke on several hosts surfaced just one `UpdateError` and

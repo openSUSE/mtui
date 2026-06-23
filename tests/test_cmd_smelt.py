@@ -56,6 +56,41 @@ def test_smelt_update_not_configured(mock_config):
     assert "not configured" in sysmock.stdout.getvalue()
 
 
+def _prompt_maintenance() -> MagicMock:
+    p = MagicMock()
+    p.metadata.__bool__ = lambda self: True
+    p.metadata.rrid = MagicMock()
+    p.metadata.rrid.kind = RequestKind.MAINTENANCE
+    p.metadata.rrid.maintenance_id = "44997"
+    return p
+
+
+def test_smelt_update_maintenance_deadline_falls_back_to_prd(mock_config):
+    """Classic incident: the deadline shows ``prd`` when ``crd`` is null, and both
+    raw dates are printed."""
+    prompt = _prompt_maintenance()
+    sysmock = _sysmock()
+    with patch("mtui.commands.smelt.Smelt") as cls:
+        smelt = cls.return_value
+        smelt.configured = True
+        smelt.incident.return_value = {
+            "incidentId": 44997,
+            "status": {"name": "active"},
+            "rating": {"name": "important"},
+            "priority": 357,
+            "crd": None,
+            "prd": "2026-07-06",
+        }
+        SmeltUpdate(Namespace(), mock_config, sysmock, prompt)()
+    out = sysmock.stdout.getvalue()
+    assert "incident : 44997" in out
+    assert "priority : 357" in out
+    assert "deadline : 2026-07-06" in out  # crd null -> prd
+    assert "crd      : None" in out
+    assert "prd      : 2026-07-06" in out
+    smelt.incident.assert_called_once_with("44997")
+
+
 def test_smelt_updates_pending_filter(mock_config):
     sysmock = _sysmock()
     args = Namespace(
