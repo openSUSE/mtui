@@ -609,9 +609,10 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         reproducer: str | None = None,
         status: str | None = None,
         summary: str | None = None,
+        workspace: str = WORKSPACE_DEFAULT,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
-        session = await resolve_session(provider, ctx)
+        session = await resolve_session(provider, ctx, workspace)
         return await testreport_fill(
             session, reproducer=reproducer, status=status, summary=summary, ctx=ctx
         )
