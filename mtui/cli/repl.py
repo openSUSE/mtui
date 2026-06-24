@@ -465,6 +465,11 @@ class CommandPrompt:
             self.interactive,
             prompter=self.prompter,
         )
+        # A failed load returns a NullTestReport sentinel (empty RRID); ``add``
+        # ignores it, and we skip the active-pointer move so the registry (and
+        # any already-loaded templates) are left untouched rather than gaining
+        # a phantom empty-RRID entry that breaks fan-out.
         self.templates.add(tr)
-        self.templates.set_active(str(tr.id))
+        if str(tr.id):
+            self.templates.set_active(str(tr.id))
         self.set_prompt()

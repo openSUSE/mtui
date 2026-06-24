@@ -70,8 +70,16 @@ class TemplateRegistry:
 
         The first template added becomes active. Re-adding an existing RRID
         replaces the stored report but does not change the active pointer.
+
+        A :class:`NullTestReport` (empty RRID) is the sentinel a *failed* load
+        returns; it is never keyed into the collection. Keying it would leave a
+        phantom empty-RRID entry that breaks every unscoped fan-out with
+        ``TestReportNotLoadedError``. Such a report is silently ignored here so
+        a failed load leaves the registry unchanged.
         """
         rrid = str(report.id)
+        if not rrid:
+            return
         # Wire host-arbitration ownership so connect_targets can draw distinct
         # pool hosts; reports stay legacy (remote-lock-only) until this is set.
         report._arbiter = self.arbiter  # noqa: SLF001
