@@ -83,10 +83,13 @@ a failure on one template does not abort the others.
 
 .. note::
 
-   Until host arbitration is available, two loaded templates that point at
+   Enable ``refhosts.pool_select`` to have fan-out draw a **distinct** free
+   reference host per test-target slot from the shared pool, so two templates
+   never collide on the same host (queueing on an exhausted pool per
+   ``lock.wait``). With it off (the default), two loaded templates that point at
    overlapping reference hosts can each open their own SSH session to the same
-   host. When that matters, load templates with disjoint host sets or scope the
-   command with ``-T``.
+   host; when that matters, enable ``pool_select``, load templates with disjoint
+   host sets, or scope the command with ``-T``.
 
 
 Commands

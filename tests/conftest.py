@@ -50,6 +50,9 @@ def mock_config():
     config.ssl_verify = True
     config.location = "nuremberg"
     config.auto = False
+    # Lock-wait queueing defaults (off = legacy fail-fast); see [lock] wait.
+    config.lock_wait = 0
+    config.lock_wait_poll = 15
     config.chdir_to_template_dir = False
     config.openqa_install_distri = "sle"
     config.openqa_install_logs = "install-logs.tar"

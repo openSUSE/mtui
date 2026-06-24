@@ -265,6 +265,43 @@ class Refhosts:
             return host_minor.replace("sp", "") == parts[1].replace("sp", "")
         return True
 
+    @staticmethod
+    def slot_of(host: Host) -> tuple[str, str, str, tuple[str, ...]]:
+        """Return the test-target slot key for ``host``.
+
+        The slot is the full ``(product, version, arch, addons)`` an update
+        distinguishes — not just arch — so an update spanning, say, all arches
+        of SLE15-SP5 *and* SP7 still gets one host per (service-pack, arch);
+        only genuine duplicates collapse to a single slot (RFC §5.7).
+        """
+        ver = host.product.version
+        if ver is None:
+            ver_str = ""
+        elif ver.minor is None or ver.minor == "":
+            ver_str = str(ver.major)
+        else:
+            ver_str = f"{ver.major}-{ver.minor}"
+        addons = tuple(sorted(a.name for a in host.addons))
+        return (host.product.name, ver_str, host.arch, addons)
+
+    def search_pool(
+        self,
+        attributes: list[Attributes],
+        *,
+        location: str | None = None,
+    ) -> list[tuple[Host, tuple[str, str, str, tuple[str, ...]]]]:
+        """Return pool candidates ``(host, slot)`` matching ``attributes``.
+
+        Thin wrapper over :meth:`query`: searches across **all** locations by
+        default (location ignored for pool candidates) and tags each match
+        with its :meth:`slot_of` test-target slot, so the host-arbitration
+        path can group candidates by slot and draw one free host per slot.
+        """
+        return [
+            (host, self.slot_of(host))
+            for host, _loc in self.query(attributes=attributes, location=location)
+        ]
+
     def check_location_sanity(self, location: str) -> None:
         """Raise :class:`InvalidLocationError` if ``location`` is unknown."""
         if location not in self.data:

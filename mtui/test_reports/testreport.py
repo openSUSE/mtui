@@ -38,6 +38,7 @@ from .svn_io import (
 
 if TYPE_CHECKING:
     from ..cli.prompter import Prompter
+    from ..hosts.host_arbiter import HostArbiter
 
 logger = getLogger("mtui.template.testreport")
 
@@ -125,6 +126,15 @@ class TestReport(ABC):
         # this comment (set while a PI assignment is active). See
         # ``mtui.commands.apicall`` and ``lock_pi_autolock``.
         self.lock_comment: str = ""
+        # Host-arbitration wiring (RFC §5.7), set by TemplateRegistry.add().
+        # ``_owner`` is the composite ``(registry_id, RRID)`` ownership key;
+        # ``_arbiter`` is the process-global HostArbiter. Both stay ``None``
+        # for directly-constructed reports, which fall back to the legacy
+        # remote-lock-only connect path.
+        self._arbiter: HostArbiter | None = None
+        self._owner: tuple[str, str] | None = None
+        # Hosts this report has claimed through the arbiter (for release).
+        self._pool_claims: set[str] = set()
         self.bugs: dict[str, str] = {}
         self.jira: dict[str, str] = {}
         self.testplatforms: list[str] = []
@@ -587,7 +597,23 @@ class TestReport(ABC):
             target.connect()
             new_system = str(target.system)
             self._verify_target_products(target)
-            self._autolock_new_target(target)
+            if host in self._pool_claims and self._pool_selection_active():
+                comment = f"mtui pool {self.id} [{self._pool_owner_label()}]"
+                if not target.try_claim(comment):
+                    # Lost the race to another process holding the remote lock;
+                    # free our in-process slot so a sibling slot host can be
+                    # tried and don't add this dead connection.
+                    logger.warning(
+                        "%s claimed in-process but busy remotely; skipping", host
+                    )
+                    self._pool_claims.discard(host)
+                    if self._arbiter is not None and self._owner is not None:
+                        self._arbiter.release(host, self._owner)
+                    with suppress(Exception):
+                        target.close()
+                    return False, False
+            else:
+                self._autolock_new_target(target)
         except KeyboardInterrupt:
             logger.warning("Connection to %s canceled by user", host)
             return False, False
@@ -699,16 +725,87 @@ class TestReport(ABC):
             return
 
         try:
-            hostnames = refhosts.search(Attributes.from_testplatform(testplatform))
+            attributes = Attributes.from_testplatform(testplatform)
         except (ValueError, KeyError):
-            hostnames = []
-            msg = "failed to parse testplatform {0!r}"
-            logger.warning(msg.format(testplatform))
-        else:
-            if not hostnames:
-                msg = "nothing found for testplatform {0!r}"
-                logger.warning(msg.format(testplatform))
+            logger.warning("failed to parse testplatform %r", testplatform)
+            return
+
+        if self._pool_selection_active():
+            self._pool_select_from_tp(refhosts, attributes, testplatform)
+            return
+
+        hostnames = refhosts.search(attributes)
+        if not hostnames:
+            logger.warning("nothing found for testplatform %r", testplatform)
         self.hostnames.update(set(hostnames))
+
+    def _pool_selection_active(self) -> bool:
+        """True when refhost-pool arbitration should drive host selection."""
+        return bool(
+            self.config.refhost_pool_select
+            and self._arbiter is not None
+            and self._owner is not None
+        )
+
+    def _pool_owner_label(self) -> str:
+        """Human owner stamp for the remote pool lock comment."""
+        return self._owner[1] if self._owner else str(self.id)
+
+    def _pool_select_from_tp(self, refhosts, attributes, testplatform) -> None:
+        """Pick one distinct free host per test-target slot via the arbiter.
+
+        Candidates are searched across all locations and grouped by slot
+        (product+version+arch+addons). For each slot the in-process arbiter
+        hands out one host not already claimed by another owner, queueing up
+        to ``[lock] wait`` seconds when every candidate is busy. The remote
+        lock is taken later at connect time (``connect_target``).
+        """
+        arbiter = self._arbiter
+        owner = self._owner
+        if arbiter is None or owner is None:
+            return
+        pairs = refhosts.search_pool(attributes)
+        if not pairs:
+            logger.warning("nothing found for testplatform %r", testplatform)
+            return
+        by_slot: dict[tuple, list[str]] = {}
+        for host, slot in pairs:
+            by_slot.setdefault(slot, []).append(host.name)
+        for slot, candidates in by_slot.items():
+            # Skip slots we already hold a host for (across testplatforms).
+            if any(arbiter.owner_of(c) == owner for c in candidates):
+                continue
+            chosen = arbiter.acquire_any(
+                candidates,
+                owner,
+                wait=self.config.lock_wait,
+                poll=self.config.lock_wait_poll,
+            )
+            if chosen is None:
+                logger.warning(
+                    "no free pool host for slot %s (all %d candidates busy)",
+                    slot,
+                    len(candidates),
+                )
+                continue
+            self._pool_claims.add(chosen)
+            self.hostnames.add(chosen)
+
+    def release_pool_claims(self) -> None:
+        """Drop arbiter ownership and remove this report's remote pool locks.
+
+        Idempotent and safe when pool selection was never used. Called from
+        :meth:`TemplateRegistry.release_claims` (``remove`` / ``unload`` /
+        ``quit`` / ``McpSession.close``).
+        """
+        for host in list(self._pool_claims):
+            target = self.targets.get(host)
+            if target is not None:
+                with suppress(Exception):
+                    target.unlock()
+        self._pool_claims.clear()
+        if self._arbiter is not None and self._owner is not None:
+            self._arbiter.release_owner(self._owner)
 
     def list_bugs(self, sink, arg):
         """Lists the bugs for the test report.

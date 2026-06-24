@@ -72,6 +72,32 @@ Age, in seconds, beyond which a remote lock is considered stale and
 eligible for automatic removal (see ``lock.reap_stale``). A value of
 ``0`` disables reaping.
 
+``lock.wait``
+~~~~~~~~~~~~~
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     0
+
+When a reference host is already locked by someone else, queue for it up
+to this many seconds instead of failing immediately. While waiting, MTUI
+polls the remote lock every ``lock.wait_poll`` seconds until it is freed,
+becomes ours, or is reaped as stale; a warning is logged when the wait
+starts and again if it times out (after which the usual "locked" error is
+raised). A value of ``0`` (the default) preserves the historical
+fail-fast behaviour. This is what lets several fanned-out templates queue
+politely on an exhausted shared host pool (see ``refhosts.pool_select``).
+
+``lock.wait_poll``
+~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     15
+
+Polling interval used while waiting for a busy lock (see ``lock.wait``).
+Ignored when ``lock.wait`` is ``0``.
+
 ``mtui.chdir_to_template_dir``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   | **type**
@@ -328,6 +354,28 @@ The ``https`` resolver fetches the refhost database from this URL.
 The ``path`` resolver uses the refhost database at this location.
 
 
+``refhosts.pool_select``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     bool
+  | **default**
+  |     ``False``
+
+Opt-in refhost-pool parallelism for multi-template fan-out. When enabled,
+each loaded template draws **one distinct free host per test-target slot**
+(product + version + arch + addons) from the shared reference-host pool,
+arbitrated in-process so two templates never draw the same host. Claimed
+hosts take the remote lock with an identifying ``mtui pool <RRID>
+[<owner>]`` comment, and are released (in-process and on the remote lock)
+on ``unload`` / ``quit`` and when an ``mtui-mcp`` session closes. When all
+candidates for a slot are busy, the claim queues per ``lock.wait`` /
+``lock.wait_poll``.
+
+When ``False`` (the default), host selection is byte-for-byte the legacy
+single-host-per-arch path and no pool claims are taken; fan-out across
+templates may then open separate SSH sessions to an overlapping host (see
+the caveat in ``Documentation/user.rst``).
+
 ``refhosts.resolvers``
 ~~~~~~~~~~~~~~~~~~~~~~
   | **type**
@@ -414,6 +462,8 @@ Example
   reap_stale = true
   stale_age = 86400
   pi_autolock = true
+  wait = 0
+  wait_poll = 15
   
 
   [mtui]
@@ -430,6 +480,7 @@ Example
   resolvers = https
   https_uri = https://qam.suse.de/refhosts/refhosts.yml
   path = /usr/share/qam-metadata/refhosts.yml
+  pool_select = false
   
 
   [url]

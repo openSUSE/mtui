@@ -274,3 +274,22 @@ def test_run_command_excludes_records_without_capture_token(tmp_path: Path) -> N
     out = asyncio.run(sess.run_command(_RawThreadCommand, []))
     assert "main line" in out
     assert "from a raw thread" not in out
+
+
+# --------------------------------------------------------------------------- #
+# close() releases host-arbitration pool claims (Phase 3B)                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_close_releases_pool_claims(tmp_path: Path) -> None:
+    """``close`` calls ``release_pool_claims`` on every loaded template."""
+    sess = _make_session(tmp_path)
+    report = MagicMock()
+    report.id = "SUSE:Maintenance:1:1"
+    report.targets = {}
+    sess.templates.add(report)
+    sess.templates.set_active("SUSE:Maintenance:1:1")
+
+    asyncio.run(sess.close())
+
+    report.release_pool_claims.assert_called_once()

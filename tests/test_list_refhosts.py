@@ -86,6 +86,32 @@ def test_query_by_testplatform_attributes() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# search_pool / slot_of                                                       #
+# --------------------------------------------------------------------------- #
+def test_search_pool_tags_slots_all_locations() -> None:
+    from mtui.hosts.refhost.models import Attributes
+
+    attrs = Attributes.from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]")
+    pairs = _rh().search_pool(attrs)
+    # matches both x86 hosts across locations, each tagged with a slot tuple
+    by_name = {h.name: slot for h, slot in pairs}
+    assert set(by_name) == {"host-default-x86", "host-nbg-x86"}
+    for slot in by_name.values():
+        assert isinstance(slot, tuple)
+        assert len(slot) == 4
+
+
+def test_slot_of_distinguishes_arch_and_version() -> None:
+    rh = _rh()
+    hosts = {h.name: h for h, _ in rh.query()}
+    x86 = rh.slot_of(hosts["host-default-x86"])
+    aarch = rh.slot_of(hosts["host-default-aarch64"])
+    # same product/version, different arch -> different slot
+    assert x86[:2] == aarch[:2]
+    assert x86[2] != aarch[2]
+
+
+# --------------------------------------------------------------------------- #
 # _version_str_match                                                          #
 # --------------------------------------------------------------------------- #
 def test_version_str_match_variants() -> None:

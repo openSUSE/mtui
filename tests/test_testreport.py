@@ -96,6 +96,101 @@ def test_get_package_list_empty(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Host-arbitration pool selection (RFC §5.7)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRefhosts:
+    """Minimal refhosts store returning fixed (host, slot) pool candidates."""
+
+    def __init__(self, pairs):
+        self._pairs = pairs
+
+    def search(self, _attributes):  # legacy path (should be unused when pooling)
+        return [h.name for h, _slot in self._pairs]
+
+    def search_pool(self, _attributes, *, location=None):
+        return self._pairs
+
+
+def _ph(name, slot):
+    h = MagicMock()
+    h.name = name
+    return (h, slot)
+
+
+def _pool_report(tmp_path, pairs, *, owner=("reg", "RRID")):
+    from mtui.hosts.host_arbiter import HostArbiter
+
+    r = _make(tmp_path)
+    r.config.refhost_pool_select = True
+    r.config.lock_wait = 0
+    r.config.lock_wait_poll = 15
+    r._arbiter = HostArbiter()
+    r._owner = owner
+    r.refhostsFactory = MagicMock(return_value=_FakeRefhosts(pairs))
+    return r
+
+
+def test_pool_off_uses_legacy_search(tmp_path: Path) -> None:
+    r = _make(tmp_path)
+    r.config.refhost_pool_select = False
+    r.refhostsFactory = MagicMock(
+        return_value=_FakeRefhosts([_ph("h1", ("sles", "15", "x86_64", ()))])
+    )
+    with patch.object(type(r), "_pool_selection_active", return_value=False):
+        r.refhosts_from_tp("base=sles(major=15,minor=5);arch=[x86_64]")
+    assert r.hostnames == {"h1"}
+    assert r._pool_claims == set()
+
+
+def test_pool_selects_one_host_per_slot(tmp_path: Path) -> None:
+    pairs = [
+        _ph("a-x86", ("sles", "15-5", "x86_64", ())),
+        _ph("b-x86", ("sles", "15-5", "x86_64", ())),  # same slot as a-x86
+        _ph("c-arm", ("sles", "15-5", "aarch64", ())),
+    ]
+    r = _pool_report(tmp_path, pairs)
+    r.refhosts_from_tp("tp")
+    # one host per distinct slot (2 slots), claimed in the arbiter
+    assert len(r._pool_claims) == 2
+    assert r.hostnames == r._pool_claims
+    for h in r._pool_claims:
+        assert r._arbiter.owner_of(h) == r._owner
+
+
+def test_pool_two_reports_draw_distinct_hosts(tmp_path: Path) -> None:
+    from mtui.hosts.host_arbiter import HostArbiter
+
+    arb = HostArbiter()
+    pairs = [
+        _ph("a-x86", ("sles", "15-5", "x86_64", ())),
+        _ph("b-x86", ("sles", "15-5", "x86_64", ())),
+    ]
+    r1 = _pool_report(tmp_path, pairs, owner=("reg", "RRID1"))
+    r2 = _pool_report(tmp_path, pairs, owner=("reg", "RRID2"))
+    r1._arbiter = r2._arbiter = arb
+    r1.refhosts_from_tp("tp")
+    r2.refhosts_from_tp("tp")
+    assert r1._pool_claims
+    assert r2._pool_claims
+    assert r1._pool_claims.isdisjoint(r2._pool_claims)
+
+
+def test_release_pool_claims_unlocks_and_releases(tmp_path: Path) -> None:
+    pairs = [_ph("a-x86", ("sles", "15-5", "x86_64", ()))]
+    r = _pool_report(tmp_path, pairs)
+    r.refhosts_from_tp("tp")
+    claimed = next(iter(r._pool_claims))
+    target = MagicMock()
+    r.targets[claimed] = target
+    r.release_pool_claims()
+    target.unlock.assert_called_once()
+    assert r._pool_claims == set()
+    assert r._arbiter.owner_of(claimed) is None
+
+
+# ---------------------------------------------------------------------------
 # _verify_target_products: drift check against refhosts.yml
 # ---------------------------------------------------------------------------
 

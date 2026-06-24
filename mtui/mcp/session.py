@@ -426,6 +426,12 @@ class McpSession:
         rest, and ``targets`` is emptied either way so a second call is
         a cheap no-op.
         """
+        # Release any host-arbitration pool claims (in-process ownership +
+        # remote pool locks) for every loaded template before disconnect.
+        # No-op when pool selection was never used.
+        for report in self.templates.all():
+            with contextlib.suppress(Exception):
+                report.release_pool_claims()
         targets = self.targets
         if not targets:
             return

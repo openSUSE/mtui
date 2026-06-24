@@ -27,12 +27,22 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   RRID` flag scopes such a command to a single loaded template, and
   `--all-templates` forces fan-out explicitly. When a fanned-out command fails on
   one template it keeps running on the others and reports an aggregate failure at
-  the end. Note: until host arbitration ships, pointing two loaded templates at
-  overlapping reference hosts can still open separate SSH sessions to the same
-  host; use disjoint host sets or `-T` when that matters.
+  the end.
 - Tab completion for the `-T/--template` and `--all-templates` flags on every
   fan-out command, completing the loaded template RRIDs as values (like `switch`
   and `unload`).
+- Opt-in host arbitration for multi-template fan-out (`refhosts.pool_select`,
+  default off). When enabled, each loaded template draws a *distinct* free
+  reference host per test-target slot (product + version + arch + addons) from
+  the shared pool, arbitrated in-process so two templates never collide on the
+  same host; claimed hosts carry an identifying `mtui pool <RRID> [<owner>]`
+  remote-lock comment and are released on `unload`/`quit` and when an mtui-mcp
+  session closes. New `lock.wait` / `lock.wait_poll` options make a busy host
+  *queue* (polling) instead of failing immediately, so several fanned-out
+  templates wait politely on an exhausted pool. With `pool_select` off (the
+  default), host selection and locking are byte-for-byte unchanged; fan-out may
+  then open separate SSH sessions to an overlapping host, so use `pool_select`,
+  disjoint host sets, or `-T` when that matters.
 
 ### Fixed
 

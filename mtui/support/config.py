@@ -106,6 +106,9 @@ class Config:
     lock_reap_stale: bool
     lock_stale_age: int
     lock_pi_autolock: bool
+    lock_wait: int
+    lock_wait_poll: int
+    refhost_pool_select: bool
 
     # -- mtui-mcp server (http transport) per-client session registry --
     mcp_session_cap: int
@@ -430,6 +433,35 @@ class Config:
                 "lock_pi_autolock",
                 ("lock", "pi_autolock"),
                 True,
+                bool,
+                getboolean,
+            ),
+            # Host-arbitration pool queueing (RFC §5.8). When a candidate host
+            # is busy, a pool claim queues up to ``wait`` seconds, polling
+            # every ``wait_poll`` seconds. ``wait <= 0`` (default) fails fast
+            # (current behaviour).
+            ConfigOption(
+                "lock_wait",
+                ("lock", "wait"),
+                0,
+                int,
+                getint,
+            ),
+            ConfigOption(
+                "lock_wait_poll",
+                ("lock", "wait_poll"),
+                15,
+                int,
+                getint,
+            ),
+            # Refhost-pool parallelism (RFC §5.7). When enabled, fan-out across
+            # templates draws one *distinct* free host per test-target slot from
+            # the shared pool via the in-process HostArbiter, instead of the
+            # legacy single-host-per-arch path. Default off → unchanged.
+            ConfigOption(
+                "refhost_pool_select",
+                ("refhosts", "pool_select"),
+                False,
                 bool,
                 getboolean,
             ),

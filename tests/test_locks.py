@@ -365,6 +365,70 @@ class TestTargetLockReaping:
         lock.connection.sftp_remove.assert_not_called()
 
 
+# --- [lock] wait queueing ---
+
+
+class TestTargetLockWait:
+    @pytest.fixture
+    def lock(self, mock_config):
+        mock_config.session_user = "testuser"
+        mock_config.lock_reap_stale = True
+        mock_config.lock_stale_age = 86400
+        mock_config.lock_wait = 0
+        mock_config.lock_wait_poll = 15
+        conn = MagicMock()
+        conn.hostname = "host1.example.com"
+        return TargetLock(conn, mock_config)
+
+    def test_wait_disabled_fails_fast(self, lock):
+        """wait <= 0 raises immediately on a foreign lock (legacy behaviour)."""
+        fresh = int(time.time()) - 60
+        lock.connection.sftp_open.return_value = _locked_by_fresh(lock, fresh)
+        with pytest.raises(TargetLockedError):
+            lock.lock()
+
+    def test_wait_succeeds_when_freed(self, lock, monkeypatch):
+        """With wait > 0, a host that frees up mid-poll is then locked."""
+        lock.config.lock_wait = 5
+        lock.config.lock_wait_poll = 1
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+        fresh = int(time.time()) - 60
+        # 1) lock() is_locked -> foreign; 2) _wait reap age -> foreign(fresh,
+        # not stale); 3) after sleep, is_locked -> ENOENT (freed);
+        # 4) lock() write.
+        lock.connection.sftp_open.side_effect = [
+            _file(f"{fresh}:otheruser:99999"),
+            _file(f"{fresh}:otheruser:99999"),
+            OSError(errno.ENOENT, "gone"),
+            MagicMock(),
+        ]
+        lock.lock("mtui pool RRID [owner]")  # should not raise
+
+    def test_wait_times_out_then_raises(self, lock):
+        """A host that stays busy past the budget still raises.
+
+        Uses a real (sub-second) budget so the monotonic deadline actually
+        advances; ``sleep`` is left real but tiny.
+        """
+        lock.config.lock_wait = 1
+        lock.config.lock_wait_poll = 1
+        fresh = int(time.time()) - 60
+        lock.connection.sftp_open.return_value = _file(f"{fresh}:otheruser:99999")
+        with pytest.raises(TargetLockedError):
+            lock.lock()
+
+
+def _file(contents: str) -> MagicMock:
+    f = MagicMock()
+    f.readline.return_value = contents
+    return f
+
+
+def _locked_by_fresh(lock, ts: int) -> MagicMock:
+    return _file(f"{ts}:otheruser:99999")
+
+
 # --- LockedTargets context manager ---
 
 

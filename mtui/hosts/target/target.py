@@ -486,6 +486,22 @@ class Target:
         """
         self._lock.lock(comment)
 
+    def try_claim(self, comment: str = "") -> bool:
+        """Claim the host's lock if free/ours/stale, else return ``False``.
+
+        Non-raising counterpart to :meth:`lock` for the host-arbitration pool
+        path: lets the caller try the next candidate when the host is busy.
+
+        Args:
+            comment: Optional comment recorded with the lock.
+
+        Returns:
+            ``True`` if the lock is now ours, ``False`` if held by someone
+            else.
+
+        """
+        return self._lock.try_claim(comment)
+
     def unlock(self, force: bool = False) -> None:
         """Unlocks the target.
 
