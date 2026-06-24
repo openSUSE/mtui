@@ -30,6 +30,7 @@ class Run(Command):
     """
 
     command = "run"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -38,6 +39,7 @@ class Run(Command):
             "command", nargs=REMAINDER, help="Command to run on refhost"
         )
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `run` command."""

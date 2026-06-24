@@ -13,6 +13,12 @@ class Checkout(Command):
     """Updates the template files from SVN."""
 
     command = "checkout"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

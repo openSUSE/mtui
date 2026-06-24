@@ -1,6 +1,7 @@
 """Tests for the mtui commands._command base module."""
 
 from argparse import Namespace
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -8,7 +9,11 @@ import pytest
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.commands._command import Command
 from mtui.hosts.target.hostgroup import HostsGroup
-from mtui.support.messages import HostIsNotConnectedError
+from mtui.support.messages import (
+    FanOutError,
+    HostIsNotConnectedError,
+    TemplateNotLoadedError,
+)
 
 
 # Create a concrete subclass for testing
@@ -226,3 +231,155 @@ class TestPrintln:
         cmd.println()
 
         sys.stdout.write.assert_called_once_with("\n")
+
+
+# --- fan-out: scope / _resolve_templates / run ---
+
+
+class _FakeReport:
+    """Minimal TestReport stand-in: carries an id and a targets attribute."""
+
+    def __init__(self, rrid):
+        self.id = rrid
+        self.targets = HostsGroup([])
+
+
+class _FakeRegistry:
+    """Minimal TemplateRegistry stand-in for resolution tests."""
+
+    def __init__(self, reports, active=None):
+        self._reports = {str(r.id): r for r in reports}
+        self._active = active or (reports[0] if reports else None)
+
+    def all(self):
+        return list(self._reports.values())
+
+    def get(self, rrid):
+        return self._reports[rrid]
+
+    @property
+    def active(self):
+        return self._active
+
+
+class CountingCommand(Command):
+    """Counts invocations and records which template each ran against."""
+
+    command = "counting_cmd"
+    scope = "active"
+
+    def __call__(self):
+        self.calls.append(str(self.metadata.id))
+
+    # ``__slots__`` on Command forbids ad-hoc attributes; stash the log on
+    # the class so the body can append to it.
+    calls: ClassVar[list] = []
+
+
+class FanoutCommand(CountingCommand):
+    command = "fanout_cmd"
+    scope = "fanout"
+
+
+class FailingFanoutCommand(Command):
+    """Fans out but raises on a configured RRID to exercise partial-failure."""
+
+    command = "failing_fanout_cmd"
+    scope = "fanout"
+
+    fail_on: str = ""
+    calls: ClassVar[list] = []
+
+    def __call__(self):
+        rrid = str(self.metadata.id)
+        self.calls.append(rrid)
+        if rrid == self.fail_on:
+            raise RuntimeError(f"boom on {rrid}")
+
+
+def _make_cmd(cmd_cls, registry, *, template=None, all_templates=False):
+    args = Namespace(template=template, all_templates=all_templates)
+    prompt = MagicMock()
+    prompt.templates = registry
+    prompt.metadata = registry.active
+    prompt.targets = registry.active.targets
+    prompt.display = MagicMock()
+    return cmd_cls(args, MagicMock(), MagicMock(), prompt)
+
+
+class TestResolveTemplates:
+    def test_active_scope_returns_active_only(self):
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(CountingCommand, reg)
+        resolved = cmd._resolve_templates()
+        assert [str(r.id) for r in resolved] == ["A"]
+
+    def test_fanout_scope_returns_all(self):
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(FanoutCommand, reg)
+        resolved = cmd._resolve_templates()
+        assert [str(r.id) for r in resolved] == ["A", "B"]
+
+    def test_template_flag_scopes_to_one(self):
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(FanoutCommand, reg, template="B")
+        resolved = cmd._resolve_templates()
+        assert [str(r.id) for r in resolved] == ["B"]
+
+    def test_template_flag_unknown_raises(self):
+        reg = _FakeRegistry([_FakeReport("A")])
+        cmd = _make_cmd(FanoutCommand, reg, template="ZZ")
+        with pytest.raises(TemplateNotLoadedError):
+            cmd._resolve_templates()
+
+    def test_all_templates_flag_forces_fanout_on_active_cmd(self):
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(CountingCommand, reg, all_templates=True)
+        resolved = cmd._resolve_templates()
+        assert [str(r.id) for r in resolved] == ["A", "B"]
+
+    def test_fanout_empty_registry_falls_back_to_active(self):
+        active = _FakeReport("")  # null-report stand-in
+        reg = _FakeRegistry([], active=active)
+        cmd = _make_cmd(FanoutCommand, reg)
+        resolved = cmd._resolve_templates()
+        assert resolved == [active]
+
+
+class TestRun:
+    def test_single_template_calls_once(self):
+        CountingCommand.calls = []
+        reg = _FakeRegistry([_FakeReport("A")])
+        cmd = _make_cmd(CountingCommand, reg)
+        cmd.run()
+        assert CountingCommand.calls == ["A"]
+
+    def test_fanout_calls_per_template_with_banner(self):
+        FanoutCommand.calls = []
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(FanoutCommand, reg)
+        cmd.run()
+        assert FanoutCommand.calls == ["A", "B"]
+        # One banner per template when fanning out across more than one.
+        assert cmd.display.template_banner.call_count == 2
+
+    def test_single_template_error_propagates(self):
+        reg = _FakeRegistry([_FakeReport("A")])
+        FailingFanoutCommand.fail_on = "A"
+        FailingFanoutCommand.calls = []
+        # One resolved template → direct call → raises as today.
+        cmd = _make_cmd(FailingFanoutCommand, reg, template="A")
+        with pytest.raises(RuntimeError):
+            cmd.run()
+
+    def test_fanout_failure_does_not_abort_others_and_aggregates(self):
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B"), _FakeReport("C")])
+        FailingFanoutCommand.fail_on = "B"
+        FailingFanoutCommand.calls = []
+        cmd = _make_cmd(FailingFanoutCommand, reg)
+        with pytest.raises(FanOutError) as exc:
+            cmd.run()
+        # All three ran even though B failed.
+        assert FailingFanoutCommand.calls == ["A", "B", "C"]
+        # The aggregate names only the failed template.
+        assert [rrid for rrid, _ in exc.value.failures] == ["B"]

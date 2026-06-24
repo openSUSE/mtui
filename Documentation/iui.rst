@@ -42,6 +42,52 @@ Common Argument Types
   In most cases ``-t`` is an optional argument; can be used multiple times, and
   if omitted, all hosts are used.
 
+.. option:: -T RRID, --template RRID
+
+  Scope a fan-out command to a single loaded template. Only meaningful for
+  action commands that fan out (see `Fan-out across templates`_). Mutually
+  exclusive with ``--all-templates``.
+
+.. option:: --all-templates
+
+  Force a command to act on every loaded template. This is already the default
+  for fan-out commands; the flag is useful for clarity and in scripts. Mutually
+  exclusive with ``-T``/``--template``.
+
+
+Fan-out across templates
+========================
+
+When more than one template is loaded (see `load_template`_ and
+`list_templates`_), action commands fan out across **all** loaded templates by
+default, each acting on that template's own hosts (or that template's own
+report, for report-scoped commands). The fan-out commands are: ``run``,
+``update``, ``prepare``, ``install``, ``uninstall``, ``downgrade``, ``export``,
+``set_repo``, ``reboot``, ``put``, ``get``, ``commit``, ``checkout``,
+``approve``, ``assign``, ``unassign``, ``reject``, ``comment``, ``show_diff``,
+``analyze_diff``, ``reload_openqa``, ``openqa_overview``, ``openqa_jobs``,
+``smelt_update``, and ``smelt_checkers``. Output for each template is prefixed
+with an ``=== <RRID> ===`` banner so results stay attributable. Queue-browsing
+SMELT commands (``smelt_requests``, ``smelt_updates``) are not template-scoped
+and do not fan out.
+
+Use ``-T RRID``/``--template RRID`` to run such a command against a single
+loaded template instead, or ``--all-templates`` to request fan-out explicitly.
+Navigation and single-target commands (for example `load_template`_, ``edit``,
+`switch`_, `unload`_, ``quit``, `list_templates`_) always act on the active
+template only.
+
+If a fanned-out command fails on one template, it continues running on the
+remaining templates and then reports an aggregate failure once the loop is done;
+a failure on one template does not abort the others.
+
+.. note::
+
+   Until host arbitration is available, two loaded templates that point at
+   overlapping reference hosts can each open their own SSH session to the same
+   host. When that matters, load templates with disjoint host sets or scope the
+   command with ``-T``.
+
 
 Commands
 ========

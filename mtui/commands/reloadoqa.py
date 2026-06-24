@@ -15,6 +15,12 @@ class ReloadOpenQA(Command):
     """Reloads information from openQA instances."""
 
     command = "reload_openqa"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

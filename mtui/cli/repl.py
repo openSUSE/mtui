@@ -285,7 +285,7 @@ class CommandPrompt:
                 args = c.parse_args(arg, self.sys)
             except ArgsParseFailureError:
                 return
-            c(args, self.config, self.sys, self)()
+            c(args, self.config, self.sys, self).run()
 
         def help() -> None:
             c.argparser(self.sys).print_help()

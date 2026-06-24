@@ -64,9 +64,11 @@ class OpenQAOverview(Command):
     """
 
     command = "openqa_overview"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
+        cls._add_template_arg(parser)
         parser.add_argument(
             "--no-aggregated",
             action="store_true",

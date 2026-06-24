@@ -27,6 +27,7 @@ class Update(Command):
     """
 
     command = "update"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -51,6 +52,7 @@ class Update(Command):
         )
 
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

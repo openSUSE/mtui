@@ -601,7 +601,7 @@ class McpSession:
                 ) from e
 
             try:
-                cmd_cls(args_ns, self.config, fake_sys, self)()
+                cmd_cls(args_ns, self.config, fake_sys, self).run()
             except SystemExit as e:
                 code = (
                     e.code if isinstance(e.code, int) else (0 if e.code is None else 1)

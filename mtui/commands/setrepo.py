@@ -15,6 +15,7 @@ class SetRepo(Command):
     """Adds or removes an issue repository to or from hosts."""
 
     command = "set_repo"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -39,6 +40,7 @@ class SetRepo(Command):
         )
 
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

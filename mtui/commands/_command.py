@@ -8,7 +8,11 @@ from typing import ClassVar
 
 from ..cli.argparse import ArgumentParser
 from ..hosts.target.hostgroup import HostsGroup
-from ..support.messages import HostIsNotConnectedError
+from ..support.messages import (
+    FanOutError,
+    HostIsNotConnectedError,
+    TemplateNotLoadedError,
+)
 
 logger = getLogger("mtui.commands.command")
 
@@ -31,6 +35,15 @@ class Command(ABC):
     """
 
     command: str
+
+    #: Fan-out scope policy. ``"active"`` (the safe default) runs the command
+    #: once against the active template; ``"fanout"`` runs it once per loaded
+    #: template. A per-invocation ``-T/--template`` always wins over this, and
+    #: ``--all-templates`` forces fan-out regardless of the class default. Only
+    #: action commands that are safe to repeat per template opt into
+    #: ``"fanout"``; inherently single-target commands (``load_template``,
+    #: ``edit``, ``switch``, ``quit``, …) keep ``"active"``.
+    scope: ClassVar[str] = "active"
 
     #: Auto-populated registry of every concrete ``Command`` subclass that
     #: assigns ``command`` in its own class body. Mutated by
@@ -199,6 +212,100 @@ class Command(ABC):
             help="Host to act on. Can be used multiple times. "
             + "If is ommited all hosts are used",
         )
+
+    @classmethod
+    def _add_template_arg(cls, parser: ArgumentParser) -> None:
+        """Adds the per-command template selection flags.
+
+        ``-T/--template RRID`` scopes the command to a single loaded template;
+        ``--all-templates`` forces fan-out across every loaded template. The two
+        are mutually exclusive. Action commands that set ``scope = "fanout"``
+        call this so a user can still target one template explicitly.
+
+        Args:
+            parser: The argument parser.
+
+        """
+        group = parser.add_mutually_exclusive_group()
+        group.add_argument(
+            "-T",
+            "--template",
+            dest="template",
+            action="store",
+            type=str,
+            default=None,
+            help="RRID of a single loaded template to act on "
+            "(default: all loaded templates)",
+        )
+        group.add_argument(
+            "--all-templates",
+            dest="all_templates",
+            action="store_true",
+            help="Act on every loaded template (the default for this command)",
+        )
+
+    def _resolve_templates(self):
+        """Return the ordered list of reports this invocation should act on.
+
+        Resolution order:
+
+        1. ``-T/--template RRID`` → exactly that template (raises
+           :class:`TemplateNotLoadedError` if it is not loaded).
+        2. ``--all-templates`` or ``scope == "fanout"`` → every loaded template.
+        3. otherwise → the active template only.
+
+        The fan-out branches fall back to the active template when the registry
+        is empty so an unloaded session behaves exactly like the historical
+        single-call dispatch.
+        """
+        rrid = getattr(self.args, "template", None)
+        if rrid:
+            try:
+                return [self.templates.get(rrid)]
+            except KeyError:
+                raise TemplateNotLoadedError(rrid) from None
+
+        if getattr(self.args, "all_templates", False) or self.scope == "fanout":
+            return self.templates.all() or [self.templates.active]
+
+        return [self.templates.active]
+
+    def run(self) -> None:
+        """Drive the command across the resolved templates.
+
+        Single-template resolution calls :meth:`__call__` directly so the error
+        contract is byte-for-byte unchanged (errors propagate as today). When
+        more than one template is resolved, each gets an RRID banner and its own
+        ``try/except``: a per-template failure is logged and collected, the loop
+        continues, and a :class:`FanOutError` aggregate is raised afterwards if
+        any template failed.
+        """
+        resolved = self._resolve_templates()
+
+        if len(resolved) <= 1:
+            report = resolved[0]
+            self.metadata = report
+            self.targets = report.targets
+            self.__call__()
+            return
+
+        failures: list[tuple[str, BaseException]] = []
+        for report in resolved:
+            rrid = str(report.id)
+            self.metadata = report
+            self.targets = report.targets
+            self.display.template_banner(rrid)
+            try:
+                self.__call__()
+            except BaseException as exc:  # noqa: BLE001 - collect & continue
+                logger.error("%s failed on %s: %s", self.command, rrid, exc)
+                failures.append((rrid, exc))
+
+        ok = [str(r.id) for r in resolved if str(r.id) not in {f[0] for f in failures}]
+        if ok:
+            logger.info("%s succeeded on: %s", self.command, ", ".join(ok))
+        if failures:
+            raise FanOutError(failures)
 
     def parse_hosts(self, enabled: bool = True) -> HostsGroup:
         """Parses the `hosts` argument and returns a `HostsGroup` object.

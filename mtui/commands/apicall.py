@@ -26,6 +26,10 @@ logger = getLogger("mtui.command.apicalls")
 class BaseApiCall(Command, ABC):
     """An abstract base class for commands that interact with backend APIs."""
 
+    # API calls act on a single template's RRID; with several templates loaded
+    # they fan out (one backend call per template) and honour ``-T/--template``.
+    scope = "fanout"
+
     # For a Product Increment, ``assign`` locks all reference hosts and the
     # end-of-testing operations unlock them. Subclasses set this to "lock"
     # or "unlock"; ``None`` (the default, e.g. ``comment``) does neither.
@@ -34,6 +38,7 @@ class BaseApiCall(Command, ABC):
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds common arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
         parser.add_argument(
             "-g",
             "--group",
@@ -294,6 +299,7 @@ class Comment(BaseApiCall):
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     def osc(self) -> None:
         """Adds a comment to the request in OSC."""

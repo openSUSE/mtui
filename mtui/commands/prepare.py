@@ -22,6 +22,7 @@ class Prepare(Command):
     """
 
     command = "prepare"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -48,6 +49,7 @@ class Prepare(Command):
             help="enable test update repositories",
         )
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

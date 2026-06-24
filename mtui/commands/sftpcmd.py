@@ -21,10 +21,12 @@ class SFTPPut(Command):
     """
 
     command = "put"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
         parser.add_argument(
             "filename", nargs=1, type=str, help="file to upload to all hosts"
         )
@@ -74,10 +76,12 @@ class SFTPGet(Command):
     """
 
     command = "get"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
         parser.add_argument(
             "filename", nargs=1, type=Path, help="file to download from target hosts"
         )
