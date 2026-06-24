@@ -652,40 +652,54 @@ class McpSession:
     # Background jobs (async path for slow host operations)
     # ------------------------------------------------------------------
 
-    async def start_job(
-        self,
-        cmd_cls: type[Command],
-        argv: list[str],
-        *,
-        ctx: Any | None = None,
-    ) -> str:
-        """Start ``cmd_cls`` in the background and return its job id.
+    def _resolve_job_rrids(
+        self, cmd_cls: type[Command], argv: list[str]
+    ) -> list[str] | None:
+        """Resolve which template RRIDs a backgrounded ``cmd_cls`` targets.
 
-        The command runs in an :func:`asyncio.create_task` worker that
-        acquires this session's ``_lock`` for its whole duration (so it
-        serialises against the session's other mutating calls exactly
-        like :meth:`run_command`) and executes the body in
-        :func:`asyncio.to_thread`. Unlike :meth:`run_command` this
-        returns **immediately** with a handle, so the client is not held
-        on one request for the minutes a ``run`` / ``update`` /
-        ``downgrade`` can take and can meanwhile issue other calls.
-
-        Outcome is recorded on the job record and read back via
-        :meth:`job_status` / :meth:`job_result`. ``ctx`` is accepted for
-        signature parity but no heartbeat is emitted (the call returns at
-        once; there is nothing to keep alive).
+        Builds the command exactly as :meth:`_run_sync` would (parse argv,
+        instantiate) and calls its :meth:`Command._resolve_templates`, so the
+        background fan-out matches the foreground one byte-for-byte. Returns the
+        ordered RRID list, or ``None`` when resolution is not meaningful (argv
+        is unparseable here, or only the Null report resolves) — the caller then
+        falls back to a single job whose body re-parses and runs as before.
 
         Args:
             cmd_cls: The :class:`Command` subclass to run.
             argv: Already-split command-line tokens.
-            ctx: Unused; accepted for caller parity.
 
         Returns:
-            The new job id (``"<command>-<n>"``).
+            The ordered list of target RRIDs, or ``None`` to keep the
+            single-job path.
 
         """
-        self._job_counter += 1
-        job_id = f"{cmd_cls.command}-{self._job_counter}"
+        fake_sys = _FakeSys()
+        try:
+            args_ns = cmd_cls.parse_args(shlex.join(argv), fake_sys)
+            cmd = cmd_cls(args_ns, self.config, fake_sys, self)
+            reports = cmd._resolve_templates()  # noqa: SLF001 - Command-internal API
+        except Exception:  # noqa: BLE001 - resolution is best-effort; fall back
+            return None
+        rrids = [str(r.id) for r in reports if str(r.id)]
+        return rrids or None
+
+    def _mint_job(self, cmd_cls: type[Command], argv: list[str], job_id: str) -> str:
+        """Create and start one job record running ``argv`` and return its id.
+
+        Shared core of :meth:`start_job` and :meth:`start_jobs`. The worker task
+        acquires this session's ``_lock`` for its whole duration (so it
+        serialises against the session's other mutating calls exactly like
+        :meth:`run_command`) and executes the body in :func:`asyncio.to_thread`.
+
+        Args:
+            cmd_cls: The :class:`Command` subclass to run.
+            argv: Already-split command-line tokens for this job.
+            job_id: The pre-allocated, session-unique job id.
+
+        Returns:
+            ``job_id``.
+
+        """
         job: dict[str, Any] = {
             "id": job_id,
             "command": cmd_cls.command,
@@ -722,6 +736,93 @@ class McpSession:
 
         job["task"] = asyncio.create_task(_runner())
         return job_id
+
+    async def start_job(
+        self,
+        cmd_cls: type[Command],
+        argv: list[str],
+        *,
+        ctx: Any | None = None,
+    ) -> str:
+        """Start ``cmd_cls`` in the background and return its job id.
+
+        The command runs in an :func:`asyncio.create_task` worker that
+        acquires this session's ``_lock`` for its whole duration (so it
+        serialises against the session's other mutating calls exactly
+        like :meth:`run_command`) and executes the body in
+        :func:`asyncio.to_thread`. Unlike :meth:`run_command` this
+        returns **immediately** with a handle, so the client is not held
+        on one request for the minutes a ``run`` / ``update`` /
+        ``downgrade`` can take and can meanwhile issue other calls.
+
+        Outcome is recorded on the job record and read back via
+        :meth:`job_status` / :meth:`job_result`. ``ctx`` is accepted for
+        signature parity but no heartbeat is emitted (the call returns at
+        once; there is nothing to keep alive).
+
+        This mints exactly **one** job; the tool layer calls
+        :meth:`start_jobs` instead so a fanned-out slow command yields one
+        job per template. Kept as the single-job primitive for tests and
+        non-fan-out callers.
+
+        Args:
+            cmd_cls: The :class:`Command` subclass to run.
+            argv: Already-split command-line tokens.
+            ctx: Unused; accepted for caller parity.
+
+        Returns:
+            The new job id (``"<command>-<n>"``).
+
+        """
+        self._job_counter += 1
+        return self._mint_job(cmd_cls, argv, f"{cmd_cls.command}-{self._job_counter}")
+
+    async def start_jobs(
+        self,
+        cmd_cls: type[Command],
+        argv: list[str],
+        *,
+        ctx: Any | None = None,
+    ) -> list[str]:
+        """Start ``cmd_cls`` in the background, fanning out one job per template.
+
+        Resolves the target templates exactly as the foreground ``.run()`` path
+        does (via :meth:`_resolve_templates`). When more than one template
+        resolves, mints **one job per template** — each running ``argv`` scoped
+        to that template with ``-T <rrid>`` appended — so a backgrounded
+        fanned-out slow command is independently observable and cancellable per
+        template (``job_list`` shows per-template progress; cancelling one
+        leaves the others running). When a single template (or none) resolves,
+        this is exactly one job with the unchanged ``<command>-<n>`` id.
+
+        The per-template jobs each acquire the session ``_lock`` for their whole
+        duration, so they run **serially** within one session (matching the
+        single-session serialisation contract); the win is independent tracking
+        and cancellation, not intra-session parallelism.
+
+        Args:
+            cmd_cls: The :class:`Command` subclass to run.
+            argv: Already-split command-line tokens.
+            ctx: Unused; accepted for caller parity.
+
+        Returns:
+            The list of new job ids (one per resolved template).
+
+        """
+        rrids = self._resolve_job_rrids(cmd_cls, argv)
+        # Single template, none, or a client-supplied ``-T`` already narrowing
+        # to one: keep the single-job path (and its stable id shape).
+        if not rrids or len(rrids) <= 1:
+            return [await self.start_job(cmd_cls, argv, ctx=ctx)]
+
+        job_ids: list[str] = []
+        for rrid in rrids:
+            self._job_counter += 1
+            token = rrid.replace(":", "_")
+            job_id = f"{cmd_cls.command}-{token}-{self._job_counter}"
+            scoped_argv = [*argv, "-T", rrid]
+            job_ids.append(self._mint_job(cmd_cls, scoped_argv, job_id))
+        return job_ids
 
     def _job_view(self, job: dict[str, Any]) -> dict[str, Any]:
         """Public-facing snapshot of ``job`` (no asyncio Task object)."""

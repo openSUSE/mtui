@@ -757,3 +757,29 @@ def test_slow_command_background_true_starts_job(
     assert "run-1" in out
     assert "job_status" in out
     assert "job_result" in out
+
+
+# --------------------------------------------------------------------------- #
+# Fan-out tools expose the template selection parameters (Phase 4)            #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("name", ["run", "update", "export"])
+def test_fanout_tool_exposes_template_params(
+    mcp: FastMCP, registered_names: list[str], name: str
+) -> None:
+    """Fan-out tools surface ``template`` / ``all_templates``, neither required.
+
+    ``_add_template_arg`` adds these as ordinary argparse arguments, so the
+    schema synthesiser exposes them automatically — a call without
+    ``template`` fans out across the session's loaded templates, while
+    ``template="<rrid>"`` scopes to one. This locks that surface in so a
+    future refactor cannot silently drop it.
+    """
+    params = _params_of(mcp, name)
+    props = params["properties"]
+    assert "template" in props
+    assert "all_templates" in props
+    required = params.get("required", [])
+    assert "template" not in required
+    assert "all_templates" not in required

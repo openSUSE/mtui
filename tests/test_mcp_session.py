@@ -293,3 +293,69 @@ def test_close_releases_pool_claims(tmp_path: Path) -> None:
     asyncio.run(sess.close())
 
     report.release_pool_claims.assert_called_once()
+
+
+# --------------------------------------------------------------------------- #
+# Fan-out dispatch honours the ``template`` parameter (Phase 4)               #
+# --------------------------------------------------------------------------- #
+
+
+def _load_two_reports(sess: McpSession) -> tuple[MagicMock, MagicMock]:
+    """Add two MagicMock reports to ``sess`` and return them (a active)."""
+    a = MagicMock()
+    a.id = "SUSE:Maintenance:1:1"
+    a.targets = {}
+    b = MagicMock()
+    b.id = "SUSE:Maintenance:2:1"
+    b.targets = {}
+    sess.templates.add(a)
+    sess.templates.add(b)
+    sess.templates.set_active("SUSE:Maintenance:1:1")
+    return a, b
+
+
+def _fanout_recorder_command():
+    """Build a throwaway fan-out :class:`Command` recording invoked RRIDs.
+
+    Returns ``(cls, seen)`` where ``seen`` is the list each ``__call__``
+    appends its acting template's RRID to. The caller must unregister
+    ``cls`` from ``Command.registry`` afterwards.
+    """
+    seen: list[str] = []
+
+    class _FanoutProbe(Command):
+        command = "fanout_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            seen.append(str(self.metadata.id))
+
+    return _FanoutProbe, seen
+
+
+def test_dispatch_fanout_runs_every_template(tmp_path: Path) -> None:
+    """A fan-out command with no ``-T`` runs once per loaded template."""
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    cls, seen = _fanout_recorder_command()
+    try:
+        asyncio.run(sess.run_command(cls, []))
+    finally:
+        Command.registry.pop(cls.command, None)
+    assert seen == ["SUSE:Maintenance:1:1", "SUSE:Maintenance:2:1"]
+
+
+def test_dispatch_template_flag_scopes_to_one(tmp_path: Path) -> None:
+    """``-T <rrid>`` scopes a fan-out command to that single template."""
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    cls, seen = _fanout_recorder_command()
+    try:
+        asyncio.run(sess.run_command(cls, ["-T", "SUSE:Maintenance:2:1"]))
+    finally:
+        Command.registry.pop(cls.command, None)
+    assert seen == ["SUSE:Maintenance:2:1"]

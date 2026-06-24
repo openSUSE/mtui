@@ -508,6 +508,38 @@ For those, raise the timeout in the client's own configuration:
 The heartbeat itself never *caps* execution time; if your client
 honours progress it will simply wait as long as the server takes.
 
+Multiple templates (fan-out and per-call scoping)
+-------------------------------------------------
+
+A session can hold several loaded templates at once: call
+``load_template`` more than once and each RRID is added to the session
+(loading an already-loaded RRID reloads and replaces it).
+``list_templates`` lists the loaded set. Each template keeps its own
+test report and SSH host group.
+
+Action tools fan out across **every** loaded template by default. A
+single ``run`` / ``update`` / ``export`` / … call runs once per loaded
+template, each against its own report and hosts, and the per-template
+output is prefixed with an ``=== <RRID> ===`` banner. Every fan-out tool
+therefore exposes two optional parameters in its schema:
+
+* ``template="<RRID>"`` — scope this one call to a single loaded
+  template (the analogue of the REPL ``-T/--template`` flag). Unknown
+  RRIDs return a clean error.
+* ``all_templates=true`` — force fan-out across every loaded template
+  (the default for these tools, so this is only needed to be explicit).
+
+Omitting both fans the call out across the session's loaded templates.
+When a fanned-out call fails on one template it keeps running on the
+others and reports an aggregate failure at the end.
+
+.. note::
+
+   ``switch`` and ``unload`` are **not** exposed as tools — moving the
+   active-template pointer is REPL-only navigation. Over MCP you target a
+   specific template per call with the ``template`` parameter instead;
+   ``list_templates`` remains available as a read-only listing.
+
 Background jobs (don't block on a slow host op)
 -----------------------------------------------
 
@@ -539,6 +571,19 @@ tool calls meanwhile and poll the job:
   and surfaces the command's failure envelope (stdout, error, exit
   code) if it failed — exactly as a foreground failure would have;
 * ``job_cancel(job_id=…)`` — cancel a running job.
+
+When a backgrounded slow command fans out across several loaded
+templates (see `Multiple templates (fan-out and per-call scoping)`_),
+it mints **one job per template** rather than a single job for the whole
+fan-out. ``job_list`` then shows per-template progress, and each job can
+be polled, fetched, and cancelled independently — cancelling one
+template's job leaves the others running. Scoping the call with
+``template="<RRID>"`` (or having only one template loaded) keeps it to a
+single job with the familiar ``<command>-<n>`` id; the fanned-out ids
+additionally encode the (sanitised) RRID. Because each per-template job
+still acquires the session lock for its whole duration, the jobs run
+serially within one session — the benefit is independent tracking and
+cancellation, not intra-session parallelism.
 
 Jobs are scoped to the session: under stdio that is the single process;
 under http it is the caller's isolated session, so one client never
