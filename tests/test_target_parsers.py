@@ -339,6 +339,44 @@ class TestParseSystem:
         mock_product_module.parse_product.assert_not_called()
 
     @patch("mtui.hosts.target.parsers.system.product")
+    def test_parse_absolute_baseproduct_symlink(self, mock_product_module):
+        """An absolute baseproduct symlink target resolves, not false-dangling.
+
+        Some hosts have ``/etc/products.d/baseproduct`` pointing at the
+        absolute path ``/etc/products.d/SLES.prod`` rather than the bare
+        ``SLES.prod``. The target file exists, so parse_system must read it
+        normally (not concatenate it into ``/etc/products.d/<abspath>`` and
+        misreport a dangling symlink).
+        """
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = ["SLES.prod"]
+        sftp.readlink.return_value = "/etc/products.d/SLES.prod"
+
+        def _open(path, *args, **kwargs):
+            p = str(path)
+            # Only the correctly-normalised path exists; a doubled path
+            # (the pre-fix bug) raises OSError like a real dangling target.
+            if p == "/etc/products.d/SLES.prod":
+                return MagicMock()
+            if "transactional-update.conf" in p:
+                raise FileNotFoundError(p)
+            raise OSError(f"no such file: {p}")
+
+        sftp.open.side_effect = _open
+        mock_product_module.parse_product.side_effect = [
+            ("SLES", "15-SP6", "x86_64"),
+        ]
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        system, transactional = parse_system(conn)
+
+        assert system.dangling_base is False
+        assert system.get_base().name == "SLES"
+        assert system.get_base().version == "15-SP6"
+        assert transactional is False
+
+    @patch("mtui.hosts.target.parsers.system.product")
     def test_parse_missing_baseproduct_symlink(self, mock_product_module):
         """An absent/empty baseproduct symlink degrades instead of crashing."""
         conn, sftp = _mock_connection_with_sftp()

@@ -1,5 +1,6 @@
 """A parser for the system information of a target host."""
 
+import posixpath
 from logging import getLogger
 
 from ....types import Product
@@ -49,6 +50,14 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
             return (System(Product(name, version, arch)), False)
 
         basefile = sftp.readlink("/etc/products.d/baseproduct")
+        if basefile:
+            # The symlink target may be absolute (``/etc/products.d/SLES.prod``)
+            # or relative (``SLES.prod``). Product files are looked up by
+            # basename within ``/etc/products.d``, so normalise either form to
+            # the basename. Without this an absolute target was concatenated
+            # into ``/etc/products.d//etc/products.d/SLES.prod`` on ``open()``,
+            # which raised ``OSError`` and was misreported as a dangling symlink.
+            basefile = posixpath.basename(basefile)
         if basefile and basefile in files:
             files.remove(basefile)
 

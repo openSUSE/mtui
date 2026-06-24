@@ -55,6 +55,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   one base (`SLES`) with LTSS/HA/SAP recorded as addons, so the previous
   base-only match found nothing — `add_host` reported "No refhosts to add" for
   every LTSS/HA/SAP incident even though matching hosts existed.
+- The product/refhost check no longer misreports a healthy host as having a
+  dangling `/etc/products.d/baseproduct` symlink when that symlink uses an
+  **absolute** target (`/etc/products.d/SLES.prod`) rather than a bare
+  `SLES.prod`. The target was concatenated onto `/etc/products.d/`, producing
+  `/etc/products.d//etc/products.d/SLES.prod`, which failed to open and was
+  reported as dangling (also mis-classifying the real base product as an
+  unexpected addon). The symlink target is now reduced to its basename, so
+  both relative and absolute forms resolve.
 
 ## 18.2.0 - 2026-06-23
 
