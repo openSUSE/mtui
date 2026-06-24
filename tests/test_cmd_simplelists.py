@@ -7,7 +7,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mtui.commands.simplelists import ListHosts, ListLocks, ListMetadata
+from mtui.commands.simplelists import (
+    ListBugs,
+    ListHosts,
+    ListLocks,
+    ListMetadata,
+    ListUpdateCommands,
+    ListVersions,
+)
 from mtui.support.messages import TestReportNotLoadedError
 
 
@@ -47,3 +54,29 @@ def test_list_metadata_without_metadata_raises(mock_config):
     prompt.metadata.__bool__ = lambda self: False
     with pytest.raises(TestReportNotLoadedError):
         ListMetadata(Namespace(), mock_config, MagicMock(), prompt)()
+
+
+# --- fan-out scope contract for report-bound list/show commands ---
+
+_REPORT_BOUND = (ListMetadata, ListBugs, ListUpdateCommands, ListVersions)
+
+
+@pytest.mark.parametrize("cmd_cls", _REPORT_BOUND)
+def test_report_bound_command_is_fanout(cmd_cls):
+    assert cmd_cls.scope == "fanout"
+
+
+@pytest.mark.parametrize("cmd_cls", _REPORT_BOUND)
+def test_report_bound_command_accepts_template_flag(cmd_cls):
+    sys_mock = MagicMock()
+    ns = cmd_cls.parse_args("-T SUSE:Maintenance:1:1", sys_mock)
+    assert ns.template == "SUSE:Maintenance:1:1"
+    assert ns.all_templates is False
+
+
+@pytest.mark.parametrize("cmd_cls", _REPORT_BOUND)
+def test_report_bound_command_accepts_all_templates_flag(cmd_cls):
+    sys_mock = MagicMock()
+    ns = cmd_cls.parse_args("--all-templates", sys_mock)
+    assert ns.all_templates is True
+    assert ns.template is None
