@@ -59,6 +59,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
+- Location support has been removed. The `set_location` command, the
+  `-l`/`--location` command-line option (both `mtui` and `mtui-mcp`), and the
+  `mtui.location` configuration option no longer exist. Legacy `refhosts.yml`
+  files that group hosts under top-level location keys are still read: every
+  group is now merged into a single host pool. A stray `location =` line in an
+  existing config is harmless and simply ignored.
 - The `set_session_name` command and the `session` field in the bottom toolbar
   (and the `:name` suffix it added to the prompt string) have been removed. They
   are redundant now that multiple templates can be loaded at once and the toolbar

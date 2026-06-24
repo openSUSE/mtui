@@ -48,7 +48,6 @@ def mock_config():
     # Matches the production default: verify TLS certificates everywhere
     # unless the user opts out via [mtui] ssl_verify.
     config.ssl_verify = True
-    config.location = "nuremberg"
     config.auto = False
     # Lock-wait queueing defaults (off = legacy fail-fast); see [lock] wait.
     config.lock_wait = 0

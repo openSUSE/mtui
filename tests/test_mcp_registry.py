@@ -81,7 +81,6 @@ class _RealishConfig:
         self.chdir_to_template_dir = False
         self.connection_timeout = 30
         self.session_user = "testuser"
-        self.location = "nuremberg"
 
 
 def _registry(
@@ -465,21 +464,20 @@ def test_build_session_copies_config_per_session(tmp_path: Path) -> None:
     """Each session gets its own config copy; mutable scalars don't leak.
 
     Under http every session is minted from one base ``cfg``; a shallow
-    copy per session keeps mutable scalars (such as ``location``)
-    independent so one client's ``set_location`` cannot change another
-    client's location.
+    copy per session keeps mutable scalars independent so one client
+    rebinding a config scalar cannot change another client's config.
     """
     base = _RealishConfig(tmp_path)
     a = build_session(base, _LOG)  # ty: ignore[invalid-argument-type]
     b = build_session(base, _LOG)  # ty: ignore[invalid-argument-type]
 
     assert a.config is not b.config
-    # Simulate client A changing its location.
-    a.config.location = "prague"
+    # Simulate client A rebinding a config scalar.
+    a.config.connection_timeout = 999
     # Client B must be unaffected.
-    assert b.config.location == "nuremberg"
+    assert b.config.connection_timeout == 30
     # And the shared base config must never have been mutated.
-    assert base.location == "nuremberg"
+    assert base.connection_timeout == 30
 
 
 def test_registry_sessions_have_independent_config(tmp_path: Path) -> None:
@@ -496,8 +494,8 @@ def test_registry_sessions_have_independent_config(tmp_path: Path) -> None:
 
     a, b = asyncio.run(driver())
     assert a.config is not b.config
-    a.config.location = "prague"
-    assert b.config.location == "nuremberg"
+    a.config.connection_timeout = 999
+    assert b.config.connection_timeout == 30
 
 
 def test_registry_sessions_have_distinct_arbiter_owner_keys(tmp_path: Path) -> None:

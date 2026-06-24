@@ -14,8 +14,6 @@ from os import getenv
 from pathlib import Path
 from typing import Any
 
-from ..hosts.refhost import RefhostsFactory, RefhostsResolveFailedError
-from .messages import InvalidLocationError
 from .paths import terms_path
 
 logger = getLogger("mtui.config")
@@ -119,19 +117,15 @@ class Config:
     distro_ver: str
     distro_kernel: str
 
-    def __init__(self, path: Path | None, refhosts=RefhostsFactory) -> None:
+    def __init__(self, path: Path | None) -> None:
         """Initializes the configuration object.
 
         This method reads config files, and sets up options.
 
         Args:
             path: An optional path to a specific config file.
-            refhosts: The factory to use for creating refhosts.
 
         """
-        self.refhosts = refhosts
-        self.__location = "default"
-
         if path:
             self.configfiles = [path]
         elif _pth := getenv("MTUI_CONF"):
@@ -151,30 +145,6 @@ class Config:
             self.config.read(self.configfiles)
         except configparser.Error as e:
             logger.error(e)
-
-    @property
-    def location(self) -> str:
-        """The location property."""
-        return self.__location
-
-    @location.setter
-    def location(self, x: str) -> None:
-        """Sets the location property.
-
-        Args:
-            x: The new location.
-
-        """
-        try:
-            self.refhosts(self).check_location_sanity(x)
-        except InvalidLocationError as e:
-            logger.error(e)
-            return
-        except RefhostsResolveFailedError:
-            logger.error("Can't read `refhosts.yml` file, no valid refhosts database")
-            return
-
-        self.__location = x
 
     def _parse_config(self) -> None:
         """Parses the configuration options from the config files.
@@ -221,7 +191,7 @@ class Config:
 
         def get_connection_timeout(section: str, option: str) -> str:
             # Read from the [connection] section, falling back to the legacy
-            # [mtui] location so existing configs keep working.
+            # [mtui] section so existing configs keep working.
             try:
                 return self.config.get(section, option)
             except (configparser.NoSectionError, configparser.NoOptionError):
@@ -486,19 +456,6 @@ class Config:
                 int,
                 getint,
             ),
-            # ``location`` MUST be parsed last. Assigning it goes through the
-            # ``location`` property setter, which resolves refhosts to validate
-            # the location -- and the resolve reads ``ssl_verify`` and the
-            # ``refhosts_*`` options. Those must already be set on ``self``, so
-            # this option stays at the end of the list. Reordering it earlier
-            # reintroduces ``AttributeError: 'Config' object has no attribute
-            # 'ssl_verify'`` during config parsing.
-            ConfigOption(
-                "location",
-                ("mtui", "location"),
-                "default",
-                getter=get,
-            ),
         ]
 
     def _list_terms(self) -> None:
@@ -537,9 +494,6 @@ class Config:
             args: The parsed command-line arguments.
 
         """
-        if args.location:
-            self.location = args.location
-
         if args.template_dir:
             self.template_dir = args.template_dir
 

@@ -1,7 +1,6 @@
 # Realistic minimal mtuirc fixture used by tests/test_config.py to exercise
 # the INI parser end-to-end (multiple sections, multiple value types).
 [mtui]
-location = nuremberg
 connection_timeout = 450
 user = qauser
 chdir_to_template_dir = true

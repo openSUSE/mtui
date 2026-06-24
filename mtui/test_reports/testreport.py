@@ -754,7 +754,7 @@ class TestReport(ABC):
     def _pool_select_from_tp(self, refhosts, attributes, testplatform) -> None:
         """Pick one distinct free host per test-target slot via the arbiter.
 
-        Candidates are searched across all locations and grouped by slot
+        Candidates are searched and grouped by slot
         (product+version+arch+addons). For each slot the in-process arbiter
         hands out one host not already claimed by another owner, queueing up
         to ``[lock] wait`` seconds when every candidate is busy. The remote

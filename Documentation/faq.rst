@@ -10,21 +10,6 @@
 Running MTUI
 ############
 
-How do I change the default refhosts location?
-==============================================
-
-In case you don't want to use the default refhost location, i.e. if
-you have a local or virtual set of refhosts, you can set your personal
-location in the ``~/.mtuirc`` configuration file.
-This eliminates the need to use the ``-l`` (``--location``) option.
-
-Example::
-
-  # cat ~/.mtuirc
-  # MTUI user configuration file
-  [mtui]
-  location=nuremberg
-
 Can I set the template directory without passing it as a command line parameter every time?
 ===========================================================================================
 
@@ -329,18 +314,6 @@ Example::
 
   mtui> add_host -t craig.qam.suse.cz
   info: connecting to craig.qam.suse.cz
-
-
-Can I use refhosts from another location?
-=========================================
-
-Changing the current location is possible using the ``set_location``
-command.
-
-Example::
-
-  mtui> set_location nuremberg
-  info: changed location from 'prague' to 'nuremberg'
 
 
 How can I override refhosts mentioned in the test report?

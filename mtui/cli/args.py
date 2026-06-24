@@ -65,9 +65,6 @@ def get_parser(sys) -> ArgumentParser:
     """
     parser = ArgumentParser(sys_=sys)
     parser.add_argument(
-        "-l", "--location", type=str, help="override config mtui.location"
-    )
-    parser.add_argument(
         "-t", "--template_dir", type=Path, help="override config mtui.template_dir"
     )
     parser.add_argument(

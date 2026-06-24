@@ -29,9 +29,6 @@ def get_parser(sys) -> ArgumentParser:
     """
     parser = ArgumentParser(sys_=sys, prog="mtui-mcp")
     parser.add_argument(
-        "-l", "--location", type=str, help="override config mtui.location"
-    )
-    parser.add_argument(
         "-t", "--template_dir", type=Path, help="override config mtui.template_dir"
     )
     parser.add_argument(

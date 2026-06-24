@@ -111,7 +111,7 @@ add_host
   add_host [-t HOST] [-k]
 
 Adds another machine to the target host list.
-Without parameter adds all hosts from testplatform based on location
+Without parameter adds all hosts from testplatform.
 
 If the session is in automatic mode, running ``add_host`` switches it to
 the manual workflow (adding hosts by hand is a manual action), updating
@@ -211,7 +211,7 @@ list_refhosts
 ::
 
   list_refhosts [-T QUERY] [-n GLOB] [-a ARCH] [-p PRODUCT]
-                [--version VERSION] [--addon ADDON] [-l LOCATION]
+                [--version VERSION] [--addon ADDON]
                 [--pool] [--json] [--free] [-v]
 
 Queries and searches the reference-host inventory **offline** — no SSH
@@ -220,10 +220,9 @@ connection, no lock, and no loaded test report. It reads the same source
 manual users can find refhosts through mtui instead of parsing
 ``refhosts.yml`` by hand.
 
-With no filters, every known refhost is listed. Location is **not** used to
-scope the search by default: every location is searched and results are
-de-duplicated by host name. Only ``--free`` goes on the wire — it probes each
-matched host's live mtui-lock state.
+With no filters, every known refhost is listed; results are de-duplicated by
+host name. Only ``--free`` goes on the wire — it probes each matched host's
+live mtui-lock state.
 
 **Options:**
 
@@ -252,10 +251,6 @@ matched host's live mtui-lock state.
 .. option:: --addon ADDON
 
   Addon-name substring. Can be used multiple times.
-
-.. option:: -l LOCATION, --location LOCATION
-
-  Restrict to a single location (the default searches all locations).
 
 .. option:: --pool
 
@@ -1124,22 +1119,6 @@ and thus can be especially useful for longer running commands.
 .. option:: loglevel
 
   Log level of MTUI: ``warning``, ``info`` or ``debug``
-
-set_location
-++++++++++++
-
-::
-
-    set_location site
-
-Changes current refhost location to another site.
-
-**Options:**
-
-.. option:: site
-
-  Location name.
-
 
 config
 ++++++

@@ -6,10 +6,9 @@ Reads the refhost inventory (the same source ``add_host`` resolves through
 lets fleet maintenance and manual users find refhosts through mtui instead of
 parsing ``refhosts.yml`` by hand.
 
-Location is **not** used to scope the search by default (it is being retired):
-every location is searched and results are de-duplicated by host name. The
-optional ``--free`` flag additionally connects to the matched hosts to report
-their live mtui-lock state (the only part that goes on the wire).
+Results are de-duplicated by host name. The optional ``--free`` flag
+additionally connects to the matched hosts to report their live mtui-lock
+state (the only part that goes on the wire).
 """
 
 import concurrent.futures
@@ -32,8 +31,7 @@ class ListRefhosts(Command):
     With no filters every known refhost is listed. Filter by hostname glob,
     arch, base product, version, or addon — or pass a full ``--testplatform``
     query (same syntax ``add_host`` matches on). ``--pool`` groups the result
-    by test-target slot (one candidate per arch/codestream). Location is
-    ignored by default.
+    by test-target slot (one candidate per arch/codestream).
     """
 
     command = "list_refhosts"
@@ -66,11 +64,6 @@ class ListRefhosts(Command):
             "--addon", action="append", help="addon-name substring (repeatable)"
         )
         parser.add_argument(
-            "-l",
-            "--location",
-            help="restrict to a single location (default: search all locations)",
-        )
-        parser.add_argument(
             "--pool",
             action="store_true",
             help="group by test-target slot (product+version+arch+addons)",
@@ -96,14 +89,13 @@ class ListRefhosts(Command):
         return f"{version.major}-{version.minor}"
 
     @classmethod
-    def _record(cls, host, location: str | None, slot: str | None) -> dict:
+    def _record(cls, host, slot: str | None) -> dict:
         return {
             "name": host.name,
             "arch": host.arch,
             "product": host.product.name,
             "version": cls._ver_str(host.product.version),
             "addons": [a.name for a in host.addons],
-            "location": location,
             "slot": slot,
         }
 
@@ -114,7 +106,6 @@ class ListRefhosts(Command):
         if a.testplatform:
             hits = refhosts.query(
                 attributes=Attributes.from_testplatform(a.testplatform),
-                location=a.location,
             )
         else:
             hits = refhosts.query(
@@ -123,17 +114,16 @@ class ListRefhosts(Command):
                 product=a.product,
                 version=a.version,
                 addon=a.addon,
-                location=a.location,
             )
         records: list[dict] = []
-        for host, loc in hits:
+        for host in hits:
             # Reuse Refhosts.slot_of for the test-target identity so the
             # command and the host-arbitration pool agree on what a "slot" is.
             slot = None
             if a.pool:
                 name, ver, arch, _addons = refhosts.slot_of(host)
                 slot = f"{name}-{ver} {arch}"
-            records.append(self._record(host, loc, slot))
+            records.append(self._record(host, slot))
         return records
 
     def _probe_locks(self, records: list[dict]) -> None:
@@ -182,8 +172,6 @@ class ListRefhosts(Command):
         def fmt(r: dict) -> str:
             prod = f"{r['product']} {r['version']}".strip()
             cols = [f"{r['name']:<34}", f"{prod:<22}", f"{r['arch']:<8}"]
-            if not self.args.pool:
-                cols.append(f"{r['location'] or '':<10}")
             if free:
                 cols.append(f"{r.get('lock', ''):<22}")
             if verbose:
@@ -215,7 +203,6 @@ class ListRefhosts(Command):
                 ("-p", "--product"),
                 ("--version",),
                 ("--addon",),
-                ("-l", "--location"),
                 ("--pool",),
                 ("--json",),
                 ("--free",),

@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 
 from ruamel.yaml import YAML
 
-from ...support import messages
 from .models import Addon, Attributes, Host, Product, Version, _host_from_dict
 
 if TYPE_CHECKING:
@@ -28,24 +27,23 @@ logger = getLogger("mtui.refhost")
 class Refhosts:
     """Loads and searches ``refhosts.yml`` for hosts matching :class:`Attributes`."""
 
-    _default_location = "default"
-
-    def __init__(self, hostmap: Path, location: str | None = None) -> None:
+    def __init__(self, hostmap: Path) -> None:
         """Initialize the Refhosts object.
 
         Args:
             hostmap: Path to ``refhosts.yml``.
-            location: Location key to search; defaults to ``"default"``.
 
         """
-        self.location = location if location is not None else self._default_location
         self._parse_refhosts(hostmap)
 
     def _parse_refhosts(self, hostmap: Path) -> None:
         """Load ``hostmap`` and convert each row to a :class:`Host`.
 
-        Malformed rows are logged at ERROR and dropped; YAML parse
-        failures propagate.
+        The legacy ``refhosts.yml`` groups host rows under top-level
+        location keys (``default:``, ``nuremberg:``, …). Location support
+        has been retired, so every group is merged into a single flat list
+        of hosts. Malformed rows are logged at ERROR and dropped; YAML
+        parse failures propagate.
         """
         try:
             with hostmap.open() as f:
@@ -54,36 +52,21 @@ class Refhosts:
             logger.error("failed to parse refhosts.yml")
             raise
 
-        self.data: dict[str, list[Host]] = {}
-        for loc, rows in (raw or {}).items():
-            self.data[loc] = [
+        self.data: list[Host] = []
+        for rows in (raw or {}).values():
+            self.data.extend(
                 h for h in (_host_from_dict(row) for row in rows or []) if h is not None
-            ]
+            )
 
     def search(self, attributes: list[Attributes]) -> list[str]:
-        """Return hostnames matching any of the given :class:`Attributes`.
-
-        For each query attribute, search the configured location first;
-        if it yields no match and the configured location is not
-        ``default``, fall back to ``default``.
-        """
+        """Return hostnames matching any of the given :class:`Attributes`."""
         results: list[str] = []
         for attribute in attributes:
-            host = [
+            results += [
                 candidate.name
-                for candidate in self.data.get(self.location, [])
+                for candidate in self.data
                 if self.is_candidate_match(candidate, attribute)
             ]
-
-            if not host and self.location != self._default_location:
-                host = [
-                    candidate.name
-                    for candidate in self.data.get(self._default_location, [])
-                    if self.is_candidate_match(candidate, attribute)
-                ]
-
-            results += host
-
         return results
 
     def is_candidate_match(self, candidate: Host, attribute: Attributes) -> bool:
@@ -171,18 +154,12 @@ class Refhosts:
     def host_by_name(self, name: str) -> Host | None:
         """Return the refhosts entry whose ``name`` matches, or ``None``.
 
-        Searches the configured location first, then ``default``, then any
-        remaining locations, so a connected host maps back to the metadata
-        row mtui would use for it. Returns ``None`` if no row matches.
+        So a connected host maps back to the metadata row mtui would use
+        for it. Returns ``None`` if no row matches.
         """
-        ordered: list[str] = []
-        for loc in (self.location, self._default_location, *self.data):
-            if loc not in ordered:
-                ordered.append(loc)
-        for loc in ordered:
-            for candidate in self.data.get(loc, []):
-                if candidate.name == name:
-                    return candidate
+        for candidate in self.data:
+            if candidate.name == name:
+                return candidate
         return None
 
     def query(
@@ -194,34 +171,26 @@ class Refhosts:
         product: str | None = None,
         version: str | None = None,
         addon: "list[str] | None" = None,
-        location: str | None = None,
-    ) -> list[tuple[Host, str]]:
-        """Return ``(host, location)`` for refhosts matching the filters.
-
-        Location is **not** used to scope the search by default (it is being
-        retired): every location is scanned and results are de-duplicated by
-        host name (first location wins, preserving first-seen order). Pass
-        ``location`` to restrict to a single one.
+    ) -> list[Host]:
+        """Return refhosts matching the filters, de-duplicated by host name.
 
         ``attributes`` (parsed from a ``testplatform``) and the field filters
         (``name`` glob, ``arch``, ``product`` substring, ``version``,
         ``addon`` substring) are alternatives — when ``attributes`` is given
         the field filters are ignored. With neither, every host is returned.
         """
-        locs = [location] if location is not None else list(self.data)
         seen: set[str] = set()
-        out: list[tuple[Host, str]] = []
-        for loc in locs:
-            for host in self.data.get(loc, []):
-                if host.name in seen:
+        out: list[Host] = []
+        for host in self.data:
+            if host.name in seen:
+                continue
+            if attributes is not None:
+                if not any(self.is_candidate_match(host, a) for a in attributes):
                     continue
-                if attributes is not None:
-                    if not any(self.is_candidate_match(host, a) for a in attributes):
-                        continue
-                elif not self._field_match(host, name, arch, product, version, addon):
-                    continue
-                seen.add(host.name)
-                out.append((host, loc))
+            elif not self._field_match(host, name, arch, product, version, addon):
+                continue
+            seen.add(host.name)
+            out.append(host)
         return out
 
     @staticmethod
@@ -287,29 +256,16 @@ class Refhosts:
     def search_pool(
         self,
         attributes: list[Attributes],
-        *,
-        location: str | None = None,
     ) -> list[tuple[Host, tuple[str, str, str, tuple[str, ...]]]]:
         """Return pool candidates ``(host, slot)`` matching ``attributes``.
 
-        Thin wrapper over :meth:`query`: searches across **all** locations by
-        default (location ignored for pool candidates) and tags each match
-        with its :meth:`slot_of` test-target slot, so the host-arbitration
-        path can group candidates by slot and draw one free host per slot.
+        Thin wrapper over :meth:`query` that tags each match with its
+        :meth:`slot_of` test-target slot, so the host-arbitration path can
+        group candidates by slot and draw one free host per slot.
         """
         return [
-            (host, self.slot_of(host))
-            for host, _loc in self.query(attributes=attributes, location=location)
+            (host, self.slot_of(host)) for host in self.query(attributes=attributes)
         ]
-
-    def check_location_sanity(self, location: str) -> None:
-        """Raise :class:`InvalidLocationError` if ``location`` is unknown."""
-        if location not in self.data:
-            raise messages.InvalidLocationError(location, self.get_locations())
-
-    def get_locations(self) -> set[str]:
-        """Return the set of known location names."""
-        return set(self.data.keys())
 
 
 class RefhostsResolveFailedError(RuntimeError):

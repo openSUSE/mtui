@@ -61,7 +61,6 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
         ("remove_host", "mtui.commands.removehost", "RemoveHost"),
         ("run", "mtui.commands.run", "Run"),
         ("set_host_state", "mtui.commands.hoststate", "HostState"),
-        ("set_location", "mtui.commands.simpleset", "SetLocation"),
         ("set_log_level", "mtui.commands.simpleset", "SetLogLevel"),
         ("set_repo", "mtui.commands.setrepo", "SetRepo"),
         ("set_timeout", "mtui.commands.simpleset", "SetTimeout"),

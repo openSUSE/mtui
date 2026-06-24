@@ -189,23 +189,23 @@ def test_set_host_state_schema_carries_enum(
     ]
 
 
-def test_set_location_schema_is_scalar_string(
+def test_nargs_one_positional_schema_is_scalar_string(
     mcp: FastMCP, registered_names: list[str]
 ) -> None:
-    """``set_location`` positional ``nargs=1`` is a required scalar string.
+    """A ``nargs=1`` positional (``put filename``) is a required scalar string.
 
-    Regression for the MCP-side bug where ``{"site": "prague"}`` was
+    Regression for the MCP-side bug where ``{"filename": "x"}`` was
     rejected with ``Input should be a valid list`` because the schema
     demanded an array.
     """
-    params = _params_of(mcp, "set_location")
-    site = params["properties"]["site"]
-    assert site["type"] == "string"
-    assert site.get("description") == "location name"
+    params = _params_of(mcp, "put")
+    filename = params["properties"]["filename"]
+    assert filename["type"] == "string"
+    assert filename.get("description") == "file to upload to all hosts"
     # Scalar field must not carry array-shaped length bounds.
-    assert "minItems" not in site
-    assert "maxItems" not in site
-    assert "site" in params.get("required", [])
+    assert "minItems" not in filename
+    assert "maxItems" not in filename
+    assert "filename" in params.get("required", [])
 
 
 def test_update_schema_exposes_store_const_as_booleans(
@@ -415,18 +415,18 @@ def test_optional_multivalue_flag_round_trip() -> None:
 
 
 def test_nargs_one_positional_accepts_scalar_round_trip() -> None:
-    """``set_location site`` (``nargs=1``) round-trips a scalar string.
+    """``put filename`` (``nargs=1``) round-trips a scalar string.
 
-    Regression for the MCP-side bug where ``{"site": "prague"}`` was
+    Regression for the MCP-side bug where ``{"filename": "x"}`` was
     rejected with ``Input should be a valid list`` because the schema
     demanded an array. The encoder must accept the scalar and argparse
     must still produce its conventional 1-element list.
     """
-    parser = Command.registry["set_location"].argparser(__import__("sys"))
-    argv = kwargs_to_argv(parser, {"site": "prague"})
-    assert argv == ["prague"]
+    parser = Command.registry["put"].argparser(__import__("sys"))
+    argv = kwargs_to_argv(parser, {"filename": "payload.bin"})
+    assert argv == ["payload.bin"]
     parsed = parser.parse_args(argv)
-    assert parsed.site == ["prague"]
+    assert parsed.filename == ["payload.bin"]
 
 
 def test_optional_list_arg_preserves_nonempty_argparse_default() -> None:

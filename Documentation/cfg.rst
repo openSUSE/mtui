@@ -140,26 +140,6 @@ Name of directory for storing install logs
 Please don't change it
 
 
-``mtui.location``
-~~~~~~~~~~~~~~~~~
-  | **type**
-  |     enum: locations defined in `refhosts.yml`_
-  | **default**
-  |     ``default``
-
-.. _refhosts.yml: https://gitlab.suse.de/qa-maintenance/metadata/blob/master/refhosts.yml
-
-.. tip:: View valid locations using ``refdb``:
-
-    ::
-
-        refdb -p location | sort | uniq
-
-MTUI will limit reference hosts to those found in ``mtui.location``.
-If a required system cannot be found in ``mtui.location``, it will be loaded
-from ``default``.
-
-
 ``mtui.ssh_strict_host_key_checking``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   | **type**
@@ -468,7 +448,6 @@ Example
 
   [mtui]
   user = <your username>
-  location = <your location>
   template_dir = /path/to/where/you/want/to/store/test-reports
   
 

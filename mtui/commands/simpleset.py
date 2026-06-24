@@ -6,53 +6,11 @@ from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
 from ..data_sources.openqa import KernelOpenQA
 from ..data_sources.qem_dashboard import DashboardAutoOpenQA
-from ..hosts.refhost import RefhostsFactory
-from ..support import messages
 from ..support.misc import requires_update
 from ..types import Workflow
 from . import Command
 
 logger = logging.getLogger("mtui.commands.simplesets")
-
-
-class SetLocation(Command):
-    """Changes the current reference host location to another site."""
-
-    command = "set_location"
-
-    @classmethod
-    def _add_arguments(cls, parser: ArgumentParser) -> None:
-        """Adds arguments to the command's argument parser."""
-        parser.add_argument(
-            "site", action="store", type=str, nargs=1, help="location name"
-        )
-
-    def __call__(self) -> None:
-        """Executes the `set_location` command."""
-        old: str = self.config.location
-        new: str = self.args.site[0]
-        self.config.location = new
-        if self.config.location != new:
-            # The config setter rejected the location (and logged why);
-            # leave the working refhost set untouched.
-            return
-
-        # A manual location change resets the working refhost selection:
-        # drop hosts inherited from the testreport template and from the
-        # previously configured location so a subsequent ``add_host``
-        # derives hosts only from the newly selected location. The
-        # per-testplatform fallback to the ``default`` location in
-        # ``Refhosts.search`` still applies.
-        self.metadata.hostnames.clear()
-        logger.info(messages.LocationChangedMessage(old, new))
-
-    @staticmethod
-    def complete(state, text, line, begidx, endidx) -> list[str]:
-        """Provides tab completion for the command."""
-        loc = RefhostsFactory(state["config"]).get_locations()
-        locations = [tuple(loc)]
-
-        return complete_choices(locations, line, text)
 
 
 class SetLogLevel(Command):

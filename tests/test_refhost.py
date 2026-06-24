@@ -9,7 +9,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from mtui.hosts import refhost
-from mtui.support.messages import InvalidLocationError
 
 REFHOSTS_FIXTURE = Path(__file__).parent / "fixtures" / "refhosts.yml"
 
@@ -208,13 +207,11 @@ class TestFromTestplatform:
 class TestRefhosts:
     """Public-API behaviour of ``Refhosts``."""
 
-    def test_init_defaults_to_default_location(self):
+    def test_init_merges_all_location_groups(self):
+        """Hosts from every legacy location key are merged into one list."""
         rh = refhost.Refhosts(REFHOSTS_FIXTURE)
-        assert rh.location == "default"
-
-    def test_init_with_explicit_location(self):
-        rh = refhost.Refhosts(REFHOSTS_FIXTURE, location="nuremberg")
-        assert rh.location == "nuremberg"
+        names = {h.name for h in rh.data}
+        assert {"host-default-x86", "host-nbg-only-here"} <= names
 
     def test_parse_refhosts_propagates_load_failure(self, tmp_path, caplog):
         """A broken yml file is logged at error and re-raised."""
@@ -246,36 +243,23 @@ class TestRefhosts:
         )
         with caplog.at_level("ERROR", logger="mtui.refhost"):
             rh = refhost.Refhosts(bad)
-        assert [h.name for h in rh.data["default"]] == ["good-host"]
+        assert [h.name for h in rh.data] == ["good-host"]
         assert any("dropping malformed host row" in r.message for r in caplog.records)
 
-    def test_get_locations(self):
+    def test_search_finds_host(self):
         rh = refhost.Refhosts(REFHOSTS_FIXTURE)
-        assert rh.get_locations() == {"default", "nuremberg"}
-
-    def test_check_location_sanity_known_location_returns_none(self):
-        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
-        assert rh.check_location_sanity("nuremberg") is None
-
-    def test_check_location_sanity_unknown_location_raises(self):
-        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
-        with pytest.raises(InvalidLocationError):
-            rh.check_location_sanity("atlantis")
-
-    def test_search_finds_host_in_current_location(self):
-        rh = refhost.Refhosts(REFHOSTS_FIXTURE, location="nuremberg")
         attrs = refhost.Attributes.from_testplatform(
             "base=sles(major=15,minor=5);arch=[x86_64]"
         )
-        assert rh.search(attrs) == ["host-nbg-x86"]
+        # Both former-location x86 hosts match the merged pool.
+        assert set(rh.search(attrs)) == {"host-default-x86", "host-nbg-x86"}
 
-    def test_search_falls_back_to_default_when_location_misses(self):
-        """When the configured location has no match, default location is checked."""
-        rh = refhost.Refhosts(REFHOSTS_FIXTURE, location="nuremberg")
+    def test_search_finds_host_from_any_former_location(self):
+        """A host that lived only under ``default`` is found in the merged pool."""
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
         attrs = refhost.Attributes.from_testplatform(
             "base=sles(major=12,minor=sp4);arch=[x86_64]"
         )
-        # Only present under ``default``.
         assert rh.search(attrs) == ["host-default-noaddon"]
 
     def test_search_returns_empty_when_no_match_anywhere(self):
@@ -293,24 +277,16 @@ class TestRefhosts:
         )
         assert rh.search(attrs) == ["host-default-x86"]
 
-    def test_search_default_location_no_fallback(self):
-        """The fallback branch is skipped when already searching the default."""
-        rh = refhost.Refhosts(REFHOSTS_FIXTURE)  # default location
-        attrs = refhost.Attributes.from_testplatform(
-            "base=sles(major=99,minor=99);arch=[mips]"
-        )
-        assert rh.search(attrs) == []
-
-    def test_host_by_name_finds_in_default(self):
+    def test_host_by_name_finds_host(self):
         rh = refhost.Refhosts(REFHOSTS_FIXTURE)
         host = rh.host_by_name("host-default-x86")
         assert host is not None
         assert host.name == "host-default-x86"
         assert host.product.name == "sles"
 
-    def test_host_by_name_finds_in_other_location(self):
-        """A host living only under ``nuremberg`` is still found from default."""
-        rh = refhost.Refhosts(REFHOSTS_FIXTURE)  # default location
+    def test_host_by_name_finds_host_from_any_former_location(self):
+        """A host that lived only under ``nuremberg`` is still found."""
+        rh = refhost.Refhosts(REFHOSTS_FIXTURE)
         host = rh.host_by_name("host-nbg-only-here")
         assert host is not None
         assert host.arch == "ppc64le"
@@ -436,7 +412,6 @@ def _make_config(**overrides):
         "refhosts_path": REFHOSTS_FIXTURE,
         "refhosts_https_uri": "https://example.invalid/refhosts.yml",
         "refhosts_https_expiration": 3600,
-        "location": "default",
         "ssl_verify": None,
     }
     base.update(overrides)
@@ -461,9 +436,9 @@ class TestPathResolver:
     def test_resolve_uses_configured_path(self):
         factory_mock = MagicMock()
         resolver = refhost.PathResolver(refhosts_factory=factory_mock)
-        cfg = _make_config(location="nuremberg")
+        cfg = _make_config()
         rh = resolver.resolve(cfg)
-        factory_mock.assert_called_once_with(REFHOSTS_FIXTURE, "nuremberg")
+        factory_mock.assert_called_once_with(REFHOSTS_FIXTURE)
         assert rh is factory_mock.return_value
 
 
@@ -474,10 +449,10 @@ class TestHttpsResolver:
         resolver = _make_https_resolver(
             statter=statter, time_now_getter=MagicMock(return_value=1_000_000)
         )
-        cfg = _make_config(location="nuremberg")
+        cfg = _make_config()
         rh = resolver.resolve(cfg)
         resolver.refhosts_factory.assert_called_once_with(  # ty: ignore[unresolved-attribute]
-            resolver.cache_path, "nuremberg"
+            resolver.cache_path
         )
         assert rh is resolver.refhosts_factory.return_value  # ty: ignore[unresolved-attribute]
 

@@ -99,7 +99,7 @@ Flags mirror :doc:`cli` for the configuration surface that
 ``--color {auto,always,never}``
     Control coloured log output; default ``auto``.
 
-``-l, --location``, ``-t, --template_dir``, ``-g, --gitea_token``, ``-w, --connection_timeout``
+``-t, --template_dir``, ``-g, --gitea_token``, ``-w, --connection_timeout``
     Configuration overrides identical to ``mtui``.
 
 ``-V, --version``

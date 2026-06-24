@@ -3,55 +3,22 @@ from pathlib import Path
 
 import pytest
 
-from mtui.hosts.refhost import RefhostsResolveFailedError
 from mtui.support import config
-from mtui.support.messages import InvalidLocationError
-
-
-class MockRefhosts:
-    def __init__(self, config):
-        pass
-
-    def check_location_sanity(self, location):
-        pass
-
-    def __call__(self, config):
-        return self
-
-
-class RaisingRefhosts:
-    """Refhosts double whose ``check_location_sanity`` raises on demand."""
-
-    exc: Exception | None = None
-
-    def __init__(self, config):
-        pass
-
-    def check_location_sanity(self, location):
-        if self.exc is not None:
-            raise self.exc
-
-    def __call__(self, config):
-        return self
 
 
 def test_default_config(tmpdir):
     """Test default config."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("")
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
-    assert cfg.location == "default"
+    cfg = config.Config(config_file)
     assert cfg.connection_timeout == 300
 
 
 def test_override_default_config(tmpdir):
     """Test override config."""
     config_file = Path(tmpdir.join("test.cfg"))
-    config_file.write_text(
-        "[mtui]\nlocation = test_location\nconnection_timeout = 600\n"
-    )
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
-    assert cfg.location == "test_location"
+    config_file.write_text("[mtui]\nconnection_timeout = 600\n")
+    cfg = config.Config(config_file)
     assert cfg.connection_timeout == 600
 
 
@@ -59,17 +26,17 @@ def test_connection_timeout_from_connection_section(tmpdir):
     """connection_timeout is read from the [connection] section."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("[connection]\nconnection_timeout = 45\n")
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    cfg = config.Config(config_file)
     assert cfg.connection_timeout == 45
 
 
 def test_connection_timeout_connection_section_wins(tmpdir):
-    """[connection] takes precedence over the legacy [mtui] location."""
+    """[connection] takes precedence over the legacy [mtui] section."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text(
         "[mtui]\nconnection_timeout = 600\n[connection]\nconnection_timeout = 45\n"
     )
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    cfg = config.Config(config_file)
     assert cfg.connection_timeout == 45
 
 
@@ -77,14 +44,11 @@ def test_smelt_url_defaults_empty_and_overrides(tmpdir):
     """smelt_url has no default (off unless configured) and reads [smelt] url."""
     empty = Path(tmpdir.join("empty.cfg"))
     empty.write_text("")
-    assert config.Config(empty, refhosts=MockRefhosts).smelt_url == ""
+    assert config.Config(empty).smelt_url == ""
 
     configured = Path(tmpdir.join("smelt.cfg"))
     configured.write_text("[smelt]\nurl = https://smelt.example.com\n")
-    assert (
-        config.Config(configured, refhosts=MockRefhosts).smelt_url
-        == "https://smelt.example.com"
-    )
+    assert config.Config(configured).smelt_url == "https://smelt.example.com"
 
 
 def test_path_options_expand_tilde(tmpdir):
@@ -95,61 +59,27 @@ def test_path_options_expand_tilde(tmpdir):
         "[mtui]\ninstall_logs = ~/logs\n"
         "[target]\ntempdir = ~/scratch\n"
     )
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    cfg = config.Config(config_file)
     assert cfg.refhosts_path == Path.home() / "qam/refhosts.yml"
     assert cfg.install_logs == Path.home() / "logs"
     assert cfg.target_tempdir == Path.home() / "scratch"
     # An absolute path is passed through unchanged.
     abs_cfg = Path(tmpdir.join("abs.cfg"))
     abs_cfg.write_text("[refhosts]\npath = /usr/share/refhosts.yml\n")
-    assert config.Config(abs_cfg, refhosts=MockRefhosts).refhosts_path == Path(
-        "/usr/share/refhosts.yml"
-    )
-
-
-def test_ssl_verify_available_when_location_resolves_during_parse(tmpdir):
-    """Parsing ``location`` triggers the resolve, which reads ``ssl_verify``.
-
-    Regression: ``location`` was parsed before ``ssl_verify``, so the resolve
-    fired by the ``location`` setter raised ``AttributeError: 'Config' object
-    has no attribute 'ssl_verify'``. ``location`` must be parsed last so every
-    option the resolve depends on is already set.
-    """
-    seen: dict[str, object] = {}
-
-    class SslReadingRefhosts:
-        def __init__(self, cfg):
-            self._cfg = cfg
-
-        def check_location_sanity(self, location):
-            # Reading these must not raise during config parsing.
-            seen["ssl_verify"] = self._cfg.ssl_verify
-            seen["refhosts_resolvers"] = self._cfg.refhosts_resolvers
-
-        def __call__(self, cfg):
-            return SslReadingRefhosts(cfg)
-
-    cfg_file = Path(tmpdir.join("test.cfg"))
-    cfg_file.write_text("[mtui]\nlocation = nuremberg\nssl_verify = false\n")
-    cfg = config.Config(cfg_file, refhosts=SslReadingRefhosts(None))
-    assert cfg.location == "nuremberg"
-    assert cfg.ssl_verify is False
-    assert seen["ssl_verify"] is False
+    assert config.Config(abs_cfg).refhosts_path == Path("/usr/share/refhosts.yml")
 
 
 def test_merge_args(tmpdir):
     """Test merge_args."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("")
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    cfg = config.Config(config_file)
     args = Namespace(
-        location="cmd_location",
         template_dir="/cmd/template_dir",
         connection_timeout=1200,
         gitea_token="cmd_gitea_token",
     )
     cfg.merge_args(args)
-    assert cfg.location == "cmd_location"
     assert cfg.template_dir == "/cmd/template_dir"
     assert cfg.connection_timeout == 1200
     assert cfg.qem_dashboard_api == "http://dashboard.qam.suse.de/api"
@@ -160,7 +90,7 @@ def test_ssh_strict_host_key_checking_default(tmpdir):
     """Default value preserves backward-compatible auto-add behaviour."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("")
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    cfg = config.Config(config_file)
     assert cfg.ssh_strict_host_key_checking == "auto_add"
 
 
@@ -168,7 +98,7 @@ def test_ssh_strict_host_key_checking_override(tmpdir):
     """[connection] section in INI overrides the default."""
     config_file = Path(tmpdir.join("test.cfg"))
     config_file.write_text("[connection]\nssh_strict_host_key_checking = reject\n")
-    cfg = config.Config(config_file, refhosts=MockRefhosts)
+    cfg = config.Config(config_file)
     assert cfg.ssh_strict_host_key_checking == "reject"
 
 
@@ -177,7 +107,7 @@ def test_mtui_conf_env_var_selects_configfile(tmpdir, monkeypatch):
     cfg_file = Path(tmpdir.join("via_env.cfg"))
     cfg_file.write_text("[mtui]\nconnection_timeout = 777\n")
     monkeypatch.setenv("MTUI_CONF", str(cfg_file))
-    cfg = config.Config(None, refhosts=MockRefhosts)
+    cfg = config.Config(None)
     assert cfg.configfiles == [cfg_file]
     assert cfg.connection_timeout == 777
 
@@ -185,7 +115,7 @@ def test_mtui_conf_env_var_selects_configfile(tmpdir, monkeypatch):
 def test_default_configfiles_when_no_path_no_env(monkeypatch):
     """No ``path`` and no ``MTUI_CONF`` falls back to the canonical pair."""
     monkeypatch.delenv("MTUI_CONF", raising=False)
-    cfg = config.Config(None, refhosts=MockRefhosts)
+    cfg = config.Config(None)
     assert cfg.configfiles == [
         Path("/etc/mtui.cfg"),
         Path("~/.mtuirc").expanduser(),
@@ -198,42 +128,13 @@ def test_read_logs_and_swallows_configparser_error(tmpdir, caplog):
     # MissingSectionHeaderError: option line before any [section].
     cfg_file.write_text("connection_timeout = 42\n")
     with caplog.at_level("ERROR", logger="mtui.config"):
-        cfg = config.Config(cfg_file, refhosts=MockRefhosts)
+        cfg = config.Config(cfg_file)
     assert any(
         "MissingSectionHeader" in r.message or "section" in r.message.lower()
         for r in caplog.records
     )
     # Defaults still applied; broken file did not poison subsequent steps.
     assert cfg.connection_timeout == 300
-
-
-def test_location_setter_invalid_location_keeps_previous(tmpdir, caplog):
-    """``InvalidLocationError`` is logged and the location is unchanged."""
-    cfg_file = Path(tmpdir.join("loc.cfg"))
-    cfg_file.write_text("")
-    refhosts = RaisingRefhosts
-    cfg = config.Config(cfg_file, refhosts=refhosts)
-    assert cfg.location == "default"
-    refhosts.exc = InvalidLocationError("nowhere", ["here", "there"])
-    with caplog.at_level("ERROR", logger="mtui.config"):
-        cfg.location = "nowhere"
-    assert cfg.location == "default"
-    assert any("nowhere" in r.message for r in caplog.records)
-    refhosts.exc = None  # reset shared class state
-
-
-def test_location_setter_resolve_failed_keeps_previous(tmpdir, caplog):
-    """``RefhostsResolveFailedError`` is logged and the location is unchanged."""
-    cfg_file = Path(tmpdir.join("loc.cfg"))
-    cfg_file.write_text("")
-    refhosts = RaisingRefhosts
-    cfg = config.Config(cfg_file, refhosts=refhosts)
-    refhosts.exc = RefhostsResolveFailedError()
-    with caplog.at_level("ERROR", logger="mtui.config"):
-        cfg.location = "anywhere"
-    assert cfg.location == "default"
-    assert any("refhosts.yml" in r.message for r in caplog.records)
-    refhosts.exc = None
 
 
 @pytest.mark.parametrize(
@@ -258,7 +159,7 @@ def test_fixup_failure_logs_and_falls_back_to_default(
     cfg_file = Path(tmpdir.join("typed.cfg"))
     cfg_file.write_text(f"[{ini_section}]\n{ini_key} = {ini_value}\n")
     with caplog.at_level("ERROR", logger="mtui.config"):
-        cfg = config.Config(cfg_file, refhosts=MockRefhosts)
+        cfg = config.Config(cfg_file)
     assert getattr(cfg, attr) == expected_default
     assert any(attr in r.message and ini_value in r.message for r in caplog.records), (
         f"expected an ERROR log line mentioning {attr!r} and the bad value "
@@ -289,7 +190,7 @@ def test_typed_getter_failure_logs_and_falls_back_to_default(
     cfg_file = Path(tmpdir.join("typed.cfg"))
     cfg_file.write_text(f"[{ini_section}]\n{ini_key} = {ini_value}\n")
     with caplog.at_level("ERROR", logger="mtui.config"):
-        cfg = config.Config(cfg_file, refhosts=MockRefhosts)
+        cfg = config.Config(cfg_file)
     assert getattr(cfg, attr) == expected_default
     assert any(attr in r.message for r in caplog.records), (
         f"expected an ERROR log line mentioning {attr!r}; "
@@ -312,10 +213,9 @@ def test_mtuirc_fixture_parses_all_sections():
     assert fixture.is_file(), "tests/fixtures/mtuirc fixture missing"
     assert fixture.stat().st_size > 0, "tests/fixtures/mtuirc must be populated"
 
-    cfg = config.Config(fixture, refhosts=MockRefhosts)
+    cfg = config.Config(fixture)
 
     # String values across multiple sections.
-    assert cfg.location == "nuremberg"
     assert cfg.session_user == "qauser"
     assert cfg.openqa_instance == "https://openqa.example.com"
     assert cfg.openqa_install_distri == "sle"

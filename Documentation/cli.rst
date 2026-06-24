@@ -81,12 +81,6 @@ MTUI will display a short description of its options, operands and their usage,
 and exit.
 
 
-``-l SITE, --location SITE``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Overrides the ``mtui.location`` configuration.
-
-
 ``-s SPEC, --sut SPEC``
 ~~~~~~~~~~~~~~~~~~~~~~~
 
