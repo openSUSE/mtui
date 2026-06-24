@@ -167,6 +167,9 @@ class Target:
                 self._timeout,
                 missing_host_key_policy=policy_from_config(policy_name),
                 timeout_prompt=self._prompter.ask if self._prompter else None,
+                password_prompt=(
+                    self._prompter.ask_password if self._prompter else None
+                ),
                 interactive=self._interactive,
             )
         except Exception as e:

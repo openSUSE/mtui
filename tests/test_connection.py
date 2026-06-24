@@ -512,6 +512,92 @@ def test_connect_wrong_password_reraises(
         Connection("test_host", 22, 300)
 
 
+def test_connection_password_prompt_is_host_labelled(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """The key-auth fallback prompt must name the user and host.
+
+    Regression for the "silent wait" UX: the old bare ``getpass.getpass()``
+    gave no indication of *why* the terminal was blocked. The prompt now
+    embeds ``<user>@<host>'s password: `` so the user understands what is
+    being asked.
+    """
+    mock_ssh_client.connect.side_effect = [
+        paramiko.AuthenticationException,
+        None,  # password attempt succeeds
+    ]
+    with patch("getpass.getpass", return_value="password") as mock_getpass:
+        Connection("test_host", 22, 300)
+
+    mock_getpass.assert_called_once()
+    (prompt_text,) = mock_getpass.call_args.args
+    assert "test_host" in prompt_text
+    assert "root@test_host" in prompt_text
+
+
+def test_connect_wrong_password_logs_only_at_debug(
+    mock_ssh_client, mock_ssh_config, mock_path, caplog
+):
+    """A wrong password emits NO error/critical at the connection layer.
+
+    Regression for the duplicate message: the connection used to log
+    ``error: ...wrong password`` and then ``Target.connect`` logged
+    ``critical: connecting to ... failed``. The connection layer now keeps
+    its specific wording (plus traceback) at DEBUG so only one user-facing
+    line -- ``Target.connect``'s -- is printed.
+    """
+    mock_ssh_client.connect.side_effect = [
+        paramiko.AuthenticationException,
+        paramiko.AuthenticationException,
+    ]
+    with (
+        patch("getpass.getpass", return_value="wrong"),
+        pytest.raises(paramiko.AuthenticationException),
+        caplog.at_level("DEBUG", logger="mtui.connection"),
+    ):
+        Connection("test_host", 22, 300)
+
+    # Nothing surfaces at ERROR or higher from the connection layer.
+    assert not [
+        r
+        for r in caplog.records
+        if r.levelno >= 40  # ERROR/CRITICAL
+    ]
+    # The detail (with traceback) is available at DEBUG for --debug runs.
+    debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
+    wrong_pw = [r for r in debug_records if "wrong password" in r.getMessage()]
+    assert len(wrong_pw) == 1
+    assert wrong_pw[0].exc_info is not None
+
+
+def test_connection_uses_password_prompt_callback_over_getpass(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """When a ``password_prompt`` callback is wired, it is used (not getpass).
+
+    Regression for the "silent wait": in the prompt_toolkit REPL a bare
+    ``getpass.getpass`` renders nothing. ``Target`` wires
+    ``Prompter.ask_password`` as ``password_prompt`` so the masked prompt is
+    rendered correctly; the callback must take precedence over getpass and
+    receive the host-labelled prompt text.
+    """
+    mock_ssh_client.connect.side_effect = [
+        paramiko.AuthenticationException,
+        None,  # password attempt succeeds
+    ]
+    callback = MagicMock(return_value="secret")
+    with patch("getpass.getpass") as mock_getpass:
+        Connection("test_host", 22, 300, password_prompt=callback)
+
+    mock_getpass.assert_not_called()
+    callback.assert_called_once()
+    (prompt_text,) = callback.call_args.args
+    assert "root@test_host" in prompt_text
+    # The captured password is fed to the retry connect.
+    second_call = mock_ssh_client.connect.call_args_list[1]
+    assert second_call.kwargs["password"] == "secret"
+
+
 def test_connect_sshexception_propagates(
     mock_ssh_client, mock_ssh_config, mock_path, caplog
 ):
