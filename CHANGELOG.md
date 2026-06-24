@@ -69,6 +69,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Loading a template no longer connects to *every* matching reference host when a
+  testplatform resolves to several candidates on the same architecture. The
+  autoconnect that runs during `load_template` was happening before the host
+  arbiter was wired, so it fell back to the legacy "connect all candidates" path;
+  it now draws exactly one host per test-target slot (product + version + arch +
+  addons). If that host fails to connect, mtui automatically falls back to a
+  backup candidate from the same slot, and only warns once when every candidate
+  for a slot is unreachable.
 - `assign`/`approve`/`reject`/`comment` no longer hang the mtui-mcp server. The
   `osc qam` subprocess inherited the server's stdin — under mtui-mcp that is the
   MCP stdio JSON-RPC pipe — so an interactive `osc` prompt (e.g. an approve

@@ -244,15 +244,11 @@ class AutoOBSUpdateID(UpdateID):
             tr.workflow = Workflow.MANUAL
 
             if autoconnect:
-                logger.info("Connect refhosts from testreport")
-                tr.connect_targets()
-
-                for tp in tr.testplatforms:
-                    logger.debug("Testplatform: %s", tp)
-                    tr.refhosts_from_tp(tp)
-
-                logger.info("Connect refhosts from TestPlatform")
-                tr.connect_targets()
+                # Defer the actual connect to TestReport.autoconnect(), which
+                # the loader calls *after* TemplateRegistry.add wires the host
+                # arbiter -- so refhosts_from_tp draws one host per slot
+                # (with backup) instead of connecting every candidate.
+                tr._autoconnect_pending = True  # noqa: SLF001
 
         return tr
 

@@ -188,7 +188,114 @@ def test_release_pool_claims_unlocks_and_releases(tmp_path: Path) -> None:
     r.release_pool_claims()
     target.unlock.assert_called_once()
     assert r._pool_claims == set()
+    assert r._slot_candidates == {}
     assert r._arbiter.owner_of(claimed) is None
+
+
+def test_pool_records_slot_candidates_for_backup(tmp_path: Path) -> None:
+    slot = ("sles", "15-5", "x86_64", ())
+    pairs = [_ph("a-x86", slot), _ph("b-x86", slot)]
+    r = _pool_report(tmp_path, pairs)
+    r.refhosts_from_tp("tp")
+    assert r._slot_candidates[slot] == ["a-x86", "b-x86"]
+
+
+# ---------------------------------------------------------------------------
+# Deferred autoconnect (runs after the arbiter is wired by the registry)
+# ---------------------------------------------------------------------------
+
+
+def test_autoconnect_noop_when_not_pending(tmp_path: Path) -> None:
+    r = _make(tmp_path)
+    assert r._autoconnect_pending is False
+    with patch.object(r, "connect_targets") as ct:
+        r.autoconnect()
+    ct.assert_not_called()
+
+
+def test_autoconnect_connects_and_resolves_testplatforms(tmp_path: Path) -> None:
+    r = _make(tmp_path)
+    r._autoconnect_pending = True
+    r.testplatforms = ["tp1", "tp2"]
+    with (
+        patch.object(r, "connect_targets") as ct,
+        patch.object(r, "refhosts_from_tp") as rft,
+    ):
+        r.autoconnect()
+    # connect once for testreport hosts, once after resolving testplatforms
+    assert ct.call_count == 2
+    assert [c.args[0] for c in rft.call_args_list] == ["tp1", "tp2"]
+    # flag cleared so a second call is a no-op
+    assert r._autoconnect_pending is False
+    with patch.object(r, "connect_targets") as ct2:
+        r.autoconnect()
+    ct2.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Connect-time backup refhost (RFC §5.7)
+# ---------------------------------------------------------------------------
+
+
+def _stub_connect(r, connectable: set[str]) -> None:
+    """Patch connect_target so only hosts in ``connectable`` succeed."""
+
+    def fake(host):
+        if host in connectable:
+            t = MagicMock()
+            t.system = f"sys-{host}"
+            return t, str(t.system)
+        return False, False
+
+    r.connect_target = MagicMock(side_effect=fake)
+
+
+def test_connect_targets_falls_back_to_backup_on_primary_failure(
+    tmp_path: Path,
+) -> None:
+    slot = ("sles", "15-5", "x86_64", ())
+    pairs = [_ph("primary", slot), _ph("backup", slot)]
+    r = _pool_report(tmp_path, pairs)
+    r.refhosts_from_tp("tp")
+    primary = next(iter(r._pool_claims))
+    backup = "backup" if primary == "primary" else "primary"
+    # Only the backup is reachable.
+    _stub_connect(r, {backup})
+    r.connect_targets()
+    assert backup in r.targets
+    assert primary not in r.targets
+    assert backup in r._pool_claims
+    assert primary not in r._pool_claims
+
+
+def test_connect_targets_warns_when_all_slot_candidates_down(
+    tmp_path: Path, caplog
+) -> None:
+    slot = ("sles", "15-5", "x86_64", ())
+    pairs = [_ph("h1", slot), _ph("h2", slot)]
+    r = _pool_report(tmp_path, pairs)
+    r.refhosts_from_tp("tp")
+    _stub_connect(r, set())  # nothing reachable
+    with caplog.at_level(logging.WARNING, logger="mtui.template.testreport"):
+        r.connect_targets()
+    assert r.targets == {}
+    assert any(
+        "no connectable pool host for slot" in rec.message for rec in caplog.records
+    )
+
+
+def test_connect_targets_no_backup_when_primary_connects(tmp_path: Path) -> None:
+    slot = ("sles", "15-5", "x86_64", ())
+    pairs = [_ph("primary", slot), _ph("backup", slot)]
+    r = _pool_report(tmp_path, pairs)
+    r.refhosts_from_tp("tp")
+    primary = next(iter(r._pool_claims))
+    _stub_connect(r, {primary})
+    r.connect_targets()
+    assert primary in r.targets
+    # backup was never attempted (only the primary connect_target call)
+    attempted = {c.args[0] for c in r.connect_target.call_args_list}
+    assert attempted == {primary}
 
 
 # ---------------------------------------------------------------------------

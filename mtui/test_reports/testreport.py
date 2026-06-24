@@ -135,6 +135,16 @@ class TestReport(ABC):
         self._owner: tuple[str, str] | None = None
         # Hosts this report has claimed through the arbiter (for release).
         self._pool_claims: set[str] = set()
+        # Per-slot ordered candidate hostnames captured during pool selection,
+        # so connect_targets can fall back to a sibling host when the primary
+        # claim fails to connect (RFC §5.7 backup-refhost).
+        self._slot_candidates: dict[tuple, list[str]] = {}
+        # Set by ``make_testreport`` when a load asked for autoconnect; the
+        # actual connect is deferred to :meth:`autoconnect` so it runs *after*
+        # ``TemplateRegistry.add`` has wired the host arbiter (otherwise the
+        # legacy search() path connects every candidate instead of one per
+        # slot).
+        self._autoconnect_pending = False
         self.bugs: dict[str, str] = {}
         self.jira: dict[str, str] = {}
         self.testplatforms: list[str] = []
@@ -666,6 +676,10 @@ class TestReport(ABC):
             del connections
             del executor
 
+        # For pool slots whose chosen host did not connect, fall back to a
+        # sibling candidate in the same slot (RFC §5.7 backup-refhost).
+        self._connect_pool_backups(hosts, targets, new_systems)
+
         # We need to be sure that only the system property only have the  connected hosts
         self.systems = {host: system for host, system in new_systems.items() if system}
         for t in self.targets.copy():
@@ -675,6 +689,75 @@ class TestReport(ABC):
         self.targets.update(
             {host: target for host, target in targets.items() if target}
         )
+
+    def _connect_pool_backups(
+        self,
+        attempted: set[str],
+        targets: dict[str, Target],
+        new_systems: dict[str, str],
+    ) -> None:
+        """Retry failed pool slots against their remaining candidates.
+
+        A slot whose primary claim failed to connect (and which we did not
+        already connect via another candidate) is retried sequentially: the
+        next free candidate in the slot is claimed through the arbiter and
+        connected, until one succeeds or the slot is exhausted. Mutates
+        ``targets`` / ``new_systems`` in place for any backup that connects.
+
+        Best-effort and a no-op when pool selection is inactive. Failures are
+        rare, so the retry runs serially rather than re-entering the fan-out.
+        """
+        if not self._pool_selection_active() or not self._slot_candidates:
+            return
+        arbiter = self._arbiter
+        owner = self._owner
+        if arbiter is None or owner is None:
+            return
+
+        for slot, candidates in self._slot_candidates.items():
+            # Already have a live connection for this slot? Nothing to do.
+            if any(c in targets for c in candidates):
+                continue
+            # Drop the dead primary claim(s) so a sibling can be tried and the
+            # exhausted-pool wait below reflects real availability.
+            for c in candidates:
+                if c in self._pool_claims and c not in targets:
+                    self._pool_claims.discard(c)
+                    arbiter.release(c, owner)
+
+            remaining = [c for c in candidates if c not in attempted]
+            connected = False
+            while remaining:
+                chosen = arbiter.acquire_any(
+                    remaining,
+                    owner,
+                    wait=self.config.lock_wait,
+                    poll=self.config.lock_wait_poll,
+                )
+                if chosen is None:
+                    break
+                attempted.add(chosen)
+                remaining.remove(chosen)
+                self._pool_claims.add(chosen)
+                self.hostnames.add(chosen)
+                logger.info("Trying backup refhost %s for slot %s", chosen, slot)
+                target, new_system = self.connect_target(chosen)
+                if target is False or new_system is False:
+                    # connect_target already released the in-process claim on a
+                    # remote-lock race; drop it unconditionally so the next
+                    # candidate is free to try.
+                    self._pool_claims.discard(chosen)
+                    arbiter.release(chosen, owner)
+                    continue
+                targets[chosen], new_systems[chosen] = target, new_system
+                connected = True
+                break
+            if not connected:
+                logger.warning(
+                    "no connectable pool host for slot %s (tried %d candidates)",
+                    slot,
+                    len(candidates),
+                )
 
     def add_target(self, hostname: str) -> None:
         """Adds a target to the test report.
@@ -774,6 +857,9 @@ class TestReport(ABC):
         for host, slot in pairs:
             by_slot.setdefault(slot, []).append(host.name)
         for slot, candidates in by_slot.items():
+            # Remember the full candidate list so connect_targets can fall
+            # back to a sibling host if the chosen one fails to connect.
+            self._slot_candidates[slot] = list(candidates)
             # Skip slots we already hold a host for (across testplatforms).
             if any(arbiter.owner_of(c) == owner for c in candidates):
                 continue
@@ -806,8 +892,34 @@ class TestReport(ABC):
                 with suppress(Exception):
                     target.unlock()
         self._pool_claims.clear()
+        self._slot_candidates.clear()
         if self._arbiter is not None and self._owner is not None:
             self._arbiter.release_owner(self._owner)
+
+    def autoconnect(self) -> None:
+        """Connect refhosts for a freshly loaded (manual-fallback) template.
+
+        Deferred from :meth:`UpdateID.make_testreport` so it runs *after*
+        :meth:`TemplateRegistry.add` has wired the host arbiter. With the
+        arbiter in place, :meth:`refhosts_from_tp` takes the pool-selection
+        path and draws one host per test-target slot (instead of the legacy
+        ``search()`` path that connected every candidate per arch).
+
+        No-op unless ``make_testreport`` flagged this report for autoconnect.
+        """
+        if not self._autoconnect_pending:
+            return
+        self._autoconnect_pending = False
+
+        logger.info("Connect refhosts from testreport")
+        self.connect_targets()
+
+        for tp in self.testplatforms:
+            logger.debug("Testplatform: %s", tp)
+            self.refhosts_from_tp(tp)
+
+        logger.info("Connect refhosts from TestPlatform")
+        self.connect_targets()
 
     def list_bugs(self, sink, arg):
         """Lists the bugs for the test report.

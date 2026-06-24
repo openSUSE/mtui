@@ -380,6 +380,10 @@ class McpSession:
         # Re-apply the non-interactive flag after the testreport swap so
         # the fresh HostsGroup inherits the session's headless mode.
         self.targets.interactive = False
+        # Run the deferred autoconnect now that ``add`` has wired the host
+        # arbiter, so refhosts are drawn one-per-slot (with backup) instead of
+        # connecting every candidate. No-op unless autoconnect was requested.
+        tr.autoconnect()
         self.set_prompt()
 
     # ------------------------------------------------------------------
