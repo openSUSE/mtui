@@ -16,6 +16,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   calls through one lock, every subsequent tool call wedged behind it. `osc` now
   runs with stdin detached (`DEVNULL`) and a 180s timeout, so it either completes
   or fails cleanly instead of deadlocking the session.
+- A failed `assign`/`approve`/`reject`/`comment` now reports *why*. `osc qam` is
+  run with its output captured, so a non-zero exit logs osc's actual stderr
+  (e.g. "request already accepted", "user not assigned") instead of a bare "the
+  command returned a non-zero exit code", and the `OSC` methods now return a
+  success/failure boolean to the caller. When the failure followed a
+  `-G/--group` call, the error adds an actionable hint: that path triggers an
+  interactive osc confirmation which cannot be answered headless (e.g. under
+  mtui-mcp), so the operation should be re-run without `-G/--group` to act on the
+  review assigned to you.
 - Desktop notifications (the `notify` extra) work again. They imported the
   long-dead `pynotify` PyGTK binding, which is unavailable on Python 3.13+, so
   the REPL's update-finished/update-failed toasts were a silent no-op; the
