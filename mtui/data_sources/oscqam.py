@@ -3,7 +3,7 @@
 from logging import getLogger
 from shlex import join as shlex_join
 from shlex import quote
-from subprocess import DEVNULL, CalledProcessError, TimeoutExpired, check_call
+from subprocess import DEVNULL, CalledProcessError, TimeoutExpired, run
 
 from ..support.config import Config
 from ..types.enums import RequestKind
@@ -12,6 +12,24 @@ from ..types.rrid import RequestReviewID
 logger = getLogger("mtui.connector.oscqam")
 
 API = "https://api.suse.de"
+
+
+def _tail(text: str | None, limit: int = 2000) -> str:
+    """Trim captured osc output to its last ``limit`` chars for logging.
+
+    Args:
+        text: Captured stdout/stderr, possibly ``None``.
+        limit: Maximum number of characters to keep.
+
+    Returns:
+        The stripped text, truncated from the front (prefixed with an
+        ellipsis) when longer than ``limit``; ``""`` when ``text`` is empty.
+
+    """
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return "…" + text[-limit:]
 
 
 class OSC:
@@ -35,7 +53,7 @@ class OSC:
         reason: str = "",
         message: str = "",
         comment: str = "",
-    ) -> None:
+    ) -> bool:
         """Constructs and executes `osc qam` commands safely.
 
         This method builds the command as a list of arguments to
@@ -47,6 +65,11 @@ class OSC:
             reason: The reason for a rejection.
             message: The message to include with the operation.
             comment: A comment to add to the request.
+
+        Returns:
+            ``True`` when osc exited cleanly, ``False`` on any failure
+            (non-zero exit, timeout, or osc not found). Failures are logged
+            with osc's captured stderr so the caller learns *why*.
 
         """
         # Start with the base command components that are always present.
@@ -98,16 +121,36 @@ class OSC:
             # Never let osc inherit the server's stdin: under mtui-mcp that stdin is
             # the MCP stdio JSON-RPC pipe, so an interactive osc prompt (e.g. an
             # approve confirmation) would block reading it forever and deadlock the
-            # single-threaded server. Feed EOF instead, and cap the runtime so a
-            # stalled osc can never wedge the whole session.
-            check_call(command, stdin=DEVNULL, timeout=180)
-
-        except CalledProcessError:
-            logger.error(
-                "'%s' operation failed. The command returned a non-zero exit code.",
-                operation,
+            # single-threaded server. Feed EOF instead, cap the runtime so a stalled
+            # osc can never wedge the session, and capture output so a failure can
+            # report osc's actual reason instead of a bare exit code.
+            proc = run(
+                command,
+                stdin=DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=True,
             )
+
+        except CalledProcessError as e:
+            detail = _tail(e.stderr) or _tail(e.stdout) or f"exit code {e.returncode}"
+            logger.error("'%s' operation failed: %s", operation, detail)
+            if groups:
+                # `osc qam <op> -G` first asks an interactive confirmation; with
+                # stdin detached that prompt EOFs, so the -G path can only fail
+                # headless. The group review reassigned to you on pickup is a plain
+                # user review — approve/assign it without -G.
+                logger.error(
+                    "'%s' was called with -G/--group, whose osc confirmation prompt "
+                    "cannot be answered without a terminal (e.g. under mtui-mcp). "
+                    "Re-run '%s' without -G/--group to act on the review assigned "
+                    "to you.",
+                    operation,
+                    operation,
+                )
             logger.debug("Call stack trace:", stack_info=True)
+            return False
 
         except TimeoutExpired:
             logger.error(
@@ -115,47 +158,66 @@ class OSC:
                 "(likely an interactive prompt with no input).",
                 operation,
             )
+            return False
 
         except FileNotFoundError:
             logger.error("'osc' command not found. Is it installed and in your PATH?")
+            return False
 
-    def approve(self, group: list[str]) -> None:
+        out = _tail(proc.stdout)
+        if out:
+            logger.info("'%s' succeeded: %s", operation, out)
+        return True
+
+    def approve(self, group: list[str]) -> bool:
         """Approves a review request for one or more groups.
 
         Args:
             group: A list of group names to approve the request for.
 
-        """
-        self.__operation("approve", group)
+        Returns:
+            ``True`` if osc approved cleanly, ``False`` otherwise.
 
-    def assign(self, group: list[str]) -> None:
+        """
+        return self.__operation("approve", group)
+
+    def assign(self, group: list[str]) -> bool:
         """Assigns a review request to one or more groups.
 
         Args:
             group: A list of group names to assign the request to.
 
-        """
-        self.__operation("assign", group)
+        Returns:
+            ``True`` if osc assigned cleanly, ``False`` otherwise.
 
-    def unassign(self, group: list[str]) -> None:
+        """
+        return self.__operation("assign", group)
+
+    def unassign(self, group: list[str]) -> bool:
         """Unassigns a review request from one or more groups.
 
         Args:
             group: A list of group names to unassign the request from.
 
-        """
-        self.__operation("unassign", group)
+        Returns:
+            ``True`` if osc unassigned cleanly, ``False`` otherwise.
 
-    def comment(self, comment: str) -> None:
+        """
+        return self.__operation("unassign", group)
+
+    def comment(self, comment: str) -> bool:
         """Adds a comment to a review request.
 
         Args:
             comment: The comment to add.
 
-        """
-        self.__operation("comment", [], comment=comment)
+        Returns:
+            ``True`` if osc recorded the comment cleanly, ``False`` otherwise.
 
-    def reject(self, group: list[str], reason: str, message: str) -> None:
+        """
+        return self.__operation("comment", [], comment=comment)
+
+    def reject(self, group: list[str], reason: str, message: str) -> bool:
         """Rejects a review request.
 
         Args:
@@ -163,5 +225,8 @@ class OSC:
             reason: The reason for the rejection.
             message: The rejection message.
 
+        Returns:
+            ``True`` if osc rejected cleanly, ``False`` otherwise.
+
         """
-        self.__operation("reject", group, reason=reason, message=message)
+        return self.__operation("reject", group, reason=reason, message=message)
