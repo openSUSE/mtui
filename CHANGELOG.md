@@ -106,6 +106,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   addons). If that host fails to connect, mtui automatically falls back to a
   backup candidate from the same slot, and only warns once when every candidate
   for a slot is unreachable.
+- `add_host` without `--target` (selecting hosts from the testplatform) now
+  connects exactly one host per test-target slot. Two problems caused several
+  machines on the same architecture/product to be connected: (1) in automatic
+  mode the reference hosts pre-loaded from the template were still connected
+  alongside the pool-selected host, and (2) the per-slot grouping keyed on every
+  module a host happened to have installed, so two otherwise-interchangeable
+  hosts that differed by a single installed module were treated as separate
+  slots and both connected. Selection now groups by what the testplatform
+  actually requests (base product + version + arch + the requested addons) and
+  connects only the arbiter-chosen host per slot. The host drawn for each slot
+  (and the backup-on-failure order) is chosen at random among the free
+  candidates so load is spread across interchangeable refhosts.
 - `assign`/`approve`/`reject`/`comment` no longer hang the mtui-mcp server. The
   `osc qam` subprocess inherited the server's stdin — under mtui-mcp that is the
   MCP stdio JSON-RPC pipe — so an interactive `osc` prompt (e.g. an approve

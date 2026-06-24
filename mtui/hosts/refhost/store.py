@@ -267,6 +267,60 @@ class Refhosts:
             (host, self.slot_of(host)) for host in self.query(attributes=attributes)
         ]
 
+    @staticmethod
+    def slot_for_query(
+        attribute: Attributes, host: Host
+    ) -> tuple[str, str, str, tuple[str, ...]]:
+        """Return the test-target slot keyed on the *queried* attributes.
+
+        Unlike :meth:`slot_of` — which keys on every module a host happens to
+        have installed — this keys on what the testplatform actually
+        distinguishes: the base product + version it requests, the host's arch
+        (testplatforms fan out one query per arch), and only the addons the
+        testplatform explicitly asked for. Hosts that satisfy the same query
+        are interchangeable for that update and must collapse to one slot, so
+        the arbiter draws a single host per (product, version, arch, requested
+        addons) instead of one per distinct installed-module set.
+        """
+        product = attribute.product
+        if product is None:
+            name, ver_str = "", ""
+        else:
+            name = product.name
+            ver = product.version
+            if ver is None:
+                ver_str = ""
+            elif ver.minor is None or ver.minor == "":
+                ver_str = str(ver.major)
+            else:
+                ver_str = f"{ver.major}-{ver.minor}"
+        addons = tuple(sorted(a.name for a in attribute.addons))
+        return (name, ver_str, host.arch, addons)
+
+    def search_pool_by_query(
+        self,
+        attributes: list[Attributes],
+    ) -> list[tuple[Host, tuple[str, str, str, tuple[str, ...]]]]:
+        """Return pool candidates ``(host, slot)`` keyed on the query slot.
+
+        Like :meth:`search_pool` but tags each match with
+        :meth:`slot_for_query` (the testplatform's requested identity) rather
+        than the host's full installed-module identity, so host-arbitration
+        draws one host per *requested* test-target slot. Each host is tagged
+        with the slot of the first attribute it matches.
+        """
+        out: list[tuple[Host, tuple[str, str, str, tuple[str, ...]]]] = []
+        seen: set[str] = set()
+        for host in self.query(attributes=attributes):
+            if host.name in seen:
+                continue
+            for attribute in attributes:
+                if self.is_candidate_match(host, attribute):
+                    out.append((host, self.slot_for_query(attribute, host)))
+                    seen.add(host.name)
+                    break
+        return out
+
 
 class RefhostsResolveFailedError(RuntimeError):
     """Raised when no resolver can produce a usable ``refhosts.yml`` source."""
