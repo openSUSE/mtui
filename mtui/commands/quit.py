@@ -27,27 +27,31 @@ class Quit(Command):
             help="reboot or poweroff refhosts",
         )
 
-    def _close_target(self, target: str, args) -> None:
+    @staticmethod
+    def _close_target(targets, target: str, args) -> None:
         """Closes the connection to a single target host.
 
         Args:
+            targets: The :class:`HostsGroup` owning the target host.
             target: The hostname of the target host to close.
             args: A list of arguments to pass to the close method.
 
         """
-        self.targets[target].close(*args)
-        self.targets.pop(target)
+        targets[target].close(*args)
+        targets.pop(target)
 
     def __call__(self) -> None:
         """Executes the `quit` command."""
         args_ = [self.args.bootarg] if self.args.bootarg else []
 
+        # Close every loaded template's host group, not just the active one.
         with ContextExecutor() as executor:
-            targets = [
-                executor.submit(self._close_target, target, args_)
-                for target in set(self.targets)
+            futures = [
+                executor.submit(self._close_target, report.targets, target, args_)
+                for report in self.templates.all()
+                for target in set(report.targets)
             ]
-            concurrent.futures.wait(targets, timeout=45)
+            concurrent.futures.wait(futures, timeout=45)
 
         # FileHistory writes synchronously on each ``append_string``, so the
         # on-disk file is already current. ``flush()`` is the canonical

@@ -499,7 +499,22 @@ def test_bottom_toolbar_manual_mode_empty_session_zero_hosts():
     p = _make_prompt()
     # NullTestReport.targets is an empty HostsGroup which supports len().
     assert len(p.targets) == 0
-    assert p._bottom_toolbar() == " mode: manual  session: empty  hosts: 0 "
+    assert p._bottom_toolbar() == (
+        " mode: manual  session: empty  hosts: 0  templates: 0  active: - "
+    )
+
+
+def test_bottom_toolbar_shows_template_count_and_active():
+    """Loaded templates surface as ``templates: N`` / ``active: <RRID>``."""
+    p = _make_prompt()
+    _load_mock_report(p, rrid="SUSE:Maintenance:1:1", targets={})
+    _load_mock_report(p, rrid="SUSE:Maintenance:2:2", targets={})
+
+    out = p._bottom_toolbar()
+
+    assert " templates: 2 " in out
+    # _load_mock_report sets each loaded report active, so the last one wins.
+    assert " active: SUSE:Maintenance:2:2 " in out
 
 
 def test_bottom_toolbar_kernel_mode():

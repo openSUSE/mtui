@@ -17,8 +17,12 @@ Per-entry rationale:
   already advertises tool descriptions to clients.
 - ``terms``: launches local terminal-emulator scripts (``term.<name>.sh``)
   that spawn ``xterm``/``konsole``/etc. on the operator's ``$DISPLAY``.
+- ``switch``, ``unload``: interactive multi-template navigation that mutates
+  the session's active-template pointer / loaded set. MCP multi-template
+  control is exposed instead through the per-tool ``template`` parameter
+  (Phase 4); ``list_templates`` remains available as a read-only listing.
 """
 
 REPL_ONLY: frozenset[str] = frozenset(
-    {"quit", "exit", "EOF", "edit", "shell", "help", "terms"}
+    {"quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch", "unload"}
 )

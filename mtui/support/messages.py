@@ -132,6 +132,14 @@ class MetadataNotLoadedError(UserError):
         return "Metadata not found"
 
 
+class TemplateNotLoadedError(UserError):
+    """Raised when an RRID is not among the loaded templates."""
+
+    def __init__(self, rrid: str) -> None:
+        self.rrid = rrid
+        self.message = f"Template not loaded: {rrid}"
+
+
 class FailedToWriteScriptResult(UserMessage):
     """A message for when writing a script result fails."""
 

@@ -863,10 +863,15 @@ load_template
 
     load_template (-a RequestReviewID | -k RequestReviewID) [-c] 
 
-Loads a QA Maintenance template by its RRID identifier. All changes and logs
-from an already loaded template are lost if not saved previously. Already
+Loads a QA Maintenance template by its RRID identifier. The template is
+*added* to the session: previously loaded templates stay loaded and the newly
+loaded one becomes active. Loading an RRID that is already loaded reloads and
+replaces its stored report (and makes it active). The active template's
 connected hosts are kept and extended by the reference hosts defined in the
 template file. `-a` and `-k` options are mutually exclusive.
+
+Use `list_templates`_ to see all loaded templates, `switch`_ to change the
+active one, and `unload`_ to drop one.
 
 **Options:**
 
@@ -887,6 +892,42 @@ template file. `-a` and `-k` options are mutually exclusive.
   Can be either in the long (``SUSE:Maintenance:XXXX:YYYYYY`` |
   ``SUSE:SLFO:XXXX:YYYY``) or short
   (``S:M:XXXX:YYYYYY`` | ``S:S:XXXX:YYYY``) format.
+
+
+list_templates
+++++++++++++++
+
+::
+
+    list_templates
+
+Lists all loaded templates. For each template the RRID, connected host count
+and workflow mode are shown; the active template is marked with a leading
+``*``.
+
+
+switch
+++++++
+
+::
+
+    switch RRID
+
+Makes the given loaded template active. Plain action commands act on the
+active template. The RRID must be one of the loaded templates (see
+`list_templates`_); an unknown RRID is rejected.
+
+
+unload
+++++++
+
+::
+
+    unload RRID
+
+Unloads one loaded template, closing only its host connections. Other loaded
+templates are left untouched. If the unloaded template was the active one, the
+next remaining template becomes active.
 
 
 list_metadata

@@ -228,7 +228,13 @@ class CommandPrompt:
         except TypeError:
             n_hosts = "?"
 
-        return f" mode: {mode}  session: {sess}  hosts: {n_hosts} "
+        n_templates = len(self.templates)
+        active = self.metadata.id or "-"
+
+        return (
+            f" mode: {mode}  session: {sess}  hosts: {n_hosts} "
+            f" templates: {n_templates}  active: {active} "
+        )
 
     def notify_user(self, msg: str, class_: str = "") -> None:
         """Displays a desktop notification.
@@ -291,6 +297,7 @@ class CommandPrompt:
                         "hosts": self.targets.select(),
                         "metadata": self.metadata,
                         "config": self.config,
+                        "templates": self.templates,
                     },
                     *args,
                     **kw,

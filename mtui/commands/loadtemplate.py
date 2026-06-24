@@ -2,7 +2,6 @@
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
-from ..cli.term import prompt_user
 from ..support.messages import TestReportNotLoadedError
 from ..types.updateid import AutoOBSUpdateID, KernelOBSUpdateID
 from . import Command
@@ -50,41 +49,35 @@ class LoadTemplate(Command):
         )
 
     def __call__(self):
-        """Executes the `load_template` command."""
-        if self.metadata:
-            msg = "Should i owerwrite already loaded session {}? (Y/n) "
-            if not prompt_user(
-                msg.format(self.metadata.id),
-                ["y", "Y", "yes", "YES", "Yes"],
-                self.prompt.interactive,
-                default=True,
-            ):
-                return
+        """Executes the `load_template` command.
 
-        re_add = list(self.targets.keys())
-        for target in re_add:
-            self.targets[target].close()
-            del self.targets[target]
-
+        The template is *added* to the registry rather than replacing the
+        current session. Loading an RRID that is already loaded replaces its
+        stored report (``TemplateRegistry.add`` is keyed by RRID) and makes it
+        active; previously loaded templates are left untouched.
+        """
         if self.args.update.kind not in ("kernel", "auto"):
             raise TestReportNotLoadedError
+
+        # Snapshot the currently active template's hosts *before* loading so
+        # the -c/--clean-hosts carry-over can reconnect them to the new
+        # template. We do not close the old template's connections any more:
+        # the old report stays in the registry with its own hosts.
+        re_add = list(self.targets.keys()) if self.args.chosts else []
 
         # Workflow mode (auto/kernel) is seeded onto the TestReport by
         # make_testreport when load_update runs below.
         self.prompt.load_update(self.args.update, autoconnect=True)
 
-        # Reload hosts to which we already have a connection
-        # close hosts we are already connected to but add them to the
-        # testreport.systems so they get connected to again.
+        # Reconnect the hosts we were already connected to, adding them to the
+        # freshly loaded testreport so they get connected to again.
         # This feature comes from pre-1.0 versions.
         # NOTE: the only reason we need to reconnect seems to be that
         # when the L{Target} object is created, it is passed a list of
         # packages, which changes with the testreport change. So this
         # may go away when refactored.
-
-        if self.args.chosts:
-            for target in re_add:
-                self.prompt.metadata.add_target(target)
+        for target in re_add:
+            self.prompt.metadata.add_target(target)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
