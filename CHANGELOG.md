@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]:
 
+### Added
+
+- Multiple templates can now be loaded at once. `load_template` adds a template
+  to the session instead of overwriting the currently loaded one (loading an
+  already-loaded RRID reloads and replaces it). New commands manage the loaded
+  set: `list_templates` shows every loaded template (RRID, host count, workflow
+  mode, and which one is active), `switch <RRID>` changes the active template,
+  and `unload <RRID>` drops one template, closing only its host connections.
+  `quit` now disconnects every loaded template's hosts. The bottom toolbar shows
+  the loaded-template count and the active RRID. Action commands still operate on
+  the active template only; fan-out across templates lands in a later release.
+
 ### Fixed
 
 - `assign`/`approve`/`reject`/`comment` no longer hang the mtui-mcp server. The

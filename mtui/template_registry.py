@@ -109,6 +109,10 @@ class TemplateRegistry:
         """Return every loaded report in insertion order (for fan-out)."""
         return list(self._entries.values())
 
+    def rrids(self) -> list[str]:
+        """Return every loaded RRID in insertion order (for completion)."""
+        return list(self._entries.keys())
+
     def __bool__(self) -> bool:
         """``True`` when at least one (non-null) template is loaded."""
         return bool(self._entries)

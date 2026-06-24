@@ -19,12 +19,22 @@ def _make_target(hostname):
     return t
 
 
-def _prompt(hg) -> MagicMock:
-    """Build a stand-in for :class:`CommandPrompt` with the surface ``Quit`` reads."""
+def _prompt(*hgs) -> MagicMock:
+    """Build a stand-in for :class:`CommandPrompt` with the surface ``Quit`` reads.
+
+    Accepts one or more :class:`HostsGroup` instances; each is wrapped in a
+    fake report so ``quit`` closes every loaded template's hosts.
+    """
     p = MagicMock()
     p.metadata = MagicMock()
     p.display = MagicMock()
-    p.targets = hg
+    reports = []
+    for hg in hgs:
+        report = MagicMock()
+        report.targets = hg
+        reports.append(report)
+    p.targets = hgs[0] if hgs else {}
+    p.templates.all.return_value = reports
     # ``Quit`` calls ``self.prompt._history.flush()`` to ensure the on-disk
     # history file is up to date. Replace it with a mock we can assert on;
     # the real ``FileHistory`` is exercised by the end-to-end test below.
@@ -90,6 +100,21 @@ def _history_cache_reset():
     yield
     _history._cache.clear()
     _history._cache.update(snapshot)
+
+
+def test_quit_closes_all_loaded_templates(mock_config):
+    """``quit`` disconnects every loaded template's hosts, not just the active."""
+    t1 = _make_target("h1")
+    t2 = _make_target("h2")
+    prompt = _prompt(HostsGroup([t1]), HostsGroup([t2]))
+    sys_mock = MagicMock()
+    args = Namespace(bootarg=None)
+
+    Quit(args, mock_config, sys_mock, prompt)()
+
+    t1.close.assert_called_once_with()
+    t2.close.assert_called_once_with()
+    sys_mock.exit.assert_called_once_with(0)
 
 
 @pytest.mark.usefixtures("_history_cache_reset")
