@@ -188,9 +188,14 @@ list_locks
 
 ::
 
-  list_locks
+  list_locks [-p]
 
 Lists lock state of all connected hosts.
+
+By default only the zypper/operation locks (set by ``lock`` and the
+install/update/prepare/downgrade flows) are shown. Use ``-p``/``--pool`` to
+instead list the host *pool* claims taken during pool selection. The two
+lock mechanisms are independent and use separate lock files on the hosts.
 
 
 list_products
@@ -617,16 +622,26 @@ unlock
 
 ::
 
-    unlock [-f] [-t HOST]
+    unlock [-f] [-p] [-t HOST]
 
 Unlocks given targets. Unlocks all if used without arguments.
+
+By default this removes the zypper/operation lock. Use ``-p``/``--pool`` to
+instead remove the host *pool* claim. The two lock mechanisms are
+independent and use separate lock files on the hosts.
 
 **Options:**
 
 
 .. option:: -f, --force
 
-  Force unlock - removes locks set by other users or sessions.
+  Force unlock - removes locks set by other users or sessions (or, with
+  ``--pool``, by other templates).
+
+
+.. option:: -p, --pool
+
+  Remove the pool claim instead of the zypper/operation lock.
 
 
 Update Management

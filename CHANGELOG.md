@@ -53,6 +53,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   backgrounded fanned-out slow command now mints one job per template (visible in
   `job_list`, individually pollable and cancellable) instead of a single job for
   the whole fan-out.
+- `list_locks` and `unlock` gained a `-p`/`--pool` flag to act on host pool
+  claims instead of the zypper/operation lock. By default both commands operate
+  on the zypper/operation lock only (pool claims are no longer shown by
+  `list_locks`). `unlock --pool --force` removes a pool claim held by another
+  user or template.
 
 ### Removed
 
@@ -69,6 +74,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Host *pool* claims and the zypper/operation lock are now fully independent.
+  Previously both shared a single lock file (`/var/lock/mtui.lock`), so a pool
+  claim taken during host selection blocked subsequent zypper operations
+  (`install`, `uninstall`, `update`, `prepare`, `downgrade`) with "Hosts
+  locked", and `list_locks` showed pool claims mixed in with operation locks.
+  Pool claims now live in their own file (`/var/lock/mtui-pool.lock`) and never
+  interfere with operation locks.
+- A host pool-claimed by the current template no longer prevents that template
+  from (re)connecting to it, even across `mtui` restarts (pool-claim ownership
+  is now identified by template RRID + user instead of process PID). A host
+  claimed by a different user or template still correctly blocks connection.
+- Pool claims are now reliably removed on disconnect (`remove_host`, `quit`,
+  `unload`, and MCP session teardown), so hosts are not left claimed after a
+  session releases them.
 - The SSH password fallback prompt now renders correctly inside the interactive
   REPL. Previously, when key authentication failed, the password prompt was read
   with `getpass`, which does not cooperate with the prompt_toolkit session that

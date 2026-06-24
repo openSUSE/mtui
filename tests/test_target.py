@@ -330,15 +330,17 @@ def test_set_timeout(mock_config):
 
 
 def test_close_unlocks_and_closes(mock_config):
-    """Test close() unlocks and closes the connection."""
+    """Test close() unlocks both the zypper and pool locks and closes."""
     target = Target(mock_config, "host.example.com")  # type: ignore[arg-type]
     target.connection = MagicMock()
     target.connection.is_active.return_value = True
     target._lock = MagicMock()
+    target._pool_lock = MagicMock()
 
     target.close()
 
     target._lock.unlock.assert_called_once_with(False)
+    target._pool_lock.unlock.assert_called_once_with(False)
     target.connection.close.assert_called_once()
 
 

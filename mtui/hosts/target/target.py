@@ -2,6 +2,7 @@
 
 import errno
 from collections.abc import Callable
+from contextlib import suppress
 from logging import getLogger
 from pathlib import Path
 from string import Template
@@ -28,6 +29,7 @@ from ...update_workflow.checks import (
 )
 from ..connection import CommandTimeoutError, Connection, policy_from_config
 from . import TargetLock, TargetLockedError
+from .locks import PoolLock
 from .package_querier import PackageQuerier
 from .parsers import parse_system
 from .repo_manager import RepoManager
@@ -86,6 +88,7 @@ class Target:
         connection: type[Connection] = Connection,
         prompter: "Prompter | None" = None,
         interactive: bool = True,
+        rrid: str = "",
     ) -> None:
         """Initializes the `Target` object.
 
@@ -109,6 +112,9 @@ class Target:
                 :class:`mtui.connection.Connection`; ``False`` (headless,
                 e.g. ``mtui-mcp``) makes a key-auth failure raise rather
                 than block on an invisible password prompt.
+            rrid: The owning template's RRID, used as the pool-lock
+                ownership identity (see :class:`PoolLock`). Empty for
+                directly-constructed reports that never use pool selection.
 
         """
         self.config = config
@@ -121,6 +127,7 @@ class Target:
         self.Connection = connection
         self._prompter = prompter
         self._interactive = interactive
+        self._rrid = rrid
 
         self.state: TargetState | str = TargetState(state)
         # default timeout for target, used only on connecting/reconnecting Target
@@ -177,6 +184,9 @@ class Target:
             raise e
 
         self._lock = self.TargetLock(self.connection, self.config)
+        # Pool claims use a separate remote file + RRID-based ownership so they
+        # never collide with the per-process zypper operation lock above.
+        self._pool_lock = PoolLock(self.connection, self.config, self._rrid)
         if self.is_locked() and not self._lock.reap_if_stale():
             logger.warning(self._lock.locked_by_msg())
 
@@ -503,7 +513,7 @@ class Target:
             else.
 
         """
-        return self._lock.try_claim(comment)
+        return self._pool_lock.try_claim(comment)
 
     def unlock(self, force: bool = False) -> None:
         """Unlocks the target.
@@ -515,6 +525,20 @@ class Target:
         """
         try:
             self._lock.unlock(force)
+        except TargetLockedError as e:
+            logger.warning(e)
+            raise
+
+    def pool_unlock(self, force: bool = False) -> None:
+        """Removes this target's pool claim (separate from the zypper lock).
+
+        Args:
+            force: If True, removes a pool claim owned by another
+                user/template too.
+
+        """
+        try:
+            self._pool_lock.unlock(force)
         except TargetLockedError as e:
             logger.warning(e)
             raise
@@ -591,6 +615,12 @@ class Target:
             if self.connection and self.connection.is_active():
                 self.connection.timeout = 15
                 self.unlock()
+                # Best-effort: drop our pool claim on disconnect so a host is
+                # not left claimed after the session releases it. Only removes
+                # a claim owned by this template (force=False); foreign claims
+                # are left untouched.
+                with suppress(TargetLockedError):
+                    self.pool_unlock()
         except Exception:
             # ignore if the connection seems to be lost
             pass

@@ -59,9 +59,14 @@ class Reporter:
         sink(t.hostname, t.system, t.lastout().split("\n"))
 
     def locks(self, sink: Callable[[str, System, "TargetLock"], None]) -> None:
-        """Report the lock object to ``sink``."""
+        """Report the zypper/operation lock object to ``sink``."""
         t = self.target
         sink(t.hostname, t.system, t._lock)  # noqa: SLF001
+
+    def pool_locks(self, sink: Callable[[str, System, "TargetLock"], None]) -> None:
+        """Report the pool-claim lock object to ``sink``."""
+        t = self.target
+        sink(t.hostname, t.system, t._pool_lock)  # noqa: SLF001
 
     def timeout(self, sink: Callable[[str, System, int], None]) -> None:
         """Report the current connection timeout to ``sink``."""

@@ -35,10 +35,18 @@ def test_list_hosts_calls_report_self(mock_config):
 
 def test_list_locks_filters_enabled_then_reports(mock_config):
     prompt = _prompt()
-    ListLocks(Namespace(), mock_config, MagicMock(), prompt)()
+    ListLocks(Namespace(pool=False), mock_config, MagicMock(), prompt)()
     prompt.targets.select.assert_called_once_with(enabled=True)
     prompt.targets.select.return_value.report_locks.assert_called_once_with(
-        prompt.display.list_locks
+        prompt.display.list_locks, pool=False
+    )
+
+
+def test_list_locks_pool_flag_reports_pool(mock_config):
+    prompt = _prompt()
+    ListLocks(Namespace(pool=True), mock_config, MagicMock(), prompt)()
+    prompt.targets.select.return_value.report_locks.assert_called_once_with(
+        prompt.display.list_locks, pool=True
     )
 
 
