@@ -88,13 +88,12 @@ a failure on one template does not abort the others.
 
 .. note::
 
-   Enable ``refhosts.pool_select`` to have fan-out draw a **distinct** free
-   reference host per test-target slot from the shared pool, so two templates
-   never collide on the same host (queueing on an exhausted pool per
-   ``lock.wait``). With it off (the default), two loaded templates that point at
-   overlapping reference hosts can each open their own SSH session to the same
-   host; when that matters, enable ``pool_select``, load templates with disjoint
-   host sets, or scope the command with ``-T``.
+   Fan-out always draws a **distinct** free reference host per test-target slot
+   (product + version + arch + addons) from the shared pool, arbitrated
+   in-process so two templates never collide on the same host. When every
+   candidate for a slot is busy, the claim queues on an exhausted pool per
+   ``lock.wait`` / ``lock.wait_poll``. Scope a command with ``-T`` to act on a
+   single template.
 
 
 Commands

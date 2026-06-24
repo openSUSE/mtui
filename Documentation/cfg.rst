@@ -86,7 +86,7 @@ becomes ours, or is reaped as stale; a warning is logged when the wait
 starts and again if it times out (after which the usual "locked" error is
 raised). A value of ``0`` (the default) preserves the historical
 fail-fast behaviour. This is what lets several fanned-out templates queue
-politely on an exhausted shared host pool (see ``refhosts.pool_select``).
+politely on an exhausted shared host pool.
 
 ``lock.wait_poll``
 ~~~~~~~~~~~~~~~~~~
@@ -334,28 +334,6 @@ The ``https`` resolver fetches the refhost database from this URL.
 The ``path`` resolver uses the refhost database at this location.
 
 
-``refhosts.pool_select``
-~~~~~~~~~~~~~~~~~~~~~~~~~
-  | **type**
-  |     bool
-  | **default**
-  |     ``False``
-
-Opt-in refhost-pool parallelism for multi-template fan-out. When enabled,
-each loaded template draws **one distinct free host per test-target slot**
-(product + version + arch + addons) from the shared reference-host pool,
-arbitrated in-process so two templates never draw the same host. Claimed
-hosts take the remote lock with an identifying ``mtui pool <RRID>
-[<owner>]`` comment, and are released (in-process and on the remote lock)
-on ``unload`` / ``quit`` and when an ``mtui-mcp`` session closes. When all
-candidates for a slot are busy, the claim queues per ``lock.wait`` /
-``lock.wait_poll``.
-
-When ``False`` (the default), host selection is byte-for-byte the legacy
-single-host-per-arch path and no pool claims are taken; fan-out across
-templates may then open separate SSH sessions to an overlapping host (see
-the caveat in ``Documentation/user.rst``).
-
 ``refhosts.resolvers``
 ~~~~~~~~~~~~~~~~~~~~~~
   | **type**
@@ -459,7 +437,6 @@ Example
   resolvers = https
   https_uri = https://qam.suse.de/refhosts/refhosts.yml
   path = /usr/share/qam-metadata/refhosts.yml
-  pool_select = false
   
 
   [url]
