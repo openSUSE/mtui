@@ -3,7 +3,7 @@
 from logging import getLogger
 from shlex import join as shlex_join
 from shlex import quote
-from subprocess import CalledProcessError, check_call
+from subprocess import DEVNULL, CalledProcessError, TimeoutExpired, check_call
 
 from ..support.config import Config
 from ..types.enums import RequestKind
@@ -95,7 +95,12 @@ class OSC:
         logger.debug("Executing command: %s", shlex_join(command))
 
         try:
-            check_call(command)
+            # Never let osc inherit the server's stdin: under mtui-mcp that stdin is
+            # the MCP stdio JSON-RPC pipe, so an interactive osc prompt (e.g. an
+            # approve confirmation) would block reading it forever and deadlock the
+            # single-threaded server. Feed EOF instead, and cap the runtime so a
+            # stalled osc can never wedge the whole session.
+            check_call(command, stdin=DEVNULL, timeout=180)
 
         except CalledProcessError:
             logger.error(
@@ -103,6 +108,13 @@ class OSC:
                 operation,
             )
             logger.debug("Call stack trace:", stack_info=True)
+
+        except TimeoutExpired:
+            logger.error(
+                "'%s' operation timed out after 180s; osc did not return "
+                "(likely an interactive prompt with no input).",
+                operation,
+            )
 
         except FileNotFoundError:
             logger.error("'osc' command not found. Is it installed and in your PATH?")

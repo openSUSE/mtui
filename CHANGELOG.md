@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `assign`/`approve`/`reject`/`comment` no longer hang the mtui-mcp server. The
+  `osc qam` subprocess inherited the server's stdin — under mtui-mcp that is the
+  MCP stdio JSON-RPC pipe — so an interactive `osc` prompt (e.g. an approve
+  confirmation) blocked reading it forever and, because the server serialises
+  calls through one lock, every subsequent tool call wedged behind it. `osc` now
+  runs with stdin detached (`DEVNULL`) and a 180s timeout, so it either completes
+  or fails cleanly instead of deadlocking the session.
 - Desktop notifications (the `notify` extra) work again. They imported the
   long-dead `pynotify` PyGTK binding, which is unavailable on Python 3.13+, so
   the REPL's update-finished/update-failed toasts were a silent no-op; the
