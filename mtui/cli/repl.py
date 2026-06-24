@@ -472,4 +472,8 @@ class CommandPrompt:
         self.templates.add(tr)
         if str(tr.id):
             self.templates.set_active(str(tr.id))
+        # Run the deferred autoconnect now that ``add`` has wired the host
+        # arbiter, so refhosts are drawn one-per-slot (with backup) instead of
+        # connecting every candidate. No-op unless autoconnect was requested.
+        tr.autoconnect()
         self.set_prompt()
