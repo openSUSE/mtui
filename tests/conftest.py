@@ -91,6 +91,9 @@ def mock_target(mock_config, mock_connection, mock_system):
     target._lock = MagicMock()
     target._lock.is_locked.return_value = False
     target._lock.is_mine.return_value = True
+    target._pool_lock = MagicMock()
+    target._pool_lock.is_locked.return_value = False
+    target._pool_lock.is_mine.return_value = True
     target.system = mock_system
     target.transactional = False
     target.packages = {
@@ -123,6 +126,9 @@ def mock_target_pair(mock_config, mock_system):
         t._lock = MagicMock()
         t._lock.is_locked.return_value = False
         t._lock.is_mine.return_value = True
+        t._pool_lock = MagicMock()
+        t._pool_lock.is_locked.return_value = False
+        t._pool_lock.is_mine.return_value = True
         t.system = mock_system
         t.transactional = False
         t.packages = {}

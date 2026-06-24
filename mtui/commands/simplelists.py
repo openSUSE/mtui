@@ -27,13 +27,35 @@ class ListBugs(Command):
 
 
 class ListLocks(Command):
-    """Lists the lock state of all connected hosts."""
+    """Lists the lock state of all connected hosts.
+
+    By default only the zypper/operation locks (set by ``lock`` and the
+    install/update/prepare/downgrade flows) are shown. Use ``-p``/``--pool``
+    to instead list the host *pool* claims taken during pool selection.
+    """
 
     command = "list_locks"
 
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        parser.add_argument(
+            "-p",
+            "--pool",
+            action="store_true",
+            help="list pool-claim locks instead of zypper/operation locks",
+        )
+
     def __call__(self) -> None:
         """Executes the `list_locks` command."""
-        self.targets.select(enabled=True).report_locks(self.display.list_locks)
+        self.targets.select(enabled=True).report_locks(
+            self.display.list_locks, pool=self.args.pool
+        )
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices([("-p", "--pool")], line, text)
 
 
 class ListHosts(Command):

@@ -418,3 +418,84 @@ class TargetLock:
         # NOTE: checking pid handles the case where one user is
         # running multiple mtui instances against the same hosts
         return self._lock.pid == self.i_am_pid
+
+
+class PoolLock(TargetLock):
+    """Remote lock for refhost *pool* claims, separate from the zypper lock.
+
+    A pool claim marks a reference host as taken by a particular template
+    (RRID) so a different user/template does not connect to the same host,
+    while the host-arbitration pool selection runs. It lives in its own
+    remote file (:attr:`filename`) so it never collides with the operation
+    lock taken around zypper transactions (``lock``/``unlock``,
+    ``update_lock``, ``LockedTargets``) -- the two mechanisms are fully
+    independent.
+
+    Ownership differs from :class:`TargetLock` deliberately: a pool lock is
+    "mine" when it was taken by the **same template (RRID) and user**,
+    regardless of PID. The pool lock outlives the process that took it (a
+    tester may reconnect from a fresh ``mtui`` invocation), so a PID-based
+    identity -- as the base class uses for the per-process operation lock --
+    would wrongly block a session from reconnecting to a host it already
+    claimed.
+
+    The RRID is stored in the lock comment as ``mtui pool <RRID> [<owner>]``
+    (see :meth:`mtui.test_reports.testreport.TestReport.connect_target`).
+    """
+
+    filename = Path("/var/lock/mtui-pool.lock")
+
+    def __init__(self, connection: Connection, config: Config, rrid: str = "") -> None:
+        """Initializes the `PoolLock` object.
+
+        Args:
+            connection: The connection to the target host.
+            config: The application configuration.
+            rrid: The RRID of the owning template. When empty (e.g. a
+                directly-constructed report that never uses pool selection),
+                ownership degrades to user-only.
+
+        """
+        super().__init__(connection, config)
+        self.i_am_rrid = rrid
+
+    @staticmethod
+    def _rrid_of(comment: str) -> str:
+        """Extracts the RRID from a ``mtui pool <RRID> [<owner>]`` comment.
+
+        Args:
+            comment: The lock comment.
+
+        Returns:
+            The RRID, or ``""`` when the comment is not a pool comment.
+
+        """
+        parts = comment.split()
+        if len(parts) >= 3 and parts[0] == "mtui" and parts[1] == "pool":
+            return parts[2]
+        return ""
+
+    def is_mine(self) -> bool:
+        """Checks if the pool lock is owned by this template + user.
+
+        Unlike :meth:`TargetLock.is_mine`, ownership ignores the PID and
+        compares the RRID recorded in the lock comment against this
+        session's RRID, so a tester reconnecting from a fresh process is
+        recognized as the owner.
+
+        Returns:
+            True if the lock belongs to this template and user, False
+            otherwise.
+
+        """
+        if not self._lock.user:
+            raise RuntimeError("not locked")
+
+        if self._lock.user != self.i_am_user:
+            return False
+        # Pool locks outlive the process, so identity is RRID-based, not PID.
+        # When this session has no RRID (non-pool report), fall back to
+        # user-only ownership.
+        if not self.i_am_rrid:
+            return True
+        return self._rrid_of(self._lock.comment) == self.i_am_rrid

@@ -61,6 +61,15 @@ def test_locks_calls_sink_with_underlying_lock_object(mock_target):
     )
 
 
+def test_pool_locks_calls_sink_with_pool_lock_object(mock_target):
+    """``pool_locks`` exposes the private ``_pool_lock`` to the sink."""
+    sink = MagicMock()
+    mock_target.reporter.pool_locks(sink)
+    sink.assert_called_once_with(
+        mock_target.hostname, mock_target.system, mock_target._pool_lock
+    )
+
+
 def test_timeout_reads_connection_timeout_at_call_time(mock_target):
     """``timeout`` reflects the live ``connection.timeout`` value."""
     mock_target.connection.timeout = 42

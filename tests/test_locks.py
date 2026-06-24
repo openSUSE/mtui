@@ -9,6 +9,7 @@ import pytest
 
 from mtui.hosts.target.locks import (
     LockedTargets,
+    PoolLock,
     RemoteLock,
     TargetLock,
     TargetLockedError,
@@ -461,3 +462,73 @@ class TestLockedTargets:
             raise ValueError("test error")
 
         t1.unlock.assert_called_once()
+
+
+# --- PoolLock ---
+
+
+class TestPoolLock:
+    @pytest.fixture
+    def pool(self, mock_config):
+        """A PoolLock owned by template SUSE:Maintenance:1:2, user testuser."""
+        mock_config.session_user = "testuser"
+        conn = MagicMock()
+        conn.hostname = "host1.example.com"
+        return PoolLock(conn, mock_config, rrid="SUSE:Maintenance:1:2")
+
+    def test_uses_separate_lockfile(self):
+        """The pool lock lives in its own file, distinct from the zypper lock."""
+        assert PoolLock.filename != TargetLock.filename
+        assert str(PoolLock.filename) == "/var/lock/mtui-pool.lock"
+
+    def test_rrid_of_parses_pool_comment(self):
+        """``mtui pool <RRID> [<owner>]`` yields the RRID."""
+        assert (
+            PoolLock._rrid_of("mtui pool SUSE:Maintenance:1:2 [alice]")
+            == "SUSE:Maintenance:1:2"
+        )
+
+    def test_rrid_of_non_pool_comment_empty(self):
+        """A non-pool comment yields no RRID."""
+        assert PoolLock._rrid_of("testing of something") == ""
+        assert PoolLock._rrid_of("") == ""
+
+    def test_is_mine_same_rrid_ignores_pid(self, pool):
+        """A pool lock by the same template + user is mine regardless of PID."""
+        pool._lock = RemoteLock()
+        pool._lock.user = "testuser"
+        pool._lock.pid = pool.i_am_pid + 1  # different process
+        pool._lock.comment = "mtui pool SUSE:Maintenance:1:2 [alice]"
+        assert pool.is_mine() is True
+
+    def test_is_mine_different_rrid_not_mine(self, pool):
+        """A pool lock by a different template (same user) is not mine."""
+        pool._lock = RemoteLock()
+        pool._lock.user = "testuser"
+        pool._lock.pid = pool.i_am_pid
+        pool._lock.comment = "mtui pool SUSE:Maintenance:9:9 [bob]"
+        assert pool.is_mine() is False
+
+    def test_is_mine_different_user_not_mine(self, pool):
+        """A pool lock by a different user is not mine even with same RRID."""
+        pool._lock = RemoteLock()
+        pool._lock.user = "otheruser"
+        pool._lock.comment = "mtui pool SUSE:Maintenance:1:2 [alice]"
+        assert pool.is_mine() is False
+
+    def test_is_mine_no_rrid_falls_back_to_user(self, mock_config):
+        """With no session RRID, ownership degrades to user-only."""
+        mock_config.session_user = "testuser"
+        conn = MagicMock()
+        conn.hostname = "host1.example.com"
+        pool = PoolLock(conn, mock_config, rrid="")
+        pool._lock = RemoteLock()
+        pool._lock.user = "testuser"
+        pool._lock.comment = "mtui pool SUSE:Maintenance:9:9 [bob]"
+        assert pool.is_mine() is True
+
+    def test_is_mine_raises_when_not_locked(self, pool):
+        """An unlocked pool lock raises, matching TargetLock's contract."""
+        pool._lock = RemoteLock()
+        with pytest.raises(RuntimeError, match="not locked"):
+            pool.is_mine()

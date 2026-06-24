@@ -363,7 +363,7 @@ def test_report_self_delegates():
 
 
 def test_report_locks_delegates():
-    """Test report_locks delegates to each target."""
+    """Test report_locks delegates to each target (zypper lock by default)."""
     t1 = MagicMock()
     t1.hostname = "h1"
     sink = MagicMock()
@@ -372,6 +372,31 @@ def test_report_locks_delegates():
     hg.report_locks(sink)
 
     t1.reporter.locks.assert_called_once_with(sink)
+    t1.reporter.pool_locks.assert_not_called()
+
+
+def test_report_locks_pool_delegates_to_pool_locks():
+    """``report_locks(pool=True)`` delegates to the pool reporter."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+    sink = MagicMock()
+
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
+    hg.report_locks(sink, pool=True)
+
+    t1.reporter.pool_locks.assert_called_once_with(sink)
+    t1.reporter.locks.assert_not_called()
+
+
+def test_pool_unlock_delegates_to_each_target():
+    """``pool_unlock`` calls ``pool_unlock`` on every target, suppressing errors."""
+    t1 = MagicMock()
+    t1.hostname = "h1"
+
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
+    hg.pool_unlock(force=True)
+
+    t1.pool_unlock.assert_called_once_with(force=True)
 
 
 def test_report_timeout_delegates():

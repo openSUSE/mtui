@@ -186,7 +186,7 @@ def test_release_pool_claims_unlocks_and_releases(tmp_path: Path) -> None:
     target = MagicMock()
     r.targets[claimed] = target
     r.release_pool_claims()
-    target.unlock.assert_called_once()
+    target.pool_unlock.assert_called_once()
     assert r._pool_claims == set()
     assert r._slot_candidates == {}
     assert r._arbiter.owner_of(claimed) is None

@@ -104,6 +104,12 @@ class HostsGroup(UserDict[str, Target]):
             with suppress(TargetLockedError):
                 x.unlock(*a, **kw)
 
+    def pool_unlock(self, *a, **kw) -> None:
+        """Removes the pool claim on all hosts in the group."""
+        for x in self.data.values():
+            with suppress(TargetLockedError):
+                x.pool_unlock(*a, **kw)
+
     def lock(self, *a, **kw) -> None:
         """Locks all hosts in the group."""
         for x in self.data.values():
@@ -697,15 +703,18 @@ class HostsGroup(UserDict[str, Target]):
         for hn in sorted(self.data.keys()):
             self.data[hn].reporter.history(sink)
 
-    def report_locks(self, sink):
+    def report_locks(self, sink, pool: bool = False):
         """Reports the lock state of all hosts in the group.
 
         Args:
             sink: The function to use for reporting.
+            pool: When True, report the pool-claim locks instead of the
+                zypper/operation locks.
 
         """
         for hn in sorted(self.data.keys()):
-            self.data[hn].reporter.locks(sink)
+            reporter = self.data[hn].reporter
+            (reporter.pool_locks if pool else reporter.locks)(sink)
 
     def report_timeout(self, sink) -> None:
         """Reports the timeout of all hosts in the group.

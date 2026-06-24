@@ -603,6 +603,7 @@ class TestReport(ABC):
                 timeout=self.config.connection_timeout,
                 prompter=self._prompter,
                 interactive=self._prompter is not None,
+                rrid=str(self.id),
             )
             target.connect()
             new_system = str(target.system)
@@ -778,6 +779,7 @@ class TestReport(ABC):
                 self.packages,
                 prompter=self._prompter,
                 interactive=self._prompter is not None,
+                rrid=str(self.id),
             )
             self.targets[hostname].connect()
 
@@ -890,7 +892,7 @@ class TestReport(ABC):
             target = self.targets.get(host)
             if target is not None:
                 with suppress(Exception):
-                    target.unlock()
+                    target.pool_unlock()
         self._pool_claims.clear()
         self._slot_candidates.clear()
         if self._arbiter is not None and self._owner is not None:
