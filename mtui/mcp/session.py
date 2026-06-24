@@ -211,7 +211,7 @@ class McpSession:
     """Headless mtui session backing one ``mtui-mcp`` client.
 
     Holds the same mutable state as :class:`CommandPrompt` — ``config``,
-    ``metadata``, ``targets``, ``session`` — so that the existing
+    ``metadata``, ``targets`` — so that the existing
     ``Command`` ABI works unchanged. Stateless per-call concerns
     (``display``, ``sys``) are constructed inside :meth:`run_command`
     and torn down after the call returns.
@@ -252,7 +252,6 @@ class McpSession:
         # parallel actions (run, set_repo, sftp_*) skip the TTY spinner;
         # MCP uses ``notifications/progress`` as its progress channel.
         self.targets.interactive = False
-        self.session: str | None = None
 
         # Snapshot of the registry so commands that introspect
         # ``self.prompt.commands`` (e.g. denied ``help``) still see a
@@ -309,18 +308,13 @@ class McpSession:
     # CommandPrompt-compatible surface
     # ------------------------------------------------------------------
 
-    def set_prompt(self, session: str | None = None) -> None:
-        """Records the session label (RRID or ``None``).
+    def set_prompt(self) -> None:
+        """No-op stub for :class:`CommandPrompt.set_prompt` parity.
 
-        :class:`CommandPrompt.set_prompt` also rewrites the REPL prompt
-        string; there is no prompt under MCP, so this is a plain
-        attribute assignment.
-
-        Args:
-            session: The session label to record, or ``None`` to clear.
-
+        :class:`CommandPrompt.set_prompt` rewrites the REPL prompt
+        string; there is no prompt under MCP, so commands can call this
+        without effect.
         """
-        self.session = session
 
     def notify_user(self, msg: str, class_: str = "") -> None:
         """Logs a notification at INFO.
@@ -381,7 +375,7 @@ class McpSession:
         # Re-apply the non-interactive flag after the testreport swap so
         # the fresh HostsGroup inherits the session's headless mode.
         self.targets.interactive = False
-        self.set_prompt(None)
+        self.set_prompt()
 
     # ------------------------------------------------------------------
     # Command dispatch

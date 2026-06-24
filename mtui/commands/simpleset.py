@@ -15,34 +15,6 @@ from . import Command
 logger = logging.getLogger("mtui.commands.simplesets")
 
 
-class SessionName(Command):
-    """Sets the optional mtui session name as part of the prompt string.
-
-    This can help to identify the correct mtui session if multiple
-    sessions are active.
-    """
-
-    command = "set_session_name"
-
-    @classmethod
-    def _add_arguments(cls, parser: ArgumentParser) -> None:
-        """Adds arguments to the command's argument parser."""
-        parser.add_argument(
-            "name",
-            action="store",
-            type=str,
-            nargs="?",
-            default="",
-            help="name of session",
-        )
-
-    def __call__(self) -> None:
-        """Executes the `set_session_name` command."""
-        session = self.args.name or self.metadata.id
-        self.prompt.session = session
-        self.prompt.set_prompt(session)
-
-
 class SetLocation(Command):
     """Changes the current reference host location to another site."""
 

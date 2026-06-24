@@ -53,22 +53,15 @@ Example:
 
   # EDITOR=nano mtui -r SUSE:Maintenance:3601:126030
 
-Is there a way to easily distinguish among different MTUI sessions?
-===================================================================
+Is there a way to easily distinguish among different updates?
+=============================================================
 
-When you are testing different updates at the same time, you may end up having
-multiple active MTUI sessions. Usability might suffer in this case since
-there is no easy way to distinguish these different sessions at the first glance.
-With the ``set_session_name`` command, you can set a name for each MTUI session.
-The name will appear as a part of the prompt string.
-
-Example::
-
-  mtui>
-
-  mtui> set_session_name sle12-bind
-
-  mtui:sle12-bind>
+When you are testing different updates at the same time, you can load several
+test reports into a single MTUI session as templates and switch between them.
+The bottom toolbar shows the active template's RRID together with the total
+number of loaded templates, so the prompt stays unambiguous. See
+`load_template`, `switch`, and `list_templates` in the interactive commands
+reference.
 
 Can I run MTUI without loading a test report?
 =============================================

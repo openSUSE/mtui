@@ -6,7 +6,7 @@ Covers the four behaviours listed in PLAN.md step 5:
 * argparse failure surfaces as :class:`McpCommandError` with a non-zero
   ``exit_code``.
 * The session-wide lock serialises concurrent ``run_command`` calls.
-* ``set_prompt`` records the session label.
+* ``set_prompt`` is a no-op stub for ``CommandPrompt`` parity.
 
 The tests use ``asyncio.run`` rather than ``pytest-asyncio`` (the dev
 group does not pull it in); each test is a tiny synchronous wrapper.
@@ -56,7 +56,6 @@ def test_construction_exposes_command_prompt_surface(tmp_path: Path) -> None:
     sess = _make_session(tmp_path)
     assert sess.interactive is False
     assert sess.prompter is None
-    assert sess.session is None
     assert sess.metadata is not None  # NullTestReport
     assert bool(sess.metadata) is False
     assert sess.targets is sess.metadata.targets
@@ -145,12 +144,11 @@ def test_run_command_serialises_via_lock(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_set_prompt_records_session_label(tmp_path: Path) -> None:
+def test_set_prompt_is_a_noop(tmp_path: Path) -> None:
+    """``set_prompt`` exists for ``CommandPrompt`` parity and takes no args."""
     sess = _make_session(tmp_path)
-    sess.set_prompt("SUSE:Maintenance:1:1")
-    assert sess.session == "SUSE:Maintenance:1:1"
-    sess.set_prompt(None)
-    assert sess.session is None
+    # Must be callable with no arguments and must not raise.
+    assert sess.set_prompt() is None
 
 
 # --------------------------------------------------------------------------- #

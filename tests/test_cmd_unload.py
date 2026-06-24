@@ -61,7 +61,7 @@ def test_unload_drops_only_target_template(mock_config):
     # only the unloaded template's host was closed
     assert r1.targets == {}
     assert r2.targets["h2"].closed is False
-    prompt.set_prompt.assert_called_once_with(None)
+    prompt.set_prompt.assert_called_once_with()
 
 
 def test_unload_active_repoints_active(mock_config):

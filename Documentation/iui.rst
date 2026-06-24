@@ -18,10 +18,11 @@ through reverse-incremental search (Ctrl-R) and forward search
 (Ctrl-S); a fish-style autosuggestion shows the closest history match
 in dim text and can be accepted with the right-arrow key.
 
-A bottom toolbar reflects session state — the RRID of the loaded test
-report when one is active, ``empty`` otherwise — so the prompt stays
-unambiguous when several mtui sessions are open in different
-terminals.
+A bottom toolbar reflects session state — the current workflow mode,
+the number of connected reference hosts, the count of loaded test
+report templates, and the RRID of the active template (``-`` when none
+is loaded) — so the prompt stays unambiguous when several mtui
+sessions are open in different terminals.
 
 For a short overview of procedures and help texts, the ``help`` command is
 also available (i.e. ``help add_host`` prints a short description of the
@@ -1101,26 +1102,6 @@ Prints source.diff with pager to user.
 
 Internal Commands
 *****************
-
-set_session_name
-++++++++++++++++
-
-::
-
-    set_session_name [name]
-
-Set optional mtui session name as part of the prompt string. This can help
-finding the correct mtui session if multiple sessions are active.
-
-When no specific name is given, the name is set to the RRID slug
-(SUSE:Maintenance:XXXX:YYYYYY).
-
-**Options:**
-
-.. option:: name
-
-  Name of the session.
-
 
 set_log_level
 ++++++++++++++

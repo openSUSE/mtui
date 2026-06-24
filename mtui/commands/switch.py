@@ -32,7 +32,7 @@ class Switch(Command):
             self.templates.set_active(rrid)
         except KeyError:
             raise TemplateNotLoadedError(rrid) from None
-        self.prompt.set_prompt(None)
+        self.prompt.set_prompt()
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:

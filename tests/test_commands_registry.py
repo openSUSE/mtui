@@ -64,7 +64,6 @@ EXPECTED: frozenset[tuple[str, str, str]] = frozenset(
         ("set_location", "mtui.commands.simpleset", "SetLocation"),
         ("set_log_level", "mtui.commands.simpleset", "SetLogLevel"),
         ("set_repo", "mtui.commands.setrepo", "SetRepo"),
-        ("set_session_name", "mtui.commands.simpleset", "SessionName"),
         ("set_timeout", "mtui.commands.simpleset", "SetTimeout"),
         ("set_workflow", "mtui.commands.simpleset", "SetWorkflow"),
         ("smelt_checkers", "mtui.commands.smelt", "SmeltCheckers"),
