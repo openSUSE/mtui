@@ -127,11 +127,12 @@ class ListRefhosts(Command):
             )
         records: list[dict] = []
         for host, loc in hits:
-            slot = (
-                f"{host.product.name}-{self._ver_str(host.product.version)} {host.arch}"
-                if a.pool
-                else None
-            )
+            # Reuse Refhosts.slot_of for the test-target identity so the
+            # command and the host-arbitration pool agree on what a "slot" is.
+            slot = None
+            if a.pool:
+                name, ver, arch, _addons = refhosts.slot_of(host)
+                slot = f"{name}-{ver} {arch}"
             records.append(self._record(host, loc, slot))
         return records
 

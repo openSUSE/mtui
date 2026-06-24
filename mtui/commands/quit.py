@@ -44,6 +44,12 @@ class Quit(Command):
         """Executes the `quit` command."""
         args_ = [self.args.bootarg] if self.args.bootarg else []
 
+        # Release host-arbitration pool claims (in-process ownership + remote
+        # pool locks) for every template before closing. No-op without pooling.
+        for report in self.templates.all():
+            with suppress(Exception):
+                report.release_pool_claims()
+
         # Close every loaded template's host group, not just the active one.
         with ContextExecutor() as executor:
             futures = [

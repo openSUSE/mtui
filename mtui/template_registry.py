@@ -20,6 +20,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from .hosts.host_arbiter import get_arbiter
+
 if TYPE_CHECKING:
     from .support.config import Config
     from .test_reports.testreport import TestReport
@@ -55,6 +57,10 @@ class TemplateRegistry:
         #: arbitration (RFC §5.7). One registry per REPL process, one per MCP
         #: session.
         self.id: str = uuid4().hex
+        #: Process-global host arbiter shared by every registry (RFC §5.7).
+        #: Reports claim distinct refhosts through it keyed on
+        #: ``(self.id, RRID)`` when ``[refhosts] pool_select`` is on.
+        self.arbiter = get_arbiter()
         self._null: TestReport = null_factory()
         self._entries: dict[str, TestReport] = {}
         self._active: str | None = None
@@ -66,6 +72,10 @@ class TemplateRegistry:
         replaces the stored report but does not change the active pointer.
         """
         rrid = str(report.id)
+        # Wire host-arbitration ownership so connect_targets can draw distinct
+        # pool hosts; reports stay legacy (remote-lock-only) until this is set.
+        report._arbiter = self.arbiter  # noqa: SLF001
+        report._owner = (self.id, rrid)  # noqa: SLF001
         self._entries[rrid] = report
         if self._active is None:
             self._active = rrid
@@ -78,6 +88,9 @@ class TemplateRegistry:
         order) becomes active, or ``None`` when the registry empties.
         """
         report = self._entries.pop(rrid)
+        # Drop arbiter ownership and remote pool locks before tearing down
+        # the connections (no-op when pool selection was never used).
+        self.release_claims(report)
         targets = report.targets
         for name in list(targets):
             # Best-effort teardown: one wedged connection must not block
@@ -91,6 +104,17 @@ class TemplateRegistry:
     def get(self, rrid: str) -> TestReport:
         """Return the loaded report for ``rrid`` (raises ``KeyError`` if absent)."""
         return self._entries[rrid]
+
+    @staticmethod
+    def release_claims(report: TestReport) -> None:
+        """Release ``report``'s host-arbitration claims and remote pool locks.
+
+        Best-effort and idempotent: a no-op for reports that never used pool
+        selection. Called from :meth:`remove` and (via the report) from
+        ``unload`` / ``quit`` / ``McpSession.close``.
+        """
+        with contextlib.suppress(Exception):
+            report.release_pool_claims()
 
     @property
     def active(self) -> TestReport:

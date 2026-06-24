@@ -217,6 +217,72 @@ class TargetLock:
         self.unlock(force=True)
         return True
 
+    def try_claim(self, comment: str = "") -> bool:
+        """Claim the remote lock without raising when it is busy.
+
+        Unlike :meth:`lock`, a host already locked by someone else does not
+        raise — it returns ``False`` so a pool caller can move on to the next
+        candidate. The claim succeeds when the host is free, already ours, or
+        the existing lock is stale enough to reap.
+
+        Args:
+            comment: Optional comment recorded with the lock (e.g. the pool
+                owner stamp ``mtui pool <RRID> [<owner>]``).
+
+        Returns:
+            ``True`` if the lock is now ours, ``False`` if it is held by
+            someone else.
+
+        """
+        if self.is_locked() and not self.is_mine() and not self.reap_if_stale():
+            return False
+        try:
+            self.lock(comment)
+        except TargetLockedError:
+            return False
+        return True
+
+    def _wait_for_lock(self) -> bool:
+        """Queue for a busy remote lock up to ``[lock] wait`` seconds.
+
+        Polls the remote lock every ``[lock] wait_poll`` seconds until it is
+        gone, has become ours, or is reaped as stale. Logs a warning on
+        wait-start and again on timeout. With ``[lock] wait <= 0`` (default)
+        this is a no-op returning ``False`` immediately, preserving the
+        historical fail-fast behaviour (RFC §5.8).
+
+        Returns:
+            ``True`` if the lock became free/ours/reaped within the budget
+            (the caller may proceed to claim it), ``False`` if it is still
+            held by someone else after the wait.
+
+        """
+        wait = self.config.lock_wait
+        if wait <= 0:
+            return False
+        poll = max(1, self.config.lock_wait_poll)
+        deadline = time.monotonic() + wait
+        logger.warning(
+            "%s: locked by %s; waiting up to %ds for it to free",
+            self.connection.hostname,
+            self._lock.user,
+            wait,
+        )
+        while True:
+            if self.reap_if_stale():
+                return True
+            time.sleep(min(poll, max(0, deadline - time.monotonic())))
+            if not self.is_locked() or self.is_mine():
+                return True
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "%s: still locked by %s after %ds; giving up",
+                    self.connection.hostname,
+                    self._lock.user,
+                    wait,
+                )
+                return False
+
     def lock(self, comment: str = "") -> None:
         """Locks the target system.
 
@@ -233,7 +299,7 @@ class TargetLock:
         # the locking really atomic.
         # NOTE: let the code pass through if is_mine() as
         # setting a different comment may be desired.
-        if self.is_locked() and not self.is_mine():
+        if self.is_locked() and not self.is_mine() and not self._wait_for_lock():
             raise TargetLockedError(self.locked_by_msg())
 
         logger.debug("%s: setting lock", self.connection.hostname)
