@@ -123,7 +123,6 @@ def _pool_report(tmp_path, pairs, *, owner=("reg", "RRID")):
     from mtui.hosts.host_arbiter import HostArbiter
 
     r = _make(tmp_path)
-    r.config.refhost_pool_select = True
     r.config.lock_wait = 0
     r.config.lock_wait_poll = 15
     r._arbiter = HostArbiter()
@@ -132,14 +131,16 @@ def _pool_report(tmp_path, pairs, *, owner=("reg", "RRID")):
     return r
 
 
-def test_pool_off_uses_legacy_search(tmp_path: Path) -> None:
+def test_pool_inactive_without_arbiter_uses_legacy_search(tmp_path: Path) -> None:
+    # No arbiter/owner wired up → fall back to the legacy search() path.
     r = _make(tmp_path)
-    r.config.refhost_pool_select = False
+    r._arbiter = None
+    r._owner = None
     r.refhostsFactory = MagicMock(
         return_value=_FakeRefhosts([_ph("h1", ("sles", "15", "x86_64", ()))])
     )
-    with patch.object(type(r), "_pool_selection_active", return_value=False):
-        r.refhosts_from_tp("base=sles(major=15,minor=5);arch=[x86_64]")
+    assert r._pool_selection_active() is False
+    r.refhosts_from_tp("base=sles(major=15,minor=5);arch=[x86_64]")
     assert r.hostnames == {"h1"}
     assert r._pool_claims == set()
 

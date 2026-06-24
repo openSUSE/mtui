@@ -59,7 +59,7 @@ class TemplateRegistry:
         self.id: str = uuid4().hex
         #: Process-global host arbiter shared by every registry (RFC §5.7).
         #: Reports claim distinct refhosts through it keyed on
-        #: ``(self.id, RRID)`` when ``[refhosts] pool_select`` is on.
+        #: ``(self.id, RRID)`` so fan-out never collides on a shared host.
         self.arbiter = get_arbiter()
         self._null: TestReport = null_factory()
         self._entries: dict[str, TestReport] = {}

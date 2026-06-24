@@ -740,12 +740,14 @@ class TestReport(ABC):
         self.hostnames.update(set(hostnames))
 
     def _pool_selection_active(self) -> bool:
-        """True when refhost-pool arbitration should drive host selection."""
-        return bool(
-            self.config.refhost_pool_select
-            and self._arbiter is not None
-            and self._owner is not None
-        )
+        """True when refhost-pool arbitration should drive host selection.
+
+        Active whenever an in-process arbiter and owner are wired up (the
+        fan-out / ``mtui-mcp`` runtime path). When they are absent — e.g. a
+        direct ``add_host`` — selection falls back to the legacy
+        single-host-per-arch ``search()`` path.
+        """
+        return self._arbiter is not None and self._owner is not None
 
     def _pool_owner_label(self) -> str:
         """Human owner stamp for the remote pool lock comment."""
