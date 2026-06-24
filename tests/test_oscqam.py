@@ -119,6 +119,29 @@ class TestOSCOperations:
         osc.approve(["qam-sle"])  # should not raise
 
     @patch("mtui.data_sources.oscqam.check_call")
+    def test_stdin_detached_and_timed_out(self, mock_check_call, osc):
+        """osc must not inherit our stdin (the MCP pipe) and must be time-capped.
+
+        Otherwise an interactive osc prompt blocks reading the JSON-RPC stdin
+        forever and deadlocks the single-threaded mtui-mcp server.
+        """
+        from subprocess import DEVNULL
+
+        osc.approve(["qam-sle"])
+
+        kwargs = mock_check_call.call_args.kwargs
+        assert kwargs.get("stdin") is DEVNULL
+        assert kwargs.get("timeout")
+
+    @patch("mtui.data_sources.oscqam.check_call")
+    def test_timeoutexpired_logged(self, mock_check_call, osc):
+        """Test TimeoutExpired is caught and logged (does not raise)."""
+        from subprocess import TimeoutExpired
+
+        mock_check_call.side_effect = TimeoutExpired("osc", 180)
+        osc.approve(["qam-sle"])  # should not raise
+
+    @patch("mtui.data_sources.oscqam.check_call")
     def test_api_url(self, mock_check_call, osc):
         """Test API URL is passed correctly."""
         osc.approve(["qam-sle"])
