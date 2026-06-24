@@ -194,16 +194,13 @@ class CommandPrompt:
         * ``mode`` — the active report's :attr:`workflow`
           (:class:`~mtui.types.Workflow`): ``kernel``, ``auto``, or
           ``manual``.
-        * ``session`` — resolved in precedence order: an explicit name
-          set via ``set_session_name`` (:attr:`self.session`) wins; else
-          the loaded test report's :attr:`id` (its RRID); else the
-          literal ``"empty"`` when no test report is loaded.
-          :class:`NullTestReport` returns ``""`` from ``id``, so the
-          fallback to ``"empty"`` covers the pre-load state.
         * ``hosts`` — count of connected refhosts. Falls back to ``"?"``
           if ``self.targets`` does not expose ``__len__`` (defensive
           guard for the brief construction window between ``__init__``
           and the first ``load_update``).
+        * ``templates`` — number of loaded test reports.
+        * ``active`` — the active report's :attr:`id` (its RRID), or
+          ``"-"`` when no test report is loaded.
 
         The toolbar is invoked by prompt_toolkit on every redraw, so
         this stays cheap — three attribute reads plus a ``len()``.
@@ -218,11 +215,6 @@ class CommandPrompt:
         """
         mode = self.metadata.workflow.value
 
-        sess = self.session if getattr(self, "session", None) else ""
-        if not sess:
-            metadata = getattr(self, "metadata", None)
-            sess = getattr(metadata, "id", "") or "empty"
-
         try:
             n_hosts: int | str = len(self.targets)
         except TypeError:
@@ -232,7 +224,7 @@ class CommandPrompt:
         active = self.metadata.id or "-"
 
         return (
-            f" mode: {mode}  session: {sess}  hosts: {n_hosts} "
+            f" mode: {mode}  hosts: {n_hosts} "
             f" templates: {n_templates}  active: {active} "
         )
 
@@ -423,7 +415,7 @@ class CommandPrompt:
         """
         if isinstance(self.metadata, NullTestReport):
             return stop
-        self.set_prompt(session=self.__dict__.get("session", None))
+        self.set_prompt()
         return stop
 
     def get_names(self) -> list[str]:
@@ -442,19 +434,12 @@ class CommandPrompt:
         """Called when an empty line is entered."""
         return False
 
-    def set_prompt(self, session: str | None = None) -> None:
-        """Sets the command prompt string.
-
-        Args:
-            session: The current session name.
-
-        """
-        self.session = session
-        session = ":" + str(session) if session else ""
+    def set_prompt(self) -> None:
+        """Sets the command prompt string from the active workflow."""
         mode = "mtui"
         if self.metadata.workflow is not Workflow.MANUAL:
             mode += f"-{self.metadata.workflow.value}"
-        self.prompt = f"{mode}{session}> "
+        self.prompt = f"{mode}> "
 
     if TYPE_CHECKING:
         # Typing-only escape hatch. The ``do_<name>``, ``help_<name>``,
@@ -482,4 +467,4 @@ class CommandPrompt:
         )
         self.templates.add(tr)
         self.templates.set_active(str(tr.id))
-        self.set_prompt(None)
+        self.set_prompt()

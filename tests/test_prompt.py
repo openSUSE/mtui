@@ -454,12 +454,11 @@ def test_postcmd_short_circuits_for_null_test_report():
 
 
 def test_postcmd_updates_prompt_when_metadata_loaded():
-    """With a real test report, ``postcmd`` refreshes the prompt with the session."""
+    """With a real test report, ``postcmd`` refreshes the prompt."""
     p = _make_prompt()
     _load_mock_report(p, workflow=Workflow.MANUAL)  # not a NullTestReport
-    p.session = "sess1"
     p.postcmd(False, "noop")
-    assert p.prompt == "mtui:sess1> "
+    assert p.prompt == "mtui> "
 
 
 def test_emptyline_returns_false():
@@ -471,21 +470,21 @@ def test_emptyline_returns_false():
 def test_set_prompt_normal_mode():
     """No auto, no kernel: prompt prefix is ``mtui``."""
     p = _make_prompt()
-    p.set_prompt("test_session")
-    assert p.prompt == "mtui:test_session> "
+    p.set_prompt()
+    assert p.prompt == "mtui> "
 
 
 def test_set_prompt_auto_mode():
     """``Workflow.AUTO`` renders the ``mtui-auto`` prefix."""
     p = _make_prompt(workflow=Workflow.AUTO)
-    p.set_prompt("s1")
-    assert p.prompt == "mtui-auto:s1> "
+    p.set_prompt()
+    assert p.prompt == "mtui-auto> "
 
 
 def test_set_prompt_kernel_mode():
     """``Workflow.KERNEL`` renders the ``mtui-kernel`` prefix."""
     p = _make_prompt(workflow=Workflow.KERNEL)
-    p.set_prompt(None)
+    p.set_prompt()
     assert p.prompt == "mtui-kernel> "
 
 
@@ -494,14 +493,12 @@ def test_set_prompt_kernel_mode():
 # --------------------------------------------------------------------------- #
 
 
-def test_bottom_toolbar_manual_mode_empty_session_zero_hosts():
-    """Default config + no loaded report → ``manual`` / ``empty`` / 0 hosts."""
+def test_bottom_toolbar_manual_mode_zero_hosts():
+    """Default config + no loaded report → ``manual`` / 0 hosts / no active."""
     p = _make_prompt()
     # NullTestReport.targets is an empty HostsGroup which supports len().
     assert len(p.targets) == 0
-    assert p._bottom_toolbar() == (
-        " mode: manual  session: empty  hosts: 0  templates: 0  active: - "
-    )
+    assert p._bottom_toolbar() == (" mode: manual  hosts: 0  templates: 0  active: - ")
 
 
 def test_bottom_toolbar_shows_template_count_and_active():
@@ -529,13 +526,6 @@ def test_bottom_toolbar_auto_mode():
     assert " mode: auto " in p._bottom_toolbar()
 
 
-def test_bottom_toolbar_renders_session_name_after_set_prompt():
-    """Once ``set_prompt`` records a session, the toolbar surfaces it."""
-    p = _make_prompt()
-    p.set_prompt("sess-42")
-    assert " session: sess-42 " in p._bottom_toolbar()
-
-
 def test_bottom_toolbar_renders_host_count():
     """``len(self.targets)`` is reflected in the ``hosts:`` field."""
     p = _make_prompt()
@@ -556,40 +546,20 @@ def test_bottom_toolbar_handles_targets_without_len():
     assert " hosts: ? " in p._bottom_toolbar()
 
 
-def test_bottom_toolbar_before_set_prompt_uses_literal_empty():
-    """Toolbar must not raise even when called before ``set_prompt`` runs."""
-    p = _make_prompt()
-    # ``self.session`` is only assigned by set_prompt; ensure the getattr
-    # guard kicks in.
-    assert not hasattr(p, "session")
-    out = p._bottom_toolbar()
-    assert " session: empty " in out
-
-
-def test_bottom_toolbar_falls_back_to_metadata_id_when_no_session():
-    """A loaded test report surfaces its RRID via ``metadata.id``."""
-    p = _make_prompt()
-    # No explicit session set; metadata is a real (non-null) report with an id.
-    assert not hasattr(p, "session")
-    _load_mock_report(p, rrid="SUSE:Maintenance:12345:67890")
-    assert " session: SUSE:Maintenance:12345:67890 " in p._bottom_toolbar()
-
-
-def test_bottom_toolbar_manual_session_overrides_metadata_id():
-    """``set_session_name`` wins over the loaded report's RRID."""
+def test_bottom_toolbar_active_uses_metadata_id():
+    """A loaded test report surfaces its RRID via the ``active:`` field."""
     p = _make_prompt()
     _load_mock_report(p, rrid="SUSE:Maintenance:12345:67890")
-    p.session = "my-debug-session"
-    assert " session: my-debug-session " in p._bottom_toolbar()
+    assert " active: SUSE:Maintenance:12345:67890 " in p._bottom_toolbar()
 
 
-def test_bottom_toolbar_empty_metadata_id_falls_back_to_empty():
-    """A ``NullTestReport``-style empty id collapses to the ``empty`` literal."""
+def test_bottom_toolbar_empty_metadata_id_active_dash():
+    """A ``NullTestReport``-style empty id collapses ``active:`` to ``-``."""
     p = _make_prompt()
     # NullTestReport.id returns ""; the default p.metadata is already that.
     assert isinstance(p.metadata, NullTestReport)
     assert p.metadata.id == ""
-    assert " session: empty " in p._bottom_toolbar()
+    assert " active: - " in p._bottom_toolbar()
 
 
 def test_load_update_swaps_metadata_and_targets():

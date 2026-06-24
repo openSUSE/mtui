@@ -57,6 +57,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `job_list`, individually pollable and cancellable) instead of a single job for
   the whole fan-out.
 
+### Removed
+
+- The `set_session_name` command and the `session` field in the bottom toolbar
+  (and the `:name` suffix it added to the prompt string) have been removed. They
+  are redundant now that multiple templates can be loaded at once and the toolbar
+  shows the active template's RRID alongside the loaded-template count.
+
 ### Fixed
 
 - `assign`/`approve`/`reject`/`comment` no longer hang the mtui-mcp server. The

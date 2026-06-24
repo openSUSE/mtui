@@ -47,7 +47,7 @@ def test_switch_flips_active(mock_config):
     Switch(args, mock_config, MagicMock(), prompt)()
 
     assert reg.active.id == "SUSE:Maintenance:2:2"
-    prompt.set_prompt.assert_called_once_with(None)
+    prompt.set_prompt.assert_called_once_with()
 
 
 def test_switch_unknown_rrid_raises(mock_config):

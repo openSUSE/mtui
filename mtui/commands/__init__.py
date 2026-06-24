@@ -31,6 +31,6 @@ for _modinfo in pkgutil.iter_modules(__path__):
         continue
 
 #: Public alias for :attr:`Command.registry`. Keys are the user-facing command
-#: strings (e.g. ``"set_session_name"``), values are the concrete
+#: strings (e.g. ``"set_location"``), values are the concrete
 #: :class:`Command` subclasses.
 registry = Command.registry

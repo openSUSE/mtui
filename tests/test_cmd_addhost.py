@@ -82,7 +82,7 @@ def test_add_host_in_automatic_mode_switches_to_manual(mock_config):
 
     assert prompt.metadata.workflow is Workflow.MANUAL
     # Prompt indicator refreshed (drops the "-auto" marker).
-    prompt.set_prompt.assert_called_once_with(prompt.session)
+    prompt.set_prompt.assert_called_once_with()
     # The hosts are still added.
     prompt.metadata.connect_targets.assert_called_once_with()
 

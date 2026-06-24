@@ -44,7 +44,7 @@ class AddHost(Command):
         if self.metadata.workflow is Workflow.AUTO and not self.args.keep_mode:
             logger.info("add_host: switching from automatic to manual workflow")
             self.metadata.workflow = Workflow.MANUAL
-            self.prompt.set_prompt(self.prompt.session)
+            self.prompt.set_prompt()
 
         if not self.args.target:
             for tp in self.metadata.testplatforms:
