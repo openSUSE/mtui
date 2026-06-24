@@ -198,12 +198,22 @@ def _make_wrapper(
         argv = list(argv_prefix) + kwargs_to_argv(parser, kwargs)
         session = await resolve_session(provider, ctx)
         if background:
-            job_id = await session.start_job(cls, argv, ctx=ctx)
+            job_ids = await session.start_jobs(cls, argv, ctx=ctx)
+            if len(job_ids) == 1:
+                job_id = job_ids[0]
+                return (
+                    f"started background job {job_id!r} for `{cls.command}`; it "
+                    f"runs on the hosts while you work elsewhere. Poll "
+                    f"job_status(job_id={job_id!r}) and fetch output with "
+                    f"job_result(job_id={job_id!r})."
+                )
+            joined = ", ".join(repr(j) for j in job_ids)
             return (
-                f"started background job {job_id!r} for `{cls.command}`; it "
-                f"runs on the hosts while you work elsewhere. Poll "
-                f"job_status(job_id={job_id!r}) and fetch output with "
-                f"job_result(job_id={job_id!r})."
+                f"started {len(job_ids)} background jobs for `{cls.command}`, "
+                f"one per loaded template: {joined}. They run on the hosts "
+                f"while you work elsewhere. Poll job_status(job_id=…) per job "
+                f"(or job_list) and fetch output with job_result(job_id=…); "
+                f"cancelling one job leaves the others running."
             )
         return await session.run_command(cls, argv, ctx=ctx)
 

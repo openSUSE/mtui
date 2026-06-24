@@ -498,3 +498,33 @@ def test_registry_sessions_have_independent_config(tmp_path: Path) -> None:
     assert a.config is not b.config
     a.config.location = "prague"
     assert b.config.location == "nuremberg"
+
+
+def test_registry_sessions_have_distinct_arbiter_owner_keys(tmp_path: Path) -> None:
+    """Same RRID in two http sessions yields distinct ``(registry.id, RRID)`` owners.
+
+    Each minted :class:`McpSession` owns its own :class:`TemplateRegistry` with
+    a stable, unique ``id``. The host arbiter keys ownership on
+    ``(registry.id, RRID)``, so two http clients loading the *same* RRID are
+    distinct arbiter owners and never block each other beyond real host
+    contention. This locks Phase 4 step 4 in.
+    """
+    reg = SessionRegistry(
+        build_session,
+        _RealishConfig(tmp_path),  # ty: ignore[invalid-argument-type]
+        _LOG,
+        idle_timeout=0.0,
+    )
+
+    async def driver() -> tuple[McpSession, McpSession]:
+        return await reg.get_or_create("k1"), await reg.get_or_create("k2")
+
+    a, b = asyncio.run(driver())
+    # Distinct registries with distinct stable ids.
+    assert a.templates is not b.templates
+    assert a.templates.id != b.templates.id
+
+    rrid = "SUSE:Maintenance:1:1"
+    owner_a = (a.templates.id, rrid)
+    owner_b = (b.templates.id, rrid)
+    assert owner_a != owner_b

@@ -43,6 +43,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   default), host selection and locking are byte-for-byte unchanged; fan-out may
   then open separate SSH sessions to an overlapping host, so use `pool_select`,
   disjoint host sets, or `-T` when that matters.
+- mtui-mcp gained multi-template parity. Fan-out action tools expose optional
+  `template` (scope the call to one loaded RRID) and `all_templates` parameters;
+  a call without them fans out across the session's loaded templates. A
+  backgrounded fanned-out slow command now mints one job per template (visible in
+  `job_list`, individually pollable and cancellable) instead of a single job for
+  the whole fan-out.
 
 ### Fixed
 

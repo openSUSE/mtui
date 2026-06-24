@@ -12,10 +12,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock
 
 import pytest
 
+from mtui.commands import Command
 from mtui.commands.whoami import Whoami
 from mtui.mcp.session import McpCommandError, McpSession
 
@@ -32,6 +34,33 @@ def _config(tmp_path: Path) -> MagicMock:
 
 def _make_session(tmp_path: Path) -> McpSession:
     return McpSession(_config(tmp_path), logging.getLogger("test.mcp.jobs"))
+
+
+def _load_two_reports(sess: McpSession) -> None:
+    """Add two MagicMock reports so a fan-out command resolves to both."""
+    for rrid in ("SUSE:Maintenance:1:1", "SUSE:Maintenance:2:1"):
+        report = MagicMock()
+        report.id = rrid
+        report.targets = {}
+        sess.templates.add(report)
+    sess.templates.set_active("SUSE:Maintenance:1:1")
+
+
+def _fanout_probe():
+    """Build a throwaway fast fan-out command; caller must unregister it."""
+
+    class _FanoutJobProbe(Command):
+        command = "fanout_job_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            self.println(str(self.metadata.id))
+
+    return _FanoutJobProbe
 
 
 def test_start_job_runs_and_result_returns_stdout(tmp_path: Path) -> None:
@@ -128,3 +157,124 @@ def test_job_cancel_unknown_id_raises(tmp_path: Path) -> None:
     sess = _make_session(tmp_path)
     with pytest.raises(McpCommandError, match="no such job"):
         asyncio.run(sess.job_cancel("nope-1"))
+
+
+# --------------------------------------------------------------------------- #
+# Per-template background jobs (Phase 4)                                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_start_jobs_single_template_keeps_one_job(tmp_path: Path) -> None:
+    """With no fan-out, ``start_jobs`` mints one job with the legacy id shape."""
+    sess = _make_session(tmp_path)
+
+    async def driver() -> list[str]:
+        ids = await sess.start_jobs(Whoami, [])
+        for jid in ids:
+            await sess._jobs[jid]["task"]
+        return ids
+
+    ids = asyncio.run(driver())
+    assert len(ids) == 1
+    assert ids[0].startswith("whoami-")
+    assert "SUSE" not in ids[0]
+
+
+def test_start_jobs_fans_out_one_job_per_template(tmp_path: Path) -> None:
+    """A fanned-out slow command mints one job per loaded template."""
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    cls = _fanout_probe()
+
+    async def driver() -> list[str]:
+        ids = await sess.start_jobs(cls, [])
+        for jid in ids:
+            await sess._jobs[jid]["task"]
+        return ids
+
+    try:
+        ids = asyncio.run(driver())
+    finally:
+        Command.registry.pop(cls.command, None)
+
+    assert len(ids) == 2
+    # ids encode the (sanitised) RRID and are unique.
+    assert len(set(ids)) == 2
+    assert any("SUSE_Maintenance_1_1" in jid for jid in ids)
+    assert any("SUSE_Maintenance_2_1" in jid for jid in ids)
+    # job_list shows both, each done, and each scoped to its own RRID.
+    listed = sess.job_list()
+    assert len(listed) == 2
+    assert all(j["state"] == "done" for j in listed)
+    outputs = {sess.job_result(jid).strip() for jid in ids}
+    assert outputs == {"SUSE:Maintenance:1:1", "SUSE:Maintenance:2:1"}
+
+
+def test_start_jobs_explicit_template_yields_single_job(tmp_path: Path) -> None:
+    """A client-supplied ``-T`` narrows to one template -> one job."""
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    cls = _fanout_probe()
+
+    async def driver() -> list[str]:
+        ids = await sess.start_jobs(cls, ["-T", "SUSE:Maintenance:2:1"])
+        for jid in ids:
+            await sess._jobs[jid]["task"]
+        return ids
+
+    try:
+        ids = asyncio.run(driver())
+    finally:
+        Command.registry.pop(cls.command, None)
+
+    assert len(ids) == 1
+    assert sess.job_result(ids[0]).strip() == "SUSE:Maintenance:2:1"
+
+
+def test_cancel_one_template_job_leaves_others(tmp_path: Path) -> None:
+    """Cancelling one per-template job does not abort the sibling jobs."""
+    import threading
+
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+
+    # The first template's body blocks on this event (set from the driver
+    # after the cancel) so we have a deterministic window to cancel it; the
+    # second template's body returns at once.
+    release = threading.Event()
+    blocking_started = threading.Event()
+
+    class _BlockingProbe(Command):
+        command = "blocking_job_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            if str(self.metadata.id) == "SUSE:Maintenance:1:1":
+                blocking_started.set()
+                release.wait(timeout=5)
+
+    async def driver() -> tuple[str, str]:
+        ids = await sess.start_jobs(_BlockingProbe, [])
+        first, second = ids
+        # Wait until the first job's blocking body is actually running.
+        while not blocking_started.is_set():
+            await asyncio.sleep(0.01)
+        # Cancel the first (blocking) job; release so its thread unwinds.
+        await sess.job_cancel(first)
+        release.set()
+        # The second job, queued behind the session lock, still completes.
+        await sess._jobs[second]["task"]
+        return first, second
+
+    try:
+        first, second = asyncio.run(driver())
+    finally:
+        Command.registry.pop(_BlockingProbe.command, None)
+
+    assert sess.job_status(first)["state"] == "cancelled"
+    assert sess.job_status(second)["state"] == "done"
+    assert sess.job_result(second).strip() == ""
