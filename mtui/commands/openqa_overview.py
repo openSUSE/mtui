@@ -21,7 +21,7 @@ from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
 from ..cli.colors import blue, green, red, yellow
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..data_sources import oqa_search as oqa
 from ..support.http import resolve_verify
 from ..support.misc import requires_update
@@ -406,4 +406,4 @@ class OpenQAOverview(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Tab-complete the command's flags."""
-        return complete_choices(_FLAGS, line, text)
+        return complete_choices([*_FLAGS, *template_completion(state)], line, text)

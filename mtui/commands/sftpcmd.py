@@ -6,7 +6,7 @@ from logging import getLogger
 from pathlib import Path
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices_filelist
+from ..cli.completion import complete_choices_filelist, template_completion
 from . import Command
 
 logger = getLogger("mtui.command.sftp")
@@ -63,7 +63,7 @@ class SFTPPut(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
-        return complete_choices_filelist([], line, text)
+        return complete_choices_filelist(list(template_completion(state)), line, text)
 
 
 class SFTPGet(Command):
@@ -93,3 +93,8 @@ class SFTPGet(Command):
         targets = self.targets.select(enabled=True)
         self.metadata.perform_get(targets, self.args.filename[0])
         logger.info("downloaded %s", self.args.filename[0])
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices_filelist(list(template_completion(state)), line, text)

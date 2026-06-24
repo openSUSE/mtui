@@ -3,7 +3,7 @@
 from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..support.misc import requires_update
 from . import Command
 
@@ -52,6 +52,7 @@ class Install(Command):
         ]
 
         parameters += packages
+        parameters += template_completion(state)
 
         return complete_choices(parameters, line, text, state["hosts"].names())
 
@@ -97,5 +98,6 @@ class Uninstall(Command):
         ]
 
         parameters += packages
+        parameters += template_completion(state)
 
         return complete_choices(parameters, line, text, state["hosts"].names())

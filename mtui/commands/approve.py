@@ -11,7 +11,7 @@ from logging import getLogger
 from typing import final
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..cli.term import prompt_user
 from ..data_sources import OSC, Gitea
 from ..support.exceptions import GiteaError, InvalidGiteaHashError
@@ -124,5 +124,12 @@ class Approve(BaseApiCall):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-g", "--group"), ("-u", "--user"), ("-r", "--reviewer")], line, text
+            [
+                ("-g", "--group"),
+                ("-u", "--user"),
+                ("-r", "--reviewer"),
+                *template_completion(state),
+            ],
+            line,
+            text,
         )

@@ -19,6 +19,7 @@ from __future__ import annotations
 from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
+from ..cli.completion import complete_choices, template_completion
 from ..data_sources import Smelt
 from ..data_sources.gitea import Gitea, pr_api_url
 from ..data_sources.smelt import slfo_update_id
@@ -98,6 +99,11 @@ class SmeltUpdate(Command):
         else:
             self.println("SMELT detail is not available for this request kind")
 
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)
+
 
 class SmeltCheckers(Command):
     """Show checker (build-check) result runs for the loaded SLFO update."""
@@ -132,6 +138,11 @@ class SmeltCheckers(Command):
                 f"running={r.get('running_count', 0)}  "
                 f"{r.get('finished') or r.get('started') or ''}"
             )
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)
 
 
 class SmeltRequests(Command):

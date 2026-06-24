@@ -3,7 +3,7 @@
 from argparse import REMAINDER
 from logging import getLogger
 
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..support.misc import requires_update
 from ..support.systemcheck import system_info
 from ..test_reports.svn_io import svn_commit_testreport
@@ -59,4 +59,6 @@ class Commit(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx):
         """Provides tab completion for the command."""
-        return complete_choices([("-m", "--msg")], line, text)
+        return complete_choices(
+            [("-m", "--msg"), *template_completion(state)], line, text
+        )

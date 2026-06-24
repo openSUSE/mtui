@@ -3,6 +3,7 @@
 from logging import getLogger
 from subprocess import check_call
 
+from ..cli.completion import complete_choices, template_completion
 from ..support.misc import requires_update
 from . import Command
 
@@ -27,3 +28,8 @@ class Checkout(Command):
             check_call(["svn", "up"], cwd=self.metadata.report_wd())
         except Exception:
             logger.exception("updating template failed")
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)

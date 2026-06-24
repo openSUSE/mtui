@@ -12,7 +12,7 @@ from logging import getLogger
 from typing import ClassVar, final
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..cli.term import ask_user
 from ..data_sources import OSC, Gitea, Smelt
 from ..support.exceptions import GiteaError
@@ -134,7 +134,11 @@ class BaseApiCall(Command, ABC):
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
-        return complete_choices([("-g", "--group"), ("-u", "--user")], line, text)
+        return complete_choices(
+            [("-g", "--group"), ("-u", "--user"), *template_completion(state)],
+            line,
+            text,
+        )
 
 
 @final
@@ -178,7 +182,14 @@ class Assign(BaseApiCall):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-g", "--group"), ("-u", "--user"), ("-f", "--force")], line, text
+            [
+                ("-g", "--group"),
+                ("-u", "--user"),
+                ("-f", "--force"),
+                *template_completion(state),
+            ],
+            line,
+            text,
         )
 
 
@@ -284,6 +295,7 @@ class Reject(BaseApiCall):
                     "false_reject",
                     "tracking_issue",
                 ),
+                *template_completion(state),
             ],
             line,
             text,

@@ -4,7 +4,7 @@ from logging import getLogger
 from pathlib import Path
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices_filelist
+from ..cli.completion import complete_choices_filelist, template_completion
 from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..support.misc import requires_update
 from ..types import Workflow
@@ -89,5 +89,9 @@ class Export(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
-        clist: list[tuple[str, ...]] = [("-f", "--force"), ("-t", "--target")]
+        clist: list[tuple[str, ...]] = [
+            ("-f", "--force"),
+            ("-t", "--target"),
+            *template_completion(state),
+        ]
         return complete_choices_filelist(clist, line, text, state["hosts"].names())
