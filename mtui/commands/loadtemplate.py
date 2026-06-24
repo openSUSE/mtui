@@ -13,9 +13,10 @@ class LoadTemplate(Command):
     All changes and logs from an already loaded template are lost if
     not saved previously.
 
-    Already connected hosts are kept and extended by the reference
-    hosts defined in the template file. This behavior can be changed
-    with the -c/--clean-hosts parameter.
+    Each loaded template owns its own reference hosts. Loading a template
+    never reconnects hosts that belong to another loaded template; the new
+    template connects only the reference hosts defined in its own template
+    file (or selected from its testplatforms).
     """
 
     command = "load_template"
@@ -40,13 +41,6 @@ class LoadTemplate(Command):
             help="OBS kernel/live-patch request review id\nexample: SUSE:Maintenance:1:1",
             dest="update",
         )
-        parser.add_argument(
-            "-c",
-            "--clean-hosts",
-            dest="chosts",
-            action="store_false",
-            help="clean up old hosts",
-        )
 
     def __call__(self):
         """Executes the `load_template` command.
@@ -55,36 +49,23 @@ class LoadTemplate(Command):
         current session. Loading an RRID that is already loaded replaces its
         stored report (``TemplateRegistry.add`` is keyed by RRID) and makes it
         active; previously loaded templates are left untouched.
+
+        The newly loaded template connects only its own reference hosts. Hosts
+        belonging to other loaded templates are left alone -- each template
+        owns its own hosts and pool claims.
         """
         if self.args.update.kind not in ("kernel", "auto"):
             raise TestReportNotLoadedError
 
-        # Snapshot the currently active template's hosts *before* loading so
-        # the -c/--clean-hosts carry-over can reconnect them to the new
-        # template. We do not close the old template's connections any more:
-        # the old report stays in the registry with its own hosts.
-        re_add = list(self.targets.keys()) if self.args.chosts else []
-
         # Workflow mode (auto/kernel) is seeded onto the TestReport by
         # make_testreport when load_update runs below.
         self.prompt.load_update(self.args.update, autoconnect=True)
-
-        # Reconnect the hosts we were already connected to, adding them to the
-        # freshly loaded testreport so they get connected to again.
-        # This feature comes from pre-1.0 versions.
-        # NOTE: the only reason we need to reconnect seems to be that
-        # when the L{Target} object is created, it is passed a list of
-        # packages, which changes with the testreport change. So this
-        # may go away when refactored.
-        for target in re_add:
-            self.prompt.metadata.add_target(target)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
             [
-                ("-c", "--clean-hosts"),
                 ("SUSE:Maintenance:", "openSUSE:Maintenance:"),
                 ("-a", "--auto-review-id"),
                 ("-k", "--kernel-review-id"),

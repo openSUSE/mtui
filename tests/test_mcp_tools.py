@@ -569,7 +569,6 @@ def test_loadtemplate_kernel_id_routes_to_kernel_flag() -> None:
         {
             "kernel_review_id": "SUSE:Maintenance:1:1",
             "auto_review_id": None,
-            "chosts": True,
         },
     )
     assert argv[:2] == ["--kernel-review-id", "SUSE:Maintenance:1:1"]
@@ -585,7 +584,6 @@ def test_loadtemplate_auto_id_routes_to_auto_flag() -> None:
         {
             "auto_review_id": "SUSE:Maintenance:1:1",
             "kernel_review_id": None,
-            "chosts": True,
         },
     )
     assert argv[:2] == ["--auto-review-id", "SUSE:Maintenance:1:1"]
@@ -621,7 +619,6 @@ def test_loadtemplate_rejects_neither_review_id(
         return await tool.fn(
             auto_review_id=None,
             kernel_review_id=None,
-            chosts=True,
         )
 
     with pytest.raises(McpCommandError) as ei:
@@ -643,7 +640,6 @@ def test_loadtemplate_rejects_both_review_ids(
         return await tool.fn(
             auto_review_id="SUSE:Maintenance:1:1",
             kernel_review_id="SUSE:Maintenance:2:2",
-            chosts=True,
         )
 
     with pytest.raises(McpCommandError) as ei:

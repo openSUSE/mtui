@@ -71,6 +71,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (and the `:name` suffix it added to the prompt string) have been removed. They
   are redundant now that multiple templates can be loaded at once and the toolbar
   shows the active template's RRID alongside the loaded-template count.
+- The `-c`/`--clean-hosts` flag on `load_template` has been removed. Host
+  carry-over between templates no longer happens (each template owns its own
+  hosts), so the flag that toggled it is obsolete.
 
 ### Fixed
 
@@ -118,6 +121,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   connects only the arbiter-chosen host per slot. The host drawn for each slot
   (and the backup-on-failure order) is chosen at random among the free
   candidates so load is spread across interchangeable refhosts.
+- `load_template` no longer reconnects the previously active template's hosts
+  onto the newly loaded one. Each loaded template now owns its own reference
+  hosts: loading a second template (e.g. after `add_host` had switched the
+  first to the manual workflow and connected its testplatform hosts) connects
+  only the new template's own hosts and leaves the first template's hosts and
+  pool claims untouched. This carry-over was a leftover from the pre-1.0,
+  single-template world where loading *replaced* the session.
 - `assign`/`approve`/`reject`/`comment` no longer hang the mtui-mcp server. The
   `osc qam` subprocess inherited the server's stdin — under mtui-mcp that is the
   MCP stdio JSON-RPC pipe — so an interactive `osc` prompt (e.g. an approve
