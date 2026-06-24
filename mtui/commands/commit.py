@@ -20,6 +20,7 @@ class Commit(Command):
     """
 
     command = "commit"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
@@ -27,6 +28,7 @@ class Commit(Command):
         parser.add_argument(
             "-m", "--msg", action="append", nargs=REMAINDER, help="commit message"
         )
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

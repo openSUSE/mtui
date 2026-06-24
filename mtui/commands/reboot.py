@@ -25,11 +25,13 @@ class Reboot(Command):
     """
 
     command = "reboot"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `reboot` command."""

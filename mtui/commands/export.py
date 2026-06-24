@@ -27,6 +27,7 @@ class Export(Command):
     """
 
     command = "export"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -41,6 +42,7 @@ class Export(Command):
             "filename", nargs="?", type=Path, help="output template file name"
         )
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

@@ -51,6 +51,12 @@ class SmeltUpdate(Command):
     """Show the loaded update's SMELT detail (priority, deadline, status, …)."""
 
     command = "smelt_update"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
@@ -97,6 +103,12 @@ class SmeltCheckers(Command):
     """Show checker (build-check) result runs for the loaded SLFO update."""
 
     command = "smelt_checkers"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

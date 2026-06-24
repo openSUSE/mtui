@@ -130,7 +130,7 @@ def test_dispatching():
     # do_
     p.do_test_command("test_args")
     mock_command.parse_args.assert_called_with("test_args", p.sys)
-    mock_command.return_value.assert_called_once()
+    mock_command.return_value.run.assert_called_once()
 
     # help_
     p.help_test_command()
@@ -173,7 +173,7 @@ def test_dash_in_command_name_dispatches():
     do = getattr(p, "do_dash-cmd")
     do("args")
     cmd.parse_args.assert_called_with("args", p.sys)
-    cmd.return_value.assert_called_once()
+    cmd.return_value.run.assert_called_once()
 
 
 def test_do_handles_argsparse_failure():

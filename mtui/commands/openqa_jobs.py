@@ -33,10 +33,12 @@ class OpenQAJobs(Command):
     """List the individual openQA jobs for the loaded update."""
 
     command = "openqa_jobs"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Register the command's arguments."""
+        cls._add_template_arg(parser)
         parser.add_argument(
             "--all",
             action="store_true",

@@ -31,6 +31,19 @@ class CommandPromptDisplay:
         """
         self.output.write(msg + eol)
 
+    def template_banner(self, rrid: str) -> None:
+        """Prints a per-template banner used to label fan-out output.
+
+        Printed before each template's output block when a command fans out
+        across more than one loaded template, so the user can tell which
+        template produced which result.
+
+        Args:
+            rrid: The RRID of the template the following block belongs to.
+
+        """
+        self.println(f"=== {rrid} ===")
+
     def list_bugs(self, bugs: dict[str, str], jira: dict[str, str], url: str) -> None:
         """Displays a list of bugs and Jira issues.
 

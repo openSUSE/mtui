@@ -16,8 +16,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   mode, and which one is active), `switch <RRID>` changes the active template,
   and `unload <RRID>` drops one template, closing only its host connections.
   `quit` now disconnects every loaded template's hosts. The bottom toolbar shows
-  the loaded-template count and the active RRID. Action commands still operate on
-  the active template only; fan-out across templates lands in a later release.
+  the loaded-template count and the active RRID.
+- Action commands now fan out across every loaded template by default. `run`,
+  `update`, `prepare`, `install`, `uninstall`, `downgrade`, `export`, `set_repo`,
+  `reboot`, `put`, `get`, `commit`, `checkout`, `approve`, `assign`, `unassign`,
+  `reject`, `comment`, `show_diff`, `analyze_diff`, `reload_openqa`,
+  `openqa_overview`, `openqa_jobs`, `smelt_update`, and `smelt_checkers` run once
+  per loaded template, each against its own hosts/report, with the output of each
+  template prefixed by an `=== <RRID> ===` banner. A new `-T/--template
+  RRID` flag scopes such a command to a single loaded template, and
+  `--all-templates` forces fan-out explicitly. When a fanned-out command fails on
+  one template it keeps running on the others and reports an aggregate failure at
+  the end. Note: until host arbitration ships, pointing two loaded templates at
+  overlapping reference hosts can still open separate SSH sessions to the same
+  host; use disjoint host sets or `-T` when that matters.
 
 ### Fixed
 

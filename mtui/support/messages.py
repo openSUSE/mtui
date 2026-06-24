@@ -140,6 +140,22 @@ class TemplateNotLoadedError(UserError):
         self.message = f"Template not loaded: {rrid}"
 
 
+class FanOutError(ErrorMessage):
+    """Aggregate raised after a fan-out command fails on one or more templates.
+
+    A fanned-out command (``scope = "fanout"``) keeps running across the
+    remaining templates when one raises, collecting the per-template failures.
+    After the loop, if any template failed, this aggregate is raised so the
+    caller still observes the error while every template got its turn.
+    """
+
+    def __init__(self, failures: list[tuple[str, BaseException]]) -> None:
+        self.failures = failures
+        detail = "; ".join(f"{rrid}: {exc}" for rrid, exc in failures)
+        rrids = ", ".join(rrid for rrid, _ in failures)
+        self.message = f"fan-out failed on {rrids} ({detail})"
+
+
 class FailedToWriteScriptResult(UserMessage):
     """A message for when writing a script result fails."""
 

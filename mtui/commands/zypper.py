@@ -14,6 +14,7 @@ class Install(Command):
     """Installs packages from the current active repositories."""
 
     command = "install"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -21,6 +22,7 @@ class Install(Command):
         parser.add_argument("package", nargs="+", type=str, help="package to install")
 
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
@@ -58,12 +60,14 @@ class Uninstall(Command):
     """Removes packages from the system."""
 
     command = "uninstall"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
         parser.add_argument("package", nargs="+", type=str, help="package to install")
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
