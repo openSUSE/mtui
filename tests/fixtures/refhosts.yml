@@ -1,3 +1,6 @@
+# Legacy refhosts.yml format: hosts grouped under top-level location keys.
+# Location support is retired; Refhosts merges every group into one flat list,
+# so this fixture verifies that hosts from all groups are read and de-duped.
 default:
   - name: host-default-x86
     arch: x86_64

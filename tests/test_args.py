@@ -27,8 +27,6 @@ def test_get_parser_args():
     # Test short arguments
     parsed_args = parser.parse_args(
         [
-            "-l",
-            "test_location",
             "-t",
             "/test/template_dir",
             "-s",
@@ -45,7 +43,6 @@ def test_get_parser_args():
         ]
     )
 
-    assert parsed_args.location == "test_location"
     assert parsed_args.template_dir == Path("/test/template_dir")
     assert parsed_args.sut[0].print_args() == "-t host1 -t host2"
     assert parsed_args.connection_timeout == 600
@@ -57,8 +54,6 @@ def test_get_parser_args():
     # Test long arguments
     parsed_args = parser.parse_args(
         [
-            "--location",
-            "test_location_long",
             "--template_dir",
             "/test/template_dir_long",
             "--sut",
@@ -75,7 +70,6 @@ def test_get_parser_args():
         ]
     )
 
-    assert parsed_args.location == "test_location_long"
     assert parsed_args.template_dir == Path("/test/template_dir_long")
     assert parsed_args.sut[0].print_args() == "-t host3 -t host4"
     assert parsed_args.connection_timeout == 1200

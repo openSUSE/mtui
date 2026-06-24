@@ -207,19 +207,6 @@ class CompareScriptCrashedError(CompareScriptError):
         return f"Compare script {self.argv!r} crashed:\n{self.stderr}"
 
 
-class LocationChangedMessage(UserMessage):
-    """A message for when the location changes."""
-
-    def __init__(self, old, new) -> None:
-        self.old = old
-        self.new = new
-
-    @property
-    def message(self):
-        """The message."""
-        return f"changed location from {self.old!r} to {self.new!r}"
-
-
 class MissingDoerError(ErrorMessage):
     """Base class for missing "doer" errors."""
 
@@ -262,18 +249,6 @@ class MissingDowngraderError(MissingDoerError):
     """Raised when a downgrader is missing."""
 
     name = "Downgrader"
-
-
-class InvalidLocationError(UserError):
-    """Raised when an invalid location is specified."""
-
-    _msg = "Invalid location {0!r}. Available locations: {1}"
-
-    def __init__(self, requested, available) -> None:
-        self.requested = requested
-        self.available = available
-
-        self.message = self._msg.format(requested, ", ".join(available))
 
 
 class ReConnectFailed(ErrorMessage):

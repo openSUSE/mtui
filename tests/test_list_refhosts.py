@@ -24,15 +24,15 @@ FIXTURE = Path(__file__).parent / "fixtures" / "refhosts.yml"
 
 
 def _rh() -> Refhosts:
-    return Refhosts(FIXTURE, location="nuremberg")
+    return Refhosts(FIXTURE)
 
 
 # --------------------------------------------------------------------------- #
 # Refhosts.query                                                              #
 # --------------------------------------------------------------------------- #
-def test_query_no_filter_lists_all_locations_deduped() -> None:
-    names = sorted(h.name for h, _loc in _rh().query())
-    # default + nuremberg, de-duplicated by name (location ignored)
+def test_query_no_filter_lists_all_hosts_deduped() -> None:
+    names = sorted(h.name for h in _rh().query())
+    # every legacy location group merged into one list, de-duplicated by name
     assert names == [
         "host-default-aarch64",
         "host-default-noaddon",
@@ -43,14 +43,14 @@ def test_query_no_filter_lists_all_locations_deduped() -> None:
 
 
 def test_query_arch_filter() -> None:
-    names = {h.name for h, _ in _rh().query(arch=["x86_64"])}
+    names = {h.name for h in _rh().query(arch=["x86_64"])}
     assert names == {"host-default-noaddon", "host-default-x86", "host-nbg-x86"}
 
 
 def test_query_product_substring_and_version() -> None:
     # product substring is case-insensitive; SP optional in version
     hits = _rh().query(product="sles", version="15-SP5")
-    assert {h.name for h, _ in hits} == {
+    assert {h.name for h in hits} == {
         "host-default-aarch64",
         "host-default-x86",
         "host-nbg-only-here",
@@ -60,17 +60,10 @@ def test_query_product_substring_and_version() -> None:
 
 
 def test_query_name_glob() -> None:
-    assert {h.name for h, _ in _rh().query(name="host-nbg-*")} == {
+    assert {h.name for h in _rh().query(name="host-nbg-*")} == {
         "host-nbg-only-here",
         "host-nbg-x86",
     }
-
-
-def test_query_location_scope_restricts() -> None:
-    # explicit location narrows to that location's rows only
-    only_nbg = {h.name for h, _ in _rh().query(location="nuremberg")}
-    assert "host-nbg-only-here" in only_nbg
-    assert "host-default-noaddon" not in only_nbg
 
 
 def test_query_empty_on_no_match() -> None:
@@ -81,19 +74,19 @@ def test_query_by_testplatform_attributes() -> None:
     from mtui.hosts.refhost.models import Attributes
 
     attrs = Attributes.from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]")
-    names = {h.name for h, _ in _rh().query(attributes=attrs)}
+    names = {h.name for h in _rh().query(attributes=attrs)}
     assert names == {"host-default-x86", "host-nbg-x86"}
 
 
 # --------------------------------------------------------------------------- #
 # search_pool / slot_of                                                       #
 # --------------------------------------------------------------------------- #
-def test_search_pool_tags_slots_all_locations() -> None:
+def test_search_pool_tags_slots() -> None:
     from mtui.hosts.refhost.models import Attributes
 
     attrs = Attributes.from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]")
     pairs = _rh().search_pool(attrs)
-    # matches both x86 hosts across locations, each tagged with a slot tuple
+    # matches both x86 hosts, each tagged with a slot tuple
     by_name = {h.name: slot for h, slot in pairs}
     assert set(by_name) == {"host-default-x86", "host-nbg-x86"}
     for slot in by_name.values():
@@ -103,7 +96,7 @@ def test_search_pool_tags_slots_all_locations() -> None:
 
 def test_slot_of_distinguishes_arch_and_version() -> None:
     rh = _rh()
-    hosts = {h.name: h for h, _ in rh.query()}
+    hosts = {h.name: h for h in rh.query()}
     x86 = rh.slot_of(hosts["host-default-x86"])
     aarch = rh.slot_of(hosts["host-default-aarch64"])
     # same product/version, different arch -> different slot
@@ -131,9 +124,7 @@ def test_version_str_match_variants() -> None:
 # --------------------------------------------------------------------------- #
 def _cfg() -> SimpleNamespace:
     # makes RefhostsFactory(config) resolve the fixture via the 'path' resolver
-    return SimpleNamespace(
-        refhosts_resolvers="path", refhosts_path=FIXTURE, location="nuremberg"
-    )
+    return SimpleNamespace(refhosts_resolvers="path", refhosts_path=FIXTURE)
 
 
 def _cmd(**args) -> ListRefhosts:
@@ -144,7 +135,6 @@ def _cmd(**args) -> ListRefhosts:
         "product": None,
         "version": None,
         "addon": None,
-        "location": None,
         "pool": False,
         "as_json": False,
         "free": False,

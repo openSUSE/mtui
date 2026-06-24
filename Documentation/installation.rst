@@ -25,10 +25,8 @@ This pulls in mtui together with all required dependencies.
 
 .. note::
 
-  After installation, you'll need to configure at least your `location`_
-  and you will likely want to customize `template_dir`_ as well.
+  After installation, you will likely want to customize `template_dir`_.
 
-.. _location: ./cfg.html#mtui-location
 .. _template_dir: ./cfg.html#mtui-template-dir
 
 

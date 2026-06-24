@@ -32,7 +32,7 @@ class PathResolver(Resolver):
         self.refhosts_factory = refhosts_factory
 
     def resolve(self, config) -> Refhosts:
-        return self.refhosts_factory(config.refhosts_path, config.location)
+        return self.refhosts_factory(config.refhosts_path)
 
 
 class HttpsResolver(Resolver):
@@ -71,7 +71,7 @@ class HttpsResolver(Resolver):
 
     def resolve(self, config) -> Refhosts:
         self._refresh_if_needed(config)
-        return self.refhosts_factory(self.cache_path, config.location)
+        return self.refhosts_factory(self.cache_path)
 
     def _refresh_if_needed(self, config) -> None:
         if self._is_refresh_needed(config.refhosts_https_expiration):

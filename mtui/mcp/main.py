@@ -75,16 +75,15 @@ def _is_clean_shutdown_group(exc: BaseException) -> bool:
 def build_session(cfg: Config, log: Logger) -> McpSession:
     """Construct a fresh :class:`McpSession` from ``cfg`` and ``log``.
 
-    Each session gets its **own** shallow copy of ``cfg`` so the
-    per-client isolation extends to the mutable scalars that commands
-    flip in place — notably ``config.location`` (``set_location``). A
-    shallow copy is the right tool: those attributes are scalars, so
-    each session rebinds its own while the heavy read-only members (the
-    parsed ``ConfigParser``, the refhosts factory) stay shared. Without
-    the copy, every http client would share one ``Config`` and clobber
+    Each session gets its **own** shallow copy of ``cfg`` so per-client
+    isolation extends to any scalar a command might rebind on ``config``
+    in place. A shallow copy is the right tool: scalars are rebound
+    per session while the heavy read-only members (the parsed
+    ``ConfigParser``, the refhosts factory) stay shared. Without the
+    copy, every http client would share one ``Config`` and could clobber
     each other's mutable state.
 
-    Workflow mode (``auto`` / ``kernel``) now lives on the loaded
+    Workflow mode (``auto`` / ``kernel``) lives on the loaded
     :class:`TestReport`, not on ``config``, so no per-session seeding of
     those flags is needed here.
 

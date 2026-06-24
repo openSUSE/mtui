@@ -109,7 +109,7 @@ class _FakeRefhosts:
     def search(self, _attributes):  # legacy path (should be unused when pooling)
         return [h.name for h, _slot in self._pairs]
 
-    def search_pool(self, _attributes, *, location=None):
+    def search_pool(self, _attributes):
         return self._pairs
 
 

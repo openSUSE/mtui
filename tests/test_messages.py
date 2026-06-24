@@ -46,10 +46,6 @@ def test_messages():
         == "Compare script 'test_argv' crashed:\nstderr"
     )
     assert (
-        str(messages.LocationChangedMessage("old", "new"))
-        == "changed location from 'old' to 'new'"
-    )
-    assert (
         str(messages.MissingPreparerError("test_release"))
         == "Missing Preparer for test_release"
     )
@@ -68,10 +64,6 @@ def test_messages():
     assert (
         str(messages.MissingDowngraderError("test_release"))
         == "Missing Downgrader for test_release"
-    )
-    assert (
-        str(messages.InvalidLocationError("req", ["avail"]))
-        == "Invalid location 'req'. Available locations: avail"
     )
     assert (
         str(messages.ReConnectFailed("test_host"))
