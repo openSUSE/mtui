@@ -13,6 +13,12 @@ class ListBugs(Command):
     """Lists related bugs and corresponding Bugzilla URLs."""
 
     command = "list_bugs"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self):
@@ -54,6 +60,12 @@ class ListUpdateCommands(Command):
     """Lists all commands invoked when applying updates on target hosts."""
 
     command = "list_update_commands"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `list_update_commands` command."""
@@ -94,6 +106,12 @@ class ListMetadata(Command):
     """Lists patchinfo metadata, such as ReviewRequestID or packager."""
 
     command = "list_metadata"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
@@ -138,6 +156,7 @@ class ListVersions(Command):
     """
 
     command = "list_versions"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -151,6 +170,7 @@ class ListVersions(Command):
             help="packagename to show versions",
         )
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:

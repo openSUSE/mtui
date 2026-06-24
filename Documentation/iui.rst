@@ -66,10 +66,14 @@ report, for report-scoped commands). The fan-out commands are: ``run``,
 ``set_repo``, ``reboot``, ``put``, ``get``, ``commit``, ``checkout``,
 ``approve``, ``assign``, ``unassign``, ``reject``, ``comment``, ``show_diff``,
 ``analyze_diff``, ``reload_openqa``, ``openqa_overview``, ``openqa_jobs``,
-``smelt_update``, and ``smelt_checkers``. Output for each template is prefixed
-with an ``=== <RRID> ===`` banner so results stay attributable. Queue-browsing
-SMELT commands (``smelt_requests``, ``smelt_updates``) are not template-scoped
-and do not fan out.
+``smelt_update``, ``smelt_checkers``, and the report-bound inspection commands
+``list_metadata``, ``list_bugs``, ``list_update_commands``, ``list_versions``,
+``list_packages``, and ``show_update_repos``. Output for each template is
+prefixed with an ``=== <RRID> ===`` banner so results stay attributable.
+Queue-browsing SMELT commands (``smelt_requests``, ``smelt_updates``) are not
+template-scoped and do not fan out. Host-listing commands (``list_hosts``,
+``list_locks``, ``list_timeout``, ``list_sessions``, ``show_log``,
+``list_history``) act on the active template only.
 
 Use ``-T RRID``/``--template RRID`` to run such a command against a single
 loaded template instead, or ``--all-templates`` to request fan-out explicitly.

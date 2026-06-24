@@ -28,6 +28,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `--all-templates` forces fan-out explicitly. When a fanned-out command fails on
   one template it keeps running on the others and reports an aggregate failure at
   the end.
+- Report-bound inspection commands `list_metadata`, `list_bugs`,
+  `list_update_commands`, `list_versions`, `list_packages`, and
+  `show_update_repos` now fan out across every loaded template too (previously
+  they only reported the active one), and accept the same `-T/--template` and
+  `--all-templates` flags. Host-listing commands (`list_hosts`, `list_locks`,
+  `list_timeout`, `list_sessions`, `show_log`, `list_history`) remain scoped to
+  the active template.
 - Tab completion for the `-T/--template` and `--all-templates` flags on every
   fan-out command, completing the loaded template RRIDs as values (like `switch`
   and `unload`).

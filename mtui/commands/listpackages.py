@@ -15,6 +15,7 @@ class ListPackages(Command):
     """Lists packages and their versions on target hosts."""
 
     command = "list_packages"
+    scope = "fanout"
 
     state_map: ClassVar[dict[None | int, str]] = {
         None: blue("not installed"),
@@ -60,6 +61,7 @@ class ListPackages(Command):
         )
 
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     @requires_update
     def _run_just_wanted(self) -> None:

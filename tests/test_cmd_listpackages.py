@@ -49,3 +49,14 @@ def test_list_packages_wanted_without_metadata_raises(mock_config):
     args = Namespace(wanted=True, package=[], hosts=None)
     with pytest.raises(TestReportNotLoadedError):
         ListPackages(args, mock_config, MagicMock(), prompt)()
+
+
+def test_list_packages_is_fanout():
+    assert ListPackages.scope == "fanout"
+
+
+def test_list_packages_accepts_template_flags():
+    sys_mock = MagicMock()
+    ns = ListPackages.parse_args("-T SUSE:Maintenance:1:1", sys_mock)
+    assert ns.template == "SUSE:Maintenance:1:1"
+    assert ListPackages.parse_args("--all-templates", sys_mock).all_templates is True
