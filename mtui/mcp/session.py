@@ -370,8 +370,13 @@ class McpSession:
             self.interactive,
             prompter=self.prompter,
         )
+        # A failed load returns a NullTestReport sentinel (empty RRID).
+        # ``add`` ignores it; skip the active-pointer move too so a failed
+        # load leaves the registry and active template untouched instead of
+        # planting a phantom entry that breaks fan-out.
         self.templates.add(tr)
-        self.templates.set_active(str(tr.id))
+        if str(tr.id):
+            self.templates.set_active(str(tr.id))
         # Re-apply the non-interactive flag after the testreport swap so
         # the fresh HostsGroup inherits the session's headless mode.
         self.targets.interactive = False

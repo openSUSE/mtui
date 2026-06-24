@@ -72,6 +72,25 @@ def test_add_second_does_not_change_active(registry):
     assert registry.active is r1
 
 
+def test_add_ignores_empty_rrid_sentinel(registry):
+    # A NullTestReport (failed load) has an empty RRID; it must never be keyed
+    # into the registry, else it becomes a phantom entry that breaks fan-out.
+    null = make_report("")
+    registry.add(null)
+    assert len(registry) == 0
+    assert not registry
+    assert "" not in registry
+
+
+def test_add_sentinel_does_not_disturb_loaded_templates(registry):
+    r = make_report("SUSE:Maintenance:1:1")
+    registry.add(r)
+    registry.add(make_report(""))  # failed load mid-session
+    assert len(registry) == 1
+    assert registry.active is r
+    assert registry.rrids() == ["SUSE:Maintenance:1:1"]
+
+
 def test_get_returns_report(registry):
     r = make_report("SUSE:Maintenance:1:1")
     registry.add(r)
