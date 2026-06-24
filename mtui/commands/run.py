@@ -4,7 +4,7 @@ from argparse import REMAINDER
 from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..cli.term import page
 from ..hosts.target.locks import LockedTargets, TargetLockedError
 from ..support.messages import NoRefhostsDefinedError
@@ -81,5 +81,8 @@ class Run(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-t", "--target")], line, text, state["hosts"].names()
+            [("-t", "--target"), *template_completion(state)],
+            line,
+            text,
+            state["hosts"].names(),
         )

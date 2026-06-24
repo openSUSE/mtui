@@ -5,8 +5,34 @@ each :class:`mtui.commands._command.Command` on the interactive prompt.
 """
 
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import chain
+from typing import Any
+
+
+def template_completion(state: Mapping[str, Any]) -> list[tuple[str, ...]]:
+    """Builds completion synonyms for the ``-T``/``--template`` flags.
+
+    Fan-out commands accept ``-T``/``--template RRID`` (scope to one loaded
+    template) and ``--all-templates`` (force fan-out). This helper returns the
+    flag tokens plus each loaded RRID as its own synonym group so a user can
+    tab-complete both the flag and the template to act on, mirroring the
+    ``switch`` / ``unload`` commands.
+
+    Args:
+        state: The prompt state dict passed to ``complete``; ``state["templates"]``
+            is the :class:`~mtui.template_registry.TemplateRegistry`.
+
+    Returns:
+        Synonym groups suitable for appending to the list passed to
+        :func:`complete_choices` / :func:`complete_choices_filelist`.
+
+    """
+    templates = state.get("templates")
+    groups: list[tuple[str, ...]] = [("-T", "--template"), ("--all-templates",)]
+    if templates:
+        groups += [(rrid,) for rrid in templates.rrids()]
+    return groups
 
 
 def complete_choices(

@@ -2,6 +2,7 @@
 
 from logging import getLogger
 
+from ..cli.completion import complete_choices, template_completion
 from ..data_sources.openqa import KernelOpenQA
 from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..support.misc import requires_update
@@ -60,3 +61,8 @@ class ReloadOpenQA(Command):
         else:
             logger.info("Refreshing data from QEM Dashboard")
             self.metadata.openqa.auto.run()
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)

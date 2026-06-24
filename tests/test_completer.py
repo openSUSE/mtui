@@ -19,7 +19,11 @@ from prompt_toolkit.completion import CompleteEvent
 from prompt_toolkit.document import Document
 
 from mtui.cli._completer import MtuiCompleter, _split_text_word
-from mtui.cli.completion import complete_choices, complete_choices_filelist
+from mtui.cli.completion import (
+    complete_choices,
+    complete_choices_filelist,
+    template_completion,
+)
 from mtui.cli.repl import CommandPrompt
 
 
@@ -204,7 +208,14 @@ def test_adapter_matches_complete_choices_for_run():
     hosts = MagicMock()
     hosts.names.return_value = []
     p.targets.select = MagicMock(return_value=hosts)
-    expected = set(complete_choices([("-t", "--target")], "run -", "-", []))
+    # ``run`` also offers the fan-out template flags; with no templates loaded
+    # ``template_completion`` contributes only the flag tokens.
+    state = {"templates": p.templates}
+    expected = set(
+        complete_choices(
+            [("-t", "--target"), *template_completion(state)], "run -", "-", []
+        )
+    )
     actual = set(_completions(p, "run -"))
     assert actual == expected
 

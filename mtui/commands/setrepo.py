@@ -3,7 +3,7 @@
 from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..hosts.target.locks import LockedTargets, TargetLockedError
 from ..support.misc import requires_update
 from . import Command
@@ -58,7 +58,11 @@ class SetRepo(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-t", "--target"), ("-A", "--add", "-R", "--remove")],
+            [
+                ("-t", "--target"),
+                ("-A", "--add", "-R", "--remove"),
+                *template_completion(state),
+            ],
             line,
             text,
             state["hosts"].names(),

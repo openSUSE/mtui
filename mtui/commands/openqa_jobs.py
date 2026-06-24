@@ -17,6 +17,7 @@ from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
 from ..cli.colors import green, red, yellow
+from ..cli.completion import complete_choices, template_completion
 from ..data_sources import oqa_search as oqa
 from ..support.http import resolve_verify
 from ..support.misc import requires_update
@@ -118,3 +119,19 @@ class OpenQAJobs(Command):
             self.println(
                 f"  {colour(j.result.ljust(15))} {j.arch:<8} {j.test}  {j.url}"
             )
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(
+            [
+                ("--all",),
+                ("--failed",),
+                ("--arch",),
+                ("--url-openqa",),
+                ("--url-dashboard-qam",),
+                *template_completion(state),
+            ],
+            line,
+            text,
+        )

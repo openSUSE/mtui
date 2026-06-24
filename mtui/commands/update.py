@@ -4,7 +4,7 @@ from logging import getLogger
 from traceback import format_exc
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..hosts.target.locks import TargetLockedError
 from ..support.messages import NoRefhostsDefinedError
 from ..support.misc import requires_update
@@ -95,7 +95,13 @@ class Update(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-t", "--target"), ("--noprepare",), ("--newpackage",), ("--noscript",)],
+            [
+                ("-t", "--target"),
+                ("--noprepare",),
+                ("--newpackage",),
+                ("--noscript",),
+                *template_completion(state),
+            ],
             line,
             text,
             state["hosts"].names(),

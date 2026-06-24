@@ -30,6 +30,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the end. Note: until host arbitration ships, pointing two loaded templates at
   overlapping reference hosts can still open separate SSH sessions to the same
   host; use disjoint host sets or `-T` when that matters.
+- Tab completion for the `-T/--template` and `--all-templates` flags on every
+  fan-out command, completing the loaded template RRIDs as values (like `switch`
+  and `unload`).
 
 ### Fixed
 

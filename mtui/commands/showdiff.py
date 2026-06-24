@@ -3,6 +3,7 @@
 import re
 from logging import getLogger
 
+from ..cli.completion import complete_choices, template_completion
 from ..cli.term import page
 from ..support.misc import requires_update
 from . import Command
@@ -27,6 +28,11 @@ class ShowDiff(Command):
         diff = self.metadata.report_wd() / "source.diff"
         text = diff.read_text().split("\n")
         page(text, self.prompt.interactive, writer=self.display.println)
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)
 
 
 # TODO: this command needs some love, in current state is too brittle
@@ -88,3 +94,8 @@ class AnalyzeDiff(Command):
         self.prompt.println("  Mentioned in changelog:")
         for i, p in enumerate(changes_patches):
             self.prompt.println(f"    {i} - {p}")
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)

@@ -4,7 +4,7 @@ from logging import getLogger
 from traceback import format_exc
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..support.messages import NoRefhostsDefinedError
 from ..support.misc import requires_update
 from ..types.systems import UnknownSystemError
@@ -91,6 +91,7 @@ class Prepare(Command):
                 ("-i", "--installed"),
                 ("-f", "--force"),
                 ("-u", "--update"),
+                *template_completion(state),
             ],
             line,
             text,
