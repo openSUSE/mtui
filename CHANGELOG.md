@@ -69,6 +69,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- The SSH password fallback prompt now renders correctly inside the interactive
+  REPL. Previously, when key authentication failed, the password prompt was read
+  with `getpass`, which does not cooperate with the prompt_toolkit session that
+  drives the REPL: the prompt was never shown and mtui appeared to hang silently.
+  The prompt now goes through the same prompt_toolkit-backed, masked,
+  cross-thread-serialised path as other interactive prompts, and names the user
+  and host it is asking for (`root@<host>'s password: `).
+- Authentication failures (wrong password, generic SSH errors) now print a
+  single clear error line instead of dumping a raw paramiko traceback and a
+  duplicate message. The full traceback is still available with `--debug`.
 - Loading a template no longer connects to *every* matching reference host when a
   testplatform resolves to several candidates on the same architecture. The
   autoconnect that runs during `load_template` was happening before the host
