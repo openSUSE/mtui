@@ -104,6 +104,64 @@ def test_slot_of_distinguishes_arch_and_version() -> None:
     assert x86[2] != aarch[2]
 
 
+def test_slot_of_distinguishes_installed_addons() -> None:
+    """slot_of keys on the host's full installed addon set (per-host identity)."""
+    rh = _rh()
+    hosts = {h.name: h for h in rh.query()}
+    # Both x86_64 sles 15-SP5, but host-default-x86 has the ``sdk`` addon and
+    # host-nbg-x86 has none -> slot_of treats them as different slots.
+    with_sdk = rh.slot_of(hosts["host-default-x86"])
+    no_addon = rh.slot_of(hosts["host-nbg-x86"])
+    assert with_sdk != no_addon
+    assert with_sdk[3] == ("sdk",)
+    assert no_addon[3] == ()
+
+
+def test_slot_for_query_collapses_same_arch_base_regardless_of_addons() -> None:
+    """The query slot ignores extra installed modules a testplatform did not ask for.
+
+    A testplatform that requests just ``base=sles;arch=x86_64`` (no addon) must
+    treat every x86_64 sles 15-SP5 host as one interchangeable slot, even though
+    one of them happens to have ``sdk`` installed. This is what keeps add_host
+    from connecting several hosts of the same arch/product.
+    """
+    from mtui.hosts.refhost.models import Attributes
+
+    rh = _rh()
+    hosts = {h.name: h for h in rh.query()}
+    attr = Attributes.from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]")[0]
+    s_with_sdk = rh.slot_for_query(attr, hosts["host-default-x86"])
+    s_no_addon = rh.slot_for_query(attr, hosts["host-nbg-x86"])
+    assert s_with_sdk == s_no_addon
+    # No requested addons -> empty addon component in the slot.
+    assert s_with_sdk[3] == ()
+
+
+def test_search_pool_by_query_groups_interchangeable_hosts() -> None:
+    """search_pool_by_query tags interchangeable hosts with one shared slot."""
+    from mtui.hosts.refhost.models import Attributes
+
+    attrs = Attributes.from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]")
+    pairs = _rh().search_pool_by_query(attrs)
+    by_name = {h.name: slot for h, slot in pairs}
+    assert set(by_name) == {"host-default-x86", "host-nbg-x86"}
+    # Both interchangeable for this query -> identical (single) slot.
+    assert len(set(by_name.values())) == 1
+
+
+def test_slot_for_query_distinguishes_requested_addon() -> None:
+    """Different requested addons on the same arch/base are different slots."""
+    from mtui.hosts.refhost.models import Attributes
+
+    rh = _rh()
+    host = next(h for h in rh.query() if h.name == "host-default-x86")
+    plain = Attributes.from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]")[0]
+    with_addon = Attributes.from_testplatform(
+        "base=sles(major=15,minor=5);arch=[x86_64];addon=sdk(major=15,minor=5)"
+    )[0]
+    assert rh.slot_for_query(plain, host) != rh.slot_for_query(with_addon, host)
+
+
 # --------------------------------------------------------------------------- #
 # _version_str_match                                                          #
 # --------------------------------------------------------------------------- #

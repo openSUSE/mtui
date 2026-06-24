@@ -115,11 +115,13 @@ Without parameter adds all hosts from testplatform.
 When adding hosts from a testplatform, mtui connects **one** reference host
 per test-target slot (product + version + arch + addons) rather than every
 matching candidate — so a testplatform that resolves to several hosts on the
-same architecture no longer fans out across all of them. If the chosen host
-fails to connect, mtui automatically tries a backup candidate from the same
-slot; only when every candidate for a slot is unreachable is a single warning
-logged and that slot left unconnected. The same one-per-slot selection and
-backup applies to the autoconnect that runs when a template is loaded.
+same architecture no longer fans out across all of them. The host drawn for
+each slot is chosen at random among the free candidates (load is spread across
+interchangeable refhosts). If the chosen host fails to connect, mtui
+automatically tries another candidate from the same slot; only when every
+candidate for a slot is unreachable is a single warning logged and that slot
+left unconnected. The same one-per-slot selection and backup applies to the
+autoconnect that runs when a template is loaded.
 
 If the session is in automatic mode, running ``add_host`` switches it to
 the manual workflow (adding hosts by hand is a manual action), updating

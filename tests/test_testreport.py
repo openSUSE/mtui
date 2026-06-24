@@ -112,6 +112,11 @@ class _FakeRefhosts:
     def search_pool(self, _attributes):
         return self._pairs
 
+    def search_pool_by_query(self, _attributes):
+        # The fake's pairs are already tagged with the (query) slot the test
+        # wants, so the query-keyed pool search returns them unchanged.
+        return self._pairs
+
 
 def _ph(name, slot):
     h = MagicMock()
@@ -197,7 +202,91 @@ def test_pool_records_slot_candidates_for_backup(tmp_path: Path) -> None:
     pairs = [_ph("a-x86", slot), _ph("b-x86", slot)]
     r = _pool_report(tmp_path, pairs)
     r.refhosts_from_tp("tp")
-    assert r._slot_candidates[slot] == ["a-x86", "b-x86"]
+    assert sorted(r._slot_candidates[slot]) == ["a-x86", "b-x86"]
+
+
+def test_pool_selection_ignores_preloaded_template_hostnames(tmp_path: Path) -> None:
+    """Pool selection connects one host per slot, not the template's full list.
+
+    In automatic mode the template parser pre-fills ``hostnames`` with every
+    ``reference host:`` line — multiple candidates per arch/slot. When the user
+    then runs ``add_host`` (no ``--target``) the testplatform/pool path must
+    connect exactly one arbiter-chosen host per slot and must NOT drag the
+    pre-loaded duplicates along (the regression that connected every candidate).
+    """
+    slot_x = ("sles", "15-5", "x86_64", ())
+    slot_a = ("sles", "15-5", "aarch64", ())
+    pairs = [
+        _ph("a-x86", slot_x),
+        _ph("b-x86", slot_x),  # same slot as a-x86
+        _ph("c-arm", slot_a),
+        _ph("d-arm", slot_a),  # same slot as c-arm
+    ]
+    r = _pool_report(tmp_path, pairs)
+    # Template autoconnect already loaded every candidate.
+    r.hostnames = {"a-x86", "b-x86", "c-arm", "d-arm"}
+    _stub_connect(r, {"a-x86", "b-x86", "c-arm", "d-arm"})
+
+    r.refhosts_from_tp("tp")
+    r.connect_targets()
+
+    # Exactly one connected host per slot, drawn from the pool claims.
+    assert len(r.targets) == 2
+    assert set(r.targets) == r._pool_claims
+    # One host from each slot, never two of the same slot.
+    assert len({h for h in r.targets if h.endswith("x86")}) == 1
+    assert len({h for h in r.targets if h.endswith("arm")}) == 1
+
+
+def test_pool_collapses_same_query_slot_across_installed_addons(
+    tmp_path: Path,
+) -> None:
+    """Same arch/base hosts with differing installed modules share one slot.
+
+    ``search_pool_by_query`` tags interchangeable hosts (same requested
+    product/arch/addons) with one shared slot, so the pool draws a single host
+    even when each candidate has a different installed-module set -- the real
+    cause of the multiple-hosts-per-arch regression.
+    """
+    # Both x86_64 sles 15-SP7 candidates, one query slot (no requested addons).
+    slot = ("SLES", "15-SP7", "x86_64", ())
+    pairs = [_ph("host-a", slot), _ph("host-b", slot)]
+    r = _pool_report(tmp_path, pairs)
+    # Automatic mode pre-loaded both into hostnames.
+    r.hostnames = {"host-a", "host-b"}
+    _stub_connect(r, {"host-a", "host-b"})
+
+    r.refhosts_from_tp("tp")
+    r.connect_targets()
+
+    assert len(r.targets) == 1
+    assert set(r.targets) <= {"host-a", "host-b"}
+    assert set(r.targets) == r._pool_claims
+
+
+def test_pool_select_shuffles_candidates(tmp_path: Path) -> None:
+    """Per-slot candidates are shuffled so the chosen host is random."""
+    slot = ("sles", "15-5", "x86_64", ())
+    pairs = [_ph(f"h{i}", slot) for i in range(5)]
+    r = _pool_report(tmp_path, pairs)
+    with patch("mtui.test_reports.testreport.random.shuffle") as shuffle:
+        r.refhosts_from_tp("tp")
+    shuffle.assert_called_once()
+
+
+def test_pool_select_warns_when_slot_exhausted(tmp_path: Path, caplog) -> None:
+    """All candidates in a slot already held → warn and claim nothing."""
+    slot = ("sles", "15-5", "x86_64", ())
+    pairs = [_ph("a-x86", slot), _ph("b-x86", slot)]
+    r = _pool_report(tmp_path, pairs)
+    # Another owner already holds every candidate for the slot.
+    other = ("reg", "OTHER")
+    assert r._arbiter.try_acquire("a-x86", other)
+    assert r._arbiter.try_acquire("b-x86", other)
+    with caplog.at_level(logging.WARNING, logger="mtui.template.testreport"):
+        r.refhosts_from_tp("tp")
+    assert r._pool_claims == set()
+    assert any("no free pool host for slot" in rec.message for rec in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +385,53 @@ def test_connect_targets_no_backup_when_primary_connects(tmp_path: Path) -> None
     # backup was never attempted (only the primary connect_target call)
     attempted = {c.args[0] for c in r.connect_target.call_args_list}
     assert attempted == {primary}
+
+
+def test_pool_connect_skips_host_locked_by_another_owner(tmp_path: Path) -> None:
+    """The autoconnect/pool path honours the *remote* pool lock.
+
+    A host whose remote lock is held by someone else (``try_claim`` -> False)
+    must not be added; the pool falls back to a free sibling in the same slot.
+    Exercises the real ``connect_target`` lock check (not the ``connect_target``
+    stub), so it guards the load->manual->autoconnect connect flow end to end.
+    """
+    slot = ("sles", "15-5", "x86_64", ())
+    pairs = [_ph("locked-host", slot), _ph("free-host", slot)]
+    r = _pool_report(tmp_path, pairs)
+
+    # Force a deterministic primary so the assertion is stable: "locked-host"
+    # is chosen first, then must yield to the free sibling.
+    with patch(
+        "mtui.test_reports.testreport.random.shuffle",
+        lambda c: c.sort(reverse=True),
+    ):
+        r.refhosts_from_tp("tp")
+    assert "locked-host" in r._pool_claims
+
+    created: dict[str, MagicMock] = {}
+
+    def fake_target(_config, host, *_a, **_kw):
+        t = MagicMock()
+        t.hostname = host
+        t.system = f"sys-{host}"
+        # Remote lock is busy only for the already-locked host.
+        t.try_claim.return_value = host != "locked-host"
+        t.connection.is_active.return_value = True
+        created[host] = t
+        return t
+
+    with patch("mtui.test_reports.testreport.Target", side_effect=fake_target):
+        r.connect_targets()
+
+    # Locked host was connected-then-released; the free sibling is the one kept.
+    assert "free-host" in r.targets
+    assert "locked-host" not in r.targets
+    assert "free-host" in r._pool_claims
+    assert "locked-host" not in r._pool_claims
+    # In-process claim on the locked host was released back to the arbiter.
+    assert r._arbiter.owner_of("locked-host") is None
+    # We actually attempted the remote claim on the locked host.
+    created["locked-host"].try_claim.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 import concurrent.futures
 import glob
 import os
+import random
 import re
 import shutil
 import stat
@@ -641,7 +642,19 @@ class TestReport(ABC):
         targets: dict[str, Target] = {}
         new_systems: dict[str, str] = {}
         executor = ContextExecutor()
-        hosts: set[str] = {host for host in self.hostnames if host not in self.targets}
+        # Once a testplatform/pool selection has run (``_slot_candidates`` set),
+        # only the arbiter-chosen hosts (one per slot) should be connected.
+        # ``hostnames`` may also hold the full set of template ``reference host:``
+        # candidates (autoconnect pre-loads them), so connecting all of it would
+        # drag in every duplicate per slot -- the regression this guards against.
+        # Before any pool selection (plain template autoconnect / ``add_host
+        # --target``) every requested host in ``hostnames`` connects as before.
+        connectable = (
+            self._pool_claims
+            if self._pool_selection_active() and self._slot_candidates
+            else self.hostnames
+        )
+        hosts: set[str] = {host for host in connectable if host not in self.targets}
 
         if hosts:
             logger.info("Adding %s", hosts)
@@ -841,17 +854,20 @@ class TestReport(ABC):
     def _pool_select_from_tp(self, refhosts, attributes, testplatform) -> None:
         """Pick one distinct free host per test-target slot via the arbiter.
 
-        Candidates are searched and grouped by slot
-        (product+version+arch+addons). For each slot the in-process arbiter
-        hands out one host not already claimed by another owner, queueing up
-        to ``[lock] wait`` seconds when every candidate is busy. The remote
-        lock is taken later at connect time (``connect_target``).
+        Candidates are searched and grouped by the *requested* slot
+        (base product + version + arch + the testplatform's requested addons),
+        so hosts that satisfy the same testplatform collapse to one slot
+        regardless of which extra modules they happen to have installed. For
+        each slot the in-process arbiter hands out one host not already claimed
+        by another owner, queueing up to ``[lock] wait`` seconds when every
+        candidate is busy. The remote lock is taken later at connect time
+        (``connect_target``).
         """
         arbiter = self._arbiter
         owner = self._owner
         if arbiter is None or owner is None:
             return
-        pairs = refhosts.search_pool(attributes)
+        pairs = refhosts.search_pool_by_query(attributes)
         if not pairs:
             logger.warning("nothing found for testplatform %r", testplatform)
             return
@@ -859,7 +875,11 @@ class TestReport(ABC):
         for host, slot in pairs:
             by_slot.setdefault(slot, []).append(host.name)
         for slot, candidates in by_slot.items():
-            # Remember the full candidate list so connect_targets can fall
+            # Pick (and fall back) randomly within a slot so load is spread
+            # across the interchangeable refhosts instead of always hammering
+            # the first one in refhosts.yml order.
+            random.shuffle(candidates)
+            # Remember the (shuffled) candidate list so connect_targets can fall
             # back to a sibling host if the chosen one fails to connect.
             self._slot_candidates[slot] = list(candidates)
             # Skip slots we already hold a host for (across testplatforms).
