@@ -183,6 +183,39 @@ def test_pool_two_reports_draw_distinct_hosts(tmp_path: Path) -> None:
     assert r1._pool_claims.isdisjoint(r2._pool_claims)
 
 
+def test_loading_second_report_keeps_first_reports_hosts(tmp_path: Path) -> None:
+    """A freshly selected report must not disturb an existing report's hosts.
+
+    Reproduces the ``load_template -a RRID1`` -> ``load_template -a RRID2``
+    regression: RRID2 selecting its own pool hosts must leave RRID1's claims
+    and arbiter ownership untouched (each template owns its own hosts).
+    """
+    from mtui.hosts.host_arbiter import HostArbiter
+
+    arb = HostArbiter()
+    pairs = [
+        _ph("a-x86", ("sles", "15-5", "x86_64", ())),
+        _ph("b-x86", ("sles", "15-5", "x86_64", ())),
+    ]
+    r1 = _pool_report(tmp_path, pairs, owner=("reg", "RRID1"))
+    r1._arbiter = arb
+    r1.refhosts_from_tp("tp")
+    r1_claims = set(r1._pool_claims)
+    assert r1_claims
+
+    # Second template loads later, sharing the process-global arbiter.
+    r2 = _pool_report(tmp_path, pairs, owner=("reg", "RRID2"))
+    r2._arbiter = arb
+    r2.refhosts_from_tp("tp")
+
+    # RRID1's claims and arbiter ownership are unchanged.
+    assert r1._pool_claims == r1_claims
+    for h in r1_claims:
+        assert arb.owner_of(h) == ("reg", "RRID1")
+    # RRID2 picked its own, disjoint hosts.
+    assert r2._pool_claims.isdisjoint(r1_claims)
+
+
 def test_release_pool_claims_unlocks_and_releases(tmp_path: Path) -> None:
     pairs = [_ph("a-x86", ("sles", "15-5", "x86_64", ()))]
     r = _pool_report(tmp_path, pairs)

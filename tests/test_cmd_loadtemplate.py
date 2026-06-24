@@ -29,7 +29,7 @@ def test_load_template_auto_kind_loads(mock_config):
     prompt = _prompt(metadata_truthy=False)
     update = MagicMock()
     update.kind = "auto"
-    args = Namespace(update=update, chosts=False)
+    args = Namespace(update=update)
 
     LoadTemplate(args, mock_config, MagicMock(), prompt)()
 
@@ -40,7 +40,7 @@ def test_load_template_unknown_kind_raises(mock_config):
     prompt = _prompt(metadata_truthy=False)
     update = MagicMock()
     update.kind = "unknown"
-    args = Namespace(update=update, chosts=False)
+    args = Namespace(update=update)
 
     with pytest.raises(TestReportNotLoadedError):
         LoadTemplate(args, mock_config, MagicMock(), prompt)()
@@ -57,24 +57,26 @@ def test_load_template_does_not_close_existing_hosts(mock_config):
     prompt.targets = {"h1": existing}
     update = MagicMock()
     update.kind = "auto"
-    # -c not passed -> chosts defaults True (keep/re-add hosts).
-    args = Namespace(update=update, chosts=True)
+    args = Namespace(update=update)
 
     LoadTemplate(args, mock_config, MagicMock(), prompt)()
 
     existing.close.assert_not_called()
     prompt.load_update.assert_called_once_with(update, autoconnect=True)
-    # carry-over re-adds the previously connected host to the new template
-    prompt.metadata.add_target.assert_called_once_with("h1")
 
 
-def test_load_template_clean_hosts_skips_carry_over(mock_config):
-    """With -c/--clean-hosts (chosts False) no host carry-over happens."""
+def test_load_template_never_carries_over_other_templates_hosts(mock_config):
+    """Loading a template must not reconnect hosts owned by another template.
+
+    Each loaded template owns its own hosts: the previously active template's
+    connected hosts are left on that template and never re-added to the newly
+    loaded one.
+    """
     prompt = _prompt(metadata_truthy=True)
-    prompt.targets = {"h1": MagicMock()}
+    prompt.targets = {"h1": MagicMock(), "h2": MagicMock()}
     update = MagicMock()
     update.kind = "auto"
-    args = Namespace(update=update, chosts=False)
+    args = Namespace(update=update)
 
     LoadTemplate(args, mock_config, MagicMock(), prompt)()
 

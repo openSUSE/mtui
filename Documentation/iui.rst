@@ -935,23 +935,21 @@ load_template
 
 ::
 
-    load_template (-a RequestReviewID | -k RequestReviewID) [-c] 
+    load_template (-a RequestReviewID | -k RequestReviewID)
 
 Loads a QA Maintenance template by its RRID identifier. The template is
 *added* to the session: previously loaded templates stay loaded and the newly
 loaded one becomes active. Loading an RRID that is already loaded reloads and
-replaces its stored report (and makes it active). The active template's
-connected hosts are kept and extended by the reference hosts defined in the
-template file. `-a` and `-k` options are mutually exclusive.
+replaces its stored report (and makes it active). Each loaded template owns its
+own reference hosts: the newly loaded template connects only the hosts defined
+in its own template file (or selected from its testplatforms) and never
+reconnects hosts that belong to another loaded template. `-a` and `-k` options
+are mutually exclusive.
 
 Use `list_templates`_ to see all loaded templates, `switch`_ to change the
 active one, and `unload`_ to drop one.
 
 **Options:**
-
-.. option:: -c, --clean-hosts
-
-  Cleans up old hosts.
 
 .. option:: -a RequestReviewID
 
