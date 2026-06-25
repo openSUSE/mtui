@@ -133,8 +133,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   pool claims untouched. This carry-over was a leftover from the pre-1.0,
   single-template world where loading *replaced* the session.
 - `assign`/`approve`/`reject`/`comment` no longer hang the mtui-mcp server. The
-  `osc qam` subprocess inherited the server's stdin — under mtui-mcp that is the
-  MCP stdio JSON-RPC pipe — so an interactive `osc` prompt (e.g. an approve
+  `osc qam` subprocess inherited the server's stdin (under mtui-mcp that is the
+  MCP stdio JSON-RPC pipe), so an interactive `osc` prompt (e.g. an approve
   confirmation) blocked reading it forever and, because the server serialises
   calls through one lock, every subsequent tool call wedged behind it. `osc` now
   runs with stdin detached (`DEVNULL`) and a 180s timeout, so it either completes
@@ -170,13 +170,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `null` for most incidents, instead of `prd` (the planned release date SMELT
   displays as the deadline). It now uses `crd` when set and falls back to
   `prd`, and `smelt_update` shows both raw dates. SLFO updates were already
-  correct — the REST v2 API exposes a dedicated `deadline` field.
+  correct; the REST v2 API exposes a dedicated `deadline` field.
 - A testplatform `base=<extension>` (e.g. `base=SLES-LTSS`, `base=sle-ha`,
   `base=SLES_SAP`, `base=SLE_RT`) now resolves to refhosts that carry that
   product as an **addon** on a SLES/SLED base, not only to hosts whose base
   product is literally that name. In the refhosts-ng schema a single host has
   one base (`SLES`) with LTSS/HA/SAP recorded as addons, so the previous
-  base-only match found nothing — `add_host` reported "No refhosts to add" for
+  base-only match found nothing; `add_host` reported "No refhosts to add" for
   every LTSS/HA/SAP incident even though matching hosts existed.
 - The product/refhost check no longer misreports a healthy host as having a
   dangling `/etc/products.d/baseproduct` symlink when that symlink uses an
@@ -196,16 +196,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `background=true` flag: instead of holding the request open for the minutes
   the operation takes, the call returns a job id immediately and runs the
   command in the background under the session lock. Four new tools drive the
-  job — `job_list` (every job in the session and its state), `job_status`
+  job: `job_list` (every job in the session and its state), `job_status`
   (one job's state and elapsed time), `job_result` (a finished job's output,
   erroring while it still runs and surfacing the command's failure envelope if
   it failed), and `job_cancel`. Jobs are scoped to the session (one process
   under stdio; the caller's isolated session under http), so a client can fire
   off a slow host op and keep issuing other calls while it runs. A cancelled
-  job already executing on a host may keep running there to completion — the
+  job already executing on a host may keep running there to completion; the
   same caveat as interrupting a foreground `run`.
 - New `list_refhosts` command (and `mcp__mtui__list_refhosts` tool) to query and
-  search the reference-host inventory **without connecting** — no SSH, no lock,
+  search the reference-host inventory **without connecting**: no SSH, no lock,
   no loaded template. Reads the same source `add_host` resolves through
   (`RefhostsFactory`) and filters by hostname glob (`--name`), arch (`--arch`),
   base product (`--product`), version (`--version`, `15-SP6`/`15.6`/`15`), addon
@@ -219,15 +219,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The `testreport_read` MCP tool accepts optional `offset` (1-based first line)
   and `limit` (max lines) to return a line window instead of the whole file.
   Without them the behaviour is unchanged (full file). This lets a caller page a
-  large report — a Product Increment `log` runs to thousands of lines after
-  `export` and otherwise overflowed the reply — using the same 1-indexed line
+  large report (a Product Increment `log` runs to thousands of lines after
+  `export` and otherwise overflowed the reply) using the same 1-indexed line
   numbers `testreport_patch` consumes; the reply still reports the file's total
   `line_count` (plus `offset`/`returned_lines` when a window is requested).
 - Connecting a reference host now verifies that its installed products match
-  what `refhosts.yml` records for that host. On any drift — wrong or
+  what `refhosts.yml` records for that host. On any drift (wrong or
   wrong-version base product, wrong architecture, addons that are missing,
   unexpected, or at a different version, or a dangling
-  `/etc/products.d/baseproduct` symlink — mtui logs a `WARNING` per drift class
+  `/etc/products.d/baseproduct` symlink), mtui logs a `WARNING` per drift class
   and keeps the host (the check never aborts a connect). `qa` is ignored on both
   sides to match the products mtui already skips. This catches validating an
   update on a host that is not the system its metadata claims; hosts absent from
@@ -236,8 +236,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   while it runs are now included in the tool reply, not just what it prints to
   stdout. The capture follows the command into the worker threads it fans out to
   (MTUI's thread pools now propagate context), so warnings logged off the main
-  thread — such as the per-host product-drift report above, emitted on
-  `add_host`'s connect pool — reach MCP clients directly; `add_host` no longer
+  thread (such as the per-host product-drift report above, emitted on
+  `add_host`'s connect pool) reach MCP clients directly; `add_host` no longer
   re-echoes them to stdout.
 
 ### Removed
@@ -278,7 +278,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   package-manager lock correctly. The `UpdateError` raised on "ZYpp transaction
   already in progress" had its `(reason, host)` arguments swapped (so `.host`
   became the literal reason and the message read backwards), and the matching
-  `downgrade` log calls were malformed — one passed **no** arguments for its four
+  `downgrade` log calls were malformed: one passed **no** arguments for its four
   `%s` placeholders, the other passed one too many. The exception arguments and
   the log-call arities are now correct (matching the `update` check), so a lock is
   attributed to the right host and the diagnostic prints real values.
@@ -290,7 +290,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   flag once followed by all its tokens, so the message/comment round-trips intact.
 - `RPMVersion` no longer raises `ValueError: too many values to unpack` when a
   version string contains more than one dash. The version/release split now uses
-  the last dash (`rsplit("-", 1)`) — the release field never contains a dash, but
+  the last dash (`rsplit("-", 1)`); the release field never contains a dash, but
   the version field can (e.g. a Debian-style `upstream-debrev` arriving through
   the dpkg querier).
 - Hashing a `UserMessage`/`UserError` (e.g. putting one in a `set` or using it
@@ -343,20 +343,20 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   temp file is now unlinked on any error before the exception propagates.
 - `mtui-mcp` now advertises `readOnlyHint=True` for the `openqa_jobs` tool (it
   only queries openQA) and drops a stale `"products"` entry from the read-only
-  allow-list (no such command exists — it is `list_products`, already covered by
+  allow-list (no such command exists; it is `list_products`, already covered by
   the `list_` prefix). Corrects the advisory hint shown to MCP clients; no
   behavioural change to the commands themselves.
 - A failed `update` no longer strips the test update repositories from the
   affected hosts. The repo cleanup used to run unconditionally (in a `finally`),
-  so a host whose update failed was left with no issue repo — retrying or
+  so a host whose update failed was left with no issue repo; retrying or
   diagnosing it (`zypper patches`) then saw nothing and the repo had to be
   re-added by hand. The repos are now removed only on a successful update; on
   failure they are kept (with a WARNING) for retry/diagnosis and removed by the
   next successful update or an explicit `set_repo --remove`. The hosts are still
   unlocked on failure as before.
 - `mtui-mcp` no longer floods its log with a repeated
-  `Warning: InsecureRequestWarning: Unverified HTTPS request ...` line — one per
-  openQA (or other internal-host) request — when TLS verification is disabled
+  `Warning: InsecureRequestWarning: Unverified HTTPS request ...` line (one per
+  openQA (or other internal-host) request) when TLS verification is disabled
   via `ssl_verify = false`. The MCP SDK records and re-emits warnings raised
   while handling each request, which defeated the per-request suppression; the
   warning is now silenced once at server start-up (only when verification is
@@ -403,8 +403,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   of stalling the whole client.
 - A failed Gitea API call caused by TLS certificate verification (common when
   the SUSE root CA is not in the system trust store) now logs a single,
-  actionable message naming the two remedies — install the SUSE CA or set
-  `ssl_verify = false` (or a CA-bundle path) under `[mtui]` — instead of dumping
+  actionable message naming the two remedies (install the SUSE CA or set
+  `ssl_verify = false`, or a CA-bundle path, under `[mtui]`) instead of dumping
   a multi-frame `SSLCertVerificationError` traceback. The full traceback is
   still available at debug level.
 - The HTTPS refhosts resolver no longer fails silently when its on-disk cache
@@ -430,13 +430,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   recorded previous version, but `RunCommand` ran it against the whole group;
   it now acts only on the hosts a per-host command dict actually covers.
 - A failed `update` now surfaces the original `UpdateError` (e.g. a dependency
-  error) to the caller even when the rollback itself raises — previously a
+  error) to the caller even when the rollback itself raises; previously a
   rollback error masked the real reason the update failed, and a clean rollback
   silently swallowed it.
 - The SSH connection setup now honours `connection_timeout` for the TCP
   connect, SSH banner, and authentication (previously only remote command
   execution was bounded, so a dead/firewalled refhost stalled on the OS TCP
-  timeout — making a bulk `add_host` appear to hang for minutes).
+  timeout, making a bulk `add_host` appear to hang for minutes).
 - `connection_timeout` is now read from the `[connection]` section (falling
   back to the legacy `[mtui]` section), matching where it is documented to live.
 
@@ -451,7 +451,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Added
 
 - New SMELT query commands (auto-exposed over MCP as `mcp__mtui__smelt_*`):
-  `smelt_update` (the loaded update's priority/deadline/status/… — SLFO via REST,
+  `smelt_update` (the loaded update's priority/deadline/status/…; SLFO via REST,
   Maintenance via GraphQL), `smelt_checkers` (checker/build-check result runs for
   the loaded SLFO update), and `smelt_updates` (enumerate the SLFO update queue
   with `--status` / `--review-group` / `--pending` filters, e.g. the testing
@@ -463,8 +463,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   data for the request. Backed by the new `mtui.data_sources.Smelt` connector
   (SMELT REST v2 for SLFO updates, GraphQL for classic Maintenance incidents).
 - New `openqa_jobs` command (auto-exposed over MCP as `mcp__mtui__openqa_jobs`)
-  lists the **individual** openQA jobs for the loaded update's incident build —
-  scenario, arch, result and job URL — so testers can see *which* jobs failed and
+  lists the **individual** openQA jobs for the loaded update's incident build
+  (scenario, arch, result and job URL), so testers can see *which* jobs failed and
   judge whether a failure relates to the package under test, rather than only the
   per-version summary `openqa_overview` gives. `obsoleted` (superseded) jobs are
   dropped by default; `--all` keeps them, `--failed` shows only non-passing jobs,
@@ -476,11 +476,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - New `mtui-mcp` console script (optional `mcp` extra) ships a
   Model Context Protocol server, built on the official `mcp` Python
   SDK, that exposes every non-interactive mtui command as an MCP
-  tool, plus dedicated testreport tools — `testreport_read` /
+  tool, plus dedicated testreport tools: `testreport_read` /
   `testreport_patch` / `testreport_write` to edit the report, and
   `testreport_logs` / `testreport_read_file` to inspect the rest of the
   checkout (the `build_checks/` and `install_logs/` files, `source.diff`,
-  `patchinfo.xml`) that the `log` file does not cover — so LLM clients
+  `patchinfo.xml`) that the `log` file does not cover, so LLM clients
   can drive a headless mtui session over `stdio` or `http`. The `mcp` extra installs
   `mcp[cli]>=1.2`; on openSUSE the SDK is packaged as
   `python3-mcp`. See `Documentation/mcp.rst` for the deny-list,
@@ -573,7 +573,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `run`, `show_log`, and `show_diff` now return their output when
   invoked through `mtui-mcp`. The three commands routed results through
   the interactive pager (`page()`), which early-returned in
-  non-interactive mode and left the captured stdout buffer empty —
+  non-interactive mode and left the captured stdout buffer empty;
   MCP clients received an empty response instead of the per-host
   command output, log lines, or source diff. The pager now forwards
   each line to the caller's display sink in non-interactive mode while
@@ -585,7 +585,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Previously a failing local command surfaced to the MCP client as
   `exit_code=1` with no output; the child's streams went to the server's
   TTY and `CalledProcessError.returncode` was discarded. The interactive
-  REPL path is unchanged — output still streams live to the terminal.
+  REPL path is unchanged; output still streams live to the terminal.
 - `openqa_overview` now shows build check logs for all packages in a
   multi-package update, not just one. Previously only logs matching a
   single package name extracted from the build string were displayed,
@@ -640,8 +640,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Non-interactive calls to `prompt_user` now return the ``default``
   argument instead of always returning ``False``. Callers that pass
-  ``default=True`` (``load_template`` — overwrites an already-loaded
-  session; ``updateid.py`` — deletes a checked-out template) now
+  ``default=True`` (``load_template``, which overwrites an already-loaded
+  session; ``updateid.py``, which deletes a checked-out template) now
   auto-confirm in non-interactive mode (MCP, scripts). All other
   callers pass no ``default`` and are unaffected. The docstring for
   ``prompt_user`` was updated to document this contract.

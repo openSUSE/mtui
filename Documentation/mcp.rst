@@ -21,8 +21,8 @@ the checkout (build-check and install logs, ``source.diff``, …).
 Session state is isolated per client. Under ``stdio`` one process
 serves one client, so there is exactly one ``Config`` / loaded test
 report / set of connected hosts. Under ``http`` each connected client
-gets its **own** isolated session — its own ``metadata`` and
-``targets`` — so concurrent clients never see each other's loaded
+gets its **own** isolated session (its own ``metadata`` and
+``targets``), so concurrent clients never see each other's loaded
 template or hosts (see :ref:`mcp-concurrency`). Clients load their own
 state at runtime via the ``load_template`` and ``add_host`` tools.
 
@@ -74,13 +74,13 @@ Flags mirror :doc:`cli` for the configuration surface that
 
 ``--transport {stdio,http}``
     Transport to serve on. ``stdio`` (default) speaks the MCP
-    framing on stdin/stdout — the standard way an LLM client spawns
+    framing on stdin/stdout, the standard way an LLM client spawns
     an MCP server as a subprocess. ``http`` binds a streamable-HTTP
     endpoint suitable for long-lived sessions.
 
 ``--host HOST``
     Bind address for ``--transport http``. Default ``127.0.0.1``;
-    deliberately loopback-only — HTTP exposure beyond loopback is
+    deliberately loopback-only; HTTP exposure beyond loopback is
     out of scope for v1 and is left to the operator's reverse-proxy
     of choice.
 
@@ -124,8 +124,8 @@ Connecting an LLM client
 any MCP-aware client wires up the same way it would for any other
 server: ``stdio`` clients spawn the binary as a subprocess; ``http``
 clients connect to a streamable-HTTP endpoint at ``/mcp`` on the
-configured host and port. The two examples below — Claude Desktop
-(stdio) and opencode (remote HTTP) — cover the common shapes; other
+configured host and port. The two examples below, Claude Desktop
+(stdio) and opencode (remote HTTP), cover the common shapes; other
 clients (Cursor, Zed, Codex CLI, Continue, etc.) follow the same
 pattern with their own config file names.
 
@@ -171,7 +171,7 @@ is not on the client's ``PATH``, give the absolute path
     }
 
 Point the server at a custom config with ``-c`` if needed; the test
-report and hosts are **not** seeded from CLI flags — the client loads
+report and hosts are **not** seeded from CLI flags; the client loads
 them at runtime by calling the ``load_template`` and ``add_host``
 tools:
 
@@ -237,7 +237,7 @@ which avoids the long-lived server process entirely:
 The HTTP transport isolates state per client but does **not**
 authenticate them (see :ref:`mcp-concurrency`). Bind to loopback (the
 default) and front with the operator's reverse-proxy of choice if
-remote access is required — ``mtui-mcp`` itself does not terminate TLS
+remote access is required; ``mtui-mcp`` itself does not terminate TLS
 or authenticate callers.
 
 
@@ -253,7 +253,7 @@ synthesised into an MCP tool at boot. The tool name is the command's
 ``command`` attribute; its description is the command's docstring;
 its JSON schema is derived from the command's :mod:`argparse` parser.
 
-See :doc:`iui` for the per-command semantics — the MCP surface and
+See :doc:`iui` for the per-command semantics; the MCP surface and
 the REPL surface share the same command catalogue and the same
 implementations.
 
@@ -333,7 +333,7 @@ report is loaded.
 
     ``offset`` (1-based first line) and ``limit`` (max lines) return a
     line window instead of the whole file, using the same 1-indexed
-    line numbers ``testreport_patch`` consumes — useful for paging a
+    line numbers ``testreport_patch`` consumes; useful for paging a
     large report whose ``log`` runs to thousands of lines after
     ``export``. Without them the full file is returned. The reply
     always reports the file's total ``line_count``, and adds
@@ -364,7 +364,7 @@ report is loaded.
 
 ``testreport_read_file(relpath: str) -> dict``
     Reads any file in the checkout by path relative to the checkout
-    directory — e.g. ``build_checks/<pkg>.<arch>.log``,
+    directory, e.g. ``build_checks/<pkg>.<arch>.log``,
     ``install_logs/<host>.log``, ``source.diff`` or ``patchinfo.xml``.
     The path is resolved under the checkout and may **not** escape it
     (``..`` traversal and absolute paths are refused). Returns
@@ -380,7 +380,7 @@ report is loaded.
 Worked example
 --------------
 
-Read the loaded report, replace lines 2–3 with three new lines, and
+Read the loaded report, replace lines 2 and 3 with three new lines, and
 re-read to confirm the new line count:
 
 .. code-block:: text
@@ -408,7 +408,7 @@ Concurrency and safety
 ======================
 
 * **One isolated session per client (HTTP).** Under ``--transport
-  http`` each connected client gets its own :class:`McpSession` — its
+  http`` each connected client gets its own :class:`McpSession`: its
   own ``Config`` view, ``metadata``, and ``targets``. One client's
   ``load_template`` / ``add_host`` is invisible to every other client,
   so concurrent reviewers never collide. Under ``stdio`` there is one
@@ -419,7 +419,7 @@ Concurrency and safety
   for the connection's lifetime. The ``Mcp-Session-Id`` header is used
   for log lines only, never to route state.
 * **Per-session ``asyncio.Lock``.** Within a single session every tool
-  invocation — auto-generated and testreport-editing alike — acquires
+  invocation (auto-generated and testreport-editing alike) acquires
   *that session's* lock, so one client's calls cannot interleave
   mutations of its own ``metadata`` / ``targets``. Calls from different
   clients hold different locks and run concurrently.
@@ -461,7 +461,7 @@ These knobs live in the ``[mcp]`` section of the mtui config file:
 Long-running tool calls
 =======================
 
-Many mtui commands legitimately take minutes rather than seconds —
+Many mtui commands legitimately take minutes rather than seconds:
 ``run`` against a slow refhost, ``update``, ``set_repo``, ``commit``,
 ``add_host`` against an SSH endpoint that takes its time to come up,
 ``load_template`` against a fresh SVN checkout, anything that drives
@@ -488,7 +488,7 @@ A small number of older / non-spec-compliant clients ignore
 ``notifications/progress`` and enforce their own short read timeout.
 For those, raise the timeout in the client's own configuration:
 
-* **Claude Desktop** — per-server ``timeout`` field (milliseconds) in
+* **Claude Desktop**: per-server ``timeout`` field (milliseconds) in
   ``mcpServers.<name>``:
 
   .. code-block:: json
@@ -503,9 +503,9 @@ For those, raise the timeout in the client's own configuration:
         }
       }
 
-* **opencode** — per-server ``timeout`` field on the MCP entry.
+* **opencode**: per-server ``timeout`` field on the MCP entry.
 
-* **Custom Python clients built on the SDK** — pass
+* **Custom Python clients built on the SDK**: pass
   ``read_timeout_seconds`` to ``ClientSession`` or
   ``request_read_timeout_seconds`` to ``send_request``; the SDK's
   ``MCP_DEFAULT_TIMEOUT = 30.0`` in ``mcp.shared._httpx_utils`` is
@@ -529,10 +529,10 @@ template, each against its own report and hosts, and the per-template
 output is prefixed with an ``=== <RRID> ===`` banner. Every fan-out tool
 therefore exposes two optional parameters in its schema:
 
-* ``template="<RRID>"`` — scope this one call to a single loaded
+* ``template="<RRID>"`` scopes this one call to a single loaded
   template (the analogue of the REPL ``-T/--template`` flag). Unknown
   RRIDs return a clean error.
-* ``all_templates=true`` — force fan-out across every loaded template
+* ``all_templates=true`` forces fan-out across every loaded template
   (the default for these tools, so this is only needed to be explicit).
 
 Omitting both fans the call out across the session's loaded templates.
@@ -541,7 +541,7 @@ others and reports an aggregate failure at the end.
 
 .. note::
 
-   ``switch`` and ``unload`` are **not** exposed as tools — moving the
+   ``switch`` and ``unload`` are **not** exposed as tools; moving the
    active-template pointer is REPL-only navigation. Over MCP you target a
    specific template per call with the ``template`` parameter instead;
    ``list_templates`` remains available as a read-only listing.
@@ -552,9 +552,9 @@ Background jobs (don't block on a slow host op)
 The heartbeat keeps a *synchronous* call alive, but the client is
 still parked on that one request until the command finishes. When you
 would rather fire off a slow host operation and keep working, the eight
-slow host commands —
-``run``, ``update``, ``downgrade``, ``prepare``, ``install``,
-``uninstall``, ``set_repo``, ``reboot`` — accept a ``background=true``
+slow host commands
+(``run``, ``update``, ``downgrade``, ``prepare``, ``install``,
+``uninstall``, ``set_repo``, ``reboot``) accept a ``background=true``
 flag. Instead of holding the request open for the minutes the op takes,
 the call returns **immediately** with a job id::
 
@@ -563,38 +563,38 @@ the call returns **immediately** with a job id::
         while you work elsewhere. Poll job_status(job_id='run-1') and
         fetch output with job_result(job_id='run-1')."
 
-The command still runs under the session lock for its whole duration —
-so it serialises against the session's other mutating calls exactly
-like a foreground call — but you are free to issue other (read-only)
+The command still runs under the session lock for its whole duration
+(so it serialises against the session's other mutating calls exactly
+like a foreground call), but you are free to issue other (read-only)
 tool calls meanwhile and poll the job:
 
-* ``job_list`` — every job in the session and its state;
-* ``job_status(job_id=…)`` — one job's state
+* ``job_list``: every job in the session and its state;
+* ``job_status(job_id=…)``: one job's state
   (``running`` / ``done`` / ``failed`` / ``cancelled``) and elapsed
   time;
-* ``job_result(job_id=…)`` — a finished job's captured stdout. It
+* ``job_result(job_id=…)``: a finished job's captured stdout. It
   *errors* while the job is still running (poll ``job_status`` first)
   and surfaces the command's failure envelope (stdout, error, exit
-  code) if it failed — exactly as a foreground failure would have;
-* ``job_cancel(job_id=…)`` — cancel a running job.
+  code) if it failed, exactly as a foreground failure would have;
+* ``job_cancel(job_id=…)``: cancel a running job.
 
 When a backgrounded slow command fans out across several loaded
 templates (see `Multiple templates (fan-out and per-call scoping)`_),
 it mints **one job per template** rather than a single job for the whole
 fan-out. ``job_list`` then shows per-template progress, and each job can
-be polled, fetched, and cancelled independently — cancelling one
+be polled, fetched, and cancelled independently; cancelling one
 template's job leaves the others running. Scoping the call with
 ``template="<RRID>"`` (or having only one template loaded) keeps it to a
 single job with the familiar ``<command>-<n>`` id; the fanned-out ids
 additionally encode the (sanitised) RRID. Because each per-template job
 still acquires the session lock for its whole duration, the jobs run
-serially within one session — the benefit is independent tracking and
+serially within one session; the benefit is independent tracking and
 cancellation, not intra-session parallelism.
 
 Jobs are scoped to the session: under stdio that is the single process;
 under http it is the caller's isolated session, so one client never
 sees another's jobs. The job table lives in memory and persists for the
-session's lifetime — finished records are not evicted — but under http
+session's lifetime (finished records are not evicted), but under http
 the registry's idle-TTL sweep drops the whole session (and its jobs)
 once it goes quiet.
 
@@ -602,7 +602,7 @@ once it goes quiet.
 
    Cancellation detaches the awaiter, but a job already executing on a
    host (an SSH command or subprocess) may keep running to completion
-   on that host even after ``job_cancel`` returns — the same caveat as
+   on that host even after ``job_cancel`` returns; the same caveat as
    interrupting a foreground ``run`` with Ctrl-C.
 
 
@@ -614,9 +614,9 @@ addition, any log record a command emits through the ``mtui`` logger
 tree (``mtui.commands.*``, ``mtui.template.*``, ``mtui.checks.*``, …) at
 ``INFO`` level or above *while it runs* is captured and appended to that
 same reply, prefixed with its level (``WARNING: …``, ``ERROR: …``). This
-means conditions a command reports by logging rather than printing — for
+means conditions a command reports by logging rather than printing (for
 example the product-drift warnings emitted when ``add_host`` connects a
-reference host whose installed products disagree with ``refhosts.yml`` —
+reference host whose installed products disagree with ``refhosts.yml``)
 reach the client even though they never touched stdout.
 
 The capture is deliberately scoped:
@@ -626,9 +626,9 @@ The capture is deliberately scoped:
 * **Per call, by capture token.** A unique token is set for the duration
   of one command and the capturing handler admits only records tagged
   with it. The token rides along into any worker threads the command
-  fans out to — MTUI's thread pools are
+  fans out to (MTUI's thread pools are
   :class:`~mtui.support.concurrency.ContextExecutor` instances that copy
-  the caller's :mod:`contextvars` context into each task — so a
+  the caller's :mod:`contextvars` context into each task), so a
   command's own background work is captured too (for example the
   product-drift warnings logged on ``add_host``'s connect pool). Records
   produced under a *different* token, including a concurrent

@@ -55,7 +55,7 @@ Controls coloured terminal output.
 
 ``auto`` (the default) emits ANSI colour escapes only when stderr is a TTY
 and the ``NO_COLOR`` environment variable is unset. ``always`` forces
-coloured output regardless of TTY detection — useful when piping into a
+coloured output regardless of TTY detection; useful when piping into a
 pager that understands escapes. ``never`` disables colour entirely.
 
 

@@ -208,10 +208,10 @@ Testing patterns
   (``mtui/foo/bar.py`` → ``tests/test_bar.py``).
 - Markers (registered in ``pyproject.toml``):
 
-  - ``slow`` — noticeably slower than the rest of the suite.
-  - ``integration`` — exercises multiple components (e.g. spawning
+  - ``slow``: noticeably slower than the rest of the suite.
+  - ``integration``: exercises multiple components (e.g. spawning
     ``python -m mtui``).
-  - ``network`` — performs real network I/O.
+  - ``network``: performs real network I/O.
 
   Run a subset with ``uv run pytest -m 'not slow and not network'``.
 
@@ -258,7 +258,7 @@ reference) auto-synthesises one MCP tool per non-denied entry in
 ``Command.registry`` and adds three hand-written testreport tools.
 Tool registration goes through the official SDK's
 :class:`mcp.server.fastmcp.FastMCP` server.
-This section covers smoke-testing and debugging the server itself —
+This section covers smoke-testing and debugging the server itself;
 operator-facing client configuration lives in :doc:`mcp`.
 
 Smoke-testing with MCP Inspector
@@ -292,7 +292,7 @@ visible alongside the Inspector interaction.
 .. _MCP Inspector: https://github.com/modelcontextprotocol/inspector
 
 For a stdio-transport smoke-test, point the Inspector at the
-binary instead of an HTTP URL — it spawns the subprocess itself and
+binary instead of an HTTP URL; it spawns the subprocess itself and
 attaches to its stdio streams. The first ``tools/list`` round-trip
 should return one entry per command in ``Command.registry`` minus the
 REPL-only deny-list (``mtui/mcp/deny.py``) plus
@@ -301,7 +301,7 @@ REPL-only deny-list (``mtui/mcp/deny.py``) plus
 Verifying dispatch
 ==================
 
-``whoami`` is the cheapest end-to-end check — it requires no loaded
+``whoami`` is the cheapest end-to-end check; it requires no loaded
 test report and no connected hosts, so a successful call confirms the
 schema-synthesis path, the dispatch wrapper, the session lock, and
 the response envelope. From a fresh server:
@@ -314,7 +314,7 @@ the response envelope. From a fresh server:
 Once a test report has been loaded for the session (via the
 ``load_template`` tool), ``testreport_read`` returns its current
 contents. Before that the editing tools refuse cleanly with
-``no testreport loaded; run `load_template` first`` — that is the
+``no testreport loaded; run `load_template` first``, which is the
 correct refusal path and exercises
 :class:`~mtui.support.messages.UserError` handling.
 
@@ -333,7 +333,7 @@ Troubleshooting
   (``update``, ``prepare``, ``checkout``) can run for minutes against
   real refhosts. Raise the client's per-tool timeout. Each HTTP client
   has its own isolated session and lock, so a long tool call blocks
-  only that client's own subsequent calls — other clients run
+  only that client's own subsequent calls; other clients run
   concurrently against their own sessions.
 * **Need to see the wire protocol.** Pass ``--debug`` to ``mtui-mcp``;
   both the server logger and the ``mcp.server.fastmcp`` logger drop
@@ -341,7 +341,7 @@ Troubleshooting
   decisions on stderr. Combine with the Inspector to see request and
   response on both sides of the wire.
 * **A new command is missing from the MCP tool surface.** Check
-  ``mtui/mcp/deny.py`` — only commands on the REPL-only deny-list are
+  ``mtui/mcp/deny.py``; only commands on the REPL-only deny-list are
   filtered. If the command is not denied and still not exposed, the
   registry probably failed to import the module (a syntax error or a
   missing ``command = "..."`` class attribute); ``mtui-mcp --debug``
