@@ -421,13 +421,19 @@ class McpSession:
         ``sys.exit`` / history-flush tail, since the process keeps
         serving other clients.
 
+        Every loaded template's hosts are disconnected, not just the
+        active one's: a session may hold several templates at once (each
+        owning its own host group), and evicting the session must reap
+        all of them — matching the REPL ``quit`` command, which closes
+        every template's host group rather than only ``self.targets``.
+
         The blocking paramiko closes run in a worker thread (via
         :func:`asyncio.to_thread`) so the event loop is never stalled,
         matching :meth:`run_command`'s threading discipline. The whole
         teardown is best-effort: a per-host close failure is logged and
         swallowed so one wedged connection cannot block reaping the
-        rest, and ``targets`` is emptied either way so a second call is
-        a cheap no-op.
+        rest, and each template's ``targets`` is emptied either way so a
+        second call is a cheap no-op.
         """
         # Release any host-arbitration pool claims (in-process ownership +
         # remote pool locks) for every loaded template before disconnect.
@@ -435,33 +441,38 @@ class McpSession:
         for report in self.templates.all():
             with contextlib.suppress(Exception):
                 report.release_pool_claims()
-        targets = self.targets
-        if not targets:
+        if not any(report.targets for report in self.templates.all()):
             return
         await asyncio.to_thread(self._disconnect_targets)
 
     def _disconnect_targets(self) -> None:
         """Synchronous parallel host-disconnect core for :meth:`close`.
 
-        Runs in a worker thread. Closes each :class:`Target` on its own
-        pool thread (paramiko teardown is blocking) with a bounded
-        wait, then clears ``targets`` regardless of individual
-        outcomes. Per-host errors are logged at WARNING, never raised.
+        Runs in a worker thread. Closes every loaded template's
+        :class:`Target` on its own pool thread (paramiko teardown is
+        blocking) with a bounded wait, then clears each template's host
+        group regardless of individual outcomes. Per-host errors are
+        logged at WARNING, never raised.
         """
-        targets = self.targets
-        hostnames = list(targets)
+        # (HostsGroup, hostname) for every host across every loaded template.
+        work = [
+            (report.targets, name)
+            for report in self.templates.all()
+            for name in list(report.targets)
+        ]
 
-        def _close_one(name: str) -> None:
+        def _close_one(targets, name: str) -> None:
             try:
                 targets[name].close()
             except Exception as exc:  # noqa: BLE001 - best-effort teardown
                 self.log.warning("error disconnecting host %s: %s", name, exc)
 
         with ContextExecutor() as executor:
-            futures = [executor.submit(_close_one, name) for name in hostnames]
+            futures = [executor.submit(_close_one, t, name) for t, name in work]
             concurrent.futures.wait(futures, timeout=45)
 
-        targets.clear()
+        for report in self.templates.all():
+            report.targets.clear()
 
     async def run_command(
         self,

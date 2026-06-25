@@ -293,6 +293,34 @@ def test_close_releases_pool_claims(tmp_path: Path) -> None:
     report.release_pool_claims.assert_called_once()
 
 
+def test_close_disconnects_every_loaded_templates_hosts(tmp_path: Path) -> None:
+    """``close`` closes hosts on *all* loaded templates, not just the active one."""
+    sess = _make_session(tmp_path)
+
+    active_host = MagicMock()
+    other_host = MagicMock()
+
+    active = MagicMock()
+    active.id = "SUSE:Maintenance:1:1"
+    active.targets = {"active-host": active_host}
+    other = MagicMock()
+    other.id = "SUSE:Maintenance:2:1"
+    other.targets = {"other-host": other_host}
+
+    sess.templates.add(active)
+    sess.templates.add(other)
+    sess.templates.set_active("SUSE:Maintenance:1:1")
+
+    asyncio.run(sess.close())
+
+    # Both the active and the non-active template's hosts are disconnected.
+    active_host.close.assert_called_once()
+    other_host.close.assert_called_once()
+    # And each template's host group is emptied.
+    assert active.targets == {}
+    assert other.targets == {}
+
+
 # --------------------------------------------------------------------------- #
 # Fan-out dispatch honours the ``template`` parameter (Phase 4)               #
 # --------------------------------------------------------------------------- #

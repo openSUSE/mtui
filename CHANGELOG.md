@@ -88,6 +88,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp` now disconnects every loaded template's hosts when a session is
+  closed (idle-TTL eviction or shutdown), not just the active template's. A
+  session can hold several templates at once, each owning its own host group;
+  the teardown previously reaped only the active template's connections,
+  leaking the others' SSH sessions. This now mirrors the REPL `quit` command,
+  which already closed every template's hosts.
 - Host *pool* claims and the zypper/operation lock are now fully independent.
   Previously both shared a single lock file (`/var/lock/mtui.lock`), so a pool
   claim taken during host selection blocked subsequent zypper operations
