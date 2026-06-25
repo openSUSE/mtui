@@ -1,7 +1,7 @@
 """The `unlock` command."""
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from . import Command
 
 
@@ -15,6 +15,7 @@ class HostsUnlock(Command):
     """
 
     command = "unlock"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -33,6 +34,7 @@ class HostsUnlock(Command):
         )
 
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `unlock` command."""
@@ -46,7 +48,12 @@ class HostsUnlock(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-f", "--force"), ("-p", "--pool"), ("-t", "--target")],
+            [
+                ("-f", "--force"),
+                ("-p", "--pool"),
+                ("-t", "--target"),
+                *template_completion(state),
+            ],
             line,
             text,
             state["hosts"].names(),

@@ -2,7 +2,7 @@
 
 from argparse import REMAINDER
 
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from . import Command
 
 
@@ -24,6 +24,7 @@ class HostLock(Command):
     """
 
     command = "lock"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
@@ -32,6 +33,7 @@ class HostLock(Command):
         parser.add_argument(
             "-c", "--comment", action="append", nargs=REMAINDER, help="lock comment"
         )
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `lock` command."""
@@ -43,7 +45,7 @@ class HostLock(Command):
     def complete(state, text, line, begidx, endidx):
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-t", "--target"), ("-c", "--comment")],
+            [("-t", "--target"), ("-c", "--comment"), *template_completion(state)],
             line,
             text,
             state["hosts"].names(),

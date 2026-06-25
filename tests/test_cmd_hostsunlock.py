@@ -45,3 +45,19 @@ def test_unlock_pool_with_force(mock_config):
     args = Namespace(hosts=None, force=True, pool=True)
     HostsUnlock(args, mock_config, MagicMock(), prompt)()
     prompt.targets.select.return_value.pool_unlock.assert_called_once_with(force=True)
+
+
+def test_unlock_is_fanout():
+    assert HostsUnlock.scope == "fanout"
+
+
+def test_unlock_accepts_template_flag():
+    ns = HostsUnlock.parse_args("-T SUSE:Maintenance:1:1", MagicMock())
+    assert ns.template == "SUSE:Maintenance:1:1"
+    assert ns.all_templates is False
+
+
+def test_unlock_accepts_all_templates_flag():
+    ns = HostsUnlock.parse_args("--all-templates", MagicMock())
+    assert ns.all_templates is True
+    assert ns.template is None

@@ -9,9 +9,13 @@ import pytest
 
 from mtui.commands.simplelists import (
     ListBugs,
+    ListHistory,
     ListHosts,
     ListLocks,
+    ListLog,
     ListMetadata,
+    ListSessions,
+    ListTimeout,
     ListUpdateCommands,
     ListVersions,
 )
@@ -84,6 +88,39 @@ def test_report_bound_command_accepts_template_flag(cmd_cls):
 
 @pytest.mark.parametrize("cmd_cls", _REPORT_BOUND)
 def test_report_bound_command_accepts_all_templates_flag(cmd_cls):
+    sys_mock = MagicMock()
+    ns = cmd_cls.parse_args("--all-templates", sys_mock)
+    assert ns.all_templates is True
+    assert ns.template is None
+
+
+# --- fan-out scope contract for host-listing / host-locking commands ---
+
+_HOST_LISTING = (
+    ListHosts,
+    ListLocks,
+    ListTimeout,
+    ListSessions,
+    ListHistory,
+    ListLog,
+)
+
+
+@pytest.mark.parametrize("cmd_cls", _HOST_LISTING)
+def test_host_listing_command_is_fanout(cmd_cls):
+    assert cmd_cls.scope == "fanout"
+
+
+@pytest.mark.parametrize("cmd_cls", _HOST_LISTING)
+def test_host_listing_command_accepts_template_flag(cmd_cls):
+    sys_mock = MagicMock()
+    ns = cmd_cls.parse_args("-T SUSE:Maintenance:1:1", sys_mock)
+    assert ns.template == "SUSE:Maintenance:1:1"
+    assert ns.all_templates is False
+
+
+@pytest.mark.parametrize("cmd_cls", _HOST_LISTING)
+def test_host_listing_command_accepts_all_templates_flag(cmd_cls):
     sys_mock = MagicMock()
     ns = cmd_cls.parse_args("--all-templates", sys_mock)
     assert ns.all_templates is True

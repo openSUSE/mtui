@@ -3,7 +3,7 @@
 from typing import ClassVar
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..cli.term import page
 from ..support.misc import requires_update
 from . import Command
@@ -35,6 +35,7 @@ class ListLocks(Command):
     """
 
     command = "list_locks"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -45,6 +46,7 @@ class ListLocks(Command):
             action="store_true",
             help="list pool-claim locks instead of zypper/operation locks",
         )
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `list_locks` command."""
@@ -55,27 +57,51 @@ class ListLocks(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
-        return complete_choices([("-p", "--pool")], line, text)
+        return complete_choices(
+            [("-p", "--pool"), *template_completion(state)], line, text
+        )
 
 
 class ListHosts(Command):
     """Lists all connected hosts, including their system types and state."""
 
     command = "list_hosts"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `list_hosts` command."""
         self.targets.report_self(self.display.list_host)
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)
 
 
 class ListTimeout(Command):
     """Prints the current timeout values per host in seconds."""
 
     command = "list_timeout"
+    scope = "fanout"
+
+    @classmethod
+    def _add_arguments(cls, parser: ArgumentParser) -> None:
+        """Adds arguments to the command's argument parser."""
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `list_timeout` command."""
         self.targets.report_timeout(self.display.list_timeout)
+
+    @staticmethod
+    def complete(state, text, line, begidx, endidx) -> list[str]:
+        """Provides tab completion for the command."""
+        return complete_choices(template_completion(state), line, text)
 
 
 class ListUpdateCommands(Command):
@@ -98,11 +124,13 @@ class ListSessions(Command):
     """Lists current active SSH sessions on target hosts."""
 
     command = "list_sessions"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `list_sessions` command."""
@@ -120,7 +148,10 @@ class ListSessions(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-t", "--target")], line, text, state["hosts"].names()
+            [("-t", "--target"), *template_completion(state)],
+            line,
+            text,
+            state["hosts"].names(),
         )
 
 
@@ -149,11 +180,13 @@ class ListLog(Command):
     """
 
     command = "show_log"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `show_log` command."""
@@ -166,7 +199,10 @@ class ListLog(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-t", "--target")], line, text, state["hosts"].names()
+            [("-t", "--target"), *template_completion(state)],
+            line,
+            text,
+            state["hosts"].names(),
         )
 
 
@@ -221,6 +257,7 @@ class ListHistory(Command):
     """
 
     command = "list_history"
+    scope = "fanout"
 
     filters: ClassVar[set[str]] = {
         "connect",
@@ -242,6 +279,7 @@ class ListHistory(Command):
             help="event to list",
         )
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `list_history` command."""
@@ -265,5 +303,6 @@ class ListHistory(Command):
             ("update",),
             ("downgrade",),
             ("install",),
+            *template_completion(state),
         ]
         return complete_choices(cstring, line, text, state["hosts"].names())

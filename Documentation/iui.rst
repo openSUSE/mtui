@@ -67,14 +67,15 @@ report, for report-scoped commands). The fan-out commands are: ``run``,
 ``set_repo``, ``reboot``, ``put``, ``get``, ``commit``, ``checkout``,
 ``approve``, ``assign``, ``unassign``, ``reject``, ``comment``, ``show_diff``,
 ``analyze_diff``, ``reload_openqa``, ``openqa_overview``, ``openqa_jobs``,
-``smelt_update``, ``smelt_checkers``, and the report-bound inspection commands
+``smelt_update``, ``smelt_checkers``, the report-bound inspection commands
 ``list_metadata``, ``list_bugs``, ``list_update_commands``, ``list_versions``,
-``list_packages``, and ``show_update_repos``. Output for each template is
-prefixed with an ``=== <RRID> ===`` banner so results stay attributable.
-Queue-browsing SMELT commands (``smelt_requests``, ``smelt_updates``) are not
-template-scoped and do not fan out. Host-listing commands (``list_hosts``,
-``list_locks``, ``list_timeout``, ``list_sessions``, ``show_log``,
-``list_history``) act on the active template only.
+``list_packages``, and ``show_update_repos``, the host-locking commands
+``lock`` and ``unlock``, and the host-listing commands ``list_hosts``,
+``list_locks``, ``list_timeout``, ``list_sessions``, ``show_log``, and
+``list_history``. Output for each template is prefixed with an
+``=== <RRID> ===`` banner so results stay attributable. Queue-browsing SMELT
+commands (``smelt_requests``, ``smelt_updates``) are not template-scoped and do
+not fan out.
 
 Use ``-T RRID``/``--template RRID`` to run such a command against a single
 loaded template instead, or ``--all-templates`` to request fan-out explicitly.
@@ -161,10 +162,14 @@ list_hosts
 
 ::
 
-  list_hosts
+  list_hosts [-T RRID | --all-templates]
 
 Lists all connected hosts, including the system types and their current
 state: ``enabled``, ``disabled`` or ``dryrun``.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope to a
+single template.
 
 
 list_history
@@ -172,11 +177,15 @@ list_history
 
 ::
 
-  list_history [-e EVENT] [-t HOST]
+  list_history [-e EVENT] [-t HOST] [-T RRID | --all-templates]
 
 Lists a history of MTUI events on the target hosts, such as installing or
 updating packages. Date, username and event is shown. Events can be
 filtered with the ``EVENT`` parameter.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope to a
+single template.
 
 **Options:**
 
@@ -190,7 +199,7 @@ list_locks
 
 ::
 
-  list_locks [-p]
+  list_locks [-p] [-T RRID | --all-templates]
 
 Lists lock state of all connected hosts.
 
@@ -198,6 +207,10 @@ By default only the zypper/operation locks (set by ``lock`` and the
 install/update/prepare/downgrade flows) are shown. Use ``-p``/``--pool`` to
 instead list the host *pool* claims taken during pool selection. The two
 lock mechanisms are independent and use separate lock files on the hosts.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope to a
+single template.
 
 
 list_products
@@ -576,10 +589,14 @@ lock
 
 ::
 
-    lock [-t HOST]
+    lock [-t HOST] [-c COMMENT] [-T RRID | --all-templates]
 
 Locks host for exclusive usage. This locks all repository transactions, such as
 enabling or disabling the testing repository on the target hosts.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope the lock to
+a single template.
 
 .. caution::
   The hosts are locked with a timestamp, the UID and PID of the session.
@@ -614,9 +631,13 @@ list_timeout
 
 ::
 
-    list_timeout
+    list_timeout [-T RRID | --all-templates]
 
 Prints the current timeout values per host in seconds.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope to a
+single template.
 
 
 unlock
@@ -624,13 +645,17 @@ unlock
 
 ::
 
-    unlock [-f] [-p] [-t HOST]
+    unlock [-f] [-p] [-t HOST] [-T RRID | --all-templates]
 
 Unlocks given targets. Unlocks all if used without arguments.
 
 By default this removes the zypper/operation lock. Use ``-p``/``--pool`` to
 instead remove the host *pool* claim. The two lock mechanisms are
 independent and use separate lock files on the hosts.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope the unlock
+to a single template.
 
 **Options:**
 
@@ -921,11 +946,15 @@ show_log
 
 ::
 
-    show_log [-t HOST]
+    show_log [-t HOST] [-T RRID | --all-templates]
 
 Prints the command protocol from the specified hosts. This might be
 handy for the tester, as one can simply dump the command history
 to the reproducer section of the template.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope to a
+single template.
 
 Metadata Commands
 *****************
@@ -1092,9 +1121,13 @@ list_sessions
 
 ::
 
-    list_sessions [-t HOST]
+    list_sessions [-t HOST] [-T RRID | --all-templates]
 
 Lists current active ssh sessions on target hosts.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_). Use ``-T RRID`` to scope to a
+single template.
 
 
 analyze_diff
