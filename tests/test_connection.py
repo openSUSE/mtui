@@ -7,7 +7,6 @@ import pytest
 from mtui.hosts.connection import (
     CommandTimeoutError,
     Connection,
-    NonInteractiveAuthRequired,
     policy_from_config,
 )
 
@@ -74,78 +73,40 @@ def test_connection_init_success(mock_ssh_client, mock_ssh_config, mock_path):
     assert conn.timeout == 300
 
 
-def test_connection_init_auth_fallback(mock_ssh_client, mock_ssh_config, mock_path):
-    """Test password fallback authentication."""
-    mock_ssh_client.connect.side_effect = [
-        paramiko.AuthenticationException,
-        None,  # second call succeeds
-    ]
-    with patch("getpass.getpass", return_value="password") as mock_getpass:
-        Connection("test_host", 22, 300)
-
-        assert mock_getpass.call_count == 1
-        assert mock_ssh_client.connect.call_count == 2
-        mock_ssh_client.connect.assert_any_call(
-            hostname="test_host",
-            port=22,
-            username="root",
-            key_filename=None,
-            sock=None,
-            timeout=300,
-            banner_timeout=300,
-            auth_timeout=300,
-        )
-        mock_ssh_client.connect.assert_any_call(
-            hostname="test_host",
-            port=22,
-            username="root",
-            password="password",
-            sock=None,
-            timeout=300,
-            banner_timeout=300,
-            auth_timeout=300,
-        )
-
-
-def test_connection_noninteractive_auth_fail_raises_without_getpass(
+def test_connection_key_auth_failure_reraises_without_password_prompt(
     mock_ssh_client, mock_ssh_config, mock_path
 ):
-    """Non-interactive: a key-auth failure must NOT prompt for a password.
+    """A key-auth failure re-raises; there is no password fallback.
 
-    Under ``mtui-mcp`` there is no TTY, so ``getpass.getpass`` would block
-    forever on an invisible prompt. With ``interactive=False`` the
-    fallback is skipped entirely and ``NonInteractiveAuthRequired`` is
-    raised instead (the original hang reported against homer.qam.suse.cz).
+    MTUI requires working SSH key authentication. When key auth fails the
+    ``AuthenticationException`` propagates to the caller (Target.connect,
+    which reports ConnectingTargetFailedMessage) -- the connection never
+    prompts for a password. This holds in both interactive and
+    non-interactive sessions.
     """
     mock_ssh_client.connect.side_effect = paramiko.AuthenticationException
 
     with patch("getpass.getpass") as mock_getpass:
-        with pytest.raises(NonInteractiveAuthRequired):
-            Connection("test_host", 22, 300, interactive=False)
+        with pytest.raises(paramiko.AuthenticationException):
+            Connection("test_host", 22, 300)
 
         mock_getpass.assert_not_called()
         # Only the initial key-auth attempt happened; no password retry.
         assert mock_ssh_client.connect.call_count == 1
 
 
-def test_connection_noninteractive_bad_host_key_raises_without_getpass(
-    mock_ssh_client, mock_ssh_config, mock_path
-):
-    """A BadHostKeyException is treated the same as auth failure when headless."""
+def test_connection_bad_host_key_reraises(mock_ssh_client, mock_ssh_config, mock_path):
+    """A BadHostKeyException re-raises just like a plain auth failure."""
     mock_ssh_client.connect.side_effect = paramiko.BadHostKeyException(
         "test_host", MagicMock(), MagicMock()
     )
 
     with patch("getpass.getpass") as mock_getpass:
-        with pytest.raises(NonInteractiveAuthRequired):
-            Connection("test_host", 22, 300, interactive=False)
+        with pytest.raises(paramiko.BadHostKeyException):
+            Connection("test_host", 22, 300)
 
         mock_getpass.assert_not_called()
-
-
-def test_connection_noninteractive_auth_fail_is_paramiko_auth_subclass():
-    """The raised error stays catchable by existing AuthenticationException handlers."""
-    assert issubclass(NonInteractiveAuthRequired, paramiko.AuthenticationException)
+        assert mock_ssh_client.connect.call_count == 1
 
 
 def test_run_command_success(mock_ssh_client, mock_ssh_config, mock_path):
@@ -496,106 +457,36 @@ def test_connect_logs_non_enoent_ssh_config_error(
     assert any("denied" in r.message for r in caplog.records)
 
 
-def test_connect_wrong_password_reraises(
+def test_connect_key_auth_failure_warns_and_logs_detail_at_debug(
     mock_ssh_client, mock_ssh_config, mock_path, caplog
 ):
-    """Failing both key and password auth re-raises the second exception."""
-    mock_ssh_client.connect.side_effect = [
-        paramiko.AuthenticationException,
-        paramiko.AuthenticationException,
-    ]
-    with (
-        patch("getpass.getpass", return_value="wrong"),
-        pytest.raises(paramiko.AuthenticationException),
-        caplog.at_level("ERROR", logger="mtui.connection"),
-    ):
-        Connection("test_host", 22, 300)
+    """A key-auth failure surfaces one WARNING; the traceback stays at DEBUG.
 
-
-def test_connection_password_prompt_is_host_labelled(
-    mock_ssh_client, mock_ssh_config, mock_path
-):
-    """The key-auth fallback prompt must name the user and host.
-
-    Regression for the "silent wait" UX: the old bare ``getpass.getpass()``
-    gave no indication of *why* the terminal was blocked. The prompt now
-    embeds ``<user>@<host>'s password: `` so the user understands what is
-    being asked.
+    The connection layer emits a single actionable WARNING (set up SSH key
+    auth) and keeps the exception detail/traceback at DEBUG so only one
+    user-facing line is printed for a single failure. The exception then
+    propagates to the caller (Target.connect), which reports the
+    user-facing ConnectingTargetFailedMessage.
     """
-    mock_ssh_client.connect.side_effect = [
-        paramiko.AuthenticationException,
-        None,  # password attempt succeeds
-    ]
-    with patch("getpass.getpass", return_value="password") as mock_getpass:
-        Connection("test_host", 22, 300)
+    mock_ssh_client.connect.side_effect = paramiko.AuthenticationException
 
-    mock_getpass.assert_called_once()
-    (prompt_text,) = mock_getpass.call_args.args
-    assert "test_host" in prompt_text
-    assert "root@test_host" in prompt_text
-
-
-def test_connect_wrong_password_logs_only_at_debug(
-    mock_ssh_client, mock_ssh_config, mock_path, caplog
-):
-    """A wrong password emits NO error/critical at the connection layer.
-
-    Regression for the duplicate message: the connection used to log
-    ``error: ...wrong password`` and then ``Target.connect`` logged
-    ``critical: connecting to ... failed``. The connection layer now keeps
-    its specific wording (plus traceback) at DEBUG so only one user-facing
-    line -- ``Target.connect``'s -- is printed.
-    """
-    mock_ssh_client.connect.side_effect = [
-        paramiko.AuthenticationException,
-        paramiko.AuthenticationException,
-    ]
     with (
-        patch("getpass.getpass", return_value="wrong"),
+        patch("getpass.getpass") as mock_getpass,
         pytest.raises(paramiko.AuthenticationException),
         caplog.at_level("DEBUG", logger="mtui.connection"),
     ):
         Connection("test_host", 22, 300)
 
-    # Nothing surfaces at ERROR or higher from the connection layer.
-    assert not [
-        r
-        for r in caplog.records
-        if r.levelno >= 40  # ERROR/CRITICAL
-    ]
+    mock_getpass.assert_not_called()
+    # No password retry: only the single key-auth attempt happened.
+    assert mock_ssh_client.connect.call_count == 1
+    # Nothing surfaces above WARNING from the connection layer.
+    assert not [r for r in caplog.records if r.levelno >= 40]
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("key authentication" in r.getMessage().lower() for r in warnings)
     # The detail (with traceback) is available at DEBUG for --debug runs.
     debug_records = [r for r in caplog.records if r.levelname == "DEBUG"]
-    wrong_pw = [r for r in debug_records if "wrong password" in r.getMessage()]
-    assert len(wrong_pw) == 1
-    assert wrong_pw[0].exc_info is not None
-
-
-def test_connection_uses_password_prompt_callback_over_getpass(
-    mock_ssh_client, mock_ssh_config, mock_path
-):
-    """When a ``password_prompt`` callback is wired, it is used (not getpass).
-
-    Regression for the "silent wait": in the prompt_toolkit REPL a bare
-    ``getpass.getpass`` renders nothing. ``Target`` wires
-    ``Prompter.ask_password`` as ``password_prompt`` so the masked prompt is
-    rendered correctly; the callback must take precedence over getpass and
-    receive the host-labelled prompt text.
-    """
-    mock_ssh_client.connect.side_effect = [
-        paramiko.AuthenticationException,
-        None,  # password attempt succeeds
-    ]
-    callback = MagicMock(return_value="secret")
-    with patch("getpass.getpass") as mock_getpass:
-        Connection("test_host", 22, 300, password_prompt=callback)
-
-    mock_getpass.assert_not_called()
-    callback.assert_called_once()
-    (prompt_text,) = callback.call_args.args
-    assert "root@test_host" in prompt_text
-    # The captured password is fed to the retry connect.
-    second_call = mock_ssh_client.connect.call_args_list[1]
-    assert second_call.kwargs["password"] == "secret"
+    assert any(r.exc_info is not None for r in debug_records)
 
 
 def test_connect_sshexception_propagates(

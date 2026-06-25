@@ -311,6 +311,12 @@ knowing:
 Where the REPL would otherwise prompt, pass the matching flag
 explicitly from the MCP client so the behaviour is unambiguous.
 
+SSH authentication is public-key only. If key authentication to a
+target fails, the connection error is reported (the host is marked
+unreachable) -- mtui never falls back to a password prompt, in either
+the REPL or under MCP. Set up working SSH key auth to the target and
+verify it with ``ssh root@<host>``.
+
 
 Testreport editing tools
 ========================

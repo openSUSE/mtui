@@ -36,57 +36,6 @@ def test_default_reader_is_input():
     assert p._reader is input  # noqa: SLF001
 
 
-def test_ask_password_uses_injected_password_reader():
-    """``ask_password`` routes through the masked reader, not ``ask``'s."""
-    reader = MagicMock(return_value="visible")
-    pw_reader = MagicMock(return_value="s3cret")
-    p = Prompter(reader=reader, password_reader=pw_reader)
-
-    assert p.ask_password("pw? ") == "s3cret"
-    pw_reader.assert_called_once_with("pw? ")
-    reader.assert_not_called()
-
-
-def test_default_password_reader_is_prompt_toolkit_backed():
-    """The default masked reader must not be the plain visible reader.
-
-    A bare ``input`` would echo the password and hang inside the REPL's
-    prompt_toolkit session; the default must be the dedicated
-    prompt_toolkit-backed reader instead.
-    """
-    p = Prompter()
-    assert p._password_reader is not input  # noqa: SLF001
-    assert p._password_reader is not p._reader  # noqa: SLF001
-
-
-def test_concurrent_ask_and_password_are_serialised():
-    """``ask`` and ``ask_password`` share one lock; they never overlap."""
-    active = 0
-    max_active = 0
-    guard = threading.Lock()
-
-    def _track(_text: str) -> str:
-        nonlocal active, max_active
-        with guard:
-            active += 1
-            max_active = max(max_active, active)
-        time.sleep(0.03)
-        with guard:
-            active -= 1
-        return _text
-
-    p = Prompter(reader=_track, password_reader=_track)
-
-    t1 = threading.Thread(target=lambda: p.ask("visible "))
-    t2 = threading.Thread(target=lambda: p.ask_password("masked "))
-    t1.start()
-    t2.start()
-    t1.join(timeout=5)
-    t2.join(timeout=5)
-
-    assert max_active == 1, f"ask/ask_password overlapped: {max_active}"
-
-
 def test_concurrent_asks_are_serialised():
     """Two concurrent ``ask`` calls never overlap; the lock fences them.
 

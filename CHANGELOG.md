@@ -79,6 +79,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - The `-c`/`--clean-hosts` flag on `load_template` has been removed. Host
   carry-over between templates no longer happens (each template owns its own
   hosts), so the flag that toggled it is obsolete.
+- The SSH password fallback has been removed. When public-key authentication to
+  a host fails, mtui no longer prompts for a root password; the connection is
+  reported as failed instead. This removes a rarely-used fallback whose prompt
+  got overwritten by sibling hosts' output when connecting a group of hosts in
+  parallel, leaving an unclear UI. Set up working SSH key authentication to the
+  target (verify with `ssh root@<host>`).
 
 ### Fixed
 
@@ -96,14 +102,7 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Pool claims are now reliably removed on disconnect (`remove_host`, `quit`,
   `unload`, and MCP session teardown), so hosts are not left claimed after a
   session releases them.
-- The SSH password fallback prompt now renders correctly inside the interactive
-  REPL. Previously, when key authentication failed, the password prompt was read
-  with `getpass`, which does not cooperate with the prompt_toolkit session that
-  drives the REPL: the prompt was never shown and mtui appeared to hang silently.
-  The prompt now goes through the same prompt_toolkit-backed, masked,
-  cross-thread-serialised path as other interactive prompts, and names the user
-  and host it is asking for (`root@<host>'s password: `).
-- Authentication failures (wrong password, generic SSH errors) now print a
+- Authentication failures (failed key auth, generic SSH errors) now print a
   single clear error line instead of dumping a raw paramiko traceback and a
   duplicate message. The full traceback is still available with `--debug`.
 - Loading a template no longer connects to *every* matching reference host when a
@@ -397,11 +396,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 - Running under MCP (`mtui-mcp`) no longer hangs when a refhost's SSH key
   authentication fails. Previously the connect path fell back to an interactive
-  `getpass` root-password prompt, which has no TTY in MCP mode (stdin is the
-  JSON-RPC pipe) and blocked the session indefinitely. Non-interactive sessions
-  now skip the prompt and fail fast with a single actionable WARNING naming the
-  fix (set up working SSH key auth, verify with `ssh root@<host>`); the affected
-  host is reported as unreachable instead of stalling the whole client.
+  root-password prompt, which has no TTY in MCP mode (stdin is the JSON-RPC pipe)
+  and blocked the session indefinitely. The connect path now fails fast with a
+  single actionable WARNING naming the fix (set up working SSH key auth, verify
+  with `ssh root@<host>`); the affected host is reported as unreachable instead
+  of stalling the whole client.
 - A failed Gitea API call caused by TLS certificate verification (common when
   the SUSE root CA is not in the system trust store) now logs a single,
   actionable message naming the two remedies — install the SUSE CA or set
