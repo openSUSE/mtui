@@ -215,6 +215,73 @@ class TestGiteaOperations:
         assert "LGTM" in str(posts[0].request.body)
 
     @responses.activate
+    def test_approve_after_rebuild_rerequest_posts_comment(self, gitea):
+        """A re-requested review supersedes a stale decision -> approve proceeds.
+
+        After a rebuild re-requests the group's review, an earlier decline
+        comment lingers in the (append-only) history. approve() must still post
+        a fresh LGTM rather than refuse with GiteaNoReviewError.
+        """
+        me = self._make_comment(
+            1,
+            gitea.ASSIGN_TEMPLATE % (gitea.user, gitea.group),
+            "2024-01-01T00:00:00+00:00",
+        )
+        stale_decline = self._make_comment(
+            2,
+            f"@{gitea.group}-review: decline",
+            "2024-01-02T00:00:00+00:00",
+        )
+        comments = [me, stale_decline]
+        # check_assign -> the session user is the assignee
+        responses.add(responses.GET, gitea.prissues, json=comments, status=200)
+        # is_done -> a decision comment exists ...
+        responses.add(responses.GET, gitea.prissues, json=comments, status=200)
+        # ... but the group's review is requested again -> not done
+        responses.add(
+            responses.GET,
+            gitea.pr,
+            json={"requested_reviewers": [{"login": f"{gitea.group}-review"}]},
+            status=200,
+        )
+        responses.add(responses.POST, gitea.prissues, json={"id": 3}, status=201)
+
+        gitea.approve()
+
+        posts = [c for c in responses.calls if c.request.method == "POST"]
+        assert len(posts) == 1
+        assert "LGTM" in str(posts[0].request.body)
+
+    @responses.activate
+    def test_approve_when_already_decided_raises(self, gitea):
+        """A standing decision with no pending re-request still blocks approve."""
+        me = self._make_comment(
+            1,
+            gitea.ASSIGN_TEMPLATE % (gitea.user, gitea.group),
+            "2024-01-01T00:00:00+00:00",
+        )
+        decision = self._make_comment(
+            2,
+            f"@{gitea.group}-review: LGTM",
+            "2024-01-02T00:00:00+00:00",
+        )
+        comments = [me, decision]
+        # check_assign -> assigned to the session user
+        responses.add(responses.GET, gitea.prissues, json=comments, status=200)
+        # is_done -> decision comment exists ...
+        responses.add(responses.GET, gitea.prissues, json=comments, status=200)
+        # ... and no pending re-request -> done
+        responses.add(
+            responses.GET,
+            gitea.pr,
+            json={"requested_reviewers": []},
+            status=200,
+        )
+
+        with pytest.raises(GiteaNoReviewError):
+            gitea.approve()
+
+    @responses.activate
     def test_assign_no_review_raises(self, gitea):
         """Test assign raises GiteaNoReviewError when no review exists."""
         responses.add(

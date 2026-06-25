@@ -282,11 +282,24 @@ class Gitea:
         return False
 
     def __is_done(self) -> bool:
-        """Checks if the pull request has been approved or rejected."""
+        """Checks if the group's review has been decided and still stands.
+
+        The decision is recorded as a magic PR comment
+        (``@<group>-review: LGTM/approved/declined``). That history is
+        append-only, so a stale decision lingers after a rebuild re-requests
+        the group's review. Treat a pending re-request as superseding the old
+        decision: only report "done" when a decision comment exists *and* the
+        group is not currently a requested reviewer.
+        """
         comments = sorted(self.__get_all_comments())
 
         done = re.compile(f"@{self.group}-review: (LGTM|approved?|declined?)")
-        return any(done.match(c.body) for c in comments)
+        if not any(done.match(c.body) for c in comments):
+            return False
+        # A decision comment exists, but a pending re-request (e.g. a rebuild
+        # that re-requested the group's review) supersedes it -- the group must
+        # review the new state again.
+        return not self.__has_review()
 
     def approve(self, other: str | None = None) -> None:
         """Approves the PR by posting a comment.
