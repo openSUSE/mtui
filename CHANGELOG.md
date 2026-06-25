@@ -94,6 +94,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the teardown previously reaped only the active template's connections,
   leaking the others' SSH sessions. This now mirrors the REPL `quit` command,
   which already closed every template's hosts.
+- `approve`, `reject`, and `assign` no longer refuse a Gitea PR whose review was
+  re-requested after an earlier decision (e.g. the package was rebuilt following
+  a `REQUEST_CHANGES`). The "already approved/rejected" guard scanned the
+  append-only comment history and so honoured a stale decision forever; it now
+  treats a pending review request for the group as superseding the old decision,
+  letting the group review the rebuilt PR again.
 - Host *pool* claims and the zypper/operation lock are now fully independent.
   Previously both shared a single lock file (`/var/lock/mtui.lock`), so a pool
   claim taken during host selection blocked subsequent zypper operations
