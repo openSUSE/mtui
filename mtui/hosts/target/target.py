@@ -107,11 +107,11 @@ class Target:
                 cross-thread serialisation. ``None`` means "no prompt,
                 silently wait on timeout" — see
                 :class:`mtui.connection.Connection`.
-            interactive: Whether a TTY-backed user can answer an SSH
-                password prompt if key auth fails. Forwarded to
+            interactive: Whether a TTY-backed user can answer the
+                command-timeout prompt. Forwarded to
                 :class:`mtui.connection.Connection`; ``False`` (headless,
-                e.g. ``mtui-mcp``) makes a key-auth failure raise rather
-                than block on an invisible password prompt.
+                e.g. ``mtui-mcp``) makes a silent command timeout abort
+                the run rather than wait for an answer that can't come.
             rrid: The owning template's RRID, used as the pool-lock
                 ownership identity (see :class:`PoolLock`). Empty for
                 directly-constructed reports that never use pool selection.
@@ -174,9 +174,6 @@ class Target:
                 self._timeout,
                 missing_host_key_policy=policy_from_config(policy_name),
                 timeout_prompt=self._prompter.ask if self._prompter else None,
-                password_prompt=(
-                    self._prompter.ask_password if self._prompter else None
-                ),
                 interactive=self._interactive,
             )
         except Exception as e:

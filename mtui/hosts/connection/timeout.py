@@ -29,22 +29,6 @@ class CommandTimeoutError(Exception):
         return repr(self.command)
 
 
-class NonInteractiveAuthRequired(paramiko.AuthenticationException):
-    """Raised when key auth fails but no interactive password prompt is possible.
-
-    SSH public-key authentication failed and the only remaining fallback
-    is to ask the user for the root password. In a non-interactive
-    session (e.g. ``mtui-mcp``, which has no TTY and whose stdin is the
-    JSON-RPC pipe) that prompt cannot be shown and would block forever,
-    so we raise this instead.
-
-    Subclasses :class:`paramiko.AuthenticationException` so existing
-    ``except (paramiko.)AuthenticationException`` / ``except Exception``
-    handlers in the connect path keep catching it -- the host is simply
-    reported as unreachable rather than hanging the process.
-    """
-
-
 _HOST_KEY_POLICIES: dict[str, type[paramiko.MissingHostKeyPolicy]] = {
     "auto_add": paramiko.AutoAddPolicy,
     "warn": paramiko.WarningPolicy,

@@ -795,8 +795,9 @@ def test_connect_target_exception_returns_false_false(tmp_path: Path) -> None:
 def test_connect_target_noninteractive_when_no_prompter(tmp_path: Path) -> None:
     """No prompter (MCP / headless) -> Target built with interactive=False.
 
-    This is the ``add_host`` path that previously hung: a key-auth failure
-    must not drop into an invisible ``getpass`` prompt under MCP.
+    The flag now governs the command-timeout prompt: under MCP a silent
+    command timeout aborts the run rather than waiting for an answer that
+    cannot come.
     """
     r = _make(tmp_path)
     assert r._prompter is None
@@ -841,8 +842,8 @@ def test_add_target_noninteractive_when_no_prompter(tmp_path: Path) -> None:
     """``add_host -t <host>`` under MCP builds the Target with interactive=False.
 
     ``AddHost.__call__`` dispatches to ``TestReport.add_target`` for each
-    ``--target``; with no prompter the connection must skip the password
-    prompt instead of blocking (the homer.qam.suse.cz hang).
+    ``--target``; with no prompter the connection runs non-interactively
+    so a silent command timeout aborts instead of blocking.
     """
     r = _make(tmp_path)
     assert r._prompter is None

@@ -6,7 +6,6 @@ remote shells on a remote host.
 """
 
 import errno
-import getpass
 import logging
 import select
 import stat
@@ -24,7 +23,7 @@ from paramiko import Channel, SFTPClient, SFTPFile, SSHClient, SSHConfig
 
 from ...cli.term import termsize
 from ...support.messages import ReConnectFailed
-from .timeout import CommandTimeoutError, NonInteractiveAuthRequired
+from .timeout import CommandTimeoutError
 
 logger = getLogger("mtui.connection")
 RETRIES: int = 5
@@ -43,7 +42,6 @@ class Connection:
 
     __slots__ = [
         "_interactive",
-        "_password_prompt",
         "_policy",
         "_timeout_prompt",
         "client",
@@ -63,13 +61,13 @@ class Connection:
         timeout: int,
         missing_host_key_policy: paramiko.MissingHostKeyPolicy | None = None,
         timeout_prompt: Callable[[str], str] | None = None,
-        password_prompt: Callable[[str], str] | None = None,
         interactive: bool = True,
     ) -> None:
         """Opens an SSH channel to the specified host.
 
-        This method tries to authenticate using SSH keys and falls back to
-        password authentication if key-based authentication fails.
+        Authentication is SSH public-key only. If key auth fails the
+        connection error propagates to the caller -- there is no password
+        fallback (set up working SSH key auth to the target instead).
 
         Args:
             hostname: The hostname or IP address of the remote host.
@@ -89,27 +87,15 @@ class Connection:
                 :class:`mtui.cli.prompter.Prompter`'s ``ask`` method here
                 to surface a serialised, race-free prompt to the user
                 when multiple targets run a command in parallel.
-            password_prompt: Optional callable invoked with prompt text
-                when key authentication fails and a password is needed.
-                Returns the user's typed password. When ``None`` (the
-                default) the fallback uses :func:`getpass.getpass`, which
-                works for a plain terminal but renders nothing when called
-                between the REPL's prompt_toolkit ``PromptSession`` reads
-                (the prompt silently hangs). Wire a
-                :class:`mtui.cli.prompter.Prompter`'s ``ask_password``
-                method here so the masked prompt is rendered correctly
-                and serialised across parallel targets.
             interactive: Whether a TTY-backed user is available to answer
-                an SSH password prompt. ``True`` (the default) preserves
-                the legacy behaviour: if key auth fails, fall back to
-                :func:`getpass.getpass`. ``False`` (e.g. under
-                ``mtui-mcp``, which has no TTY) skips the prompt and
-                raises :class:`NonInteractiveAuthRequired` instead of
-                blocking forever on an invisible password prompt.
+                the command-timeout prompt raised by :meth:`run`. ``True``
+                (the default) lets a timed-out command ask the user
+                whether to keep waiting. ``False`` (e.g. under
+                ``mtui-mcp``, which has no TTY) makes a silent command
+                timeout abort the run instead of looping forever.
 
         """
         self._timeout_prompt = timeout_prompt
-        self._password_prompt = password_prompt
         self._interactive = interactive
         self.hostname = hostname
 
@@ -186,81 +172,25 @@ class Connection:
             )
 
         except (paramiko.AuthenticationException, paramiko.BadHostKeyException):
-            # public key auth failed. The only remaining fallback is to
-            # ask the user for the root password, which needs a TTY.
-            if not self._interactive:
-                # No TTY (e.g. under mtui-mcp): a getpass prompt would be
-                # invisible to the client and block the process forever.
-                # Fail fast with a clear, actionable message instead.
-                logger.warning(
-                    "Authentication failed on %s: key auth did not succeed and "
-                    "password prompting is unavailable in non-interactive mode. "
-                    "Set up working SSH key authentication for this host "
-                    '(verify with "ssh root@%s").',
-                    self.hostname,
-                    self.hostname,
-                )
-                raise NonInteractiveAuthRequired(
-                    f"key authentication failed on {self.hostname} and no "
-                    "interactive password prompt is available"
-                ) from None
-
-            # Interactive session: fall back to a password prompt. Other
-            # than ssh, mtui asks only once for a password. this could
-            # be changed if there is demand for it.
-            username = opts.get("user", "root")
+            # Public-key authentication failed. There is no password
+            # fallback: MTUI requires working SSH key auth to the target
+            # (set it up and verify with "ssh root@<host>"). Re-raise so
+            # the caller (Target.connect) reports the single user-facing
+            # ConnectingTargetFailedMessage; keep the traceback at DEBUG
+            # (visible with --debug) so only one line surfaces per failure.
             logger.warning(
-                "Authentication failed on %s: AuthKey missing. Make sure your system is set up correctly",
+                "Authentication failed on %s: SSH key authentication did not "
+                'succeed. Set up working SSH key auth (verify with "ssh '
+                'root@%s").',
+                self.hostname,
                 self.hostname,
             )
-            logger.warning("Trying manually, please enter the password")
-            # Explicit, host/user-labelled prompt so the user understands
-            # *why* the terminal is waiting (the old bare getpass() looked
-            # like a silent hang in the REPL).
-            prompt_text = f"{username}@{self.hostname}'s password: "
-            # Prefer the injected password prompt (the REPL wires
-            # Prompter.ask_password, which renders correctly between
-            # prompt_toolkit reads and masks input). Fall back to
-            # getpass.getpass for plain-terminal / test callers that pass
-            # no callback.
-            if self._password_prompt is not None:
-                password = self._password_prompt(prompt_text)
-            else:
-                password = getpass.getpass(prompt_text)
-
-            try:
-                # try again with password auth instead of public/private key
-                self.client.connect(
-                    hostname=(
-                        opts.get("hostname", self.hostname)
-                        if "proxycommand" not in opts
-                        else self.hostname
-                    ),
-                    port=int(opts.get("port", self.port)),
-                    username=username,
-                    password=password,
-                    sock=(
-                        paramiko.ProxyCommand(opts["proxycommand"])
-                        if "proxycommand" in opts
-                        else None
-                    ),
-                    timeout=self.timeout,
-                    banner_timeout=self.timeout,
-                    auth_timeout=self.timeout,
-                )
-            except paramiko.AuthenticationException:
-                # if a wrong password was set, don't connect to the host and
-                # reraise the exception so the caller (Target.connect) reports
-                # the single user-facing ConnectingTargetFailedMessage. Keep
-                # the specific "wrong password" wording and traceback at DEBUG
-                # (visible with --debug) so we don't print two messages for one
-                # failure.
-                logger.debug(
-                    "Authentication failed on %s: wrong password",
-                    self.hostname,
-                    exc_info=True,
-                )
-                raise
+            logger.debug(
+                "Authentication failure detail on %s",
+                self.hostname,
+                exc_info=True,
+            )
+            raise
         except paramiko.SSHException:
             # unspecified general SSHException. the host/sshd is probably not
             # available. As above: one-line error, traceback to DEBUG.
