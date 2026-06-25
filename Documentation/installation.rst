@@ -98,7 +98,7 @@ The following extras can be combined (for example
 
 ``mcp``
     Adds the official `mcp <https://pypi.org/project/mcp/>`_ Python
-    SDK to provide the ``mtui-mcp`` console script — a `Model
+    SDK to provide the ``mtui-mcp`` console script, a `Model
     Context Protocol`_ server that exposes every non-interactive
     mtui command as an MCP tool, plus dedicated
     ``testreport_read`` / ``testreport_patch`` /

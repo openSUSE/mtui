@@ -18,10 +18,10 @@ through reverse-incremental search (Ctrl-R) and forward search
 (Ctrl-S); a fish-style autosuggestion shows the closest history match
 in dim text and can be accepted with the right-arrow key.
 
-A bottom toolbar reflects session state — the current workflow mode,
+A bottom toolbar reflects session state: the current workflow mode,
 the number of connected reference hosts, the count of loaded test
 report templates, and the RRID of the active template (``-`` when none
-is loaded) — so the prompt stays unambiguous when several mtui
+is loaded), so the prompt stays unambiguous when several mtui
 sessions are open in different terminals.
 
 For a short overview of procedures and help texts, the ``help`` command is
@@ -115,7 +115,7 @@ Without parameter adds all hosts from testplatform.
 
 When adding hosts from a testplatform, mtui connects **one** reference host
 per test-target slot (product + version + arch + addons) rather than every
-matching candidate — so a testplatform that resolves to several hosts on the
+matching candidate; so a testplatform that resolves to several hosts on the
 same architecture no longer fans out across all of them. The host drawn for
 each slot is chosen at random among the free candidates (load is spread across
 interchangeable refhosts). If the chosen host fails to connect, mtui
@@ -131,9 +131,9 @@ switching the workflow.
 
 When a host connects, mtui checks that the products actually installed on
 it (from ``/etc/products.d``) match what ``refhosts.yml`` records for that
-host. Any drift — a wrong or wrong-version base product, a wrong
+host. Any drift (a wrong or wrong-version base product, a wrong
 architecture, addons that are missing, unexpected, or at a different
-version, or a dangling ``/etc/products.d/baseproduct`` symlink — is logged
+version, or a dangling ``/etc/products.d/baseproduct`` symlink) is logged
 as a ``WARNING`` and the host is kept (the check never aborts a connect).
 The ``qa`` product is ignored, and hosts not listed in ``refhosts.yml`` are
 skipped silently.
@@ -242,14 +242,14 @@ list_refhosts
                 [--version VERSION] [--addon ADDON]
                 [--pool] [--json] [--free] [-v]
 
-Queries and searches the reference-host inventory **offline** — no SSH
+Queries and searches the reference-host inventory **offline**: no SSH
 connection, no lock, and no loaded test report. It reads the same source
 `add_host`_ resolves through (``RefhostsFactory``), so fleet maintenance and
 manual users can find refhosts through mtui instead of parsing
 ``refhosts.yml`` by hand.
 
 With no filters, every known refhost is listed; results are de-duplicated by
-host name. Only ``--free`` goes on the wire — it probes each matched host's
+host name. Only ``--free`` goes on the wire; it probes each matched host's
 live mtui-lock state.
 
 **Options:**
@@ -406,7 +406,7 @@ PASSED/FAILED/RUNNING summary that `openqa_overview`_ prints. Prints a per-resul
 count summary followed by one colourised line per job (``result``, ``arch``,
 scenario, job URL).
 
-By default ``obsoleted`` jobs (superseded by a later retrigger) are dropped —
+By default ``obsoleted`` jobs (superseded by a later retrigger) are dropped;
 only the current run matters.
 
 **Options:**
@@ -441,7 +441,7 @@ smelt_update
 
     smelt_update
 
-Prints the loaded update's SMELT detail — priority, deadline, status, category,
+Prints the loaded update's SMELT detail: priority, deadline, status, category,
 rating and packages. SLFO updates are read from SMELT's REST v2 API; classic
 Maintenance updates from its GraphQL API. Requires the SMELT base URL in
 ``[smelt] url`` (see :doc:`cfg`).
@@ -454,7 +454,7 @@ smelt_checkers
 
     smelt_checkers
 
-Prints the checker (build-check) result runs for the loaded SLFO update — per run
+Prints the checker (build-check) result runs for the loaded SLFO update: per run
 the checker type and pass/fail/warn/error/running counts. SLFO only. Requires the
 SMELT base URL in ``[smelt] url`` (see :doc:`cfg`).
 
@@ -486,7 +486,7 @@ the SMELT base URL in ``[smelt] url`` (see :doc:`cfg`).
 .. option:: --pending GROUP
 
   Only updates whose review by ``GROUP`` is not yet ``APPROVED`` (e.g.
-  ``qam-sle-review`` — the actionable queue).
+  ``qam-sle-review``, the actionable queue).
 
 .. option:: --group GROUP
 
@@ -496,7 +496,7 @@ the SMELT base URL in ``[smelt] url`` (see :doc:`cfg`).
 .. option:: --unassigned
 
   Only updates with no current assignee for ``--group``. Assignment is read from
-  the PR's mtui assign/unassign comments via Gitea — one call per row, evaluated
+  the PR's mtui assign/unassign comments via Gitea; one call per row, evaluated
   highest-priority first and short-circuited by ``--limit``, so
   ``--pending qam-sle-review --unassigned --limit 1`` finds the top unassigned
   update cheaply. Needs a Gitea token; ignored with a hint if none is set.
@@ -517,7 +517,7 @@ smelt_requests
 
     smelt_requests [--group GROUP] [--pending] [--status STATUS] [--limit N]
 
-Enumerates the classic Maintenance review-request queue (GraphQL) — the
+Enumerates the classic Maintenance review-request queue (GraphQL), the
 old-SMELT counterpart of `smelt_updates`_. Unlike the SLFO feed it shows the
 per-request assignee. Requires the SMELT base URL in ``[smelt] url`` (see
 :doc:`cfg`).
