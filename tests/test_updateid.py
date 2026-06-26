@@ -87,6 +87,7 @@ def test_checkout_invalid_hash_abort_declining_delete_keeps_trdir(
     trdir.mkdir(parents=True)
 
     with (
+        patch("mtui.types.updateid.TeReGen"),
         patch(
             "mtui.types.updateid.prompt_user", return_value=False
         ) as prompt_user_mock,
@@ -94,10 +95,11 @@ def test_checkout_invalid_hash_abort_declining_delete_keeps_trdir(
     ):
         uid._checkout(mock_config, interactive=True)
 
-    # Two prompts: force-continue, then (since trdir exists) delete.
-    assert prompt_user_mock.call_count == 2
-    assert prompt_user_mock.call_args_list[0].args[0] == PROMPT_LABEL
-    delete_call = prompt_user_mock.call_args_list[1]
+    # Three prompts: regenerate offer, force-continue, then (trdir exists) delete.
+    assert prompt_user_mock.call_count == 3
+    assert "Regenerate" in prompt_user_mock.call_args_list[0].args[0]
+    assert prompt_user_mock.call_args_list[1].args[0] == PROMPT_LABEL
+    delete_call = prompt_user_mock.call_args_list[2]
     assert delete_call.args[0] == f"Delete checked out template {trdir}? [Y/n]: "
     assert delete_call.kwargs["default"] is True
     assert trdir.exists()  # declined -> not removed
@@ -113,8 +115,9 @@ def test_checkout_invalid_hash_abort_accepting_delete_removes_trdir(
     trdir.mkdir(parents=True)
 
     with (
-        # First prompt (force-continue) -> False, second (delete) -> True.
-        patch("mtui.types.updateid.prompt_user", side_effect=[False, True]),
+        patch("mtui.types.updateid.TeReGen"),
+        # offer -> decline, force-continue -> decline, delete -> accept.
+        patch("mtui.types.updateid.prompt_user", side_effect=[False, False, True]),
         caplog.at_level(logging.INFO, logger="mtui.types.updateid"),
         pytest.raises(TestReportNotLoadedError),
     ):
@@ -136,6 +139,7 @@ def test_checkout_invalid_hash_abort_silent_when_trdir_missing(
     assert not (tmp_path / str(uid.id)).exists()
 
     with (
+        patch("mtui.types.updateid.TeReGen"),
         patch("mtui.types.updateid.prompt_user", return_value=False),
         caplog.at_level(logging.WARNING, logger="mtui.types.updateid"),
         pytest.raises(TestReportNotLoadedError),
@@ -155,7 +159,9 @@ def test_checkout_invalid_hash_force_continue_no_cleanup_warning(
     trdir.mkdir(parents=True)
 
     with (
-        patch("mtui.types.updateid.prompt_user", return_value=True),
+        patch("mtui.types.updateid.TeReGen"),
+        # offer -> decline, force-continue -> accept.
+        patch("mtui.types.updateid.prompt_user", side_effect=[False, True]),
         caplog.at_level(logging.WARNING, logger="mtui.types.updateid"),
     ):
         tr = uid._checkout(mock_config, interactive=True)
@@ -243,6 +249,7 @@ def test_checkout_invalid_hash_after_svn_checkout_prompts(
     trdir.mkdir(parents=True)
 
     with (
+        patch("mtui.types.updateid.TeReGen"),
         patch(
             "mtui.types.updateid.prompt_user", return_value=False
         ) as prompt_user_mock,
@@ -252,7 +259,54 @@ def test_checkout_invalid_hash_after_svn_checkout_prompts(
         uid._checkout(mock_config, interactive=True)  # noqa: SLF001
 
     vcs_mock.assert_called_once()
-    # Two prompts: force-continue, then delete (trdir exists, both declined).
-    assert prompt_user_mock.call_count == 2
-    assert prompt_user_mock.call_args_list[0].args[0] == PROMPT_LABEL
+    # Three prompts: regenerate offer, force-continue, delete (all declined).
+    assert prompt_user_mock.call_count == 3
+    assert prompt_user_mock.call_args_list[1].args[0] == PROMPT_LABEL
     assert not any(CLEANUP_HINT in r.getMessage() for r in caplog.records)
+
+
+def test_checkout_invalid_hash_offers_regeneration(mock_config, tmp_path):
+    """Accepting the TeReGen offer regenerates, waits, and reloads in place."""
+    mock_config.template_dir = tmp_path
+    uid, _tr_mock = _make_updateid()
+    trdir = tmp_path / str(uid.id)
+    trdir.mkdir(parents=True)
+    fresh = MagicMock(name="fresh_testreport")
+
+    with (
+        patch("mtui.types.updateid.TeReGen"),
+        # First prompt is the regenerate offer -> accept.
+        patch("mtui.types.updateid.prompt_user", return_value=True) as prompt_user_mock,
+        patch.object(uid, "_regenerate", return_value=fresh) as regen_mock,
+    ):
+        result = uid._checkout(mock_config, interactive=True)
+
+    assert result is fresh
+    regen_mock.assert_called_once()
+    # The offer is the only prompt; accepting short-circuits force/delete.
+    assert prompt_user_mock.call_count == 1
+    assert "Regenerate" in prompt_user_mock.call_args_list[0].args[0]
+
+
+def test_checkout_invalid_hash_regeneration_failure_falls_back(mock_config, tmp_path):
+    """A failed regeneration falls back to the force/decline handling."""
+    mock_config.template_dir = tmp_path
+    uid, _tr_mock = _make_updateid()
+    trdir = tmp_path / str(uid.id)
+    trdir.mkdir(parents=True)
+
+    with (
+        patch("mtui.types.updateid.TeReGen"),
+        # Offer accepted, but regeneration fails; then force-continue + delete
+        # are both declined.
+        patch(
+            "mtui.types.updateid.prompt_user", side_effect=[True, False, False]
+        ) as prompt_user_mock,
+        patch.object(uid, "_regenerate", return_value=None),
+        pytest.raises(TestReportNotLoadedError),
+    ):
+        uid._checkout(mock_config, interactive=True)
+
+    # offer -> force-continue -> delete
+    assert prompt_user_mock.call_count == 3
+    assert prompt_user_mock.call_args_list[1].args[0] == PROMPT_LABEL

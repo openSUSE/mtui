@@ -1,7 +1,7 @@
-"""External data-source clients (Gitea, OSC, openQA, QEM Dashboard, SMELT)."""
+"""External data-source clients (Gitea, OSC, openQA, QEM Dashboard, TeReGen)."""
 
 from .gitea import Gitea
 from .oscqam import OSC
-from .smelt import Smelt
+from .teregen import TeReGen
 
-__all__ = ["OSC", "Gitea", "Smelt"]
+__all__ = ["OSC", "Gitea", "TeReGen"]

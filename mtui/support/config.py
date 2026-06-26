@@ -85,7 +85,7 @@ class Config:
     reports_url: str
     fancy_reports_url: str
     qem_dashboard_api: str
-    smelt_url: str
+    teregen_api: str
     target_tempdir: Path
     chdir_to_template_dir: bool
     refhosts_resolvers: str
@@ -264,13 +264,10 @@ class Config:
                 "http://dashboard.qam.suse.de/api",
                 getter=get,
             ),
-            # SMELT base URL. No default on purpose: it is not part of mtui's
-            # public configuration surface, so it is read from ``[smelt] url`` in
-            # the user's config and the SMELT features are skipped when unset.
             ConfigOption(
-                "smelt_url",
-                ("smelt", "url"),
-                "",
+                "teregen_api",
+                ("teregen", "api"),
+                "https://qam.suse.de/api/v1",
                 getter=get,
             ),
             ConfigOption(

@@ -40,17 +40,6 @@ def test_connection_timeout_connection_section_wins(tmpdir):
     assert cfg.connection_timeout == 45
 
 
-def test_smelt_url_defaults_empty_and_overrides(tmpdir):
-    """smelt_url has no default (off unless configured) and reads [smelt] url."""
-    empty = Path(tmpdir.join("empty.cfg"))
-    empty.write_text("")
-    assert config.Config(empty).smelt_url == ""
-
-    configured = Path(tmpdir.join("smelt.cfg"))
-    configured.write_text("[smelt]\nurl = https://smelt.example.com\n")
-    assert config.Config(configured).smelt_url == "https://smelt.example.com"
-
-
 def test_path_options_expand_tilde(tmpdir):
     """``~``-prefixed path options expand to the user's home directory."""
     config_file = Path(tmpdir.join("test.cfg"))

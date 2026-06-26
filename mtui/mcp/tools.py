@@ -71,6 +71,8 @@ SLOW_COMMANDS: frozenset[str] = frozenset(
         "uninstall",
         "set_repo",
         "reboot",
+        # Not a host op, but waits on the TeReGen regeneration job (minutes).
+        "regenerate",
     }
 )
 
