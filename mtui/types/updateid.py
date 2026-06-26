@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from ..cli.term import prompt_user
 from ..data_sources.openqa import KernelOpenQA
 from ..data_sources.qem_dashboard import DashboardAutoOpenQA, QEMIncident
+from ..data_sources.teregen import TeReGen
 from ..support.config import Config
 from ..support.exceptions import (
     FailedGiteaCallError,
@@ -114,13 +115,25 @@ class UpdateID(ABC):
 
         except InvalidGiteaHashError:
             logger.error("Invalid Gitea hash")
-            logger.info(
-                "TestReport has different hash than GiteaPR, please regenerate template"
+            logger.warning(
+                "TestReport hash differs from the Gitea PR; the template is stale"
             )
-            logger.info(
-                "TestReport can be regenerated here: https://qam.suse.de/reports/%s/log",
-                self.id,
-            )
+            teregen = TeReGen(config)
+            if prompt_user(
+                "Regenerate the template now via TeReGen? [y/N]: ",
+                ["yes", "y"],
+                interactive,
+            ):
+                regenerated = self._regenerate(config, teregen, trdir, trpath, prompter)
+                if regenerated is not None:
+                    return regenerated
+                logger.warning("Regeneration failed; falling back to manual handling")
+            else:
+                logger.info(
+                    "TestReport can be regenerated here: https://qam.suse.de/reports/%s/log",
+                    self.id,
+                )
+
             if not prompt_user(
                 "Force continue loading template ? [y/N]: ", ["yes", "y"], interactive
             ):
@@ -135,6 +148,61 @@ class UpdateID(ABC):
                 raise TestReportNotLoadedError from None
             logger.warning("Template is loaded, but hash differs")
 
+        return tr
+
+    def _regenerate(
+        self,
+        config: Config,
+        teregen: TeReGen,
+        trdir: Path,
+        trpath: Path,
+        prompter: "Prompter | None",
+    ) -> TestReport | None:
+        """Regenerate a stale template via TeReGen, then re-check it out.
+
+        Triggers a server-side regeneration (overwriting the stale template),
+        deletes the local checkout, waits for the Minion job to finish, then
+        checks out and reads the fresh template. Returns the loaded
+        :class:`TestReport` on success, or ``None`` so the caller can fall back
+        to the manual force/decline handling.
+        """
+        logger.info("Waiting for the template to be regenerated ...")
+        outcome = teregen.regenerate_and_wait(self.id, force_overwrite=True)
+        if outcome.unreachable:
+            logger.error("TeReGen unreachable; cannot regenerate")
+            return None
+        if outcome.error:
+            logger.error("Regeneration refused: %s", outcome.error)
+            return None
+        # The job was accepted: now it is safe to drop the stale local checkout.
+        logger.info("Regeneration job %s enqueued for %s", outcome.job, self.id)
+        if trdir.exists():
+            shutil.rmtree(trdir, ignore_errors=True)
+            logger.info("Removed stale checked out template %s", trdir)
+        if not outcome.ok:
+            logger.error(
+                "Regeneration did not finish (state=%s)%s",
+                outcome.state or "unknown",
+                f": {outcome.minion_error}" if outcome.minion_error else "",
+            )
+            return None
+
+        tr = self.testreport_factory(config, prompter=prompter)
+        try:
+            self._vcs_checkout(config, config.svn_path, self.id)
+            tr.read(trpath)
+        except (
+            SvnCheckoutInterruptedError,
+            SvnCheckoutFailed,
+            TemplateIOError,
+            InvalidGiteaHashError,
+            FailedGiteaCallError,
+            MissingGiteaTokenError,
+        ) as e:
+            logger.error("Reload after regeneration failed: %s", e)
+            return None
+
+        logger.info("Template for %s regenerated and reloaded", self.id)
         return tr
 
     def _create_installogs_dir(self, config) -> None:

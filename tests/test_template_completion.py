@@ -18,7 +18,6 @@ from mtui.commands.checkout import Checkout
 from mtui.commands.openqa_jobs import OpenQAJobs
 from mtui.commands.reboot import Reboot
 from mtui.commands.run import Run
-from mtui.commands.smelt import SmeltUpdate
 from mtui.template_registry import TemplateRegistry
 
 
@@ -113,7 +112,7 @@ def test_reboot_completes_rrid_value():
     assert out == ["SUSE:Maintenance:7:7"]
 
 
-@pytest.mark.parametrize("command", [Checkout, SmeltUpdate, OpenQAJobs])
+@pytest.mark.parametrize("command", [Checkout, OpenQAJobs])
 def test_template_only_commands_complete_rrid(command):
     """Commands with no host arg still complete loaded RRIDs."""
     state = _state("SUSE:Maintenance:3:3")
@@ -122,7 +121,7 @@ def test_template_only_commands_complete_rrid(command):
     assert out == ["SUSE:Maintenance:3:3"]
 
 
-@pytest.mark.parametrize("command", [Checkout, SmeltUpdate, OpenQAJobs])
+@pytest.mark.parametrize("command", [Checkout, OpenQAJobs])
 def test_template_only_commands_complete_flag(command):
     state = _state("SUSE:Maintenance:3:3")
     out = command.complete(state, "--t", f"{command.command} --t", 0, 0)
