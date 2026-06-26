@@ -184,12 +184,15 @@ def test_run_parallel_emits_no_log_records(caplog):
 
 
 def test_tty_spinner_is_silent_when_stderr_not_a_tty(capsys):
-    """``_TtySpinner`` must be a no-op when stderr is not a TTY (pytest case)."""
-    from mtui.hosts.target.actions import _TtySpinner
+    """``TtySpinner`` must be a no-op when stderr is not a TTY (pytest case)."""
+    from mtui.support.spinner import TtySpinner, spinner
 
-    s = _TtySpinner("anything")
+    s = TtySpinner("anything")
     s.start()
     s.stop()
+
+    with spinner("anything"):
+        pass
 
     captured = capsys.readouterr()
     assert captured.err == ""
@@ -211,7 +214,7 @@ def test_run_parallel_skips_spinner_when_desc_is_none_even_on_tty(capsys):
 
     fake_tty = MagicMock()
     fake_tty.isatty.return_value = True
-    with patch("mtui.hosts.target.actions.sys.stderr", fake_tty):
+    with patch("mtui.support.spinner.sys.stderr", fake_tty):
         run_parallel([(MagicMock(), ()), (MagicMock(), ())], desc=None)
 
     # No spinner means no writes to the (faked) stderr at all.

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable, ValuesView
 from concurrent.futures import as_completed
@@ -14,57 +12,9 @@ from typing import Any
 
 from ...cli.term import prompt_user
 from ...support.concurrency import ContextExecutor
+from ...support.spinner import TtySpinner
 from ...types import ExecutionMode
 from . import Target
-
-
-class _TtySpinner:
-    """A tiny ``|/-\\`` spinner that writes to stderr only when it is a TTY.
-
-    Drives a single daemon thread that repaints ``\\r<frame> <desc>`` on
-    a fixed cadence, then erases the line on stop. When stderr is not a
-    TTY (pytest, redirected output, log files) the spinner is a no-op so
-    test output and log files stay clean. Safe to ``stop()`` more than
-    once and from any thread.
-    """
-
-    _FRAMES = "|/-\\"
-    _INTERVAL = 0.1  # seconds
-
-    def __init__(self, desc: str) -> None:
-        self._desc = desc
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._enabled = sys.stderr.isatty()
-
-    def start(self) -> None:
-        """Start the spinner thread (no-op when stderr is not a TTY)."""
-        if not self._enabled:
-            return
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        """Stop the spinner thread and erase the spinner line."""
-        if not self._enabled:
-            return
-        self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=1.0)
-            self._thread = None
-        # Erase the spinner line so the next caller writes from column 0.
-        with suppress(Exception):
-            sys.stderr.write("\r\033[K")
-            sys.stderr.flush()
-
-    def _spin(self) -> None:
-        i = 0
-        while not self._stop.is_set():
-            with suppress(Exception):
-                sys.stderr.write(f"\r[{self._FRAMES[i % 4]}] {self._desc}")
-                sys.stderr.flush()
-            i += 1
-            self._stop.wait(self._INTERVAL)
 
 
 def run_parallel(
@@ -92,7 +42,7 @@ def run_parallel(
     """
     if not work:
         return
-    spinner = _TtySpinner(desc) if desc else None
+    spinner = TtySpinner(desc) if desc else None
     if spinner is not None:
         spinner.start()
     ex = ContextExecutor(max_workers=len(work))
