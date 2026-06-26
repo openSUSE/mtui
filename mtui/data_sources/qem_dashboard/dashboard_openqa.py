@@ -7,6 +7,7 @@ from typing import Any, Self
 
 from ...support.concurrency import ContextExecutor
 from ...types import RequestReviewID, URLs
+from ..openqa_install import install_logfile_for
 from .client import _FUTURE_TIMEOUT, FAILED_RESULTS
 from .incident import QEMIncident
 
@@ -182,14 +183,15 @@ class DashboardAutoOpenQA:
                     "tests",
                     str(job["id"]),
                     "file",
-                    self.config.openqa_install_logs,
+                    install_logfile_for(
+                        job.get("test", "") or "", self.config.openqa_install_logs
+                    ),
                 ),
                 str(job.get("result", "") or ""),
             )
             for job in jobs
             if (
                 "qam-incidentinstall" in (job.get("test", "") or "")
-                and "SLFO" not in (job.get("test", "") or "")
                 and self._normalize_result(job.get("result"))
             )
         ]
