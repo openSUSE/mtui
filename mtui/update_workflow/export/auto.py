@@ -98,6 +98,10 @@ class AutoExport(BaseExport):
         auto = self.openqa.auto
         if auto is None:
             return []
+        # Ensure the install_logs directory exists before writing. SLFO load
+        # paths may not have pre-created it, and writing a log into a missing
+        # directory raises FileNotFoundError.
+        filepath.mkdir(parents=True, exist_ok=True)
         ilogs = zip_longest(
             auto.results,
             map(self._openqa_installog_to_template, auto.results),

@@ -121,6 +121,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- SLFO updates now run in AUTOMATIC mode. Their openQA install jobs
+  (`qam-incidentinstall-SLFO`) were previously excluded from the auto workflow,
+  forcing every SLFO update to fall back to manual; they are now recognised and
+  their install logs fetched from the correct artifact
+  (`SLFO_update_install-zypper.log`, distinct from the classic
+  `update_install-zypper.log`) via a job-name to log-filename mapping shared by
+  both auto connectors (poo#200832).
 - `mtui-mcp` now disconnects every loaded template's hosts when a session is
   closed (idle-TTL eviction or shutdown), not just the active template's. A
   session can hold several templates at once, each owning its own host group;

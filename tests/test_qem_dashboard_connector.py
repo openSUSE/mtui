@@ -719,3 +719,43 @@ def test_get_logs_url_tolerates_missing_test_field(mock_config):
     urls = dashboard._get_logs_url(jobs)
     assert urls is not None
     assert len(urls) == 1  # only the matching job, no crash on the None one
+
+
+def test_get_logs_url_includes_slfo_jobs_with_slfo_logfile(mock_config):
+    """SLFO install jobs are included and point at the SLFO install log.
+
+    Regression: ``_get_logs_url`` used to drop any job whose name contained
+    ``SLFO`` (the poo#200832 workaround) and always built the URL with the
+    classic ``install_logfile`` name. SLFO jobs (``qam-incidentinstall-SLFO``)
+    must now be included with ``SLFO_update_install-zypper.log``, while classic
+    jobs keep the configured default.
+    """
+    dashboard = _make_dashboard(mock_config)
+    jobs = [
+        {
+            "test": "qam-incidentinstall-SLFO",
+            "result": "passed",
+            "id": 10,
+            "settings": {"DISTRI": "sle", "ARCH": "x86_64", "VERSION": "16.0"},
+        },
+        {
+            "test": "qam-incidentinstall",
+            "result": "passed",
+            "id": 11,
+            "settings": {"DISTRI": "sle", "ARCH": "x86_64", "VERSION": "15-SP5"},
+        },
+    ]
+    urls = dashboard._get_logs_url(jobs)
+    assert urls is not None
+    assert len(urls) == 2
+    by_id = {u.url.rsplit("/tests/", 1)[1].split("/")[0]: u.url for u in urls}
+    assert by_id["10"].endswith("SLFO_update_install-zypper.log")
+    assert by_id["11"].endswith(mock_config.openqa_install_logs)
+
+
+def test_has_passed_install_jobs_counts_slfo_jobs(mock_config):
+    """SLFO install jobs participate in the pass/fail decision."""
+    jobs = [{"test": "qam-incidentinstall-SLFO", "result": "passed"}]
+    assert DashboardAutoOpenQA._has_passed_install_jobs(jobs) is True
+    failed = [{"test": "qam-incidentinstall-SLFO", "result": "failed"}]
+    assert DashboardAutoOpenQA._has_passed_install_jobs(failed) is False
