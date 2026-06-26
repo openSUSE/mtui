@@ -46,6 +46,21 @@ class TestHasPassedInstallJobs:
         ]
         assert auto_oqa._has_passed_install_jobs(jobs) is True
 
+    def test_slfo_install_job_counted(self, auto_oqa):
+        """SLFO install jobs participate in the pass/fail decision."""
+        assert (
+            auto_oqa._has_passed_install_jobs(
+                [{"test": "qam-incidentinstall-SLFO", "result": "passed"}]
+            )
+            is True
+        )
+        assert (
+            auto_oqa._has_passed_install_jobs(
+                [{"test": "qam-incidentinstall-SLFO", "result": "failed"}]
+            )
+            is False
+        )
+
     def test_failed_install_job(self, auto_oqa):
         """Test failed install job returns False."""
         jobs = [
@@ -164,6 +179,26 @@ class TestGetLogsUrl:
         assert len(result) == 1
         assert "123" in result[0].url
         assert result[0].result == "passed"
+
+    def test_slfo_install_job_uses_slfo_logfile(self, auto_oqa):
+        """SLFO install jobs are recognised and use the SLFO install log."""
+        jobs = [
+            {
+                "id": 789,
+                "test": "qam-incidentinstall-SLFO",
+                "result": "passed",
+                "settings": {
+                    "HDD_1": "SLFO-16.0-x86_64-Build1.qcow2",
+                    "ARCH": "x86_64",
+                    "VERSION": "16.0",
+                },
+            },
+        ]
+        result = auto_oqa._get_logs_url(jobs)
+
+        assert len(result) == 1
+        assert "789" in result[0].url
+        assert result[0].url.endswith("SLFO_update_install-zypper.log")
 
 
 # --- AutoOpenQA.run ---

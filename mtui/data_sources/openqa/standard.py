@@ -5,6 +5,7 @@ from os.path import join
 from typing import Self, override
 
 from ...types.urls import URLs
+from ..openqa_install import install_logfile_for
 from .base import OpenQA
 
 logger = getLogger("mtui.connector.openqa.standard")
@@ -36,7 +37,12 @@ class AutoOpenQA(OpenQA):
         return all(
             normalize(y["result"])
             for y in jobs
-            if y["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
+            if y["test"]
+            in [
+                "qam-incidentinstall",
+                "qam-incidentinstall-ha",
+                "qam-incidentinstall-SLFO",
+            ]
         )
 
     @override
@@ -100,12 +106,17 @@ class AutoOpenQA(OpenQA):
                     "tests",
                     str(job["id"]),
                     "file",
-                    self.config.openqa_install_logs,
+                    install_logfile_for(job["test"], self.config.openqa_install_logs),
                 ),
                 job["result"],
             )
             for job in jobs
-            if job["test"] in ["qam-incidentinstall", "qam-incidentinstall-ha"]
+            if job["test"]
+            in [
+                "qam-incidentinstall",
+                "qam-incidentinstall-ha",
+                "qam-incidentinstall-SLFO",
+            ]
         ]
 
     @override

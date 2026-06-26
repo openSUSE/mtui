@@ -130,3 +130,30 @@ def test_download_ssl_verify_false_skips_verification(mock_config):
 
     assert out == ["x\n"]
     bs.assert_called_once_with(False)
+
+
+def test_get_logs_creates_install_logs_dir(mock_config, tmp_path):
+    """``get_logs`` creates the install_logs directory before writing.
+
+    Regression: SLFO load paths may not pre-create
+    ``template_dir/<rrid>/install_logs``; writing a log into a missing
+    directory raised ``FileNotFoundError``.
+    """
+    mock_config.template_dir = tmp_path
+    rrid = "SUSE:SLFO:1.2:5295"
+    exporter = AutoExport(mock_config, MagicMock(), FileList([]), False, rrid, False)
+    exporter.openqa = MagicMock()
+    exporter.openqa.auto.results = [_url()]
+
+    target_dir = tmp_path / rrid / mock_config.install_logs
+    assert not target_dir.exists()
+
+    with patch.object(
+        AutoExport, "_openqa_installog_to_template", return_value=["log line\n"]
+    ):
+        filenames = exporter.get_logs()
+
+    assert target_dir.is_dir()
+    assert len(filenames) == 1
+    written = target_dir / "sle_15-SP7_x86_64.log"
+    assert written.is_file()
