@@ -104,15 +104,45 @@ class TeReGen:
         return d.get("checkers") if isinstance(d, dict) else None
 
     def updates(
-        self, review_group: str | None = None, status: str | None = None
+        self,
+        review_group: str | None = None,
+        status: str | None = None,
+        assignee: str | None = None,
+        unassigned: bool = False,
+        with_assignment: bool = False,
+        no_cache: bool = False,
     ) -> list[Any] | None:
         """The unreleased update queue (live from SMELT), or ``None``.
 
         Optional ``review_group`` / ``status`` narrow the queue server-side.
+
+        Assignment exposure (each maps to a query param of the same name):
+
+        - ``assignee``: keep only updates assigned to that user (any qam group);
+          implies server-side ``status=testing``.
+        - ``unassigned``: keep only updates with no assignee; implies
+          ``status=testing``.
+        - ``with_assignment``: include assignment on every row without
+          filtering; implies ``status=testing``.
+        - ``no_cache``: bypass the server's short assignment cache (use for the
+          pickup moment).
         """
         params = {
-            k: v for k, v in (("review_group", review_group), ("status", status)) if v
+            k: v
+            for k, v in (
+                ("review_group", review_group),
+                ("status", status),
+                ("assignee", assignee),
+            )
+            if v
         }
+        for flag, name in (
+            (unassigned, "unassigned"),
+            (with_assignment, "with_assignment"),
+            (no_cache, "no_cache"),
+        ):
+            if flag:
+                params[name] = "1"
         d = self._get("updates", params=params or None)
         return d.get("updates") if isinstance(d, dict) else None
 
