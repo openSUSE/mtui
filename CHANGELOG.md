@@ -9,6 +9,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- New `regenerate` command — regenerates the loaded update's test-report
+  template via the TeReGen API (`POST /reports/{id}/regenerate`), waits for the
+  generation job to finish, and reloads the fresh template. Supports `--force`
+  (overwrite an existing unedited template), `--ignore-inconsistent`
+  (regenerate despite inconsistent metadata, e.g. an arch mismatch), and
+  `--no-wait`. The wait shows a TTY spinner interactively and can be
+  interrupted with Ctrl-C, and over `mtui-mcp`
+  it is a slow command that can be backgrounded (`background=true`). The
+  stale-template loader (when a checked-out template's hash no longer matches its
+  Gitea PR) now offers to regenerate via TeReGen, delete the local checkout, and
+  wait for the rebuild in place of the old static hint.
+- New `updates` command — lists the update queue, fetched live from the TeReGen
+  API (`GET /api/v1/updates`, fed from SMELT) and sorted by priority. Each row
+  shows priority, status, kind (SLFO / Maintenance / ...), deadline and the
+  RRID; the queue merges gitea-sourced updates (SLFO/SL-Micro) with the classic
+  Maintenance updates in QAM testing. Optional `--review-group`/`--status`/
+  `--limit` filters. This is the TeReGen-backed replacement for the removed
+  `smelt_updates`/`smelt_requests` commands.
+- New `checkers` command — lists the build-check (checker) result runs for the
+  loaded update, fetched live from the TeReGen report API
+  (`GET /reports/{id}/checkers`). This is the TeReGen-backed replacement for the
+  removed `smelt_checkers` command (same data, now via TeReGen instead of SMELT).
+  Report-bound and fans out across loaded templates like the other inspection
+  commands.
 - Multiple templates can now be loaded at once. `load_template` adds a template
   to the session instead of overwriting the currently loaded one (loading an
   already-loaded RRID reloads and replaces it). New commands manage the loaded
@@ -66,6 +90,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
+- SMELT support has been removed; report data is now sourced from the TeReGen
+  report API (`[teregen] api`, default `https://qam.suse.de/api/v1`). The
+  `Smelt` data-source client, the `smelt_update`, `smelt_updates`,
+  `smelt_requests` and `smelt_checkers` commands, and the `[smelt] url`
+  configuration option no longer exist. Picking up an update now surfaces its
+  priority/deadline from TeReGen (`metadata.json` priority/deadline fields)
+  instead of SMELT. `smelt_checkers` is replaced by the new TeReGen-backed
+  `checkers` command and `smelt_updates`/`smelt_requests` by the new `updates`
+  command (see Added) — all SMELT-sourced data now flows through TeReGen.
 - Location support has been removed. The `set_location` command, the
   `-l`/`--location` command-line option (both `mtui` and `mtui-mcp`), and the
   `mtui.location` configuration option no longer exist. Legacy `refhosts.yml`

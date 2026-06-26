@@ -67,15 +67,16 @@ report, for report-scoped commands). The fan-out commands are: ``run``,
 ``set_repo``, ``reboot``, ``put``, ``get``, ``commit``, ``checkout``,
 ``approve``, ``assign``, ``unassign``, ``reject``, ``comment``, ``show_diff``,
 ``analyze_diff``, ``reload_openqa``, ``openqa_overview``, ``openqa_jobs``,
-``smelt_update``, ``smelt_checkers``, the report-bound inspection commands
+``checkers``, the report-bound inspection commands
 ``list_metadata``, ``list_bugs``, ``list_update_commands``, ``list_versions``,
 ``list_packages``, and ``show_update_repos``, the host-locking commands
 ``lock`` and ``unlock``, and the host-listing commands ``list_hosts``,
 ``list_locks``, ``list_timeout``, ``list_sessions``, ``show_log``, and
 ``list_history``. Output for each template is prefixed with an
-``=== <RRID> ===`` banner so results stay attributable. Queue-browsing SMELT
-commands (``smelt_requests``, ``smelt_updates``) are not template-scoped and do
-not fan out.
+``=== <RRID> ===`` banner so results stay attributable. The queue-browsing
+``updates`` command is not template-scoped and does not fan out. ``regenerate``
+acts on the active template by default (use ``-T``/``--all-templates`` to
+select).
 
 Use ``-T RRID``/``--template RRID`` to run such a command against a single
 loaded template instead, or ``--all-templates`` to request fan-out explicitly.
@@ -434,111 +435,86 @@ only the current run matters.
   ``config.qem_dashboard_api``).
 
 
-smelt_update
-++++++++++++
+checkers
+++++++++
 
 ::
 
-    smelt_update
+    checkers [-T RRID | --all-templates]
 
-Prints the loaded update's SMELT detail: priority, deadline, status, category,
-rating and packages. SLFO updates are read from SMELT's REST v2 API; classic
-Maintenance updates from its GraphQL API. Requires the SMELT base URL in
-``[smelt] url`` (see :doc:`cfg`).
-
-
-smelt_checkers
-++++++++++++++
-
-::
-
-    smelt_checkers
-
-Prints the checker (build-check) result runs for the loaded SLFO update: per run
-the checker type and pass/fail/warn/error/running counts. SLFO only. Requires the
-SMELT base URL in ``[smelt] url`` (see :doc:`cfg`).
+Prints the build-check (checker) result runs for the loaded SLFO update, fetched
+live from the TeReGen report API (``GET /reports/{id}/checkers``): per run the
+checker name and its pass/fail status. SLFO only. Report-bound -- fans out across
+loaded templates (see `Fan-out across templates`_). This is the
+TeReGen-backed replacement for the former ``smelt_checkers`` command (same data,
+now served through TeReGen instead of SMELT directly). Requires the TeReGen base
+URL in ``[teregen] api`` (see :doc:`cfg`).
 
 
-smelt_updates
-+++++++++++++
+updates
++++++++
 
 ::
 
-    smelt_updates [--status STATUS] [--review-group GROUP]
-                  [--pending GROUP] [--group GROUP]
-                  [--unassigned] [--show-assignment] [--limit N]
+    updates [--review-group GROUP] [--status STATUS] [--limit N]
 
-Enumerates the SLFO update queue (highest priority first), one line per update.
-With ``--unassigned`` / ``--show-assignment`` it also resolves each update's
-current assignee from the pull request's mtui assign/unassign comments. Requires
-the SMELT base URL in ``[smelt] url`` (see :doc:`cfg`).
+Enumerates the unreleased update queue, fetched live from the TeReGen API
+(``GET /updates``, fed from SMELT behind the scenes), one line per update with
+its priority, status and RRID. This is the TeReGen-backed replacement for the
+former ``smelt_updates`` / ``smelt_requests`` commands. Not template-scoped; does
+not fan out. Requires the TeReGen base URL in ``[teregen] api`` (see :doc:`cfg`).
 
 **Options:**
+
+.. option:: --review-group GROUP
+
+  Narrow to updates assigned to this review group (e.g. ``qam-sle``).
 
 .. option:: --status STATUS
 
   Only updates with this status (e.g. ``testing``).
 
-.. option:: --review-group GROUP
-
-  Narrow to updates assigned to this review group.
-
-.. option:: --pending GROUP
-
-  Only updates whose review by ``GROUP`` is not yet ``APPROVED`` (e.g.
-  ``qam-sle-review``, the actionable queue).
-
-.. option:: --group GROUP
-
-  Review group for the assignment lookup (default ``qam-sle``); used by
-  ``--unassigned`` and ``--show-assignment``.
-
-.. option:: --unassigned
-
-  Only updates with no current assignee for ``--group``. Assignment is read from
-  the PR's mtui assign/unassign comments via Gitea; one call per row, evaluated
-  highest-priority first and short-circuited by ``--limit``, so
-  ``--pending qam-sle-review --unassigned --limit 1`` finds the top unassigned
-  update cheaply. Needs a Gitea token; ignored with a hint if none is set.
-
-.. option:: --show-assignment
-
-  Add a column with each update's current assignee (or ``unassigned``).
-
 .. option:: --limit N
 
-  Cap the number of rows.
+  Cap the number of rows (``0`` = all).
 
 
-smelt_requests
-++++++++++++++
+regenerate
+++++++++++
 
 ::
 
-    smelt_requests [--group GROUP] [--pending] [--status STATUS] [--limit N]
+    regenerate [--force] [--ignore-inconsistent] [--no-wait]
+               [-T RRID | --all-templates]
 
-Enumerates the classic Maintenance review-request queue (GraphQL), the
-old-SMELT counterpart of `smelt_updates`_. Unlike the SLFO feed it shows the
-per-request assignee. Requires the SMELT base URL in ``[smelt] url`` (see
-:doc:`cfg`).
+Regenerates the loaded update's test-report template via the TeReGen API
+(``POST /reports/{id}/regenerate``), waits for the Minion generation job to
+finish, then reloads the freshly generated template into the session. Use it to
+pick up a regenerated template -- e.g. after an arch/metadata fix -- without
+leaving and re-entering mtui. Acts on the active template by default. Requires the
+TeReGen base URL in ``[teregen] api`` (see :doc:`cfg`).
+
+The stale-template loader makes the same offer automatically: when a
+checked-out template's hash no longer matches its Gitea PR, mtui offers to
+regenerate via TeReGen, delete the local checkout, and wait for the rebuild
+before reloading it in place.
 
 **Options:**
 
-.. option:: --group GROUP
+.. option:: --force
 
-  Review assigned-by group (default ``qam-sle``).
+  Overwrite an existing but *unedited* template. (The server still refuses to
+  overwrite a hand-edited template.)
 
-.. option:: --pending
+.. option:: --ignore-inconsistent
 
-  Only requests whose ``GROUP`` review is still ``new``.
+  Regenerate despite inconsistent metadata, e.g. an arch list that disagrees
+  with the build.
 
-.. option:: --status STATUS
+.. option:: --no-wait
 
-  Request status (e.g. ``review``).
-
-.. option:: --limit N
-
-  Cap the number of rows.
+  Enqueue the regeneration job and return immediately, without waiting for it to
+  finish or reloading the template.
 
 
 set_workflow
