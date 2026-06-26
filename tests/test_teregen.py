@@ -109,6 +109,51 @@ def test_updates_passes_query_filters(mock_config):
 
 
 @responses.activate
+def test_updates_passes_assignee(mock_config):
+    responses.add(responses.GET, f"{API}/updates", json={"updates": []})
+    assert _client(mock_config).updates(assignee="mpluskal", status="testing") == []
+    qs = responses.calls[0].request.url or ""
+    assert "assignee=mpluskal" in qs
+    assert "status=testing" in qs
+
+
+@responses.activate
+def test_updates_passes_unassigned_flag(mock_config):
+    responses.add(responses.GET, f"{API}/updates", json={"updates": []})
+    _client(mock_config).updates(unassigned=True)
+    qs = responses.calls[0].request.url or ""
+    assert "unassigned=1" in qs
+
+
+@responses.activate
+def test_updates_passes_with_assignment_flag(mock_config):
+    responses.add(responses.GET, f"{API}/updates", json={"updates": []})
+    _client(mock_config).updates(with_assignment=True)
+    qs = responses.calls[0].request.url or ""
+    assert "with_assignment=1" in qs
+
+
+@responses.activate
+def test_updates_passes_no_cache_flag(mock_config):
+    responses.add(responses.GET, f"{API}/updates", json={"updates": []})
+    _client(mock_config).updates(assignee="mpluskal", no_cache=True)
+    qs = responses.calls[0].request.url or ""
+    assert "no_cache=1" in qs
+    assert "assignee=mpluskal" in qs
+
+
+@responses.activate
+def test_updates_omits_unset_assignment_flags(mock_config):
+    responses.add(responses.GET, f"{API}/updates", json={"updates": []})
+    _client(mock_config).updates()
+    url = responses.calls[0].request.url or ""
+    assert "unassigned" not in url
+    assert "with_assignment" not in url
+    assert "no_cache" not in url
+    assert "assignee" not in url
+
+
+@responses.activate
 def test_regenerate_returns_json_body(mock_config):
     responses.add(
         responses.POST,

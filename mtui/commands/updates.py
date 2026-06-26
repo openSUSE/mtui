@@ -43,11 +43,47 @@ class Updates(Command):
             default=0,
             help="cap the number of rows (0 = all)",
         )
+        # --assignee/--mine/--unassigned select at most one assignment view;
+        # argparse rejects any combination of the three for us.
+        assignment = parser.add_mutually_exclusive_group()
+        assignment.add_argument(
+            "--assignee",
+            default=None,
+            help="filter to updates assigned to this user (any qam group)",
+        )
+        assignment.add_argument(
+            "--mine",
+            action="store_true",
+            help="filter to updates assigned to the current session user",
+        )
+        assignment.add_argument(
+            "--unassigned",
+            action="store_true",
+            help="filter to updates with no assignee",
+        )
+        parser.add_argument(
+            "--show-assignment",
+            action="store_true",
+            help="show the assignee on each row without filtering",
+        )
 
     def __call__(self) -> None:
         """Fetch and print the update queue from TeReGen."""
+        assignee = self.args.assignee
+        if self.args.mine:
+            assignee = self.config.session_user
+
+        # Any assignment-related flag means rows should carry assignment info.
+        want_assignment = bool(
+            assignee or self.args.unassigned or self.args.show_assignment
+        )
+
         updates = TeReGen(self.config).updates(
-            review_group=self.args.review_group, status=self.args.status
+            review_group=self.args.review_group,
+            status=self.args.status,
+            assignee=assignee,
+            unassigned=self.args.unassigned,
+            with_assignment=want_assignment,
         )
         if not updates:
             self.println("No updates in the queue")
@@ -63,16 +99,29 @@ class Updates(Command):
                 continue
             # deadline is an ISO timestamp; the date alone is enough for a row.
             deadline = (u.get("deadline") or "")[:10] or "-"
-            self.println(
+            row = (
                 f"  prio={u.get('priority', '?')!s:<5} "
                 f"{u.get('status', '?')!s:<10} "
                 f"{u.get('kind', '?')!s:<12} "
                 f"{deadline:<11} {u.get('id', '?')}"
             )
+            if want_assignment:
+                row += f" assignee={u.get('assignee') or 'unassigned'}"
+            self.println(row)
 
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("--review-group",), ("--status",), ("--limit",)], line, text
+            [
+                ("--review-group",),
+                ("--status",),
+                ("--limit",),
+                ("--assignee",),
+                ("--mine",),
+                ("--unassigned",),
+                ("--show-assignment",),
+            ],
+            line,
+            text,
         )

@@ -27,6 +27,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Maintenance updates in QAM testing. Optional `--review-group`/`--status`/
   `--limit` filters. This is the TeReGen-backed replacement for the removed
   `smelt_updates`/`smelt_requests` commands.
+- `updates` gained assignment exposure (restoring functionality dropped with
+  SMELT): `--assignee <user>` and `--mine` (the current session user) filter the
+  queue to updates assigned to that user, `--unassigned` to updates with no
+  assignee, and `--show-assignment` annotates every row with its assignee
+  without filtering. Requires the matching TeReGen `/updates` assignment support.
 - New `checkers` command — lists the build-check (checker) result runs for the
   loaded update, fetched live from the TeReGen report API
   (`GET /reports/{id}/checkers`). This is the TeReGen-backed replacement for the
