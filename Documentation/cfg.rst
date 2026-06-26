@@ -345,17 +345,18 @@ This property takes a comma-separated list of resolver types.
 Resolvers are tried left-to-right.
 
 
-``smelt.url``
-~~~~~~~~~~~~~
+``teregen.api``
+~~~~~~~~~~~~~~~
   | **type**
   |     URL
   | **default**
-  |     none (unset)
+  |     ``https://qam.suse.de/api/v1``
 
-Base URL of the SMELT instance used by the ``smelt_*`` commands and by
-``assign`` to show an update's priority and deadline. There is no built-in
-default: when it is unset the SMELT-backed features are silently skipped. Set it
-to ``https://smelt.suse.de`` to enable them.
+Base URL of the TeReGen report API, mtui's source of truth for the report data
+formerly read from SMELT. It backs the ``checkers`` and ``updates`` commands, the
+``regenerate`` command (and the loader's stale-template regeneration offer), and
+``assign``'s display of an update's priority and deadline. The locally
+checked-out ``metadata.json`` is used as a fallback when the API is unreachable.
 
 
 ``svn.path``
