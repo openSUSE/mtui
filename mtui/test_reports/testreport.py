@@ -918,6 +918,31 @@ class TestReport(ABC):
         if self._arbiter is not None and self._owner is not None:
             self._arbiter.release_owner(self._owner)
 
+    def release_pool_claim(self, host: str) -> None:
+        """Release one host's in-process arbiter claim.
+
+        Per-host analogue of :meth:`release_pool_claims`, called from
+        ``remove_host`` so a disconnected refhost does not stay claimed in the
+        process-global :class:`HostArbiter` for the rest of the server's
+        lifetime (there is no ``unload`` over MCP, so the template stays
+        loaded). ``Target.close()`` already drops the remote operation/pool
+        lock files; this clears the in-process ownership that those locks and
+        the ``--free`` probe never see. Idempotent and safe when pool
+        selection was never used (``_arbiter``/``_owner`` are then ``None``).
+        """
+        self._pool_claims.discard(host)
+        # Drop only this host from each slot's candidate list -- siblings stay
+        # available as backup-refhost fallbacks (RFC 5.7). Prune a slot only
+        # once it has no candidates left. (``release_pool_claims`` clears the
+        # whole map because it tears the entire report down.)
+        for slot, candidates in list(self._slot_candidates.items()):
+            if host in candidates:
+                candidates.remove(host)
+                if not candidates:
+                    del self._slot_candidates[slot]
+        if self._arbiter is not None and self._owner is not None:
+            self._arbiter.release(host, self._owner)
+
     def autoconnect(self) -> None:
         """Connect refhosts for a freshly loaded (manual-fallback) template.
 

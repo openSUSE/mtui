@@ -32,6 +32,11 @@ class RemoveHost(Command):
 
         """
         self.targets[target].close()
+        # Drop the in-process pool-arbitration claim too. close() only removes
+        # the remote lock files; the process-global HostArbiter would otherwise
+        # keep this host marked busy for the server's lifetime (no unload over
+        # MCP, so the template stays loaded). See TestReport.release_pool_claim.
+        self.metadata.release_pool_claim(target)
         self.targets.pop(target)
         if target in self.metadata.systems:
             del self.metadata.systems[target]
