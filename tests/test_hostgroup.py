@@ -615,39 +615,39 @@ def test_perform_uninstall_transactional_triggers_reboot(mock_run):
 
 
 @patch("mtui.hosts.target.hostgroup.RunCommand")
-def test_perform_prepare_runs_per_package_command(mock_run):
-    """``perform_prepare`` runs the command-template once per package."""
+def test_perform_prepare_installs_all_packages_in_one_command(mock_run):
+    """``perform_prepare`` installs every package in a SINGLE command (one
+    transaction/snapshot), not one run per package -- the per-package loop left
+    packages missing after reboot on transactional hosts."""
     t1 = _stub_target("h1")
     t1.lasterr.return_value = ""
-    t1.doer.return_value = _doer_dict(
-        command="zypper in $package", reboot="", start_command=""
-    )
+    doer = _doer_dict(command="zypper in $package", reboot="")
+    t1.doer.return_value = doer
     t1.check.return_value = MagicMock()
     hg = HostsGroup([t1])  # type: ignore[arg-type]
     hg.perform_prepare(["pkg-a", "pkg-b"], MagicMock())
-    # 2 packages → 2 RunCommand invocations beyond the lock cleanup.
-    assert mock_run.call_count >= 2
-    t1.unlock.assert_called()
-
-
-@patch("mtui.hosts.target.hostgroup.RunCommand")
-def test_perform_prepare_filters_branding_upstream(mock_run):
-    """The hard-coded ``branding-upstream`` name is excluded from per-pkg cmds."""
-    t1 = _stub_target("h1")
-    t1.lasterr.return_value = ""
-    t1.doer.return_value = _doer_dict(
-        command="zypper in $package", reboot="", start_command=""
-    )
-    t1.check.return_value = MagicMock()
-    hg = HostsGroup([t1])  # type: ignore[arg-type]
-    hg.perform_prepare(["pkg-a", "branding-upstream", "pkg-b"], MagicMock())
-    # 2 surviving packages.
     per_pkg_calls = [
         c
         for c in mock_run.call_args_list
         if isinstance(c.args[1], dict) and "h1" in c.args[1]
     ]
-    assert len(per_pkg_calls) == 2
+    assert len(per_pkg_calls) == 1  # one combined call, not one-per-package
+    doer["command"].substitute.assert_called_once_with(package="pkg-a pkg-b")
+    t1.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_prepare_filters_branding_upstream(mock_run):
+    """The hard-coded ``branding-upstream`` name is excluded from the combined
+    install command."""
+    t1 = _stub_target("h1")
+    t1.lasterr.return_value = ""
+    doer = _doer_dict(command="zypper in $package", reboot="")
+    t1.doer.return_value = doer
+    t1.check.return_value = MagicMock()
+    hg = HostsGroup([t1])  # type: ignore[arg-type]
+    hg.perform_prepare(["pkg-a", "branding-upstream", "pkg-b"], MagicMock())
+    doer["command"].substitute.assert_called_once_with(package="pkg-a pkg-b")
 
 
 @patch("mtui.hosts.target.hostgroup.RunCommand")
@@ -746,6 +746,31 @@ def test_perform_downgrade_unlocks_on_error(mock_run):
     mock_run.return_value.run.side_effect = RuntimeError("downgrade boom")
     with pytest.raises(RuntimeError, match="downgrade boom"):
         hg.perform_downgrade(["pkg-a"], MagicMock())
+    t1.unlock.assert_called()
+
+
+@patch("mtui.hosts.target.hostgroup.RunCommand")
+def test_perform_downgrade_transactional_combines_packages(mock_run):
+    """A transactional host downgrades EVERY package in a SINGLE command (one
+    transaction/snapshot): the per-package loop opened a snapshot per package and
+    they never landed together, so the packages stayed at the test version after
+    reboot. The combined call must substitute the full ``name=version`` spec list
+    once, and the downgrader check must run for the transactional host."""
+    t1 = _stub_target("h1", transactional=True)
+    # list_command output parsed into versions: pkg-a -> 1.5-1, pkg-b -> 2.0-1.
+    t1.lastout.return_value = "pkg-a = 1.5-1\npkg-b = 2.0-1\n"
+    command = MagicMock(safe_substitute=MagicMock(return_value="tu pkg in ..."))
+    t1.doer.return_value = {
+        **_doer_dict(reboot=""),
+        "list_command": MagicMock(safe_substitute=MagicMock(return_value="rpm -qa")),
+        "command": command,
+    }
+    t1.check.return_value = MagicMock()
+    hg = HostsGroup([t1])
+    hg.perform_downgrade(["pkg-a", "pkg-b"], MagicMock())
+    # Every spec joined into ONE invocation, not one call per package.
+    command.safe_substitute.assert_called_once_with(package="pkg-a=1.5-1 pkg-b=2.0-1")
+    t1.check.assert_called_with("downgrader")
     t1.unlock.assert_called()
 
 

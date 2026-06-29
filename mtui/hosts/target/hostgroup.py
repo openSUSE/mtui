@@ -352,11 +352,6 @@ class HostsGroup(UserDict[str, Target]):
                 for t in self.data.values()
                 if t.transactional
             }
-            start = {
-                t.hostname: t.doer("preparer")["start_command"].substitute()
-                for t in self.data.values()
-                if t.transactional
-            }
         except MissingPreparerError as e:
             logger.error("%s", e)
             return
@@ -365,9 +360,10 @@ class HostsGroup(UserDict[str, Target]):
 
         try:
             self._fanout_set_repo(operation, testreport)
-            if start:
-                self.run(start)
 
+            # Abort early if adding/removing the issue repo failed on any host;
+            # installing against a half-configured repo set would only produce a
+            # confusing downstream error.
             for t in self.data.values():
                 if t.lasterr():
                     logger.critical(
@@ -379,14 +375,32 @@ class HostsGroup(UserDict[str, Target]):
                         t.lastexit(),
                     )
                     return
-            for pkg in pkgs:
+
+            if cmd == "installed_only":
+                # Conditional per-package install (only touch already-installed
+                # packages) -- inherently one package at a time.
+                for pkg in pkgs:
+                    command = {
+                        t.hostname: t.doer("preparer", force, testing)[cmd].substitute(
+                            package=pkg
+                        )
+                        for t in self.data.values()
+                    }
+                    self.run(command)
+            elif pkgs:
+                # Install every package in a SINGLE transaction. This is required
+                # for transactional (read-only-root) hosts: a per-package loop
+                # runs one `transactional-update pkg in` per package, each opening
+                # its own snapshot, so the packages never end up together in the
+                # booted snapshot -- the install "succeeds" yet they are missing
+                # after reboot. One call -> one snapshot -> one reboot. (Matches
+                # the comment above and the single-call slm_update patch path.)
                 command = {
                     t.hostname: t.doer("preparer", force, testing)[cmd].substitute(
-                        package=pkg
+                        package=" ".join(pkgs)
                     )
                     for t in self.data.values()
                 }
-
                 self.run(command)
 
             for t in self.data.values():
@@ -427,11 +441,6 @@ class HostsGroup(UserDict[str, Target]):
                 for t in self.data.values()
                 if t.transactional
             }
-            init_snapshot = {
-                t.hostname: t.doer("downgrader")["init_snapshot"].substitute()
-                for t in self.data.values()
-                if t.transactional
-            }
         except MissingDowngraderError as e:
             logger.error("%s", e)
             return
@@ -468,28 +477,61 @@ class HostsGroup(UserDict[str, Target]):
                     version = sorted(release[name], key=RPMVersion, reverse=True)[0]
                     versions.setdefault(hn, {}).update({name: version})
 
-            if init_snapshot:
-                self.run(init_snapshot)
+            transactional_hosts = {h for h, t in self.data.items() if t.transactional}
 
+            # Non-transactional hosts: per-package zypper downgrade (each gated on
+            # the package being installed) -- unchanged behaviour.
             for package in packages:
                 cmd = {
                     h: t.doer("downgrader")["command"].safe_substitute(
                         package=package, version=versions[h][package]
                     )
                     for h, t in self.data.items()
-                    if h in versions and package in versions[h]
+                    if h not in transactional_hosts
+                    and h in versions
+                    and package in versions[h]
                 }
                 if cmd:
                     self.run(cmd)
 
-                    for t in self.data.values():
-                        t.check("downgrader")(
-                            t.hostname,
-                            t.lastout(),
-                            t.lastin(),
-                            t.lasterr(),
-                            t.lastexit(),
-                        )
+                    for h, t in self.data.items():
+                        if h not in transactional_hosts:
+                            t.check("downgrader")(
+                                t.hostname,
+                                t.lastout(),
+                                t.lastin(),
+                                t.lasterr(),
+                                t.lastexit(),
+                            )
+
+            # Transactional hosts: downgrade ALL packages in a SINGLE
+            # transaction/snapshot. A per-package loop opens a snapshot per
+            # package and they never land together, so the packages stay at the
+            # test version after reboot (the prepare/newpackage failure mode).
+            combined = {}
+            for h in transactional_hosts:
+                specs = [
+                    f"{p}={versions[h][p]}"
+                    for p in packages
+                    if h in versions and p in versions[h]
+                ]
+                if specs:
+                    combined[h] = (
+                        self.data[h]
+                        .doer("downgrader")["command"]
+                        .safe_substitute(package=" ".join(specs))
+                    )
+            if combined:
+                self.run(combined)
+                for h in combined:
+                    t = self.data[h]
+                    t.check("downgrader")(
+                        t.hostname,
+                        t.lastout(),
+                        t.lastin(),
+                        t.lasterr(),
+                        t.lastexit(),
+                    )
 
             self._reboot(reboot)
         except MissingDowngraderError:

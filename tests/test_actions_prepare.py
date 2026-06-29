@@ -33,7 +33,23 @@ def test_slm_prepare_force_adds_force_resolution() -> None:
     sub = cmds["command"].safe_substitute(package="bash")
     assert "--force-resolution" in sub
     assert "reboot" in cmds
-    assert "start_command" in cmds
+
+
+def test_slm_prepare_command_is_single_fresh_snapshot() -> None:
+    """The slmicro prepare command must NOT use ``--continue``/``-C`` and must
+    not rely on a separate ``start_command`` canary: each prepare runs as one
+    fresh ``transactional-update pkg in`` so a one-shot multi-package install
+    lands atomically and survives the reboot. A per-package ``-C`` chain left the
+    packages missing after reboot even though the command "succeeded"."""
+    cmds = slm_prepare()
+    template = cmds["command"].template
+    assert "-C" not in template
+    assert "--continue" not in template
+    assert "start_command" not in cmds
+    sub = cmds["command"].safe_substitute(package="pkg-a pkg-b pkg-c")
+    assert "transactional-update" in sub
+    assert "pkg in" in sub
+    assert "pkg-a pkg-b pkg-c" in sub  # all packages in one invocation
 
 
 def test_slm_prepare_default_no_force() -> None:

@@ -126,6 +126,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Transactional (read-only-root, SL Micro) hosts now install and downgrade every
+  package in a SINGLE `transactional-update` snapshot. The previous per-package
+  loop ran one `transactional-update pkg in` per package, each opening its own
+  snapshot, so the packages never landed together in the booted snapshot — the
+  prepare/downgrade reported success yet the packages were missing (or stayed at
+  the test version) after reboot. `prepare` and `downgrade` now pass the whole
+  package set to a single fresh-snapshot invocation, dropping the obsolete
+  `--continue`/`-C` chain and the separate init-snapshot/start-command canaries.
 - SLFO updates now run in AUTOMATIC mode. Their openQA install jobs
   (`qam-incidentinstall-SLFO`) were previously excluded from the auto workflow,
   forcing every SLFO update to fall back to manual; they are now recognised and

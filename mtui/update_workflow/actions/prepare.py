@@ -61,11 +61,14 @@ def slm_prepare(force: bool = False, testing: bool = False) -> dict[str, Templat
 
     """
     parameter = "--force-resolution" if force else ""
+    # Install in a SINGLE fresh snapshot (no --continue): the caller passes all
+    # packages to one invocation, so they land together and a single reboot
+    # activates them. The previous `--continue` + per-package "start operation"
+    # canary chained a separate snapshot per package, which did not accumulate --
+    # the packages "succeeded" but were missing after reboot. This mirrors the
+    # working single-call slm_update patch path.
     return {
-        "start_command": Template("transactional-update run echo 'start operation'"),
-        "command": Template(
-            f"transactional-update -n -C pkg in -l {parameter} $package"
-        ),
+        "command": Template(f"transactional-update -n pkg in -l {parameter} $package"),
         "installed_only": Template(
             f"if $(rpm -q $package &>/dev/null); then transactional-update -n pkg in -l {parameter} $package ; fi"
         ),
