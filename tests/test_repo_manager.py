@@ -139,6 +139,32 @@ def test_run_zypper_warns_when_no_product_matches(mock_target, mock_rrid, caplog
     ), [r.message for r in caplog.records]
 
 
+def test_run_zypper_transactional_routes_ref_through_transactional_update(
+    mock_target, mock_rrid
+):
+    """On a transactional host the final refresh is wrapped in transactional-update.
+
+    A plain ``zypper ref`` of a signed repo whose key is not yet trusted imports
+    that key into the read-only rpmdb and fails; routing it through
+    ``transactional-update --continue run zypper --gpg-auto-import-keys ref``
+    gives zypper a writable snapshot and lets it import the key.
+    """
+    mock_target.state = "enabled"
+    mock_target.transactional = True
+    mock_target.connection.run.return_value = 0
+    mock_target.connection.stdout = ""
+    mock_target.connection.stderr = ""
+    mock_target.system = MagicMock()
+    mock_target.system.flatten.return_value = {Product("SL-Micro", "6-1", "x86_64")}
+    repos = {Product("SL-Micro", "6-1", "x86_64"): "https://example/repo"}
+    mock_target.repo_manager.run_zypper("ar", repos, mock_rrid)
+    commands = [c[0][0] for c in mock_target.connection.run.call_args_list]
+    assert commands[-1] == (
+        "transactional-update --continue --non-interactive run "
+        "zypper --gpg-auto-import-keys -n ref"
+    )
+
+
 def test_run_zypper_ar_warns_on_zypper_failure(mock_target, mock_rrid, caplog):
     """A non-zero ``zypper ar`` exit is surfaced as a WARNING, not swallowed."""
     import logging
