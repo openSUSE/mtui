@@ -48,15 +48,23 @@ done \
 | awk -F "|" '{{ print $2,"=",$4 }}'
 """
 
-    cmd_template = "rpm -q $package &>/dev/null && transactional-update -c pkg in -C --force-resolution --oldpackage -y $package=$version"
+    # Downgrade ALL packages in a single fresh snapshot (no --continue, no
+    # separate init snapshot): ``$package`` carries the whole "name=version ..."
+    # spec list so one transactional-update call lands them together and one
+    # reboot activates them. The previous per-package ``-c ... -C`` chain plus a
+    # ``transactional-update run true`` init snapshot opened a snapshot per
+    # package, which did not accumulate -- the downgrade "succeeded" yet the
+    # packages stayed at the test version after reboot (same failure mode as
+    # prepare/newpackage).
+    cmd_template = (
+        "transactional-update -n pkg in --force-resolution --oldpackage -y $package"
+    )
     reboot = "systemctl reboot"
-    init_snapshot = "transactional-update run true"
 
     return {
         "list_command": Template(list_command_template),
         "command": Template(cmd_template),
         "reboot": Template(reboot),
-        "init_snapshot": Template(init_snapshot),
     }
 
 
