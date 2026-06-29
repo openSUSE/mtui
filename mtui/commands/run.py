@@ -1,5 +1,6 @@
 """The `run` command."""
 
+import shlex
 from argparse import REMAINDER
 from logging import getLogger
 
@@ -47,12 +48,13 @@ class Run(Command):
         if not targets:
             raise NoRefhostsDefinedError
 
-        command: str = ""
-
-        for i in self.args.command:
-            command += i + " "
-
-        command = command.rstrip(" ")
+        # Quote each argument so a single token that contains shell
+        # metacharacters (e.g. ``sh -c "VAR=x; echo $VAR"`` or ``$(...)``)
+        # survives the trip to the remote shell intact. A plain space-join
+        # would let the remote shell re-split the script body, dropping the
+        # quoting -- so ``sh -c "a; b"`` ran as ``sh -c a`` with ``; b`` leaking
+        # into the outer shell, and ``$VAR``/``$(...)`` expanded empty.
+        command = shlex.join(self.args.command)
         output: list[str] = []
         try:
             with LockedTargets(list(targets.values())):
