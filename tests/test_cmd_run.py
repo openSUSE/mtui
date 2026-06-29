@@ -60,6 +60,33 @@ def test_run_empty_targets_raises(mock_config):
         Run(args, mock_config, MagicMock(), prompt)()
 
 
+def test_run_quotes_shell_metacharacters(mock_config):
+    """A single argument with shell metacharacters must reach the host intact.
+
+    Pre-fix the args were space-joined without quoting, so
+    ``sh -c "VAR=x; echo $VAR"`` went on the wire as ``sh -c VAR=x; echo $VAR``
+    -- the remote shell then ran ``sh -c VAR=x`` and leaked ``; echo $VAR`` into
+    the outer shell, where ``$VAR`` expanded empty. ``shlex.join`` keeps the
+    script body as one quoted argument.
+    """
+    t = _target("h1")
+    prompt = _prompt(HostsGroup([t]))
+    args = Namespace(command=["sh", "-c", "VAR=x; echo $VAR"], hosts=None)
+
+    @contextmanager
+    def noop_ctx(_):
+        yield
+
+    with (
+        patch("mtui.commands.run.LockedTargets", noop_ctx),
+        patch("mtui.commands.run.page"),
+        patch.object(HostsGroup, "run") as hg_run,
+    ):
+        Run(args, mock_config, MagicMock(), prompt)()
+
+    hg_run.assert_called_once_with("sh -c 'VAR=x; echo $VAR'")
+
+
 def test_run_target_locked_returns_without_unbound_local(mock_config):
     """A ``TargetLockedError`` during locking must not crash with ``UnboundLocalError``.
 

@@ -1,5 +1,6 @@
 """The `lrun` command."""
 
+import shlex
 import subprocess
 from argparse import REMAINDER
 from logging import getLogger
@@ -39,7 +40,11 @@ class LocalRun(Command):
             logger.error("Missing argument")
             return
 
-        cmd = " ".join(self.args.command)
+        # Quote each argument so a token with shell metacharacters (e.g.
+        # ``sh -c "VAR=x; echo $VAR"``) keeps its quoting instead of being
+        # re-split by the ``shell=True`` shell. Shell operators (pipes,
+        # redirection) belong inside an explicit ``sh -c '...'``.
+        cmd = shlex.join(self.args.command)
 
         # Default to the safe (current) streaming behaviour if a caller
         # forgets to set ``interactive`` on the prompt.
