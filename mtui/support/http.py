@@ -31,15 +31,32 @@ who cannot install that CA can disable verification globally with
 
 from __future__ import annotations
 
+import os
 import ssl
 
 import requests
+import requests.adapters
 import urllib3
 from urllib3.exceptions import InsecureRequestWarning
 
 #: Shared ``(connect, read)`` timeout in seconds for every outbound HTTP
 #: call. Bounds a stuck socket so a broken network can't hang mtui.
 HTTP_TIMEOUT: tuple[float, float] = (5.0, 30.0)
+
+
+def default_pool_size() -> int:
+    """The default thread-pool / connection-pool width shared across mtui.
+
+    Matches :class:`concurrent.futures.ThreadPoolExecutor`'s own default
+    (``min(32, cpu + 4)``) so a pool of worker threads fanning HTTP
+    requests at one host has exactly one cached connection per worker.
+    Sizing the :class:`requests.Session` connection pool to the same
+    value stops ``urllib3`` from logging "Connection pool is full,
+    discarding connection" and tearing down (then re-handshaking)
+    connections under concurrent fan-out.
+    """
+    return min(32, (os.process_cpu_count() or 1) + 4)
+
 
 #: A ``requests``-compatible ``verify`` value: ``True`` (use the system
 #: trust store), ``False`` (skip verification), or a path to a CA
@@ -87,11 +104,23 @@ def resolve_verify(
 def build_session(verify: VerifyPolicy) -> requests.Session:
     """Create a :class:`requests.Session` with a fixed ``verify`` policy.
 
+    The session's HTTP(S) connection pool is sized to
+    :func:`default_pool_size` (the same width as mtui's default thread
+    pool) so concurrent fan-out at a single host reuses connections
+    instead of triggering ``urllib3``'s "Connection pool is full,
+    discarding connection" churn.
+
     When ``verify`` is falsy, the module-wide insecure-request warning
     is suppressed so callers do not have to repeat that boilerplate.
     """
     session = requests.Session()
     session.verify = verify
+    pool_size = default_pool_size()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=pool_size, pool_maxsize=pool_size
+    )
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
     if not verify:
         disable_insecure_warnings()
     return session
