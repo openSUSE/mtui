@@ -6,21 +6,22 @@ command spawns ``$EDITOR`` on ``metadata.path`` — meaningless under
 MCP. This module replaces it with three explicit tools that operate
 directly on the file path tracked by ``session.metadata.path``:
 
-* :func:`testreport_read` — return the file's bytes plus a line count
-  computed with the same convention :func:`testreport_patch` consumes.
-  Optional ``offset``/``limit`` read a 1-indexed line window so a large
-  report (a Product Increment log) can be paged instead of overflowing.
+* :func:`testreport_read` — return a checkout file's bytes plus a line
+  count computed with the same convention :func:`testreport_patch`
+  consumes. Defaults to the ``log`` file; pass ``relpath`` to read any
+  other file under the checkout directory (traversal-guarded). Optional
+  ``offset``/``limit`` read a 1-indexed line window so a large report (a
+  Product Increment log) can be paged instead of overflowing.
 * :func:`testreport_patch` — splice an inclusive 1-indexed line range,
   written atomically via ``NamedTemporaryFile`` + :func:`os.replace`.
 * :func:`testreport_write` — full-file overwrite, also atomic.
 
-Two further read-only tools expose the rest of the checkout that the
+One further read-only tool exposes the rest of the checkout that the
 ``log`` file does not cover:
 
 * :func:`testreport_logs` — list the ``build_checks/`` and
-  ``install_logs/`` files (name + size).
-* :func:`testreport_read_file` — read any file under the checkout
-  directory by relative path (traversal-guarded).
+  ``install_logs/`` files (name + size); fetch one with
+  :func:`testreport_read` (pass ``relpath``).
 
 All three are ``async def``. The registered tool closures resolve the
 caller's own :class:`McpSession` from the
@@ -284,21 +285,29 @@ async def _heartbeat(ctx: Context | None, message: str) -> None:
 
 async def testreport_read(
     session: McpSession,
+    relpath: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     offset: int = 1,  # noqa: PT028 - tool entrypoint, not a pytest test
     limit: int | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
-    """Return the loaded testreport file's content and line count.
+    """Return a testreport checkout file's content and line count.
 
-    By default the whole file is returned. ``offset``/``limit`` request a
-    1-indexed inclusive line window — the same numbering ``testreport_patch``
-    consumes — so a large report (a Product Increment ``log`` runs to thousands
-    of lines after ``export``) can be paged instead of overflowing the caller.
-    ``offset`` is the first line to return (1-based, default 1); ``limit`` caps
-    how many lines to return (default: to end of file). ``line_count`` is always
-    the file's *total* line count so the caller can page; when a window was
-    requested the reply also carries ``offset`` and ``returned_lines``.
+    By default (``relpath`` omitted) the report's ``log`` file is read. Pass
+    ``relpath`` to read any other file under the checkout directory instead —
+    ``build_checks/<pkg>.<arch>.log``, ``install_logs/<host>.log``,
+    ``source.diff``, ``patchinfo.xml`` and the like; the path is resolved under
+    the checkout directory and may not escape it.
+
+    The whole file is returned unless a window is requested. ``offset``/``limit``
+    request a 1-indexed inclusive line window — the same numbering
+    ``testreport_patch`` consumes — so a large report (a Product Increment
+    ``log`` runs to thousands of lines after ``export``) can be paged instead of
+    overflowing the caller. ``offset`` is the first line to return (1-based,
+    default 1); ``limit`` caps how many lines to return (default: to end of
+    file). ``line_count`` is always the file's *total* line count so the caller
+    can page; when a window was requested the reply also carries ``offset`` and
+    ``returned_lines``.
 
     Acquires the target template's per-RRID lock (under the registry-shared
     gate) so the snapshot is coherent with any in-flight command dispatch on
@@ -312,7 +321,17 @@ async def testreport_read(
 
     await _heartbeat(ctx, "testreport_read: waiting for template lock")
     async with session.scoped_lock(template):
-        path = _resolve_testreport_path(session, template)
+        if relpath is None:
+            path = _resolve_testreport_path(session, template)
+        else:
+            base = _resolve_template_dir(session, template)
+            path = _safe_template_file(base, relpath)
+            if not path.is_file():
+                raise McpCommandError(
+                    "",
+                    f"no such file in testreport checkout: {relpath}",
+                    1,
+                )
         content = path.read_text(encoding="utf-8", errors="replace")
 
     cap = _output_cap(session)
@@ -348,7 +367,7 @@ async def testreport_logs(
     install logs live in ``build_checks/`` and ``install_logs/`` next to the
     testreport, but are not part of the ``log`` file. This returns their
     names (and byte sizes) so a caller can then fetch one with
-    :func:`testreport_read_file`.
+    :func:`testreport_read` (passing ``relpath``).
     """
     await _heartbeat(ctx, "testreport_logs: waiting for template lock")
     async with session.scoped_lock(template):
@@ -369,37 +388,6 @@ async def testreport_logs(
             "build_checks": listing("build_checks"),
             "install_logs": listing("install_logs"),
         }
-
-
-async def testreport_read_file(
-    session: McpSession,
-    relpath: str,
-    template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
-    ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
-) -> dict[str, Any]:
-    """Read a file from the loaded testreport's checkout by relative path.
-
-    Complements :func:`testreport_read` (which only returns the ``log``):
-    use this for ``build_checks/<pkg>.<arch>.log``, ``install_logs/<host>.log``,
-    ``source.diff``, ``patchinfo.xml`` and the like. ``relpath`` is resolved
-    under the checkout directory and may not escape it.
-    """
-    await _heartbeat(ctx, "testreport_read_file: waiting for template lock")
-    async with session.scoped_lock(template):
-        base = _resolve_template_dir(session, template)
-        target = _safe_template_file(base, relpath)
-        if not target.is_file():
-            raise McpCommandError(
-                "",
-                f"no such file in testreport checkout: {relpath}",
-                1,
-            )
-        content = target.read_text(encoding="utf-8", errors="replace")
-    return {
-        "path": str(target),
-        "line_count": _count_lines(content),
-        "content": cap_output(content, _output_cap(session)),
-    }
 
 
 async def testreport_patch(
@@ -646,6 +634,7 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
     globals().setdefault("Context", _Context)
 
     async def _read(
+        relpath: str | None = None,
         offset: int = 1,
         limit: int | None = None,
         template: str | None = None,
@@ -653,7 +642,12 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
     ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
         return await testreport_read(
-            session, offset=offset, limit=limit, template=template, ctx=ctx
+            session,
+            relpath=relpath,
+            offset=offset,
+            limit=limit,
+            template=template,
+            ctx=ctx,
         )
 
     async def _logs(
@@ -661,12 +655,6 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
     ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
         return await testreport_logs(session, template=template, ctx=ctx)
-
-    async def _read_file(
-        relpath: str, template: str | None = None, ctx: Context | None = None
-    ) -> dict[str, Any]:
-        session = await resolve_session(provider, ctx)
-        return await testreport_read_file(session, relpath, template=template, ctx=ctx)
 
     async def _patch(
         start_line: int,
@@ -704,11 +692,15 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         )
 
     read_desc = (
-        "Read the currently loaded testreport file. Returns the path, total "
-        "line count, and content (utf-8, errors replaced). By default returns "
-        "the whole file; pass `offset` (1-based first line) and/or `limit` (max "
-        "lines) to read a line window instead — use this to page a large report "
-        "(a Product Increment log can be thousands of lines) without overflowing. "
+        "Read a file from the loaded testreport's checkout. Returns the path, "
+        "total line count, and content (utf-8, errors replaced). By default "
+        "(no `relpath`) reads the report's `log` file; pass `relpath` to read "
+        "another checkout file instead, e.g. 'build_checks/<pkg>.<arch>.log', "
+        "'install_logs/<host>.log', 'source.diff' or 'patchinfo.xml' — the path "
+        "may not escape the checkout directory. Pass `offset` (1-based first "
+        "line) and/or `limit` (max lines) to read a line window instead of the "
+        "whole file — use this to page a large report (a Product Increment log "
+        "can be thousands of lines) without overflowing. "
         f"{_READ_FIRST_WARNING} {_TEMPLATE_NOTE}"
     )
     patch_desc = (
@@ -727,13 +719,7 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         "List the auxiliary log files in the loaded testreport's checkout: the "
         "per-package/arch build-check logs (build_checks/) and the per-refhost "
         "install logs (install_logs/). Returns each file's name and size; fetch "
-        f"one with testreport_read_file. {_TEMPLATE_NOTE}"
-    )
-    read_file_desc = (
-        "Read a file from the loaded testreport's checkout by relative path, "
-        "e.g. 'build_checks/<pkg>.<arch>.log', 'install_logs/<host>.log', "
-        "'source.diff' or 'patchinfo.xml'. The path may not escape the checkout "
-        f"directory. Returns path, line count and full content. {_TEMPLATE_NOTE}"
+        f"one with testreport_read (pass relpath). {_TEMPLATE_NOTE}"
     )
     fill_desc = (
         "Bulk-set the repetitive per-bug placeholder tokens an exported "
@@ -761,12 +747,6 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
             "testreport_logs",
             _logs,
             logs_desc,
-            ToolAnnotations(readOnlyHint=True, idempotentHint=True),
-        ),
-        (
-            "testreport_read_file",
-            _read_file,
-            read_file_desc,
             ToolAnnotations(readOnlyHint=True, idempotentHint=True),
         ),
         (

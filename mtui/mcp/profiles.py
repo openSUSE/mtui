@@ -67,7 +67,6 @@ CORE: frozenset[str] = frozenset(
         "openqa_jobs",
         # hand-written tools (always kept)
         "testreport_read",
-        "testreport_read_file",
         "testreport_logs",
         "testreport_patch",
         "testreport_write",

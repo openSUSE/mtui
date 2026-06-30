@@ -136,12 +136,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   template. `list_templates` no longer shows the `*` active marker over MCP
   (the marker remains in the interactive REPL).
 - Over `mtui-mcp`, the testreport file tools (`testreport_read`,
-  `testreport_logs`, `testreport_read_file`, `testreport_patch`,
-  `testreport_write`, `testreport_fill`) gained an optional `template=RRID`
-  parameter selecting which loaded template's checkout to act on. With more than
-  one template loaded they now refuse an unscoped call (naming the loaded RRIDs)
-  instead of silently editing the last-loaded one; single-template sessions are
-  unchanged.
+  `testreport_logs`, `testreport_patch`, `testreport_write`, `testreport_fill`)
+  gained an optional `template=RRID` parameter selecting which loaded template's
+  checkout to act on. With more than one template loaded they now refuse an
+  unscoped call (naming the loaded RRIDs) instead of silently editing the
+  last-loaded one; single-template sessions are unchanged.
+- Over `mtui-mcp`, `testreport_read` now accepts an optional `relpath` to read
+  any file under the loaded template's checkout (traversal-guarded), defaulting
+  to the report's `log` file when omitted. This absorbs the former
+  `testreport_read_file` tool (see Removed); `testreport_logs` still lists the
+  auxiliary `build_checks/` and `install_logs/` files, now fetched via
+  `testreport_read`.
 - Over `mtui-mcp`, loading a template (`load_template`, `regenerate`) no longer
   moves the session's active-template pointer. The active template is REPL-only
   navigation state; setting it on every load made it hidden, unaddressable
@@ -162,6 +167,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
+- The `mtui-mcp` `testreport_read_file` tool has been removed; its function is
+  now served by `testreport_read` with the new optional `relpath` parameter
+  (which defaults to the report's `log` file). Replace
+  `testreport_read_file(relpath=…)` calls with `testreport_read(relpath=…)`.
 - The initrd / pre-post custom-check framework has been removed. The
   `PreScript`/`PostScript`/`CompareScript` hook engine that copied probe
   scripts onto reference hosts and ran them before/after an `update` (diffing

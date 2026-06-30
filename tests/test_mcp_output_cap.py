@@ -2,8 +2,9 @@
 
 :func:`mtui.mcp._slim.cap_output` itself is unit-tested in
 ``tests/test_mcp_slim.py``; here we assert the cap is actually applied to the
-``content`` returned by ``testreport_read`` / ``testreport_read_file`` using the
-session's ``config.mcp_max_output_bytes``.
+``content`` returned by ``testreport_read`` (both for the default ``log`` and
+for a ``relpath`` checkout file) using the session's
+``config.mcp_max_output_bytes``.
 """
 
 from __future__ import annotations
@@ -85,7 +86,7 @@ def test_read_file_caps_oversized_content(tmp_path: Path) -> None:
     (big / "pkg.x86_64.log").write_text("C" * 5000, encoding="utf-8")
     sess = _session(log, cap=100)
 
-    call = tt.testreport_read_file(sess, "build_checks/pkg.x86_64.log")  # ty: ignore[invalid-argument-type]
+    call = tt.testreport_read(sess, relpath="build_checks/pkg.x86_64.log")  # ty: ignore[invalid-argument-type]
     res = asyncio.run(call)
     assert res["content"].startswith("C" * 100)
     assert "truncated" in res["content"]

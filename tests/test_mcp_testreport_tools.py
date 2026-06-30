@@ -410,7 +410,6 @@ def test_register_testreport_tools_exposes_all_tools(tmp_path: Path) -> None:
         "testreport_logs",
         "testreport_patch",
         "testreport_read",
-        "testreport_read_file",
         "testreport_write",
     ]
 
@@ -421,7 +420,7 @@ def test_register_testreport_tools_exposes_all_tools(tmp_path: Path) -> None:
         tools[n] = tool
 
     # The read-only tools advertise it; the mutating ones must not.
-    for n in ("testreport_read", "testreport_logs", "testreport_read_file"):
+    for n in ("testreport_read", "testreport_logs"):
         assert tools[n].annotations is not None
         assert tools[n].annotations.readOnlyHint is True
         assert tools[n].annotations.idempotentHint is True
@@ -435,7 +434,7 @@ def test_register_testreport_tools_exposes_all_tools(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Auxiliary checkout files: testreport_logs / testreport_read_file            #
+# Auxiliary checkout files: testreport_logs / testreport_read(relpath=...)    #
 # --------------------------------------------------------------------------- #
 
 
@@ -452,7 +451,7 @@ def test_logs_and_read_file_roundtrip(tmp_path: Path) -> None:
     assert [f["name"] for f in logs["install_logs"]] == ["host1.log"]
 
     out = asyncio.run(
-        tt.testreport_read_file(sess, "build_checks/libica.s390x.log")  # ty: ignore[invalid-argument-type]
+        tt.testreport_read(sess, relpath="build_checks/libica.s390x.log")  # ty: ignore[invalid-argument-type]
     )
     assert out["content"] == "ok\nfine\n"
     assert out["line_count"] == 2
@@ -468,7 +467,7 @@ def test_logs_empty_when_subdirs_absent(tmp_path: Path) -> None:
 def test_read_file_missing_raises(tmp_path: Path) -> None:
     sess = _loaded_session(tmp_path, tmp_path / "log")
     with pytest.raises(McpCommandError, match="no such file"):
-        asyncio.run(tt.testreport_read_file(sess, "build_checks/nope.log"))  # ty: ignore[invalid-argument-type]
+        asyncio.run(tt.testreport_read(sess, relpath="build_checks/nope.log"))  # ty: ignore[invalid-argument-type]
 
 
 def test_read_file_rejects_traversal(tmp_path: Path) -> None:
@@ -476,7 +475,7 @@ def test_read_file_rejects_traversal(tmp_path: Path) -> None:
     (tmp_path.parent / "secret.txt").write_text("nope\n")
     sess = _loaded_session(tmp_path, tmp_path / "log")
     with pytest.raises(McpCommandError, match="escapes"):
-        asyncio.run(tt.testreport_read_file(sess, "../secret.txt"))  # ty: ignore[invalid-argument-type]
+        asyncio.run(tt.testreport_read(sess, relpath="../secret.txt"))  # ty: ignore[invalid-argument-type]
 
 
 def test_logs_and_read_file_refuse_without_loaded_report(tmp_path: Path) -> None:
@@ -484,7 +483,7 @@ def test_logs_and_read_file_refuse_without_loaded_report(tmp_path: Path) -> None
     with pytest.raises(McpCommandError):
         asyncio.run(tt.testreport_logs(sess))
     with pytest.raises(McpCommandError):
-        asyncio.run(tt.testreport_read_file(sess, "source.diff"))
+        asyncio.run(tt.testreport_read(sess, relpath="source.diff"))
 
 
 # --------------------------------------------------------------------------- #
@@ -839,7 +838,6 @@ def test_template_param_in_json_schema(tmp_path: Path) -> None:
     for name in (
         "testreport_read",
         "testreport_logs",
-        "testreport_read_file",
         "testreport_patch",
         "testreport_write",
         "testreport_fill",
@@ -851,3 +849,27 @@ def test_template_param_in_json_schema(tmp_path: Path) -> None:
             f"tool {name!r} is missing the template parameter: {list(props)!r}"
         )
         assert "template" not in tool.parameters.get("required", [])
+
+
+def test_read_relpath_optional_in_schema_and_reads_log_by_default(
+    tmp_path: Path,
+) -> None:
+    """``relpath`` is exposed and optional; omitting it reads the log file."""
+    pytest.importorskip("mcp")
+    from mcp.server.fastmcp import FastMCP
+
+    mcp: FastMCP = FastMCP(name="test-mtui-mcp-relpath-schema")
+    tt.register_testreport_tools(mcp, _null_session(tmp_path))
+    tool = mcp._tool_manager.get_tool("testreport_read")  # noqa: SLF001
+    assert tool is not None
+    props = tool.parameters.get("properties", {})
+    assert "relpath" in props
+    assert "relpath" not in tool.parameters.get("required", [])
+
+    # No relpath -> the report's log file.
+    log = tmp_path / "log"
+    log.write_text("the log\n")
+    sess = _loaded_session(tmp_path, log)
+    out = asyncio.run(tt.testreport_read(sess))  # ty: ignore[invalid-argument-type]
+    assert out["path"] == str(log)
+    assert out["content"] == "the log\n"
