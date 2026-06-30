@@ -204,6 +204,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Fetching openQA data from the QEM Dashboard no longer floods the log with
+  "Connection pool is full, discarding connection" warnings. The shared HTTP
+  session's connection pool is now sized to match mtui's default worker-thread
+  count (`min(32, cpu + 4)`), so the concurrent per-setting requests reuse
+  connections instead of repeatedly opening and tearing them down.
 - Over `mtui-mcp`, a command with a `nargs=REMAINDER` *optional* flag declared
   before another flag (the shape used by `reject --message`) could have the
   later flag swallowed into the message when re-encoding a tool call to argv.

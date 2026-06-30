@@ -37,6 +37,33 @@ def test_resolve_verify_precedence(default, override, expected):
     assert _http.resolve_verify(default, override) == expected
 
 
+def test_default_pool_size_matches_threadpool_default(monkeypatch):
+    # Mirrors ThreadPoolExecutor's own default of min(32, cpu + 4).
+    monkeypatch.setattr(_http.os, "process_cpu_count", lambda: 4)
+    assert _http.default_pool_size() == 8
+
+    monkeypatch.setattr(_http.os, "process_cpu_count", lambda: 100)
+    assert _http.default_pool_size() == 32  # capped at 32
+
+    # os.process_cpu_count() can return None; fall back to 1 + 4.
+    monkeypatch.setattr(_http.os, "process_cpu_count", lambda: None)
+    assert _http.default_pool_size() == 5
+
+
+def test_build_session_sizes_connection_pool(monkeypatch):
+    monkeypatch.setattr(_http, "default_pool_size", lambda: 17)
+
+    session = _http.build_session(verify=True)
+
+    for scheme in ("https://", "http://"):
+        adapter = session.get_adapter(f"{scheme}example.test")
+        assert isinstance(adapter, _http.requests.adapters.HTTPAdapter)
+        # pool_maxsize is forwarded to the underlying urllib3 pool manager
+        # connection_pool_kw; assert on that public surface rather than the
+        # adapter's private _pool_maxsize attribute.
+        assert adapter.poolmanager.connection_pool_kw["maxsize"] == 17
+
+
 def test_build_session_sets_verify_true_and_keeps_warnings(monkeypatch):
     calls = []
     monkeypatch.setattr(

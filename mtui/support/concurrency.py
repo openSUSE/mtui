@@ -19,6 +19,13 @@ Routing MTUI's thread pools through this class instead of the bare
 and every transport (stdio / http / REPL); code that does not set any
 context var is unaffected (copying an unmodified context is cheap and
 side-effect free).
+
+When constructed without ``max_workers`` (the common case for MTUI's
+HTTP fan-out), this inherits ``ThreadPoolExecutor``'s default of
+``min(32, cpu + 4)`` workers. :func:`mtui.support.http.default_pool_size`
+mirrors that same formula to size the shared ``requests`` connection
+pool, so a fan-out of workers hitting one host has one cached connection
+per worker and never triggers ``urllib3``'s pool-full connection churn.
 """
 
 from collections.abc import Callable
