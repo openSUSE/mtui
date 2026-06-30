@@ -3,7 +3,7 @@
 import concurrent.futures
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..support.concurrency import ContextExecutor
 from . import Command
 
@@ -18,11 +18,13 @@ class RemoveHost(Command):
     """
 
     command = "remove_host"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
         cls._add_hosts_arg(parser)
+        cls._add_template_arg(parser)
 
     def _remove_target(self, target) -> None:
         """Removes a single target host.
@@ -53,5 +55,8 @@ class RemoveHost(Command):
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
         return complete_choices(
-            [("-t", "--target")], line, text, state["hosts"].names()
+            [("-t", "--target"), *template_completion(state)],
+            line,
+            text,
+            state["hosts"].names(),
         )

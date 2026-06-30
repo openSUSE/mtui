@@ -3,7 +3,7 @@
 import logging
 
 from ..cli.argparse import ArgumentParser
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..data_sources.openqa import KernelOpenQA
 from ..data_sources.qem_dashboard import DashboardAutoOpenQA
 from ..support.misc import requires_update
@@ -107,6 +107,7 @@ class SetWorkflow(Command):
     """
 
     command = "set_workflow"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -114,6 +115,7 @@ class SetWorkflow(Command):
         parser.add_argument(
             "workflow", choices=["auto", "manual", "kernel"], help="desired workflow"
         )
+        cls._add_template_arg(parser)
 
     @requires_update
     def __call__(self) -> None:
@@ -185,4 +187,8 @@ class SetWorkflow(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
-        return complete_choices([("auto",), ("manual",), ("kernel",)], line, text)
+        return complete_choices(
+            [("auto",), ("manual",), ("kernel",), *template_completion(state)],
+            line,
+            text,
+        )
