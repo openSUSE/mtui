@@ -43,6 +43,12 @@ class Command(ABC):
     #: action commands that are safe to repeat per template opt into
     #: ``"fanout"``; inherently single-target commands (``load_template``,
     #: ``edit``, ``switch``, ``quit``, …) keep ``"active"``.
+    #:
+    #: ``"single"`` is a stricter variant of ``"active"`` for commands that
+    #: name their own target template and must run **exactly once** regardless
+    #: of how many templates are loaded — e.g. ``unload <rrid>``, which would
+    #: otherwise fan out under MCP (where ``"active"`` defaults to fan-out with
+    #: several loaded) and try to remove the same RRID once per template.
     scope: ClassVar[str] = "active"
 
     #: Auto-populated registry of every concrete ``Command`` subclass that
@@ -268,6 +274,12 @@ class Command(ABC):
                 return [self.templates.get(rrid)]
             except KeyError:
                 raise TemplateNotLoadedError(rrid) from None
+
+        # Inherently single-target commands (``unload <rrid>``) name their own
+        # template and must run exactly once; never auto-fan-out them, not even
+        # under MCP with several loaded.
+        if self.scope == "single":
+            return [self.templates.active]
 
         if getattr(self.args, "all_templates", False) or self.scope == "fanout":
             return self.templates.all() or [self.templates.active]

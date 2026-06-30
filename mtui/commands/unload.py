@@ -1,5 +1,7 @@
 """The `unload` command."""
 
+from typing import ClassVar
+
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
 from ..support.messages import TemplateNotLoadedError
@@ -14,6 +16,12 @@ class Unload(Command):
     """
 
     command = "unload"
+    #: ``unload`` names its own target RRID and removes exactly that template,
+    #: so it must run once regardless of how many templates are loaded. Without
+    #: this it would fan out under MCP (where ``"active"`` defaults to fan-out
+    #: with several loaded) and try to remove the same RRID once per template,
+    #: failing on the second pass with ``TemplateNotLoadedError``.
+    scope: ClassVar[str] = "single"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:

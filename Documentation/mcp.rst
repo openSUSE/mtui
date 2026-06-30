@@ -295,6 +295,11 @@ MCP tool surface. ``mtui/mcp/deny.py`` is the source of truth.
     - Launches local terminal-emulator scripts (``term.<name>.sh``)
       that spawn ``xterm``/``konsole``/etc. on the operator's
       ``$DISPLAY``.
+  * - ``switch``
+    - Moves the session's active-template pointer — REPL-only navigation
+      with no client-addressable equivalent over MCP (tools select a
+      template per call via the ``template`` parameter). ``unload`` is the
+      addressable counterpart and **is** exposed (it names its own RRID).
 
 Interactive-prompt defaults
 ---------------------------
@@ -550,10 +555,12 @@ others and reports an aggregate failure at the end.
 
 .. note::
 
-   ``switch`` and ``unload`` are **not** exposed as tools; moving the
-   active-template pointer is REPL-only navigation. Over MCP you target a
-   specific template per call with the ``template`` parameter instead;
-   ``list_templates`` remains available as a read-only listing.
+   ``switch`` is **not** exposed as a tool; moving the active-template
+   pointer is REPL-only navigation. Over MCP you target a specific template
+   per call with the ``template`` parameter instead. ``unload <rrid>`` **is**
+   exposed — it names its own RRID and drops exactly that template (closing
+   only its host connections), leaving the others loaded. ``list_templates``
+   remains available as a read-only listing.
 
 Background jobs (don't block on a slow host op)
 -----------------------------------------------
