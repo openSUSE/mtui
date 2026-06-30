@@ -5,7 +5,7 @@ from logging import getLogger
 from os.path import join
 from pathlib import Path
 
-from ..support.fileops import chdir, ensure_dir_exists
+from ..support.fileops import ensure_dir_exists
 from ..support.messages import SvnCheckoutFailed, SvnCheckoutInterruptedError
 from ..types import RequestReviewID
 
@@ -82,22 +82,24 @@ def testreport_svn_checkout(config, path: str, rrid: RequestReviewID) -> None:
     )
     uri = join(path, str(rrid))
 
-    with chdir(config.template_dir):
-        try:
-            # Capture stderr so svn's cryptic "E170000: URL ... doesn't
-            # exist" line does not reach the user; it is surfaced at debug
-            # while the caller logs a clear, actionable message instead.
-            result = subprocess.run(
-                ["svn", "co", uri],
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-        except KeyboardInterrupt:
-            raise SvnCheckoutInterruptedError(uri) from None
+    try:
+        # Capture stderr so svn's cryptic "E170000: URL ... doesn't
+        # exist" line does not reach the user; it is surfaced at debug
+        # while the caller logs a clear, actionable message instead.
+        # The svn uri is absolute, so run svn co with cwd=template_dir
+        # rather than mutating the process-global working directory.
+        result = subprocess.run(
+            ["svn", "co", uri],
+            cwd=config.template_dir,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except KeyboardInterrupt:
+        raise SvnCheckoutInterruptedError(uri) from None
 
-        if result.returncode != 0:
-            if result.stderr:
-                logger.debug("svn co %s failed: %s", uri, result.stderr.strip())
-            report_url = f"{config.fancy_reports_url.rstrip('/')}/{rrid}/log"
-            raise SvnCheckoutFailed(str(rrid), report_url) from None
+    if result.returncode != 0:
+        if result.stderr:
+            logger.debug("svn co %s failed: %s", uri, result.stderr.strip())
+        report_url = f"{config.fancy_reports_url.rstrip('/')}/{rrid}/log"
+        raise SvnCheckoutFailed(str(rrid), report_url) from None
