@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -54,3 +55,26 @@ def test_svn_checkout_success_does_not_raise(tmp_path: Path) -> None:
 
     with patch("mtui.test_reports.svn_io.subprocess.run", return_value=completed):
         svn_io.testreport_svn_checkout(cfg, "svn+ssh://svn@example/testreports", rrid)
+
+
+def test_svn_checkout_runs_with_cwd_not_global_chdir(tmp_path: Path) -> None:
+    """``svn co`` runs with ``cwd=template_dir`` and never chdir's the process."""
+    cfg = _cfg(tmp_path)
+    rrid = RequestReviewID("SUSE:Maintenance:1:1")
+    completed = subprocess.CompletedProcess(args=[], returncode=0, stderr="")
+    before = os.getcwd()
+
+    with patch(
+        "mtui.test_reports.svn_io.subprocess.run", return_value=completed
+    ) as run:
+        svn_io.testreport_svn_checkout(cfg, "svn+ssh://svn@example/testreports", rrid)
+
+    # The checkout targets the absolute uri via cwd= instead of os.chdir.
+    assert run.call_args.kwargs.get("cwd") == tmp_path
+    assert run.call_args.args[0] == [
+        "svn",
+        "co",
+        "svn+ssh://svn@example/testreports/SUSE:Maintenance:1:1",
+    ]
+    # The process working directory is untouched.
+    assert os.getcwd() == before
