@@ -126,6 +126,7 @@ def test_build_tools_includes_expected_commands(
         "assign",
         "update",
         "load_template",
+        "unload",
         "list_hosts",
         "openqa_overview",
         "reject",

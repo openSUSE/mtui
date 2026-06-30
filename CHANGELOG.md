@@ -9,6 +9,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `unload` is now exposed as an `mtui-mcp` tool. It takes an RRID and drops
+  exactly that loaded template (closing only its host connections), leaving the
+  others loaded — the addressable counterpart to `load_template` for MCP
+  clients. It is single-target by design and never fans out, even with several
+  templates loaded. (`switch` stays REPL-only; select a template per call with
+  the `template` parameter.)
 - New `regenerate` command — regenerates the loaded update's test-report
   template via the TeReGen API (`POST /reports/{id}/regenerate`), waits for the
   generation job to finish, and reloads the fresh template. Supports `--force`

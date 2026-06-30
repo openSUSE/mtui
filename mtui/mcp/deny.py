@@ -17,12 +17,17 @@ Per-entry rationale:
   already advertises tool descriptions to clients.
 - ``terms``: launches local terminal-emulator scripts (``term.<name>.sh``)
   that spawn ``xterm``/``konsole``/etc. on the operator's ``$DISPLAY``.
-- ``switch``, ``unload``: interactive multi-template navigation that mutates
-  the session's active-template pointer / loaded set. MCP multi-template
-  control is exposed instead through the per-tool ``template`` parameter
-  (Phase 4); ``list_templates`` remains available as a read-only listing.
+- ``switch``: interactive navigation that moves the session's active-template
+  pointer — REPL-only state with no client-addressable equivalent under MCP
+  (tools select a template per call via the ``template`` parameter, and
+  ``list_templates`` remains a read-only listing).
+
+``unload`` is **not** denied: it takes an explicit RRID, mutates only the
+loaded set (closing that template's host connections), needs no TTY, and does
+not call ``sys.exit``, so it is exposed as an MCP tool. It is the addressable
+counterpart to ``load_template`` for dropping one template from a session.
 """
 
 REPL_ONLY: frozenset[str] = frozenset(
-    {"quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch", "unload"}
+    {"quit", "exit", "EOF", "edit", "shell", "help", "terms", "switch"}
 )

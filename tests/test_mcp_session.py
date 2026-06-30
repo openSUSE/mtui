@@ -385,3 +385,39 @@ def test_dispatch_template_flag_scopes_to_one(tmp_path: Path) -> None:
     finally:
         Command.registry.pop(cls.command, None)
     assert seen == ["SUSE:Maintenance:2:1"]
+
+
+def test_unload_removes_only_the_named_template(tmp_path: Path) -> None:
+    """``unload <rrid>`` runs once and removes exactly that template.
+
+    Regression: ``unload`` has ``scope="single"``, so even with several
+    templates loaded under MCP (where ``scope="active"`` defaults to fan-out)
+    it must not fan out and try to remove the same RRID once per template,
+    which failed the second pass with ``TemplateNotLoadedError``.
+    """
+    from mtui.commands.unload import Unload
+
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+
+    out = asyncio.run(sess.run_command(Unload, ["SUSE:Maintenance:1:1"]))
+
+    assert out == ""
+    assert sess.templates.rrids() == ["SUSE:Maintenance:2:1"]
+
+
+def test_unload_unknown_rrid_raises(tmp_path: Path) -> None:
+    """``unload`` on an unloaded RRID surfaces a clean command error."""
+    from mtui.commands.unload import Unload
+    from mtui.mcp.session import McpCommandError
+
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+
+    with pytest.raises(McpCommandError):
+        asyncio.run(sess.run_command(Unload, ["SUSE:Maintenance:9:9"]))
+    # Both templates remain loaded after a failed unload.
+    assert sess.templates.rrids() == [
+        "SUSE:Maintenance:1:1",
+        "SUSE:Maintenance:2:1",
+    ]
