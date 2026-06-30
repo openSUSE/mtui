@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..test_reports.null_report import NullTestReport
+from ._slim import cap_output
 from .registry import resolve_session
 from .session import McpCommandError
 
@@ -247,6 +248,17 @@ def _count_lines(text: str) -> int:
     return len(text.splitlines())
 
 
+def _output_cap(session: McpSession) -> int:
+    """Return the session's ``[mcp] max_output_bytes`` budget, 0 if unset.
+
+    Read defensively via :func:`getattr` so a session object without a fully
+    populated ``config`` (direct-call tests, fakes) simply disables the cap
+    instead of raising. ``cap_output`` treats a non-int / non-positive value as
+    "no cap", so a missing setting is harmless.
+    """
+    return getattr(getattr(session, "config", None), "mcp_max_output_bytes", 0)
+
+
 async def _heartbeat(ctx: Context | None, message: str) -> None:
     """Best-effort single progress frame for the testreport tools.
 
@@ -303,12 +315,13 @@ async def testreport_read(
         path = _resolve_testreport_path(session, template)
         content = path.read_text(encoding="utf-8", errors="replace")
 
+    cap = _output_cap(session)
     windowed = offset != 1 or limit is not None
     if not windowed:
         return {
             "path": str(path),
             "line_count": _count_lines(content),
-            "content": content,
+            "content": cap_output(content, cap),
         }
 
     # 1-indexed line slicing matching testreport_patch's numbering.
@@ -320,7 +333,7 @@ async def testreport_read(
         "line_count": len(lines),
         "offset": offset,
         "returned_lines": len(sliced),
-        "content": "".join(sliced),
+        "content": cap_output("".join(sliced), cap),
     }
 
 
@@ -385,7 +398,7 @@ async def testreport_read_file(
     return {
         "path": str(target),
         "line_count": _count_lines(content),
-        "content": content,
+        "content": cap_output(content, _output_cap(session)),
     }
 
 

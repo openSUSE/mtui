@@ -774,7 +774,7 @@ def test_slow_command_background_true_starts_job(
         return await tool.fn(command=["true"], hosts=[], background=True)
 
     out = asyncio.run(_call())
-    assert "started background job" in out
+    assert "started job" in out
     assert "run-1" in out
     assert "job_status" in out
     assert "job_result" in out

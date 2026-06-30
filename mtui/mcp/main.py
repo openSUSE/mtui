@@ -34,7 +34,9 @@ from ..cli.colors import set_mode as set_color_mode
 from ..support.config import Config
 from ..support.http import disable_insecure_warnings, resolve_verify
 from ..support.systemcheck import detect_system
+from ._slim import slim_registered_tools
 from .args import get_parser
+from .profiles import apply_profile
 from .registry import SessionRegistry
 from .session import McpSession
 from .testreport_tools import register_testreport_tools
@@ -187,6 +189,18 @@ def main() -> int:
     build_tools(mcp, provider)
     register_testreport_tools(mcp, provider)
     register_job_tools(mcp, provider)
+
+    # Token-budget passes (see mtui.mcp._slim / mtui.mcp.profiles): slim every
+    # tool's JSON schema of redundant pydantic boilerplate, then narrow the tool
+    # surface to the configured profile. ``full`` with no allow/deny override is
+    # a no-op, so the default deployment is unchanged.
+    slim_registered_tools(mcp)
+    apply_profile(
+        mcp,
+        cfg.mcp_tool_profile,
+        allow=cfg.mcp_tools_allow,
+        deny=cfg.mcp_tools_deny,
+    )
 
     try:
         if args.transport == "http":

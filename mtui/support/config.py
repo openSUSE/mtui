@@ -24,6 +24,19 @@ def _identity(x: Any) -> Any:
     return x
 
 
+def _parse_csv_set(raw: str) -> tuple[str, ...]:
+    """Split a comma/whitespace-separated INI value into an ordered tuple.
+
+    Used for the ``[mcp] tools_allow`` / ``tools_deny`` lists. Empty entries are
+    dropped and surrounding whitespace stripped, so ``"run, update ,"`` →
+    ``("run", "update")``. An empty/blank value yields an empty tuple.
+    """
+    if not raw:
+        return ()
+    parts = (p.strip() for chunk in raw.split(",") for p in chunk.split())
+    return tuple(p for p in parts if p)
+
+
 _TRUE_STRINGS = frozenset({"1", "yes", "true", "on"})
 _FALSE_STRINGS = frozenset({"0", "no", "false", "off"})
 
@@ -110,6 +123,12 @@ class Config:
     # -- mtui-mcp server (http transport) per-client session registry --
     mcp_session_cap: int
     mcp_session_idle_timeout: int
+
+    # -- mtui-mcp tool surface / output budget (both transports) --
+    mcp_tool_profile: str
+    mcp_tools_allow: tuple[str, ...]
+    mcp_tools_deny: tuple[str, ...]
+    mcp_max_output_bytes: int
 
     # -- Attributes set externally in main.py --
     distro: str
@@ -438,6 +457,43 @@ class Config:
                 "mcp_session_idle_timeout",
                 ("mcp", "session_idle_timeout"),
                 1800,
+                int,
+                getint,
+            ),
+            # Tool-surface budget. ``tool_profile`` selects which synthesised
+            # tools the ``mtui-mcp`` server exposes: ``full`` (default) keeps
+            # every command tool, ``core`` exposes only the curated everyday
+            # subset (see mtui.mcp.profiles) to shrink the per-request tool list
+            # the model must carry. ``tools_allow`` / ``tools_deny`` are
+            # comma-separated overrides layered on top of the profile (allow is
+            # added back, deny is removed last). ``max_output_bytes`` caps a
+            # single tool result's size before it is truncated with a notice
+            # (0 disables the cap).
+            ConfigOption(
+                "mcp_tool_profile",
+                ("mcp", "tool_profile"),
+                "full",
+                str,
+                get,
+            ),
+            ConfigOption(
+                "mcp_tools_allow",
+                ("mcp", "tools_allow"),
+                (),
+                _parse_csv_set,
+                get,
+            ),
+            ConfigOption(
+                "mcp_tools_deny",
+                ("mcp", "tools_deny"),
+                (),
+                _parse_csv_set,
+                get,
+            ),
+            ConfigOption(
+                "mcp_max_output_bytes",
+                ("mcp", "max_output_bytes"),
+                100_000,
                 int,
                 getint,
             ),

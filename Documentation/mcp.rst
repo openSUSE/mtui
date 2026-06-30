@@ -477,6 +477,43 @@ These knobs live in the ``[mcp]`` section of the mtui config file:
     [mcp]
     session_cap = 32
     session_idle_timeout = 1800
+    tool_profile = full
+    tools_allow =
+    tools_deny =
+    max_output_bytes = 100000
+
+
+Token budget: tool surface and output size
+==========================================
+
+Every tool the server registers is described to the model on **each**
+request — names, descriptions and JSON input schemas. With the full
+command set that fixed cost is several thousand tokens before any work
+happens, and a single large tool result (a ``run`` across many hosts, a
+multi-thousand-line install log) can dwarf the rest of the context. Three
+measures keep that budget in check; all are applied automatically and are
+configurable in the ``[mcp]`` section.
+
+* **Schema slimming (always on).** Each synthesised tool schema is
+  rewritten to drop redundant pydantic ``title`` keys and to flatten the
+  ``anyOf: [{type: X}, {type: null}]`` unions pydantic emits for optional
+  fields down to a flat ``{type: X}`` (the field's ``default`` already
+  marks it optional). The set of tools and what the model can call is
+  unchanged; only dead schema weight is removed. This alone trims the
+  tool-list payload by roughly a quarter.
+* **Tool profiles.** ``[mcp] tool_profile`` selects which tools are
+  exposed. ``full`` (the default) keeps every command tool, so existing
+  deployments are unchanged. ``core`` exposes only the curated everyday
+  subset (load/inspect/run/install, report editing, approve/reject, the
+  ``testreport_*`` and ``job_*`` tools), removing the long tail of
+  host-bookkeeping and server-tuning verbs and roughly halving the
+  tool-list payload. Fine-tune either profile with the comma-separated
+  ``tools_allow`` (added back on top of the profile) and ``tools_deny``
+  (removed last, always wins) lists.
+* **Output cap.** ``[mcp] max_output_bytes`` (default ``100000``) caps a
+  single tool result; output beyond the cap is truncated with a one-line
+  notice pointing at the ``offset``/``limit`` paging on the testreport
+  read tools. Set it to ``0`` to disable the cap.
 
 
 Long-running tool calls
