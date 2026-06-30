@@ -30,14 +30,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   API (`GET /api/v1/updates`, fed from SMELT) and sorted by priority. Each row
   shows priority, status, kind (SLFO / Maintenance / ...), deadline and the
   RRID; the queue merges gitea-sourced updates (SLFO/SL-Micro) with the classic
-  Maintenance updates in QAM testing. Optional `--review-group`/`--status`/
+  Maintenance updates in QAM testing. By default it shows the actionable pickup
+  queue — **unassigned** updates that are **in testing** — so bare `updates`
+  is usable without wading through released entries; pass `--status all` for the
+  full queue (every status and assignee). Optional `--review-group`/`--status`/
   `--limit` filters. This is the TeReGen-backed replacement for the removed
   `smelt_updates`/`smelt_requests` commands.
 - `updates` gained assignment exposure (restoring functionality dropped with
   SMELT): `--assignee <user>` and `--mine` (the current session user) filter the
-  queue to updates assigned to that user, `--unassigned` to updates with no
-  assignee, and `--show-assignment` annotates every row with its assignee
-  without filtering. Requires the matching TeReGen `/updates` assignment support.
+  queue to updates assigned to that user, while `--all-assignees` shows every
+  update regardless of assignee (overriding the unassigned default) and
+  annotates each row with its assignee. Requires the matching TeReGen
+  `/updates` assignment support.
 - New `checkers` command — lists the build-check (checker) result runs for the
   loaded update, fetched live from the TeReGen report API
   (`GET /reports/{id}/checkers`). This is the TeReGen-backed replacement for the

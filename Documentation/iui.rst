@@ -465,12 +465,20 @@ updates
 ::
 
     updates [--review-group GROUP] [--status STATUS] [--limit N]
+            [--assignee USER | --mine | --all-assignees]
 
-Enumerates the unreleased update queue, fetched live from the TeReGen API
+Enumerates the update queue, fetched live from the TeReGen API
 (``GET /updates``, fed from SMELT behind the scenes), one line per update with
-its priority, status and RRID. This is the TeReGen-backed replacement for the
-former ``smelt_updates`` / ``smelt_requests`` commands. Not template-scoped; does
-not fan out. Requires the TeReGen base URL in ``[teregen] api`` (see :doc:`cfg`).
+its priority, status, kind, deadline and RRID. This is the TeReGen-backed
+replacement for the former ``smelt_updates`` / ``smelt_requests`` commands. Not
+template-scoped; does not fan out. Requires the TeReGen base URL in
+``[teregen] api`` (see :doc:`cfg`).
+
+By default the command shows the actionable pickup queue: **unassigned**
+updates that are **in testing**. Choosing another assignment view
+(``--assignee``/``--mine``/``--all-assignees``) drops the unassigned default,
+and ``--status all`` widens the queue to every status and assignee (including
+released updates).
 
 **Options:**
 
@@ -480,11 +488,27 @@ not fan out. Requires the TeReGen base URL in ``[teregen] api`` (see :doc:`cfg`)
 
 .. option:: --status STATUS
 
-  Only updates with this status (e.g. ``testing``).
+  Only updates with this status. Defaults to ``testing``; pass ``all`` to show
+  every status (including released updates).
 
 .. option:: --limit N
 
   Cap the number of rows (``0`` = all).
+
+.. option:: --assignee USER
+
+  Filter to updates assigned to ``USER`` (any qam group). Drops the unassigned
+  default.
+
+.. option:: --mine
+
+  Filter to updates assigned to the current session user. Drops the unassigned
+  default.
+
+.. option:: --all-assignees
+
+  Show every update regardless of assignee (assigned and unassigned), with the
+  assignee on each row. Overrides the unassigned default.
 
 
 regenerate

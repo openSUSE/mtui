@@ -21,12 +21,11 @@ def _sysmock() -> MagicMock:
 def _args(**kw) -> Namespace:
     base = {
         "review_group": None,
-        "status": None,
+        "status": "testing",
         "limit": 0,
         "assignee": None,
         "mine": False,
-        "unassigned": False,
-        "show_assignment": False,
+        "all_assignees": False,
     }
     base.update(kw)
     return Namespace(**base)
@@ -62,10 +61,10 @@ def test_updates_lists_queue(mock_config):
 
     teregen.updates.assert_called_once_with(
         review_group="qam-sle",
-        status=None,
+        status="testing",
         assignee=None,
-        unassigned=False,
-        with_assignment=False,
+        unassigned=True,
+        with_assignment=True,
     )
     out = sysmock.stdout.getvalue()
     assert "SUSE:SLFO:1.2:5444" in out
@@ -87,7 +86,7 @@ def test_updates_limit(mock_config):
     assert "Update queue (1)" in out
 
 
-def test_updates_show_assignment_renders_assignee(mock_config):
+def test_updates_all_assignees_renders_assignee(mock_config):
     sysmock = _sysmock()
     with patch("mtui.commands.updates.TeReGen") as teregen_cls:
         teregen = teregen_cls.return_value
@@ -95,11 +94,11 @@ def test_updates_show_assignment_renders_assignee(mock_config):
             {"id": "SUSE:SLFO:1.2:1", "assignee": "alice"},
             {"id": "SUSE:SLFO:1.2:2", "assignee": None},
         ]
-        Updates(_args(show_assignment=True), mock_config, sysmock, MagicMock())()
+        Updates(_args(all_assignees=True), mock_config, sysmock, MagicMock())()
 
     teregen.updates.assert_called_once_with(
         review_group=None,
-        status=None,
+        status="testing",
         assignee=None,
         unassigned=False,
         with_assignment=True,
@@ -118,25 +117,73 @@ def test_updates_mine_maps_to_session_user(mock_config):
 
     teregen.updates.assert_called_once_with(
         review_group=None,
-        status=None,
+        status="testing",
         assignee="testuser",
         unassigned=False,
         with_assignment=True,
     )
 
 
-def test_updates_unassigned_passes_through(mock_config):
+def test_updates_all_assignees_drops_unassigned_filter(mock_config):
     sysmock = _sysmock()
     with patch("mtui.commands.updates.TeReGen") as teregen_cls:
         teregen = teregen_cls.return_value
         teregen.updates.return_value = []
-        Updates(_args(unassigned=True), mock_config, sysmock, MagicMock())()
+        Updates(_args(all_assignees=True), mock_config, sysmock, MagicMock())()
+
+    teregen.updates.assert_called_once_with(
+        review_group=None,
+        status="testing",
+        assignee=None,
+        unassigned=False,
+        with_assignment=True,
+    )
+
+
+def test_updates_default_is_unassigned_testing(mock_config):
+    sysmock = _sysmock()
+    with patch("mtui.commands.updates.TeReGen") as teregen_cls:
+        teregen = teregen_cls.return_value
+        teregen.updates.return_value = []
+        Updates(_args(), mock_config, sysmock, MagicMock())()
+
+    teregen.updates.assert_called_once_with(
+        review_group=None,
+        status="testing",
+        assignee=None,
+        unassigned=True,
+        with_assignment=True,
+    )
+
+
+def test_updates_status_all_widens_to_full_queue(mock_config):
+    sysmock = _sysmock()
+    with patch("mtui.commands.updates.TeReGen") as teregen_cls:
+        teregen = teregen_cls.return_value
+        teregen.updates.return_value = []
+        Updates(_args(status="all"), mock_config, sysmock, MagicMock())()
 
     teregen.updates.assert_called_once_with(
         review_group=None,
         status=None,
         assignee=None,
-        unassigned=True,
+        unassigned=False,
+        with_assignment=False,
+    )
+
+
+def test_updates_assignee_drops_unassigned_default(mock_config):
+    sysmock = _sysmock()
+    with patch("mtui.commands.updates.TeReGen") as teregen_cls:
+        teregen = teregen_cls.return_value
+        teregen.updates.return_value = []
+        Updates(_args(assignee="bob"), mock_config, sysmock, MagicMock())()
+
+    teregen.updates.assert_called_once_with(
+        review_group=None,
+        status="testing",
+        assignee="bob",
+        unassigned=False,
         with_assignment=True,
     )
 
@@ -146,11 +193,11 @@ def test_updates_mine_and_assignee_are_mutually_exclusive():
         _parser().parse_args(["--mine", "--assignee", "bob"])
 
 
-def test_updates_unassigned_with_assignee_errors():
+def test_updates_all_assignees_with_assignee_errors():
     with pytest.raises(ArgsParseFailureError):
-        _parser().parse_args(["--unassigned", "--assignee", "bob"])
+        _parser().parse_args(["--all-assignees", "--assignee", "bob"])
 
 
-def test_updates_mine_and_unassigned_are_mutually_exclusive():
+def test_updates_mine_and_all_assignees_are_mutually_exclusive():
     with pytest.raises(ArgsParseFailureError):
-        _parser().parse_args(["--mine", "--unassigned"])
+        _parser().parse_args(["--mine", "--all-assignees"])

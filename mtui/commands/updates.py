@@ -5,6 +5,12 @@ Lists the update queue, fetched live from the TeReGen API
 priority. Each row shows priority, status, kind (SLFO / Maintenance / ...),
 deadline and the RRID. The queue merges gitea-sourced updates (SLFO/SL-Micro)
 with the classic Maintenance updates in QAM testing.
+
+By default the command shows the actionable pickup queue: **unassigned**
+updates that are **in testing** (``--status testing``). Pick another
+assignment view (``--assignee``/``--mine``/``--all-assignees``) to drop the
+unassigned default, or pass ``--status all`` to see the whole queue (every
+status, every assignee), including released updates.
 """
 
 from __future__ import annotations
@@ -20,9 +26,13 @@ logger = getLogger("mtui.commands.updates")
 
 
 class Updates(Command):
-    """List the unreleased update queue (via the TeReGen API)."""
+    """List the unassigned, in-testing update queue (via the TeReGen API)."""
 
     command = "updates"
+
+    #: ``--status`` value that widens the queue to every status (the escape
+    #: hatch translated to ``status=None`` server-side).
+    STATUS_ALL = "all"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
@@ -34,8 +44,8 @@ class Updates(Command):
         )
         parser.add_argument(
             "--status",
-            default=None,
-            help="filter by status, e.g. testing",
+            default="testing",
+            help="filter by status (default: testing); use 'all' for every status",
         )
         parser.add_argument(
             "--limit",
@@ -43,8 +53,9 @@ class Updates(Command):
             default=0,
             help="cap the number of rows (0 = all)",
         )
-        # --assignee/--mine/--unassigned select at most one assignment view;
-        # argparse rejects any combination of the three for us.
+        # --assignee/--mine/--all-assignees select at most one assignment view;
+        # argparse rejects any combination of the three for us. The default
+        # (no flag) is the unassigned queue.
         assignment = parser.add_mutually_exclusive_group()
         assignment.add_argument(
             "--assignee",
@@ -57,14 +68,10 @@ class Updates(Command):
             help="filter to updates assigned to the current session user",
         )
         assignment.add_argument(
-            "--unassigned",
+            "--all-assignees",
             action="store_true",
-            help="filter to updates with no assignee",
-        )
-        parser.add_argument(
-            "--show-assignment",
-            action="store_true",
-            help="show the assignee on each row without filtering",
+            help="show every update regardless of assignee (assigned and "
+            "unassigned), overriding the unassigned default",
         )
 
     def __call__(self) -> None:
@@ -73,16 +80,26 @@ class Updates(Command):
         if self.args.mine:
             assignee = self.config.session_user
 
-        # Any assignment-related flag means rows should carry assignment info.
-        want_assignment = bool(
-            assignee or self.args.unassigned or self.args.show_assignment
-        )
+        # '--status all' is the escape hatch: widen to every status by sending
+        # no status filter at all (the server returns released updates too).
+        status_all = self.args.status == self.STATUS_ALL
+        status = None if status_all else self.args.status
+
+        # Default view is the unassigned pickup queue: with no assignment view
+        # chosen, filter to unassigned. --assignee/--mine pick a specific user;
+        # --all-assignees and --status all opt out of the unassigned filter (the
+        # latter because 'unassigned' implies status=testing server-side).
+        chose_other_view = bool(assignee or self.args.all_assignees)
+        unassigned = not chose_other_view and not status_all
+
+        # Show the assignee column whenever assignment is part of the view.
+        want_assignment = bool(assignee or unassigned or self.args.all_assignees)
 
         updates = TeReGen(self.config).updates(
             review_group=self.args.review_group,
-            status=self.args.status,
+            status=status,
             assignee=assignee,
-            unassigned=self.args.unassigned,
+            unassigned=unassigned,
             with_assignment=want_assignment,
         )
         if not updates:
@@ -119,8 +136,7 @@ class Updates(Command):
                 ("--limit",),
                 ("--assignee",),
                 ("--mine",),
-                ("--unassigned",),
-                ("--show-assignment",),
+                ("--all-assignees",),
             ],
             line,
             text,
