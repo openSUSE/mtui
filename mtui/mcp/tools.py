@@ -205,18 +205,13 @@ def _make_wrapper(
             if len(job_ids) == 1:
                 job_id = job_ids[0]
                 return (
-                    f"started background job {job_id!r} for `{cls.command}`; it "
-                    f"runs on the hosts while you work elsewhere. Poll "
-                    f"job_status(job_id={job_id!r}) and fetch output with "
-                    f"job_result(job_id={job_id!r})."
+                    f"started job {job_id!r} (`{cls.command}`); poll "
+                    f"job_status({job_id!r}), then job_result({job_id!r})."
                 )
             joined = ", ".join(repr(j) for j in job_ids)
             return (
-                f"started {len(job_ids)} background jobs for `{cls.command}`, "
-                f"one per loaded template: {joined}. They run on the hosts "
-                f"while you work elsewhere. Poll job_status(job_id=…) per job "
-                f"(or job_list) and fetch output with job_result(job_id=…); "
-                f"cancelling one job leaves the others running."
+                f"started {len(job_ids)} jobs (`{cls.command}`, one per "
+                f"template): {joined}. Poll job_status/job_result per job."
             )
         return await session.run_command(cls, argv, ctx=ctx)
 

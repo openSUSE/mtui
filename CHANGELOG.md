@@ -9,6 +9,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- `mtui-mcp` is now much more token-efficient. Tool schemas are automatically
+  slimmed of redundant pydantic boilerplate (the per-field `title` keys and the
+  `anyOf: [T, null]` optional-field unions), shrinking the tool-list payload
+  sent on every request by roughly a quarter with no change to what the model
+  can call. A new `[mcp] tool_profile` setting selects the exposed tool surface:
+  `full` (default, every tool — unchanged behaviour) or `core` (a curated
+  everyday subset that roughly halves the payload), fine-tunable with the
+  `[mcp] tools_allow` / `tools_deny` lists. A new `[mcp] max_output_bytes`
+  setting (default `100000`, `0` to disable) caps a single tool result, with
+  oversized output truncated and a notice pointing at the testreport read
+  paging.
 - `unload` is now exposed as an `mtui-mcp` tool. It takes an RRID and drops
   exactly that loaded template (closing only its host connections), leaving the
   others loaded — the addressable counterpart to `load_template` for MCP

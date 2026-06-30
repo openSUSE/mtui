@@ -56,6 +56,7 @@ from ..commands import Command
 from ..support.concurrency import ContextExecutor
 from ..template_registry import TemplateRegistry
 from ..test_reports.null_report import NullTestReport
+from ._slim import cap_output
 
 if TYPE_CHECKING:
     from ..support.config import Config
@@ -827,7 +828,9 @@ class McpSession:
                     stderr.rstrip(),
                 )
 
-            return fake_sys.stdout.getvalue()
+            return cap_output(
+                fake_sys.stdout.getvalue(), self.config.mcp_max_output_bytes
+            )
         finally:
             cap_logger.removeHandler(cap_handler)
             _capture_token.reset(token_reset)
