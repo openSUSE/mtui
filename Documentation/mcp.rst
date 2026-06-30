@@ -15,8 +15,9 @@ headless mtui session to LLM clients. Every non-interactive mtui
 command is auto-exposed as an MCP tool, and dedicated testreport tools
 (``testreport_read``, ``testreport_patch``, ``testreport_write``)
 replace the REPL's ``$EDITOR``-based ``edit`` flow, with
-``testreport_logs`` and ``testreport_read_file`` exposing the rest of
-the checkout (build-check and install logs, ``source.diff``, …).
+``testreport_logs`` and ``testreport_read`` (passing ``relpath``)
+exposing the rest of the checkout (build-check and install logs,
+``source.diff``, …).
 
 Session state is isolated per client. Under ``stdio`` one process
 serves one client, so there is exactly one ``Config`` / loaded test
@@ -340,10 +341,18 @@ silently editing the last-loaded report. With zero or one template loaded
 the parameter may be omitted and behaves as before. An unknown RRID is
 refused with ``template not loaded: <rrid>``.
 
-``testreport_read(offset: int = None, limit: int = None) -> dict``
+``testreport_read(relpath: str = None, offset: int = None, limit: int = None) -> dict``
     Returns ``{"path": str, "line_count": int, "content": str}``.
     Reads the file as UTF-8 with ``errors="replace"``. Marked
     ``readOnlyHint=True`` and ``idempotentHint=True``.
+
+    Without ``relpath`` the report's ``log`` file is read. Pass
+    ``relpath`` to read any other file in the checkout by path relative
+    to the checkout directory, e.g. ``build_checks/<pkg>.<arch>.log``,
+    ``install_logs/<host>.log``, ``source.diff`` or ``patchinfo.xml``.
+    The path is resolved under the checkout and may **not** escape it
+    (``..`` traversal and absolute paths are refused); a missing file is
+    refused with ``no such file in testreport checkout: <relpath>``.
 
     ``offset`` (1-based first line) and ``limit`` (max lines) return a
     line window instead of the whole file, using the same 1-indexed
@@ -374,15 +383,8 @@ refused with ``template not loaded: <rrid>``.
     build-check logs (``build_checks/``) and the per-refhost install
     logs (``install_logs/``). Returns ``{"path": str, "build_checks":
     [{"name", "size"}], "install_logs": [{"name", "size"}]}``. Marked
-    ``readOnlyHint=True``.
-
-``testreport_read_file(relpath: str) -> dict``
-    Reads any file in the checkout by path relative to the checkout
-    directory, e.g. ``build_checks/<pkg>.<arch>.log``,
-    ``install_logs/<host>.log``, ``source.diff`` or ``patchinfo.xml``.
-    The path is resolved under the checkout and may **not** escape it
-    (``..`` traversal and absolute paths are refused). Returns
-    ``{"path", "line_count", "content"}``. Marked ``readOnlyHint=True``.
+    ``readOnlyHint=True``. Fetch one of the listed files with
+    ``testreport_read`` (passing ``relpath``).
 
 .. warning::
 
