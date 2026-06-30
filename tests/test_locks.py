@@ -141,25 +141,24 @@ class TestTargetLock:
         assert lock.is_locked() is True
 
     def test_lock_creates_lockfile(self, lock):
-        """Test lock() creates a lockfile on the remote host."""
-        # First call to is_locked (in lock()) should return False
-        lock.connection.sftp_open.side_effect = [
-            OSError(errno.ENOENT, "not found"),  # is_locked -> load
-            MagicMock(),  # the actual lockfile write
-        ]
+        """Test lock() creates the lockfile via an atomic exclusive create."""
+        # On a free host the exclusive ``"x"`` create succeeds outright; there
+        # is no preceding stat, so a single sftp_open call (mode "x") is made.
+        lock.connection.sftp_open.return_value = MagicMock()
 
         lock.lock("test comment")
 
-        # Verify sftp_open was called with write mode
         calls = lock.connection.sftp_open.call_args_list
-        assert len(calls) == 2
-        assert calls[1][0][1] == "w+"
+        assert len(calls) == 1
+        assert calls[0][0][1] == "x"
 
     def test_lock_raises_when_locked_by_other(self, lock):
         """Test lock() raises TargetLockedError when locked by another user."""
         mock_file = MagicMock()
         mock_file.readline.return_value = "1700000000:otheruser:99999"
-        lock.connection.sftp_open.return_value = mock_file
+        # Exclusive create loses the race (file exists); subsequent reads see
+        # the foreign lock and lock() must refuse.
+        lock.connection.sftp_open.side_effect = _busy_sftp_open(mock_file)
 
         with pytest.raises(TargetLockedError):
             lock.lock()
@@ -168,9 +167,42 @@ class TestTargetLock:
         """Test lock() allows re-locking when lock is owned by current user."""
         mock_file = MagicMock()
         mock_file.readline.return_value = f"1700000000:testuser:{os.getpid()}"
-        lock.connection.sftp_open.return_value = mock_file
+        # Exclusive create loses (file exists) but it is our own lock, so the
+        # reconciliation overwrites it with the new comment instead of raising.
+        lock.connection.sftp_open.side_effect = _busy_sftp_open(mock_file)
 
         lock.lock("new comment")  # should not raise
+
+    def test_lock_uses_atomic_exclusive_create_on_free_host(self, lock):
+        """On a free host the very first open is the atomic exclusive create.
+
+        No preceding stat/read happens, so the read-then-write TOCTOU window is
+        gone: a single ``sftp_open(.., "x")`` either wins the create or the
+        process loses the race and reconciles.
+        """
+        lock.connection.sftp_open.return_value = MagicMock()
+
+        lock.lock("mtui pool RRID [owner]")
+
+        first_call = lock.connection.sftp_open.call_args_list[0]
+        assert first_call[0][1] == "x"
+
+    def test_try_claim_loses_atomic_race_to_concurrent_winner(self, lock):
+        """A second concurrent exclusive claim sees the file exist and backs off.
+
+        Models two processes racing: the winner created the lockfile, so this
+        caller's ``"x"`` create raises ``FileExistsError`` and the foreign lock
+        is fresh (not reapable), so ``try_claim`` returns ``False`` instead of
+        clobbering the winner.
+        """
+        lock.config.lock_wait = 0
+        lock.config.lock_reap_stale = False
+        fresh = int(time.time()) - 60
+        lock.connection.sftp_open.side_effect = _busy_sftp_open(
+            _file(f"{fresh}:otheruser:99999")
+        )
+
+        assert lock.try_claim("mtui pool RRID [me]") is False
 
     def test_unlock_when_not_locked(self, lock):
         """Test unlock() does nothing when not locked."""
@@ -384,7 +416,9 @@ class TestTargetLockWait:
     def test_wait_disabled_fails_fast(self, lock):
         """wait <= 0 raises immediately on a foreign lock (legacy behaviour)."""
         fresh = int(time.time()) - 60
-        lock.connection.sftp_open.return_value = _locked_by_fresh(lock, fresh)
+        lock.connection.sftp_open.side_effect = _busy_sftp_open(
+            _locked_by_fresh(lock, fresh)
+        )
         with pytest.raises(TargetLockedError):
             lock.lock()
 
@@ -395,10 +429,11 @@ class TestTargetLockWait:
         monkeypatch.setattr(time, "sleep", lambda _s: None)
 
         fresh = int(time.time()) - 60
-        # 1) lock() is_locked -> foreign; 2) _wait reap age -> foreign(fresh,
-        # not stale); 3) after sleep, is_locked -> ENOENT (freed);
-        # 4) lock() write.
+        # 1) exclusive "x" create loses the race (file exists); 2) lock()
+        # is_locked -> foreign; 3) _wait reap age -> foreign(fresh, not stale);
+        # 4) after sleep, is_locked -> ENOENT (freed); 5) lock() "w+" write.
         lock.connection.sftp_open.side_effect = [
+            FileExistsError("lockfile exists"),
             _file(f"{fresh}:otheruser:99999"),
             _file(f"{fresh}:otheruser:99999"),
             OSError(errno.ENOENT, "gone"),
@@ -415,7 +450,9 @@ class TestTargetLockWait:
         lock.config.lock_wait = 1
         lock.config.lock_wait_poll = 1
         fresh = int(time.time()) - 60
-        lock.connection.sftp_open.return_value = _file(f"{fresh}:otheruser:99999")
+        lock.connection.sftp_open.side_effect = _busy_sftp_open(
+            _file(f"{fresh}:otheruser:99999")
+        )
         with pytest.raises(TargetLockedError):
             lock.lock()
 
@@ -424,6 +461,23 @@ def _file(contents: str) -> MagicMock:
     f = MagicMock()
     f.readline.return_value = contents
     return f
+
+
+def _busy_sftp_open(read_file: MagicMock):
+    """side_effect making the exclusive ``"x"`` create lose the race.
+
+    Models a host that is already locked: the atomic ``sftp_open(.., "x")`` in
+    :meth:`TargetLock.lock` raises ``FileExistsError`` (someone else holds the
+    file), and every other open (the reconciliation reads, then the ``"w+"``
+    overwrite) returns ``read_file``.
+    """
+
+    def _open(_filename, mode="r", *_a, **_k):
+        if mode == "x":
+            raise FileExistsError("lockfile exists")
+        return read_file
+
+    return _open
 
 
 def _locked_by_fresh(lock, ts: int) -> MagicMock:

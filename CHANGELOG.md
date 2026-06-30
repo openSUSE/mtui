@@ -166,6 +166,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   later flag swallowed into the message when re-encoding a tool call to argv.
   The REMAINDER optional is now always emitted after every other flag, so the
   trailing flag is parsed correctly regardless of argument declaration order.
+- The remote refhost pool lock is now claimed with an atomic exclusive create
+  (`O_EXCL`) instead of a separate "read the lock state, then write it" pair.
+  This closes a TOCTOU window where two separate mtui processes/users running
+  pool selection at the same time could both believe a host was free and clobber
+  each other's claim; exactly one now wins the create and the other backs off to
+  the next candidate.
 - Transactional (read-only-root, SL Micro) hosts now install and downgrade every
   package in a SINGLE `transactional-update` snapshot. The previous per-package
   loop ran one `transactional-update pkg in` per package, each opening its own
