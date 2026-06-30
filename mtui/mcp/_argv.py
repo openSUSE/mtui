@@ -15,7 +15,15 @@ inverse of :func:`mtui.mcp._schema.action_to_parameter`:
   ``[[v1, v2, ...]]`` instead of swallowing a repeated flag as a value.
 * Positional ``nargs=REMAINDER``/``*``/``+`` → append elements verbatim
   at the end (after every flag-shaped argument), preserving order.
-* Optional scalar → emit ``[long_flag, str(value)]``.
+* Optional ``nargs=REMAINDER`` (e.g. ``reject --message``) → emit the
+  flag once followed by every token, but **into the positional tail** so
+  it lands after every other flag. A REMAINDER optional consumes all
+  remaining argv tokens, so emitting a later ``--flag`` behind it would
+  be swallowed as a value; deferring it to the tail keeps it safe
+  regardless of ``parser._actions`` declaration order.
+* Optional scalar / other multi-value (``+``/``*``/N) → emit
+  ``[long_flag, v1, v2, ...]`` (or ``[long_flag, str(value)]`` for a
+  scalar) among the flags.
 * Positional scalar → append ``str(value)`` after the flags.
 
 The function returns a list of strings; callers (notably
@@ -76,9 +84,11 @@ def kwargs_to_argv(
 
     Arguments are emitted in the same order ``parser._actions`` defines
     them so the output is deterministic and easy to read in logs. All
-    optional flags come out first, then positional values — argparse
-    accepts positionals after flags but not interleaved with them when
-    ``nargs=REMAINDER`` is involved.
+    plain optional flags come out first, then the positional tail —
+    argparse accepts positionals after flags but not interleaved with
+    them when ``nargs=REMAINDER`` is involved. A REMAINDER-consuming
+    *optional* (e.g. ``reject --message``) is also deferred to the tail
+    so it is emitted after every other flag and cannot swallow one.
 
     Args:
         parser: The command's :class:`argparse.ArgumentParser`. Used to
@@ -212,8 +222,18 @@ def kwargs_to_argv(
             # token. We must emit ``[--flag, v1, v2, ...]`` once, not
             # ``[--flag, v1, --flag, v2]`` (the latter would be parsed
             # as a single value list ``[v1, '--flag', v2]``).
-            flag_tokens.append(flag)
-            flag_tokens.extend(str(item) for item in value)
+            if action.nargs == argparse.REMAINDER:
+                # A REMAINDER optional swallows *every* remaining token,
+                # including a later ``--flag``. Emitting it inside
+                # ``flag_tokens`` is only safe when it happens to be the
+                # last flag declared; route it into the positional tail so
+                # it is always emitted after every other flag regardless of
+                # ``parser._actions`` order (e.g. ``reject --message``).
+                positional_tail.append(flag)
+                positional_tail.extend(str(item) for item in value)
+            else:
+                flag_tokens.append(flag)
+                flag_tokens.extend(str(item) for item in value)
         else:
             flag_tokens.extend([flag, str(value)])
 

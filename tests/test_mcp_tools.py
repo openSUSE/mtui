@@ -414,6 +414,31 @@ def test_optional_multivalue_flag_round_trip() -> None:
     assert parsed.message == ["why", "not"]
 
 
+def test_remainder_optional_emitted_after_other_flags() -> None:
+    """A REMAINDER optional must land after every other flag, not swallow it.
+
+    Regression: when a ``nargs=REMAINDER`` *optional* is declared before
+    another flag, emitting it among the flags lets REMAINDER consume the
+    later flag as a value (``--message a b --xflag`` -> ``message=['a','b',
+    '--xflag']``, ``xflag`` lost). The encoder defers the REMAINDER optional
+    to the positional tail so it is always emitted last regardless of
+    ``parser._actions`` declaration order.
+    """
+    import argparse
+    from argparse import REMAINDER
+
+    parser = argparse.ArgumentParser(prog="probe")
+    parser.add_argument("-m", "--message", nargs=REMAINDER)
+    parser.add_argument("-x", "--xflag", action="store_true")
+
+    argv = kwargs_to_argv(parser, {"message": ["a", "b"], "xflag": True})
+    # The store_true flag must precede the REMAINDER tokens.
+    assert argv == ["--xflag", "--message", "a", "b"]
+    parsed = parser.parse_args(argv)
+    assert parsed.message == ["a", "b"]
+    assert parsed.xflag is True
+
+
 def test_nargs_one_positional_accepts_scalar_round_trip() -> None:
     """``put filename`` (``nargs=1``) round-trips a scalar string.
 
