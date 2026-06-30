@@ -106,6 +106,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (`switch` is REPL-only). Pass `template=RRID` to scope a call to a single
   template. `list_templates` no longer shows the `*` active marker over MCP
   (the marker remains in the interactive REPL).
+- Over `mtui-mcp`, the testreport file tools (`testreport_read`,
+  `testreport_logs`, `testreport_read_file`, `testreport_patch`,
+  `testreport_write`, `testreport_fill`) gained an optional `template=RRID`
+  parameter selecting which loaded template's checkout to act on. With more than
+  one template loaded they now refuse an unscoped call (naming the loaded RRIDs)
+  instead of silently editing the last-loaded one; single-template sessions are
+  unchanged.
 
 ### Removed
 

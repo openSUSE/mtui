@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -57,15 +58,55 @@ def _null_session(tmp_path: Path) -> McpSession:
     return McpSession(_config(tmp_path), logging.getLogger("test.mcp.testreport"))
 
 
+class _FakeRegistry:
+    """Minimal stand-in for :class:`mtui.template_registry.TemplateRegistry`.
+
+    Exposes only the surface :func:`mtui.mcp.testreport_tools._resolve_report`
+    reads: ``get(rrid)``, ``all()``. Seeded from an ordered ``{rrid: report}``
+    mapping so single- and multi-template tests can share the fixture.
+    """
+
+    def __init__(self, reports: Mapping[str, object]) -> None:
+        self._entries = dict(reports)
+
+    def get(self, rrid: str) -> object:
+        return self._entries[rrid]
+
+    def all(self) -> list[object]:
+        return list(self._entries.values())
+
+
 def _loaded_session(tmp_path: Path, path: Path) -> SimpleNamespace:
-    """Fake session that only needs the two attributes the tools touch.
+    """Fake session that only needs the attributes the tools touch.
 
     Avoids constructing a full TestReport — we just need ``metadata.path``
     to be a non-None string and ``metadata`` to *not* be a NullTestReport.
     ``_lock`` is a real :class:`asyncio.Lock` so the ``async with`` works.
+    A single-entry ``templates`` registry is provided so ``_resolve_report``
+    resolves to ``metadata`` (zero/one loaded -> active fallback).
     """
-    metadata = SimpleNamespace(path=str(path))
-    return SimpleNamespace(metadata=metadata, _lock=asyncio.Lock())
+    metadata = SimpleNamespace(id="SUSE:Maintenance:1:1", path=str(path))
+    return SimpleNamespace(
+        metadata=metadata,
+        templates=_FakeRegistry({"SUSE:Maintenance:1:1": metadata}),
+        _lock=asyncio.Lock(),
+    )
+
+
+def _multi_session(tmp_path: Path, paths: dict[str, Path]) -> SimpleNamespace:
+    """Fake session with several loaded templates keyed by RRID.
+
+    ``metadata`` points at the first entry (the "active" fallback the REPL
+    would use); ``_resolve_report`` must refuse an unscoped call here and only
+    act when ``template=<rrid>`` selects one.
+    """
+    reports = {rrid: SimpleNamespace(id=rrid, path=str(p)) for rrid, p in paths.items()}
+    first = next(iter(reports.values()))
+    return SimpleNamespace(
+        metadata=first,
+        templates=_FakeRegistry(reports),
+        _lock=asyncio.Lock(),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -548,7 +589,6 @@ def test_two_ctx_keys_read_their_own_template(tmp_path: Path) -> None:
             targets={},
         )
         session.templates.add(report)  # ty: ignore[invalid-argument-type]
-        session.templates.set_active(report.id)
         return session
 
     registry = SessionRegistry(
@@ -680,3 +720,112 @@ def test_fill_refuses_without_loaded_report(tmp_path: Path) -> None:
     sess = _null_session(tmp_path)
     with pytest.raises(McpCommandError):
         asyncio.run(tt.testreport_fill(sess, reproducer="NO"))
+
+
+# --------------------------------------------------------------------------- #
+# template= scoping (multi-template MCP sessions)                             #
+# --------------------------------------------------------------------------- #
+
+
+def test_read_refuses_when_multiple_loaded_without_template(tmp_path: Path) -> None:
+    """Unscoped read with >1 template loaded must refuse and name the RRIDs."""
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("alpha\n", encoding="utf-8")
+    file_b = tmp_path / "b.txt"
+    file_b.write_text("beta\n", encoding="utf-8")
+    sess = _multi_session(
+        tmp_path,
+        {"SUSE:Maintenance:1:1": file_a, "SUSE:Maintenance:2:2": file_b},
+    )
+
+    with pytest.raises(McpCommandError) as ei:
+        asyncio.run(tt.testreport_read(sess))  # ty: ignore[invalid-argument-type]
+    assert "multiple templates" in ei.value.stderr
+    assert "SUSE:Maintenance:1:1" in ei.value.stderr
+    assert "SUSE:Maintenance:2:2" in ei.value.stderr
+
+
+def test_read_with_template_selects_that_report(tmp_path: Path) -> None:
+    """``template=<rrid>`` reads exactly that loaded template's file."""
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("alpha\n", encoding="utf-8")
+    file_b = tmp_path / "b.txt"
+    file_b.write_text("beta\nbeta2\n", encoding="utf-8")
+    sess = _multi_session(
+        tmp_path,
+        {"SUSE:Maintenance:1:1": file_a, "SUSE:Maintenance:2:2": file_b},
+    )
+
+    result: dict[str, Any] = asyncio.run(
+        tt.testreport_read(sess, template="SUSE:Maintenance:2:2")  # ty: ignore[invalid-argument-type]
+    )
+    assert result["content"] == "beta\nbeta2\n"
+    assert result["path"] == str(file_b)
+
+
+def test_patch_with_template_targets_the_right_file(tmp_path: Path) -> None:
+    """``testreport_patch`` honours ``template=`` and leaves siblings untouched."""
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("a1\na2\n", encoding="utf-8")
+    file_b = tmp_path / "b.txt"
+    file_b.write_text("b1\nb2\n", encoding="utf-8")
+    sess = _multi_session(
+        tmp_path,
+        {"SUSE:Maintenance:1:1": file_a, "SUSE:Maintenance:2:2": file_b},
+    )
+
+    asyncio.run(
+        tt.testreport_patch(sess, 1, 1, "B1!\n", template="SUSE:Maintenance:2:2")  # ty: ignore[invalid-argument-type]
+    )
+    assert file_b.read_text(encoding="utf-8") == "B1!\nb2\n"
+    assert file_a.read_text(encoding="utf-8") == "a1\na2\n"  # untouched
+
+
+def test_read_with_unknown_template_raises(tmp_path: Path) -> None:
+    """An RRID that is not loaded is refused with a clear message."""
+    file_a = tmp_path / "a.txt"
+    file_a.write_text("alpha\n", encoding="utf-8")
+    sess = _multi_session(tmp_path, {"SUSE:Maintenance:1:1": file_a})
+
+    with pytest.raises(McpCommandError) as ei:
+        asyncio.run(
+            tt.testreport_read(sess, template="SUSE:Maintenance:9:9")  # ty: ignore[invalid-argument-type]
+        )
+    assert "template not loaded" in ei.value.stderr
+    assert "SUSE:Maintenance:9:9" in ei.value.stderr
+
+
+def test_single_template_unscoped_still_works(tmp_path: Path) -> None:
+    """Zero/one loaded keeps the historical no-template behaviour."""
+    file = tmp_path / "report.txt"
+    file.write_text("solo\n", encoding="utf-8")
+    sess = _loaded_session(tmp_path, file)
+
+    result: dict[str, Any] = asyncio.run(tt.testreport_read(sess))  # ty: ignore[invalid-argument-type]
+    assert result["content"] == "solo\n"
+
+
+def test_template_param_in_json_schema(tmp_path: Path) -> None:
+    """``template`` is an exposed optional parameter on every testreport tool."""
+    pytest.importorskip("mcp")
+    from mcp.server.fastmcp import FastMCP
+
+    sess = _null_session(tmp_path)
+    mcp: FastMCP = FastMCP(name="test-mtui-mcp-template-schema")
+    tt.register_testreport_tools(mcp, sess)
+
+    for name in (
+        "testreport_read",
+        "testreport_logs",
+        "testreport_read_file",
+        "testreport_patch",
+        "testreport_write",
+        "testreport_fill",
+    ):
+        tool = mcp._tool_manager.get_tool(name)  # noqa: SLF001
+        assert tool is not None
+        props = tool.parameters.get("properties", {})
+        assert "template" in props, (
+            f"tool {name!r} is missing the template parameter: {list(props)!r}"
+        )
+        assert "template" not in tool.parameters.get("required", [])

@@ -326,6 +326,15 @@ Three hand-written tools operate on the path tracked by
 ``no testreport loaded; run `load_template` first`` when no test
 report is loaded.
 
+Every testreport tool accepts an optional ``template="<RRID>"`` parameter
+selecting which loaded template's checkout to act on. There is no
+client-addressable active template over MCP (``switch`` is REPL-only), so
+with **more than one** template loaded an unscoped call is refused with
+``multiple templates loaded (...); pass template=<rrid>`` rather than
+silently editing the last-loaded report. With zero or one template loaded
+the parameter may be omitted and behaves as before. An unknown RRID is
+refused with ``template not loaded: <rrid>``.
+
 ``testreport_read(offset: int = None, limit: int = None) -> dict``
     Returns ``{"path": str, "line_count": int, "content": str}``.
     Reads the file as UTF-8 with ``errors="replace"``. Marked
