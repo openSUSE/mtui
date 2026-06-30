@@ -127,6 +127,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   unscoped action fans out across all loaded templates. A single-template
   session is unchanged (the registry's active fallback is the only loaded
   report).
+- Over `mtui-mcp`, tool calls now run **concurrently across different
+  templates** within one session: a command (or testreport tool) scoped to one
+  loaded template holds only that template's lock, so work on other templates
+  (and backgrounded per-template jobs) proceeds in parallel instead of queuing
+  behind a single session-wide lock. Two calls on the *same* template still
+  serialise, and registry-mutating commands (`load_template`, `unload`) take an
+  exclusive gate that briefly drains in-flight per-template work. Per-call
+  stdout/display capture is now isolated per call so concurrent commands never
+  cross-contaminate each other's output.
 
 ### Removed
 

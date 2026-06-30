@@ -11,8 +11,9 @@ whose:
   :func:`mtui.mcp._schema.build_parameters`.
 * **handler** re-serialises kwargs to argv via
   :func:`mtui.mcp._argv.kwargs_to_argv` and dispatches through
-  :meth:`McpSession.run_command`, which serialises calls behind the
-  session-wide lock and captures stdout/stderr.
+  :meth:`McpSession.run_command`, which serialises calls per template
+  (different-template calls run concurrently; registry mutations take an
+  exclusive gate) and captures stdout/stderr.
 
 Subparser commands (only ``config`` today) are fanned out: one tool per
 subcommand (``config_show``, ``config_set``). The bare ``config`` tool

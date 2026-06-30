@@ -199,7 +199,10 @@ def test_get_or_create_distinct_keys_are_isolated(tmp_path: Path) -> None:
     assert a is not b
     assert a.metadata is not b.metadata
     assert a.targets is not b.targets
-    assert a._lock is not b._lock  # noqa: SLF001
+    # Each session owns its own registry gate and per-RRID lock map, so work on
+    # one client never blocks another.
+    assert a._registry is not b._registry  # noqa: SLF001
+    assert a._rrid_locks is not b._rrid_locks  # noqa: SLF001
 
 
 def test_get_or_create_concurrent_first_calls_mint_one(tmp_path: Path) -> None:
