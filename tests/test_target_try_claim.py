@@ -29,15 +29,16 @@ def _locked_by(contents: str) -> MagicMock:
 
 
 def test_try_claim_free_host(lock):
-    """A free host is claimed (True) and the lockfile is written."""
-    # is_locked()->load (ENOENT), then lock()'s is_locked()->load (ENOENT),
-    # then the actual write.
+    """A free host is claimed (True) via the atomic exclusive create."""
+    # try_claim's is_locked()->load (ENOENT), then lock()'s exclusive ``"x"``
+    # create wins outright (no stat-before-write).
     lock.connection.sftp_open.side_effect = [
-        OSError(errno.ENOENT, "not found"),
-        OSError(errno.ENOENT, "not found"),
-        MagicMock(),
+        OSError(errno.ENOENT, "not found"),  # try_claim is_locked
+        MagicMock(),  # lock() exclusive "x" create succeeds
     ]
     assert lock.try_claim("mtui pool RRID [owner]") is True
+    # The write that won was the exclusive create.
+    assert lock.connection.sftp_open.call_args_list[-1][0][1] == "x"
 
 
 def test_try_claim_foreign_host_returns_false(lock):
@@ -61,13 +62,12 @@ def test_try_claim_stale_reaps_then_claims(lock):
     stale = int(time.time()) - 200000  # > 1 day
     # try_claim: is_locked->load(stale); is_mine->False (cached);
     # reap_if_stale: age_seconds->load(stale), unlock(force): is_locked->load,
-    # sftp_remove; then lock(): is_locked->load(ENOENT), write.
+    # sftp_remove; then lock()'s exclusive "x" create wins on the now-free host.
     lock.connection.sftp_open.side_effect = [
         _locked_by(f"{stale}:otheruser:99999"),  # try_claim is_locked
         _locked_by(f"{stale}:otheruser:99999"),  # reap age_seconds load
         _locked_by(f"{stale}:otheruser:99999"),  # unlock(force) is_locked load
-        OSError(errno.ENOENT, "not found"),  # lock() is_locked after reap
-        MagicMock(),  # write
+        MagicMock(),  # lock() exclusive "x" create succeeds
     ]
     assert lock.try_claim() is True
     lock.connection.sftp_remove.assert_called_once()

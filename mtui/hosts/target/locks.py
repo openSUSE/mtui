@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from logging import getLogger
 from pathlib import Path
+from traceback import format_exc
 from typing import Self
 
 from ...support.config import Config
@@ -293,15 +294,6 @@ class TargetLock:
             TargetLockedError: If the target is already locked.
 
         """
-        # NOTE: there is a slight race between getting the state of the
-        # lock on target host and setting the lock.
-        # TODO: test if using sftpclient.mkdir can be used to make
-        # the locking really atomic.
-        # NOTE: let the code pass through if is_mine() as
-        # setting a different comment may be desired.
-        if self.is_locked() and not self.is_mine() and not self._wait_for_lock():
-            raise TargetLockedError(self.locked_by_msg())
-
         logger.debug("%s: setting lock", self.connection.hostname)
 
         rl = RemoteLock()
@@ -310,15 +302,48 @@ class TargetLock:
         rl.pid = self.i_am_pid
         rl.comment = comment
 
-        try:
-            lockfile = self.connection.sftp_open(self.filename, "w+")
-            lockfile.write(rl.to_lockfile())
-            lockfile.close()
-        except Exception:
+        # First try an *atomic exclusive create* (paramiko maps mode ``"x"`` to
+        # ``O_CREAT | O_EXCL``): on a free host exactly one of two racing
+        # processes wins the create and the loser falls through to the
+        # reconciliation below. This closes the read-then-write TOCTOU the
+        # previous "stat, then ``w+``" sequence had.
+        if self._write_lockfile(rl, exclusive=True):
+            self._lock = rl
+            return
+
+        # The file already exists. Decide whether we may overwrite it: our own
+        # lock (re-stamp with a possibly-new comment), a stale lock we may reap,
+        # or one that frees within the optional wait budget. Otherwise refuse.
+        if self.is_locked() and not self.is_mine() and not self._wait_for_lock():
+            raise TargetLockedError(self.locked_by_msg())
+
+        if not self._write_lockfile(rl, exclusive=False):
             logger.error("failed to open lockfile")
-            raise
+            raise OSError(f"failed to write lockfile on {self.connection.hostname}")
 
         self._lock = rl
+
+    def _write_lockfile(self, rl: RemoteLock, *, exclusive: bool) -> bool:
+        """Write ``rl`` to the remote lockfile; return whether it succeeded.
+
+        With ``exclusive=True`` the file is opened ``"x"`` (atomic create that
+        fails if it already exists) and a "file exists" failure returns
+        ``False`` so the caller can reconcile. With ``exclusive=False`` the file
+        is opened ``"w+"`` (truncate/overwrite) and any failure returns
+        ``False``. Both modes log unexpected errors at DEBUG for diagnosis.
+        """
+        mode = "x" if exclusive else "w+"
+        try:
+            lockfile = self.connection.sftp_open(self.filename, mode)
+            lockfile.write(rl.to_lockfile())
+            lockfile.close()
+        except Exception:  # noqa: BLE001 - all failures are non-fatal here
+            # An exclusive create racing a winner (file already exists) is
+            # expected; any other failure is logged for diagnosis. Either way
+            # the caller decides what to do next.
+            logger.debug(format_exc())
+            return False
+        return True
 
     def locked_by_msg(self) -> str:
         """Returns a "locked by" message suitable for display to the user.
