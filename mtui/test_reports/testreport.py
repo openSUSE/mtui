@@ -1,17 +1,13 @@
 """The `TestReport` abstract base class."""
 
 import concurrent.futures
-import glob
 import os
 import random
 import re
-import shutil
-import stat
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from contextlib import suppress
-from errno import EEXIST, ENOENT
 from json import loads
 from json.decoder import JSONDecodeError
 from logging import getLogger
@@ -28,7 +24,6 @@ from ..support.config import Config
 from ..support.exceptions import InvalidGiteaHashError, UpdateError
 from ..support.fileops import ensure_dir_exists
 from ..support.messages import MetadataNotLoadedError
-from ..support.paths import scripts_path
 from ..types import OpenQAResults, Product, TargetMeta, Workflow
 from .metadata_parsers import patchinfo_titles
 from .svn_io import (
@@ -73,14 +68,12 @@ class TestReport(ABC):
     def __init__(
         self,
         config: Config,
-        scripts_src_dir: Path | None = None,
         prompter: "Prompter | None" = None,
     ) -> None:
         """Initializes the `TestReport` object.
 
         Args:
             config: The application configuration.
-            scripts_src_dir: The source directory for scripts.
             prompter: Optional :class:`mtui.cli.prompter.Prompter` forwarded
                 to every :class:`mtui.target.Target` built by
                 :meth:`connect_target` and :meth:`add_target`. ``None``
@@ -93,8 +86,6 @@ class TestReport(ABC):
 
         # Per-report workflow mode (previously global config.auto / config.kernel).
         self.workflow: Workflow = Workflow.MANUAL
-
-        self._scripts_src_dir: Path = scripts_src_dir or scripts_path()
 
         self.directory: Path = config.template_dir
 
@@ -246,8 +237,6 @@ class TestReport(ABC):
         self._update_repos_parse()
         if self.config.chdir_to_template_dir:
             os.chdir(path.parent)
-
-        self.copy_scripts()
 
         result = self.check_hash()
         if not result[0]:
@@ -439,63 +428,6 @@ class TestReport(ABC):
         """
         targets.add_history(["uninstall", packages])
         targets.perform_uninstall(packages)
-
-    def copy_scripts(self) -> None:
-        """Copies the scripts to the test report directory."""
-        if not self.path:
-            raise RuntimeError("Called while missing path")
-
-        # copy check_* and compare_* scripts to the template directory
-        # TODO: do not override
-        src = self._scripts_src_dir
-        dst = self.scripts_wd()
-
-        ignore = shutil.ignore_patterns("*.svn")
-
-        self._copy_scripts(src, dst, ignore)
-        self._ensure_executable(f"{dst}/*/compare_*")
-
-    def _copy_scripts(self, src: Path, dst: Path, ignore: Callable) -> None:
-        """A helper method for copying scripts.
-
-        Args:
-            src: The source directory.
-            dst: The destination directory.
-            ignore: A function that returns a set of files to ignore.
-
-        """
-        try:
-            logger.debug("Copying scripts: %s -> %s", src, dst)
-            shutil.copytree(src, dst, ignore=ignore)
-        except OSError as e:
-            # this should not happen but was already noticed once or
-            # twice.  probable due to nfs timeouts if mtui was checked
-            # out to a nfs mount.
-            msg = "Copy scripts {0} -> {1} failed. reason:"
-            msg = msg.format(src, dst)
-            if e.errno == ENOENT:
-                logger.error(msg)
-                logger.error("copy scripts manually")
-                logger.debug(format_exc())
-            elif e.errno == EEXIST:
-                logger.info("Scripts are in place")
-            else:
-                raise
-
-    @staticmethod
-    def _ensure_executable(pattern) -> None:
-        """Ensures that a file is executable.
-
-        Args:
-            pattern: A glob pattern for the files to make executable.
-
-        """
-        for i in glob.glob(pattern):
-            # make sure the compare scripts (which run localy) are
-            # executable
-            # TODO: add test that the scripts indeed are +x
-            st = os.stat(i)
-            os.chmod(i, st.st_mode | stat.S_IEXEC)
 
     def _autolock_new_target(self, target: Target) -> None:
         """Locks a freshly connected target if a PI lock is active.
@@ -1069,38 +1001,9 @@ class TestReport(ABC):
         """
         return self.config.target_tempdir.joinpath(str(self.id), *paths)
 
-    def scripts_wd(self, *paths):
-        """Returns the path to the scripts directory.
-
-        Args:
-            *paths: The path components to join to the scripts directory.
-
-        Returns:
-            The path to the scripts directory.
-
-        """
-        return self.report_wd().joinpath(*["scripts", *list(paths)])
-
     def __repr__(self):
         """Returns a string representation of the `TestReport` object."""
         return f"<{self.__module__}.{self.__class__.__name__} {self.id}>"
-
-    def run_scripts(self, s, targets: HostsGroup) -> None:
-        """Runs the scripts for the test report.
-
-        Args:
-            s: The script class to run.
-            targets: The targets to run the scripts on.
-
-        """
-        d = self.scripts_wd(s.subdir)
-
-        # os.walk returns path as string and list of string with filenames
-        for r, _, filelist in os.walk(d):
-            if r == str(d):
-                for f in filelist:
-                    x = s(self, d / f)
-                    x.run(targets)
 
     def list_versions(self, sink, targets: HostsGroup, packages):
         """Lists the available versions of packages.

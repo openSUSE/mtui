@@ -46,9 +46,6 @@ before:
 	sle-module-python2-release-15.3-47.1
 after:
 	sle-module-python2-release-15.3-150300.59.4.1
-scripts:
-	initrd_state             : SUCCEEDED
-	vendor_and_disturl       : SUCCEEDED
 
 => PASSED
 
@@ -61,9 +58,6 @@ before:
 	sle-module-python2-release-15.3-47.1
 after:
 	sle-module-python2-release-15.3-150300.59.4.1
-scripts:
-	initrd_state             : SUCCEEDED
-	vendor_and_disturl       : SUCCEEDED
 
 => PASSED
 

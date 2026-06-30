@@ -14,9 +14,8 @@ from ...support.messages import (
     MissingPreparerError,
     MissingUpdaterError,
 )
-from ...types import Package, Workflow
+from ...types import Package
 from ...types.rpmver import RPMVersion
-from ...update_workflow.hooks import CompareScript, PostScript, PreScript
 from . import Target
 from .actions import (
     FileDelete,
@@ -608,9 +607,6 @@ class HostsGroup(UserDict[str, Target]):
 
         package_check()
 
-        if "noscript" not in params and testreport.workflow is not Workflow.AUTO:
-            testreport.run_scripts(PreScript, self)
-
         self.update_lock()
 
         self._fanout_set_repo("add", testreport)
@@ -680,12 +676,8 @@ class HostsGroup(UserDict[str, Target]):
                 )
 
             package_check(True)
-
-            if "noscript" not in params and testreport.workflow is not Workflow.AUTO:
-                testreport.run_scripts(PostScript, self)
-                testreport.run_scripts(CompareScript, self)
         except BaseException:
-            # The update (or its scripts) failed: KEEP the test update
+            # The update failed: KEEP the test update
             # repositories in place. Stripping them here — as the old
             # unconditional cleanup did — left a failed host with no issue repo,
             # so retrying or diagnosing it (e.g. `zypper patches`) saw nothing

@@ -156,57 +156,6 @@ class FanOutError(ErrorMessage):
         self.message = f"fan-out failed on {rrids} ({detail})"
 
 
-class FailedToWriteScriptResult(UserMessage):
-    """A message for when writing a script result fails."""
-
-    def __init__(self, path, reason) -> None:
-        self.path = path
-        self.reason = reason
-
-    def __str__(self) -> str:
-        return f"failed to write script output to {self.path}: {self.reason}"
-
-
-class StartingCompareScriptError(UserMessage):
-    """A message for when starting a compare script fails."""
-
-    def __init__(self, reason, argv) -> None:
-        self.reason = reason
-        self.argv = argv
-
-    def __str__(self) -> str:
-        return f"Starting compare script {self.argv!r} failed: {self.reason}"
-
-
-class CompareScriptError(UserMessage):
-    """Base class for compare script errors."""
-
-    def __init__(self, argv, stdout, stderr, rc) -> None:
-        self.argv = argv
-        self.stderr = stderr
-        self.stdout = stdout
-        self.rc = rc
-
-    def __str__(self):
-        raise NotImplementedError
-
-
-class CompareScriptFailedError(CompareScriptError):
-    """A message for when a compare script fails."""
-
-    def __str__(self) -> str:
-        return (
-            f"Compare script {self.argv!r} failed: rc = {self.rc} err:\n{self.stderr}"
-        )
-
-
-class CompareScriptCrashedError(CompareScriptError):
-    """A message for when a compare script crashes."""
-
-    def __str__(self) -> str:
-        return f"Compare script {self.argv!r} crashed:\n{self.stderr}"
-
-
 class MissingDoerError(ErrorMessage):
     """Base class for missing "doer" errors."""
 

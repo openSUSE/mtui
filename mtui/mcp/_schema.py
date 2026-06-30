@@ -167,7 +167,7 @@ def action_to_parameter(
             True,
         )
     if isinstance(action, argparse._StoreConstAction):
-        # Mutually-exclusive ``--noscript`` / ``--newpackage`` style
+        # Mutually-exclusive ``--newpackage`` / ``--noprepare`` style
         # flags share a dest in some commands but mtui's usage gives each
         # its own dest, so a flat boolean is faithful.
         desc = (help_text or "").strip()

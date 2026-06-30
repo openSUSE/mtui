@@ -16,9 +16,6 @@ logger = getLogger("mtui.command.update")
 class Update(Command):
     """Applies the testing update to the target hosts.
 
-    While updating the machines, the pre-, post-, and compare scripts
-    are run before and after the update process.
-
     If the update adds new packages to the channel, the "--newpackage"
     parameter triggers the package installation right after the update.
 
@@ -44,12 +41,6 @@ class Update(Command):
             const="noprepare",
             help="Skip prepare procedure",
         )
-        parser.add_argument(
-            "--noscript",
-            action="store_const",
-            const="noscript",
-            help="Don't run pre and post scripts",
-        )
 
         cls._add_hosts_arg(parser)
         cls._add_template_arg(parser)
@@ -66,7 +57,6 @@ class Update(Command):
         params: list[str] = []
         params.append(self.args.newpackage)
         params.append(self.args.noprepare)
-        params.append(self.args.noscript)
 
         try:
             self.metadata.perform_update(targets, params)
@@ -99,7 +89,6 @@ class Update(Command):
                 ("-t", "--target"),
                 ("--noprepare",),
                 ("--newpackage",),
-                ("--noscript",),
                 *template_completion(state),
             ],
             line,

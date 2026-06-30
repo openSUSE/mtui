@@ -1,1 +1,0 @@
-../../helper/check_vendor_and_disturl.pl
