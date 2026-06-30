@@ -93,6 +93,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `list_locks`). `unlock --pool --force` removes a pool claim held by another
   user or template.
 
+### Changed
+
+- `set_workflow`, `add_host`, and `remove_host` now fan out across all loaded
+  templates by default (each acting on that template's own report and host
+  list), matching the other action commands. Use `-T RRID`/`--template RRID` to
+  scope a single command to one loaded template, or `--all-templates` to request
+  fan-out explicitly.
+
 ### Removed
 
 - SMELT support has been removed; report data is now sourced from the TeReGen

@@ -27,3 +27,28 @@ def test_set_workflow_auto_uses_rrid(mock_config):
         prompt.metadata.incident,
         prompt.metadata.rrid,
     )
+
+
+def test_set_workflow_is_fanout():
+    """set_workflow fans out across every loaded template by default."""
+    assert SetWorkflow.scope == "fanout"
+
+
+def test_set_workflow_accepts_template_flag():
+    ns = SetWorkflow.parse_args("-T SUSE:Maintenance:1:1 manual", MagicMock())
+    assert ns.workflow == "manual"
+    assert ns.template == "SUSE:Maintenance:1:1"
+    assert ns.all_templates is False
+
+
+def test_set_workflow_accepts_all_templates_flag():
+    ns = SetWorkflow.parse_args("--all-templates manual", MagicMock())
+    assert ns.all_templates is True
+    assert ns.template is None
+
+
+def test_set_workflow_complete_offers_template_rrids():
+    templates = MagicMock()
+    templates.rrids.return_value = ["SUSE:Maintenance:1:1"]
+    out = SetWorkflow.complete({"templates": templates}, "", "set_workflow ", 13, 13)
+    assert "SUSE:Maintenance:1:1" in out

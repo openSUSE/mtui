@@ -3,7 +3,7 @@
 import concurrent.futures
 from logging import getLogger
 
-from ..cli.completion import complete_choices
+from ..cli.completion import complete_choices, template_completion
 from ..support.concurrency import ContextExecutor
 from ..types import Workflow
 from . import Command
@@ -18,6 +18,7 @@ class AddHost(Command):
     """
 
     command = "add_host"
+    scope = "fanout"
 
     @classmethod
     def _add_arguments(cls, parser) -> None:
@@ -34,6 +35,7 @@ class AddHost(Command):
             action="store_true",
             help="do not switch to the manual workflow when in automatic mode",
         )
+        cls._add_template_arg(parser)
 
     def __call__(self) -> None:
         """Executes the `add_host` command."""
@@ -61,4 +63,8 @@ class AddHost(Command):
     @staticmethod
     def complete(state, text, line, begidx, endidx) -> list[str]:
         """Provides tab completion for the command."""
-        return complete_choices([("-t", "--target"), ("-k", "--keep-mode")], line, text)
+        return complete_choices(
+            [("-t", "--target"), ("-k", "--keep-mode"), *template_completion(state)],
+            line,
+            text,
+        )

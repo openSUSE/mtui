@@ -67,12 +67,12 @@ report, for report-scoped commands). The fan-out commands are: ``run``,
 ``set_repo``, ``reboot``, ``put``, ``get``, ``commit``, ``checkout``,
 ``approve``, ``assign``, ``unassign``, ``reject``, ``comment``, ``show_diff``,
 ``analyze_diff``, ``reload_openqa``, ``openqa_overview``, ``openqa_jobs``,
-``checkers``, the report-bound inspection commands
+``checkers``, ``set_workflow``, the report-bound inspection commands
 ``list_metadata``, ``list_bugs``, ``list_update_commands``, ``list_versions``,
-``list_packages``, and ``show_update_repos``, the host-locking commands
-``lock`` and ``unlock``, and the host-listing commands ``list_hosts``,
-``list_locks``, ``list_timeout``, ``list_sessions``, ``show_log``, and
-``list_history``. Output for each template is prefixed with an
+``list_packages``, and ``show_update_repos``, the host-management commands
+``add_host``, ``remove_host``, ``lock`` and ``unlock``, and the host-listing
+commands ``list_hosts``, ``list_locks``, ``list_timeout``, ``list_sessions``,
+``show_log``, and ``list_history``. Output for each template is prefixed with an
 ``=== <RRID> ===`` banner so results stay attributable. The queue-browsing
 ``updates`` command is not template-scoped and does not fan out. ``regenerate``
 acts on the active template by default (use ``-T``/``--all-templates`` to
@@ -109,10 +109,14 @@ add_host
 
 ::
 
-  add_host [-t HOST] [-k]
+  add_host [-t HOST] [-k] [-T RRID | --all-templates]
 
 Adds another machine to the target host list.
 Without parameter adds all hosts from testplatform.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_), adding the host(s) to each template's
+own host list. Use ``-T RRID`` to scope to a single template.
 
 When adding hosts from a testplatform, mtui connects **one** reference host
 per test-target slot (product + version + arch + addons) rather than every
@@ -145,9 +149,13 @@ remove_host
 
 ::
 
-  remove_host [-t HOST]
+  remove_host [-t HOST] [-T RRID | --all-templates]
 
 Disconnects from given refhost(s) and removes them from the target host list.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_), removing the host(s) from each
+template's own host list. Use ``-T RRID`` to scope to a single template.
 
 .. warning::
   When used without parameters, the command removes all hosts.
@@ -522,12 +530,16 @@ set_workflow
 
 ::
   
-  set_workflow {auto,manual,kernel}
+  set_workflow {auto,manual,kernel} [-T RRID | --all-templates]
 
 Sets workflow and reload data from openQA.
 
 'auto' workflow will be automatically set to manual if openQA install tests
 missing or have failed state
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_), reloading openQA data for each. Use
+``-T RRID`` to scope to a single template.
 
 .. option:: workflow
 

@@ -147,3 +147,31 @@ def test_release_pool_claim_keeps_sibling_candidates():
     assert report._slot_candidates == {slot: ["rosa"]}
     assert report._pool_claims == set()
     assert arb.owner_of("bianca") is None
+
+
+def test_remove_host_is_fanout():
+    """remove_host fans out across every loaded template by default."""
+    assert RemoveHost.scope == "fanout"
+
+
+def test_remove_host_accepts_template_flag():
+    ns = RemoveHost.parse_args("-T SUSE:Maintenance:1:1", MagicMock())
+    assert ns.template == "SUSE:Maintenance:1:1"
+    assert ns.all_templates is False
+
+
+def test_remove_host_accepts_all_templates_flag():
+    ns = RemoveHost.parse_args("--all-templates", MagicMock())
+    assert ns.all_templates is True
+    assert ns.template is None
+
+
+def test_remove_host_complete_offers_template_rrids():
+    templates = MagicMock()
+    templates.rrids.return_value = ["SUSE:Maintenance:1:1"]
+    hosts = MagicMock()
+    hosts.names.return_value = []
+    out = RemoveHost.complete(
+        {"hosts": hosts, "templates": templates}, "", "remove_host ", 12, 12
+    )
+    assert "SUSE:Maintenance:1:1" in out

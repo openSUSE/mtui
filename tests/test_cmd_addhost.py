@@ -141,3 +141,33 @@ def test_add_host_in_manual_mode_does_not_switch(mock_config):
     AddHost(args, mock_config, MagicMock(), prompt)()
 
     prompt.set_prompt.assert_not_called()
+
+
+def test_add_host_is_fanout():
+    """add_host fans out across every loaded template by default."""
+    assert AddHost.scope == "fanout"
+
+
+def test_add_host_accepts_template_flag():
+    ns = AddHost.parse_args("-T SUSE:Maintenance:1:1", sys)
+    assert ns.template == "SUSE:Maintenance:1:1"
+    assert ns.all_templates is False
+
+
+def test_add_host_accepts_all_templates_flag():
+    ns = AddHost.parse_args("--all-templates", sys)
+    assert ns.all_templates is True
+    assert ns.template is None
+
+
+def test_add_host_defaults_have_template_flags():
+    default = AddHost.parse_args("", sys)
+    assert default.template is None
+    assert default.all_templates is False
+
+
+def test_add_host_complete_offers_template_rrids():
+    templates = MagicMock()
+    templates.rrids.return_value = ["SUSE:Maintenance:1:1"]
+    out = AddHost.complete({"hosts": [], "templates": templates}, "", "add_host ", 9, 9)
+    assert "SUSE:Maintenance:1:1" in out
