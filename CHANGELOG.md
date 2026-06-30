@@ -147,6 +147,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Over `mtui-mcp`, a command with a `nargs=REMAINDER` *optional* flag declared
+  before another flag (the shape used by `reject --message`) could have the
+  later flag swallowed into the message when re-encoding a tool call to argv.
+  The REMAINDER optional is now always emitted after every other flag, so the
+  trailing flag is parsed correctly regardless of argument declaration order.
 - Transactional (read-only-root, SL Micro) hosts now install and downgrade every
   package in a SINGLE `transactional-update` snapshot. The previous per-package
   loop ran one `transactional-update pkg in` per package, each opening its own
