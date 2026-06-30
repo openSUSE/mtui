@@ -257,6 +257,9 @@ class _FakeRegistry:
     def get(self, rrid):
         return self._reports[rrid]
 
+    def __len__(self):
+        return len(self._reports)
+
     @property
     def active(self):
         return self._active
@@ -297,13 +300,16 @@ class FailingFanoutCommand(Command):
             raise RuntimeError(f"boom on {rrid}")
 
 
-def _make_cmd(cmd_cls, registry, *, template=None, all_templates=False):
+def _make_cmd(
+    cmd_cls, registry, *, template=None, all_templates=False, interactive=True
+):
     args = Namespace(template=template, all_templates=all_templates)
     prompt = MagicMock()
     prompt.templates = registry
     prompt.metadata = registry.active
     prompt.targets = registry.active.targets
     prompt.display = MagicMock()
+    prompt.interactive = interactive
     return cmd_cls(args, MagicMock(), MagicMock(), prompt)
 
 
@@ -344,6 +350,28 @@ class TestResolveTemplates:
         cmd = _make_cmd(FanoutCommand, reg)
         resolved = cmd._resolve_templates()
         assert resolved == [active]
+
+    def test_mcp_active_scope_fans_out_when_many_loaded(self):
+        # Under MCP (non-interactive) there is no addressable active pointer,
+        # so an unscoped active-scope command fans out across all templates.
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(CountingCommand, reg, interactive=False)
+        resolved = cmd._resolve_templates()
+        assert [str(r.id) for r in resolved] == ["A", "B"]
+
+    def test_mcp_active_scope_single_template_unchanged(self):
+        # With one template the MCP path is identical to the active fallback.
+        reg = _FakeRegistry([_FakeReport("A")])
+        cmd = _make_cmd(CountingCommand, reg, interactive=False)
+        resolved = cmd._resolve_templates()
+        assert [str(r.id) for r in resolved] == ["A"]
+
+    def test_repl_active_scope_still_returns_active_only(self):
+        # The interactive REPL keeps its active-template behaviour.
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(CountingCommand, reg, interactive=True)
+        resolved = cmd._resolve_templates()
+        assert [str(r.id) for r in resolved] == ["A"]
 
 
 class TestRun:

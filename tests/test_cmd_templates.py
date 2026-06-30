@@ -33,9 +33,10 @@ def _registry(*reports):
     return reg
 
 
-def _prompt(registry):
+def _prompt(registry, *, interactive=True):
     p = MagicMock()
     p.templates = registry
+    p.interactive = interactive
     return p
 
 
@@ -68,3 +69,17 @@ def test_list_templates_marks_active(mock_config):
     assert lines[1].startswith("* SUSE:Maintenance:2:2")
     assert "hosts: 1" in lines[1]
     assert "mode: kernel" in lines[1]
+
+
+def test_list_templates_omits_active_marker_under_mcp(mock_config):
+    r1 = _report("SUSE:Maintenance:1:1", hosts=2, workflow=Workflow.AUTO)
+    r2 = _report("SUSE:Maintenance:2:2", hosts=1, workflow=Workflow.KERNEL)
+    reg = _registry(r1, r2)
+    reg.set_active("SUSE:Maintenance:2:2")
+    lines = _run(_prompt(reg, interactive=False), mock_config)
+
+    # No '*' marker over MCP: the active pointer is not client-addressable.
+    assert len(lines) == 2
+    assert "*" not in "".join(lines)
+    assert lines[0].startswith("  SUSE:Maintenance:1:1")
+    assert lines[1].startswith("  SUSE:Maintenance:2:2")

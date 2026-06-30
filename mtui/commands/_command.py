@@ -252,7 +252,11 @@ class Command(ABC):
         1. ``-T/--template RRID`` → exactly that template (raises
            :class:`TemplateNotLoadedError` if it is not loaded).
         2. ``--all-templates`` or ``scope == "fanout"`` → every loaded template.
-        3. otherwise → the active template only.
+        3. otherwise → the active template only, **except** under MCP (a
+           non-interactive prompt) with more than one template loaded, where
+           there is no client-addressable "active" pointer (``switch`` is a
+           REPL-only command), so the call fans out across every loaded
+           template instead.
 
         The fan-out branches fall back to the active template when the registry
         is empty so an unloaded session behaves exactly like the historical
@@ -267,6 +271,13 @@ class Command(ABC):
 
         if getattr(self.args, "all_templates", False) or self.scope == "fanout":
             return self.templates.all() or [self.templates.active]
+
+        # Under MCP there is no interactive ``switch``, so the active pointer is
+        # hidden, unaddressable state. With several templates loaded, default an
+        # otherwise-unscoped call to fanout instead of silently picking the
+        # last-loaded one. The REPL keeps its active-template behaviour.
+        if not getattr(self.prompt, "interactive", True) and len(self.templates) > 1:
+            return self.templates.all()
 
         return [self.templates.active]
 
