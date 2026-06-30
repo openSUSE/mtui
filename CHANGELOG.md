@@ -119,6 +119,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   one template loaded they now refuse an unscoped call (naming the loaded RRIDs)
   instead of silently editing the last-loaded one; single-template sessions are
   unchanged.
+- Over `mtui-mcp`, loading a template (`load_template`, `regenerate`) no longer
+  moves the session's active-template pointer. The active template is REPL-only
+  navigation state; setting it on every load made it hidden, unaddressable
+  state that let unscoped tools silently act on the last-loaded template.
+  Clients now address a template explicitly per call (`template=`/`-T`), and an
+  unscoped action fans out across all loaded templates. A single-template
+  session is unchanged (the registry's active fallback is the only loaded
+  report).
 
 ### Removed
 

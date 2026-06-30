@@ -371,15 +371,22 @@ class McpSession:
             prompter=self.prompter,
         )
         # A failed load returns a NullTestReport sentinel (empty RRID).
-        # ``add`` ignores it; skip the active-pointer move too so a failed
-        # load leaves the registry and active template untouched instead of
-        # planting a phantom entry that breaks fan-out.
+        # ``add`` ignores it; nothing else to do for a failed load.
         self.templates.add(tr)
-        if str(tr.id):
-            self.templates.set_active(str(tr.id))
-        # Re-apply the non-interactive flag after the testreport swap so
-        # the fresh HostsGroup inherits the session's headless mode.
-        self.targets.interactive = False
+        # Deliberately do NOT move the active pointer here. The active template
+        # is REPL-only navigation state (moved by the ``switch`` command, which
+        # is denied over MCP); setting it as a side effect of every load made it
+        # hidden, unaddressable state and let unscoped tools silently act on the
+        # last-loaded template. MCP clients address a template explicitly per
+        # call (``template=``/``-T``); an unscoped action fans out across all
+        # loaded templates (see ``Command._resolve_templates``). The registry's
+        # ``active`` property still falls back to the first-loaded report so a
+        # single-template session behaves exactly as before.
+        #
+        # Re-apply the non-interactive flag on the *freshly loaded* report's
+        # host group (not ``self.targets``, which tracks the active pointer we
+        # no longer move) so it inherits the session's headless mode.
+        tr.targets.interactive = False
         # Run the deferred autoconnect now that ``add`` has wired the host
         # arbiter, so refhosts are drawn one-per-slot (with backup) instead of
         # connecting every candidate. No-op unless autoconnect was requested.

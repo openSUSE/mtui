@@ -406,6 +406,65 @@ def test_unload_removes_only_the_named_template(tmp_path: Path) -> None:
     assert sess.templates.rrids() == ["SUSE:Maintenance:2:1"]
 
 
+def _fake_update(rrid: str) -> MagicMock:
+    """Build a fake OBS update whose ``make_testreport`` yields a report.
+
+    The returned report mock carries an ``id`` (str-able to ``rrid``), a
+    ``targets`` namespace exposing a settable ``interactive`` flag, and a
+    no-op ``autoconnect``.
+    """
+    targets = MagicMock()
+    targets.interactive = True
+    report = MagicMock()
+    report.id = rrid
+    report.targets = targets
+    update = MagicMock()
+    update.make_testreport.return_value = report
+    return update
+
+
+def test_load_update_does_not_move_active_pointer(tmp_path: Path) -> None:
+    """A second ``load_update`` must leave the active pointer on the first load.
+
+    The active template is REPL-only navigation state; over MCP it must not
+    move as a side effect of loading. The registry's ``active`` falls back to
+    the first-loaded report, so it stays put across subsequent loads.
+    """
+    sess = _make_session(tmp_path)
+
+    sess.load_update(_fake_update("SUSE:Maintenance:1:1"), autoconnect=False)
+    # First load is addressable as the active fallback.
+    assert str(sess.templates.active.id) == "SUSE:Maintenance:1:1"
+
+    sess.load_update(_fake_update("SUSE:Maintenance:2:1"), autoconnect=False)
+    # Both loaded, but active is still the first — not the last-loaded.
+    assert sess.templates.rrids() == [
+        "SUSE:Maintenance:1:1",
+        "SUSE:Maintenance:2:1",
+    ]
+    assert str(sess.templates.active.id) == "SUSE:Maintenance:1:1"
+
+
+def test_load_update_sets_headless_on_freshly_loaded_report(tmp_path: Path) -> None:
+    """``interactive=False`` lands on the just-loaded report, not the active one.
+
+    With the active pointer no longer moved on load, the headless flag must be
+    applied to the newly loaded report's own host group, even when a different
+    (first-loaded) template remains active.
+    """
+    sess = _make_session(tmp_path)
+
+    first = _fake_update("SUSE:Maintenance:1:1")
+    sess.load_update(first, autoconnect=False)
+    second = _fake_update("SUSE:Maintenance:2:1")
+    sess.load_update(second, autoconnect=False)
+
+    # The second (non-active) report still got the headless flag applied.
+    second_report = second.make_testreport.return_value
+    assert second_report.targets.interactive is False
+    second_report.autoconnect.assert_called_once()
+
+
 def test_unload_unknown_rrid_raises(tmp_path: Path) -> None:
     """``unload`` on an unloaded RRID surfaces a clean command error."""
     from mtui.commands.unload import Unload
