@@ -1,1 +1,1 @@
-"""Update workflow: actions, checks, export, hooks executed against test hosts."""
+"""Update workflow: actions, checks, and export executed against test hosts."""

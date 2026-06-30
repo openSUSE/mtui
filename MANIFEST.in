@@ -1,6 +1,4 @@
 recursive-include mtui/terms term*sh
-recursive-include mtui/scripts *
-recursive-include mtui/helper *
 recursive-include Documentation *
 recursive-include tests *
 exclude dist

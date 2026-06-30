@@ -151,6 +151,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Removed
 
+- The initrd / pre-post custom-check framework has been removed. The
+  `PreScript`/`PostScript`/`CompareScript` hook engine that copied probe
+  scripts onto reference hosts and ran them before/after an `update` (diffing
+  the pre/post output to flag regressions), the shipped probes
+  (`check_initrd_state`, `check_vendor_and_disturl` and their `compare_*`
+  scripts, plus the standalone `doit.sh` harness), the `update --noscript`
+  flag (and its `mtui-mcp` tool parameter), and the per-host `scripts:` section
+  in the manual test-report export no longer exist. The `=> PASSED/FAILED`
+  install verdict is unchanged — it still derives from the package-version
+  check. The zypper exit-code validators that confirm an `update`/`prepare`/
+  `downgrade` actually succeeded are unaffected.
 - SMELT support has been removed; report data is now sourced from the TeReGen
   report API (`[teregen] api`, default `https://qam.suse.de/api/v1`). The
   `Smelt` data-source client, the `smelt_update`, `smelt_updates`,

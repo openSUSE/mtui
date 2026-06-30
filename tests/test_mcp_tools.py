@@ -214,7 +214,7 @@ def test_update_schema_exposes_store_const_as_booleans(
 ) -> None:
     """``store_const`` flags collapse to booleans with a hint in the description."""
     params = _params_of(mcp, "update")["properties"]
-    for flag in ("newpackage", "noprepare", "noscript"):
+    for flag in ("newpackage", "noprepare"):
         assert params[flag]["type"] == "boolean"
         assert "sets " in params[flag]["description"]
 
@@ -380,17 +380,16 @@ def test_append_remainder_flag_round_trip_lock_with_target() -> None:
 
 
 def test_store_const_flag_round_trip() -> None:
-    """``update --noscript`` round-trips both ways."""
+    """``update --noprepare`` round-trips both ways."""
     parser = Command.registry["update"].argparser(__import__("sys"))
     argv = kwargs_to_argv(
         parser,
-        {"noscript": True, "newpackage": False, "noprepare": False, "hosts": []},
+        {"noprepare": True, "newpackage": False, "hosts": []},
     )
-    assert argv == ["--noscript"]
+    assert argv == ["--noprepare"]
     parsed = parser.parse_args(argv)
-    assert parsed.noscript == "noscript"
+    assert parsed.noprepare == "noprepare"
     assert parsed.newpackage is None
-    assert parsed.noprepare is None
 
 
 def test_optional_multivalue_flag_round_trip() -> None:

@@ -1,6 +1,5 @@
 """An exporter for the manual workflow."""
 
-import os.path
 import re
 from itertools import zip_longest
 from logging import getLogger
@@ -100,7 +99,6 @@ class ManualExport(BaseExport):
                     # --------------
                     # before:
                     # after:
-                    # scripts:
                     #
                     # => PASSED/FAILED
                     #
@@ -118,8 +116,6 @@ class ManualExport(BaseExport):
                     index += 1
                     self.template.insert(index, "after:\n")
                     index += 1
-                    self.template.insert(index, "scripts:\n")
-                    index += 1
                     self.template.insert(index, "\n")
                     index += 1
                     self.template.insert(index, "=> PASSED/FAILED\n")
@@ -130,7 +126,7 @@ class ManualExport(BaseExport):
                     index += 1
                     self.template.insert(index, "\n")
 
-        # add package version log and script results for each host to the template
+        # add package version log for each host to the template
         for host in self.results:
             versions = {}
             hostname = host.hostname
@@ -182,17 +178,8 @@ class ManualExport(BaseExport):
                         index += 1
                     except Exception:
                         pass
-            try:
-                # search for scripts starting point
-                index = self.template.index("scripts:\n", index - 1) + 1
-            except ValueError:
-                # if no scripts section is found, add a new one
-                logger.debug("scripts section not found, adding one")
-                self.template.insert(index, "      scripts:\n")
-                index += 1
-
-            # if the package versions were not updated or one of the testscripts
-            # failed, set the result to FAILED, otherwise to PASSED
+            # if the package versions were not updated, set the result to
+            # FAILED, otherwise to PASSED
             failed = False
             for package in versions["before"]:
                 # check if the packages have a higher version after the update
@@ -208,62 +195,20 @@ class ManualExport(BaseExport):
                     hostname,
                 )
 
-            # temporary variable to avoid repeating the same script. We only want the
-            # last result, so we store the previous position
-            template_log = host.hostlog
-            scripts: dict[str, str | int] = {}
-            for cmdlog in template_log:
-                # search for check scripts in the xml and inspect return code
-                # return code values:   0 SUCCEEDED
-                #                       1 FAILED
-                #                       2 INTERNAL ERROR
-                #                       3 NOT RUN
-                try:
-                    # name == command, exitcode == exitcode  # noqa: ERA001
-                    name = cmdlog.command
-                    exitcode = cmdlog.exitcode
-
-                except Exception:
-                    continue
-
-                # check if command is a compare_* script
-                if "scripts/compare/compare_" in name:
-                    scriptname = os.path.basename(name.split(" ")[0])
-                    scriptname = scriptname.replace("compare_", "")
-                    scriptname = scriptname.replace(".pl", "")
-                    scriptname = scriptname.replace(".sh", "")
-
-                    # move on if the script wasn't run
-                    if exitcode == 3:
-                        continue
-
-                    if exitcode == 0:
-                        result = "SUCCEEDED"
-                    elif exitcode == 1:
-                        failed = True
-                        result = "FAILED"
-                    else:
-                        failed = True
-                        result = "INTERNAL ERROR"
-
-                    scriptline = f"\t{scriptname:25}: {result}\n"
-
-                    if scriptname in scripts:
-                        scripts[scriptname] = scriptline
-                    else:
-                        scripts[scriptname] = index
-                        if scriptname in self.template[index]:
-                            self.template[index] = scriptline
-                        else:
-                            self.template.insert(index, scriptline)
-
-                        index += 1
-
-            if "PASSED/FAILED" in self.template[index + 1]:
-                if failed:
-                    self.template[index + 1] = "=> FAILED\n"
-                else:
-                    self.template[index + 1] = "=> PASSED\n"
+            # flip the verdict placeholder for this host's section. Bounded by the
+            # host's trailing ``comment:`` line — or the start of the next host
+            # block — so an already-set verdict (from a previous export) is left
+            # untouched rather than the next host's grabbed, even if a block is
+            # ever malformed (missing its comment line).
+            for j in range(index, len(self.template)):
+                if "PASSED/FAILED" in self.template[j]:
+                    self.template[j] = "=> FAILED\n" if failed else "=> PASSED\n"
+                    break
+                if (
+                    self.template[j].startswith("comment:")
+                    or "reference host:" in (self.template[j])
+                ):
+                    break
 
     def _host_installog_to_template(self, target) -> list[str]:
         """Converts a host's install log to a template.

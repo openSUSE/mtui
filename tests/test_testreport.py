@@ -989,16 +989,3 @@ def test_list_versions_aggregates_by_host_then_package(tmp_path: Path) -> None:
     assert out == "ok"
     sink.assert_called_once()
     targets.run.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# scripts_wd + report_wd require a path
-# ---------------------------------------------------------------------------
-
-
-def test_scripts_wd_joins_under_report_wd(tmp_path: Path) -> None:
-    r = _make(tmp_path)
-    r.path = tmp_path / "fake.tpl"
-    r.path.write_text("hi")
-    out = r.scripts_wd("compare")
-    assert str(out).endswith("scripts/compare")

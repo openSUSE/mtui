@@ -30,22 +30,6 @@ def test_messages():
         == "connecting to test_host failed: test_reason"
     )
     assert (
-        str(messages.FailedToWriteScriptResult("test_path", "test_reason"))
-        == "failed to write script output to test_path: test_reason"
-    )
-    assert (
-        str(messages.StartingCompareScriptError("test_reason", "test_argv"))
-        == "Starting compare script 'test_argv' failed: test_reason"
-    )
-    assert (
-        str(messages.CompareScriptFailedError("test_argv", "stdout", "stderr", 1))
-        == "Compare script 'test_argv' failed: rc = 1 err:\nstderr"
-    )
-    assert (
-        str(messages.CompareScriptCrashedError("test_argv", "stdout", "stderr", 1))
-        == "Compare script 'test_argv' crashed:\nstderr"
-    )
-    assert (
         str(messages.MissingPreparerError("test_release"))
         == "Missing Preparer for test_release"
     )

@@ -779,16 +779,11 @@ update
 
 ::
 
-    update [--newpackage] [--noprepare] [--noscript] [-t HOST]
+    update [--newpackage] [--noprepare] [-t HOST]
 
 
 Runs the `prepare`_ command and applies the testing update to the target hosts.
 (To skip the preparation procedure, use ``--noprepare``.)
-
-In classic workflow, while updating the machines, the pre-, post- and compare
-scripts are run before and after the update process. During auto mode, scripts are
-always disabled.
-(To skip run of scripts use ``--noscript`` parameter.)
 
 If the update adds new packages to the channel, the "newpackage" parameter
 triggers the package installation right after the update.
@@ -805,10 +800,6 @@ changed before an `update`_ please use `reload_products`_ command.
 .. option:: --noprepare
 
   Skips the prepare procedure.
-
-.. option:: --noscript
-
-  Skips the pre- and post- scripts.
 
 
 export

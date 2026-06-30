@@ -56,7 +56,6 @@ Project layout
         actions/           #   background SSH worker actions
         checks/            #   post-update verification probes
         export/            #   testreport export + artefact download
-        hooks.py           #   pre/post hook runner
       support/             # cross-cutting utilities (the only layer-named dir)
         config.py          #   INI config loader
         exceptions.py      #   typed exception hierarchy
@@ -64,11 +63,9 @@ Project layout
         misc.py            #   requires_update etc.
         fileops.py         #   atomic write, ensure_dir
         systemcheck.py     #   `ssh`/`osc`/`svn` availability probes
-        paths.py           #   scripts_path / terms_path / XDG cache (merged)
+        paths.py           #   terms_path / XDG cache (merged)
       commands/            # one module per `do_<command>` (auto-discovered)
       types/               # typed value objects (UpdateID, RpmVer, …)
-      helper/              # shell/perl helper scripts (data)
-      scripts/             # pre/post/compare hook scripts (data)
       terms/               # terminal-launcher snippets (data)
 
     tests/                 # pytest test suite (flat, mirrors mtui/ paths)

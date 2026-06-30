@@ -780,8 +780,8 @@ def test_perform_downgrade_transactional_combines_packages(mock_run):
 
 
 @patch("mtui.hosts.target.hostgroup.RunCommand")
-def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
-    """``noprepare`` skips prepare; ``noscript`` skips Pre/Post/Compare scripts."""
+def test_perform_update_runs_full_flow_with_noprepare(mock_run):
+    """``noprepare`` skips prepare and the update still completes + unlocks."""
     t1 = _stub_target("h1")
     t1.packages = {}  # short-circuit package_check
     t1.doer.return_value = _doer_dict(command="zypper up", reboot="")
@@ -792,42 +792,8 @@ def test_perform_update_runs_full_flow_with_noprepare_and_noscript(mock_run):
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
     hg = HostsGroup([t1])
-    hg.perform_update(testreport, ["noprepare", "noscript"])
-    # Pre/Post/Compare scripts must not have been run.
-    testreport.run_scripts.assert_not_called()
+    hg.perform_update(testreport, ["noprepare"])
     t1.unlock.assert_called()
-
-
-@patch("mtui.hosts.target.hostgroup.RunCommand")
-def test_perform_update_runs_pre_post_and_compare_scripts(mock_run):
-    """Default flow runs Pre, Post and Compare scripts when not in auto mode."""
-    from mtui.update_workflow.hooks import CompareScript, PostScript, PreScript
-
-    t1 = _stub_target("h1")
-    t1.packages = {}
-    # perform_update internally calls perform_prepare → two distinct
-    # doer roles are looked up against the same target. Dispatch by role.
-    doers = {
-        "updater": _doer_dict(command="zypper up", reboot=""),
-        "preparer": _doer_dict(
-            command="zypper in $package", reboot="", start_command=""
-        ),
-    }
-    t1.doer.side_effect = lambda role, *a, **kw: doers[role]
-    t1.check.return_value = MagicMock()
-    t1.lasterr.return_value = ""
-    testreport = MagicMock()
-    testreport.workflow = Workflow.MANUAL
-    testreport.get_package_list.return_value = ["pkg"]
-    testreport.rrid.maintenance_id = "1"
-    testreport.rrid.review_id = "2"
-    hg = HostsGroup([t1])
-    hg.perform_update(testreport, [])
-    # PreScript before update, Post + Compare after.
-    script_classes_called = [c.args[0] for c in testreport.run_scripts.call_args_list]
-    assert PreScript in script_classes_called
-    assert PostScript in script_classes_called
-    assert CompareScript in script_classes_called
 
 
 @patch("mtui.hosts.target.hostgroup.RunCommand")
@@ -843,7 +809,7 @@ def test_perform_update_unlocks_when_run_fails(mock_run):
     hg = HostsGroup([t1])
     mock_run.return_value.run.side_effect = RuntimeError("update boom")
     with pytest.raises(RuntimeError, match="update boom"):
-        hg.perform_update(testreport, ["noprepare", "noscript"])
+        hg.perform_update(testreport, ["noprepare"])
     t1.unlock.assert_called()
 
 
@@ -875,7 +841,7 @@ def test_perform_update_reports_all_host_failures(
         caplog.at_level(logging.ERROR, logger="mtui.target.hostgroup"),
         pytest.raises(UpdateError) as ei,
     ):
-        hg.perform_update(testreport, ["noprepare", "noscript"])
+        hg.perform_update(testreport, ["noprepare"])
 
     msg = str(ei.value)
     assert "h1" in msg  # aggregated, not just the first
@@ -913,7 +879,7 @@ def test_perform_update_single_failure_reraises_original(
     hg = HostsGroup([t1, t2])
 
     with pytest.raises(UpdateError) as ei:
-        hg.perform_update(testreport, ["noprepare", "noscript"])
+        hg.perform_update(testreport, ["noprepare"])
 
     assert ei.value is orig  # exact original error, unchanged
     assert str(ei.value) == "h1: Dependency Error"
@@ -934,7 +900,7 @@ def test_perform_update_removes_repos_at_end(mock_run, mock_fanout):
     testreport.rrid.maintenance_id = "1"
     testreport.rrid.review_id = "2"
     hg = HostsGroup([t1])
-    hg.perform_update(testreport, ["noprepare", "noscript"])
+    hg.perform_update(testreport, ["noprepare"])
 
     operations = [c.args[0] for c in mock_fanout.call_args_list]
     # The repo lifecycle is: add at the start, remove at the end.
@@ -959,7 +925,7 @@ def test_perform_update_keeps_repos_when_run_fails(mock_run, mock_fanout):
     mock_run.return_value.run.side_effect = RuntimeError("update boom")
 
     with pytest.raises(RuntimeError, match="update boom"):
-        hg.perform_update(testreport, ["noprepare", "noscript"])
+        hg.perform_update(testreport, ["noprepare"])
 
     operations = [c.args[0] for c in mock_fanout.call_args_list]
     # Repo was added, but NOT removed on failure.

@@ -198,8 +198,8 @@ Example::
   info: exporting XML to /suse/testing/testreports//SUSE:Maintenance:3601:126030/log
   wrote template to /suse/testing/testreports//SUSE:Maintenance:3601:126030/log
 
-How do I avoid exporting the check script results of a specific host into the test report?
-==========================================================================================
+How do I avoid exporting a specific host's results into the test report?
+========================================================================
 
 MTUI exports the results of all hosts from the list to the test report,
 even the disabled ones. This means that all hosts which are for example
@@ -221,26 +221,16 @@ In case the update introduces new packages which are only available in the
 test update repositories (which is the case on almost every feature update),
 the packages cannot be installed by ``prepare`` since they are not yet available.
 In such a case, use the ``update`` command with the ``--newpackage`` flag, which
-installs all packages right before the post-check scripts are run, saving you
-the need to install these packages manually.
+installs all packages right after the update, saving you the need to install
+these packages manually.
 
 Example::
 
   mtui> update --newpackage
   info: preparing
   info: done
-  info: preparing script check_vendor_and_disturl.pl
-  info: preparing script check_dependencies.sh
-  info: preparing script check_new_licenses.sh
   info: updating
   info: preparing
-  info: done
-  info: preparing script check_vendor_and_disturl.pl
-  info: preparing script check_dependencies.sh
-  info: preparing script check_new_licenses.sh
-  info: preparing script compare_vendor_and_disturl.pl
-  info: preparing script compare_dependencies.sh
-  info: preparing script compare_new_licenses.sh
   info: done
 
 
@@ -272,8 +262,8 @@ Example::
   info: done
 
 
-Can I update the tested packages without running the check scripts?
-===================================================================
+Can I install all packages from the test update repositories at once?
+=====================================================================
 
 The ``prepare`` command installs all packages from the test update
 repositories if the ``--update`` parameter is set.
@@ -449,51 +439,9 @@ Example::
   │   ├── s390ctc045.suse.de.log
   │   └── steve.qam.suse.cz.log
   ├── log
-  ├── output
-  │   └── scripts
-  │       ├── post.check_from_same_srcrpm.hayley.qam.suse.cz
-  │       ├── post.check_from_same_srcrpm.s390ctc045.suse.de
-  │       ├── post.check_from_same_srcrpm.steve.qam.suse.cz
-  │       ├── post.check_initrd_state.hayley.qam.suse.cz
-  │       ├── post.check_initrd_state.s390ctc045.suse.de
-  │       ├── post.check_initrd_state.steve.qam.suse.cz
-  │       ├── post.check_new_dependencies.hayley.qam.suse.cz
-  │       ├── post.check_new_dependencies.s390ctc045.suse.de
-  │       ├── post.check_new_dependencies.steve.qam.suse.cz
-  │       ├── post.check_vendor_and_disturl.hayley.qam.suse.cz
-  │       ├── post.check_vendor_and_disturl.s390ctc045.suse.de
-  │       ├── post.check_vendor_and_disturl.steve.qam.suse.cz
-  │       ├── pre.check_from_same_srcrpm.hayley.qam.suse.cz
-  │       ├── pre.check_from_same_srcrpm.s390ctc045.suse.de
-  │       ├── pre.check_from_same_srcrpm.steve.qam.suse.cz
-  │       ├── pre.check_initrd_state.hayley.qam.suse.cz
-  │       ├── pre.check_initrd_state.s390ctc045.suse.de
-  │       ├── pre.check_initrd_state.steve.qam.suse.cz
-  │       ├── pre.check_new_dependencies.hayley.qam.suse.cz
-  │       ├── pre.check_new_dependencies.s390ctc045.suse.de
-  │       ├── pre.check_new_dependencies.steve.qam.suse.cz
-  │       ├── pre.check_vendor_and_disturl.hayley.qam.suse.cz
-  │       ├── pre.check_vendor_and_disturl.s390ctc045.suse.de
-  │       └── pre.check_vendor_and_disturl.steve.qam.suse.cz
   ├── packages-list.txt
   ├── packages.xml
   ├── patchinfo.xml
   ├── project.xml
   ├── repositories.xml
-  ├── scripts
-  │   ├── compare
-  │   │   ├── compare_from_same_srcrpm.sh
-  │   │   ├── compare_initrd_state.sh
-  │   │   ├── compare_new_dependencies.sh
-  │   │   └── compare_vendor_and_disturl.sh
-  │   ├── post
-  │   │   ├── check_from_same_srcrpm.pl
-  │   │   ├── check_initrd_state.sh
-  │   │   ├── check_new_dependencies.sh
-  │   │   └── check_vendor_and_disturl.pl
-  │   └── pre
-  │       ├── check_from_same_srcrpm.pl
-  │       ├── check_initrd_state.sh
-  │       ├── check_new_dependencies.sh
-  │       └── check_vendor_and_disturl.pl
   └── source.diff
