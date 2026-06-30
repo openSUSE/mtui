@@ -105,6 +105,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Changed
 
+- `analyze_diff` was reworked to handle complex OBS `source.diff` files. It now
+  parses the diff section by section (coping with multiple spec files and
+  repeating `other changes:` blocks) and produces a review-friendly summary:
+  changed source archives, patches added to / removed from the spec (flagging
+  any added patch missing from the changelog), version/`%global` bumps, and
+  `bsc#`/`CVE-` references. The define-vs-apply cross-check now warns only on a
+  genuine mismatch and is skipped for `%autosetup`/`%autopatch` packages, and
+  changelog matching is literal (a `.` in a patch name is no longer a wildcard).
 - `set_workflow`, `add_host`, and `remove_host` now fan out across all loaded
   templates by default (each acting on that template's own report and host
   list), matching the other action commands. Use `-T RRID`/`--template RRID` to
