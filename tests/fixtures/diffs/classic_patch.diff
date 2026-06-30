@@ -1,0 +1,37 @@
+changes files:
+--------------
+--- examplepkg.changes
++++ examplepkg.changes
+@@ -1,0 +2,9 @@
++Mon Jun 15 10:00:00 UTC 2026 - Jane Doe <jane@suse.com>
++
++- Add fix-overflow.patch to address CVE-2026-12345 (bsc#1234567)
++- Add fix-typo.patch cleaning up docs
++
++-------------------------------------------------------------------
+
+old:
+----
+  examplepkg-1.2.0.tar.gz
+
+new:
+----
+  examplepkg-1.3.0.tar.gz
+
+spec files:
+-----------
+--- examplepkg.spec
++++ examplepkg.spec
+@@ -8,6 +8,9 @@
+-Version:        1.2.0
++Version:        1.3.0
+ Source0:        examplepkg-%{version}.tar.gz
++Patch1:         fix-overflow.patch
++Patch2:         fix-typo.patch
+@@ -30,6 +33,9 @@
+ %prep
+ %setup -q
++%patch1 -p1
++%patch2 -p1
+ 
+ %build

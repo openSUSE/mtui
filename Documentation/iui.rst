@@ -1149,7 +1149,23 @@ analyze_diff
 
     analyze_diff
 
-Check source diff file for patches and prints them to user.
+Analyzes the OBS ``source.diff`` to assist with code review.
+
+The diff is parsed section by section (``changes files:``, ``old:``,
+``new:``, ``spec files:`` and the possibly repeating ``other changes:``
+blocks), so it copes with complex multi-section diffs that previously
+confused the command. It reports:
+
+* source archives changed (``old:`` to ``new:``),
+* patches added to and removed from the spec file, flagging any added
+  patch that is not mentioned in the changelog,
+* version and ``%global``/``%define`` macro bumps,
+* bug and CVE references (``bsc#``, ``boo#``, ``CVE-...``) found in the
+  changelog.
+
+When patches are applied with ``%autosetup``/``%autopatch`` (or no
+explicit ``%patchN`` lines exist), the define-vs-apply cross-check is
+skipped instead of emitting a misleading warning.
 
 
 show_diff
