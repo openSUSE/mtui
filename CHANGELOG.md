@@ -100,6 +100,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   list), matching the other action commands. Use `-T RRID`/`--template RRID` to
   scope a single command to one loaded template, or `--all-templates` to request
   fan-out explicitly.
+- Over `mtui-mcp`, tools that previously acted on the "active" template now fan
+  out across every loaded template when more than one is loaded and no
+  `template`/`-T` is given, since MCP has no client-addressable active pointer
+  (`switch` is REPL-only). Pass `template=RRID` to scope a call to a single
+  template. `list_templates` no longer shows the `*` active marker over MCP
+  (the marker remains in the interactive REPL).
 
 ### Removed
 
