@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -75,21 +76,42 @@ class _FakeRegistry:
     def all(self) -> list[object]:
         return list(self._entries.values())
 
+    @property
+    def active(self) -> object:
+        return next(iter(self._entries.values()))
+
+
+def _fake_scoped_lock(lock: asyncio.Lock):
+    """Build a ``scoped_lock(rrid)`` stand-in over a single real lock.
+
+    The tools call ``session.scoped_lock(template)``; the fakes only need the
+    ``async with`` to acquire *a* lock, so we ignore the rrid and serialise on
+    one :class:`asyncio.Lock` (matching the old ``_lock`` behaviour).
+    """
+
+    @asynccontextmanager
+    async def _scoped_lock(_rrid: str | None):
+        async with lock:
+            yield
+
+    return _scoped_lock
+
 
 def _loaded_session(tmp_path: Path, path: Path) -> SimpleNamespace:
     """Fake session that only needs the attributes the tools touch.
 
     Avoids constructing a full TestReport — we just need ``metadata.path``
     to be a non-None string and ``metadata`` to *not* be a NullTestReport.
-    ``_lock`` is a real :class:`asyncio.Lock` so the ``async with`` works.
-    A single-entry ``templates`` registry is provided so ``_resolve_report``
-    resolves to ``metadata`` (zero/one loaded -> active fallback).
+    ``scoped_lock`` wraps a real :class:`asyncio.Lock` so the ``async with``
+    works. A single-entry ``templates`` registry is provided so
+    ``_resolve_report`` resolves to ``metadata`` (zero/one loaded -> active
+    fallback).
     """
     metadata = SimpleNamespace(id="SUSE:Maintenance:1:1", path=str(path))
     return SimpleNamespace(
         metadata=metadata,
         templates=_FakeRegistry({"SUSE:Maintenance:1:1": metadata}),
-        _lock=asyncio.Lock(),
+        scoped_lock=_fake_scoped_lock(asyncio.Lock()),
     )
 
 
@@ -105,7 +127,7 @@ def _multi_session(tmp_path: Path, paths: dict[str, Path]) -> SimpleNamespace:
     return SimpleNamespace(
         metadata=first,
         templates=_FakeRegistry(reports),
-        _lock=asyncio.Lock(),
+        scoped_lock=_fake_scoped_lock(asyncio.Lock()),
     )
 
 

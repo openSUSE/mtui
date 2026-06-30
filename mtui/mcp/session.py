@@ -17,18 +17,23 @@ configurable TTL (``[mcp] session_idle_timeout``) and their hosts
 disconnected via :meth:`McpSession.close`; the number of concurrent
 sessions is bounded by ``[mcp] session_cap``.
 
-Within a single session, every :meth:`McpSession.run_command` call is
-serialised through that session's :class:`asyncio.Lock`, so two
-concurrent tool calls from the *same* client cannot interleave
-mutations of its ``metadata`` / ``targets``; calls from *different*
+Within a single session, locking is **per template**: a
+:meth:`McpSession.run_command` call scoped to one loaded template holds
+only that template's lock, so two tool calls on *different* templates run
+concurrently while two on the *same* template serialise (they cannot
+interleave that template's host phase). Registry-mutating commands
+(``load_template`` / ``unload`` / ``close``) and unscoped fan-out take a
+registry-wide *exclusive* gate that drains in-flight per-template work, so
+the loaded set is never observed mid-mutation. Calls from *different*
 clients run concurrently against their own sessions. Blocking command
 bodies (SSH, subprocess) run inside :func:`asyncio.to_thread` so they
 do not stall the event loop.
 
-Stdout / stderr produced by a command are captured per-call via a
-fresh :class:`io.StringIO`; stdout is returned to the caller, stderr
-either surfaces in :class:`McpCommandError` on failure or is logged at
-WARNING on a clean return.
+Stdout / stderr produced by a command are captured per-call via a fresh
+:class:`io.StringIO` bound to per-call :mod:`contextvars` (so concurrent
+commands never clobber each other's sinks); stdout is returned to the
+caller, stderr either surfaces in :class:`McpCommandError` on failure or
+is logged at WARNING on a clean return.
 """
 
 from __future__ import annotations
@@ -67,6 +72,22 @@ logger = getLogger("mtui.mcp.session")
 #: captured.
 _capture_token: contextvars.ContextVar[object | None] = contextvars.ContextVar(
     "mtui_mcp_capture_token", default=None
+)
+
+#: Per-call output sinks. ``_run_sync`` sets these to the running command's
+#: :class:`CommandPromptDisplay` and stdout :class:`io.StringIO` for the
+#: duration of one command, and (via
+#: :class:`mtui.support.concurrency.ContextExecutor`) the values propagate
+#: into any worker threads the command fans out to. Holding them in
+#: :mod:`contextvars` rather than on the session instance is what lets two
+#: commands run concurrently (per-RRID locking) without clobbering each
+#: other's captured output. ``None`` outside a call -> ``println`` falls
+#: back to the log.
+_current_display: contextvars.ContextVar[CommandPromptDisplay | None] = (
+    contextvars.ContextVar("mtui_mcp_current_display", default=None)
+)
+_current_stdout: contextvars.ContextVar[io.StringIO | None] = contextvars.ContextVar(
+    "mtui_mcp_current_stdout", default=None
 )
 
 
@@ -207,6 +228,64 @@ class _FakeSys(SimpleNamespace):
         raise SystemExit(code)
 
 
+class _RWLock:
+    """A minimal async readers-writer lock used as the registry gate.
+
+    Many *shared* holders (per-RRID commands, which mutate only their own
+    template) may run at once, but a *shared* holder excludes every
+    *exclusive* holder and vice-versa. Exclusive holders (registry mutators:
+    ``load_template`` / ``unload`` / ``close`` / unscoped fan-out) run one at a
+    time with no shared holder present.
+
+    Writer-preference is intentional: while an exclusive waiter is pending, new
+    shared acquisitions block, so a steady stream of per-RRID commands cannot
+    starve a ``load_template``. There is no fairness queue beyond that; the
+    single-session workload (a handful of concurrent subagents) does not need
+    one.
+    """
+
+    def __init__(self) -> None:
+        self._readers = 0
+        self._writer_waiting = 0
+        # ``_cond`` guards ``_readers`` / ``_writer_waiting`` and is the
+        # rendezvous both modes wait on.
+        self._cond = asyncio.Condition()
+
+    @contextlib.asynccontextmanager
+    async def shared(self):
+        """Acquire in shared (reader) mode for the duration of the body."""
+        async with self._cond:
+            # Wait out any active or pending exclusive holder (writer pref).
+            await self._cond.wait_for(lambda: self._writer_waiting == 0)
+            self._readers += 1
+        try:
+            yield
+        finally:
+            async with self._cond:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._cond.notify_all()
+
+    @contextlib.asynccontextmanager
+    async def exclusive(self):
+        """Acquire in exclusive (writer) mode for the duration of the body."""
+        async with self._cond:
+            self._writer_waiting += 1
+            try:
+                await self._cond.wait_for(lambda: self._readers == 0)
+            finally:
+                self._writer_waiting -= 1
+            # Hold ``_cond`` across the body so no reader/writer can enter:
+            # both modes must take ``_cond`` to mutate their counters, and a
+            # would-be reader also blocks on ``_writer_waiting``/the readers
+            # check. Keeping the condition's underlying lock held is the
+            # exclusion.
+            try:
+                yield
+            finally:
+                self._cond.notify_all()
+
+
 class McpSession:
     """Headless mtui session backing one ``mtui-mcp`` client.
 
@@ -263,22 +342,23 @@ class McpSession:
         # silently misbehaving.
         self._history = None
 
-        # Per-session serialiser. Concurrent tool calls from the *same*
-        # client queue here so they cannot interleave mutations of this
-        # session's ``metadata`` / ``targets``; calls from *other* http
-        # clients hold their own session's lock and run concurrently.
-        # The lock is held across the ``to_thread`` worker so re-entrant
-        # calls (a Command's body touching ``self.prompt.load_update``)
-        # execute on the same thread without re-acquiring.
-        self._lock = asyncio.Lock()
-
-        # Per-call stdout pointer. ``println`` falls back to ``log``
-        # when no command is currently running.
-        self._current_stdout: io.StringIO | None = None
-        # Per-call display, swapped in by ``_run_sync`` so
-        # ``Command.__init__`` picks up the right StringIO-bound
-        # writer. ``None`` outside a call.
-        self.display: CommandPromptDisplay | None = None
+        # Per-RRID serialiser layered over a registry shared/exclusive gate.
+        #
+        # A command scoped to one template takes that template's per-RRID lock
+        # (``_rrid_locks``) so same-RRID calls serialise while different-RRID
+        # calls run concurrently — but it *also* enters the registry gate in
+        # *shared* mode (``_registry`` as a readers-writer lock) so it cannot
+        # overlap a registry mutation. Registry mutators (``load_template`` /
+        # ``unload`` / ``close``) and unscoped fan-out take the gate in
+        # *exclusive* mode, which waits for every in-flight per-RRID command to
+        # drain and blocks new ones, giving them a consistent view of the loaded
+        # set. ``_locks_guard`` protects lazy creation of the per-RRID lock map.
+        # Locks are held across the ``to_thread`` worker so a command's
+        # re-entrant body (touching ``self.prompt.load_update``) executes on the
+        # same thread without re-acquiring.
+        self._registry = _RWLock()
+        self._rrid_locks: dict[str, asyncio.Lock] = {}
+        self._locks_guard = asyncio.Lock()
 
         # Background-job table for the async ("don't block on a slow host
         # op") path. A backgrounded command still acquires this session's
@@ -303,6 +383,26 @@ class McpSession:
     def targets(self):
         """The active template's :class:`HostsGroup`."""
         return self.templates.active.targets
+
+    @property
+    def display(self) -> CommandPromptDisplay | None:
+        """The running command's per-call display, or ``None`` outside a call.
+
+        Backed by the :data:`_current_display` :class:`~contextvars.ContextVar`
+        (set by :meth:`_run_sync`) so concurrent commands each see their own
+        :class:`CommandPromptDisplay` rather than a shared session attribute.
+        """
+        return _current_display.get()
+
+    @property
+    def _current_stdout(self) -> io.StringIO | None:
+        """The running command's per-call stdout buffer, or ``None``.
+
+        Backed by the :data:`_current_stdout` :class:`~contextvars.ContextVar`
+        so :meth:`println` lands in the originating call's buffer even when
+        several commands run concurrently.
+        """
+        return _current_stdout.get()
 
     # ------------------------------------------------------------------
     # CommandPrompt-compatible surface
@@ -527,12 +627,76 @@ class McpSession:
                 raises an unhandled exception.
 
         """
-        async with self._lock:
+        async with self._command_lock(cmd_cls, argv):
             if ctx is None:
                 return await asyncio.to_thread(self._run_sync, cmd_cls, argv)
             return await self._run_with_heartbeat(
                 ctx, cmd_cls, argv, interval=progress_interval
             )
+
+    async def _lock_for(self, rrid: str) -> asyncio.Lock:
+        """Return (creating on first use) the per-template lock for ``rrid``.
+
+        Lazily populates :attr:`_rrid_locks` under :attr:`_locks_guard` so two
+        coroutines racing to lock the same fresh RRID share one lock object.
+        """
+        async with self._locks_guard:
+            lock = self._rrid_locks.get(rrid)
+            if lock is None:
+                lock = asyncio.Lock()
+                self._rrid_locks[rrid] = lock
+            return lock
+
+    @contextlib.asynccontextmanager
+    async def _command_lock(self, cmd_cls: type[Command], argv: list[str]):
+        """Hold the right lock(s) for ``cmd_cls`` for the duration of the body.
+
+        Resolution mirrors the foreground dispatch:
+
+        * a command resolving to **exactly one** template → the registry gate
+          in *shared* mode **plus** that template's per-RRID lock, so
+          different-RRID commands run concurrently while same-RRID commands
+          serialise and no command overlaps a registry mutation;
+        * fan-out / unscoped-multi commands, registry mutators
+          (``load_template`` / ``unload``), or anything that resolves to no
+          real template → the registry gate in *exclusive* mode, which drains
+          in-flight per-RRID commands and blocks new ones for the duration.
+
+        A single command never holds two per-RRID locks and the exclusive path
+        holds only the gate, so the lock order (gate-shared → one rrid lock) is
+        total and cannot deadlock.
+        """
+        rrids = self._resolve_job_rrids(cmd_cls, argv)
+        if rrids is not None and len(rrids) == 1:
+            async with self._registry.shared():
+                lock = await self._lock_for(rrids[0])
+                async with lock:
+                    yield
+        else:
+            async with self._registry.exclusive():
+                yield
+
+    @contextlib.asynccontextmanager
+    async def scoped_lock(self, rrid: str | None):
+        """Hold the registry-shared gate plus one template's per-RRID lock.
+
+        For the hand-written testreport tools (which act on a single template's
+        files): entering the registry gate in *shared* mode keeps the loaded set
+        stable for the body (no concurrent ``load_template`` / ``unload``) while
+        still letting tools on *other* templates run in parallel, and the
+        per-RRID lock serialises against the foreground dispatch for the *same*
+        template (e.g. a concurrent ``commit``).
+
+        ``rrid`` is the resolved target template id, or ``None`` to fall back to
+        the active template (single-/zero-loaded case). Callers should resolve
+        and validate the target report *inside* the body, where the shared gate
+        guarantees the registry cannot change underfoot.
+        """
+        async with self._registry.shared():
+            key = rrid if rrid is not None else str(self.templates.active.id)
+            lock = await self._lock_for(key)
+            async with lock:
+                yield
 
     async def _run_with_heartbeat(
         self,
@@ -585,10 +749,13 @@ class McpSession:
         fake_sys = _FakeSys()
         display = CommandPromptDisplay(fake_sys.stdout)
 
-        prev_display = self.display
-        prev_stdout = self._current_stdout
-        self.display = display
-        self._current_stdout = fake_sys.stdout
+        # Bind the per-call output sinks via context vars (not session
+        # attributes) so concurrent commands — now that different-RRID calls
+        # hold different locks — each see their own display / stdout and never
+        # clobber one another. ``ContextExecutor`` propagates these into the
+        # worker threads a command fans out to, exactly like ``_capture_token``.
+        display_reset = _current_display.set(display)
+        stdout_reset = _current_stdout.set(fake_sys.stdout)
 
         # Tee the command's own ``mtui.*`` log records (INFO+) into the
         # captured stdout so MCP clients see warnings/errors the command
@@ -666,8 +833,8 @@ class McpSession:
             _capture_token.reset(token_reset)
             if lowered_cap_level:
                 cap_logger.setLevel(prev_cap_level)
-            self.display = prev_display
-            self._current_stdout = prev_stdout
+            _current_display.reset(display_reset)
+            _current_stdout.reset(stdout_reset)
 
     # ------------------------------------------------------------------
     # Background jobs (async path for slow host operations)
@@ -708,9 +875,11 @@ class McpSession:
         """Create and start one job record running ``argv`` and return its id.
 
         Shared core of :meth:`start_job` and :meth:`start_jobs`. The worker task
-        acquires this session's ``_lock`` for its whole duration (so it
-        serialises against the session's other mutating calls exactly like
-        :meth:`run_command`) and executes the body in :func:`asyncio.to_thread`.
+        acquires the same per-RRID / registry gate as :meth:`run_command` (via
+        :meth:`_command_lock`) for its whole duration, so a job scoped to one
+        template serialises only against same-RRID work and runs concurrently
+        with jobs on other templates, and executes the body in
+        :func:`asyncio.to_thread`.
 
         Args:
             cmd_cls: The :class:`Command` subclass to run.
@@ -737,7 +906,7 @@ class McpSession:
 
         async def _runner() -> None:
             try:
-                async with self._lock:
+                async with self._command_lock(cmd_cls, argv):
                     out = await asyncio.to_thread(self._run_sync, cmd_cls, argv)
                 job["result"] = out
                 job["state"] = "done"
@@ -768,10 +937,9 @@ class McpSession:
         """Start ``cmd_cls`` in the background and return its job id.
 
         The command runs in an :func:`asyncio.create_task` worker that
-        acquires this session's ``_lock`` for its whole duration (so it
-        serialises against the session's other mutating calls exactly
-        like :meth:`run_command`) and executes the body in
-        :func:`asyncio.to_thread`. Unlike :meth:`run_command` this
+        acquires the same per-RRID / registry gate as :meth:`run_command`
+        (via :meth:`_command_lock`) for its whole duration, and executes the
+        body in :func:`asyncio.to_thread`. Unlike :meth:`run_command` this
         returns **immediately** with a handle, so the client is not held
         on one request for the minutes a ``run`` / ``update`` /
         ``downgrade`` can take and can meanwhile issue other calls.
@@ -816,10 +984,10 @@ class McpSession:
         leaves the others running). When a single template (or none) resolves,
         this is exactly one job with the unchanged ``<command>-<n>`` id.
 
-        The per-template jobs each acquire the session ``_lock`` for their whole
-        duration, so they run **serially** within one session (matching the
-        single-session serialisation contract); the win is independent tracking
-        and cancellation, not intra-session parallelism.
+        Each fanned-out job is scoped to one template (``-T <rrid>``) and so
+        takes only that template's per-RRID lock, so the jobs run **concurrently
+        across templates** within one session (same-RRID work still serialises);
+        on top of that they remain independently observable and cancellable.
 
         Args:
             cmd_cls: The :class:`Command` subclass to run.

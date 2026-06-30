@@ -25,10 +25,12 @@ Two further read-only tools expose the rest of the checkout that the
 All three are ``async def``. The registered tool closures resolve the
 caller's own :class:`McpSession` from the
 :class:`mtui.mcp.registry.SessionProvider` (keyed on the request
-session under http, a single session under stdio) and then acquire
-*that session's* ``_lock``, so each client serialises only against its
-own concurrent :meth:`McpSession.run_command` calls and patches **only
-its own** loaded testreport file — no cross-client interference.
+session under http, a single session under stdio) and then acquire the
+target template's per-RRID lock via :meth:`McpSession.scoped_lock` (under
+the registry-shared gate), so a tool serialises only against same-template
+:meth:`McpSession.run_command` calls, runs concurrently with work on other
+templates, and patches **only** the addressed testreport file — no
+cross-client and no cross-template interference.
 
 Refusal is uniform: when ``session.metadata`` is a
 :class:`NullTestReport` or ``metadata.path`` is ``None``, every tool
@@ -286,16 +288,18 @@ async def testreport_read(
     the file's *total* line count so the caller can page; when a window was
     requested the reply also carries ``offset`` and ``returned_lines``.
 
-    Acquires ``session._lock`` so the snapshot is coherent with any
-    in-flight command dispatch (e.g. a concurrent ``commit``).
+    Acquires the target template's per-RRID lock (under the registry-shared
+    gate) so the snapshot is coherent with any in-flight command dispatch on
+    the *same* template (e.g. a concurrent ``commit``), while tools on other
+    templates run in parallel.
     """
     if offset < 1:
         raise McpCommandError("", f"offset must be >= 1 (got {offset})", 1)
     if limit is not None and limit < 0:
         raise McpCommandError("", f"limit must be >= 0 (got {limit})", 1)
 
-    await _heartbeat(ctx, "testreport_read: waiting for session lock")
-    async with session._lock:
+    await _heartbeat(ctx, "testreport_read: waiting for template lock")
+    async with session.scoped_lock(template):
         path = _resolve_testreport_path(session, template)
         content = path.read_text(encoding="utf-8", errors="replace")
 
@@ -333,8 +337,8 @@ async def testreport_logs(
     names (and byte sizes) so a caller can then fetch one with
     :func:`testreport_read_file`.
     """
-    await _heartbeat(ctx, "testreport_logs: waiting for session lock")
-    async with session._lock:
+    await _heartbeat(ctx, "testreport_logs: waiting for template lock")
+    async with session.scoped_lock(template):
         base = _resolve_template_dir(session, template)
 
         def listing(sub: str) -> list[dict[str, Any]]:
@@ -367,8 +371,8 @@ async def testreport_read_file(
     ``source.diff``, ``patchinfo.xml`` and the like. ``relpath`` is resolved
     under the checkout directory and may not escape it.
     """
-    await _heartbeat(ctx, "testreport_read_file: waiting for session lock")
-    async with session._lock:
+    await _heartbeat(ctx, "testreport_read_file: waiting for template lock")
+    async with session.scoped_lock(template):
         base = _resolve_template_dir(session, template)
         target = _safe_template_file(base, relpath)
         if not target.is_file():
@@ -402,8 +406,8 @@ async def testreport_patch(
     of the surrounding lines (which come from
     :meth:`str.splitlines` with ``keepends=True``).
     """
-    await _heartbeat(ctx, "testreport_patch: waiting for session lock")
-    async with session._lock:
+    await _heartbeat(ctx, "testreport_patch: waiting for template lock")
+    async with session.scoped_lock(template):
         path = _resolve_testreport_path(session, template)
         content = path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
@@ -453,8 +457,8 @@ async def testreport_write(
     :func:`testreport_patch` unreliable; the LLM resends the whole
     file in one shot.
     """
-    await _heartbeat(ctx, "testreport_write: waiting for session lock")
-    async with session._lock:
+    await _heartbeat(ctx, "testreport_write: waiting for template lock")
+    async with session.scoped_lock(template):
         path = _resolve_testreport_path(session, template)
         bytes_written = _atomic_write_text(path, content)
     return {
@@ -551,8 +555,8 @@ async def testreport_fill(
             "", "nothing to fill: pass at least one of reproducer/status/summary", 1
         )
 
-    await _heartbeat(ctx, "testreport_fill: waiting for session lock")
-    async with session._lock:
+    await _heartbeat(ctx, "testreport_fill: waiting for template lock")
+    async with session.scoped_lock(template):
         path = _resolve_testreport_path(session, template)
         content = path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)

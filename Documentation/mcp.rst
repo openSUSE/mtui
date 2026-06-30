@@ -432,11 +432,18 @@ Concurrency and safety
   (``id(ctx.session)``), which the SDK keeps 1:1 with the MCP session
   for the connection's lifetime. The ``Mcp-Session-Id`` header is used
   for log lines only, never to route state.
-* **Per-session ``asyncio.Lock``.** Within a single session every tool
-  invocation (auto-generated and testreport-editing alike) acquires
-  *that session's* lock, so one client's calls cannot interleave
-  mutations of its own ``metadata`` / ``targets``. Calls from different
-  clients hold different locks and run concurrently.
+* **Per-template locking within a session.** Within a single session a
+  tool invocation scoped to one loaded template (auto-generated commands
+  with ``-T``/``template=`` and the testreport-editing tools alike)
+  acquires only *that template's* lock, so calls on **different**
+  templates run concurrently while calls on the **same** template
+  serialise (they cannot interleave that template's host phase).
+  Registry-mutating commands (``load_template``, ``unload``) and unscoped
+  fan-out take a session-wide *exclusive* gate that briefly drains
+  in-flight per-template work, so the loaded set is never observed
+  mid-mutation. Per-call stdout/display capture is isolated per call, so
+  concurrent commands never cross-contaminate output. Calls from
+  different clients use different sessions and run concurrently.
 * **Bounded session count.** The HTTP registry refuses to create more
   than ``[mcp] session_cap`` concurrent sessions (default ``32``),
   failing the offending tool call with a clear error rather than
@@ -579,10 +586,10 @@ the call returns **immediately** with a job id::
         while you work elsewhere. Poll job_status(job_id='run-1') and
         fetch output with job_result(job_id='run-1')."
 
-The command still runs under the session lock for its whole duration
-(so it serialises against the session's other mutating calls exactly
-like a foreground call), but you are free to issue other (read-only)
-tool calls meanwhile and poll the job:
+The command still holds its template's lock for its whole duration (so
+it serialises against same-template calls exactly like a foreground
+call), but you are free to issue other tool calls meanwhile — including
+work on other templates, which runs concurrently — and poll the job:
 
 * ``job_list``: every job in the session and its state;
 * ``job_status(job_id=…)``: one job's state
@@ -602,10 +609,10 @@ be polled, fetched, and cancelled independently; cancelling one
 template's job leaves the others running. Scoping the call with
 ``template="<RRID>"`` (or having only one template loaded) keeps it to a
 single job with the familiar ``<command>-<n>`` id; the fanned-out ids
-additionally encode the (sanitised) RRID. Because each per-template job
-still acquires the session lock for its whole duration, the jobs run
-serially within one session; the benefit is independent tracking and
-cancellation, not intra-session parallelism.
+additionally encode the (sanitised) RRID. Because each fanned-out job is
+scoped to one template and takes only that template's lock, the jobs run
+**concurrently across templates** within one session (same-template work
+still serialises), on top of being independently tracked and cancellable.
 
 Jobs are scoped to the session: under stdio that is the single process;
 under http it is the caller's isolated session, so one client never

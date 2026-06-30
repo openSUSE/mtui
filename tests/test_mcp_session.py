@@ -116,8 +116,13 @@ class _RecordingCommand(Command):
         self.println(f"{start:.6f}-{end:.6f}")
 
 
-def test_run_command_serialises_via_lock(tmp_path: Path) -> None:
-    """Two concurrent ``run_command`` calls must not overlap in time."""
+def test_run_command_unscoped_serialises_via_exclusive_gate(tmp_path: Path) -> None:
+    """Unscoped commands (no real template) take the exclusive registry gate.
+
+    With nothing loaded, ``_resolve_job_rrids`` yields only the Null report, so
+    the command falls onto the registry-exclusive path and concurrent calls
+    must still run strictly one-at-a-time (no overlap).
+    """
     sess = _make_session(tmp_path)
     _RecordingCommand._intervals.clear()
 
@@ -137,6 +142,131 @@ def test_run_command_serialises_via_lock(tmp_path: Path) -> None:
         intervals, intervals[1:], strict=False
     ):
         assert a_end <= b_start, f"intervals overlapped: {intervals!r}"
+
+
+def _rrid_recorder_command():
+    """Build a throwaway fan-out :class:`Command` that records its interval.
+
+    Each ``__call__`` sleeps briefly and appends ``(rrid, start, end)`` to the
+    returned ``seen`` list, so a test can check whether two invocations on
+    different RRIDs overlapped in time. ``scope="fanout"`` + ``_add_template_arg``
+    lets ``-T <rrid>`` scope it to exactly one loaded template (one per-RRID
+    lock). The caller must unregister ``cls`` afterwards.
+    """
+    seen: list[tuple[str, float, float]] = []
+
+    class _RridProbe(Command):
+        command = "rrid_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+        _hold_seconds: ClassVar[float] = 0.1
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            start = time.monotonic()
+            time.sleep(self._hold_seconds)
+            end = time.monotonic()
+            seen.append((str(self.metadata.id), start, end))
+
+    return _RridProbe, seen
+
+
+def test_run_command_different_rrids_run_concurrently(tmp_path: Path) -> None:
+    """Two ``run_command`` calls scoped to *different* templates overlap in time."""
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    cls, seen = _rrid_recorder_command()
+
+    async def driver() -> None:
+        await asyncio.gather(
+            sess.run_command(cls, ["-T", "SUSE:Maintenance:1:1"]),
+            sess.run_command(cls, ["-T", "SUSE:Maintenance:2:1"]),
+        )
+
+    try:
+        asyncio.run(driver())
+    finally:
+        Command.registry.pop(cls.command, None)
+
+    assert len(seen) == 2
+    (_r1, s1, e1), (_r2, s2, e2) = seen
+    # Different RRID locks → the intervals must overlap (each holds for 0.1s,
+    # so a serial run would take ~0.2s and not overlap).
+    assert s2 < e1, f"expected overlap, got {seen!r}"
+    assert s1 < e2, f"expected overlap, got {seen!r}"
+
+
+def test_run_command_same_rrid_serialises(tmp_path: Path) -> None:
+    """Two ``run_command`` calls scoped to the *same* template do not overlap."""
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    cls, seen = _rrid_recorder_command()
+
+    async def driver() -> None:
+        await asyncio.gather(
+            sess.run_command(cls, ["-T", "SUSE:Maintenance:1:1"]),
+            sess.run_command(cls, ["-T", "SUSE:Maintenance:1:1"]),
+        )
+
+    try:
+        asyncio.run(driver())
+    finally:
+        Command.registry.pop(cls.command, None)
+
+    assert len(seen) == 2
+    intervals = sorted((s, e) for _r, s, e in seen)
+    (_s1, e1), (s2, _e2) = intervals
+    assert e1 <= s2, f"same-RRID calls overlapped: {seen!r}"
+
+
+def _stdout_probe_command():
+    """Throwaway command that prints its RRID twice around a sleep.
+
+    Two concurrent different-RRID runs overlap (per-RRID locks); each call must
+    capture *only* its own two prints — proving ``self._current_stdout`` /
+    ``self.display`` are per-call context vars, not a clobberable session attr.
+    """
+
+    class _StdoutProbe(Command):
+        command = "stdout_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            rrid = str(self.metadata.id)
+            self.println(f"{rrid}:first")
+            time.sleep(0.1)
+            self.println(f"{rrid}:second")
+
+    return _StdoutProbe
+
+
+def test_concurrent_runs_do_not_clobber_each_others_stdout(tmp_path: Path) -> None:
+    """Overlapping different-RRID runs each capture only their own output."""
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    cls = _stdout_probe_command()
+
+    async def driver() -> tuple[str, str]:
+        return await asyncio.gather(
+            sess.run_command(cls, ["-T", "SUSE:Maintenance:1:1"]),
+            sess.run_command(cls, ["-T", "SUSE:Maintenance:2:1"]),
+        )
+
+    try:
+        out_a, out_b = asyncio.run(driver())
+    finally:
+        Command.registry.pop(cls.command, None)
+
+    # Each reply contains exactly its own RRID's two lines and nothing of the
+    # other call's — no cross-contamination despite the overlapping execution.
+    assert out_a == "SUSE:Maintenance:1:1:first\nSUSE:Maintenance:1:1:second\n"
+    assert out_b == "SUSE:Maintenance:2:1:first\nSUSE:Maintenance:2:1:second\n"
 
 
 # --------------------------------------------------------------------------- #

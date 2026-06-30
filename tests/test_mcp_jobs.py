@@ -103,7 +103,7 @@ def test_job_result_running_tells_caller_to_poll(tmp_path: Path) -> None:
         # A job whose body blocks until we release the gate.
         async def _blocker() -> None:
             try:
-                async with sess._lock:
+                async with sess._registry.exclusive():
                     await gate.wait()
             except asyncio.CancelledError:
                 raise
