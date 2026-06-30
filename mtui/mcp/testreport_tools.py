@@ -66,34 +66,94 @@ _READ_FIRST_WARNING = (
     "to get current line numbers; line numbers shift after every patch."
 )
 
+#: Glued onto every testreport tool description: there is no client-addressable
+#: active template under MCP, so a tool with several templates loaded must be
+#: told which one to act on.
+_TEMPLATE_NOTE = (
+    "Pass `template=<rrid>` to target a specific loaded template; required when "
+    "more than one template is loaded."
+)
+
 
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #
 
 
-def _resolve_testreport_path(session: McpSession) -> Path:
-    """Return the loaded testreport's path or raise :class:`McpCommandError`.
+def _resolve_report(session: McpSession, template: str | None):
+    """Return the :class:`TestReport` a tool call should act on.
 
-    Two refusal conditions, both producing the same single-sentence
-    error message so the LLM does not have to disambiguate:
+    Resolution mirrors the auto-generated command tools' ``-T/--template``
+    contract (see :meth:`mtui.commands._command.Command._resolve_templates`)
+    but for the hand-written testreport tools, which act on exactly one file:
 
-    * ``session.metadata`` is a :class:`NullTestReport` (no template
-      ever loaded in this session).
-    * ``session.metadata.path`` is ``None`` (loaded but no on-disk
-      representation, defensive — should not happen in practice).
+    * ``template`` given → that loaded template, via
+      ``session.templates.get(rrid)``; an unknown RRID raises
+      :class:`McpCommandError`.
+    * ``template`` omitted with **more than one** template loaded → refuse and
+      tell the caller to pass ``template=<rrid>``. There is no client-
+      addressable "active" pointer under MCP, so silently picking one would be
+      a wrong-target hazard.
+    * ``template`` omitted with **zero or one** loaded → fall back to
+      ``session.metadata`` (the single loaded report or the
+      :class:`NullTestReport` sentinel), preserving the historical single-
+      template behaviour.
 
     Args:
         session: The active :class:`McpSession`.
+        template: Optional RRID of a loaded template to scope to.
+
+    Returns:
+        The selected :class:`TestReport` (possibly the NullTestReport
+        sentinel when nothing is loaded; the caller's path check rejects it).
+
+    Raises:
+        McpCommandError: When ``template`` names an unloaded RRID, or when it
+            is omitted while several templates are loaded.
+
+    """
+    if template is not None:
+        try:
+            return session.templates.get(template)
+        except KeyError:
+            raise McpCommandError("", f"template not loaded: {template}", 1) from None
+
+    loaded = session.templates.all()
+    if len(loaded) > 1:
+        rrids = ", ".join(str(r.id) for r in loaded)
+        raise McpCommandError(
+            "",
+            f"multiple templates loaded ({rrids}); pass template=<rrid>",
+            1,
+        )
+    return session.metadata
+
+
+def _resolve_testreport_path(session: McpSession, template: str | None = None) -> Path:
+    """Return the loaded testreport's path or raise :class:`McpCommandError`.
+
+    The target report is selected by :func:`_resolve_report` (honouring the
+    optional ``template`` RRID); the path is then validated. Two refusal
+    conditions produce the same single-sentence error message so the LLM does
+    not have to disambiguate:
+
+    * the resolved report is a :class:`NullTestReport` (no template loaded).
+    * its ``path`` is ``None`` (loaded but no on-disk representation,
+      defensive — should not happen in practice).
+
+    Args:
+        session: The active :class:`McpSession`.
+        template: Optional RRID of a loaded template to scope to.
 
     Returns:
         The :class:`pathlib.Path` pointing at the loaded testreport.
 
     Raises:
-        McpCommandError: When no testreport is loaded.
+        McpCommandError: When no testreport is loaded or ``template`` is
+            ambiguous/unknown (see :func:`_resolve_report`).
 
     """
-    metadata = session.metadata
+    metadata = _resolve_report(session, template)
     if isinstance(metadata, NullTestReport) or metadata.path is None:
         raise McpCommandError(
             "",
@@ -103,7 +163,7 @@ def _resolve_testreport_path(session: McpSession) -> Path:
     return Path(metadata.path)
 
 
-def _resolve_template_dir(session: McpSession) -> Path:
+def _resolve_template_dir(session: McpSession, template: str | None = None) -> Path:
     """Return the loaded testreport's checkout directory.
 
     This is the parent of the ``log`` file (``metadata.path``) — the directory
@@ -111,7 +171,7 @@ def _resolve_template_dir(session: McpSession) -> Path:
     ``build_checks/`` and ``install_logs/`` subdirectories. Raises the same
     refusal as :func:`_resolve_testreport_path` when nothing is loaded.
     """
-    return _resolve_testreport_path(session).parent
+    return _resolve_testreport_path(session, template).parent
 
 
 def _safe_template_file(base: Path, relpath: str) -> Path:
@@ -212,6 +272,7 @@ async def testreport_read(
     session: McpSession,
     offset: int = 1,  # noqa: PT028 - tool entrypoint, not a pytest test
     limit: int | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+    template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """Return the loaded testreport file's content and line count.
@@ -235,7 +296,7 @@ async def testreport_read(
 
     await _heartbeat(ctx, "testreport_read: waiting for session lock")
     async with session._lock:
-        path = _resolve_testreport_path(session)
+        path = _resolve_testreport_path(session, template)
         content = path.read_text(encoding="utf-8", errors="replace")
 
     windowed = offset != 1 or limit is not None
@@ -261,6 +322,7 @@ async def testreport_read(
 
 async def testreport_logs(
     session: McpSession,
+    template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """List the auxiliary log files in the loaded testreport's checkout.
@@ -273,7 +335,7 @@ async def testreport_logs(
     """
     await _heartbeat(ctx, "testreport_logs: waiting for session lock")
     async with session._lock:
-        base = _resolve_template_dir(session)
+        base = _resolve_template_dir(session, template)
 
         def listing(sub: str) -> list[dict[str, Any]]:
             d = base / sub
@@ -295,6 +357,7 @@ async def testreport_logs(
 async def testreport_read_file(
     session: McpSession,
     relpath: str,
+    template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """Read a file from the loaded testreport's checkout by relative path.
@@ -306,7 +369,7 @@ async def testreport_read_file(
     """
     await _heartbeat(ctx, "testreport_read_file: waiting for session lock")
     async with session._lock:
-        base = _resolve_template_dir(session)
+        base = _resolve_template_dir(session, template)
         target = _safe_template_file(base, relpath)
         if not target.is_file():
             raise McpCommandError(
@@ -327,6 +390,7 @@ async def testreport_patch(
     start_line: int,
     end_line: int,
     replacement: str,
+    template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """Replace an inclusive 1-indexed line range with ``replacement``.
@@ -340,7 +404,7 @@ async def testreport_patch(
     """
     await _heartbeat(ctx, "testreport_patch: waiting for session lock")
     async with session._lock:
-        path = _resolve_testreport_path(session)
+        path = _resolve_testreport_path(session, template)
         content = path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         n = len(lines)
@@ -380,6 +444,7 @@ async def testreport_patch(
 async def testreport_write(
     session: McpSession,
     content: str,
+    template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """Overwrite the loaded testreport file with ``content`` atomically.
@@ -390,7 +455,7 @@ async def testreport_write(
     """
     await _heartbeat(ctx, "testreport_write: waiting for session lock")
     async with session._lock:
-        path = _resolve_testreport_path(session)
+        path = _resolve_testreport_path(session, template)
         bytes_written = _atomic_write_text(path, content)
     return {
         "path": str(path),
@@ -437,6 +502,7 @@ async def testreport_fill(
     reproducer: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     status: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     summary: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
+    template: str | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
     ctx: Context | None = None,  # noqa: PT028 - tool entrypoint, not a pytest test
 ) -> dict[str, Any]:
     """Bulk-fill the repetitive placeholder tokens left by ``export``.
@@ -487,7 +553,7 @@ async def testreport_fill(
 
     await _heartbeat(ctx, "testreport_fill: waiting for session lock")
     async with session._lock:
-        path = _resolve_testreport_path(session)
+        path = _resolve_testreport_path(session, template)
         content = path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         counts = {"summary": 0, "reproducer": 0, "status": 0}
@@ -565,43 +631,59 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
     async def _read(
         offset: int = 1,
         limit: int | None = None,
+        template: str | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
-        return await testreport_read(session, offset=offset, limit=limit, ctx=ctx)
+        return await testreport_read(
+            session, offset=offset, limit=limit, template=template, ctx=ctx
+        )
 
-    async def _logs(ctx: Context | None = None) -> dict[str, Any]:
+    async def _logs(
+        template: str | None = None, ctx: Context | None = None
+    ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
-        return await testreport_logs(session, ctx=ctx)
+        return await testreport_logs(session, template=template, ctx=ctx)
 
-    async def _read_file(relpath: str, ctx: Context | None = None) -> dict[str, Any]:
+    async def _read_file(
+        relpath: str, template: str | None = None, ctx: Context | None = None
+    ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
-        return await testreport_read_file(session, relpath, ctx=ctx)
+        return await testreport_read_file(session, relpath, template=template, ctx=ctx)
 
     async def _patch(
         start_line: int,
         end_line: int,
         replacement: str,
+        template: str | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
         return await testreport_patch(
-            session, start_line, end_line, replacement, ctx=ctx
+            session, start_line, end_line, replacement, template=template, ctx=ctx
         )
 
-    async def _write(content: str, ctx: Context | None = None) -> dict[str, Any]:
+    async def _write(
+        content: str, template: str | None = None, ctx: Context | None = None
+    ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
-        return await testreport_write(session, content, ctx=ctx)
+        return await testreport_write(session, content, template=template, ctx=ctx)
 
     async def _fill(
         reproducer: str | None = None,
         status: str | None = None,
         summary: str | None = None,
+        template: str | None = None,
         ctx: Context | None = None,
     ) -> dict[str, Any]:
         session = await resolve_session(provider, ctx)
         return await testreport_fill(
-            session, reproducer=reproducer, status=status, summary=summary, ctx=ctx
+            session,
+            reproducer=reproducer,
+            status=status,
+            summary=summary,
+            template=template,
+            ctx=ctx,
         )
 
     read_desc = (
@@ -610,30 +692,31 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         "the whole file; pass `offset` (1-based first line) and/or `limit` (max "
         "lines) to read a line window instead — use this to page a large report "
         "(a Product Increment log can be thousands of lines) without overflowing. "
-        f"{_READ_FIRST_WARNING}"
+        f"{_READ_FIRST_WARNING} {_TEMPLATE_NOTE}"
     )
     patch_desc = (
         "Splice an inclusive 1-indexed line range in the currently loaded "
         "testreport file. `end_line == start_line - 1` inserts before "
         "`start_line` without replacing anything. The write is atomic. "
-        f"{_READ_FIRST_WARNING}"
+        f"{_READ_FIRST_WARNING} {_TEMPLATE_NOTE}"
     )
     write_desc = (
         "Overwrite the currently loaded testreport file with the given "
         "content. Atomic. Use this as the fallback when patching would "
-        f"require tracking line-number drift across many edits. {_READ_FIRST_WARNING}"
+        f"require tracking line-number drift across many edits. {_READ_FIRST_WARNING} "
+        f"{_TEMPLATE_NOTE}"
     )
     logs_desc = (
         "List the auxiliary log files in the loaded testreport's checkout: the "
         "per-package/arch build-check logs (build_checks/) and the per-refhost "
         "install logs (install_logs/). Returns each file's name and size; fetch "
-        "one with testreport_read_file."
+        f"one with testreport_read_file. {_TEMPLATE_NOTE}"
     )
     read_file_desc = (
         "Read a file from the loaded testreport's checkout by relative path, "
         "e.g. 'build_checks/<pkg>.<arch>.log', 'install_logs/<host>.log', "
         "'source.diff' or 'patchinfo.xml'. The path may not escape the checkout "
-        "directory. Returns path, line count and full content."
+        f"directory. Returns path, line count and full content. {_TEMPLATE_NOTE}"
     )
     fill_desc = (
         "Bulk-set the repetitive per-bug placeholder tokens an exported "
@@ -646,7 +729,8 @@ def register_testreport_tools(mcp: FastMCP, provider: SessionProvider) -> list[s
         "value you already set by hand. Ideal for CVE-heavy updates: call with "
         "reproducer=NO, status=SKIPPED (security policy), then override any "
         "non-security bug individually with testreport_patch. Returns a `filled` "
-        "count per token. Still fill regression/build-log/source sections yourself."
+        "count per token. Still fill regression/build-log/source sections yourself. "
+        f"{_TEMPLATE_NOTE}"
     )
 
     specs = (
