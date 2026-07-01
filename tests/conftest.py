@@ -57,6 +57,12 @@ def mock_config():
     config.openqa_install_logs = "install-logs.tar"
     config.install_logs = "install_logs"
     config.reports_url = "https://reports.example.com"
+    # Slack review-request integration.
+    config.slack_token = "xoxb-test-token"
+    config.slack_channel = "C123"
+    config.slack_base_url = "https://slack.test/api"
+    config.slack_poll_interval = 1
+    config.slack_watch_timeout = 5
     return config
 
 

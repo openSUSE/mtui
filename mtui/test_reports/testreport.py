@@ -25,7 +25,7 @@ from ..support.exceptions import InvalidGiteaHashError, UpdateError
 from ..support.fileops import ensure_dir_exists
 from ..support.messages import MetadataNotLoadedError
 from ..types import OpenQAResults, Product, TargetMeta, Workflow
-from .metadata_parsers import patchinfo_titles
+from .metadata_parsers import ReducedMetadataParser, patchinfo_titles
 from .svn_io import (
     TemplateFormatError,
     TemplateIOError,
@@ -48,6 +48,17 @@ re_ver = re.compile(r"(\S+)\s+(\S+)")
 # phrasing; both are matched and normalized to "Test Plan Reviewer:".
 _reviewer_line = re.compile(
     r"^(?:Suggested )?Test Plan Reviewers?:.*$",
+    re.MULTILINE,
+)
+
+# Matches the "Slack Review: <channel>/<ts>" marker line recording the Slack
+# message a review was requested on. Unlike the reviewer line this does not
+# pre-exist in the template; ``set_slack_review`` inserts it on first write.
+# ``get_slack_review`` parses the value back with the same regex the load-time
+# metadata parser uses (``ReducedMetadataParser.slack_review``), so the two
+# views of the marker can never diverge.
+_slack_review_line = re.compile(
+    r"^Slack Review:.*$",
     re.MULTILINE,
 )
 
@@ -146,6 +157,10 @@ class TestReport(ABC):
         self.reviewer: str = ""
         self.repository: str = ""
         self.packages = {}
+        # Slack review reference (channel ID, message ts) recorded by
+        # ``request_review`` and re-checked by the approve/reject gate.
+        # ``None`` until a review has been requested and persisted.
+        self.slack_review: tuple[str, str] | None = None
 
         self._attrs = [
             "products",
@@ -280,6 +295,91 @@ class TestReport(ABC):
         tmp.write_text(new_text)
         os.replace(tmp, self.path)
         self.reviewer = name
+
+    def set_slack_review(self, channel: str, ts: str) -> None:
+        """Records the Slack review reference in the loaded template on disk.
+
+        Writes a ``Slack Review: <channel>/<ts>`` marker line so the ack state
+        survives a reload and can be re-checked by the approve/reject gate. If
+        the marker already exists it is replaced; otherwise it is inserted right
+        after the ``Test Plan Reviewer:`` line (a stable anchor that always
+        pre-exists in the template). The file is rewritten atomically and the
+        in-memory :attr:`slack_review` attribute is updated only afterwards.
+
+        Args:
+            channel: The Slack channel ID the review message was posted to.
+            ts: The Slack message timestamp identifying the review message.
+
+        Raises:
+            RuntimeError: If no template is loaded (``self.path`` is ``None``).
+            TemplateFormatError: If the marker is missing and there is no
+                ``Test Plan Reviewer:`` line to anchor the insert.
+
+        """
+        if not self.path:
+            raise RuntimeError("Called while missing path")
+
+        marker = f"Slack Review: {channel}/{ts}"
+        text = self.path.read_text(errors="replace")
+        new_text, count = _slack_review_line.subn(marker, text, count=1)
+        if count == 0:
+            # Marker absent: insert it right after the reviewer line.
+            new_text, count = _reviewer_line.subn(
+                lambda m: f"{m.group(0)}\n{marker}", text, count=1
+            )
+            if count == 0:
+                raise TemplateFormatError(
+                    f"no 'Test Plan Reviewer:' line to anchor Slack Review in {self.path}"
+                )
+
+        tmp = self.path.with_name(self.path.name + ".tmp")
+        tmp.write_text(new_text)
+        os.replace(tmp, self.path)
+        self.slack_review = (channel, ts)
+
+    def has_slack_review_anchor(self) -> bool:
+        """Whether :meth:`set_slack_review` could record its marker.
+
+        True when the loaded template already carries a ``Slack Review:``
+        marker or has a ``Test Plan Reviewer:`` line to anchor the insert.
+        ``request_review`` checks this **before** posting to Slack, so a
+        malformed template aborts the request instead of leaving a dangling
+        review message whose ack can never be recorded.
+        """
+        if not self.path:
+            return False
+        try:
+            text = self.path.read_text(errors="replace")
+        except OSError:
+            # The template can vanish underneath the session (an ``svn up``
+            # that removed a withdrawn report); no file, no anchor.
+            return False
+        return bool(_slack_review_line.search(text) or _reviewer_line.search(text))
+
+    def get_slack_review(self) -> tuple[str, str] | None:
+        """The ``Slack Review:`` marker as currently recorded **on disk**.
+
+        Unlike :attr:`slack_review` (a load-time snapshot plus this session's
+        own writes), this re-parses the template file, so it reflects marker
+        changes pulled in underneath the session — every testreport commit
+        runs ``svn up``, which can bring in a colleague's newer, reposted, or
+        removed marker. Used by ``request_review`` for its resume-vs-post
+        decision and its pre-approve supersede guard, and by the
+        ``approve``/``reject`` review gate. A missing file reads as "no
+        marker".
+        """
+        if not self.path:
+            return None
+        try:
+            text = self.path.read_text(errors="replace")
+        except OSError:
+            return None
+        # Match per line with the load-time parser's own regex (its ``$`` is
+        # not MULTILINE-aware, so it must see one line at a time).
+        for line in text.splitlines():
+            if match := ReducedMetadataParser.slack_review.search(line):
+                return (match.group(1), match.group(2))
+        return None
 
     @abstractmethod
     def check_hash(self) -> tuple[bool, str, str]:
@@ -924,6 +1024,10 @@ class TestReport(ABC):
                 ("Build checks", self._testreport_url()[:-3] + "build_checks"),
                 ("Testreport", self._testreport_url()),
                 ("Repository", self.repository),
+                (
+                    "Slack Review",
+                    "/".join(self.slack_review) if self.slack_review else "",
+                ),
             ]
             + [("Testplatform", x) for x in self.testplatforms]
             + [("Products", x) for x in self.products]

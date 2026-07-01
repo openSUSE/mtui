@@ -323,6 +323,87 @@ def test_read_only_annotation_set_for_known_safe_tools(
 
 
 # --------------------------------------------------------------------------- #
+# Slack review-request command surface (request_review + --force hiding)      #
+# --------------------------------------------------------------------------- #
+
+
+def test_request_review_is_a_mutating_tool(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """``request_review`` is exposed over MCP and is not read-only.
+
+    It commits the testreport, posts to Slack, and can auto-approve, so
+    its ``readOnlyHint`` must be ``False``.
+    """
+    assert "request_review" in registered_names
+    assert _annotations_of(mcp, "request_review").readOnlyHint is False
+
+
+@pytest.mark.parametrize("name", ["approve", "reject"])
+def test_force_absent_from_mcp_schema(
+    mcp: FastMCP, registered_names: list[str], name: str
+) -> None:
+    """``-f/--force`` is tagged ``_mtui_mcp_hidden`` → never in the tool schema.
+
+    The flag exists on the REPL parser (so a human can bypass the Slack
+    review gate) but is structurally unavailable over MCP so an AI agent
+    cannot force-approve/reject without a review.
+    """
+    props = _params_of(mcp, name).get("properties", {})
+    assert "force" not in props
+    assert "force" not in _params_of(mcp, name).get("required", [])
+
+
+def test_repl_parser_still_accepts_force_for_approve() -> None:
+    """The REPL ``approve`` argparser still honours ``--force`` (human bypass)."""
+    parser = Command.registry["approve"].argparser(__import__("sys"))
+    parsed = parser.parse_args(["--force"])
+    assert parsed.force is True
+
+
+def test_repl_parser_still_accepts_force_for_reject() -> None:
+    """The REPL ``reject`` argparser still honours ``--force`` (human bypass).
+
+    ``reject`` requires ``-r/--reason``, so a valid reason is supplied
+    alongside the flag being exercised.
+    """
+    parser = Command.registry["reject"].argparser(__import__("sys"))
+    parsed = parser.parse_args(["--force", "-r", "admin"])
+    assert parsed.force is True
+
+
+def test_injected_force_kwarg_does_not_reach_approve_argv() -> None:
+    """An agent-injected ``{"force": true}`` must never re-emit ``--force``.
+
+    FastMCP's pydantic arg model uses ``extra="ignore"``, so any kwarg
+    whose name is absent from the synthesised schema is dropped before
+    the wrapper runs. We model that here by filtering the injected kwargs
+    down to the schema's parameter names (``force`` is not among them,
+    per :func:`build_parameters`) and asserting the surviving kwargs
+    re-serialise to argv without a ``--force``/``-f`` token.
+    """
+    parser = Command.registry["approve"].argparser(__import__("sys"))
+    schema_names = {p.name for p in build_parameters(parser)}
+    assert "force" not in schema_names
+
+    injected = {"force": True, "group": [], "user": ""}
+    surviving = {k: v for k, v in injected.items() if k in schema_names}
+    argv = kwargs_to_argv(parser, surviving)
+    assert "--force" not in argv
+
+    # Defense-in-depth: even if an extra ``force=True`` slips past the SDK's
+    # schema validation, kwargs_to_argv itself skips ``_mtui_mcp_hidden`` actions
+    # so ``--force`` can never be emitted — the security property no longer
+    # depends on pydantic's ``extra="ignore"``.
+    assert "--force" not in kwargs_to_argv(parser, injected)
+    assert "--force" not in kwargs_to_argv(
+        Command.registry["reject"].argparser(__import__("sys")),
+        {"force": True, "reason": "admin", "group": [], "user": ""},
+    )
+    assert "-f" not in argv
+
+
+# --------------------------------------------------------------------------- #
 # kwargs \u2192 argv reserialisation round-trips                                #
 # --------------------------------------------------------------------------- #
 

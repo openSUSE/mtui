@@ -17,7 +17,7 @@ from ..data_sources import OSC, Gitea
 from ..support.exceptions import GiteaError, InvalidGiteaHashError
 from ..support.misc import requires_update
 from ..test_reports.svn_io import TemplateFormatError, svn_commit_testreport
-from .apicall import BaseApiCall
+from .apicall import BaseApiCall, _force_bypasses_gate, require_slack_review
 
 logger = getLogger("mtui.command.approve")
 
@@ -41,15 +41,27 @@ class Approve(BaseApiCall):
             help="Record reviewer in the testreport, commit it to SVN, "
             "then approve. Aborts the approval if either step fails.",
         )
+        force = parser.add_argument(
+            "-f",
+            "--force",
+            action="store_true",
+            help="Approve without a Slack review 👍 (interactive REPL only).",
+        )
+        # Never expose ``--force`` over MCP so agents cannot bypass the review
+        # gate; skipped by build_parameters in mtui/mcp/_schema.py.
+        force._mtui_mcp_hidden = True  # noqa: SLF001 - tag for mtui.mcp._schema  # ty: ignore[unresolved-attribute]
 
     @requires_update
     def __call__(self) -> None:
         """The main entry point for the command.
 
-        When ``-r/--reviewer`` is given, record the reviewer in the
-        testreport and commit it to SVN before approving. If either step
-        fails, the approval is aborted.
+        Refuse unless the report carries a live Slack 👍 ack (unless
+        ``--force`` is used interactively). When ``-r/--reviewer`` is given,
+        record the reviewer in the testreport and commit it to SVN before
+        approving. If either step fails, the approval is aborted.
         """
+        if not _force_bypasses_gate(self):
+            require_slack_review(self)
         if self.args.reviewer is not None and not self._record_reviewer():
             return
         super().__call__()
@@ -128,6 +140,7 @@ class Approve(BaseApiCall):
                 ("-g", "--group"),
                 ("-u", "--user"),
                 ("-r", "--reviewer"),
+                ("-f", "--force"),
                 *template_completion(state),
             ],
             line,

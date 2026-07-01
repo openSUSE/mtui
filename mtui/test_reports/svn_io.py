@@ -27,6 +27,19 @@ class TemplateFormatError(RuntimeError):
     """Exception raised when a template does not match the expected format."""
 
 
+def svn_update_testreport(checkout: Path) -> None:
+    """Runs ``svn up`` on the testreport working copy.
+
+    Used to refresh the checkout right before decisions that must see the
+    repository's current state — e.g. ``request_review`` re-validating the
+    ``Slack Review:`` marker before auto-approving, where a colleague's
+    ``--repost`` committed from another checkout supersedes the watched
+    thread. Lets ``subprocess`` exceptions propagate so callers decide
+    whether a failed refresh is fatal.
+    """
+    subprocess.check_call(["svn", "up"], cwd=checkout)
+
+
 def svn_commit_testreport(
     checkout: Path, install_logs: Path, msg: list[str] | None = None
 ) -> None:

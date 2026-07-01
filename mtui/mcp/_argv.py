@@ -160,6 +160,13 @@ def kwargs_to_argv(
     for action in parser._actions:  # noqa: SLF001 - argparse exposes only this
         if id(action) in synthetic_action_ids or id(action) in const_action_ids:
             continue  # already handled by a synthetic pass above
+        if getattr(action, "_mtui_mcp_hidden", False):
+            # Never emit a REPL-only hidden flag (e.g. approve/reject --force):
+            # build_parameters keeps it out of the MCP schema, and this makes the
+            # encoder refuse to render it even if an extra kwarg slips past the
+            # SDK's schema validation — the security property no longer depends on
+            # Pydantic's default extra='ignore'.
+            continue
         if action.dest not in index or index[action.dest] is not action:
             continue  # secondary action sharing a dest (e.g. load_template -k)
         if action.dest not in kwargs:

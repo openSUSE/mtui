@@ -408,7 +408,9 @@ def build_parameters(
     Anything else falls through to the legacy first-wins-with-WARNING
     path. Subparser ``dest`` values like ``SUPPRESS`` are ignored —
     subparsers are fanned out to multiple tools in :mod:`mtui.mcp.tools`
-    rather than collapsed into one parameter.
+    rather than collapsed into one parameter. Actions carrying a truthy
+    ``_mtui_mcp_hidden`` attribute are likewise skipped, letting a
+    command keep an argparse flag out of its MCP schema.
     """
     emit_at, skip, synthetic_map = _scan_shared_dest_groups(parser)
     # Expose the synthetic-name map for the argv encoder and the
@@ -446,6 +448,10 @@ def build_parameters(
             # Handled by the subparser fan-out in mtui.mcp.tools.
             continue
         if action.dest == argparse.SUPPRESS:
+            continue
+        if getattr(action, "_mtui_mcp_hidden", False):
+            # Actions tagged ``_mtui_mcp_hidden`` are internal-only flags
+            # that must not surface as MCP tool parameters.
             continue
 
         if id(action) in emit_at:
