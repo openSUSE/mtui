@@ -41,14 +41,15 @@ class Command(ABC):
     #: template. A per-invocation ``-T/--template`` always wins over this, and
     #: ``--all-templates`` forces fan-out regardless of the class default. Only
     #: action commands that are safe to repeat per template opt into
-    #: ``"fanout"``; inherently single-target commands (``load_template``,
-    #: ``edit``, ``switch``, ``quit``, …) keep ``"active"``.
+    #: ``"fanout"``; REPL-only single-target commands (``edit``, ``switch``,
+    #: ``quit``, …) keep ``"active"`` since they never run under MCP fan-out.
     #:
     #: ``"single"`` is a stricter variant of ``"active"`` for commands that
     #: name their own target template and must run **exactly once** regardless
-    #: of how many templates are loaded — e.g. ``unload <rrid>``, which would
-    #: otherwise fan out under MCP (where ``"active"`` defaults to fan-out with
-    #: several loaded) and try to remove the same RRID once per template.
+    #: of how many templates are loaded — e.g. ``load_template``/``unload
+    #: <rrid>``, which would otherwise fan out under MCP (where ``"active"``
+    #: defaults to fan-out with several loaded) and re-run against the same RRID
+    #: once per loaded template.
     scope: ClassVar[str] = "active"
 
     #: Auto-populated registry of every concrete ``Command`` subclass that
