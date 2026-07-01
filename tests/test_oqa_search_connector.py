@@ -412,8 +412,10 @@ def test_build_checks_matches_flavored_python_package_to_source_log():
         ("python-ecdsa.log", ["bash", "python311-ecdsa"], True),
         # Unrelated package does not match.
         ("python-ecdsa.log", ["python-rsa"], False),
-        # `python3-foo` (single digit) is not a flavor and is not normalized.
-        ("python-foo.log", ["python3-foo"], False),
+        # `python3-foo` (single digit) is also normalized.
+        ("python-foo.log", ["python3-foo"], True),
+        # Regression: python3-tornado -> python-tornado (SUSE:Maintenance:44982:414912).
+        ("python-tornado.x86_64.log", ["python3-tornado"], True),
         # Empty package list never matches.
         ("python-ecdsa.log", [], False),
     ],

@@ -93,4 +93,4 @@ TESTSUITE_SUMMARY_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^(ok|fail|expected fail|unexpected pass|skipped):\s*\d+"),
 ]
 
-PYTHON_FLAVOR_RE = re.compile(r"^python\d{2,3}-")
+PYTHON_FLAVOR_RE = re.compile(r"^python\d+-")
