@@ -340,6 +340,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   reported as dangling (also mis-classifying the real base product as an
   unexpected addon). The symlink target is now reduced to its basename, so
   both relative and absolute forms resolve.
+- `openqa_overview` build-checks now match `python3-<pkg>` binary packages
+  against their `python-<pkg>`-named source log. The normalization regex
+  previously required at least two digits after `python` (`python38-`,
+  `python313-`), so single-digit flavors like `python3-tornado` were missed
+  and their build-check log was silently skipped.
 
 ## 18.2.0 - 2026-06-23
 
