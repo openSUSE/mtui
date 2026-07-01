@@ -15,12 +15,106 @@ from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices, template_completion
 from ..cli.term import ask_user
 from ..data_sources import OSC, Gitea, TeReGen
-from ..support.exceptions import GiteaError
+from ..support.exceptions import FailedSlackCallError, GiteaError
 from ..support.misc import requires_update
 from ..types import RequestKind
 from . import Command
 
 logger = getLogger("mtui.command.apicalls")
+
+
+def require_slack_review(command: "BaseApiCall") -> None:
+    """Refuse an approve/reject unless the report carries a live Slack ack.
+
+    ``request_review`` persists the Slack message reference (channel + ts) in
+    the testreport via :meth:`TestReport.set_slack_review`. This gate reads
+    the marker back **from the template file** (not the load-time snapshot —
+    any ``svn up`` may have pulled in a colleague's newer or reposted marker)
+    and re-queries Slack live so the 👍 ack is confirmed to still be present
+    at approve/reject time (durable and re-checkable across sessions).
+
+    The marker is plain text in the testreport, so anything that can edit the
+    template (``edit``, the MCP testreport write tools) can point it at an
+    arbitrary Slack message. Before trusting any reaction the gate therefore
+    BINDS the marker to this update:
+
+    1. the referenced message must exist and be readable in the marker's
+       channel (fetched via ``conversations.replies``; the parent/request
+       message is the first element),
+    2. the parent message text must name this update's RRID verbatim —
+       ``request_review`` always includes the RRID in the request message it
+       posts, so a message that does not name this RRID is not a review
+       request for this update,
+    3. only then are the parent's reactions checked for a 👍 ack (reaction
+       names are normalized so skin-toned variants like ``+1::skin-tone-3``
+       still count).
+
+    Channel binding: ``config.slack_channel`` may hold a channel *name* while
+    the marker records the canonical channel *id* Slack returned when the
+    request was posted, so a hard equality check against the config would
+    falsely refuse legitimate reviews. The fetch + RRID text check above
+    establishes the binding instead; a config mismatch is only surfaced as a
+    warning for the operator.
+
+    Raises:
+        FailedSlackCallError: if no Slack review is recorded (the user is
+            pointed at ``request_review``), the referenced message cannot be
+            fetched, the message is not this update's review request, or the
+            live reactions no longer carry a 👍.
+
+    """
+    review = command.metadata.get_slack_review()
+    if review is None:
+        raise FailedSlackCallError(
+            "No Slack review recorded for this update; run 'request_review' first."
+        )
+
+    # Imported lazily to avoid an import cycle at module load time.
+    from ..data_sources import SlackClient
+    from ..data_sources.slack import is_ack_reaction
+
+    channel, ts = review
+    rrid = str(command.metadata.rrid)
+
+    if channel != command.config.slack_channel:
+        # Not a refusal: the marker usually stores the resolved channel id
+        # while the config may hold the channel name (see the docstring). The
+        # binding is verified via the message fetch below.
+        logger.warning(
+            "Slack review marker channel %s differs from configured "
+            "slack_channel %s; verifying the marker via the message itself.",
+            channel,
+            command.config.slack_channel,
+        )
+
+    try:
+        messages = SlackClient(command.config).conversations_replies(channel, ts)
+    except FailedSlackCallError as e:
+        raise FailedSlackCallError(
+            f"Slack review message {channel}/{ts} could not be fetched: {e}. "
+            "The recorded marker may be stale; re-run 'request_review'."
+        ) from e
+    if not messages:
+        raise FailedSlackCallError(
+            f"Slack review message {channel}/{ts} does not exist; "
+            "the recorded marker is stale. Re-run 'request_review'."
+        )
+
+    parent = messages[0]
+    if rrid not in parent.get("text", ""):
+        raise FailedSlackCallError(
+            f"Slack review message {channel}/{ts} does not mention {rrid}; "
+            "the recorded marker does not match this update (forged or "
+            "stale). Re-run 'request_review' to post a genuine request."
+        )
+
+    # is_ack_reaction normalizes skin-toned variants ("+1::skin-tone-3").
+    reactions = parent.get("reactions", [])
+    if not any(is_ack_reaction(r.get("name") or "") for r in reactions):
+        raise FailedSlackCallError(
+            f"Slack review {channel}/{ts} has no 👍 ack; refusing. "
+            "Have a reviewer react with 👍 first."
+        )
 
 
 class BaseApiCall(Command, ABC):
@@ -244,6 +338,16 @@ class Reject(BaseApiCall):
             help="Message to use for rejection-comment."
             + "Always as last of command, it takes remainder of command",
         )
+
+    @requires_update
+    def __call__(self) -> None:
+        """Reject the request after the Slack review gate.
+
+        Mirrors :class:`~mtui.commands.approve.Approve`: require a live Slack
+        👍 ack before delegating to the shared backend-dispatch path.
+        """
+        require_slack_review(self)
+        super().__call__()
 
     @property
     def _message(self) -> str:

@@ -268,6 +268,16 @@ implementations.
    refuse destructive calls. Operators driving an autonomous LLM
    client should reason about blast radius accordingly.
 
+Slack review gate on ``approve``/``reject``
+-------------------------------------------
+
+The ``approve`` and ``reject`` commands refuse unless the loaded
+testreport carries a live Slack 👍 review ack (see :doc:`iui` and the
+``request_review`` command). The gate is unconditional and has no bypass
+flag, so an autonomous LLM client — exactly like a human at the REPL —
+cannot approve or reject an update that has not been reviewed and does
+not still carry a 👍. Run ``request_review`` first to obtain the ack.
+
 REPL-only deny-list
 -------------------
 
@@ -644,13 +654,59 @@ work on other templates, which runs concurrently — and poll the job:
 
 * ``job_list``: every job in the session and its state;
 * ``job_status(job_id=…)``: one job's state
-  (``running`` / ``done`` / ``failed`` / ``cancelled``) and elapsed
-  time;
+  (``running`` / ``cancelling`` / ``done`` / ``failed`` / ``cancelled``)
+  and elapsed time;
 * ``job_result(job_id=…)``: a finished job's captured stdout. It
   *errors* while the job is still running (poll ``job_status`` first)
   and surfaces the command's failure envelope (stdout, error, exit
   code) if it failed, exactly as a foreground failure would have;
-* ``job_cancel(job_id=…)``: cancel a running job.
+* ``job_cancel(job_id=…)``: cancel a running job. Cancellation is
+  cooperative and **truthful**: the request sets the job's cancel flag,
+  the command body stops at its next checkpoint, and ``job_cancel``
+  reports "cancelled" only once the worker has actually exited. If the
+  body does not stop within a bounded grace period, ``job_cancel``
+  returns while the job shows ``cancelling`` — it does **not** claim the
+  body stopped — and the state flips to ``cancelled`` when the worker
+  exits. The job keeps its per-template lock until then, so a re-run on
+  the same template safely queues behind the stopping job instead of
+  interleaving with it.
+
+``request_review`` is also a slow, background-capable tool, though it is
+not a host command: it posts a review request to Slack and then **watches**
+the thread, polling for replies and the review 👍 up to
+``slack.watch_timeout`` seconds (see :doc:`cfg`). Under MCP the streamed
+thread replies are not server-pushed; they accumulate in the call's
+captured stdout and surface in ``job_result`` once the job has finished —
+neither ``job_status`` (state and elapsed time only) nor ``job_result``
+(errors while the job runs) exposes them mid-watch, and a cancelled job's
+captured output is likewise not retrievable. The thread itself is not
+lost: re-running ``request_review`` resumes the recorded thread and
+forwards its replies so far. For live reply relaying, watch from the REPL
+instead.
+Pass ``background=true`` to return a job id immediately instead of parking
+the request for the whole watch, and ``job_cancel`` it to stop watching
+early — the watch checks its cancel flag before every side effect and at
+each poll, so it stops at the next checkpoint (bounded by one HTTP
+timeout), and a cancelled watch never approves, even if the 👍 lands in
+its final in-flight poll. Always background a watch-bearing
+``request_review``: a foreground call that would watch **more than one**
+template is refused outright (use ``background=true``, scope with
+``template="<RRID>"``, or pass ``no_watch=true``), and even a
+single-template foreground watch parks the client request and holds that
+template's lock for up to the whole ``slack.watch_timeout`` with no
+cancel handle.
+
+When the testreport already records a ``Slack Review:`` marker, a
+``request_review`` call **resumes** that request instead of posting a
+duplicate — the existing thread's replies so far are forwarded first, so a
+cancelled job can simply be re-run (foreground or as a new background job)
+and picks up the same thread, including a 👍 that arrived in between.
+``repost=true`` forces a fresh post, replacing the marker (refused for an
+unscoped multi-template fan-out; scope it with ``template="<RRID>"``).
+``job_cancel`` any in-flight watch on the same template before re-running;
+the new call then queues behind the stopping job's per-template lock and
+starts only once the old worker has fully exited — the two can never
+interleave on the testreport or the Slack thread.
 
 When a backgrounded slow command fans out across several loaded
 templates (see `Multiple templates (fan-out and per-call scoping)`_),

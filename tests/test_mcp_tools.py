@@ -350,6 +350,23 @@ def test_read_only_annotation_set_for_known_safe_tools(
 
 
 # --------------------------------------------------------------------------- #
+# Slack review-request command surface (request_review + --force hiding)      #
+# --------------------------------------------------------------------------- #
+
+
+def test_request_review_is_a_mutating_tool(
+    mcp: FastMCP, registered_names: list[str]
+) -> None:
+    """``request_review`` is exposed over MCP and is not read-only.
+
+    It commits the testreport, posts to Slack, and can auto-approve, so
+    its ``readOnlyHint`` must be ``False``.
+    """
+    assert "request_review" in registered_names
+    assert _annotations_of(mcp, "request_review").readOnlyHint is False
+
+
+# --------------------------------------------------------------------------- #
 # kwargs \u2192 argv reserialisation round-trips                                #
 # --------------------------------------------------------------------------- #
 
@@ -739,6 +756,23 @@ def test_job_tools_schema_has_no_workspace_param(
         props = _params_of(mcp, name).get("properties", {})
         assert "workspace" not in props
         assert "job_id" in props
+
+
+def test_job_tool_descriptions_document_cancelling_state(
+    mcp: FastMCP, job_tool_names: list[str]
+) -> None:
+    """``job_status`` / ``job_cancel`` descriptions document 'cancelling'.
+
+    ``job_cancel`` waits a bounded grace and reports the job as
+    'cancelling' when the body is still finishing its current step;
+    ``job_status`` is the poll surface where the state later flips to
+    'cancelled' — both tool descriptions must tell the caller so.
+    """
+    for name in ("job_status", "job_cancel"):
+        tool = mcp._tool_manager.get_tool(name)  # noqa: SLF001
+        assert tool is not None, f"tool {name!r} not registered"
+        assert "cancelling" in tool.description
+        assert "cancelled" in tool.description
 
 
 def test_slow_command_schema_exposes_background_boolean(

@@ -263,6 +263,13 @@ class Config:
     obs_api_url: str
     obs_request_timeout: int
 
+    # -- Slack review-request integration --
+    slack_token: str
+    slack_channel: str
+    slack_base_url: str
+    slack_poll_interval: int
+    slack_watch_timeout: int
+
     # -- mtui-mcp server (http transport) per-client session registry --
     mcp_session_cap: int
     mcp_session_idle_timeout: int
@@ -542,6 +549,48 @@ class Config:
                 ("gitea", "token"),
                 getenv("GITEA_TOKEN", ""),
                 getter=get,
+            ),
+            # Slack review-request integration. ``request_review`` posts the
+            # update to ``channel`` and watches the thread for a 👍 ack; the
+            # ``token`` (bot token, INI wins over the ``SLACK_TOKEN`` env like
+            # ``gitea_token``) authenticates the Slack Web API at ``base_url``.
+            # ``poll_interval`` / ``watch_timeout`` are the seconds between
+            # thread polls and the total time to wait for an ack.
+            ConfigOption(
+                "slack_token",
+                ("slack", "token"),
+                getenv("SLACK_TOKEN", ""),
+                getter=get,
+            ),
+            ConfigOption(
+                "slack_channel",
+                ("slack", "channel"),
+                "",
+                getter=get,
+            ),
+            ConfigOption(
+                "slack_base_url",
+                ("slack", "base_url"),
+                "https://slack.com/api",
+                getter=get,
+            ),
+            ConfigOption(
+                "slack_poll_interval",
+                ("slack", "poll_interval"),
+                20,
+                int,
+                getint,
+            ),
+            # A review can legitimately take hours, so ``request_review`` is
+            # meant to block (with a spinner in the REPL, Ctrl-C to stop) or run
+            # as a background MCP job for a full working day by default. Lower it
+            # if you prefer a shorter give-up window.
+            ConfigOption(
+                "slack_watch_timeout",
+                ("slack", "watch_timeout"),
+                28800,
+                int,
+                getint,
             ),
             # Global policy for TLS certificate verification on every
             # outbound HTTP call (see mtui.support.http). Unset — or an

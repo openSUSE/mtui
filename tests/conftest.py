@@ -78,6 +78,12 @@ def mock_config():
     # Native OBS backend defaults (mtui/data_sources/obs/); see [obs].
     config.obs_api_url = "https://api.suse.de"
     config.obs_request_timeout = 180
+    # Slack review-request integration.
+    config.slack_token = "xoxb-test-token"
+    config.slack_channel = "C123"
+    config.slack_base_url = "https://slack.test/api"
+    config.slack_poll_interval = 1
+    config.slack_watch_timeout = 5
     return config
 
 

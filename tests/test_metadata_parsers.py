@@ -78,6 +78,8 @@ def test_reduced_metadata_parser_parse():
     results.hostnames = set()
     results.jira = {}
     results.bugs = {}
+    # Mirror TestReport.__init__: the first-wins guard checks this is unset.
+    results.slack_review = None
 
     # Test hostname parsing
     ReducedMetadataParser.parse(results, "some text (reference host: test_host)")
@@ -90,6 +92,47 @@ def test_reduced_metadata_parser_parse():
     # Test bug parsing
     ReducedMetadataParser.parse(results, 'Bug 123 ("Test bug"):')
     assert results.bugs["123"] == "Test bug"
+
+    # Test Slack review marker parsing (written by set_slack_review)
+    ReducedMetadataParser.parse(results, "Slack Review: C0123ABC/1700000000.000100")
+    assert results.slack_review == ("C0123ABC", "1700000000.000100")
+
+
+def test_reduced_metadata_parser_slack_review_needs_whole_line():
+    """Free text merely containing the phrase mid-line is not a marker.
+
+    The template's free-text comment field sits above the real marker's
+    anchor; a comment ending in "Slack Review: X/Y" must not be parsed as
+    (and thus shadow) the marker written by ``set_slack_review``.
+    """
+    results = MagicMock()
+    results.slack_review = None
+
+    ReducedMetadataParser.parse(results, "comment: blah Slack Review: CBAD/000.111")
+    assert results.slack_review is None
+
+    # The real, line-anchored marker afterwards is still picked up.
+    ReducedMetadataParser.parse(results, "Slack Review: CREAL/111.222")
+    assert results.slack_review == ("CREAL", "111.222")
+
+
+def test_reduced_metadata_parser_slack_review_first_wins():
+    """With duplicate marker lines the first one in file order wins."""
+    results = MagicMock()
+    results.slack_review = None
+
+    ReducedMetadataParser.parse(results, "Slack Review: CFIRST/111.222")
+    ReducedMetadataParser.parse(results, "Slack Review: CSECOND/333.444")
+    assert results.slack_review == ("CFIRST", "111.222")
+
+
+def test_reduced_metadata_parser_slack_review_tolerates_trailing_blanks():
+    """Trailing spaces/tabs on the marker line don't break parsing."""
+    results = MagicMock()
+    results.slack_review = None
+
+    ReducedMetadataParser.parse(results, "Slack Review: C1/111.222 \t")
+    assert results.slack_review == ("C1", "111.222")
 
 
 # ---------------------------------------------------------------------------

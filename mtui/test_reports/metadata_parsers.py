@@ -29,6 +29,16 @@ from .products import normalize, normalize_16
 # Text/line-based metadata parser (was mtui/parsemeta.py).
 # ---------------------------------------------------------------------------
 
+# The one line-anchored pattern for the ``Slack Review: <channel>/<ts>``
+# marker written by ``TestReport.set_slack_review``. Shared with
+# ``testreport.py`` (which compiles it with ``re.MULTILINE`` to scan whole
+# files) so the writer and every reader see the exact same set of marker
+# lines and can never diverge: the marker must be a whole line of its own,
+# and free text (e.g. a template comment) merely *containing* the phrase
+# mid-line is never treated as a marker. ``[ \t]`` instead of ``\s`` keeps a
+# match on a single line even under MULTILINE.
+SLACK_REVIEW_MARKER = r"^Slack Review:[ \t]*(\S+)/(\S+)[ \t]*$"
+
 
 @final
 class ReducedMetadataParser:
@@ -37,6 +47,9 @@ class ReducedMetadataParser:
     hostnames = re.compile(r".* \(reference host: (\S+).*\)")
     jira = re.compile(r'Jira ([A-Z]+-\d+) \("(.*)"\):')
     bugs = re.compile(r'Bug (\d+) \("(.*)"\):')
+    # "Slack Review: <channel>/<ts>" marker written by set_slack_review; parsed
+    # back so metadata.slack_review is populated after a fresh checkout.
+    slack_review = re.compile(SLACK_REVIEW_MARKER)
 
     @classmethod
     def parse(cls, results, line: str) -> None:
@@ -57,6 +70,15 @@ class ReducedMetadataParser:
 
         if match := re.search(cls.bugs, line):
             results.bugs[match.group(1)] = match.group(2)
+            return
+
+        # First marker in file order wins; later duplicates (merge or
+        # hand-edit artifacts) are ignored, matching the disk-read view in
+        # ``TestReport.get_slack_review``.
+        if (match := re.search(cls.slack_review, line)) and getattr(
+            results, "slack_review", None
+        ) is None:
+            results.slack_review = (match.group(1), match.group(2))
 
 
 # ---------------------------------------------------------------------------

@@ -263,10 +263,13 @@ def test_cancel_one_template_job_leaves_others(tmp_path: Path) -> None:
         # Wait until the first job's blocking body is actually running.
         while not blocking_started.is_set():
             await asyncio.sleep(0.01)
-        # Cancel the first (blocking) job; release so its thread unwinds.
-        await sess.job_cancel(first)
+        # Cancel the first (blocking) job with a short grace: its body does
+        # not poll the cancel event, so the grace expires and the job reports
+        # 'cancelling'; release so its thread unwinds to the terminal state.
+        await sess.job_cancel(first, grace=0.1)
         release.set()
-        # The second job, queued behind the session lock, still completes.
+        await sess._jobs[first]["task"]
+        # The second job (its own template lock) still completes.
         await sess._jobs[second]["task"]
         return first, second
 
@@ -278,3 +281,416 @@ def test_cancel_one_template_job_leaves_others(tmp_path: Path) -> None:
     assert sess.job_status(first)["state"] == "cancelled"
     assert sess.job_status(second)["state"] == "done"
     assert sess.job_result(second).strip() == ""
+
+
+def test_start_jobs_refuses_unscoped_repost_fanout(tmp_path: Path) -> None:
+    """``request_review --repost`` must not fan out one ``-T`` job per template.
+
+    Each minted job resolves to exactly one template and would pass the
+    command's own multi-template refusal, reposting (and orphaning) every
+    template's live review thread — so the fan-out itself must refuse.
+    """
+    import contextlib
+
+    from mtui.commands.request_review import RequestReview
+
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+
+    async def refused() -> None:
+        with pytest.raises(McpCommandError, match="scope it with template"):
+            await sess.start_jobs(RequestReview, ["--repost"])
+
+    async def scoped() -> list[str]:
+        ids = await sess.start_jobs(
+            RequestReview, ["--repost", "-T", "SUSE:Maintenance:2:1"]
+        )
+        # Exactly one job was minted; cancel it before its runner gets a loop
+        # slice so the real request_review body never executes in the test.
+        task = sess._jobs[ids[0]]["task"]
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        return ids
+
+    asyncio.run(refused())
+    # An explicitly scoped repost still passes the guard: exactly one job.
+    ids = asyncio.run(scoped())
+    assert len(ids) == 1
+
+
+def test_start_jobs_repost_token_in_other_command_fans_out(tmp_path: Path) -> None:
+    """The ``--repost`` fan-out guard is ``request_review``-specific.
+
+    Any other backgrounded command whose argv happens to carry the literal
+    token (e.g. a ``run`` remote command line) must still fan out normally.
+    """
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+
+    class _RepostTokenProbe(Command):
+        command = "repost_token_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            parser.add_argument("--repost", action="store_true")
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            pass
+
+    async def driver() -> list[str]:
+        ids = await sess.start_jobs(_RepostTokenProbe, ["--repost"])
+        for jid in ids:
+            await sess._jobs[jid]["task"]
+        return ids
+
+    try:
+        ids = asyncio.run(driver())
+    finally:
+        Command.registry.pop(_RepostTokenProbe.command, None)
+
+    assert len(ids) == 2
+    assert all(sess.job_status(jid)["state"] == "done" for jid in ids)
+
+
+def test_job_cancel_sets_cooperative_cancel_event(tmp_path: Path) -> None:
+    """``job_cancel`` flags the contextvar cancel event so a polling body exits.
+
+    ``request_review``'s Slack watch passes this event into ``wait_for_ack``;
+    without it a cancelled job's worker thread would keep watching (and could
+    still auto-approve) until its own multi-hour timeout.
+    """
+    import threading
+
+    from mtui.support.cancellation import current_cancel_event
+
+    sess = _make_session(tmp_path)
+
+    entered = threading.Event()
+    finished = threading.Event()
+    observed: dict[str, bool] = {}
+
+    class _CancelProbe(Command):
+        command = "cancel_probe_tmp"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            pass
+
+        def __call__(self) -> None:
+            ev = current_cancel_event.get()
+            entered.set()
+            # Block like a review watch would, until job_cancel sets the event
+            # (bounded so a broken implementation fails the test, not hangs it).
+            observed["event_set"] = ev is not None and ev.wait(timeout=5)
+            finished.set()
+
+    async def driver() -> str:
+        job_id = await sess.start_job(_CancelProbe, [])
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        await sess.job_cancel(job_id)
+        return job_id
+
+    try:
+        job_id = asyncio.run(driver())
+    finally:
+        Command.registry.pop(_CancelProbe.command, None)
+
+    # The worker thread observed the cancellation promptly (not a timeout).
+    assert finished.wait(timeout=5)
+    assert observed["event_set"] is True
+    assert sess.job_status(job_id)["state"] == "cancelled"
+
+
+# --------------------------------------------------------------------------- #
+# Truthful cancellation (cooperative-first job_cancel)                         #
+# --------------------------------------------------------------------------- #
+
+
+def _slow_step_probe(name: str):
+    """Build a probe whose body blocks inside a simulated side-effecting step.
+
+    Returns ``(cls, entered, release, body_exited)``: the body sets
+    ``entered`` on start, blocks on ``release`` (it deliberately does NOT
+    poll the cancel event, like a body mid-HTTP/svn step), and sets
+    ``body_exited`` on the way out. Caller must unregister ``cls``.
+    """
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    body_exited = threading.Event()
+
+    class _SlowStepProbe(Command):
+        command = name
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            pass
+
+        def __call__(self) -> None:
+            entered.set()
+            release.wait(timeout=5)
+            body_exited.set()
+
+    return _SlowStepProbe, entered, release, body_exited
+
+
+def test_job_cancel_waits_for_body_to_stop(tmp_path: Path) -> None:
+    """``job_cancel`` reports 'cancelled' only once the worker thread exited.
+
+    While the body is inside a side-effecting step the cancel call must not
+    return (the job shows 'cancelling'); only after the thread unwinds does
+    it report the job cancelled.
+    """
+    sess = _make_session(tmp_path)
+    cls, entered, release, body_exited = _slow_step_probe("slow_step_probe_tmp")
+
+    async def driver() -> tuple[str, str, bool]:
+        job_id = await sess.start_job(cls, [])
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        cancel_task = asyncio.create_task(sess.job_cancel(job_id, grace=5))
+        await asyncio.sleep(0.1)
+        # Body mid-step: no 'cancelled' report yet, state is honest.
+        assert not cancel_task.done()
+        assert sess.job_status(job_id)["state"] == "cancelling"
+        release.set()
+        msg = await cancel_task
+        return job_id, msg, body_exited.is_set()
+
+    try:
+        job_id, msg, exited_before_report = asyncio.run(driver())
+    finally:
+        Command.registry.pop(cls.command, None)
+
+    # The body had fully exited before job_cancel reported 'cancelled'.
+    assert exited_before_report is True
+    assert msg == f"cancelled job {job_id}"
+    assert sess.job_status(job_id)["state"] == "cancelled"
+
+
+def test_job_cancel_grace_expiry_reports_cancelling(tmp_path: Path) -> None:
+    """An expired grace reports 'cancelling', never a false 'cancelled'."""
+    sess = _make_session(tmp_path)
+    cls, entered, release, _exited = _slow_step_probe("grace_expiry_probe_tmp")
+
+    async def driver() -> str:
+        job_id = await sess.start_job(cls, [])
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        msg = await sess.job_cancel(job_id, grace=0.05)
+        # The body is still running: the report must not claim it stopped.
+        assert "cancelled job" not in msg
+        assert "cancelling" in msg
+        assert sess.job_status(job_id)["state"] == "cancelling"
+        with pytest.raises(McpCommandError, match="still cancelling"):
+            sess.job_result(job_id)
+        release.set()
+        await sess._jobs[job_id]["task"]
+        return job_id
+
+    try:
+        job_id = asyncio.run(driver())
+    finally:
+        Command.registry.pop(cls.command, None)
+
+    # Once the thread actually exited the state flips to the terminal one.
+    assert sess.job_status(job_id)["state"] == "cancelled"
+
+
+def test_job_cancel_report_stays_truthful_when_body_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A body that dies (not cancels) during the grace wait is not miscalled.
+
+    The runner's defensive branch records ``failed`` when a
+    non-``McpCommandError`` escapes ``_run_sync``; a ``job_cancel`` whose
+    grace wait sees that terminal state must report the stop without
+    claiming the job was cancelled.
+    """
+    import threading
+
+    sess = _make_session(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def _boom(cmd_cls: type[Command], argv: list[str]) -> str:
+        entered.set()
+        release.wait(timeout=5)
+        raise ValueError("kaboom")
+
+    monkeypatch.setattr(sess, "_run_sync", _boom)
+
+    async def driver() -> tuple[str, str]:
+        job_id = await sess.start_job(Whoami, [])
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        cancel_task = asyncio.create_task(sess.job_cancel(job_id, grace=5))
+        await asyncio.sleep(0.05)
+        release.set()
+        msg = await cancel_task
+        return job_id, msg
+
+    job_id, msg = asyncio.run(driver())
+    # The body has stopped (no-further-mutations holds), but it failed
+    # rather than cancelled — the report must not claim otherwise.
+    assert "cancelled job" not in msg
+    assert "state=failed" in msg
+    assert sess.job_status(job_id)["state"] == "failed"
+
+
+def test_same_template_rerun_serialises_until_cancelled_thread_exits(
+    tmp_path: Path,
+) -> None:
+    """A re-run after a grace-expired cancel queues behind the old thread.
+
+    The cancelled job's runner keeps holding the template's per-RRID lock
+    until its worker thread really exits, so the documented cancel-then-rerun
+    flow serialises instead of interleaving (no stale-thread Slack/svn writes
+    racing the new run).
+    """
+    import threading
+
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    rrid = "SUSE:Maintenance:1:1"
+
+    first_entered = threading.Event()
+    second_entered = threading.Event()
+    release = threading.Event()
+    order: list[str] = []
+
+    class _RerunProbe(Command):
+        command = "rerun_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            # Bodies on one template serialise on its per-RRID lock, so the
+            # shared list is safe: first invocation blocks, second records.
+            if not order:
+                order.append("first")
+                first_entered.set()
+                release.wait(timeout=5)
+                order.append("first_exit")
+            else:
+                order.append("second")
+                second_entered.set()
+
+    async def driver() -> tuple[str, str]:
+        first = (await sess.start_jobs(_RerunProbe, ["-T", rrid]))[0]
+        while not first_entered.is_set():
+            await asyncio.sleep(0.01)
+        await sess.job_cancel(first, grace=0.05)
+        assert sess.job_status(first)["state"] == "cancelling"
+        # Re-run on the same template while the old thread is still alive.
+        second = (await sess.start_jobs(_RerunProbe, ["-T", rrid]))[0]
+        await asyncio.sleep(0.1)
+        # The new body must not have started: it is queued on the lock the
+        # cancelled-but-still-running job keeps holding.
+        assert not second_entered.is_set()
+        assert sess.job_status(second)["state"] == "running"
+        release.set()
+        await sess._jobs[first]["task"]
+        await sess._jobs[second]["task"]
+        return first, second
+
+    try:
+        first, second = asyncio.run(driver())
+    finally:
+        Command.registry.pop(_RerunProbe.command, None)
+
+    assert order == ["first", "first_exit", "second"]
+    assert sess.job_status(first)["state"] == "cancelled"
+    assert sess.job_status(second)["state"] == "done"
+
+
+def test_job_cancel_queued_job_never_starts_body(tmp_path: Path) -> None:
+    """Cancelling a job still queued on its template lock is immediate.
+
+    The body provably never ran (the pre-start guard refuses once the cancel
+    event is flagged), so the hard-cancel path may report 'cancelled' at once
+    — even after the lock frees, the cancelled job's body stays unrun.
+    """
+    import threading
+
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+    rrid = "SUSE:Maintenance:1:1"
+
+    entered = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    class _QueueProbe(Command):
+        command = "queue_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            calls.append("body")
+            if len(calls) == 1:
+                entered.set()
+                release.wait(timeout=5)
+
+    async def driver() -> tuple[str, str, str]:
+        first = (await sess.start_jobs(_QueueProbe, ["-T", rrid]))[0]
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        second = (await sess.start_jobs(_QueueProbe, ["-T", rrid]))[0]
+        await asyncio.sleep(0.05)
+        # ``second`` is queued (its body never started): the cancel resolves
+        # immediately and truthfully, no grace involved.
+        msg = await sess.job_cancel(second)
+        release.set()
+        await sess._jobs[first]["task"]
+        return first, second, msg
+
+    try:
+        first, second, msg = asyncio.run(driver())
+    finally:
+        Command.registry.pop(_QueueProbe.command, None)
+
+    assert msg == f"cancelled job {second}"
+    assert sess.job_status(second)["state"] == "cancelled"
+    assert sess.job_status(first)["state"] == "done"
+    # The cancelled job's body never ran, even after the lock freed.
+    assert calls == ["body"]
+
+
+# --------------------------------------------------------------------------- #
+# Foreground multi-template watch guard                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_foreground_multi_template_watch_refused(tmp_path: Path) -> None:
+    """``run_command`` refuses a foreground watching multi-template review.
+
+    An unscoped watch-bearing ``request_review`` would hold the registry's
+    exclusive gate for the whole (multi-hour) watch, freezing every other
+    tool call in the MCP session; the caller is pointed at background=true /
+    template scoping / no_watch instead. Post-only, scoped and unrelated
+    commands pass the guard.
+    """
+    from mtui.commands.request_review import RequestReview
+
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+
+    with pytest.raises(McpCommandError, match="background=true"):
+        asyncio.run(sess.run_command(RequestReview, []))
+
+    # Narrow guard: none of these raise (post-only, scoped, other command).
+    sess._refuse_foreground_multi_watch(RequestReview, ["--no-watch"])
+    sess._refuse_foreground_multi_watch(RequestReview, ["-T", "SUSE:Maintenance:2:1"])
+    sess._refuse_foreground_multi_watch(Whoami, [])

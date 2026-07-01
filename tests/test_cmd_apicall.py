@@ -10,6 +10,10 @@ import pytest
 from mtui.commands.apicall import Assign, Comment, Reject, Unassign
 from mtui.types import RequestKind, RequestReviewID
 
+# The update under test; the reject gate binds the Slack marker to this RRID
+# by requiring the review-request parent message to name it verbatim.
+_RRID = "SUSE:Maintenance:12345:67890"
+
 
 def _prompt() -> MagicMock:
     p = MagicMock()
@@ -20,9 +24,35 @@ def _prompt() -> MagicMock:
     p.metadata.rrid.kind = RequestKind.MAINTENANCE
     p.metadata.rrid.maintenance_id = "12345"
     p.metadata.rrid.review_id = "67890"
+    p.metadata.rrid.__str__.return_value = _RRID
+    # A persisted Slack review so the approve/reject gate re-queries live
+    # reactions rather than refusing outright (only Reject consults it here).
+    p.metadata.get_slack_review.return_value = ("C123", "111.222")
     p.display = MagicMock()
     p.targets = MagicMock()
     return p
+
+
+# A 👍 reaction as Slack message objects carry it (message.reactions list).
+_THUMBSUP = [{"name": "thumbsup", "count": 1, "users": ["Ureviewer"]}]
+
+
+def _slack(rrid: str = _RRID):
+    """Patch the reject gate's ``SlackClient`` so it sees a live, bound 👍 ack.
+
+    The gate fetches the review-request parent message via
+    ``conversations_replies`` and requires its text to name this update's
+    RRID before trusting the parent's ``reactions``; pass ``rrid`` when the
+    test's prompt carries a different RRID.
+
+    ``require_slack_review`` imports ``SlackClient`` lazily from
+    ``mtui.data_sources``, so that is the patch target.
+    """
+    client = MagicMock()
+    client.conversations_replies.return_value = [
+        {"text": f"Please review {rrid}: https://qam.suse.de/x", "reactions": _THUMBSUP}
+    ]
+    return patch("mtui.data_sources.SlackClient", return_value=client)
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +115,7 @@ def test_end_of_testing_pi_unlocks(mock_config, cls, extra):
     prompt.metadata.lock_comment = "testing of SUSE:PI:34556:1"
     args = Namespace(group=["qam-sle"], user="", **extra)
 
-    with patch("mtui.commands.apicall.OSC"):
+    with patch("mtui.commands.apicall.OSC"), _slack(rrid="SUSE:PI:34556:1"):
         cls(args, mock_config, MagicMock(), prompt)()
 
     prompt.targets.unlock.assert_called_once_with()
@@ -109,7 +139,7 @@ def test_reject_osc_joins_message_into_string(mock_config):
         user="",
     )
 
-    with patch("mtui.commands.apicall.OSC") as osc_cls:
+    with patch("mtui.commands.apicall.OSC") as osc_cls, _slack():
         Reject(args, mock_config, MagicMock(), prompt)()
 
     osc_cls.return_value.reject.assert_called_once_with(
@@ -128,7 +158,7 @@ def test_reject_gitea_joins_message_into_string(mock_config):
         user="someone",
     )
 
-    with patch("mtui.commands.apicall.Gitea") as gitea_cls:
+    with patch("mtui.commands.apicall.Gitea") as gitea_cls, _slack():
         Reject(args, mock_config, MagicMock(), prompt)()
 
     gitea_cls.return_value.reject.assert_called_once_with(
@@ -141,7 +171,7 @@ def test_reject_without_message_sends_empty_string(mock_config):
     prompt = _prompt()
     args = Namespace(group=["qam-sle"], reason="admin", message=None, user="")
 
-    with patch("mtui.commands.apicall.OSC") as osc_cls:
+    with patch("mtui.commands.apicall.OSC") as osc_cls, _slack():
         Reject(args, mock_config, MagicMock(), prompt)()
 
     osc_cls.return_value.reject.assert_called_once_with(["qam-sle"], "admin", "")

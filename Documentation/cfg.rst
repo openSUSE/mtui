@@ -520,6 +520,78 @@ port must be numeric); an invalid value is rejected when the
 configuration is read and the default is used instead.
 
 
+``slack.base_url``
+~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     URL
+  | **default**
+  |     https://slack.com/api
+
+Base URL of the Slack Web API used by the ``request_review`` command
+and the ``approve`` / ``reject`` review gate. Rarely changed; overridable
+mainly so the test suite can point the client at a mock endpoint.
+
+
+``slack.channel``
+~~~~~~~~~~~~~~~~~
+  | **type**
+  |     string
+  | **default**
+  |     ``""``
+
+Slack channel the ``request_review`` command posts the review request
+to. Prefer a channel **ID** (``Cxxxxxxxx``); a ``#name`` is accepted at
+post time and mtui then records the canonical channel ID Slack returns,
+so the watch and the review gate keep working either way. The bot must
+be invited to the channel. ``request_review`` refuses up front, naming
+the missing key, when this is unset.
+
+
+``slack.poll_interval``
+~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     20
+
+Interval, in seconds, at which ``request_review`` polls Slack for thread
+replies and the review 👍 reaction while watching a posted request. Keep
+this at roughly 20 s or higher: per-template fan-out multiplies the
+request rate, and a lower interval risks Slack ``429`` rate limiting.
+
+
+``slack.token``
+~~~~~~~~~~~~~~~
+  | **type**
+  |     string
+  | **default**
+  |     `os.getenv('SLACK_TOKEN','')`__
+
+.. __: https://docs.python.org/3/library/os.html#os.getenv
+
+Slack bot token (``xoxb-``) used to post the review request and read
+thread replies and reactions. This config has higher priority than the
+environment variable. The Slack app needs the ``chat:write``,
+``reactions:read``, ``channels:history`` (plus ``groups:history`` for
+private channels) and ``users:read`` scopes, and the bot must be invited
+to ``slack.channel``.
+
+
+``slack.watch_timeout``
+~~~~~~~~~~~~~~~~~~~~~~~
+  | **type**
+  |     int (seconds)
+  | **default**
+  |     28800
+
+Maximum time, in seconds, ``request_review`` waits for a review 👍 before
+giving up and returning without approving. A review can take hours, so the
+default is a full working day (8h); ``request_review`` blocks with a spinner
+in the REPL (Ctrl-C to stop) or runs as a background MCP job for that long.
+This also bounds a cancelled MCP background watch job's worker thread, so a
+lower value frees a leaked poller sooner.
+
+
 ``svn.path``
 ~~~~~~~~~~~~
   | **type**
@@ -611,7 +683,14 @@ Example
   resolvers = https
   https_uri = https://qam.suse.de/refhosts/refhosts.yml
   path = /usr/share/qam-metadata/refhosts.yml
-  
+
+
+  [slack]
+  token = xoxb-your-bot-token
+  channel = C0123456789
+  poll_interval = 20
+  watch_timeout = 28800
+
 
   [url]
   bugzilla = https://bugzilla.suse.com

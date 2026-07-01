@@ -1341,6 +1341,12 @@ When ``-r REVIEWER`` is given, the reviewer is recorded in the testreport (the
 then is the update approved. If the testreport has no ``Test Plan Reviewer:``
 line or the SVN commit fails, the approval is aborted.
 
+Approval requires a live Slack review acknowledgement: the update refuses to
+approve unless the testreport carries a recorded Slack review (see
+`request_review`_) and a 👍 reaction is still present on that Slack message. Run
+`request_review`_ first to obtain the ack. The gate is unconditional -- there is
+no bypass -- and applies identically at the REPL and over MCP.
+
 .. _osc qam approve: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#approve
 
 **Options:**
@@ -1365,6 +1371,12 @@ reject
 Rejects the current update (always as a ``by_user`` decline). The ``-r``
 option is required; ``-g`` is accepted for compatibility but ignored. Mirrors
 the `osc qam reject`_ workflow.
+
+Like `approve`_, rejection requires a live Slack review acknowledgement: it
+refuses unless the testreport carries a recorded Slack review (see
+`request_review`_) and a 👍 reaction is still present on that Slack message. The
+gate is unconditional -- there is no bypass -- and applies identically at the
+REPL and over MCP.
 
 .. _osc qam reject: http://qam.suse.de/projects/oscqam/latest/workflows/tester.html#reject
 
@@ -1396,6 +1408,104 @@ Adds a comment to the currently loaded review request via the native OBS
 backend. The command takes no arguments; it prompts interactively for the comment
 text on stdin (``Comment:``). The comment is posted against the RRID
 of the loaded test report template.
+
+
+request_review
+++++++++++++++
+
+::
+
+    request_review [--no-watch] [--no-approve] [--repost] [-g [GROUP]]
+                   [-u USER] [-T RRID | --all-templates]
+
+Requests a Slack review of the loaded update and, by default, waits for the
+reviewer's acknowledgement and then approves the update.
+
+The command first ensures the testreport is committed (auto-committing it if
+needed, since the ``http://qam.suse.de/testreports/<RRID>/log`` mirror only
+reflects committed content), then posts that ``/log`` URL to the configured
+Slack channel asking for review. The posted message's channel and timestamp are
+recorded durably in the testreport (a ``Slack Review:`` marker line in the
+``log`` file), so the ack state survives a reload and is re-checkable by
+`approve`_ and `reject`_.
+
+Requires the ``[slack]`` configuration (bot token, channel, and related
+options; see :doc:`cfg`). The bot must be invited to the channel.
+
+Three modes:
+
+* **Default (watch and approve)**: after posting, the command watches the Slack
+  message. Thread replies are streamed to the console as they arrive, and when a
+  👍 (``+1``/``thumbsup``) reaction appears, the review is considered done and
+  the update is **approved** automatically. The reactor's Slack display name is
+  recorded as the reviewer (best-effort -- Slack does not guarantee the ordering
+  of a reaction's user list).
+* **--no-watch**: post the review request and return immediately without
+  watching for a reply or reaction.
+* **--no-approve**: watch and report the acknowledgement, but do not approve the
+  update.
+
+If the testreport already records a ``Slack Review:`` marker, the command
+**resumes** that request instead of posting a duplicate: the existing thread is
+watched, and its replies so far are forwarded to the console first — so an
+interrupted watch (CTRL-C, a cancelled MCP job) can simply be re-run and picks
+up where it left off, including a 👍 that arrived in the meantime. The on-disk
+marker (re-read after the initial commit's ``svn up``) decides this, so a
+review requested by a colleague is resumed, not duplicated. Pass ``--repost``
+to force a fresh post: the marker is replaced and a best-effort "superseded"
+reply is left under the old thread. If a resumed watch reports Slack
+unreachable, the review message may have been deleted — re-run with
+``--repost``. The auto-approve re-validates the marker after the ack, so an
+ack observed by a cancelled watch or on a thread that was superseded mid-watch
+is reported but never acted on.
+
+Both ``slack.token`` and ``slack.channel`` must be configured: the command
+refuses up front, naming the missing ``[slack]`` key, before anything is
+committed or posted. If committing the marker to SVN fails, the command
+aborts **before** watching (the approve/reject gate relies on the committed
+marker being visible to every checkout); the Slack post stays live, and a
+re-run commits the local marker and resumes the watch.
+
+The watch is bounded by ``slack.watch_timeout`` and polls at
+``slack.poll_interval`` (see :doc:`cfg`). Under the REPL the wait can be
+interrupted with CTRL-C.
+
+When more than one template is loaded this fans out across all of them by
+default (see `Fan-out across templates`_) in two phases: first every
+template's review request is posted (or resumed) — one Slack thread per
+template — and only then a single combined watch polls all of the threads,
+approving each update as its 👍 arrives, until every request is resolved or
+the shared ``slack.watch_timeout`` deadline expires. Relayed thread replies
+are prefixed with the template's RRID. CTRL-C during the watch stops it and
+prints a per-template status summary (posted/acked/approved/pending); the
+already-posted requests and their markers survive, so a re-run resumes the
+pending ones. Use ``-T RRID`` to scope to a single template.
+
+**Options:**
+
+.. option:: --no-watch
+
+  Post the review request and return immediately, without watching for a reply
+  or reaction.
+
+.. option:: --no-approve
+
+  Watch for the acknowledgement and report it, but do not approve the update.
+
+.. option:: --repost
+
+  Post a fresh review request even when one is already recorded, replacing the
+  stored marker; the old thread gets a best-effort "superseded" reply. Applies
+  to every fanned-out template, so with more than one template loaded it is
+  refused unless scoped with ``-T RRID``.
+
+.. option:: -g [GROUP], --group [GROUP]
+
+  QA group to approve under (passed through to the internal `approve`_).
+
+.. option:: -u USER, --user USER
+
+  User to approve as (passed through to the internal `approve`_).
 
 
 Other Commands

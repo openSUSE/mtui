@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any
 from ..cli.argparse import ArgsParseFailureError
 from ..cli.display import CommandPromptDisplay
 from ..commands import Command
+from ..support.cancellation import current_cancel_event
 from ..support.concurrency import ContextExecutor
 from ..template_registry import TemplateRegistry
 from ..test_reports.null_report import NullTestReport
@@ -103,6 +104,19 @@ _current_stdout: contextvars.ContextVar[io.StringIO | None] = contextvars.Contex
 #: nothing on the wire and stops well-behaved clients from timing out
 #: on ``run`` / ``update`` / ``set_repo`` / ``commit`` etc.).
 DEFAULT_PROGRESS_INTERVAL_SECONDS: float = 10.0
+
+#: Default grace, in seconds, that :meth:`McpSession.job_cancel` waits for a
+#: cancelled job's worker thread to actually finish before returning. A
+#: cooperative body (``request_review``'s Slack watch) checks its cancel
+#: event between side effects, so it normally exits well within this window;
+#: a body mid-HTTP-request can need up to one full
+#: :data:`mtui.support.http.HTTP_TIMEOUT` (~35 s) to reach its next
+#: checkpoint, which deliberately exceeds this grace — ``job_cancel`` then
+#: reports the job as ``cancelling`` (not ``cancelled``) and the state flips
+#: once the thread exits. 20 s sits under the MCP SDK's 30 s default
+#: client-side request timeout so the ``job_cancel`` call itself (which emits
+#: no progress heartbeat) is never abandoned by a well-behaved client.
+JOB_CANCEL_GRACE_SECONDS: float = 20.0
 
 #: Upper bound (seconds) that :meth:`McpSession._disconnect_targets` waits
 #: for the parallel per-host ``Target.close()`` calls to finish before it
@@ -694,15 +708,71 @@ class McpSession:
         Raises:
             McpCommandError: If argparse rejects ``argv``, the command
                 calls ``sys.exit`` with a non-zero code, or its body
-                raises an unhandled exception.
+                raises an unhandled exception — or, before anything runs,
+                if the call is a foreground watch-bearing multi-template
+                ``request_review`` (see
+                :meth:`_refuse_foreground_multi_watch`).
 
         """
+        self._refuse_foreground_multi_watch(cmd_cls, argv)
         async with self._command_lock(cmd_cls, argv):
             if ctx is None:
-                return await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+                return await self._to_thread_cancellable(cmd_cls, argv)
             return await self._run_with_heartbeat(
                 ctx, cmd_cls, argv, interval=progress_interval
             )
+
+    async def _to_thread_cancellable(
+        self,
+        cmd_cls: type[Command],
+        argv: list[str],
+        *,
+        cancel: threading.Event | None = None,
+        body_started: threading.Event | None = None,
+    ) -> str:
+        """Run ``_run_sync`` in a worker thread with a cancellation channel.
+
+        Binds a :class:`threading.Event` to
+        :data:`~mtui.support.cancellation.current_cancel_event` (contextvars
+        propagate into :func:`asyncio.to_thread`) and sets it when the awaiting
+        task is cancelled, so cooperative command bodies that poll it — e.g.
+        ``request_review``'s Slack watch — exit promptly on ``job_cancel`` or a
+        client disconnect even though the worker thread itself cannot be
+        killed.
+
+        ``cancel`` lets the job path (:meth:`_mint_job`) share the event with
+        the job record so :meth:`job_cancel` can flag it *without* cancelling
+        the awaiting task (cooperative-first cancellation); when ``None`` a
+        fresh private event is minted, as before. ``body_started`` (when
+        given) is set by the worker thread immediately before the pre-start
+        guard, so a canceller that sets ``cancel`` and *then* observes
+        ``body_started`` unset has proof the body will never run: the guard
+        reads ``cancel`` after ``body_started`` is set, so it necessarily sees
+        the flag and refuses — closing the race where a hard task-cancel
+        detaches from an executor work item that slips past
+        ``Future.cancel()`` and runs unobserved.
+        """
+        cancel_event = cancel if cancel is not None else threading.Event()
+        token = current_cancel_event.set(cancel_event)
+
+        def _body() -> str:
+            if body_started is not None:
+                body_started.set()
+            if cancel_event.is_set():
+                # Cancelled while queued (or in the submit race): refuse to
+                # start so "cancelled" never precedes a side effect.
+                raise McpCommandError(
+                    "", "command cancelled before its body started", 1
+                )
+            return self._run_sync(cmd_cls, argv)
+
+        try:
+            return await asyncio.to_thread(_body)
+        except asyncio.CancelledError:
+            cancel_event.set()
+            raise
+        finally:
+            current_cancel_event.reset(token)
 
     async def _lock_for(self, rrid: str) -> asyncio.Lock:
         """Return (creating on first use) the per-template lock for ``rrid``.
@@ -786,7 +856,7 @@ class McpSession:
         logged at ``DEBUG`` and swallowed so a flaky transport never
         masks the actual command outcome.
         """
-        worker = asyncio.create_task(asyncio.to_thread(self._run_sync, cmd_cls, argv))
+        worker = asyncio.create_task(self._to_thread_cancellable(cmd_cls, argv))
         started = time.monotonic()
         try:
             while True:
@@ -942,6 +1012,44 @@ class McpSession:
         rrids = [str(r.id) for r in reports if str(r.id)]
         return rrids or None
 
+    def _refuse_foreground_multi_watch(
+        self, cmd_cls: type[Command], argv: list[str]
+    ) -> None:
+        """Refuse a foreground watch-bearing multi-template ``request_review``.
+
+        An unscoped ``request_review`` resolving to more than one template
+        takes the registry gate in *exclusive* mode (the fan-out path of
+        :meth:`_command_lock`) and then watches Slack for up to the configured
+        watch timeout (hours) — freezing every other tool call in this MCP
+        session with no cancel handle. Post-only calls (``--no-watch``) stay
+        quick, a single-template call holds only that template's lock, and
+        ``background=true`` fans out one independently cancellable job per
+        template (each holding only its own per-RRID lock), so those paths
+        remain allowed. The interactive REPL does not dispatch through
+        :class:`McpSession` and is unaffected.
+
+        Raises:
+            McpCommandError: When ``cmd_cls`` is ``request_review``, argv
+                does not carry ``--no-watch``, and more than one template
+                resolves.
+
+        """
+        if cmd_cls.command != "request_review" or "--no-watch" in argv:
+            return
+        rrids = self._resolve_job_rrids(cmd_cls, argv)
+        if rrids is None or len(rrids) <= 1:
+            return
+        raise McpCommandError(
+            "",
+            f"a foreground request_review watching across {len(rrids)} "
+            "templates would hold this session's exclusive gate for the "
+            "whole watch, blocking every other tool call; run it with "
+            "background=true (one cancellable job per template), scope it "
+            'with template="<RRID>", or pass no_watch=true to post without '
+            "watching",
+            1,
+        )
+
     def _mint_job(self, cmd_cls: type[Command], argv: list[str], job_id: str) -> str:
         """Create and start one job record running ``argv`` and return its id.
 
@@ -972,21 +1080,51 @@ class McpSession:
             "error": None,
             "exit_code": None,
             "task": None,
+            # Cooperative cancellation channel (see ``job_cancel``):
+            # ``cancel`` is shared with the worker thread via
+            # ``_to_thread_cancellable`` so the body can be flagged without
+            # cancelling the awaiting task; ``body_started`` is set by the
+            # worker thread just before the pre-start guard, so an unset
+            # event *after* flagging ``cancel`` proves the body never runs;
+            # ``cancel_requested`` folds the body's eventual outcome into a
+            # truthful terminal ``cancelled`` state.
+            "cancel": threading.Event(),
+            "body_started": threading.Event(),
+            "cancel_requested": False,
         }
         self._jobs[job_id] = job
 
         async def _runner() -> None:
             try:
                 async with self._command_lock(cmd_cls, argv):
-                    out = await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+                    out = await self._to_thread_cancellable(
+                        cmd_cls,
+                        argv,
+                        cancel=job["cancel"],
+                        body_started=job["body_started"],
+                    )
+                # Reaching here means the worker thread has fully exited, so
+                # ``cancelled`` (when requested) is truthful: no further
+                # externally visible mutation can come from this job.
                 job["result"] = out
-                job["state"] = "done"
+                job["state"] = "cancelled" if job["cancel_requested"] else "done"
             except McpCommandError as exc:
-                job["state"] = "failed"
-                job["error"] = str(exc)
-                job["result"] = exc.stdout
-                job["exit_code"] = exc.exit_code
+                if job["cancel_requested"]:
+                    # The body observed the cooperative cancel (or the
+                    # pre-start guard refused to run it) and has exited.
+                    job["state"] = "cancelled"
+                    job["result"] = exc.stdout
+                    job["error"] = str(exc)
+                else:
+                    job["state"] = "failed"
+                    job["error"] = str(exc)
+                    job["result"] = exc.stdout
+                    job["exit_code"] = exc.exit_code
             except asyncio.CancelledError:
+                # Only reached by a hard task-cancel, which ``job_cancel``
+                # issues solely while ``body_started`` is provably unset (the
+                # pre-start guard then keeps the body from ever running), so
+                # ``cancelled`` remains truthful here too.
                 job["state"] = "cancelled"
                 raise
             except Exception as exc:  # noqa: BLE001 - record, never crash the loop
@@ -1070,6 +1208,26 @@ class McpSession:
 
         """
         rrids = self._resolve_job_rrids(cmd_cls, argv)
+        # ``request_review --repost`` replaces each template's recorded review
+        # request; the foreground fan-out refuses it unscoped (see
+        # ``RequestReview.run``). Minting one ``-T``-scoped job per template
+        # would silently bypass that refusal — every job would resolve to
+        # exactly one template and repost, superseding every live review
+        # thread wholesale — so refuse here too. Scoped to ``request_review``
+        # (the command that owns ``--repost``): any other argv may carry the
+        # literal token, e.g. as part of a ``run``/``install`` remote command.
+        if (
+            cmd_cls.command == "request_review"
+            and "--repost" in argv
+            and rrids is not None
+            and len(rrids) > 1
+        ):
+            raise McpCommandError(
+                "",
+                "--repost would replace every fanned-out template's recorded "
+                'review request; scope it with template="<RRID>"',
+                1,
+            )
         # Single template, none, or a client-supplied ``-T`` already narrowing
         # to one: keep the single-job path (and its stable id shape).
         if not rrids or len(rrids) <= 1:
@@ -1114,7 +1272,8 @@ class McpSession:
         """Return a finished job's stdout, or raise the right envelope.
 
         * unknown id -> :class:`McpCommandError` (exit 1)
-        * still running -> :class:`McpCommandError` telling the caller to
+        * still running (or ``cancelling``: cancel requested, body still
+          winding down) -> :class:`McpCommandError` telling the caller to
           poll ``job_status`` (the job keeps running)
         * failed -> :class:`McpCommandError` carrying the command's
           captured stdout / error / exit code, exactly as a foreground
@@ -1126,11 +1285,11 @@ class McpSession:
         if job is None:
             raise McpCommandError("", f"no such job: {job_id}", 1)
         state = job["state"]
-        if state == "running":
+        if state in ("running", "cancelling"):
             elapsed = round(time.monotonic() - job["started"], 1)
             raise McpCommandError(
                 "",
-                f"job {job_id} still running ({elapsed}s); poll job_status",
+                f"job {job_id} still {state} ({elapsed}s); poll job_status",
                 1,
             )
         if state == "failed":
@@ -1143,21 +1302,79 @@ class McpSession:
             raise McpCommandError("", f"job {job_id} was cancelled", 1)
         return job["result"] or ""
 
-    async def job_cancel(self, job_id: str) -> str:
-        """Cancel a running job; raise if the id is unknown.
+    async def job_cancel(self, job_id: str, *, grace: float | None = None) -> str:
+        """Cancel a running job cooperatively; raise if the id is unknown.
 
-        Cancels the worker task. NOTE: if the job is mid
-        :func:`asyncio.to_thread` (an SSH/subprocess body), cancellation
-        detaches the awaiter but the underlying host operation may keep
-        running to completion — the same caveat as interrupting a
-        foreground ``run``. A finished job is a no-op.
+        Cancellation is cooperative-first and truthful — ``cancelled`` is
+        only ever reported once the job can produce **no further externally
+        visible mutation**:
+
+        * The job's cancellation event is flagged (shared with the worker
+          thread — see :meth:`_to_thread_cancellable`), so cooperative
+          command bodies that poll it — e.g. ``request_review``'s Slack
+          watch — exit at their next checkpoint.
+        * If the body has provably not started (the worker task is still
+          queued on its template lock / the thread has not passed the
+          pre-start guard, which now refuses to run it), the task is
+          hard-cancelled: safe, nothing ran.
+        * Otherwise this call **waits** up to ``grace`` seconds
+          (:data:`JOB_CANCEL_GRACE_SECONDS` by default) for the worker
+          thread to actually finish and only then reports ``cancelled``.
+        * If the grace expires the job is reported as ``cancelling``: the
+          body is still finishing its current step (a non-cooperative
+          SSH/subprocess step, or an HTTP call of up to one
+          :data:`~mtui.support.http.HTTP_TIMEOUT`). The worker task is
+          **not** hard-cancelled — it keeps holding the job's per-template
+          lock, so a re-run (or any same-template command) queues behind the
+          old thread instead of interleaving with it; ``job_status`` flips
+          to ``cancelled`` once the thread exits.
+
+        A finished job is a no-op.
         """
         job = self._jobs.get(job_id)
         if job is None:
             raise McpCommandError("", f"no such job: {job_id}", 1)
         task = job.get("task")
-        if task is not None and not task.done():
+        if task is None or task.done():
+            # Legacy no-op message (pinned): the state itself stays truthful
+            # (job_status still reports done/failed/...), and a finished job
+            # trivially satisfies the no-further-mutations invariant.
+            return f"cancelled job {job_id}"
+        job["cancel_requested"] = True
+        cancel: threading.Event | None = job.get("cancel")
+        if cancel is not None:
+            cancel.set()
+        # Order matters: ``cancel`` is flagged *before* ``body_started`` is
+        # read, and the worker thread sets ``body_started`` *before* reading
+        # ``cancel`` (see ``_to_thread_cancellable``). An unset
+        # ``body_started`` here therefore proves the body either never runs
+        # or refuses at the pre-start guard — a hard task-cancel is safe.
+        body_started: threading.Event | None = job.get("body_started")
+        if cancel is None or body_started is None or not body_started.is_set():
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        return f"cancelled job {job_id}"
+            return f"cancelled job {job_id}"
+        job["state"] = "cancelling"
+        if grace is None:
+            grace = JOB_CANCEL_GRACE_SECONDS
+        done, _pending = await asyncio.wait({task}, timeout=grace)
+        if task in done:
+            # ``_runner`` has recorded the terminal state; the worker thread
+            # has fully exited, so "cancelled" is truthful. The defensive
+            # generic-exception branch is the one terminal state that is not
+            # ``cancelled`` (a non-``McpCommandError`` escaping ``_run_sync``
+            # records ``failed``) — the message must not claim otherwise.
+            if job["state"] == "cancelled":
+                return f"cancelled job {job_id}"
+            return (
+                f"job {job_id} stopped (state={job['state']}) after the "
+                f"cancellation request; see job_result"
+            )
+        return (
+            f"cancellation of job {job_id} requested; its command body is "
+            f"still finishing the current step and stops at its next "
+            f"cancellation checkpoint (bounded by one HTTP timeout at "
+            f"worst). state=cancelling until then — poll job_status for "
+            f"'cancelled'; same-template commands stay queued behind it."
+        )

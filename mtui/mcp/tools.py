@@ -74,6 +74,8 @@ SLOW_COMMANDS: frozenset[str] = frozenset(
         "reboot",
         # Not a host op, but waits on the TeReGen regeneration job (minutes).
         "regenerate",
+        # Not a host op, but blocks polling Slack for a reviewer ack (minutes).
+        "request_review",
     }
 )
 
@@ -433,9 +435,11 @@ def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
         "reboot — with background=true) and their state."
     )
     status_desc = (
-        "Report a background job's state (running/done/failed/cancelled) and "
-        "elapsed time. Poll this after starting a slow command with "
-        "background=true."
+        "Report a background job's state (running/cancelling/done/failed/"
+        "cancelled) and elapsed time. Poll this after starting a slow command "
+        "with background=true. 'cancelling' means a cancel was requested and "
+        "the command body is still finishing its current step; it becomes "
+        "'cancelled' once the body has fully stopped."
     )
     result_desc = (
         "Return a finished background job's output. Errors if the job is still "
@@ -443,8 +447,15 @@ def register_job_tools(mcp: FastMCP, provider: SessionProvider) -> list[str]:
         "it failed."
     )
     cancel_desc = (
-        "Cancel a running background job. Note: a job already executing on a "
-        "host (SSH/subprocess) may keep running on the host even after cancel."
+        "Cancel a running background job. Cooperative commands (e.g. "
+        "request_review's Slack watch) stop at their next checkpoint; this "
+        "call waits a short grace for the body to actually stop and only "
+        "then reports it cancelled. If the body is still finishing a "
+        "non-interruptible step the job is reported as 'cancelling' instead "
+        "(poll job_status; it flips to 'cancelled' once the body has "
+        "stopped, and same-template commands stay queued until then). Note: "
+        "a command already executing on a host (SSH/subprocess) may keep "
+        "running on the host to the end of that step."
     )
 
     # structured_output=False on all four: they return plain ``str``; see

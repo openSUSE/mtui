@@ -17,7 +17,7 @@ from ..data_sources import OSC, Gitea
 from ..support.exceptions import GiteaError, InvalidGiteaHashError
 from ..support.misc import requires_update
 from ..test_reports.svn_io import TemplateFormatError, svn_commit_testreport
-from .apicall import BaseApiCall
+from .apicall import BaseApiCall, require_slack_review
 
 logger = getLogger("mtui.command.approve")
 
@@ -46,10 +46,12 @@ class Approve(BaseApiCall):
     def __call__(self) -> None:
         """The main entry point for the command.
 
-        When ``-r/--reviewer`` is given, record the reviewer in the
-        testreport and commit it to SVN before approving. If either step
-        fails, the approval is aborted.
+        Refuse unless the report carries a live Slack 👍 ack. When
+        ``-r/--reviewer`` is given, record the reviewer in the testreport and
+        commit it to SVN before approving. If either step fails, the approval
+        is aborted.
         """
+        require_slack_review(self)
         if self.args.reviewer is not None and not self._record_reviewer():
             return
         super().__call__()

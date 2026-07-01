@@ -59,6 +59,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   unresolvable fails closed. A new `[obs]` config section (`api_url`,
   `request_timeout`) is introduced.
 
+- New `request_review` command — posts the loaded update's test report to a
+  configured Slack channel (`[slack]` config section), then watches the request
+  thread and auto-approves the update once a reviewer reacts with 👍 (skin-toned
+  👍 variants count), relaying any thread replies as they arrive. With several
+  templates loaded, all review requests are posted first and a single combined
+  watch then polls every thread, approving each update as its ack arrives;
+  Ctrl-C stops the watch with a per-template status summary. When the report
+  already records a Slack review marker, a re-run resumes the existing request
+  instead of posting a duplicate — forwarding the thread's replies so far — so
+  an interrupted watch (Ctrl-C, a cancelled MCP job) just picks up where it
+  left off; `--repost` forces a fresh post, replacing the marker and leaving a
+  "superseded" reply under the old thread. A cancelled or superseded watch
+  reports an observed 👍 but never approves from it, and a cancelled MCP job
+  stops before its next side effect — `job_cancel` reports "cancelled" only
+  once the worker has actually stopped (a `cancelling` state covers the stop
+  window), and a foreground MCP `request_review` that would watch several
+  templates is refused (background it instead). In turn, `approve` and `reject` now
+  require a recorded Slack review that still shows a 👍 — the gate verifies the
+  referenced Slack message really is this update's review request (it must
+  name the RRID) before trusting any reaction, and refuses otherwise.
 - `mtui-mcp` is now much more token-efficient. Tool schemas are automatically
   slimmed of redundant pydantic boilerplate (the per-field `title` keys and the
   `anyOf: [T, null]` optional-field unions), shrinking the tool-list payload

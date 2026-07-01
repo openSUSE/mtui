@@ -122,6 +122,18 @@ class GiteaError(Exception):
     """Base exception for Gitea-related errors."""
 
 
+class SlackError(Exception):
+    """Base exception for Slack-related errors."""
+
+
+class MissingSlackTokenError(SlackError):
+    """Raised when a Slack token is missing."""
+
+
+class FailedSlackCallError(SlackError):
+    """Raised when a call to the Slack API fails."""
+
+
 class MissingGiteaTokenError(GiteaError):
     """Raised when a Gitea token is missing."""
 
