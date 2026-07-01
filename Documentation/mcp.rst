@@ -597,7 +597,16 @@ therefore exposes two optional parameters in its schema:
 
 Omitting both fans the call out across the session's loaded templates.
 When a fanned-out call fails on one template it keeps running on the
-others and reports an aggregate failure at the end.
+others and reports an aggregate failure at the end. A host-phase tool called
+without explicit ``-t`` hosts skips a loaded template with **no connected
+host** (warning, not a failure), so an unscoped ``lock`` still succeeds on
+the templates that do have hosts; if every template is host-less the call
+fails with "No refhosts defined" instead of reporting an empty success.
+Naming a disconnected host with ``-t`` is still a failure, and a call scoped
+with ``template="<RRID>"`` keeps the single-template error behaviour. With
+``background=true`` each template runs as its own independent job, so a
+host-less template fails only its own job and never blocks the jobs of the
+other templates.
 
 .. note::
 
