@@ -11,6 +11,7 @@ from ..hosts.target.hostgroup import HostsGroup
 from ..support.messages import (
     FanOutError,
     HostIsNotConnectedError,
+    NoRefhostsDefinedError,
     TemplateNotLoadedError,
 )
 
@@ -302,7 +303,11 @@ class Command(ABC):
         more than one template is resolved, each gets an RRID banner and its own
         ``try/except``: a per-template failure is logged and collected, the loop
         continues, and a :class:`FanOutError` aggregate is raised afterwards if
-        any template failed.
+        any template failed. A template with no connected host is skipped up
+        front (warning, never collected) when the invocation named no ``-t``
+        hosts; if every template got skipped that way the command ran nowhere
+        and :class:`NoRefhostsDefinedError` is raised instead of reporting
+        success.
         """
         resolved = self._resolve_templates()
 
@@ -313,23 +318,51 @@ class Command(ABC):
             self.__call__()
             return
 
+        # A host-phase command (one taking ``-t``) invoked without explicit
+        # hosts opportunistically applies to every loaded template; a template
+        # with no connected host has nothing to act on and is skipped so it
+        # can't fail the fan-out (or, for commands like ``lock`` whose body
+        # no-ops on an empty host group, be reported as a success that never
+        # happened). Explicitly named hosts must keep failing loudly: a typo'd
+        # ``-t`` raises HostIsNotConnectedError inside the body and lands in
+        # the aggregate below.
+        skippable = hasattr(self.args, "hosts") and not self.args.hosts
+
         failures: list[tuple[str, BaseException]] = []
+        skipped: list[str] = []
         for report in resolved:
             rrid = str(report.id)
+            if skippable and not report.targets:
+                logger.warning(
+                    "%s skipped on %s: no connected hosts", self.command, rrid
+                )
+                skipped.append(rrid)
+                continue
             self.metadata = report
             self.targets = report.targets
             self.display.template_banner(rrid)
             try:
                 self.__call__()
-            except BaseException as exc:  # noqa: BLE001 - collect & continue
+            except Exception as exc:  # noqa: BLE001 - collect & continue
                 logger.error("%s failed on %s: %s", self.command, rrid, exc)
                 failures.append((rrid, exc))
 
-        ok = [str(r.id) for r in resolved if str(r.id) not in {f[0] for f in failures}]
+        done = {*(f[0] for f in failures), *skipped}
+        ok = [str(r.id) for r in resolved if str(r.id) not in done]
         if ok:
             logger.info("%s succeeded on: %s", self.command, ", ".join(ok))
+        if skipped:
+            logger.info(
+                "%s skipped (no connected host): %s",
+                self.command,
+                ", ".join(skipped),
+            )
         if failures:
             raise FanOutError(failures)
+        if skipped and not ok:
+            # Every resolved template was skipped: the command executed on
+            # nothing, which must stay an error, not a silent success.
+            raise NoRefhostsDefinedError
 
     def parse_hosts(self, enabled: bool = True) -> HostsGroup:
         """Parses the `hosts` argument and returns a `HostsGroup` object.

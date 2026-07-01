@@ -86,7 +86,15 @@ template only.
 
 If a fanned-out command fails on one template, it continues running on the
 remaining templates and then reports an aggregate failure once the loop is done;
-a failure on one template does not abort the others.
+a failure on one template does not abort the others. When a host-phase command
+(one accepting ``-t``) fans out without explicit ``-t`` hosts, a loaded
+template that has **no connected host** is skipped with a warning rather than
+counted as a failure, so an unscoped ``lock``/``run``/… still succeeds on the
+templates that do have hosts. If *every* template gets skipped that way the
+command executed nowhere and fails with "No refhosts defined". Naming a host
+that is not connected (``-t <host>``) is still a per-template failure, and an
+explicitly ``-T``/``--template``-scoped call keeps the single-template error
+behaviour — you asked for exactly that one.
 
 .. note::
 
