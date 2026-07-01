@@ -391,7 +391,7 @@ def log_matches_package(log: str, packages: list[str]) -> bool:
     """Return ``True`` if ``log`` belongs to any package in ``packages``.
 
     Besides the plain substring check this also tries a normalized form of
-    each package name (``pythonNNN-foo`` -> ``python-foo``) so the flavored
+    each package name (``pythonN[N...]-foo`` -> ``python-foo``) so the flavored
     Python binary packages still match their source-named build_checks log.
     """
     for pkg in packages:
