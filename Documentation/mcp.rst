@@ -603,10 +603,13 @@ others and reports an aggregate failure at the end.
 
    ``switch`` is **not** exposed as a tool; moving the active-template
    pointer is REPL-only navigation. Over MCP you target a specific template
-   per call with the ``template`` parameter instead. ``unload <rrid>`` **is**
-   exposed — it names its own RRID and drops exactly that template (closing
-   only its host connections), leaving the others loaded. ``list_templates``
-   remains available as a read-only listing.
+   per call with the ``template`` parameter instead. ``load_template`` and
+   ``unload <rrid>`` **are** exposed — each names its own RRID and acts on
+   exactly that one template: ``load_template`` loads the given RRID and
+   connects only *its* hosts (it never fans out across the already-loaded
+   set), and ``unload`` drops exactly that template, closing only its host
+   connections and leaving the others loaded. ``list_templates`` remains
+   available as a read-only listing.
 
 Background jobs (don't block on a slow host op)
 -----------------------------------------------

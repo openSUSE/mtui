@@ -218,6 +218,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   session's connection pool is now sized to match mtui's default worker-thread
   count (`min(32, cpu + 4)`), so the concurrent per-setting requests reuse
   connections instead of repeatedly opening and tearing them down.
+- `load_template` no longer fans out across already-loaded templates. Over
+  `mtui-mcp`, where an unscoped command fans out by default, loading a new RRID
+  while several templates were already loaded re-ran the load — and its host
+  autoconnect — once per loaded template, needlessly grabbing reference hosts
+  from the pool. `load_template` now runs exactly once (`scope = "single"`, like
+  `unload`), connecting only the newly loaded template's own hosts.
 - Over `mtui-mcp`, a command with a `nargs=REMAINDER` *optional* flag declared
   before another flag (the shape used by `reject --message`) could have the
   later flag swallowed into the message when re-encoding a tool call to argv.

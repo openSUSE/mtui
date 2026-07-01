@@ -1,5 +1,7 @@
 """The `load_template` command."""
 
+from typing import ClassVar
+
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
 from ..support.messages import TestReportNotLoadedError
@@ -20,6 +22,11 @@ class LoadTemplate(Command):
     """
 
     command = "load_template"
+    # Names its own target via -a/-k, so it must run exactly once. Without this
+    # an unscoped call under MCP (where "active" fans out with several templates
+    # loaded) would re-run the load — and its host autoconnect — once per already
+    # loaded template, needlessly grabbing pool hosts. Mirrors ``unload``.
+    scope: ClassVar[str] = "single"
 
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
