@@ -2,6 +2,7 @@
 
 import os.path
 from collections.abc import Callable
+from concurrent.futures import Future, as_completed
 from logging import getLogger
 from pathlib import Path
 
@@ -32,8 +33,8 @@ def _subdl(
         logger.info("Downloading log %s", oqa_path)
         data = get_bytes(oqa_path, verify=verify)
         atomic_write_file(data, Path(l_path))
-    except requests.exceptions.RequestException:
-        logger.error("Download from %s failed", oqa_path)
+    except requests.exceptions.RequestException as error:
+        logger.error("Download from %s failed: %s", oqa_path, error)
         if errormode == "full":
             raise ResultsMissingError(test["name"], test["arch"]) from None
 
@@ -120,6 +121,10 @@ def download_logs(
         errormode: The error mode to use if a download fails.
         verify: The TLS verification policy (see ``mtui.support.http``).
 
+    Raises:
+        ResultsMissingError: If a download fails and ``errormode`` is
+            ``"full"`` (raised after the whole batch has finished).
+
     """
     results_matrix: list[tuple[str, str, str, str]] = []
     for host in oqa:
@@ -128,8 +133,37 @@ def download_logs(
                 (host.host, x.name, x.test_id, x.arch) for x in host.results
             ]
 
+    failures: list[BaseException] = []
     with ContextExecutor() as e:
+        futures: dict[Future[None], tuple[str, str, str]] = {}
         for host, name, test_id, arch in results_matrix:
             test = {"name": name, "test_id": test_id, "arch": arch}
             dl = downloader.get(name.split("_")[0], _emptylog)
-            e.submit(dl, host, test, resultsdir, installogsdir, errormode, verify)
+            futures[
+                e.submit(dl, host, test, resultsdir, installogsdir, errormode, verify)
+            ] = (host, name, arch)
+
+        for future in as_completed(futures):
+            error = future.exception()
+            if error is None:
+                continue
+            failures.append(error)
+            if not isinstance(error, ResultsMissingError):
+                # _subdl already logs the download failures it anticipates
+                # (and raises ResultsMissingError under errormode="full");
+                # anything else would otherwise vanish with the future.
+                host, name, arch = futures[future]
+                logger.error(
+                    "Downloading log of test %s (%s) from %s failed: %s",
+                    name,
+                    arch,
+                    host,
+                    error,
+                )
+
+    if failures:
+        logger.warning(
+            "%s of %s openQA log downloads failed", len(failures), len(futures)
+        )
+        if errormode == "full":
+            raise failures[0]
