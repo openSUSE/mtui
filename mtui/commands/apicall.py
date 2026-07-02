@@ -15,12 +15,63 @@ from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices, template_completion
 from ..cli.term import ask_user
 from ..data_sources import OSC, Gitea, TeReGen
-from ..support.exceptions import GiteaError
+from ..support.exceptions import FailedSlackCallError, GiteaError
 from ..support.misc import requires_update
 from ..types import RequestKind
 from . import Command
 
 logger = getLogger("mtui.command.apicalls")
+
+# Slack reaction names that count as a review acknowledgement (👍).
+_SLACK_ACK_REACTIONS = frozenset({"+1", "thumbsup"})
+
+
+def require_slack_review(command: "BaseApiCall") -> None:
+    """Refuse an approve/reject unless the report carries a live Slack ack.
+
+    ``request_review`` persists the Slack message reference (channel + ts) in
+    the testreport via :meth:`TestReport.set_slack_review`. This gate reads
+    the marker back **from the template file** (not the load-time snapshot —
+    any ``svn up`` may have pulled in a colleague's newer or reposted marker)
+    and re-queries Slack live so the 👍 ack is confirmed to still be present
+    at approve/reject time (durable and re-checkable across sessions).
+
+    Raises:
+        FailedSlackCallError: if no Slack review is recorded (the user is
+            pointed at ``request_review``) or the live reactions no longer
+            carry a 👍.
+
+    """
+    review = command.metadata.get_slack_review()
+    if review is None:
+        raise FailedSlackCallError(
+            "No Slack review recorded for this update; run 'request_review' "
+            "first (or pass -f/--force interactively to bypass)."
+        )
+
+    # Imported lazily to avoid an import cycle at module load time.
+    from ..data_sources import SlackClient
+
+    channel, ts = review
+    reactions = SlackClient(command.config).reactions_get(channel, ts)
+    if not any(r.get("name") in _SLACK_ACK_REACTIONS for r in reactions):
+        raise FailedSlackCallError(
+            f"Slack review {channel}/{ts} has no 👍 ack; refusing. "
+            "Have a reviewer react with 👍, or pass -f/--force interactively."
+        )
+
+
+def _force_bypasses_gate(command: "BaseApiCall") -> bool:
+    """Whether ``-f/--force`` legitimately skips the Slack review gate.
+
+    ``--force`` is honoured only in the interactive REPL: it is tagged
+    ``_mtui_mcp_hidden`` so it never enters an MCP tool schema, and
+    :class:`~mtui.session.McpSession` sets ``prompt.interactive = False`` — so
+    an AI agent cannot force-approve without a review.
+    """
+    return getattr(command.args, "force", False) and getattr(
+        command.prompt, "interactive", True
+    )
 
 
 class BaseApiCall(Command, ABC):
@@ -237,6 +288,15 @@ class Reject(BaseApiCall):
             ],
             help="Reason to reject update, required",
         )
+        force = parser.add_argument(
+            "-f",
+            "--force",
+            action="store_true",
+            help="Reject without a Slack review 👍 (interactive REPL only).",
+        )
+        # Never expose ``--force`` over MCP so agents cannot bypass the review
+        # gate; skipped by build_parameters in mtui/mcp/_schema.py.
+        force._mtui_mcp_hidden = True  # noqa: SLF001 - tag for mtui.mcp._schema  # ty: ignore[unresolved-attribute]
         parser.add_argument(
             "-m",
             "--message",
@@ -244,6 +304,18 @@ class Reject(BaseApiCall):
             help="Message to use for rejection-comment."
             + "Always as last of command, it takes remainder of command",
         )
+
+    @requires_update
+    def __call__(self) -> None:
+        """Reject the request after the Slack review gate.
+
+        Mirrors :class:`~mtui.commands.approve.Approve`: require a live Slack
+        👍 ack (unless ``--force`` is used interactively) before delegating to
+        the shared backend-dispatch path.
+        """
+        if not _force_bypasses_gate(self):
+            require_slack_review(self)
+        super().__call__()
 
     @property
     def _message(self) -> str:
@@ -281,6 +353,7 @@ class Reject(BaseApiCall):
                 ("-r", "--reason"),
                 ("-m", "--message"),
                 ("-u", "--user"),
+                ("-f", "--force"),
                 (
                     "admin",
                     "retracted",

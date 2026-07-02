@@ -45,6 +45,7 @@ import contextvars
 import io
 import logging
 import shlex
+import threading
 import time
 from logging import Handler, Logger, LogRecord, getLogger
 from types import SimpleNamespace
@@ -53,6 +54,7 @@ from typing import TYPE_CHECKING, Any
 from ..cli.argparse import ArgsParseFailureError
 from ..cli.display import CommandPromptDisplay
 from ..commands import Command
+from ..support.cancellation import current_cancel_event
 from ..support.concurrency import ContextExecutor
 from ..template_registry import TemplateRegistry
 from ..test_reports.null_report import NullTestReport
@@ -630,10 +632,33 @@ class McpSession:
         """
         async with self._command_lock(cmd_cls, argv):
             if ctx is None:
-                return await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+                return await self._to_thread_cancellable(cmd_cls, argv)
             return await self._run_with_heartbeat(
                 ctx, cmd_cls, argv, interval=progress_interval
             )
+
+    async def _to_thread_cancellable(
+        self, cmd_cls: type[Command], argv: list[str]
+    ) -> str:
+        """Run ``_run_sync`` in a worker thread with a cancellation channel.
+
+        Binds a fresh :class:`threading.Event` to
+        :data:`~mtui.support.cancellation.current_cancel_event` (contextvars
+        propagate into :func:`asyncio.to_thread`) and sets it when the awaiting
+        task is cancelled, so cooperative command bodies that poll it — e.g.
+        ``request_review``'s Slack watch — exit promptly on ``job_cancel`` or a
+        client disconnect even though the worker thread itself cannot be
+        killed.
+        """
+        cancel = threading.Event()
+        token = current_cancel_event.set(cancel)
+        try:
+            return await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+        except asyncio.CancelledError:
+            cancel.set()
+            raise
+        finally:
+            current_cancel_event.reset(token)
 
     async def _lock_for(self, rrid: str) -> asyncio.Lock:
         """Return (creating on first use) the per-template lock for ``rrid``.
@@ -717,7 +742,7 @@ class McpSession:
         logged at ``DEBUG`` and swallowed so a flaky transport never
         masks the actual command outcome.
         """
-        worker = asyncio.create_task(asyncio.to_thread(self._run_sync, cmd_cls, argv))
+        worker = asyncio.create_task(self._to_thread_cancellable(cmd_cls, argv))
         started = time.monotonic()
         try:
             while True:
@@ -910,7 +935,7 @@ class McpSession:
         async def _runner() -> None:
             try:
                 async with self._command_lock(cmd_cls, argv):
-                    out = await asyncio.to_thread(self._run_sync, cmd_cls, argv)
+                    out = await self._to_thread_cancellable(cmd_cls, argv)
                 job["result"] = out
                 job["state"] = "done"
             except McpCommandError as exc:
@@ -1002,6 +1027,19 @@ class McpSession:
 
         """
         rrids = self._resolve_job_rrids(cmd_cls, argv)
+        # ``request_review --repost`` replaces each template's recorded review
+        # request; the foreground fan-out refuses it unscoped (see
+        # ``RequestReview.run``). Minting one ``-T``-scoped job per template
+        # would silently bypass that refusal — every job would resolve to
+        # exactly one template and repost, superseding every live review
+        # thread wholesale — so refuse here too.
+        if "--repost" in argv and rrids is not None and len(rrids) > 1:
+            raise McpCommandError(
+                "",
+                "--repost would replace every fanned-out template's recorded "
+                'review request; scope it with template="<RRID>"',
+                1,
+            )
         # Single template, none, or a client-supplied ``-T`` already narrowing
         # to one: keep the single-job path (and its stable id shape).
         if not rrids or len(rrids) <= 1:
@@ -1073,7 +1111,10 @@ class McpSession:
     async def job_cancel(self, job_id: str) -> str:
         """Cancel a running job; raise if the id is unknown.
 
-        Cancels the worker task. NOTE: if the job is mid
+        Cancels the worker task and flags the job's cancellation event
+        (see :meth:`_to_thread_cancellable`), so cooperative command
+        bodies that poll it — e.g. ``request_review``'s Slack watch —
+        exit promptly. NOTE: for non-cooperative bodies mid
         :func:`asyncio.to_thread` (an SSH/subprocess body), cancellation
         detaches the awaiter but the underlying host operation may keep
         running to completion — the same caveat as interrupting a

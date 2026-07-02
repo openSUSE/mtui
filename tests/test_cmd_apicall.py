@@ -76,7 +76,7 @@ def test_assign_non_pi_does_not_lock(mock_config):
     ("cls", "extra"),
     [
         (Unassign, {}),
-        (Reject, {"reason": "admin", "message": ["nope"]}),
+        (Reject, {"reason": "admin", "message": ["nope"], "force": True}),
     ],
 )
 def test_end_of_testing_pi_unlocks(mock_config, cls, extra):
@@ -107,6 +107,7 @@ def test_reject_osc_joins_message_into_string(mock_config):
         reason="build_problem",
         message=["dependency", "issues", "bsc#1234"],
         user="",
+        force=True,  # bypass the Slack-review gate (covered separately)
     )
 
     with patch("mtui.commands.apicall.OSC") as osc_cls:
@@ -126,6 +127,7 @@ def test_reject_gitea_joins_message_into_string(mock_config):
         reason="build_problem",
         message=["dependency", "issues"],
         user="someone",
+        force=True,  # bypass the Slack-review gate (covered separately)
     )
 
     with patch("mtui.commands.apicall.Gitea") as gitea_cls:
@@ -139,7 +141,9 @@ def test_reject_gitea_joins_message_into_string(mock_config):
 def test_reject_without_message_sends_empty_string(mock_config):
     mock_config.lock_pi_autolock = False
     prompt = _prompt()
-    args = Namespace(group=["qam-sle"], reason="admin", message=None, user="")
+    args = Namespace(
+        group=["qam-sle"], reason="admin", message=None, user="", force=True
+    )
 
     with patch("mtui.commands.apicall.OSC") as osc_cls:
         Reject(args, mock_config, MagicMock(), prompt)()

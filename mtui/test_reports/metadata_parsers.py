@@ -37,6 +37,9 @@ class ReducedMetadataParser:
     hostnames = re.compile(r".* \(reference host: (\S+).*\)")
     jira = re.compile(r'Jira ([A-Z]+-\d+) \("(.*)"\):')
     bugs = re.compile(r'Bug (\d+) \("(.*)"\):')
+    # "Slack Review: <channel>/<ts>" marker written by set_slack_review; parsed
+    # back so metadata.slack_review is populated after a fresh checkout.
+    slack_review = re.compile(r"Slack Review:\s*(\S+)/(\S+)\s*$")
 
     @classmethod
     def parse(cls, results, line: str) -> None:
@@ -57,6 +60,10 @@ class ReducedMetadataParser:
 
         if match := re.search(cls.bugs, line):
             results.bugs[match.group(1)] = match.group(2)
+            return
+
+        if match := re.search(cls.slack_review, line):
+            results.slack_review = (match.group(1), match.group(2))
 
 
 # ---------------------------------------------------------------------------

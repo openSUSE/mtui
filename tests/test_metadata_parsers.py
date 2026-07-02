@@ -91,6 +91,10 @@ def test_reduced_metadata_parser_parse():
     ReducedMetadataParser.parse(results, 'Bug 123 ("Test bug"):')
     assert results.bugs["123"] == "Test bug"
 
+    # Test Slack review marker parsing (written by set_slack_review)
+    ReducedMetadataParser.parse(results, "Slack Review: C0123ABC/1700000000.000100")
+    assert results.slack_review == ("C0123ABC", "1700000000.000100")
+
 
 # ---------------------------------------------------------------------------
 # JSONParser unit tests (was tests/test_parsemetajson.py).

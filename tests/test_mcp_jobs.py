@@ -278,3 +278,97 @@ def test_cancel_one_template_job_leaves_others(tmp_path: Path) -> None:
     assert sess.job_status(first)["state"] == "cancelled"
     assert sess.job_status(second)["state"] == "done"
     assert sess.job_result(second).strip() == ""
+
+
+def test_start_jobs_refuses_unscoped_repost_fanout(tmp_path: Path) -> None:
+    """``--repost`` must not be silently fanned out one ``-T`` job per template.
+
+    Each minted job resolves to exactly one template and would pass the
+    command's own multi-template refusal, reposting (and orphaning) every
+    template's live review thread — so the fan-out itself must refuse.
+    """
+    sess = _make_session(tmp_path)
+    _load_two_reports(sess)
+
+    class _RepostProbe(Command):
+        command = "repost_job_probe_tmp"
+        scope: ClassVar[str] = "fanout"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            parser.add_argument("--repost", action="store_true")
+            cls._add_template_arg(parser)
+
+        def __call__(self) -> None:
+            pass
+
+    async def refused() -> None:
+        with pytest.raises(McpCommandError, match="scope it with template"):
+            await sess.start_jobs(_RepostProbe, ["--repost"])
+
+    async def scoped() -> list[str]:
+        ids = await sess.start_jobs(
+            _RepostProbe, ["--repost", "-T", "SUSE:Maintenance:2:1"]
+        )
+        for jid in ids:
+            await sess._jobs[jid]["task"]
+        return ids
+
+    try:
+        asyncio.run(refused())
+        # An explicitly scoped repost still works: exactly one job.
+        ids = asyncio.run(scoped())
+    finally:
+        Command.registry.pop(_RepostProbe.command, None)
+
+    assert len(ids) == 1
+
+
+def test_job_cancel_sets_cooperative_cancel_event(tmp_path: Path) -> None:
+    """``job_cancel`` flags the contextvar cancel event so a polling body exits.
+
+    ``request_review``'s Slack watch passes this event into ``wait_for_ack``;
+    without it a cancelled job's worker thread would keep watching (and could
+    still auto-approve) until its own multi-hour timeout.
+    """
+    import threading
+
+    from mtui.support.cancellation import current_cancel_event
+
+    sess = _make_session(tmp_path)
+
+    entered = threading.Event()
+    finished = threading.Event()
+    observed: dict[str, bool] = {}
+
+    class _CancelProbe(Command):
+        command = "cancel_probe_tmp"
+
+        @classmethod
+        def _add_arguments(cls, parser) -> None:
+            pass
+
+        def __call__(self) -> None:
+            ev = current_cancel_event.get()
+            entered.set()
+            # Block like a review watch would, until job_cancel sets the event
+            # (bounded so a broken implementation fails the test, not hangs it).
+            observed["event_set"] = ev is not None and ev.wait(timeout=5)
+            finished.set()
+
+    async def driver() -> str:
+        job_id = await sess.start_job(_CancelProbe, [])
+        while not entered.is_set():
+            await asyncio.sleep(0.01)
+        await sess.job_cancel(job_id)
+        return job_id
+
+    try:
+        job_id = asyncio.run(driver())
+    finally:
+        Command.registry.pop(_CancelProbe.command, None)
+
+    # The worker thread observed the cancellation promptly (not a timeout).
+    assert finished.wait(timeout=5)
+    assert observed["event_set"] is True
+    assert sess.job_status(job_id)["state"] == "cancelled"

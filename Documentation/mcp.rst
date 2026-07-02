@@ -268,6 +268,28 @@ implementations.
    refuse destructive calls. Operators driving an autonomous LLM
    client should reason about blast radius accordingly.
 
+``--force`` is not exposed over MCP
+-----------------------------------------
+
+The ``approve`` and ``reject`` commands refuse unless the loaded
+testreport carries a live Slack 👍 review ack (see
+:doc:`iui` and the ``request_review`` command). A human at the REPL can
+bypass that gate with ``-f``/``--force``, but that flag is **deliberately
+absent from the MCP tool schema**, so an autonomous LLM client cannot
+force-approve an update that has not been reviewed.
+
+The hiding is arg-granularity, not command-granularity: ``approve`` and
+``reject`` themselves stay exposed as tools; only their ``force``
+parameter is stripped. The ``force`` argparse action is tagged
+``_mtui_mcp_hidden = True`` and the schema builder in ``mtui/mcp/_schema.py``
+skips any such action (beside its ``argparse.SUPPRESS`` skip), so ``force``
+never enters a synthesised tool schema. A second, behavioural belt backs
+this up: even if a ``force`` value reached a command, it is honoured only
+when the session is interactive, and the MCP session is always
+non-interactive. The command-granularity ``deny.py`` / profiles machinery
+cannot hide a single argument, which is why this is enforced at the schema
+builder instead.
+
 REPL-only deny-list
 -------------------
 
@@ -642,6 +664,28 @@ work on other templates, which runs concurrently — and poll the job:
   and surfaces the command's failure envelope (stdout, error, exit
   code) if it failed, exactly as a foreground failure would have;
 * ``job_cancel(job_id=…)``: cancel a running job.
+
+``request_review`` is also a slow, background-capable tool, though it is
+not a host command: it posts a review request to Slack and then **watches**
+the thread, polling for replies and the review 👍 up to
+``slack.watch_timeout`` seconds (see :doc:`cfg`). Under MCP the streamed
+thread replies are not server-pushed; they accumulate in the call's
+captured stdout and surface on the next ``job_status`` / ``job_result``.
+Pass ``background=true`` to return a job id immediately instead of parking
+the request for the whole watch, and ``job_cancel`` it to stop watching
+early — cancellation frees the worker thread promptly rather than waiting
+out the timeout, and a cancelled watch never approves, even if the 👍
+lands in its final in-flight poll.
+
+When the testreport already records a ``Slack Review:`` marker, a
+``request_review`` call **resumes** that request instead of posting a
+duplicate — the existing thread's replies so far are forwarded first, so a
+cancelled job can simply be re-run (foreground or as a new background job)
+and picks up the same thread, including a 👍 that arrived in between.
+``repost=true`` forces a fresh post, replacing the marker (refused for an
+unscoped multi-template fan-out; scope it with ``template="<RRID>"``).
+``job_cancel`` any in-flight watch on the same template before re-running,
+otherwise the new call queues behind it on the per-template lock.
 
 When a backgrounded slow command fans out across several loaded
 templates (see `Multiple templates (fan-out and per-call scoping)`_),

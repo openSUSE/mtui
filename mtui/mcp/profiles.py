@@ -60,6 +60,7 @@ CORE: frozenset[str] = frozenset(
         "export",
         "commit",
         "comment",
+        "request_review",
         "approve",
         "reject",
         # openQA

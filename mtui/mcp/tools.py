@@ -74,6 +74,8 @@ SLOW_COMMANDS: frozenset[str] = frozenset(
         "reboot",
         # Not a host op, but waits on the TeReGen regeneration job (minutes).
         "regenerate",
+        # Not a host op, but blocks polling Slack for a reviewer ack (minutes).
+        "request_review",
     }
 )
 
