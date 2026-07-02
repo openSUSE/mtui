@@ -19,6 +19,8 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
+from ..support.spinner import spinner_suspended
+
 
 class Prompter:
     """Serialise interactive prompts across worker threads.
@@ -53,7 +55,11 @@ class Prompter:
         """Prompt the user with ``text`` and return the typed response.
 
         Acquires the prompter's lock for the duration of the read so
-        sibling workers cannot race for ``stdin``.
+        sibling workers cannot race for ``stdin``, and holds
+        :func:`mtui.support.spinner.spinner_suspended` for the whole
+        read so a live TTY spinner (e.g. ``run_parallel``'s) erases its
+        frame and stops repainting over the prompt until the user has
+        answered. A no-op when no spinner is active.
 
         Args:
             text: The prompt text shown to the user.
@@ -63,5 +69,5 @@ class Prompter:
             identical to :func:`input`).
 
         """
-        with self._lock:
+        with self._lock, spinner_suspended():
             return self._reader(text)
