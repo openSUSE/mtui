@@ -243,11 +243,6 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   checkout — previously internal hosts failed certificate verification there
   even with `ca-certificates-suse` correctly installed, because PyPI
   `certifi` never consults the system trust store.
-- The REPL `config set` command now routes values through the same
-  validation as the config file (`config set ssl_verify false` correctly
-  disables verification instead of storing the literal string; boolean
-  options accept the INI spellings — previously only the exact string `True`
-  worked — and invalid values are rejected with the option left unchanged).
 - Fetching openQA data from the QEM Dashboard no longer floods the log with
   "Connection pool is full, discarding connection" warnings. The shared HTTP
   session's connection pool is now sized to match mtui's default worker-thread
@@ -410,6 +405,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   errors are logged with the affected test and host, a summary warning
   reports how many downloads failed, and under `errormode="full"` the failure
   propagates to the caller once the whole batch has finished.
+- `config set` now parses values through the option's declared getter and
+  fixup — the same pipeline used for the config file — instead of coercing via
+  the current attribute's type. Boolean options accept the INI spellings
+  (`config set use_keyring true` previously set **False**, because only the
+  literal `True` compared as true), integer options reject non-numbers
+  (`config set connection_timeout abc` used to store the string `abc`), and
+  `ssl_verify` only accepts booleans or an existing CA bundle path (a typo like
+  `false1` used to be stored verbatim and made every later HTTP call fail with
+  an `OSError` about an invalid CA path — such a value is now also rejected at
+  config-file parse time, falling back to the verifying default). An invalid
+  value is rejected with a single actionable error and the option is left
+  unchanged.
 
 ## 18.2.0 - 2026-06-23
 
