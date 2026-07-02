@@ -3,6 +3,7 @@
 import inspect
 import logging
 
+from ...support.spinner import spinner_suspended
 from .mode import colors_enabled
 
 # ANSI color offsets (added to 30 to form the foreground color escape code).
@@ -60,8 +61,7 @@ class ColorFormatter(logging.Formatter):
             if not colors_enabled():
                 return levelname.lower() + suffix
             return (
-                "\033[2K"
-                + COLOR_SEQ.format(30 + COLORS[levelname])
+                COLOR_SEQ.format(30 + COLORS[levelname])
                 + levelname.lower()
                 + RESET_SEQ
                 + suffix
@@ -69,12 +69,7 @@ class ColorFormatter(logging.Formatter):
             )
         if not colors_enabled():
             return levelname.lower()
-        return (
-            "\033[2K"
-            + COLOR_SEQ.format(30 + COLORS[levelname])
-            + levelname.lower()
-            + RESET_SEQ
-        )
+        return COLOR_SEQ.format(30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
 
     @staticmethod
     def _find_caller_frame() -> tuple[object, str] | None:
@@ -113,8 +108,31 @@ class ColorFormatter(logging.Formatter):
         return logging.Formatter.format(self, record)
 
 
+class SpinnerAwareStreamHandler(logging.StreamHandler):
+    """A stream handler that coordinates with a live TTY spinner.
+
+    Every record is emitted inside :func:`spinner_suspended`: while a
+    :class:`mtui.support.spinner.TtySpinner` is painting, the handler
+    erases the current frame (``\\r`` + erase-to-end, homing the cursor
+    to column 0), writes the record from a clean line, and lets the
+    spinner repaint on its next tick. Without this, a record emitted
+    mid-spin starts at the column where the frame write left the
+    cursor, rendering with phantom leading padding (or, with colours
+    off, appended straight after the frame text).
+
+    When no spinner is active — notably off a TTY, where spinners never
+    start — the wrapper adds nothing and the handler behaves exactly
+    like a plain :class:`logging.StreamHandler`.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Emit the record with any live spinner frame erased first."""
+        with spinner_suspended():
+            super().emit(record)
+
+
 def create_logger(name: str, level: str = "INFO") -> logging.Logger:
-    """Creates a logger with a colorized output.
+    """Creates a logger with a colorized, spinner-aware output.
 
     Args:
         name: The name of the logger.
@@ -126,7 +144,7 @@ def create_logger(name: str, level: str = "INFO") -> logging.Logger:
     """
     out = logging.getLogger(name) if name else logging.getLogger()
     out.setLevel(level)
-    handler = logging.StreamHandler()
+    handler = SpinnerAwareStreamHandler()
     formatter = ColorFormatter("%(levelname)s: %(message)s")
     handler.setFormatter(formatter)
     out.addHandler(handler)
