@@ -434,6 +434,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   (e.g. a plain file in the way) is now reported as one clear error naming the
   option instead of an `OSError` traceback, and openQA queries catch any
   remaining URL/transport error shape instead of crashing the command.
+- Log lines emitted while the TTY spinner is painting (e.g. the per-host
+  `Removing repo … on <host>` lines under the `set_repo remove` spinner during
+  `update`/`prepare`) no longer render with phantom leading padding — or, with
+  colours off, glued to the leftover frame text. The spinner and the logging
+  handler now coordinate through a shared paint lock: each record first erases
+  the live frame and homes the cursor to column 0, then prints, and the spinner
+  repaints on its next tick. Interactive prompts raised under a live spinner
+  (e.g. the SSH command-timeout question) also pause the spinner for the whole
+  read instead of repainting over the prompt. Off a TTY nothing changes.
 
 ## 18.2.0 - 2026-06-23
 
