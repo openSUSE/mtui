@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from mtui.support.messages import SvnCheckoutFailed
+from mtui.support.messages import SvnCheckoutFailed, TemplateDirNotUsableError
 from mtui.test_reports import svn_io
 from mtui.types import RequestReviewID
 
@@ -55,6 +55,35 @@ def test_svn_checkout_success_does_not_raise(tmp_path: Path) -> None:
 
     with patch("mtui.test_reports.svn_io.subprocess.run", return_value=completed):
         svn_io.testreport_svn_checkout(cfg, "svn+ssh://svn@example/testreports", rrid)
+
+
+def test_svn_checkout_unusable_template_dir_raises_clear_error(
+    tmp_path: Path,
+) -> None:
+    """A template_dir that cannot be created is one actionable error.
+
+    A plain file sitting where ``[mtui] template_dir`` points (or a
+    permission problem) used to escape ``ensure_dir_exists`` as a raw
+    ``OSError`` traceback before ``svn co`` even ran.
+    """
+    blocked = tmp_path / "templates"
+    blocked.write_text("a file, not a directory")
+    cfg = SimpleNamespace(
+        template_dir=blocked, fancy_reports_url="https://qam.suse.de/reports"
+    )
+    rrid = RequestReviewID("SUSE:Maintenance:1:1")
+
+    with (
+        patch("mtui.test_reports.svn_io.subprocess.run") as run,
+        pytest.raises(TemplateDirNotUsableError) as excinfo,
+    ):
+        svn_io.testreport_svn_checkout(cfg, "svn+ssh://svn@example/testreports", rrid)
+
+    # svn co is never attempted against an unusable template_dir.
+    run.assert_not_called()
+    msg = str(excinfo.value)
+    assert "[mtui] template_dir" in msg
+    assert str(blocked) in msg
 
 
 def test_svn_checkout_runs_with_cwd_not_global_chdir(tmp_path: Path) -> None:

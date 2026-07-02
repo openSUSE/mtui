@@ -3,7 +3,9 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import openqa_client.exceptions
 import pytest
+import requests.exceptions
 
 from mtui.data_sources.openqa.standard import AutoOpenQA
 
@@ -81,6 +83,53 @@ class TestHasPassedInstallJobs:
             {"test": "qam-somethertest", "result": "failed"},
         ]
         assert auto_oqa._has_passed_install_jobs(jobs) is True
+
+
+# --- OpenQA._get_jobs error handling ---
+
+
+class TestGetJobsErrorHandling:
+    """No URL/transport failure shape may escape ``_get_jobs`` as a traceback."""
+
+    def test_openqa_request_error_returns_none(self, auto_oqa):
+        """An openqa_client RequestError (HTTP error code) yields None."""
+        auto_oqa.client = MagicMock()
+        auto_oqa.client.openqa_request.side_effect = (
+            openqa_client.exceptions.RequestError(
+                "GET", "https://openqa/jobs", 404, "not found"
+            )
+        )
+        assert auto_oqa._get_jobs() is None
+
+    def test_openqa_connection_error_logs_and_returns_none(self, auto_oqa, caplog):
+        """An openqa_client ConnectionError is logged and yields None."""
+        auto_oqa.client = MagicMock()
+        auto_oqa.client.openqa_request.side_effect = (
+            openqa_client.exceptions.ConnectionError(
+                requests.exceptions.ConnectionError("refused")
+            )
+        )
+        with caplog.at_level("ERROR", logger="mtui.connector.openqa"):
+            assert auto_oqa._get_jobs() is None
+        assert any("openQA" in r.message for r in caplog.records)
+
+    def test_requests_exception_logs_and_returns_none(self, auto_oqa, caplog):
+        """A requests failure openqa_client does not wrap is caught too.
+
+        The reproduced shape: a malformed instance URL (e.g. a non-numeric
+        port) escapes ``OpenQA_Client`` as ``InvalidURL`` from
+        ``prepare_request``, outside its retry ``try``. It must be logged
+        and turned into the usual "no jobs" result, not a raw traceback.
+        """
+        auto_oqa.client = MagicMock()
+        auto_oqa.client.openqa_request.side_effect = requests.exceptions.InvalidURL(
+            "Failed to parse: https://openqa.suse.de:44e3"
+        )
+        with caplog.at_level("ERROR", logger="mtui.connector.openqa"):
+            assert auto_oqa._get_jobs() is None
+        errors = [r for r in caplog.records if "openQA request" in r.message]
+        assert len(errors) == 1
+        assert "44e3" in errors[0].message
 
 
 # --- AutoOpenQA._pretty_print ---

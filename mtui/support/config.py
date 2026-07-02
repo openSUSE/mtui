@@ -14,6 +14,7 @@ from logging import getLogger
 from os import getenv
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from .http import system_ca_bundle
 from .paths import terms_path
@@ -113,6 +114,84 @@ def _parse_ssl_verify(raw: str) -> bool | str:
         "false/no/off/0, or the path of an existing CA bundle file or "
         "c_rehash-ed certificate directory"
     )
+
+
+def _parse_base_url(raw: str) -> str:
+    """Validate an ``http(s)`` endpoint-URL option at parse time.
+
+    A malformed endpoint (a typo like ``https://openqa.suse.de:44e3``)
+    otherwise survives startup untouched and only explodes at the first
+    query, deep inside :mod:`requests` as an unhandled ``InvalidURL``
+    traceback. Requires an ``http`` or ``https`` scheme, a non-empty
+    host, and — when a port is present — a numeric one. Returns the
+    stripped string.
+
+    Raises:
+        ValueError: If the value is not a usable http(s) URL.
+
+    """
+    token = raw.strip()
+    try:
+        parts = urlsplit(token)
+        # Accessing ``port`` raises ValueError on a non-numeric or
+        # out-of-range port; ``urlsplit`` itself raises on unparsable
+        # netlocs (e.g. an unclosed IPv6 bracket).
+        _ = parts.port
+        valid = parts.scheme in ("http", "https") and bool(parts.netloc)
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError(
+            f"invalid URL {raw!r}: expected an http:// or https:// URL "
+            "with a host and, if given, a numeric port "
+            "(e.g. https://openqa.suse.de)"
+        )
+    return token
+
+
+def _parse_positive_int(raw: Any) -> int:
+    """Coerce a duration/count option to a strictly positive ``int``.
+
+    Zero and negative values pass ``int()`` but break downstream in
+    opaque ways — e.g. a negative ``connection_timeout`` reaches paramiko
+    and surfaces as a bogus per-host ``Error reading SSH protocol
+    banner`` — so they are rejected at parse time and the option falls
+    back to its default.
+
+    Raises:
+        ValueError: If the value is not an integer greater than zero.
+
+    """
+    val = int(raw)
+    if val <= 0:
+        raise ValueError(
+            f"expected a positive integer (a timeout, interval or count "
+            f"greater than 0), got {raw!r}"
+        )
+    return val
+
+
+def _parse_install_logs(raw: str) -> Path:
+    """Validate ``[mtui] install_logs`` as a single relative directory name.
+
+    The value is joined as ``template_dir / <rrid> / install_logs`` and
+    created with ``mkdir(parents=False)`` only after a successful template
+    checkout: a nested value crashes at that point, and an absolute value
+    silently *replaces* the whole base path in the ``pathlib`` join. Both
+    are rejected at parse time instead.
+
+    Raises:
+        ValueError: If the value is empty, absolute, contains a path
+            separator, or is ``.``/``..``.
+
+    """
+    token = raw.strip()
+    if not token or "/" in token or Path(token).is_absolute() or token in (".", ".."):
+        raise ValueError(
+            f"invalid install_logs value {raw!r}: expected a single relative "
+            "directory name without a path separator (e.g. install_logs)"
+        )
+    return Path(token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -315,11 +394,13 @@ class Config:
                 getpass.getuser,
                 getter=get,
             ),
+            # A single directory name, joined per update as
+            # ``template_dir / <rrid> / install_logs``; see _parse_install_logs.
             ConfigOption(
                 "install_logs",
                 ("mtui", "install_logs"),
                 Path("install_logs"),
-                expanduser,
+                _parse_install_logs,
                 get,
             ),
             # Seconds. Bounds both establishing the SSH connection (TCP
@@ -329,7 +410,7 @@ class Config:
                 "connection_timeout",
                 ("connection", "connection_timeout"),
                 300,
-                int,
+                _parse_positive_int,
                 get_connection_timeout,
             ),
             ConfigOption(
@@ -360,13 +441,15 @@ class Config:
                 "qem_dashboard_api",
                 ("qem_dashboard", "api"),
                 "http://dashboard.qam.suse.de/api",
-                getter=get,
+                _parse_base_url,
+                get,
             ),
             ConfigOption(
                 "teregen_api",
                 ("teregen", "api"),
                 "https://qam.suse.de/api/v1",
-                getter=get,
+                _parse_base_url,
+                get,
             ),
             ConfigOption(
                 "target_tempdir",
@@ -391,13 +474,14 @@ class Config:
                 "refhosts_https_uri",
                 ("refhosts", "https_uri"),
                 "https://qam.suse.de/refhosts/refhosts.yml",
-                getter=get,
+                _parse_base_url,
+                get,
             ),
             ConfigOption(
                 "refhosts_https_expiration",
                 ("refhosts", "https_expiration"),
                 3600 * 12,
-                int,
+                _parse_positive_int,
                 getint,
             ),
             ConfigOption(
@@ -419,13 +503,15 @@ class Config:
                 "openqa_instance",
                 ("openqa", "openqa"),
                 "https://openqa.suse.de",
-                getter=get,
+                _parse_base_url,
+                get,
             ),
             ConfigOption(
                 "openqa_instance_baremetal",
                 ("openqa", "baremetal"),
                 "http://openqa.qam.suse.cz",
-                getter=get,
+                _parse_base_url,
+                get,
             ),
             ConfigOption(
                 "openqa_install_distri",
@@ -519,7 +605,7 @@ class Config:
                 "lock_wait_poll",
                 ("lock", "wait_poll"),
                 15,
-                int,
+                _parse_positive_int,
                 getint,
             ),
             # ``mtui-mcp`` http transport isolates state per client in a
@@ -533,14 +619,14 @@ class Config:
                 "mcp_session_cap",
                 ("mcp", "session_cap"),
                 32,
-                int,
+                _parse_positive_int,
                 getint,
             ),
             ConfigOption(
                 "mcp_session_idle_timeout",
                 ("mcp", "session_idle_timeout"),
                 1800,
-                int,
+                _parse_positive_int,
                 getint,
             ),
             # Tool-surface budget. ``tool_profile`` selects which synthesised

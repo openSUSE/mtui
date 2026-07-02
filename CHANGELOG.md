@@ -417,6 +417,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   config-file parse time, falling back to the verifying default). An invalid
   value is rejected with a single actionable error and the option is left
   unchanged.
+- More config options are validated when the configuration is read, each
+  invalid value producing one actionable error and falling back to its default
+  instead of a delayed crash: the endpoint URLs (`[openqa] openqa`/`baremetal`,
+  `[qem_dashboard] api`, `[teregen] api`, `[refhosts] https_uri`) must be
+  http(s) URLs with a host and a numeric port (a typo like
+  `https://openqa.suse.de:44e3` used to surface as a raw `InvalidURL`
+  traceback at the first query), the duration/count options
+  (`connection_timeout`, `[lock] wait_poll`, `[mcp] session_cap` /
+  `session_idle_timeout`, `[refhosts] https_expiration`) must be positive
+  integers (a negative `connection_timeout` reached paramiko and failed every
+  host with a bogus "Error reading SSH protocol banner"), and
+  `[mtui] install_logs` must be a single relative directory name (a nested
+  value crashed after a successful template checkout; an absolute one silently
+  replaced the whole log path). A `[mtui] template_dir` that cannot be created
+  (e.g. a plain file in the way) is now reported as one clear error naming the
+  option instead of an `OSError` traceback, and openQA queries catch any
+  remaining URL/transport error shape instead of crashing the command.
 
 ## 18.2.0 - 2026-06-23
 
