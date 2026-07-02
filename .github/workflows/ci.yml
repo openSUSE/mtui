@@ -1,7 +1,17 @@
 ---
 name: ci
-# yamllint disable-line rule:truthy
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+    tags: ['**']
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only PR runs are cancelled by a newer push; a main/tag run must finish
+  # so its Codecov upload lands (PR comparisons need the main baseline).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -27,6 +37,24 @@ jobs:
         run: uv sync --extra norpm --extra mcp --group dev
       - name: Run ty check
         run: uv run ty check
+  docs:
+    runs-on: ubuntu-latest
+    name: MTUI docs
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          # The default cache key ignores the job, and caches are immutable
+          # per key: without a suffix this job and typecheck would fight
+          # over one cache holding the wrong wheel set for the loser.
+          cache-suffix: docs
+      - name: Build documentation (warnings as errors)
+        # ``uv run --group doc`` syncs the doc group implicitly; a separate
+        # ``uv sync`` step would resolve the same environment twice.
+        run: >-
+          uv run --group doc sphinx-build -W -b html
+          Documentation Documentation/.build/html
   test:
     runs-on: ubuntu-latest
     name: MTUI tests + coverage
@@ -43,16 +71,18 @@ jobs:
       - name: Sync dependencies
         run: uv sync --extra norpm --extra mcp --group dev
       - name: Test run ${{ matrix.python-version }}
-        run: uv run pytest -v --cov=./mtui --cov-report=xml --cov-report=term --junitxml=junit.xml -o junit_family=legacy
+        run: >-
+          uv run pytest -v --cov=./mtui --cov-report=xml --cov-report=term
+          --junitxml=junit.xml -o junit_family=legacy
       - name: Upload coverage to CodeCov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
-        if: ${{ matrix.python-version == '3.14' }} 
+        if: ${{ matrix.python-version == '3.14' }}
         with:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload test results to CodeCov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7
-        if: ${{ !cancelled() }} 
+        if: ${{ !cancelled() }}
         with:
           files: junit.xml
           token: ${{ secrets.CODECOV_TOKEN }}
