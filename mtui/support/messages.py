@@ -95,6 +95,20 @@ class SvnCheckoutFailed(ErrorMessage):
         self.message = self._msg.format(rrid, report_url)
 
 
+class TemplateDirNotUsableError(ErrorMessage):
+    """Raised when the configured template_dir cannot be created."""
+
+    _msg = (
+        "Cannot create template directory {0}: {1}\n"
+        "Please check the [mtui] template_dir option in your configuration."
+    )
+
+    def __init__(self, path, reason) -> None:
+        self.path = path
+        self.reason = reason
+        self.message = self._msg.format(path, reason)
+
+
 class ConnectingTargetFailedMessage(UserMessage):
     """A message for when connecting to a target fails."""
 

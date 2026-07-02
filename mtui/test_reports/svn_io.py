@@ -6,7 +6,11 @@ from os.path import join
 from pathlib import Path
 
 from ..support.fileops import ensure_dir_exists
-from ..support.messages import SvnCheckoutFailed, SvnCheckoutInterruptedError
+from ..support.messages import (
+    SvnCheckoutFailed,
+    SvnCheckoutInterruptedError,
+    TemplateDirNotUsableError,
+)
 from ..types import RequestReviewID
 
 # Logger name kept at the original "mtui.template" string for log-config
@@ -74,12 +78,18 @@ def testreport_svn_checkout(config, path: str, rrid: RequestReviewID) -> None:
         rrid: The RequestReviewID of the test report.
 
     """
-    ensure_dir_exists(
-        config.template_dir,
-        on_create=lambda path: logger.debug(
-            "created config.template_dir directory %s", path
-        ),
-    )
+    try:
+        ensure_dir_exists(
+            config.template_dir,
+            on_create=lambda path: logger.debug(
+                "created config.template_dir directory %s", path
+            ),
+        )
+    except OSError as e:
+        # A template_dir that cannot be created (permission denied, a
+        # plain file in the way, ...) otherwise escapes as a raw OSError
+        # traceback; surface it as one clear error naming the option.
+        raise TemplateDirNotUsableError(config.template_dir, e) from None
     uri = join(path, str(rrid))
 
     try:
