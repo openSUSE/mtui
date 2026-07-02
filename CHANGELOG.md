@@ -365,6 +365,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   previously required at least two digits after `python` (`python38-`,
   `python313-`), so single-digit flavors like `python3-tornado` were missed
   and their build-check log was silently skipped.
+- The kernel-export log downloader no longer swallows download failures. It
+  fanned the per-log downloads out to a thread pool without ever collecting
+  the futures, so any error raised in a worker (an unexpected one such as a
+  bad TLS CA path — or even the downloader's own `ResultsMissingError` under
+  `errormode="full"`) was stored on a discarded future and vanished: the
+  kernel export finished "successfully" with zero downloaded logs and no
+  error output. Failures are now collected from every future: unexpected
+  errors are logged with the affected test and host, a summary warning
+  reports how many downloads failed, and under `errormode="full"` the failure
+  propagates to the caller once the whole batch has finished.
 
 ## 18.2.0 - 2026-06-23
 
