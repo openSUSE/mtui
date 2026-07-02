@@ -8,10 +8,13 @@ import pytest
 
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.commands._command import Command
+from mtui.commands.hostslock import HostLock
+from mtui.commands.run import Run
 from mtui.hosts.target.hostgroup import HostsGroup
 from mtui.support.messages import (
     FanOutError,
     HostIsNotConnectedError,
+    NoRefhostsDefinedError,
     TemplateNotLoadedError,
 )
 
@@ -300,10 +303,36 @@ class FailingFanoutCommand(Command):
             raise RuntimeError(f"boom on {rrid}")
 
 
+class InterruptingFanoutCommand(Command):
+    """Fans out but raises KeyboardInterrupt on a configured RRID."""
+
+    command = "interrupting_fanout_cmd"
+    scope = "fanout"
+
+    interrupt_on: str = ""
+    calls: ClassVar[list] = []
+
+    def __call__(self):
+        rrid = str(self.metadata.id)
+        self.calls.append(rrid)
+        if rrid == self.interrupt_on:
+            raise KeyboardInterrupt
+
+
+def _report_with_host(rrid, hostname):
+    """A _FakeReport whose targets group holds one connected, enabled host."""
+    report = _FakeReport(rrid)
+    host = MagicMock()
+    host.hostname = hostname
+    host.state = "enabled"
+    report.targets = HostsGroup([host])
+    return report
+
+
 def _make_cmd(
-    cmd_cls, registry, *, template=None, all_templates=False, interactive=True
+    cmd_cls, registry, *, template=None, all_templates=False, interactive=True, **extra
 ):
-    args = Namespace(template=template, all_templates=all_templates)
+    args = Namespace(template=template, all_templates=all_templates, **extra)
     prompt = MagicMock()
     prompt.templates = registry
     prompt.metadata = registry.active
@@ -411,3 +440,76 @@ class TestRun:
         assert FailingFanoutCommand.calls == ["A", "B", "C"]
         # The aggregate names only the failed template.
         assert [rrid for rrid, _ in exc.value.failures] == ["B"]
+
+    def test_fanout_interrupt_aborts_remaining_templates(self):
+        # Ctrl-C must abort the fan-out, not be collected as a per-template
+        # failure while the loop keeps going.
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B"), _FakeReport("C")])
+        InterruptingFanoutCommand.interrupt_on = "B"
+        InterruptingFanoutCommand.calls = []
+        cmd = _make_cmd(InterruptingFanoutCommand, reg)
+        with pytest.raises(KeyboardInterrupt):
+            cmd.run()
+        # C never ran: the interrupt propagated instead of being swallowed.
+        assert InterruptingFanoutCommand.calls == ["A", "B"]
+
+    def test_fanout_skips_hostless_template_without_error(self):
+        # A real host-phase command (lock) fanning out unscoped over a template
+        # with no connected host: the host-less template is skipped (warn), the
+        # others run, nothing raises.
+        hosted_a = _report_with_host("A", "ha.example.com")
+        hostless = _FakeReport("B")
+        hosted_c = _report_with_host("C", "hc.example.com")
+        reg = _FakeRegistry([hosted_a, hostless, hosted_c])
+        cmd = _make_cmd(HostLock, reg, hosts=None, comment=None)
+        cmd.run()
+        # lock reached the connected hosts; the host-less template was skipped.
+        assert hosted_a.targets["ha.example.com"].lock.called
+        assert hosted_c.targets["hc.example.com"].lock.called
+
+    def test_fanout_named_missing_host_is_failure(self):
+        # Naming a -t host that is not connected anywhere must stay a hard
+        # failure on every template — never a silent skip that lets the command
+        # "succeed" while executing on zero hosts.
+        reg = _FakeRegistry(
+            [_report_with_host("A", "h1"), _report_with_host("B", "h2")]
+        )
+        cmd = _make_cmd(HostLock, reg, hosts=["typo.example.com"], comment=None)
+        with pytest.raises(FanOutError) as exc:
+            cmd.run()
+        assert [rrid for rrid, _ in exc.value.failures] == ["A", "B"]
+        assert all(
+            isinstance(e, HostIsNotConnectedError) for _, e in exc.value.failures
+        )
+
+    def test_fanout_all_hostless_raises_no_refhosts(self):
+        # Every resolved template skipped == the command executed nowhere;
+        # that must surface as an error, not as a clean return.
+        reg = _FakeRegistry([_FakeReport("A"), _FakeReport("B")])
+        cmd = _make_cmd(HostLock, reg, hosts=None, comment=None)
+        with pytest.raises(NoRefhostsDefinedError):
+            cmd.run()
+
+    def test_fanout_hostless_skip_excluded_from_aggregate(self):
+        # A host-less skip and a genuine failure in the same fan-out: only the
+        # genuine failure is aggregated into the FanOutError; the skip is not.
+        hosted_a = _report_with_host("A", "ha.example.com")
+        hostless = _FakeReport("B")
+        hosted_c = _report_with_host("C", "hc.example.com")
+        hosted_c.targets["hc.example.com"].lock.side_effect = RuntimeError("boom")
+        reg = _FakeRegistry([hosted_a, hostless, hosted_c])
+        cmd = _make_cmd(HostLock, reg, hosts=None, comment=None)
+        with pytest.raises(FanOutError) as exc:
+            cmd.run()
+        # Only the genuinely-failed template is named; the host-less skip is not.
+        assert [rrid for rrid, _ in exc.value.failures] == ["C"]
+        assert hosted_a.targets["ha.example.com"].lock.called
+
+    def test_scoped_hostless_template_still_raises(self):
+        # An explicitly -T-scoped call resolves to one template and takes the
+        # single-template branch, so a real host-phase command still raises
+        # directly on a host-less target instead of skipping.
+        reg = _FakeRegistry([_report_with_host("A", "h1"), _FakeReport("B")])
+        cmd = _make_cmd(Run, reg, template="B", hosts=None, command=["uname"])
+        with pytest.raises(NoRefhostsDefinedError):
+            cmd.run()

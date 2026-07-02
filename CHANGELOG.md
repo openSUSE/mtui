@@ -213,6 +213,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- An unscoped multi-template fan-out of a host-phase command (e.g. `lock`,
+  `run`) no longer fails the whole fan-out — or, for `lock`, pretends to
+  succeed — when a loaded template has no connected host. A host-less template
+  is now skipped with a warning when no `-t` host was named, the command still
+  runs on every template that does have hosts, and it fails with "No refhosts
+  defined" if every template was skipped. Naming a disconnected host with `-t`
+  is still a per-template failure, and explicitly `-T`/`--template`-scoped
+  calls are unchanged and still raise.
+- `Ctrl-C` during a multi-template fan-out now aborts the remaining templates
+  instead of being recorded as a per-template failure while the loop keeps
+  going.
 - Fetching openQA data from the QEM Dashboard no longer floods the log with
   "Connection pool is full, discarding connection" warnings. The shared HTTP
   session's connection pool is now sized to match mtui's default worker-thread
