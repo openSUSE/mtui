@@ -187,6 +187,123 @@ def test_typed_getter_failure_logs_and_falls_back_to_default(
     )
 
 
+# --- [mtui] ssl_verify: parse-time validation + system-bundle default ---
+
+
+def test_ssl_verify_typo_logs_one_clean_error_and_falls_back(
+    tmpdir, caplog, monkeypatch
+):
+    """The reproduced field bug: ``ssl_verify = false1``.
+
+    Previously the string flowed verbatim into ``requests`` and died at the
+    first HTTPS call with ``OSError: ... invalid path: false1``. Now it is
+    rejected at parse time with ONE clean ERROR line (no traceback) naming
+    the accepted forms, and verification falls back to the secure default.
+    """
+    monkeypatch.setattr(config, "system_ca_bundle", lambda: None)
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text("[mtui]\nssl_verify = false1\n")
+    with caplog.at_level("ERROR", logger="mtui.config"):
+        cfg = config.Config(cfg_file)
+    assert cfg.ssl_verify is True
+    errors = [r for r in caplog.records if "ssl_verify" in r.message]
+    assert len(errors) == 1
+    assert "false1" in errors[0].message
+    assert "true/yes/on/1" in errors[0].message  # accepted forms are named
+    assert errors[0].exc_info is None  # one line, no traceback
+
+
+def test_ssl_verify_unset_prefers_system_bundle(tmpdir, monkeypatch):
+    """Unset, the policy is the distribution CA bundle when one exists.
+
+    requests validates against its bundled certifi CAs, not the system
+    trust store, so without this a system-installed internal CA (e.g. the
+    SUSE root) is invisible when mtui runs from a git checkout.
+    """
+    monkeypatch.setattr(config, "system_ca_bundle", lambda: "/etc/ssl/ca-bundle.pem")
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text("")
+    assert config.Config(cfg_file).ssl_verify == "/etc/ssl/ca-bundle.pem"
+
+
+def test_ssl_verify_unset_defaults_true_without_system_bundle(tmpdir, monkeypatch):
+    monkeypatch.setattr(config, "system_ca_bundle", lambda: None)
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text("")
+    assert config.Config(cfg_file).ssl_verify is True
+
+
+def test_ssl_verify_explicit_existing_bundle_is_kept(tmpdir):
+    ca = Path(tmpdir.join("ca.pem"))
+    ca.write_text("dummy")
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text(f"[mtui]\nssl_verify = {ca}\n")
+    assert config.Config(cfg_file).ssl_verify == str(ca)
+
+
+def test_ssl_verify_false_still_disables(tmpdir):
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text("[mtui]\nssl_verify = false\n")
+    assert config.Config(cfg_file).ssl_verify is False
+
+
+def test_ssl_verify_explicit_true_equals_unset_default(tmpdir, monkeypatch):
+    """Writing out the documented default must not change behaviour.
+
+    With a system bundle present, both an unset option and an explicit
+    ``true`` prefer it — otherwise users who wrote ``ssl_verify = true``
+    would keep the internal-CA verification failure the default avoids.
+    """
+    monkeypatch.setattr(config, "system_ca_bundle", lambda: "/etc/ssl/ca-bundle.pem")
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text("[mtui]\nssl_verify = true\n")
+    assert config.Config(cfg_file).ssl_verify == "/etc/ssl/ca-bundle.pem"
+
+
+def test_ssl_verify_blank_keeps_verification_off_with_warning(
+    tmpdir, caplog, monkeypatch
+):
+    """A blank value historically disabled verification; that must survive."""
+    monkeypatch.setattr(config, "system_ca_bundle", lambda: None)
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text("[mtui]\nssl_verify =\n")
+    with caplog.at_level("WARNING", logger="mtui.config"):
+        cfg = config.Config(cfg_file)
+    assert cfg.ssl_verify is False
+    assert any("blank ssl_verify" in r.message for r in caplog.records)
+
+
+def test_unexpected_fixup_error_keeps_traceback(tmpdir, caplog):
+    """Non-ValueError fixup failures are parser bugs: the stack is kept.
+
+    Only validation rejections (ValueError) get the clean one-line
+    treatment; anything else logs with the full traceback so a bug report
+    from a normal run contains the stack.
+    """
+    cfg_file = Path(tmpdir.join("boom.cfg"))
+    cfg_file.write_text("[mtui]\nconnection_timeout = 5\n")
+    cfg = config.Config(cfg_file)
+
+    def _boom(_raw):
+        raise RuntimeError("parser bug")
+
+    cfg.data = [
+        config.ConfigOption(
+            "connection_timeout",
+            ("mtui", "connection_timeout"),
+            300,
+            _boom,
+            cfg.config.get,
+        )
+    ]
+    with caplog.at_level("ERROR", logger="mtui.config"):
+        cfg._parse_config()
+    assert cfg.connection_timeout == 300
+    errors = [r for r in caplog.records if "connection_timeout" in r.message]
+    assert len(errors) == 1
+    assert errors[0].exc_info is not None  # traceback preserved
+
+
 # --- Realistic fixture round-trip (Phase 6 / D5) ---
 
 

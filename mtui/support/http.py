@@ -11,8 +11,9 @@ verification. This module centralises both:
   shared by all callers. It bounds a stuck socket so a broken network
   cannot hang mtui indefinitely.
 - :func:`resolve_verify` turns the user's ``[mtui] ssl_verify`` config
-  value into the effective ``verify`` passed to :mod:`requests`,
-  defaulting to ``True`` (verify) when the value is unset.
+  value into the effective ``verify`` passed to :mod:`requests`; the
+  config default prefers the distribution CA bundle
+  (:func:`system_ca_bundle`) and falls back to ``True`` (certifi).
 - :func:`build_session` / :func:`disable_insecure_warnings` make the
   ``urllib3`` ``InsecureRequestWarning`` suppression happen in exactly
   one place, and only when verification is actually disabled.
@@ -22,9 +23,11 @@ verification. This module centralises both:
 
 Verification is **on by default for every call site**. Several internal
 SUSE hosts (openqa.suse.de, dashboard.qam.suse.de, qam.suse.de,
-internal mirrors) present internal-CA certificates, so reaching them
-out of the box requires the SUSE CA in the system trust store. A user
-who cannot install that CA can disable verification globally with
+internal mirrors) present internal-CA certificates; with the SUSE CA
+installed system-wide they verify out of the box, because the default
+policy prefers the distribution CA bundle (:func:`system_ca_bundle`)
+over :mod:`requests`' bundled certifi CAs. A user who cannot install
+that CA can disable verification globally with
 ``[mtui] ssl_verify = false`` (or point at a CA bundle with
 ``ssl_verify = /path/to/ca.pem``).
 """
@@ -181,20 +184,59 @@ def is_ssl_verification_error(exc: BaseException) -> bool:
     return "CERTIFICATE_VERIFY_FAILED" in str(exc)
 
 
+#: Fallback locations of the distribution-managed CA bundle, probed only
+#: when :func:`ssl.get_default_verify_paths` names no existing cafile.
+#: :mod:`requests` validates against the *certifi* package's bundled
+#: Mozilla CAs by default — NOT the system trust store — so a CA installed
+#: system-wide (e.g. the SUSE internal root from ca-certificates-suse) is
+#: invisible to it when mtui runs from a checkout/venv with PyPI certifi.
+#: Distribution python-certifi packages patch certifi to return the system
+#: bundle, which is why the gap only shows outside RPM installs.
+_SYSTEM_CA_BUNDLES = (
+    "/etc/ssl/ca-bundle.pem",  # openSUSE / SLE
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian / Ubuntu
+    "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora / RHEL
+    "/etc/ssl/cert.pem",  # Alpine, BSDs
+)
+
+
+def system_ca_bundle() -> str | None:
+    """The system's CA bundle path, or ``None`` when none is found.
+
+    Used as the default TLS verification source when the user set no
+    ``[mtui] ssl_verify`` policy, so system-installed CAs work from a git
+    checkout exactly as they do from an RPM install (see
+    :data:`_SYSTEM_CA_BUNDLES` for why certifi alone is not enough).
+    Prefers the interpreter's own OpenSSL default cafile
+    (:func:`ssl.get_default_verify_paths`, which also honours the
+    ``SSL_CERT_FILE`` environment override), falling back to the
+    well-known distribution paths.
+    """
+    for candidate in (ssl.get_default_verify_paths().cafile, *_SYSTEM_CA_BUNDLES):
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def ssl_verification_hint(host: str | None = None) -> str:
     """A short, actionable message for a TLS certificate-verification failure.
 
-    Aimed at non-technical users who hit an internal-CA host without the
-    SUSE CA installed: it names the two concrete remedies instead of
-    dumping a multi-frame traceback.
+    Aimed at non-technical users who hit an internal-CA host: it names the
+    concrete remedies instead of dumping a multi-frame traceback. The
+    default verify policy already prefers the system CA bundle
+    (:func:`system_ca_bundle`), so installing the missing CA into the
+    system trust store — which regenerates that bundle — is the primary
+    remedy. The custom-bundle example stays generic on purpose: naming the
+    system bundle here would suggest a no-op, since it is usually already
+    the verify source that just failed.
     """
     where = f" to {host}" if host else ""
     return (
         f"TLS certificate verification failed{where}. The server's "
-        "certificate could not be verified against your system's trust "
-        "store. To fix this, either install the SUSE root CA in your "
-        "system trust store, or disable verification by setting "
-        "'ssl_verify = false' under the [mtui] section of your mtui config "
-        "(e.g. ~/.mtuirc). You can also point 'ssl_verify' at a CA bundle "
-        "file: 'ssl_verify = /path/to/ca.pem'."
+        "certificate could not be verified against the trusted CA bundle. "
+        "To fix this, install the missing CA (e.g. the SUSE root CA) into "
+        "your system trust store, point 'ssl_verify' at a CA bundle file "
+        "that contains the server's CA ('ssl_verify = /path/to/ca.pem' "
+        "under the [mtui] section of your mtui config, e.g. ~/.mtuirc), "
+        "or disable verification there with 'ssl_verify = false'."
     )
