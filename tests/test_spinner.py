@@ -43,7 +43,10 @@ def test_spin_paints_a_frame(monkeypatch):
     fake = _fake_tty(monkeypatch)
     s = TtySpinner("regen")
 
-    calls = iter([False, True])  # one loop body, then exit
+    # ``_spin`` checks the stop event twice per iteration: once in the loop
+    # condition and once under the paint lock (so a frame is never repainted
+    # after ``stop`` erased it). One painted frame, then exit.
+    calls = iter([False, False, True])
     s._stop = MagicMock()  # noqa: SLF001
     s._stop.is_set.side_effect = lambda: next(calls)  # noqa: SLF001
     s._stop.wait.return_value = None  # noqa: SLF001
