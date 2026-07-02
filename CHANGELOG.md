@@ -224,6 +224,30 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - `Ctrl-C` during a multi-template fan-out now aborts the remaining templates
   instead of being recorded as a per-template failure while the loop keeps
   going.
+- An invalid `[mtui] ssl_verify` value (e.g. the typo `false1`, a CA-bundle
+  path that does not exist, or a certificate directory without `c_rehash`-ed
+  entries) is now rejected when the config is read — one clear error naming
+  the accepted forms, falling back to the verifying default — instead of
+  flowing verbatim into `requests` and crashing the first HTTPS call (e.g.
+  loading an SLFO template) with an opaque `OSError: Could not find a
+  suitable TLS CA certificate bundle`. A `~` in a bundle path is expanded, a
+  relative path is pinned absolute at startup (so `chdir_to_template_dir`
+  cannot invalidate it), and a blank value keeps meaning "verification off"
+  but warns. Validation rejections across all config options now log a single
+  actionable line; unexpected parser errors keep their full traceback.
+- When `ssl_verify` is unset — or set to `true`, which now behaves
+  identically — TLS verification prefers the system's CA bundle (the
+  interpreter's OpenSSL default cafile, honouring `SSL_CERT_FILE`; e.g.
+  `/etc/ssl/ca-bundle.pem`) over `requests`' bundled `certifi` CAs, so
+  system-installed CAs like the SUSE root work when running mtui from a git
+  checkout — previously internal hosts failed certificate verification there
+  even with `ca-certificates-suse` correctly installed, because PyPI
+  `certifi` never consults the system trust store.
+- The REPL `config set` command now routes values through the same
+  validation as the config file (`config set ssl_verify false` correctly
+  disables verification instead of storing the literal string; boolean
+  options accept the INI spellings — previously only the exact string `True`
+  worked — and invalid values are rejected with the option left unchanged).
 - Fetching openQA data from the QEM Dashboard no longer floods the log with
   "Connection pool is full, discarding connection" warnings. The shared HTTP
   session's connection pool is now sized to match mtui's default worker-thread

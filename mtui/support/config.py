@@ -6,6 +6,7 @@ overriding configuration options with command-line arguments.
 
 import configparser
 import getpass
+import re
 from argparse import Namespace
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from os import getenv
 from pathlib import Path
 from typing import Any
 
+from .http import system_ca_bundle
 from .paths import terms_path
 
 logger = getLogger("mtui.config")
@@ -41,20 +43,76 @@ _TRUE_STRINGS = frozenset({"1", "yes", "true", "on"})
 _FALSE_STRINGS = frozenset({"0", "no", "false", "off"})
 
 
+#: A c_rehash-ed capath directory entry: OpenSSL only consults hash-named
+#: symlinks/files (``<8 hex>.<n>`` / ``<8 hex>.r<n>``) in a certificate
+#: directory, so a directory without any is a verify source that can never
+#: verify anything.
+_CAPATH_HASH_ENTRY = re.compile(r"[0-9a-f]{8}\.r?\d+")
+
+
+def _default_verify() -> bool | str:
+    """The verify policy when the user expressed no path preference.
+
+    Prefers the system CA bundle over :mod:`requests`' bundled certifi
+    CAs (see :func:`mtui.support.http.system_ca_bundle`); ``True``
+    (certifi) when the system provides no bundle. Used both for an unset
+    ``[mtui] ssl_verify`` and for an explicit ``true`` spelling, so
+    writing out the documented default never changes behaviour.
+    """
+    return system_ca_bundle() or True
+
+
 def _parse_ssl_verify(raw: str) -> bool | str:
     """Coerce the ``[mtui] ssl_verify`` value into a ``requests`` ``verify``.
 
-    Accepts the usual boolean spellings (``true``/``false``/``yes``/...)
-    and otherwise treats the value as a path to a CA bundle file, which
-    :mod:`requests` accepts directly as ``verify``.
+    The boolean spellings (``true``/``false``/``yes``/...) select the
+    default verifying policy (:func:`_default_verify` — identical to an
+    unset option) or disable verification. Any other value is the path of
+    a CA bundle — a PEM file or a **c_rehash-ed** certificate directory,
+    with a leading ``~`` expanded and the result absolutised so a later
+    ``chdir`` (``chdir_to_template_dir``) cannot invalidate it. The path
+    must exist: a typo like ``false1`` or a missing file would otherwise
+    surface only at the first HTTPS call as an opaque ``OSError`` deep
+    inside :mod:`requests`, so it is rejected here at parse time and the
+    option falls back to its (verifying) default. A blank value keeps its
+    historical requests semantics (verification off) but warns, since it
+    is almost always an unfinished edit.
+
+    Raises:
+        ValueError: If the value is neither a boolean spelling nor the
+            path of an existing CA bundle file or hashed directory.
+
     """
     token = raw.strip()
+    if not token:
+        logger.warning(
+            "blank ssl_verify disables TLS verification; write "
+            "'ssl_verify = false' to make that explicit"
+        )
+        return False
     lowered = token.lower()
     if lowered in _TRUE_STRINGS:
-        return True
+        return _default_verify()
     if lowered in _FALSE_STRINGS:
         return False
-    return token
+    expanded = Path(token).expanduser().resolve()
+    if expanded.is_file():
+        return str(expanded)
+    if expanded.is_dir():
+        if any(
+            _CAPATH_HASH_ENTRY.fullmatch(entry.name) for entry in expanded.iterdir()
+        ):
+            return str(expanded)
+        raise ValueError(
+            f"ssl_verify directory {raw!r} contains no c_rehash-ed "
+            "(hash-named) entries, so OpenSSL could never verify anything "
+            "against it; run c_rehash on it or point at a PEM bundle file"
+        )
+    raise ValueError(
+        f"invalid ssl_verify value {raw!r}: expected one of true/yes/on/1, "
+        "false/no/off/0, or the path of an existing CA bundle file or "
+        "c_rehash-ed certificate directory"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,8 +239,29 @@ class Config:
             except (configparser.NoSectionError, configparser.NoOptionError):
                 # Option absent from the INI: not an error, just use the default.
                 val = opt.default() if callable(opt.default) else opt.default
+            except ValueError as e:
+                default_val = opt.default() if callable(opt.default) else opt.default
+                # A validation rejection (int(...), getboolean, the fixups'
+                # own ValueErrors) is an expected user error: one clean,
+                # actionable line — the console formatter appends
+                # ``exc_text`` to every record, so ``logger.exception``
+                # would bury the message under a traceback.
+                logger.error(
+                    "Config option %s (%s.%s) failed to parse value %r: %s; "
+                    "falling back to default %r",
+                    opt.attr,
+                    opt.ini_path[0],
+                    opt.ini_path[1],
+                    raw,
+                    e,
+                    default_val,
+                )
+                val = default_val
             except Exception:
                 default_val = opt.default() if callable(opt.default) else opt.default
+                # Anything else is a parser bug, not a bad value — keep the
+                # full traceback so a bug report from a normal run contains
+                # the stack.
                 logger.exception(
                     "Config option %s (%s.%s) failed to parse value %r; "
                     "falling back to default %r",
@@ -373,16 +452,20 @@ class Config:
                 getter=get,
             ),
             # Global policy for TLS certificate verification on every
-            # outbound HTTP call (see mtui.support.http). Defaults to
-            # ``True`` so mtui verifies certificates everywhere out of the
-            # box; this requires the SUSE CA in the system trust store to
-            # reach internal hosts that present an internal-CA certificate.
-            # Set ``ssl_verify = false`` to skip verification everywhere, or
-            # point at a CA bundle file with ``ssl_verify = /path/to/ca.pem``.
+            # outbound HTTP call (see mtui.support.http). Unset — or an
+            # explicit ``true``, which is deliberately identical — mtui
+            # verifies against the system's CA bundle when one exists, so
+            # system-installed CAs (e.g. the SUSE root) work from a git
+            # checkout, where requests' bundled certifi CAs would not
+            # contain them; requests' certifi default (``True``) otherwise.
+            # Set ``ssl_verify = false`` to skip verification everywhere,
+            # or point it at a CA bundle (an existing PEM file or
+            # c_rehash-ed certificate directory; ``~`` expanded, the path
+            # absolutised) with ``ssl_verify = /path/to/ca.pem``.
             ConfigOption(
                 "ssl_verify",
                 ("mtui", "ssl_verify"),
-                True,
+                _default_verify,
                 _parse_ssl_verify,
                 get,
             ),
