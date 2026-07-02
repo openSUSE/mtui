@@ -213,6 +213,25 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- An invalid `[mtui] ssl_verify` value (e.g. the typo `false1`, a CA-bundle
+  path that does not exist, or a certificate directory without `c_rehash`-ed
+  entries) is now rejected when the config is read — one clear error naming
+  the accepted forms, falling back to the verifying default — instead of
+  flowing verbatim into `requests` and crashing the first HTTPS call (e.g.
+  loading an SLFO template) with an opaque `OSError: Could not find a
+  suitable TLS CA certificate bundle`. A `~` in a bundle path is expanded, a
+  relative path is pinned absolute at startup (so `chdir_to_template_dir`
+  cannot invalidate it), and a blank value keeps meaning "verification off"
+  but warns. Validation rejections across all config options now log a single
+  actionable line; unexpected parser errors keep their full traceback.
+- When `ssl_verify` is unset — or set to `true`, which now behaves
+  identically — TLS verification prefers the system's CA bundle (the
+  interpreter's OpenSSL default cafile, honouring `SSL_CERT_FILE`; e.g.
+  `/etc/ssl/ca-bundle.pem`) over `requests`' bundled `certifi` CAs, so
+  system-installed CAs like the SUSE root work when running mtui from a git
+  checkout — previously internal hosts failed certificate verification there
+  even with `ca-certificates-suse` correctly installed, because PyPI
+  `certifi` never consults the system trust store.
 - Fetching openQA data from the QEM Dashboard no longer floods the log with
   "Connection pool is full, discarding connection" warnings. The shared HTTP
   session's connection pool is now sized to match mtui's default worker-thread
@@ -365,6 +384,35 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   previously required at least two digits after `python` (`python38-`,
   `python313-`), so single-digit flavors like `python3-tornado` were missed
   and their build-check log was silently skipped.
+- `config set` now parses values through the option's declared getter and
+  fixup — the same pipeline used for the config file — instead of coercing via
+  the current attribute's type. Boolean options accept the INI spellings
+  (`config set use_keyring true` previously set **False**, because only the
+  literal `True` compared as true), integer options reject non-numbers
+  (`config set connection_timeout abc` used to store the string `abc`), and
+  `ssl_verify` only accepts booleans or an existing CA bundle path (a typo like
+  `false1` used to be stored verbatim and made every later HTTP call fail with
+  an `OSError` about an invalid CA path — such a value is now also rejected at
+  config-file parse time, falling back to the verifying default). An invalid
+  value is rejected with a single actionable error and the option is left
+  unchanged.
+- More config options are validated when the configuration is read, each
+  invalid value producing one actionable error and falling back to its default
+  instead of a delayed crash: the endpoint URLs (`[openqa] openqa`/`baremetal`,
+  `[qem_dashboard] api`, `[teregen] api`, `[refhosts] https_uri`) must be
+  http(s) URLs with a host and a numeric port (a typo like
+  `https://openqa.suse.de:44e3` used to surface as a raw `InvalidURL`
+  traceback at the first query), the duration/count options
+  (`connection_timeout`, `[lock] wait_poll`, `[mcp] session_cap` /
+  `session_idle_timeout`, `[refhosts] https_expiration`) must be positive
+  integers (a negative `connection_timeout` reached paramiko and failed every
+  host with a bogus "Error reading SSH protocol banner"), and
+  `[mtui] install_logs` must be a single relative directory name (a nested
+  value crashed after a successful template checkout; an absolute one silently
+  replaced the whole log path). A `[mtui] template_dir` that cannot be created
+  (e.g. a plain file in the way) is now reported as one clear error naming the
+  option instead of an `OSError` traceback, and openQA queries catch any
+  remaining URL/transport error shape instead of crashing the command.
 
 ## 18.2.0 - 2026-06-23
 

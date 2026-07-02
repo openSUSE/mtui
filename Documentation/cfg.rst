@@ -96,7 +96,9 @@ politely on an exhausted shared host pool.
   |     15
 
 Polling interval used while waiting for a busy lock (see ``lock.wait``).
-Ignored when ``lock.wait`` is ``0``.
+Ignored when ``lock.wait`` is ``0``. Must be a positive integer; zero or
+negative values are rejected when the configuration is read and the
+default is used instead.
 
 ``mtui.chdir_to_template_dir``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -126,18 +128,26 @@ Sets the execution timeout to the specified value.
 When the timeout limit was hit, the user is asked to wait for the current
 command to return or to proceed with the next one.
 
-To disable the timeout set it to ``0``.
+Must be a positive integer. Zero or negative values are rejected when
+the configuration is read — a non-positive timeout would reach the SSH
+layer and fail every host connection with a misleading protocol-banner
+error — and the default is used instead.
 
 
 ``mtui.install_logs``
 ~~~~~~~~~~~~~~~~~~~~~
   | **type**
-  |     string
+  |     directory name (a single relative path component)
   | **default**
   |     install_logs
 
 Name of directory for storing install logs
 Please don't change it
+
+The value is joined per update as ``template_dir/<rrid>/install_logs``,
+so it must be a bare directory name: absolute paths and values
+containing a path separator are rejected when the configuration is read
+and the default is used instead.
 
 
 ``mtui.ssh_strict_host_key_checking``
@@ -172,20 +182,36 @@ Unknown values are reported with a warning and fall back to the default
 ``mtui.ssl_verify``
 ~~~~~~~~~~~~~~~~~~~
   | **type**
-  |     bool or string (path)
+  |     bool, or path to an existing CA bundle (PEM file or a
+        ``c_rehash``-ed certificate directory)
   | **default**
-  |     ``True``
+  |     the system's CA bundle when one exists (the interpreter's
+        OpenSSL default cafile, honouring ``SSL_CERT_FILE``, e.g.
+        ``/etc/ssl/ca-bundle.pem``), otherwise ``True``
 
 Global TLS certificate-verification policy for every outbound HTTP
 call (Gitea PR client, QEM Dashboard client, openQA job client, the
 openQA / QAM Dashboard search, the log downloads, and the
-``refhosts.yml`` fetch). Defaults to ``True``, so MTUI verifies
-certificates everywhere out of the box; reaching internal hosts that
-present an internal-CA certificate therefore requires the SUSE CA in
-the system trust store. Set ``ssl_verify = false`` to disable
-verification everywhere, or set it to a filesystem path
-(``ssl_verify = /path/to/ca-bundle.pem``) to verify against a custom CA
-bundle.
+``refhosts.yml`` fetch). MTUI verifies certificates everywhere out of
+the box. When the option is unset — or set to ``true``, which is
+deliberately identical — verification prefers the system CA bundle
+when one is found: the :mod:`requests` library otherwise validates
+only against its bundled ``certifi`` CAs, which do not include
+system-installed CAs such as the SUSE root, so internal hosts would
+fail verification when MTUI runs from a git checkout even with the CA
+properly installed system-wide.
+
+Set ``ssl_verify = false`` to disable verification everywhere, or set
+it to a filesystem path (``ssl_verify = /path/to/ca-bundle.pem``) to
+verify against a custom CA bundle — a PEM file or a ``c_rehash``-ed
+certificate directory (one containing OpenSSL hash-named entries; a
+directory of plain ``.pem`` files cannot be used for verification and
+is rejected). A leading ``~`` is expanded, a relative path is pinned to
+an absolute one at startup (so a later ``chdir_to_template_dir`` cannot
+invalidate it), and the path must exist when MTUI starts. A blank value
+keeps its historical meaning (verification off) but logs a warning; any
+other value is rejected at startup with an error naming the accepted
+forms, and MTUI falls back to the (verifying) default.
 
 
 ``mtui.tempdir``
@@ -251,6 +277,10 @@ Used e.g. in lock files.
 
 URL of baremetal openqa instance
 
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
+
 
 ``openqa.distri``
 ~~~~~~~~~~~~~~~~~
@@ -291,6 +321,10 @@ Name of kernel installation test logfile
 
 URL of openqa instance
 
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
+
 
 ``qem_dashboard.api``
 ~~~~~~~~~~~~~~~~~~~~~
@@ -302,6 +336,10 @@ URL of openqa instance
 URL of the QEM Dashboard API used for incident, aggregate, and auto openQA job discovery.
 Kernel workflow still uses openQA directly.
 
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
+
 
 ``refhosts.https_expiration``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -312,6 +350,8 @@ Kernel workflow still uses openQA directly.
 
 Maximum age of the refhost database cache before MTUI will
 update it from ``refhosts.https_uri`` if the ``https`` resolver is used.
+Must be a positive integer; zero or negative values are rejected when
+the configuration is read and the default is used instead.
 
 
 ``refhosts.https_uri``
@@ -322,6 +362,10 @@ update it from ``refhosts.https_uri`` if the ``https`` resolver is used.
   |     https://qam.suse.de/refhosts/refhosts.yml
 
 The ``https`` resolver fetches the refhost database from this URL.
+
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
 
 
 ``refhosts.path``
@@ -357,6 +401,10 @@ formerly read from SMELT. It backs the ``checkers`` and ``updates`` commands, th
 ``regenerate`` command (and the loader's stale-template regeneration offer), and
 ``assign``'s display of an update's priority and deadline. The locally
 checked-out ``metadata.json`` is used as a fallback when the API is unreachable.
+
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
 
 
 ``svn.path``

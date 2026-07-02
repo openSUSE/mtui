@@ -5,6 +5,7 @@ from logging import getLogger
 from typing import ClassVar, Self
 
 import openqa_client.exceptions
+import requests.exceptions
 from openqa_client.client import OpenQA_Client as oqa
 
 from ...support.http import disable_insecure_warnings, resolve_verify
@@ -73,6 +74,12 @@ class OpenQA(ABC):
         except openqa_client.exceptions.ConnectionError as e:
             logger.error("Cannont connect to openQA - %s", self.host)
             logger.debug("openqa_client returned: %s", e)
+            return None
+        except requests.exceptions.RequestException as e:
+            # Defensive: URL/transport failures that openqa_client does not
+            # wrap (e.g. an InvalidURL raised while preparing the request)
+            # must not escape as a raw traceback mid-command.
+            logger.error("openQA request to %s failed: %s", self.host, e)
             return None
 
         return jobs
