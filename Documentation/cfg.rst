@@ -172,20 +172,36 @@ Unknown values are reported with a warning and fall back to the default
 ``mtui.ssl_verify``
 ~~~~~~~~~~~~~~~~~~~
   | **type**
-  |     bool or string (path)
+  |     bool, or path to an existing CA bundle (PEM file or a
+        ``c_rehash``-ed certificate directory)
   | **default**
-  |     ``True``
+  |     the system's CA bundle when one exists (the interpreter's
+        OpenSSL default cafile, honouring ``SSL_CERT_FILE``, e.g.
+        ``/etc/ssl/ca-bundle.pem``), otherwise ``True``
 
 Global TLS certificate-verification policy for every outbound HTTP
 call (Gitea PR client, QEM Dashboard client, openQA job client, the
 openQA / QAM Dashboard search, the log downloads, and the
-``refhosts.yml`` fetch). Defaults to ``True``, so MTUI verifies
-certificates everywhere out of the box; reaching internal hosts that
-present an internal-CA certificate therefore requires the SUSE CA in
-the system trust store. Set ``ssl_verify = false`` to disable
-verification everywhere, or set it to a filesystem path
-(``ssl_verify = /path/to/ca-bundle.pem``) to verify against a custom CA
-bundle.
+``refhosts.yml`` fetch). MTUI verifies certificates everywhere out of
+the box. When the option is unset — or set to ``true``, which is
+deliberately identical — verification prefers the system CA bundle
+when one is found: the :mod:`requests` library otherwise validates
+only against its bundled ``certifi`` CAs, which do not include
+system-installed CAs such as the SUSE root, so internal hosts would
+fail verification when MTUI runs from a git checkout even with the CA
+properly installed system-wide.
+
+Set ``ssl_verify = false`` to disable verification everywhere, or set
+it to a filesystem path (``ssl_verify = /path/to/ca-bundle.pem``) to
+verify against a custom CA bundle — a PEM file or a ``c_rehash``-ed
+certificate directory (one containing OpenSSL hash-named entries; a
+directory of plain ``.pem`` files cannot be used for verification and
+is rejected). A leading ``~`` is expanded, a relative path is pinned to
+an absolute one at startup (so a later ``chdir_to_template_dir`` cannot
+invalidate it), and the path must exist when MTUI starts. A blank value
+keeps its historical meaning (verification off) but logs a warning; any
+other value is rejected at startup with an error naming the accepted
+forms, and MTUI falls back to the (verifying) default.
 
 
 ``mtui.tempdir``
