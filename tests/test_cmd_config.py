@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from mtui.commands.config import Config
+from mtui.support.config import Config as RealConfig
 from mtui.support.config import ConfigOption
 
 
@@ -15,6 +19,21 @@ def _prompt() -> MagicMock:
     p.display = MagicMock()
     p.targets = MagicMock()
     return p
+
+
+@pytest.fixture
+def real_config(tmp_path) -> RealConfig:
+    """A real Config (empty INI) so `set` sees the declared ConfigOptions."""
+    cfg_file = tmp_path / "mtui.cfg"
+    cfg_file.write_text("")
+    return RealConfig(cfg_file)
+
+
+def _run_set(config, attribute: str, value: str) -> MagicMock:
+    sys_mock = MagicMock()
+    args = Namespace(func="set", attribute=attribute, value=value)
+    Config(args, config, sys_mock, _prompt())()
+    return sys_mock
 
 
 def test_config_show_named_attribute(mock_config):
@@ -63,3 +82,120 @@ def test_config_set_new_attribute_assigns_string(mock_config):
     Config(args, cfg, sys_mock, _prompt())()
 
     assert getattr(cfg, "unknown_key") == "hello"  # noqa: B009
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # Regression: the old coercion was ``val == "True"``, so every
+        # spelling but the literal "True" -- including "true" -- set False.
+        ("true", True),
+        ("True", True),
+        ("yes", True),
+        ("on", True),
+        ("1", True),
+        ("false", False),
+        ("False", False),
+        ("no", False),
+        ("0", False),
+    ],
+)
+def test_config_set_bool_parses_ini_spellings(real_config, value, expected):
+    _run_set(real_config, "use_keyring", value)
+
+    assert real_config.use_keyring is expected
+
+
+def test_config_set_bool_rejects_garbage(real_config, caplog):
+    with caplog.at_level("ERROR", logger="mtui.commands.config"):
+        _run_set(real_config, "use_keyring", "maybe")
+
+    assert real_config.use_keyring is False  # default, unchanged
+    assert any(
+        "use_keyring" in r.message and "maybe" in r.message for r in caplog.records
+    )
+
+
+def test_config_set_int_accepts_integer(real_config):
+    _run_set(real_config, "connection_timeout", "600")
+
+    assert real_config.connection_timeout == 600
+
+
+def test_config_set_int_rejects_non_integer(real_config, caplog):
+    """`config set connection_timeout abc` must not store the string 'abc'."""
+    with caplog.at_level("ERROR", logger="mtui.commands.config"):
+        _run_set(real_config, "connection_timeout", "abc")
+
+    assert real_config.connection_timeout == 300  # default, unchanged
+    assert any(
+        "connection_timeout" in r.message and "abc" in r.message for r in caplog.records
+    )
+
+
+def test_config_set_getint_option_rejects_non_integer(real_config, caplog):
+    """Options declared with the ``getint`` getter reject non-integers too."""
+    with caplog.at_level("ERROR", logger="mtui.commands.config"):
+        _run_set(real_config, "refhosts_https_expiration", "xyz")
+
+    assert real_config.refhosts_https_expiration == 3600 * 12
+    assert any(
+        "refhosts_https_expiration" in r.message and "expected an integer" in r.message
+        for r in caplog.records
+    )
+
+
+def test_config_set_ssl_verify_false_disables_verification(real_config):
+    _run_set(real_config, "ssl_verify", "false")
+
+    assert real_config.ssl_verify is False
+
+
+def test_config_set_ssl_verify_bogus_value_rejected(real_config, caplog):
+    """'false1' is neither a boolean nor a CA bundle: reject, keep the default.
+
+    Previously the string was stored verbatim once ssl_verify held a str,
+    making every later HTTP call die with a requests-level OSError about
+    an invalid CA path.
+    """
+    before = real_config.ssl_verify
+    with caplog.at_level("ERROR", logger="mtui.commands.config"):
+        _run_set(real_config, "ssl_verify", "false1")
+
+    assert real_config.ssl_verify == before  # unchanged (verifying default)
+    assert any(
+        "ssl_verify" in r.message and "false1" in r.message for r in caplog.records
+    )
+
+
+def test_config_set_ssl_verify_ca_bundle_path(real_config, tmp_path):
+    bundle = tmp_path / "ca.pem"
+    bundle.write_text("dummy")
+
+    _run_set(real_config, "ssl_verify", str(bundle))
+
+    assert real_config.ssl_verify == str(bundle)
+
+
+def test_config_set_str_option_stays_verbatim(real_config):
+    sys_mock = _run_set(real_config, "session_user", "bob")
+
+    assert real_config.session_user == "bob"
+    written = "".join(c.args[0] for c in sys_mock.stdout.write.call_args_list)
+    assert "session_user" in written
+
+
+def test_config_set_path_option_applies_fixup(real_config):
+    """Declared path options run their ``expanduser`` fixup, like the INI."""
+    _run_set(real_config, "template_dir", "~/templates")
+
+    assert real_config.template_dir == Path.home() / "templates"
+
+
+def test_config_set_undeclared_attribute_keeps_current_type(real_config):
+    """Attributes set externally (no ConfigOption) keep the legacy coercion."""
+    real_config.distro = "sle"
+
+    _run_set(real_config, "distro", "opensuse")
+
+    assert real_config.distro == "opensuse"
