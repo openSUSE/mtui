@@ -25,6 +25,7 @@ from ..support.http import resolve_verify
 from ..support.messages import (
     SvnCheckoutFailed,
     SvnCheckoutInterruptedError,
+    TemplateDirNotUsableError,
     TestReportNotLoadedError,
 )
 from ..test_reports.null_report import NullTestReport
@@ -94,7 +95,11 @@ class UpdateID(ABC):
                     raise
                 try:
                     self._vcs_checkout(config, config.svn_path, self.id)
-                except (SvnCheckoutInterruptedError, SvnCheckoutFailed) as e:
+                except (
+                    SvnCheckoutInterruptedError,
+                    SvnCheckoutFailed,
+                    TemplateDirNotUsableError,
+                ) as e:
                     logger.error(e)
                     raise TestReportNotLoadedError from e
                 # Retry the read now that the template is on disk. Any
@@ -194,6 +199,7 @@ class UpdateID(ABC):
         except (
             SvnCheckoutInterruptedError,
             SvnCheckoutFailed,
+            TemplateDirNotUsableError,
             TemplateIOError,
             InvalidGiteaHashError,
             FailedGiteaCallError,

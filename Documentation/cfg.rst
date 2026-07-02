@@ -96,7 +96,9 @@ politely on an exhausted shared host pool.
   |     15
 
 Polling interval used while waiting for a busy lock (see ``lock.wait``).
-Ignored when ``lock.wait`` is ``0``.
+Ignored when ``lock.wait`` is ``0``. Must be a positive integer; zero or
+negative values are rejected when the configuration is read and the
+default is used instead.
 
 ``mtui.chdir_to_template_dir``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -126,18 +128,26 @@ Sets the execution timeout to the specified value.
 When the timeout limit was hit, the user is asked to wait for the current
 command to return or to proceed with the next one.
 
-To disable the timeout set it to ``0``.
+Must be a positive integer. Zero or negative values are rejected when
+the configuration is read — a non-positive timeout would reach the SSH
+layer and fail every host connection with a misleading protocol-banner
+error — and the default is used instead.
 
 
 ``mtui.install_logs``
 ~~~~~~~~~~~~~~~~~~~~~
   | **type**
-  |     string
+  |     directory name (a single relative path component)
   | **default**
   |     install_logs
 
 Name of directory for storing install logs
 Please don't change it
+
+The value is joined per update as ``template_dir/<rrid>/install_logs``,
+so it must be a bare directory name: absolute paths and values
+containing a path separator are rejected when the configuration is read
+and the default is used instead.
 
 
 ``mtui.ssh_strict_host_key_checking``
@@ -267,6 +277,10 @@ Used e.g. in lock files.
 
 URL of baremetal openqa instance
 
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
+
 
 ``openqa.distri``
 ~~~~~~~~~~~~~~~~~
@@ -307,6 +321,10 @@ Name of kernel installation test logfile
 
 URL of openqa instance
 
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
+
 
 ``qem_dashboard.api``
 ~~~~~~~~~~~~~~~~~~~~~
@@ -318,6 +336,10 @@ URL of openqa instance
 URL of the QEM Dashboard API used for incident, aggregate, and auto openQA job discovery.
 Kernel workflow still uses openQA directly.
 
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
+
 
 ``refhosts.https_expiration``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -328,6 +350,8 @@ Kernel workflow still uses openQA directly.
 
 Maximum age of the refhost database cache before MTUI will
 update it from ``refhosts.https_uri`` if the ``https`` resolver is used.
+Must be a positive integer; zero or negative values are rejected when
+the configuration is read and the default is used instead.
 
 
 ``refhosts.https_uri``
@@ -338,6 +362,10 @@ update it from ``refhosts.https_uri`` if the ``https`` resolver is used.
   |     https://qam.suse.de/refhosts/refhosts.yml
 
 The ``https`` resolver fetches the refhost database from this URL.
+
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
 
 
 ``refhosts.path``
@@ -373,6 +401,10 @@ formerly read from SMELT. It backs the ``checkers`` and ``updates`` commands, th
 ``regenerate`` command (and the loader's stale-template regeneration offer), and
 ``assign``'s display of an update's priority and deadline. The locally
 checked-out ``metadata.json`` is used as a fallback when the API is unreachable.
+
+Must be an ``http://`` or ``https://`` URL with a host (an explicit
+port must be numeric); an invalid value is rejected when the
+configuration is read and the default is used instead.
 
 
 ``svn.path``
