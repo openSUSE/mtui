@@ -218,7 +218,9 @@ def test_system_ca_bundle_prefers_interpreter_cafile(tmp_path, monkeypatch):
     fallback = tmp_path / "fallback.pem"
     fallback.write_text("dummy")
     monkeypatch.setattr(
-        _http.ssl, "get_default_verify_paths", lambda: SimpleNamespace(cafile=str(openssl))
+        _http.ssl,
+        "get_default_verify_paths",
+        lambda: SimpleNamespace(cafile=str(openssl)),
     )
     monkeypatch.setattr(_http, "_SYSTEM_CA_BUNDLES", (str(fallback),))
     assert _http.system_ca_bundle() == str(openssl)
@@ -367,14 +369,10 @@ def test_ssl_verification_hint_without_host():
     assert "ssl_verify = false" in msg
 
 
-def test_ssl_verification_hint_names_the_system_bundle(monkeypatch):
-    """With a distribution bundle present, the hint gives its exact path."""
-    monkeypatch.setattr(_http, "system_ca_bundle", lambda: "/etc/ssl/ca-bundle.pem")
-    msg = _http.ssl_verification_hint()
-    assert "ssl_verify = /etc/ssl/ca-bundle.pem" in msg
-
-
-def test_ssl_verification_hint_generic_without_system_bundle(monkeypatch):
-    monkeypatch.setattr(_http, "system_ca_bundle", lambda: None)
+def test_ssl_verification_hint_gives_generic_bundle_example():
+    """The custom-bundle example stays generic: naming the system bundle
+    would suggest a no-op, since it is usually already the failing verify
+    source."""
     msg = _http.ssl_verification_hint()
     assert "/path/to/ca.pem" in msg
+    assert "ca-bundle.pem" not in msg
