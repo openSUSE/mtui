@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+sandogasa-rpmvercmp.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 

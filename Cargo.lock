@@ -272,6 +272,7 @@ dependencies = [
 name = "mtui-types"
 version = "0.1.0"
 dependencies = [
+ "sandogasa-rpmvercmp",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -345,6 +346,12 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "sandogasa-rpmvercmp"
+version = "0.15.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdf3a3eda30ad5d56ce4546be49d493515644a429257a5ea9c8c8114f379a094"
 
 [[package]]
 name = "scopeguard"

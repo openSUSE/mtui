@@ -30,6 +30,24 @@ pub enum Error {
     /// A request-kind token could not be recognised.
     #[error(transparent)]
     RequestKind(#[from] RequestKindParseError),
+
+    /// An RPM version string could not be parsed.
+    #[error(transparent)]
+    RpmVersionParse(#[from] RpmVersionParseError),
+}
+
+/// Error produced when an RPM version string cannot be parsed.
+///
+/// Mirrors upstream `RPMVersion.__init__` raising a bare `ValueError` for an
+/// empty (or `None`) version string. The Rust port turns this into a typed,
+/// fallible parse error rather than a panic, following the crate's
+/// fallible-constructor convention (see [`RridParseError`]).
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RpmVersionParseError {
+    /// The version string was empty.
+    #[error("RPM version: empty version string")]
+    Empty,
 }
 
 /// Error produced when a request-kind token is not recognised.
@@ -167,6 +185,20 @@ mod tests {
         // reports `None` — proving the wrapper adds no spurious layer.
         let err: Error = RridParseError::TooManyComponents { limit: 4 }.into();
         assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn rpm_version_empty_matches_message() {
+        let err = RpmVersionParseError::Empty;
+        assert_eq!(err.to_string(), "RPM version: empty version string");
+    }
+
+    #[test]
+    fn from_rpm_version_parse_error_wraps_transparently() {
+        let inner = RpmVersionParseError::Empty;
+        let err: Error = inner.clone().into();
+        assert_eq!(err.to_string(), inner.to_string());
+        assert!(matches!(err, Error::RpmVersionParse(_)));
     }
 
     #[test]
