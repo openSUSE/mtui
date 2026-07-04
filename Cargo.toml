@@ -21,6 +21,7 @@ reedline = "0.42"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9" # or serde_yml; decide in Phase 1
+toml = "1"
 directories = "6"
 # rpm version comparison — pure-Rust replacement for upstream's libc
 # `rpm.labelCompare`, preserving the single-static-binary / no-runtime-deps

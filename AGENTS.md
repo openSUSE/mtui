@@ -94,9 +94,15 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
   Doer/Check registries (in `mtui-testreport`) into the host `Target` dispatch
   (in `mtui-hosts`) via traits, so `mtui-hosts` never depends on
   `mtui-testreport`. Do not create crate cycles — add a trait and inject.
-- **Config.** INI, resolved from `--config` → `$MTUI_CONF` →
-  `/etc/mtui.cfg` + `~/.mtuirc` (preserve this order). Bad options log an error
-  and fall back to a default; they do not hard-fail.
+- **Config.** **TOML** (intentional deviation from upstream INI — this is a
+  redesign, not a 1:1 port), resolved from `--config` → `$MTUI_CONF` →
+  `$XDG_CONFIG_HOME/mtui/config.toml` → `/etc/mtui.toml`. When the default pair
+  is used, files are merged **lowest-precedence first** so the per-user XDG file
+  overrides `/etc` on shared keys. Sectioned tables (`[mtui]`, `[connection]`,
+  `[refhosts]`, `[url]`, ...) map to typed options whose defaults match upstream
+  mtui exactly. Loading is **lenient**: a missing/malformed file (or a bad value)
+  is logged at ERROR and skipped, falling back to defaults; it never hard-fails.
+  CLI-arg merging (`merge_args`) lands with the `clap` args in Phase 6.
 - **MCP is a thin adapter.** `mtui-mcp` builds one tool per non-denied command by
   converting the command's `clap` arg spec to a JSON schema, reconstructing argv
   from tool kwargs, and dispatching through the **same engine** as the REPL.

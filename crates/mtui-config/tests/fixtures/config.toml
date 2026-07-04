@@ -1,0 +1,28 @@
+# Realistic minimal mtui-rs config fixture used by the integration tests to
+# exercise the TOML parser end-to-end (multiple sections, multiple value types).
+#
+# This is the TOML translation of upstream `tests/fixtures/mtuirc`, restricted
+# to the Phase-1 option subset that `mtui-config` currently models.
+
+[mtui]
+user = "qauser"
+chdir_to_template_dir = true      # inline comment: boolean value
+# ssl_verify accepts a native bool (true/false), a boolean-spelling string
+# ("yes"/"no"/"on"/"off"/...), or a path to a custom certificate/CA bundle:
+ssl_verify = "warn.example/ca.pem"
+
+[connection]
+connection_timeout = 450          # integer value
+ssh_strict_host_key_checking = "warn"
+
+[refhosts]
+resolvers = "https,path"
+https_expiration = 3600
+path = "~/qam/refhosts.yml"       # tilde must expand
+
+[url]
+bugzilla = "https://bugzilla.example.com"
+testreports = "https://qam.example.com/testreports"
+
+[svn]
+path = "svn+ssh://svn@svn.example/testreports"

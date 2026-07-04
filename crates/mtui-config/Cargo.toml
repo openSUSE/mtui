@@ -12,4 +12,10 @@ workspace = true
 [dependencies]
 mtui-types.workspace = true
 serde.workspace = true
+toml.workspace = true
+directories.workspace = true
+tracing.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+directories.workspace = true
