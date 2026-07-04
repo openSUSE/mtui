@@ -1,10 +1,11 @@
 # mtui-rs
 
-> **Status: pre-implementation / work in progress.** This is a ground-up Rust
+> **Status: early work in progress (Phase 0 complete).** This is a ground-up Rust
 > rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The architecture
-> and phased plan are defined (`PLAN-highlevel.md`, `PLAN-phase0..8.md`);
-> implementation has not started. Commands and flags below describe the
-> **intended** interface, not a shipped one.
+> and phased plan are defined (`PLAN-highlevel.md`, `PLAN-phase0..8.md`). The
+> Cargo workspace skeleton builds and is CI-gated; no domain logic has landed yet
+> (Phase 1+). Commands and flags below describe the **intended** interface, not a
+> shipped one.
 
 An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
 **U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
@@ -52,13 +53,17 @@ ecosystem.
 
 ## Build
 
-Requires a Rust toolchain (edition 2024, MSRV 1.85).
+Requires a Rust toolchain (edition 2024, **MSRV 1.96**). MSRV is pinned via
+`rust-version` in `Cargo.toml`; there is no `rust-toolchain.toml` (the reference
+dev environment uses a Homebrew rustc with no `rustup`).
 
 ```sh
-cargo build --workspace                     # build all crates
-cargo run -p mtui-cli -- --help             # run the REPL binary (mtui)
-cargo run -p mtui-mcp --features mcp -- --help   # run the MCP server (mtui-mcp)
-cargo test --workspace                      # run tests
+cargo build --workspace              # build all crates
+cargo run -p mtui-cli -- --help      # run the REPL binary (mtui)
+cargo run -p mtui-mcp -- --help      # run the MCP server (mtui-mcp)
+cargo test --workspace               # run tests
+cargo fmt --all --check              # formatting gate
+cargo clippy --workspace --all-targets -- -D warnings   # lint gate
 ```
 
 ## Runtime dependencies
