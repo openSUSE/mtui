@@ -1,0 +1,15 @@
+[package]
+name = "mtui-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mtui-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true
