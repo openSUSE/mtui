@@ -4,10 +4,13 @@
 
 pub mod enums;
 pub mod error;
+pub mod hostlog;
+pub mod package;
 pub mod product;
 pub mod refhost;
 pub mod rpmver;
 pub mod rrid;
+pub mod system;
 pub mod updateid;
 pub mod version;
 

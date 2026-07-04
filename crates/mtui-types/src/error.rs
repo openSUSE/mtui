@@ -38,6 +38,10 @@ pub enum Error {
     /// A `refhosts.yml` document could not be parsed.
     #[error(transparent)]
     RefhostsParse(#[from] RefhostsParseError),
+
+    /// A system's base product mapped to no known release.
+    #[error(transparent)]
+    UnknownSystem(#[from] crate::system::UnknownSystemError),
 }
 
 /// Error produced when a `refhosts.yml` document cannot be parsed.
