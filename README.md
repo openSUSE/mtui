@@ -2,7 +2,7 @@
 
 > **Status: early work in progress (Phase 0 complete).** This is a ground-up Rust
 > rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The architecture
-> and phased plan are defined (`PLAN-highlevel.md`, `PLAN-phase0..8.md`). The
+> and phased plan are defined (`PLAN-highlevel.md`; per-phase tasks tracked in beads). The
 > Cargo workspace skeleton builds and is CI-gated; no domain logic has landed yet
 > (Phase 1+). Commands and flags below describe the **intended** interface, not a
 > shipped one.
@@ -79,8 +79,9 @@ absent):
 
 - [`PLAN-highlevel.md`](PLAN-highlevel.md) — architecture, crate layout,
   dependency mapping, and the 8-phase roadmap.
-- `PLAN-phase0.md` … `PLAN-phase8.md` — detailed per-phase plans with confirmed
-  upstream behavior.
+- Per-phase task breakdown is tracked in [beads](https://github.com/Dicklesworthstone/beads_rust)
+  (`br ready`, `br epic status`, `br show <id>`); the detailed per-phase plans were
+  migrated from the former `PLAN-phase0..8.md` files into beads epics + tasks.
 - [`AGENTS.md`](AGENTS.md) — contributor/agent guide: conventions, contracts, and
   the definition of done.
 
