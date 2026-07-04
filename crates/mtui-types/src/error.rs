@@ -26,6 +26,22 @@ pub enum Error {
     /// A Request Review ID (RRID) failed to parse.
     #[error(transparent)]
     RridParse(#[from] RridParseError),
+
+    /// A request-kind token could not be recognised.
+    #[error(transparent)]
+    RequestKind(#[from] RequestKindParseError),
+}
+
+/// Error produced when a request-kind token is not recognised.
+///
+/// Mirrors upstream `RequestKind.from_token` raising
+/// `ValueError(f"unknown request kind: {raw!r}")`. The `{raw:?}` debug
+/// formatting reproduces the Python `!r` repr (quoted token).
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+#[error("unknown request kind: {raw:?}")]
+pub struct RequestKindParseError {
+    /// The raw token that failed to parse.
+    pub raw: String,
 }
 
 /// Errors produced while parsing an OBS Request Review ID (RRID).

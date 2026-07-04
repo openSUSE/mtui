@@ -2,22 +2,12 @@
 //!
 //! Foundation crate: no I/O, no async. Real types land in Phase 1.
 
+pub mod enums;
 pub mod error;
+pub mod product;
+pub mod version;
 
-pub use error::{Error, Result, RridParseError};
-
-/// Returns the crate name. Placeholder until Phase 1 introduces domain types.
-#[must_use]
-pub fn crate_name() -> &'static str {
-    env!("CARGO_PKG_NAME")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crate_name_is_reported() {
-        assert_eq!(crate_name(), "mtui-types");
-    }
-}
+pub use enums::{ExecutionMode, RequestKind, TargetState, Workflow};
+pub use error::{Error, RequestKindParseError, Result, RridParseError};
+pub use product::{Addon, Host, Product};
+pub use version::Version;
