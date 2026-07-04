@@ -5,9 +5,11 @@
 pub mod enums;
 pub mod error;
 pub mod product;
+pub mod rrid;
 pub mod version;
 
 pub use enums::{ExecutionMode, RequestKind, TargetState, Workflow};
 pub use error::{Error, RequestKindParseError, Result, RridParseError};
 pub use product::{Addon, Host, Product};
+pub use rrid::RequestReviewID;
 pub use version::Version;
