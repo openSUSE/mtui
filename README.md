@@ -1,0 +1,84 @@
+# mtui-rs
+
+> **Status: pre-implementation / work in progress.** This is a ground-up Rust
+> rewrite of [openSUSE/mtui](https://github.com/openSUSE/mtui). The architecture
+> and phased plan are defined (`PLAN-highlevel.md`, `PLAN-phase0..8.md`);
+> implementation has not started. Commands and flags below describe the
+> **intended** interface, not a shipped one.
+
+An **improved, idiomatic Rust successor** to MTUI — the **M**aintenance **T**est
+**U**pdate **I**nstaller, SUSE QE's tool for validating maintenance updates: load
+a request by RRID, install and test it on reference hosts over SSH in parallel,
+then approve or reject. It drives `osc`/`svn`/Gitea and openQA/QEM under the hood.
+
+This is a **redesign, not a transpile**: MTUI is the behavioral reference and
+source of domain truth, but mtui-rs aims to be memory-safe, async-native, and
+distributable as a single static binary — while preserving the data-format and
+workflow contracts that keep it interoperable with the SUSE maintenance
+ecosystem.
+
+## Why a rewrite
+
+- **Safety & robustness** — strong types, exhaustive error enums, no interpreter.
+- **Performance** — async I/O (`tokio`), true parallel host fan-out, fast startup.
+- **Distribution** — two static binaries (`mtui`, `mtui-mcp`), no Python runtime
+  or virtualenv; generated shell completions and man pages.
+- **Maintainability** — a Cargo workspace with clean crate boundaries and one
+  composition root.
+
+## Two surfaces
+
+- `mtui` — interactive REPL (line editing, tab completion, history) **and**
+  non-interactive single-command mode.
+- `mtui-mcp` — a Model Context Protocol server whose tools are **synthesised from
+  the command registry**, so the CLI and the MCP surface never drift.
+
+## Planned features
+
+- Parallel SSH command execution across reference hosts (`run`, `update`,
+  `install`, `prepare`, `downgrade`, …) with per-host `enabled`/`disabled`/
+  `dryrun` states and `parallel`/`serial` modes. **Pubkey auth only.**
+- OBS/IBS and Gitea maintenance-request workflow (`assign`, `approve`, `reject`,
+  `comment`, …).
+- openQA / QEM Dashboard integration, incl. an `openqa_overview` (port of
+  `oqa-search`) with `--export` into the testreport.
+- Reference-host discovery via `refhosts.yml` (HTTPS- or filesystem-resolved,
+  cached) and offline inventory search (`list_refhosts`).
+- Cooperative reference-host locking (`/var/lock/mtui.lock`), interoperable with
+  Python MTUI on a shared fleet.
+- Test-report lifecycle: `load_template`, `checkout`, `commit`, `edit`, `export`
+  (SVN and Gitea backends).
+- File transfer (`put`/`get`) over SFTP.
+
+## Build
+
+Requires a Rust toolchain (edition 2024, MSRV 1.85).
+
+```sh
+cargo build --workspace                     # build all crates
+cargo run -p mtui-cli -- --help             # run the REPL binary (mtui)
+cargo run -p mtui-mcp --features mcp -- --help   # run the MCP server (mtui-mcp)
+cargo test --workspace                      # run tests
+```
+
+## Runtime dependencies
+
+Some backends shell out to external tools (kept optional; degrade gracefully when
+absent):
+
+- `svn` — testreport checkout/commit (SVN backend)
+- `osc` + `osc-plugin-qam` — the osc-qam request backend
+- a terminal emulator — for the `terms`/`switch` commands
+
+## Documentation
+
+- [`PLAN-highlevel.md`](PLAN-highlevel.md) — architecture, crate layout,
+  dependency mapping, and the 8-phase roadmap.
+- `PLAN-phase0.md` … `PLAN-phase8.md` — detailed per-phase plans with confirmed
+  upstream behavior.
+- [`AGENTS.md`](AGENTS.md) — contributor/agent guide: conventions, contracts, and
+  the definition of done.
+
+## License
+
+GPL-2.0-only, matching upstream MTUI. See `LICENSE`.
