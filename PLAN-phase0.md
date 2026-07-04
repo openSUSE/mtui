@@ -48,7 +48,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-2.0-only"       # match upstream mtui
-repository = "https://github.com/<owner>/mtui-rs"
+repository = "https://gitlab.suse.de/osukup/mtui-rs"
 
 [workspace.dependencies]
 # runtime
@@ -147,20 +147,22 @@ Stub `main.rs` for both binaries: parse `--help` via clap, print version, exit 0
 - Add `rustfmt.toml` (edition 2024, defaults) and `clippy` lint policy
   (optional `[lints]` table in workspace: `unsafe_code = "warn"`, etc.).
 
-### T5 — CI (GitHub Actions)
-Mirror upstream conventions (Actions + codecov). `.github/workflows/ci.yml`:
+### T5 — CI (GitLab CI)
+The project lives on `gitlab.suse.de`, so CI is GitLab CI (`.gitlab-ci.yml`),
+not GitHub Actions. Base image: `rust:latest` (Docker Hub).
 
-- **jobs:**
-  - `fmt` — `cargo fmt --all --check`
-  - `clippy` — `cargo clippy --workspace --all-targets -- -D warnings`
-  - `test` — matrix `{stable, beta}` → `cargo test --workspace` (MSRV 1.96 is
-    satisfied by stable; no separate 1.85 job)
-  - `coverage` — install `cargo-llvm-cov` (via `taiki-e/install-action`), then
-    `cargo llvm-cov --workspace --lcov` → upload to codecov (CI-only; not
-    installed locally)
-- **triggers:** `push` to `main`, `pull_request`.
-- **caching:** `Swatinem/rust-cache`.
-- Optional: carry over `.pre-commit-config.yaml` with `cargo fmt`/`clippy` hooks.
+- **stages / jobs:**
+  - `fmt` — `rustup component add rustfmt` then `cargo fmt --all --check`
+  - `clippy` — `rustup component add clippy` then
+    `cargo clippy --workspace --all-targets -- -D warnings`
+  - `test` — `cargo build --workspace` + `cargo test --workspace`
+  - `coverage` — install `cargo-llvm-cov` + `llvm-tools-preview`, emit Cobertura
+    XML as a GitLab `coverage_report` artifact and expose the total via the
+    `coverage:` regex (native MR diff coverage; no external service). CI-only —
+    `cargo-llvm-cov` is not installed locally.
+- **triggers:** default GitLab pipeline on push / merge request.
+- **caching:** `.cargo/` + `target/` keyed on `Cargo.lock`.
+- Optional: `.pre-commit-config.yaml` with `cargo fmt`/`clippy` hooks.
 
 ### T6 — Docs + housekeeping
 - `README.md`: one-paragraph intent (Rust rewrite of openSUSE/mtui), status
@@ -190,7 +192,7 @@ CI must show all jobs green on the opening PR.
 - **Modify:** `Cargo.toml` (→ virtual workspace), `.gitignore`, `README.md`.
 - **Create:** `crates/{mtui-types,mtui-config,mtui-hosts,mtui-datasources,`
   `mtui-testreport,mtui-core,mtui-cli,mtui-mcp}/{Cargo.toml,src/{lib,main}.rs}`,
-  `rustfmt.toml`, `.github/workflows/ci.yml`, `LICENSE`.
+  `rustfmt.toml`, `.gitlab-ci.yml`, `LICENSE`.
 - **Delete:** root `src/main.rs` (relocated).
 - **Explicitly not created:** `rust-toolchain.toml` (no rustup; MSRV documented
   via `rust-version` + README instead).
