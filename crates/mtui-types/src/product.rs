@@ -2,10 +2,10 @@
 //!
 //! These are the value-types a `refhosts.yml` row deserializes into:
 //! [`Product`] (base product), [`Addon`] (module/extension), and [`Host`]
-//! (one refhost row). The location-flatten/dedup loader and the golden
-//! fixture test live in the next task (P1.3: refhost); this module only
-//! defines the serde-derived types and verifies they round-trip an inline
-//! row.
+//! (one refhost row). The location-flatten/dedup loader that turns a whole
+//! `refhosts.yml` document into a `Vec<Host>` lives in [`crate::refhost`]; this
+//! module only defines the serde-derived types and verifies they round-trip an
+//! inline row.
 //!
 //! Note: upstream also has a separate flat `Product` NamedTuple in
 //! `mtui/types/product.py` used by `System` (name/version:str/arch). That one

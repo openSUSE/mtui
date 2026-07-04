@@ -34,6 +34,26 @@ pub enum Error {
     /// An RPM version string could not be parsed.
     #[error(transparent)]
     RpmVersionParse(#[from] RpmVersionParseError),
+
+    /// A `refhosts.yml` document could not be parsed.
+    #[error(transparent)]
+    RefhostsParse(#[from] RefhostsParseError),
+}
+
+/// Error produced when a `refhosts.yml` document cannot be parsed.
+///
+/// Mirrors upstream `Refhosts._parse_refhosts`, which lets a YAML parse
+/// failure propagate (`logger.error("failed to parse refhosts.yml"); raise`).
+/// The Rust port turns that into a typed error wrapping the underlying
+/// `serde_yaml` failure. Note: individual *malformed rows* do not surface here
+/// — like upstream `_host_from_dict`, they are dropped (logged) so one bad row
+/// never aborts the whole load. Only a document-level YAML failure is fatal.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum RefhostsParseError {
+    /// The YAML document itself was malformed.
+    #[error("failed to parse refhosts.yml: {0}")]
+    Yaml(#[from] serde_yaml::Error),
 }
 
 /// Error produced when an RPM version string cannot be parsed.
