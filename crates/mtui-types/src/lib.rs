@@ -7,6 +7,7 @@ pub mod error;
 pub mod product;
 pub mod rpmver;
 pub mod rrid;
+pub mod updateid;
 pub mod version;
 
 pub use enums::{ExecutionMode, RequestKind, TargetState, Workflow};
@@ -14,4 +15,5 @@ pub use error::{Error, RequestKindParseError, Result, RpmVersionParseError, Rrid
 pub use product::{Addon, Host, Product};
 pub use rpmver::RPMVersion;
 pub use rrid::RequestReviewID;
+pub use updateid::UpdateID;
 pub use version::Version;
