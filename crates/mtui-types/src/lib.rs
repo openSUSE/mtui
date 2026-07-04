@@ -2,6 +2,10 @@
 //!
 //! Foundation crate: no I/O, no async. Real types land in Phase 1.
 
+pub mod error;
+
+pub use error::{Error, Result, RridParseError};
+
 /// Returns the crate name. Placeholder until Phase 1 introduces domain types.
 #[must_use]
 pub fn crate_name() -> &'static str {
