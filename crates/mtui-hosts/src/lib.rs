@@ -1,9 +1,13 @@
 //! `mtui-hosts` — SSH/SFTP host layer (russh), host groups, locks, targets.
 //!
-//! Async host connections land in Phase 2.
+//! Phase 2 builds this crate up incrementally. The current surface is the
+//! [`Connection`] abstraction plus its scriptable [`MockConnection`] test
+//! double and the [`HostError`] hierarchy; the russh-backed implementation,
+//! `Target` state machine, `HostsGroup` fan-out, locks, and arbiter land in
+//! subsequent Phase 2 tasks.
 
-/// Returns the crate name. Placeholder until Phase 2 introduces the SSH layer.
-#[must_use]
-pub fn crate_name() -> &'static str {
-    env!("CARGO_PKG_NAME")
-}
+pub mod connection;
+pub mod error;
+
+pub use connection::{Connection, MockConnection};
+pub use error::{HostError, Result};

@@ -12,3 +12,10 @@ workspace = true
 [dependencies]
 mtui-types.workspace = true
 mtui-config.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
