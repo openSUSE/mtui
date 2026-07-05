@@ -8,6 +8,7 @@
 //! in later Phase 2 tasks (P2.3 reconnect, P2.5 parallel fan-out) are testable.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -23,6 +24,43 @@ enum Outcome {
     Ok(CommandLog),
     /// Fail the run with a timeout for the command.
     Timeout,
+}
+
+/// An SFTP operation observed by a [`MockConnection`], recorded in order so
+/// tests can assert exactly what a caller did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MockSftpOp {
+    /// `sftp_put(local, remote)`.
+    Put {
+        /// The local source path.
+        local: PathBuf,
+        /// The remote destination path.
+        remote: PathBuf,
+    },
+    /// `sftp_get(remote, local)`.
+    Get {
+        /// The remote source path.
+        remote: PathBuf,
+        /// The local destination path.
+        local: PathBuf,
+    },
+    /// `sftp_get_folder(remote, local)`.
+    GetFolder {
+        /// The remote source folder.
+        remote: PathBuf,
+        /// The local destination folder.
+        local: PathBuf,
+    },
+    /// `sftp_listdir(path)`.
+    Listdir(PathBuf),
+    /// `sftp_open(path)`.
+    Open(PathBuf),
+    /// `sftp_remove(path)`.
+    Remove(PathBuf),
+    /// `sftp_rmdir(path)`.
+    Rmdir(PathBuf),
+    /// `sftp_readlink(path)`.
+    Readlink(PathBuf),
 }
 
 /// A scriptable, in-memory [`Connection`] implementation for tests.
@@ -46,6 +84,21 @@ pub struct MockConnection {
     issued: Arc<Mutex<Vec<String>>>,
     /// Set once [`close`](Connection::close) has been called.
     closed: Arc<Mutex<bool>>,
+    /// Number of times [`reconnect`](Connection::reconnect) has been called.
+    reconnects: Arc<Mutex<usize>>,
+    /// When `true`, [`reconnect`](Connection::reconnect) fails.
+    reconnect_fails: bool,
+    /// Commands dispatched via [`fire_and_forget`](Connection::fire_and_forget).
+    fired: Arc<Mutex<Vec<String>>>,
+    /// SFTP operations observed, in order.
+    sftp_ops: Arc<Mutex<Vec<MockSftpOp>>>,
+    /// Canned directory listings keyed by remote path (for `sftp_listdir` /
+    /// `sftp_get_folder`).
+    listings: HashMap<PathBuf, Vec<String>>,
+    /// Canned file contents keyed by remote path (for `sftp_open`).
+    files: HashMap<PathBuf, Vec<u8>>,
+    /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
+    links: HashMap<PathBuf, String>,
 }
 
 impl MockConnection {
@@ -60,6 +113,13 @@ impl MockConnection {
             active: true,
             issued: Arc::new(Mutex::new(Vec::new())),
             closed: Arc::new(Mutex::new(false)),
+            reconnects: Arc::new(Mutex::new(0)),
+            reconnect_fails: false,
+            fired: Arc::new(Mutex::new(Vec::new())),
+            sftp_ops: Arc::new(Mutex::new(Vec::new())),
+            listings: HashMap::new(),
+            files: HashMap::new(),
+            links: HashMap::new(),
         }
     }
 
@@ -92,6 +152,41 @@ impl MockConnection {
         self
     }
 
+    /// Scripts [`reconnect`](Connection::reconnect) to fail with
+    /// [`HostError::ReconnectFailed`].
+    #[must_use]
+    pub fn failing_reconnect(mut self) -> Self {
+        self.reconnect_fails = true;
+        self
+    }
+
+    /// Scripts a canned directory listing for `sftp_listdir` /
+    /// `sftp_get_folder` on `path`.
+    #[must_use]
+    pub fn with_listing(
+        mut self,
+        path: impl Into<PathBuf>,
+        entries: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.listings
+            .insert(path.into(), entries.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Scripts canned file contents for `sftp_open` on `path`.
+    #[must_use]
+    pub fn with_file(mut self, path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
+        self.files.insert(path.into(), contents.into());
+        self
+    }
+
+    /// Scripts a canned symlink target for `sftp_readlink` on `path`.
+    #[must_use]
+    pub fn with_link(mut self, path: impl Into<PathBuf>, target: impl Into<String>) -> Self {
+        self.links.insert(path.into(), target.into());
+        self
+    }
+
     /// Returns a snapshot of the commands issued so far, in order.
     #[must_use]
     pub fn commands(&self) -> Vec<String> {
@@ -102,6 +197,29 @@ impl MockConnection {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         *self.closed.lock().expect("mock closed lock")
+    }
+
+    /// Returns how many times [`reconnect`](Connection::reconnect) was called.
+    #[must_use]
+    pub fn reconnect_count(&self) -> usize {
+        *self.reconnects.lock().expect("mock reconnects lock")
+    }
+
+    /// Returns the commands dispatched via
+    /// [`fire_and_forget`](Connection::fire_and_forget), in order.
+    #[must_use]
+    pub fn fired_commands(&self) -> Vec<String> {
+        self.fired.lock().expect("mock fired lock").clone()
+    }
+
+    /// Returns the SFTP operations observed so far, in order.
+    #[must_use]
+    pub fn sftp_ops(&self) -> Vec<MockSftpOp> {
+        self.sftp_ops.lock().expect("mock sftp lock").clone()
+    }
+
+    fn record_sftp(&self, op: MockSftpOp) {
+        self.sftp_ops.lock().expect("mock sftp lock").push(op);
     }
 }
 
@@ -134,6 +252,89 @@ impl Connection for MockConnection {
         *self.closed.lock().expect("mock closed lock") = true;
         self.active = false;
         Ok(())
+    }
+
+    async fn reconnect(&mut self) -> Result<()> {
+        *self.reconnects.lock().expect("mock reconnects lock") += 1;
+        if self.reconnect_fails {
+            return Err(HostError::ReconnectFailed {
+                host: self.hostname.clone(),
+            });
+        }
+        self.active = true;
+        Ok(())
+    }
+
+    async fn fire_and_forget(&mut self, command: &str) -> Result<()> {
+        self.fired
+            .lock()
+            .expect("mock fired lock")
+            .push(command.to_owned());
+        // Mirrors upstream: dispatch, then tear down the local link.
+        self.active = false;
+        *self.closed.lock().expect("mock closed lock") = true;
+        Ok(())
+    }
+
+    async fn sftp_put(&mut self, local: &Path, remote: &Path) -> Result<()> {
+        self.record_sftp(MockSftpOp::Put {
+            local: local.to_path_buf(),
+            remote: remote.to_path_buf(),
+        });
+        Ok(())
+    }
+
+    async fn sftp_get(&mut self, remote: &Path, local: &Path) -> Result<()> {
+        self.record_sftp(MockSftpOp::Get {
+            remote: remote.to_path_buf(),
+            local: local.to_path_buf(),
+        });
+        Ok(())
+    }
+
+    async fn sftp_get_folder(&mut self, remote: &Path, local: &Path) -> Result<()> {
+        self.record_sftp(MockSftpOp::GetFolder {
+            remote: remote.to_path_buf(),
+            local: local.to_path_buf(),
+        });
+        Ok(())
+    }
+
+    async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
+        self.record_sftp(MockSftpOp::Listdir(path.to_path_buf()));
+        Ok(self.listings.get(path).cloned().unwrap_or_default())
+    }
+
+    async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
+        self.record_sftp(MockSftpOp::Open(path.to_path_buf()));
+        self.files
+            .get(path)
+            .cloned()
+            .ok_or_else(|| HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("no such file: {}", path.display()),
+            })
+    }
+
+    async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
+        self.record_sftp(MockSftpOp::Remove(path.to_path_buf()));
+        Ok(())
+    }
+
+    async fn sftp_rmdir(&mut self, path: &Path) -> Result<()> {
+        self.record_sftp(MockSftpOp::Rmdir(path.to_path_buf()));
+        Ok(())
+    }
+
+    async fn sftp_readlink(&mut self, path: &Path) -> Result<String> {
+        self.record_sftp(MockSftpOp::Readlink(path.to_path_buf()));
+        self.links
+            .get(path)
+            .cloned()
+            .ok_or_else(|| HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("not a link: {}", path.display()),
+            })
     }
 }
 
@@ -209,5 +410,109 @@ mod tests {
         let log = conn.run("whoami").await.expect("run ok");
         assert_eq!(log.exitcode, 0);
         conn.close().await.expect("close ok");
+    }
+
+    #[tokio::test]
+    async fn reconnect_counts_and_reactivates() {
+        let mut conn = MockConnection::new("h1").inactive();
+        assert!(!conn.is_active());
+        conn.reconnect().await.expect("reconnect ok");
+        assert!(conn.is_active());
+        assert_eq!(conn.reconnect_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn failing_reconnect_surfaces_error() {
+        let mut conn = MockConnection::new("h1").failing_reconnect();
+        let err = conn.reconnect().await.expect_err("should fail");
+        assert!(matches!(err, HostError::ReconnectFailed { host } if host == "h1"));
+        assert_eq!(conn.reconnect_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn fire_and_forget_records_and_tears_down() {
+        let mut conn = MockConnection::new("h1");
+        conn.fire_and_forget("reboot").await.expect("dispatch ok");
+        assert_eq!(conn.fired_commands(), ["reboot"]);
+        assert!(!conn.is_active());
+        assert!(conn.is_closed());
+    }
+
+    #[tokio::test]
+    async fn sftp_put_get_are_recorded_in_order() {
+        let mut conn = MockConnection::new("h1");
+        conn.sftp_put(Path::new("/tmp/a"), Path::new("/remote/a"))
+            .await
+            .expect("put ok");
+        conn.sftp_get(Path::new("/remote/b"), Path::new("/tmp/b"))
+            .await
+            .expect("get ok");
+        assert_eq!(
+            conn.sftp_ops(),
+            [
+                MockSftpOp::Put {
+                    local: PathBuf::from("/tmp/a"),
+                    remote: PathBuf::from("/remote/a"),
+                },
+                MockSftpOp::Get {
+                    remote: PathBuf::from("/remote/b"),
+                    local: PathBuf::from("/tmp/b"),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_listdir_returns_scripted_entries() {
+        let mut conn = MockConnection::new("h1").with_listing("/var/log", ["a.log", "b.log"]);
+        let entries = conn.sftp_listdir(Path::new("/var/log")).await.expect("ok");
+        assert_eq!(entries, ["a.log", "b.log"]);
+        // Unscripted paths list empty, not error.
+        let empty = conn.sftp_listdir(Path::new("/nope")).await.expect("ok");
+        assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sftp_open_returns_scripted_bytes_or_errors() {
+        let mut conn = MockConnection::new("h1").with_file("/etc/os-release", b"SLES".to_vec());
+        let bytes = conn
+            .sftp_open(Path::new("/etc/os-release"))
+            .await
+            .expect("ok");
+        assert_eq!(bytes, b"SLES");
+        let err = conn
+            .sftp_open(Path::new("/missing"))
+            .await
+            .expect_err("should error");
+        assert!(matches!(err, HostError::Sftp { .. }));
+    }
+
+    #[tokio::test]
+    async fn sftp_readlink_returns_scripted_target() {
+        let mut conn = MockConnection::new("h1").with_link("/link", "/target");
+        let target = conn.sftp_readlink(Path::new("/link")).await.expect("ok");
+        assert_eq!(target, "/target");
+        assert!(conn.sftp_readlink(Path::new("/nope")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sftp_remove_rmdir_getfolder_recorded() {
+        let mut conn = MockConnection::new("h1");
+        conn.sftp_remove(Path::new("/f")).await.expect("ok");
+        conn.sftp_rmdir(Path::new("/d")).await.expect("ok");
+        conn.sftp_get_folder(Path::new("/rd"), Path::new("/ld"))
+            .await
+            .expect("ok");
+        assert_eq!(
+            conn.sftp_ops(),
+            [
+                MockSftpOp::Remove(PathBuf::from("/f")),
+                MockSftpOp::Rmdir(PathBuf::from("/d")),
+                MockSftpOp::GetFolder {
+                    remote: PathBuf::from("/rd"),
+                    local: PathBuf::from("/ld"),
+                },
+            ]
+        );
     }
 }

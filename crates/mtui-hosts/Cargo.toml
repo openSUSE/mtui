@@ -16,6 +16,14 @@ async-trait.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio = { workspace = true }
+futures.workspace = true
+russh.workspace = true
+russh-sftp.workspace = true
+russh-config = "0.58"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tempfile = "3"
+insta.workspace = true
+rand = "0.8"
+russh-sftp = { workspace = true }

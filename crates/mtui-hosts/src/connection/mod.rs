@@ -21,23 +21,36 @@
 //! cheap [`hostname`](Connection::hostname) accessor. Later tasks extend it
 //! deliberately:
 //!
-//! * **P2.3** — `reconnect`, `fire_and_forget`, and the `sftp_*` transfer
-//!   family (`put` / `get` / `get_folder` / `listdir` / `open` / `remove` /
-//!   `rmdir` / `readlink`).
+//! * **P2.3** (landed) — `reconnect`, `fire_and_forget`, and the `sftp_*`
+//!   transfer family (`put` / `get` / `get_folder` / `listdir` / `open` /
+//!   `remove` / `rmdir` / `readlink`), plus the russh-backed
+//!   [`SshConnection`].
+//!
+//! Still pending: the interactive PTY [`shell`] (P2.10).
+//!
+//! [`shell`]: https://github.com/openSUSE/mtui
 //!
 //! The trait is object-safe so callers hold `Box<dyn Connection>` and swap the
 //! russh impl for [`MockConnection`] freely.
 
 mod mock;
+mod ssh;
 mod timeout;
 
-pub use mock::MockConnection;
+use std::path::Path;
+
+pub use mock::{MockConnection, MockSftpOp};
+pub use ssh::SshConnection;
 pub use timeout::{CommandTimeout, HostKeyPolicy};
 
 use async_trait::async_trait;
 use mtui_types::hostlog::CommandLog;
 
 use crate::error::Result;
+
+/// The default SSH login user when `~/.ssh/config` names none, matching
+/// upstream's `opts.get("user", "root")`.
+pub(crate) const DEFAULT_USER: &str = "root";
 
 /// One SSH/SFTP connection to a single remote host.
 ///
@@ -76,6 +89,110 @@ pub trait Connection: Send + Sync {
     /// Returns an error only if an orderly shutdown of the transport fails; a
     /// best-effort implementation may treat an already-closed link as success.
     async fn close(&mut self) -> Result<()>;
+
+    /// Re-establishes the transport if it has dropped.
+    ///
+    /// Mirrors upstream `Connection.reconnect`: bounded retries, quiet while
+    /// the host is (e.g.) rebooting, then a single surfaced failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostError::ReconnectFailed`](crate::HostError::ReconnectFailed)
+    /// if the retry budget is exhausted while the link is still down.
+    async fn reconnect(&mut self) -> Result<()>;
+
+    /// Dispatches a command without waiting for it to complete, then closes the
+    /// local connection.
+    ///
+    /// Intended for commands that deliberately tear down the link (e.g. a
+    /// reboot): no output or exit status is collected and a dropped link is
+    /// expected — callers should follow up with [`reconnect`](Self::reconnect).
+    /// Mirrors upstream `Connection.fire_and_forget`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a connection error only if the command could not be dispatched
+    /// at all (no live channel); a link dropped *after* dispatch is expected
+    /// and not an error.
+    async fn fire_and_forget(&mut self, command: &str) -> Result<()>;
+
+    /// Transfers a local file to the remote host over SFTP, creating parent
+    /// directories and making the uploaded file executable (mode `0770`).
+    ///
+    /// Mirrors upstream `Connection.sftp_put`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the transfer fails.
+    async fn sftp_put(&mut self, local: &Path, remote: &Path) -> Result<()>;
+
+    /// Transfers a remote file to the local host over SFTP.
+    ///
+    /// Mirrors upstream `Connection.sftp_get`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the transfer fails.
+    async fn sftp_get(&mut self, remote: &Path, local: &Path) -> Result<()>;
+
+    /// Transfers every file in a remote folder to the local host, suffixing
+    /// each local filename with `.{hostname}`.
+    ///
+    /// Mirrors upstream `Connection.sftp_get_folder`, whose per-host suffix is
+    /// a workflow contract (parallel fan-out writes many hosts' copies into one
+    /// local dir without clobbering).
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if listing or any transfer fails.
+    async fn sftp_get_folder(&mut self, remote: &Path, local: &Path) -> Result<()>;
+
+    /// Lists the entries of a remote directory.
+    ///
+    /// Mirrors upstream `Connection.sftp_listdir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the directory cannot be listed.
+    async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>>;
+
+    /// Reads a remote file's full contents over SFTP.
+    ///
+    /// The upstream `Connection.sftp_open` returns a paramiko `SFTPFile`
+    /// handle; in this port the object-safe surface returns the file's bytes,
+    /// which covers every current caller (small config/metadata reads).
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the file cannot be opened or read.
+    async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>>;
+
+    /// Deletes a remote file over SFTP.
+    ///
+    /// Mirrors upstream `Connection.sftp_remove`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the file cannot be removed.
+    async fn sftp_remove(&mut self, path: &Path) -> Result<()>;
+
+    /// Recursively deletes a remote directory over SFTP (files then the dir).
+    ///
+    /// Mirrors upstream `Connection.sftp_rmdir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the directory cannot be removed.
+    async fn sftp_rmdir(&mut self, path: &Path) -> Result<()>;
+
+    /// Returns the target of a remote symbolic link.
+    ///
+    /// Mirrors upstream `Connection.sftp_readlink`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an SFTP/transport error if the link cannot be read.
+    async fn sftp_readlink(&mut self, path: &Path) -> Result<String>;
 }
 
 #[cfg(test)]

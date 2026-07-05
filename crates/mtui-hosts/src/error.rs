@@ -65,6 +65,31 @@ pub enum HostError {
         /// The host that could not be reconnected.
         host: String,
     },
+
+    /// A channel/transport-level SSH error occurred while running a command
+    /// (channel open/exec failure, unexpected EOF, protocol error).
+    ///
+    /// Mirrors upstream re-raising `paramiko.ChannelException` /
+    /// `paramiko.SSHException` from the command path.
+    #[error("transport error on {host}: {reason}")]
+    Transport {
+        /// The host the error occurred on.
+        host: String,
+        /// A human-readable reason (transport/protocol message).
+        reason: String,
+    },
+
+    /// An SFTP operation failed.
+    ///
+    /// Mirrors upstream's `sftp_*` methods surfacing paramiko/`OSError`
+    /// failures (open/put/get/listdir/remove).
+    #[error("sftp error on {host}: {reason}")]
+    Sftp {
+        /// The host the error occurred on.
+        host: String,
+        /// A human-readable reason (SFTP status / I/O message).
+        reason: String,
+    },
 }
 
 #[cfg(test)]
