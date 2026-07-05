@@ -210,6 +210,32 @@ pub enum OscError {
     },
 }
 
+/// Errors from the openQA / QAM Dashboard overview search ([`crate::oqa_search`]).
+///
+/// Mirrors upstream's single `_HTTPError` (raised by `_get_json` /
+/// `_fetch_url_content` on any transport or non-2xx / bad-JSON failure). The
+/// three high-level entry points (`single_incidents`, `aggregated_updates`,
+/// `build_checks`) catch it internally and fold it into a typed note / empty
+/// result, exactly as upstream does, so it never escapes them. It surfaces only
+/// from the lower-level fetch helpers that upstream also lets propagate —
+/// `get_incident_info` and `incident_jobs` — where the caller is expected to
+/// convert it into a user-facing message.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum OqaSearchError {
+    /// A transport failure, a non-2xx HTTP status, or a malformed JSON body
+    /// from an openQA / Dashboard / QAM endpoint. Corresponds to upstream
+    /// `_HTTPError`.
+    #[error("openQA/Dashboard request failed: {0}")]
+    Http(String),
+}
+
+impl From<HttpError> for OqaSearchError {
+    fn from(source: HttpError) -> Self {
+        Self::Http(source.to_string())
+    }
+}
+
 /// Render the [`GiteaError::AssignInvalid`] message for an assignment state,
 /// mirroring upstream `GiteaAssignInvalidError.__str__` verbatim.
 fn assign_invalid_message(state: Assignment, user: &str) -> String {

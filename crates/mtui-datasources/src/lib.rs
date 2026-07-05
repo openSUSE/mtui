@@ -10,10 +10,13 @@ pub mod error;
 pub mod gitea;
 pub mod http;
 pub mod openqa;
+pub mod oqa_search;
 pub mod oscqam;
 pub mod refhost;
 
-pub use error::{GiteaError, HttpError, OpenQAError, OscError, RefhostError, Result};
+pub use error::{
+    GiteaError, HttpError, OpenQAError, OqaSearchError, OscError, RefhostError, Result,
+};
 pub use gitea::{Comment, DEFAULT_GROUP, Gitea, assign_marker, pr_api_url, unassign_marker};
 pub use http::{
     HTTP_TIMEOUT, HttpClient, VerifyPolicy, default_pool_size, disable_insecure_warnings,
@@ -22,6 +25,10 @@ pub use http::{
 pub use openqa::{
     ApiCredentials, AutoOpenQA, ClientConf, IncidentName, Job, KernelOpenQA, OpenQABase,
     OpenQAClient, install_logfile_for,
+};
+pub use oqa_search::{
+    BuildCheckResult, GroupResult, JobResult, VersionResult, aggregated_updates, build_checks,
+    get_incident_info, incident_jobs, single_incidents,
 };
 pub use oscqam::{API, CommandRunner, OSC_TIMEOUT_SECS, Osc, RunError, RunOutcome, TokioRunner};
 pub use refhost::{Attributes, ProductDiff, Refhosts};

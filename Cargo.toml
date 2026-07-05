@@ -41,6 +41,10 @@ hex = "0.4"
 urlencoding = "2"
 # regex — SMELT testplatform grammar parsing (refhost Attributes::from_testplatform)
 regex = "1"
+# HTML parsing — extract `.log` hrefs from the qam.suse.de build_checks directory
+# index (oqa_search build-check overview), replacing upstream's minimal
+# html.parser LogFileLinkParser.
+scraper = "0.24"
 # datetime — parse/sort Gitea comment `updated_at` timestamps (RFC3339 with
 # offset), matching upstream `datetime.fromisoformat`. std only, no clock/oldtime
 # baggage; keeps the single-static-binary contract clean.
