@@ -22,5 +22,6 @@ pub use product::{Addon, Host, Product};
 pub use refhost::load_refhosts;
 pub use rpmver::RPMVersion;
 pub use rrid::RequestReviewID;
+pub use system::{System, SystemProduct, UnknownSystemError};
 pub use updateid::UpdateID;
-pub use version::Version;
+pub use version::{Version, VersionField};

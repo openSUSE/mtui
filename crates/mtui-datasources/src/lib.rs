@@ -15,4 +15,4 @@ pub use http::{
     HTTP_TIMEOUT, HttpClient, VerifyPolicy, default_pool_size, disable_insecure_warnings,
     is_ssl_verification_error, resolve_verify, ssl_verification_hint, system_ca_bundle,
 };
-pub use refhost::{Attributes, Refhosts};
+pub use refhost::{Attributes, ProductDiff, Refhosts};
