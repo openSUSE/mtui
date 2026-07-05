@@ -236,6 +236,25 @@ impl From<HttpError> for OqaSearchError {
     }
 }
 
+/// Errors from the QEM Dashboard connector ([`crate::qem_dashboard`]).
+///
+/// The dashboard client is read-only and best-effort: like upstream
+/// `QEMDashboardClient._get`, every *fetch* failure (transport, non-2xx, bad
+/// JSON) is logged at `debug` and folded into a `None`/empty result, so a fetch
+/// error never escapes the client. This error type therefore covers only the
+/// failure that surfaces *before* any request — building the shared
+/// [`HttpClient`](crate::http::HttpClient) (e.g. an unreadable CA bundle) — via
+/// the `#[from] HttpError` conversion used by `QemDashboardClient::new` and
+/// `QemIncident::new`.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum QemDashboardError {
+    /// The underlying HTTP layer failed to build the client (e.g. a
+    /// user-configured CA bundle could not be read or parsed).
+    #[error(transparent)]
+    Http(#[from] HttpError),
+}
+
 /// Render the [`GiteaError::AssignInvalid`] message for an assignment state,
 /// mirroring upstream `GiteaAssignInvalidError.__str__` verbatim.
 fn assign_invalid_message(state: Assignment, user: &str) -> String {
