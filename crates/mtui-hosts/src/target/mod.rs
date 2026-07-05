@@ -28,6 +28,12 @@
 //! (`mtui-hosts` must not depend on `mtui-testreport`) and lets the whole
 //! state machine be unit-tested offline against [`MockConnection`].
 
+pub mod actions;
+pub mod hostgroup;
+
+pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
+pub use hostgroup::HostsGroup;
+
 use std::path::{Path, PathBuf};
 
 use mtui_config::Config;
@@ -390,6 +396,45 @@ impl Target {
             TargetState::Disabled => {}
         }
     }
+
+    /// Deletes a file (or directory) on the host over SFTP, gated by
+    /// [`TargetState`].
+    ///
+    /// Mirrors upstream `Target.sftp_remove`: a plain file remove is attempted
+    /// first via [`Connection::sftp_remove`]; if that fails the path may be a
+    /// directory, so [`Connection::sftp_rmdir`] is tried as a fallback. A
+    /// missing path or a failed fallback is logged, never propagated (upstream
+    /// behaviour). [`Dryrun`](TargetState::Dryrun) logs the intended removal;
+    /// [`Disabled`](TargetState::Disabled) does nothing.
+    pub async fn sftp_remove(&mut self, path: &Path) {
+        match self.state {
+            TargetState::Enabled => {
+                let Some(conn) = self.connection.as_mut() else {
+                    tracing::error!(host = %self.hostname, "sftp_remove on unconnected target");
+                    return;
+                };
+                if conn.sftp_remove(path).await.is_err() {
+                    // The path may be a directory rather than a file; fall back
+                    // to rmdir before giving up, matching upstream's OSError
+                    // recovery branch.
+                    if let Err(e) = conn.sftp_rmdir(path).await {
+                        tracing::warn!(
+                            host = %self.hostname, path = %path.display(), error = %e,
+                            "unable to remove"
+                        );
+                    }
+                }
+            }
+            TargetState::Dryrun => {
+                tracing::info!(
+                    host = %self.hostname,
+                    "dryrun: remove {}:{}",
+                    self.hostname, path.display()
+                );
+            }
+            TargetState::Disabled => {}
+        }
+    }
 }
 
 /// Splits `host[:port]` into `(host, port)` on the first `:`, matching upstream
@@ -667,6 +712,73 @@ mod tests {
         );
 
         t.sftp_get("/remote/file", Path::new("/local")).await;
+
+        assert!(handle.sftp_ops().is_empty());
+    }
+
+    // --- sftp_remove --------------------------------------------------------
+
+    #[tokio::test]
+    async fn sftp_remove_enabled_removes_file() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        t.sftp_remove(Path::new("/remote/file")).await;
+
+        assert_eq!(
+            handle.sftp_ops(),
+            vec![MockSftpOp::Remove(PathBuf::from("/remote/file"))]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_remove_falls_back_to_rmdir_when_remove_fails() {
+        // A failed file remove (e.g. the path is a directory) falls back to
+        // rmdir, matching upstream's OSError recovery branch.
+        let conn = MockConnection::new("h1").failing_sftp_remove();
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        t.sftp_remove(Path::new("/remote/dir")).await;
+
+        assert_eq!(
+            handle.sftp_ops(),
+            vec![
+                MockSftpOp::Remove(PathBuf::from("/remote/dir")),
+                MockSftpOp::Rmdir(PathBuf::from("/remote/dir")),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn sftp_remove_dryrun_does_nothing() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Dryrun,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        t.sftp_remove(Path::new("/remote/file")).await;
+
+        assert!(handle.sftp_ops().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sftp_remove_disabled_does_nothing() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Disabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        t.sftp_remove(Path::new("/remote/file")).await;
 
         assert!(handle.sftp_ops().is_empty());
     }

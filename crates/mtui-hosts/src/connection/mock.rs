@@ -99,6 +99,9 @@ pub struct MockConnection {
     files: HashMap<PathBuf, Vec<u8>>,
     /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
     links: HashMap<PathBuf, String>,
+    /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails, exercising a
+    /// caller's directory-removal fallback (e.g. `Target::sftp_remove`).
+    sftp_remove_fails: bool,
 }
 
 impl MockConnection {
@@ -120,7 +123,16 @@ impl MockConnection {
             listings: HashMap::new(),
             files: HashMap::new(),
             links: HashMap::new(),
+            sftp_remove_fails: false,
         }
+    }
+
+    /// Makes [`sftp_remove`](Connection::sftp_remove) fail so a caller's
+    /// directory-removal fallback path can be exercised.
+    #[must_use]
+    pub fn failing_sftp_remove(mut self) -> Self {
+        self.sftp_remove_fails = true;
+        self
     }
 
     /// Scripts a full [`CommandLog`] response for an exact command string.
@@ -318,6 +330,12 @@ impl Connection for MockConnection {
 
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
         self.record_sftp(MockSftpOp::Remove(path.to_path_buf()));
+        if self.sftp_remove_fails {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: "scripted sftp_remove failure".to_owned(),
+            });
+        }
         Ok(())
     }
 

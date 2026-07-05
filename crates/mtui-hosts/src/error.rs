@@ -90,6 +90,16 @@ pub enum HostError {
         /// A human-readable reason (SFTP status / I/O message).
         reason: String,
     },
+
+    /// A host requested from a group is not a member of it.
+    ///
+    /// Mirrors upstream `HostIsNotConnectedError`, raised by
+    /// `HostsGroup.select` when a caller names a host the group does not hold.
+    #[error("host {host} is not connected")]
+    NotConnected {
+        /// The host that is not a member of the group.
+        host: String,
+    },
 }
 
 #[cfg(test)]
