@@ -9,5 +9,5 @@
 pub mod connection;
 pub mod error;
 
-pub use connection::{Connection, MockConnection};
+pub use connection::{CommandTimeout, Connection, HostKeyPolicy, MockConnection};
 pub use error::{HostError, Result};

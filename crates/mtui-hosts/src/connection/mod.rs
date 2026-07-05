@@ -29,8 +29,10 @@
 //! russh impl for [`MockConnection`] freely.
 
 mod mock;
+mod timeout;
 
 pub use mock::MockConnection;
+pub use timeout::{CommandTimeout, HostKeyPolicy};
 
 use async_trait::async_trait;
 use mtui_types::hostlog::CommandLog;
