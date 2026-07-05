@@ -7,7 +7,6 @@ pull_request_rules:
         # wait explicitly for one of the final checks to show up to be on the
         # safe side even in case of checks not reporting back at all
         - "check-success=codecov/project"
-        - "check-success=codecov/patch"
         - "#check-failure=0"
         - "#check-pending=0"
         - linear-history
