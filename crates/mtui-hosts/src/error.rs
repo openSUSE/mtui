@@ -91,6 +91,23 @@ pub enum HostError {
         reason: String,
     },
 
+    /// An SFTP operation referenced a path that does not exist
+    /// (`SSH_FX_NO_SUCH_FILE`).
+    ///
+    /// Distinguished from the catch-all [`Sftp`](Self::Sftp) variant because
+    /// the host-system parser branches on "not found" the way upstream branches
+    /// on Python's `FileNotFoundError` vs the broader `OSError`: a missing
+    /// `/etc/products.d` means "not a SUSE host", a missing `/etc/os-release`
+    /// means "fall back to RHEL", and a missing product file behind
+    /// `baseproduct` means "dangling symlink".
+    #[error("sftp path not found on {host}: {path}")]
+    SftpNotFound {
+        /// The host the error occurred on.
+        host: String,
+        /// The remote path that did not exist.
+        path: String,
+    },
+
     /// A host requested from a group is not a member of it.
     ///
     /// Mirrors upstream `HostIsNotConnectedError`, raised by

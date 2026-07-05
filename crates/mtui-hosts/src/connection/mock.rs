@@ -7,7 +7,7 @@
 //! and can be scripted to fail a specific command so the retry / timeout paths
 //! in later Phase 2 tasks (P2.3 reconnect, P2.5 parallel fan-out) are testable.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -114,6 +114,15 @@ pub struct MockConnection {
     /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails, exercising a
     /// caller's directory-removal fallback (e.g. `Target::sftp_remove`).
     sftp_remove_fails: bool,
+    /// Directory paths scripted to raise [`HostError::SftpNotFound`] from
+    /// `sftp_listdir` (mirrors upstream `listdir` raising `OSError`, e.g. a host
+    /// with no `/etc/products.d`). Distinct from unscripted paths, which return
+    /// an empty listing.
+    missing_dirs: HashSet<PathBuf>,
+    /// File paths scripted to raise a generic [`HostError::Sftp`] (non
+    /// not-found) from `sftp_open`, mirroring a dangling symlink whose target
+    /// product file open raises `OSError` rather than `FileNotFoundError`.
+    sftp_open_errors: HashSet<PathBuf>,
 }
 
 impl MockConnection {
@@ -136,6 +145,8 @@ impl MockConnection {
             files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
             sftp_remove_fails: false,
+            missing_dirs: HashSet::new(),
+            sftp_open_errors: HashSet::new(),
         }
     }
 
@@ -223,6 +234,26 @@ impl MockConnection {
     #[must_use]
     pub fn with_link(mut self, path: impl Into<PathBuf>, target: impl Into<String>) -> Self {
         self.links.insert(path.into(), target.into());
+        self
+    }
+
+    /// Scripts a directory `path` to raise [`HostError::SftpNotFound`] from
+    /// [`sftp_listdir`](Connection::sftp_listdir), mirroring a host whose
+    /// directory does not exist (upstream `listdir` raising `OSError`). Without
+    /// this, unscripted directories return an empty listing.
+    #[must_use]
+    pub fn with_missing_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.missing_dirs.insert(path.into());
+        self
+    }
+
+    /// Scripts a file `path` to raise a generic (non not-found)
+    /// [`HostError::Sftp`] from [`sftp_open`](Connection::sftp_open), mirroring a
+    /// dangling symlink whose target product file open raises `OSError` rather
+    /// than `FileNotFoundError`.
+    #[must_use]
+    pub fn with_open_error(mut self, path: impl Into<PathBuf>) -> Self {
+        self.sftp_open_errors.insert(path.into());
         self
     }
 
@@ -341,19 +372,31 @@ impl Connection for MockConnection {
 
     async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
         self.record_sftp(MockSftpOp::Listdir(path.to_path_buf()));
+        if self.missing_dirs.contains(path) {
+            return Err(HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            });
+        }
         Ok(self.listings.get(path).cloned().unwrap_or_default())
     }
 
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
         self.record_sftp(MockSftpOp::Open(path.to_path_buf()));
+        if self.sftp_open_errors.contains(path) {
+            return Err(HostError::Sftp {
+                host: self.hostname.clone(),
+                reason: format!("open failed: {}", path.display()),
+            });
+        }
         self.files
             .lock()
             .expect("mock files lock")
             .get(path)
             .cloned()
-            .ok_or_else(|| HostError::Sftp {
+            .ok_or_else(|| HostError::SftpNotFound {
                 host: self.hostname.clone(),
-                reason: format!("no such file: {}", path.display()),
+                path: path.display().to_string(),
             })
     }
 
@@ -548,7 +591,7 @@ mod tests {
             .sftp_open(Path::new("/missing"))
             .await
             .expect_err("should error");
-        assert!(matches!(err, HostError::Sftp { .. }));
+        assert!(matches!(err, HostError::SftpNotFound { .. }));
     }
 
     #[tokio::test]

@@ -205,6 +205,28 @@ impl SshConnection {
         }
     }
 
+    /// Maps a russh-sftp client error to [`HostError`], routing the
+    /// `SSH_FX_NO_SUCH_FILE` status to the dedicated
+    /// [`HostError::SftpNotFound`] variant so the host-system parser can branch
+    /// on "not found" the way upstream branches on `FileNotFoundError`.
+    fn sftp_err_at(&self, e: russh_sftp::client::error::Error, path: &Path) -> HostError {
+        use russh_sftp::client::error::Error as SftpError;
+        use russh_sftp::protocol::StatusCode;
+
+        if let SftpError::Status(status) = &e
+            && status.status_code == StatusCode::NoSuchFile
+        {
+            return HostError::SftpNotFound {
+                host: self.hostname.clone(),
+                path: path.to_string_lossy().into_owned(),
+            };
+        }
+        HostError::Sftp {
+            host: self.hostname.clone(),
+            reason: e.to_string(),
+        }
+    }
+
     fn transport_err(&self, e: impl std::fmt::Display) -> HostError {
         HostError::Transport {
             host: self.hostname.clone(),
@@ -582,7 +604,7 @@ impl Connection for SshConnection {
         let dir = sftp
             .read_dir(path.to_string_lossy().to_string())
             .await
-            .map_err(|e| self.sftp_err(e))?;
+            .map_err(|e| self.sftp_err_at(e, path))?;
         let entries = dir.map(|e| e.file_name()).collect();
         let _ = sftp.close().await;
         Ok(entries)
@@ -593,7 +615,7 @@ impl Connection for SshConnection {
         let data = sftp
             .read(path.to_string_lossy().to_string())
             .await
-            .map_err(|e| self.sftp_err(e))?;
+            .map_err(|e| self.sftp_err_at(e, path))?;
         let _ = sftp.close().await;
         Ok(data)
     }
@@ -671,7 +693,7 @@ impl Connection for SshConnection {
         let target = sftp
             .read_link(path.to_string_lossy().to_string())
             .await
-            .map_err(|e| self.sftp_err(e))?;
+            .map_err(|e| self.sftp_err_at(e, path))?;
         let _ = sftp.close().await;
         Ok(target)
     }

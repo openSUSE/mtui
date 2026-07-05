@@ -257,10 +257,11 @@ impl<C: Clock> TargetLock<C> {
                 self.lock = RemoteLock::from_lockfile(line)?;
                 Ok(())
             }
-            Err(HostError::Sftp { .. }) => {
+            Err(HostError::SftpNotFound { .. } | HostError::Sftp { .. }) => {
                 // Treat a missing/unreadable lockfile as "unlocked", matching
-                // upstream's ENOENT branch. (The mock and ssh layers surface a
-                // missing file as HostError::Sftp.)
+                // upstream's ENOENT branch. A truly absent file surfaces as
+                // HostError::SftpNotFound; a present-but-unreadable one as the
+                // catch-all HostError::Sftp — both mean "no usable lock".
                 Ok(())
             }
             Err(e) => Err(e),

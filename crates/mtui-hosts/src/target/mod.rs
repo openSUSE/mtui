@@ -35,6 +35,8 @@ pub mod actions;
 pub mod arbiter;
 pub mod hostgroup;
 pub mod locks;
+pub mod package_querier;
+pub mod parsers;
 
 pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
@@ -43,12 +45,15 @@ pub use locks::{
     Clock, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
     TargetLock, with_locked,
 };
+pub use package_querier::PackageQuerier;
+pub use parsers::{parse_os_release, parse_product, parse_system};
 
 use std::path::{Path, PathBuf};
 
 use mtui_config::Config;
 use mtui_types::enums::{ExecutionMode, TargetState};
 use mtui_types::hostlog::{CommandLog, HostLog};
+use mtui_types::system::{System, SystemProduct};
 
 use crate::connection::{CommandTimeout, Connection, HostKeyPolicy, SshConnection};
 use crate::error::{HostError, Result};
@@ -96,6 +101,25 @@ pub struct Target {
     /// The live connection, or `None` until [`connect`](Target::connect) (or a
     /// test injection) supplies one.
     connection: Option<Box<dyn Connection>>,
+    /// The parsed host system (base product + addons). Defaults to an unknown
+    /// system until [`parse_system`](parsers::parse_system) populates it via
+    /// [`set_system`](Target::set_system); [`PackageQuerier`] reads it to choose
+    /// the rpm-vs-dpkg query path.
+    system: System,
+    /// Whether the host is a transactional (read-only-root) system, set
+    /// alongside [`system`](Self::system).
+    transactional: bool,
+}
+
+/// Builds the placeholder [`System`] a freshly-constructed [`Target`] carries
+/// before it has been parsed — an `unknown` base with no addons, matching the
+/// upstream `Target.system` sentinel prior to `_parse_system`.
+fn unknown_system() -> System {
+    System::new(
+        SystemProduct::new("unknown", "", ""),
+        Default::default(),
+        false,
+    )
 }
 
 impl Target {
@@ -126,6 +150,8 @@ impl Target {
             policy: HostKeyPolicy::from_config(&config.ssh_strict_host_key_checking),
             out: HostLog::new(),
             connection: None,
+            system: unknown_system(),
+            transactional: false,
         }
     }
 
@@ -154,6 +180,8 @@ impl Target {
             policy: HostKeyPolicy::default(),
             out: HostLog::new(),
             connection: Some(connection),
+            system: unknown_system(),
+            transactional: false,
         }
     }
 
@@ -204,6 +232,32 @@ impl Target {
     #[must_use]
     pub fn out(&self) -> &HostLog {
         &self.out
+    }
+
+    /// The parsed host system (base product + addons).
+    ///
+    /// Returns the `unknown` placeholder until
+    /// [`set_system`](Self::set_system) records a parsed one.
+    #[must_use]
+    pub fn system(&self) -> &System {
+        &self.system
+    }
+
+    /// Whether the host is a transactional (read-only-root) system.
+    #[must_use]
+    pub const fn transactional(&self) -> bool {
+        self.transactional
+    }
+
+    /// Records the parsed host system and its transactional flag.
+    ///
+    /// Called with the pair returned by
+    /// [`parse_system`](parsers::parse_system) once a connection is live; the
+    /// two values always move together (upstream sets `self.system` and
+    /// `self.transactional` in the same `_parse_system` step).
+    pub fn set_system(&mut self, system: System, transactional: bool) {
+        self.system = system;
+        self.transactional = transactional;
     }
 
     /// Establishes the SSH transport for this target.
