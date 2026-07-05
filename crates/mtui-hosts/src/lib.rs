@@ -3,14 +3,17 @@
 //! Phase 2 builds this crate up incrementally. The current surface is the
 //! [`Connection`] abstraction, the russh-backed [`SshConnection`] (connect /
 //! run-with-timeout / SFTP transfers), the scriptable [`MockConnection`] test
-//! double, and the [`HostError`] hierarchy. Still to come in subsequent Phase 2
-//! tasks: the `Target` state machine, `HostsGroup` fan-out, remote locks, the
+//! double, the [`HostError`] hierarchy, and the [`Target`] state machine
+//! (enabled/dryrun/disabled command gating + connection-only `connect`). Still
+//! to come in subsequent Phase 2 tasks: `HostsGroup` fan-out, remote locks, the
 //! host arbiter, and the interactive PTY shell (P2.10).
 
 pub mod connection;
 pub mod error;
+pub mod target;
 
 pub use connection::{
     CommandTimeout, Connection, HostKeyPolicy, MockConnection, MockSftpOp, SshConnection,
 };
 pub use error::{HostError, Result};
+pub use target::Target;
