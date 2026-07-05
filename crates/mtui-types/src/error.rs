@@ -13,7 +13,7 @@
 
 use thiserror::Error;
 
-/// Convenience alias for `Result<T, `[`Error`]`>`.
+/// Convenience alias for `Result<T, `[`enum@Error`]`>`.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Top-level error type for the `mtui-types` crate.

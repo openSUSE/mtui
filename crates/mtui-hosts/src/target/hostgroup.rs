@@ -14,7 +14,7 @@
 //! * construction and [`select`](HostsGroup::select)ion of a host subset,
 //! * [`names`](HostsGroup::names) / iteration,
 //! * command fan-out via [`run`](HostsGroup::run) (delegating to
-//!   [`RunCommand`](super::actions::RunCommand)),
+//!   [`super::actions::RunCommand`]),
 //! * SFTP fan-out ([`sftp_put`](HostsGroup::sftp_put) /
 //!   [`sftp_get`](HostsGroup::sftp_get) / [`sftp_remove`](HostsGroup::sftp_remove)).
 //!

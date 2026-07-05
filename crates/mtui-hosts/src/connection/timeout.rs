@@ -93,7 +93,7 @@ impl From<CommandTimeout> for Duration {
 /// Mirrors upstream's `_HOST_KEY_POLICIES` mapping of paramiko policies. The
 /// wire tokens are the exact `ssh_strict_host_key_checking` config values
 /// (`auto_add` / `warn` / `reject`), so a config string round-trips through
-/// [`FromStr`]/[`Display`].
+/// [`FromStr`](std::str::FromStr)/[`Display`](std::fmt::Display).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum HostKeyPolicy {
     /// Silently add an unknown host key and continue (paramiko `AutoAddPolicy`).

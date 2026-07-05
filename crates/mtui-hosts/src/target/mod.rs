@@ -26,7 +26,7 @@
 //!
 //! Keeping the seams out of P2.4 preserves the acyclic crate graph
 //! (`mtui-hosts` must not depend on `mtui-testreport`) and lets the whole
-//! state machine be unit-tested offline against [`MockConnection`].
+//! state machine be unit-tested offline against a `MockConnection`.
 
 pub mod actions;
 pub mod hostgroup;

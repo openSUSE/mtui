@@ -11,7 +11,7 @@
 //! ## Shape
 //!
 //! The on-disk format is **sectioned TOML** (`[mtui]`, `[connection]`,
-//! `[refhosts]`, `[url]`, `[svn]`, `[target]`). [`RawConfig`] mirrors that
+//! `[refhosts]`, `[url]`, `[svn]`, `[target]`). `RawConfig` mirrors that
 //! structure for serde; [`Config`] is the flattened, fully-typed view the rest
 //! of the workspace consumes. Every serde field defaults, so an empty (or
 //! partial) TOML document deserialises into all-defaults.
