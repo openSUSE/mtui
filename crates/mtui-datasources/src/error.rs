@@ -40,3 +40,27 @@ pub enum HttpError {
         source: std::io::Error,
     },
 }
+
+/// Errors from loading and parsing a local `refhosts.yml` database.
+///
+/// Mirrors upstream `Refhosts._parse_refhosts`, which logs at ERROR and
+/// re-raises: a file that cannot be read surfaces as [`Io`](Self::Io) and a
+/// document-level YAML failure as [`Parse`](Self::Parse). Per-row malformation
+/// is handled lower down (dropped + logged by
+/// [`mtui_types::load_refhosts`]), so it never reaches this hierarchy.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum RefhostError {
+    /// The `refhosts.yml` file could not be read from disk.
+    #[error("failed to read refhosts.yml {path}: {source}")]
+    Io {
+        /// The path that could not be read.
+        path: String,
+        /// The underlying I/O failure.
+        source: std::io::Error,
+    },
+
+    /// The `refhosts.yml` contents are not a valid document.
+    #[error(transparent)]
+    Parse(#[from] mtui_types::RefhostsParseError),
+}

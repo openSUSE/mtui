@@ -1673,6 +1673,7 @@ dependencies = [
  "directories",
  "mtui-config",
  "mtui-types",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
