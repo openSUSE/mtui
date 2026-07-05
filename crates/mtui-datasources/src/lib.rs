@@ -13,6 +13,7 @@ pub mod openqa;
 pub mod oqa_search;
 pub mod oscqam;
 pub mod refhost;
+pub mod teregen;
 
 pub use error::{
     GiteaError, HttpError, OpenQAError, OqaSearchError, OscError, RefhostError, Result,
@@ -32,3 +33,4 @@ pub use oqa_search::{
 };
 pub use oscqam::{API, CommandRunner, OSC_TIMEOUT_SECS, Osc, RunError, RunOutcome, TokioRunner};
 pub use refhost::{Attributes, ProductDiff, Refhosts};
+pub use teregen::{RegenOutcome, TeReGen, UpdatesQuery};
