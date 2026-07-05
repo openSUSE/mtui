@@ -15,6 +15,8 @@ use async_trait::async_trait;
 use mtui_types::hostlog::CommandLog;
 
 use super::Connection;
+#[cfg(feature = "shell")]
+use super::ShellChannel;
 use crate::error::{HostError, Result};
 
 /// The outcome scripted for a command run against a [`MockConnection`].
@@ -123,6 +125,22 @@ pub struct MockConnection {
     /// not-found) from `sftp_open`, mirroring a dangling symlink whose target
     /// product file open raises `OSError` rather than `FileNotFoundError`.
     sftp_open_errors: HashSet<PathBuf>,
+    /// Canned bytes served by [`ShellChannel::read`] on a spawned shell, drained
+    /// one chunk per `read` then `0` (EOF). Lets the Phase-6 TTY bridge be
+    /// tested offline.
+    #[cfg(feature = "shell")]
+    shell_output: Vec<Vec<u8>>,
+    /// PTY sizes requested via [`shell`](Connection::shell), in order, so a
+    /// caller can assert the spawn dimensions.
+    #[cfg(feature = "shell")]
+    shell_spawns: Arc<Mutex<Vec<(u32, u32)>>>,
+    /// Bytes written to spawned shells via [`ShellChannel::write`], concatenated
+    /// across all channels, so a caller can assert the keystrokes sent.
+    #[cfg(feature = "shell")]
+    shell_input: Arc<Mutex<Vec<u8>>>,
+    /// Resize requests observed via [`ShellChannel::resize`], in order.
+    #[cfg(feature = "shell")]
+    shell_resizes: Arc<Mutex<Vec<(u32, u32)>>>,
 }
 
 impl MockConnection {
@@ -147,6 +165,14 @@ impl MockConnection {
             sftp_remove_fails: false,
             missing_dirs: HashSet::new(),
             sftp_open_errors: HashSet::new(),
+            #[cfg(feature = "shell")]
+            shell_output: Vec::new(),
+            #[cfg(feature = "shell")]
+            shell_spawns: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "shell")]
+            shell_input: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "shell")]
+            shell_resizes: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -290,6 +316,118 @@ impl MockConnection {
 
     fn record_sftp(&self, op: MockSftpOp) {
         self.sftp_ops.lock().expect("mock sftp lock").push(op);
+    }
+
+    /// Scripts one chunk of shell output served by
+    /// [`ShellChannel::read`](crate::connection::ShellChannel::read) on a
+    /// spawned shell. Chunks are drained in order, one per `read`, then `read`
+    /// returns `0` (EOF) — the bridge loop's stop condition.
+    #[cfg(feature = "shell")]
+    #[must_use]
+    pub fn with_shell_output(mut self, chunk: impl Into<Vec<u8>>) -> Self {
+        self.shell_output.push(chunk.into());
+        self
+    }
+
+    /// Returns the PTY sizes requested via [`shell`](Connection::shell), in
+    /// order (`(cols, rows)`).
+    #[cfg(feature = "shell")]
+    #[must_use]
+    pub fn shell_spawns(&self) -> Vec<(u32, u32)> {
+        self.shell_spawns
+            .lock()
+            .expect("mock shell spawns lock")
+            .clone()
+    }
+
+    /// Returns the bytes written to spawned shells via
+    /// [`ShellChannel::write`](crate::connection::ShellChannel::write),
+    /// concatenated in order.
+    #[cfg(feature = "shell")]
+    #[must_use]
+    pub fn shell_input(&self) -> Vec<u8> {
+        self.shell_input
+            .lock()
+            .expect("mock shell input lock")
+            .clone()
+    }
+
+    /// Returns the resize requests observed via
+    /// [`ShellChannel::resize`](crate::connection::ShellChannel::resize), in
+    /// order (`(cols, rows)`).
+    #[cfg(feature = "shell")]
+    #[must_use]
+    pub fn shell_resizes(&self) -> Vec<(u32, u32)> {
+        self.shell_resizes
+            .lock()
+            .expect("mock shell resizes lock")
+            .clone()
+    }
+}
+
+/// A scriptable in-memory [`ShellChannel`] returned by
+/// [`MockConnection::shell`], so the Phase-6 TTY bridge is testable offline.
+///
+/// Mirrors the real [`SshShellChannel`](crate::connection::SshConnection)
+/// read semantics: a scripted chunk larger than the caller's buffer is served
+/// in pieces across successive `read`s (leftover carryover) rather than
+/// truncated, so the mock stays a faithful double for the CLI bridge tests.
+#[cfg(feature = "shell")]
+struct MockShellChannel {
+    /// Canned output chunks, drained front-to-back.
+    output: std::collections::VecDeque<Vec<u8>>,
+    /// Bytes of the current chunk not yet returned to a caller.
+    leftover: Vec<u8>,
+    /// Shared keystroke sink (the parent mock's `shell_input`).
+    input: Arc<Mutex<Vec<u8>>>,
+    /// Shared resize log (the parent mock's `shell_resizes`).
+    resizes: Arc<Mutex<Vec<(u32, u32)>>>,
+}
+
+#[cfg(feature = "shell")]
+impl MockShellChannel {
+    fn serve(&mut self, data: &[u8], buf: &mut [u8]) -> usize {
+        let n = data.len().min(buf.len());
+        buf[..n].copy_from_slice(&data[..n]);
+        if n < data.len() {
+            self.leftover = data[n..].to_vec();
+        }
+        n
+    }
+}
+
+#[cfg(feature = "shell")]
+#[async_trait]
+impl ShellChannel for MockShellChannel {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        if !self.leftover.is_empty() {
+            let carried = std::mem::take(&mut self.leftover);
+            return Ok(self.serve(&carried, buf));
+        }
+        match self.output.pop_front() {
+            Some(chunk) => Ok(self.serve(&chunk, buf)),
+            None => Ok(0),
+        }
+    }
+
+    async fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.input
+            .lock()
+            .expect("mock shell input lock")
+            .extend_from_slice(data);
+        Ok(())
+    }
+
+    async fn resize(&mut self, cols: u32, rows: u32) -> Result<()> {
+        self.resizes
+            .lock()
+            .expect("mock shell resizes lock")
+            .push((cols, rows));
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -442,6 +580,20 @@ impl Connection for MockConnection {
                 host: self.hostname.clone(),
                 reason: format!("not a link: {}", path.display()),
             })
+    }
+
+    #[cfg(feature = "shell")]
+    async fn shell(&mut self, cols: u32, rows: u32) -> Result<Box<dyn ShellChannel>> {
+        self.shell_spawns
+            .lock()
+            .expect("mock shell spawns lock")
+            .push((cols, rows));
+        Ok(Box::new(MockShellChannel {
+            output: self.shell_output.iter().cloned().collect(),
+            leftover: Vec::new(),
+            input: Arc::clone(&self.shell_input),
+            resizes: Arc::clone(&self.shell_resizes),
+        }))
     }
 }
 
@@ -668,5 +820,45 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[cfg(feature = "shell")]
+    #[tokio::test]
+    async fn shell_records_spawn_and_serves_canned_output_then_eof() {
+        let conn = MockConnection::new("h1").with_shell_output(b"hi".to_vec());
+        let handle = conn.clone();
+        let mut conn = conn;
+
+        let mut ch = conn.shell(100, 30).await.expect("shell spawns");
+        assert_eq!(handle.shell_spawns(), vec![(100, 30)]);
+
+        let mut buf = [0u8; 8];
+        let n = ch.read(&mut buf).await.expect("read");
+        assert_eq!(&buf[..n], b"hi");
+        assert_eq!(ch.read(&mut buf).await.expect("eof"), 0);
+
+        ch.write(b"q").await.expect("write");
+        ch.resize(90, 20).await.expect("resize");
+        ch.close().await.expect("close");
+        assert_eq!(handle.shell_input(), b"q");
+        assert_eq!(handle.shell_resizes(), vec![(90, 20)]);
+    }
+
+    #[cfg(feature = "shell")]
+    #[tokio::test]
+    async fn shell_read_carries_over_chunk_larger_than_buffer() {
+        // A chunk larger than the read buffer is served in pieces across
+        // successive reads (leftover carryover), never truncated — mirroring
+        // paramiko's `recv(n)` and the real SSH channel, so no PTY bytes are
+        // lost on a short buffer.
+        let mut conn = MockConnection::new("h1").with_shell_output(b"abcdef".to_vec());
+        let mut ch = conn.shell(80, 24).await.expect("spawn");
+        let mut buf = [0u8; 3];
+
+        let n = ch.read(&mut buf).await.expect("read 1");
+        assert_eq!(&buf[..n], b"abc");
+        let n = ch.read(&mut buf).await.expect("read 2 drains leftover");
+        assert_eq!(&buf[..n], b"def");
+        assert_eq!(ch.read(&mut buf).await.expect("eof"), 0);
     }
 }

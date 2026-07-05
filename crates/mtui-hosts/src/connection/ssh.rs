@@ -31,7 +31,9 @@
 //!   documented follow-up. Upstream supports it via `paramiko.ProxyCommand`.
 //! * **`sftp_open`** returns the file's bytes rather than a live file handle
 //!   (the object-safe trait surface); this covers every current caller.
-//! * The interactive PTY `shell` is **not** here — it lands in P2.10.
+//! * The interactive PTY `shell` (feature `shell`, P2.10) returns an
+//!   object-safe [`ShellChannel`] duplex over the PTY; the raw-`termios` local
+//!   terminal bridge that consumes it is a CLI concern (Phase 6).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -47,6 +49,8 @@ use russh::{ChannelMsg, client::Config as ClientConfig};
 use russh_sftp::client::SftpSession;
 use tokio::time::{Duration, timeout};
 
+#[cfg(feature = "shell")]
+use super::ShellChannel;
 use super::timeout::{CommandTimeout, HostKeyPolicy};
 use super::{Connection, DEFAULT_USER};
 use crate::error::{HostError, Result};
@@ -696,6 +700,142 @@ impl Connection for SshConnection {
             .map_err(|e| self.sftp_err_at(e, path))?;
         let _ = sftp.close().await;
         Ok(target)
+    }
+
+    #[cfg(feature = "shell")]
+    async fn shell(&mut self, cols: u32, rows: u32) -> Result<Box<dyn ShellChannel>> {
+        // Open a channel, reconnecting + retrying on a lost link, mirroring the
+        // open->reconnect loop in `run` (and upstream's `while not session:
+        // reconnect()` in `shell`).
+        let mut attempt = 0;
+        let channel = loop {
+            if !self.is_active() {
+                self.reconnect().await?;
+            }
+            match self.handle()?.channel_open_session().await {
+                Ok(ch) => break ch,
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= RETRIES {
+                        return Err(HostError::ReconnectFailed {
+                            host: self.hostname.clone(),
+                        });
+                    }
+                    tracing::debug!(host = %self.hostname, "shell channel open failed ({e}); retrying");
+                    self.reconnect().await?;
+                }
+            }
+        };
+
+        // Request an `xterm` PTY sized cols x rows (no pixel dims, no special
+        // terminal modes) then invoke the remote shell — upstream
+        // `get_pty("xterm", width, height)` + `invoke_shell()`. On failure,
+        // explicitly close the half-initialised channel (upstream's
+        // `close_session` in the `except` arm) rather than relying on drop.
+        if let Err(e) = channel
+            .request_pty(true, "xterm", cols, rows, 0, 0, &[])
+            .await
+        {
+            let _ = channel.close().await;
+            return Err(self.transport_err(e));
+        }
+        if let Err(e) = channel.request_shell(true).await {
+            let _ = channel.close().await;
+            return Err(self.transport_err(e));
+        }
+
+        Ok(Box::new(SshShellChannel {
+            host: self.hostname.clone(),
+            channel,
+            leftover: Vec::new(),
+        }))
+    }
+}
+
+/// A russh-backed [`ShellChannel`]: the interactive PTY duplex returned by
+/// [`SshConnection::shell`].
+///
+/// Reads drain [`ChannelMsg::Data`]/[`ChannelMsg::ExtendedData`] (the PTY
+/// merges stdout+stderr, so extended data is folded into the same stream a
+/// terminal sees); writes send channel data; resize forwards `window-change`.
+#[cfg(feature = "shell")]
+struct SshShellChannel {
+    host: String,
+    channel: russh::Channel<russh::client::Msg>,
+    /// Payload bytes received in excess of a previous `read`'s buffer, served
+    /// before the next `wait()`. Mirrors paramiko's `recv(n)`, which leaves
+    /// unconsumed bytes buffered in the transport rather than dropping them —
+    /// without this, a server frame larger than the caller's buffer would lose
+    /// its tail and corrupt interactive output.
+    leftover: Vec<u8>,
+}
+
+#[cfg(feature = "shell")]
+impl SshShellChannel {
+    /// Copies up to `buf.len()` bytes of `data` into `buf`, stashing any excess
+    /// in `self.leftover` for the next `read`. Returns the count copied.
+    fn serve(&mut self, data: &[u8], buf: &mut [u8]) -> usize {
+        let n = data.len().min(buf.len());
+        buf[..n].copy_from_slice(&data[..n]);
+        if n < data.len() {
+            self.leftover.extend_from_slice(&data[n..]);
+        }
+        n
+    }
+}
+
+#[cfg(feature = "shell")]
+#[async_trait]
+impl ShellChannel for SshShellChannel {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        // Drain any bytes carried over from a previous short read first.
+        if !self.leftover.is_empty() {
+            let carried = std::mem::take(&mut self.leftover);
+            return Ok(self.serve(&carried, buf));
+        }
+        loop {
+            match self.channel.wait().await {
+                // Channel closed cleanly: the remote shell exited.
+                None => return Ok(0),
+                Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                    return Ok(self.serve(&data, buf));
+                }
+                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) => return Ok(0),
+                // Ignore control messages (window adjust, exit status, ...) and
+                // keep waiting for payload or close.
+                Some(_) => {}
+            }
+        }
+    }
+
+    async fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.channel
+            .data(data)
+            .await
+            .map_err(|e| HostError::Transport {
+                host: self.host.clone(),
+                reason: e.to_string(),
+            })
+    }
+
+    async fn resize(&mut self, cols: u32, rows: u32) -> Result<()> {
+        self.channel
+            .window_change(cols, rows, 0, 0)
+            .await
+            .map_err(|e| HostError::Transport {
+                host: self.host.clone(),
+                reason: e.to_string(),
+            })
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        // Best-effort, idempotent close (upstream `close_session`): a channel
+        // the remote already tore down is treated as success per the trait
+        // contract, so a double-close never surfaces an error.
+        if let Err(e) = self.channel.close().await {
+            tracing::debug!(host = %self.host, error = %e, "shell channel already closed");
+        }
+        Ok(())
     }
 }
 

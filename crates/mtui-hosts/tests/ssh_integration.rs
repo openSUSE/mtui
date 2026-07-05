@@ -58,6 +58,8 @@ impl russh::server::Server for TestServer {
         TestSshSession {
             fs: self.fs.clone(),
             channels: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "shell")]
+            shell_channels: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 }
@@ -65,6 +67,10 @@ impl russh::server::Server for TestServer {
 struct TestSshSession {
     fs: SharedFs,
     channels: Arc<Mutex<HashMap<ChannelId, Channel<Msg>>>>,
+    /// Channels that requested an interactive shell, so the `data` callback only
+    /// echoes keystrokes for shells and leaves SFTP-subsystem data untouched.
+    #[cfg(feature = "shell")]
+    shell_channels: Arc<Mutex<std::collections::HashSet<ChannelId>>>,
 }
 
 impl russh::server::Handler for TestSshSession {
@@ -133,6 +139,60 @@ impl russh::server::Handler for TestSshSession {
             russh_sftp::server::run(channel.into_stream(), handler).await;
         } else {
             session.channel_failure(channel_id)?;
+        }
+        Ok(())
+    }
+
+    // A minimal interactive shell: accept the PTY + shell requests, greet the
+    // client, then echo keystrokes back. Sending the sentinel byte `\x04`
+    // (Ctrl-D) closes the channel — the client's read loop sees EOF (`0`).
+    #[cfg(feature = "shell")]
+    async fn pty_request(
+        &mut self,
+        channel_id: ChannelId,
+        _term: &str,
+        _col_width: u32,
+        _row_height: u32,
+        _pix_width: u32,
+        _pix_height: u32,
+        _modes: &[(russh::Pty, u32)],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel_id)?;
+        Ok(())
+    }
+
+    #[cfg(feature = "shell")]
+    async fn shell_request(
+        &mut self,
+        channel_id: ChannelId,
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        self.shell_channels.lock().await.insert(channel_id);
+        session.channel_success(channel_id)?;
+        session.data(channel_id, b"welcome\n".to_vec())?;
+        Ok(())
+    }
+
+    #[cfg(feature = "shell")]
+    async fn data(
+        &mut self,
+        channel_id: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // Only interactive-shell channels echo here; SFTP-subsystem data is
+        // routed by russh_sftp's own runner and must not be intercepted.
+        if !self.shell_channels.lock().await.contains(&channel_id) {
+            return Ok(());
+        }
+        if data.contains(&0x04) {
+            // Ctrl-D: close the shell so the client read loop terminates.
+            session.eof(channel_id)?;
+            session.close(channel_id)?;
+        } else {
+            // Echo keystrokes back, as an interactive shell with echo on would.
+            session.data(channel_id, data.to_vec())?;
         }
         Ok(())
     }
@@ -662,4 +722,39 @@ async fn sftp_remove_and_readlink() {
         .await
         .expect("readlink");
     assert_eq!(target, "/tmp/target");
+}
+
+#[cfg(feature = "shell")]
+#[tokio::test]
+async fn shell_spawns_pty_and_bridges_bytes() {
+    use mtui_hosts::ShellChannel;
+
+    let fs = SharedFs::default();
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let mut ch: Box<dyn ShellChannel> = conn.shell(80, 24).await.expect("shell spawns");
+
+    // Read the server greeting through a buffer smaller than the frame, forcing
+    // the leftover-carryover path: no bytes may be lost across the two reads.
+    let mut small = [0u8; 4];
+    let n = ch.read(&mut small).await.expect("read greeting part 1");
+    assert_eq!(&small[..n], b"welc");
+    let n = ch.read(&mut small).await.expect("read greeting part 2");
+    assert_eq!(&small[..n], b"ome\n");
+
+    let mut buf = [0u8; 64];
+
+    // Keystrokes are echoed back.
+    ch.write(b"hi").await.expect("write");
+    let n = ch.read(&mut buf).await.expect("read echo");
+    assert_eq!(&buf[..n], b"hi");
+
+    // A resize forwards a window-change without error.
+    ch.resize(120, 40).await.expect("resize");
+
+    // Ctrl-D closes the remote shell; the next read observes EOF (0).
+    ch.write(&[0x04]).await.expect("write ctrl-d");
+    let n = ch.read(&mut buf).await.expect("read eof");
+    assert_eq!(n, 0, "channel close surfaces as EOF");
 }

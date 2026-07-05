@@ -11,13 +11,19 @@
 //! [`parse_system`] / [`parse_product`] / [`parse_os_release`] plus the
 //! [`PackageQuerier`] (P2.8), and the install/uninstall [`Operation`] template
 //! (skeleton + trait, P2.9) — the `lock → run → check → reboot → unlock`
-//! flow driven over the object-safe [`OperationGroup`] seam. Still to come in
-//! subsequent Phase 2 tasks: the interactive PTY shell (P2.10).
+//! flow driven over the object-safe [`OperationGroup`] seam — and, behind the
+//! `shell` feature, the interactive PTY shell (P2.10): `Connection::shell` /
+//! `Target::shell` returning an object-safe `ShellChannel` duplex over the
+//! remote PTY. Only the transport primitive lives here; the raw-`termios` local
+//! terminal bridge and the `shell` REPL command that consume it are a CLI
+//! concern (Phase 6).
 
 pub mod connection;
 pub mod error;
 pub mod target;
 
+#[cfg(feature = "shell")]
+pub use connection::ShellChannel;
 pub use connection::{
     CommandTimeout, Connection, HostKeyPolicy, MockConnection, MockSftpOp, SshConnection,
 };

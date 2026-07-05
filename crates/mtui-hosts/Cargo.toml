@@ -9,6 +9,14 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Interactive PTY shell primitive (P2.10). Adds `Connection::shell` /
+# `Target::shell` and the `ShellChannel` duplex handle. Off by default: the
+# raw-termios stdin<->stdout bridge and the `shell` REPL command that consume
+# this primitive live in the CLI crate (Phase 6), so only that surface needs
+# the feature.
+shell = []
+
 [dependencies]
 mtui-types.workspace = true
 mtui-config.workspace = true

@@ -68,6 +68,8 @@ use mtui_types::enums::{ExecutionMode, TargetState};
 use mtui_types::hostlog::{CommandLog, HostLog};
 use mtui_types::system::{System, SystemProduct};
 
+#[cfg(feature = "shell")]
+use crate::connection::ShellChannel;
 use crate::connection::{CommandTimeout, Connection, HostKeyPolicy, SshConnection};
 use crate::error::{HostError, Result};
 
@@ -532,6 +534,48 @@ impl Target {
             TargetState::Disabled => {}
         }
     }
+
+    /// Opens an interactive PTY shell on the host, gated by [`TargetState`].
+    ///
+    /// Mirrors upstream `Target.shell`: on an [`Enabled`](TargetState::Enabled)
+    /// target it delegates to [`Connection::shell`] and returns the
+    /// [`ShellChannel`]; a spawn failure is logged and swallowed as `None`
+    /// (upstream's `except Exception: log "failed to spawn shell"`), so one bad
+    /// host never aborts a sequential fan-out. [`Dryrun`](TargetState::Dryrun)
+    /// and [`Disabled`](TargetState::Disabled) do nothing and return `None`
+    /// (there is no PTY to spawn under a dry run).
+    ///
+    /// The returned handle is a transport duplex only; the raw-`termios` local
+    /// terminal bridge that consumes it is a CLI concern (Phase 6).
+    ///
+    /// Available only with the `shell` feature.
+    #[cfg(feature = "shell")]
+    pub async fn shell(&mut self, cols: u32, rows: u32) -> Option<Box<dyn ShellChannel>> {
+        match self.state {
+            TargetState::Enabled => {
+                tracing::debug!(host = %self.hostname, "spawning shell");
+                let Some(conn) = self.connection.as_mut() else {
+                    tracing::error!(host = %self.hostname, "shell on unconnected target");
+                    return None;
+                };
+                match conn.shell(cols, rows).await {
+                    Ok(channel) => Some(channel),
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, error = %e,
+                            "failed to spawn shell"
+                        );
+                        None
+                    }
+                }
+            }
+            TargetState::Dryrun => {
+                tracing::info!(host = %self.hostname, "dryrun: shell");
+                None
+            }
+            TargetState::Disabled => None,
+        }
+    }
 }
 
 /// Splits `host[:port]` into `(host, port)` on the first `:`, matching upstream
@@ -890,5 +934,85 @@ mod tests {
         assert!(t.is_connected());
         t.connect().await.expect("noop connect");
         assert!(t.is_connected());
+    }
+
+    // --- shell() (feature `shell`) ------------------------------------------
+
+    #[cfg(feature = "shell")]
+    #[tokio::test]
+    async fn shell_enabled_spawns_and_bridges() {
+        let conn = MockConnection::new("h1")
+            .with_shell_output(b"welcome\n".to_vec())
+            .with_shell_output(b"$ ".to_vec());
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        let mut ch = t.shell(120, 40).await.expect("enabled spawns a shell");
+
+        // Spawn recorded the requested PTY size.
+        assert_eq!(handle.shell_spawns(), vec![(120, 40)]);
+
+        // Output chunks drain in order, then EOF (0) — the bridge stop signal.
+        let mut buf = [0u8; 64];
+        let n = ch.read(&mut buf).await.expect("read 1");
+        assert_eq!(&buf[..n], b"welcome\n");
+        let n = ch.read(&mut buf).await.expect("read 2");
+        assert_eq!(&buf[..n], b"$ ");
+        let n = ch.read(&mut buf).await.expect("read eof");
+        assert_eq!(n, 0, "channel EOF terminates the bridge loop");
+
+        // Keystrokes and resizes are recorded through the shared mock.
+        ch.write(b"ls\n").await.expect("write");
+        ch.resize(80, 24).await.expect("resize");
+        ch.close().await.expect("close");
+        assert_eq!(handle.shell_input(), b"ls\n");
+        assert_eq!(handle.shell_resizes(), vec![(80, 24)]);
+    }
+
+    #[cfg(feature = "shell")]
+    #[tokio::test]
+    async fn shell_dryrun_does_not_spawn() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Dryrun,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        assert!(t.shell(80, 24).await.is_none(), "dryrun must not spawn");
+        assert!(handle.shell_spawns().is_empty());
+    }
+
+    #[cfg(feature = "shell")]
+    #[tokio::test]
+    async fn shell_disabled_does_not_spawn() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Disabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        assert!(t.shell(80, 24).await.is_none(), "disabled must not spawn");
+        assert!(handle.shell_spawns().is_empty());
+    }
+
+    #[cfg(feature = "shell")]
+    #[tokio::test]
+    async fn shell_on_unconnected_target_returns_none() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        assert!(
+            t.shell(80, 24).await.is_none(),
+            "no connection -> no shell, logged not panicked"
+        );
     }
 }

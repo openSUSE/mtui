@@ -27,21 +27,25 @@
 //!   [`SshConnection`].
 //! * **P2.6** (landed) — `sftp_write` (atomic exclusive create / truncating
 //!   overwrite), the write primitive the remote-lock protocol is built on.
-//!
-//! Still pending: the interactive PTY [`shell`] (P2.10).
-//!
-//! [`shell`]: https://github.com/openSUSE/mtui
+//! * **P2.10** (landed, feature `shell`) — the interactive PTY `shell`,
+//!   returning an object-safe `ShellChannel` duplex. Only the transport
+//!   primitive lives here; the raw-`termios` local TTY bridge and `shell` REPL
+//!   command that consume it are a CLI concern (Phase 6).
 //!
 //! The trait is object-safe so callers hold `Box<dyn Connection>` and swap the
 //! russh impl for [`MockConnection`] freely.
 
 mod mock;
+#[cfg(feature = "shell")]
+mod shell;
 mod ssh;
 mod timeout;
 
 use std::path::Path;
 
 pub use mock::{MockConnection, MockSftpOp};
+#[cfg(feature = "shell")]
+pub use shell::ShellChannel;
 pub use ssh::SshConnection;
 pub use timeout::{CommandTimeout, HostKeyPolicy};
 
@@ -215,6 +219,25 @@ pub trait Connection: Send + Sync {
     ///
     /// Returns an SFTP/transport error if the link cannot be read.
     async fn sftp_readlink(&mut self, path: &Path) -> Result<String>;
+
+    /// Opens an interactive PTY shell on the host, returning an object-safe
+    /// [`ShellChannel`] duplex.
+    ///
+    /// Requests an `xterm` PTY sized `cols`×`rows` and invokes a login shell,
+    /// mirroring upstream `Connection.__invoke_shell` + `shell`. The returned
+    /// handle carries the transport only — the raw-`termios` local-terminal
+    /// bridge (stdin↔channel↔stdout) that upstream runs inline is a CLI concern
+    /// (Phase 6) and deliberately not part of the host library.
+    ///
+    /// Available only with the `shell` feature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostError::Transport`](crate::HostError::Transport) if the
+    /// channel, PTY request, or shell request fails, or a reconnect error if
+    /// the link is down and cannot be re-established.
+    #[cfg(feature = "shell")]
+    async fn shell(&mut self, cols: u32, rows: u32) -> Result<Box<dyn ShellChannel>>;
 }
 
 #[cfg(test)]
