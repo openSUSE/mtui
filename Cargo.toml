@@ -31,6 +31,14 @@ directories = "6"
 sandogasa-rpmvercmp = "0.15"
 # http
 reqwest = { version = "0.13", features = ["json", "rustls"], default-features = false }
+# openQA API auth: HMAC-SHA1 request signing (X-API-Hash), matching the
+# third-party python `openqa_client` auth design (openQA/lib/OpenQA/client.pm).
+hmac = "0.12"
+sha1 = "0.10"
+hex = "0.4"
+# percent-encoding of the request path before HMAC signing (openQA quirks:
+# %20 -> +, ~ -> %7E)
+urlencoding = "2"
 # regex — SMELT testplatform grammar parsing (refhost Attributes::from_testplatform)
 regex = "1"
 # ssh (Phase 2)

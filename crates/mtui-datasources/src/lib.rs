@@ -8,11 +8,16 @@
 
 pub mod error;
 pub mod http;
+pub mod openqa;
 pub mod refhost;
 
-pub use error::{HttpError, RefhostError, Result};
+pub use error::{HttpError, OpenQAError, RefhostError, Result};
 pub use http::{
     HTTP_TIMEOUT, HttpClient, VerifyPolicy, default_pool_size, disable_insecure_warnings,
     is_ssl_verification_error, resolve_verify, ssl_verification_hint, system_ca_bundle,
+};
+pub use openqa::{
+    ApiCredentials, AutoOpenQA, ClientConf, IncidentName, Job, KernelOpenQA, OpenQABase,
+    OpenQAClient, install_logfile_for,
 };
 pub use refhost::{Attributes, ProductDiff, Refhosts};

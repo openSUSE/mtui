@@ -21,8 +21,13 @@ tracing.workspace = true
 thiserror.workspace = true
 regex.workspace = true
 async-trait.workspace = true
+hmac.workspace = true
+sha1.workspace = true
+hex.workspace = true
+urlencoding.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 wiremock.workspace = true
+insta.workspace = true
 tempfile = "3"

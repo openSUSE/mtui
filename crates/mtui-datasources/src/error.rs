@@ -74,3 +74,24 @@ pub enum RefhostError {
     #[error("no refhosts resolver could produce a usable database")]
     ResolveFailed,
 }
+
+/// Errors from building an openQA API request.
+///
+/// The openQA connectors ([`crate::openqa`]) fold all *fetch* failures into a
+/// "no jobs" [`None`] result (mirroring upstream, where any transport error is
+/// logged and turned into `None` so a command never aborts on a flaky openQA).
+/// This error type therefore covers only the failures that surface *before* the
+/// request is dispatched — building the signed request — plus the HMAC/clock
+/// preconditions that must hold for signing.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum OpenQAError {
+    /// The underlying HTTP layer failed to build the request or client.
+    #[error(transparent)]
+    Http(#[from] HttpError),
+
+    /// The system clock is before the Unix epoch, so a request microtime
+    /// cannot be computed (required for the `X-API-Microtime` auth header).
+    #[error("system clock is before the Unix epoch; cannot compute request microtime")]
+    Clock,
+}
