@@ -10,6 +10,15 @@ stages:
   - check
   - test
 
+# The mtui-hosts SSH integration tests run against an in-process russh server
+# that accepts any offered public key, but the client is pubkey/agent-only and
+# offers keys from the SSH agent or ~/.ssh/id_*. CI runners have neither, so an
+# ephemeral keypair is generated to give the client something to authenticate
+# with. Reused by every job that runs the SSH integration suite.
+.ssh_fixture: &ssh_fixture
+  - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+  - ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+
 cache:
   key:
     files:
@@ -34,6 +43,8 @@ clippy:
 
 test:
   stage: test
+  before_script:
+    - *ssh_fixture
   script:
     - cargo build --workspace
     - cargo test --workspace
@@ -41,6 +52,7 @@ test:
 coverage:
   stage: test
   before_script:
+    - *ssh_fixture
     - rustup component add llvm-tools-preview
     - cargo install cargo-llvm-cov --locked
   script:
