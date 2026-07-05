@@ -1,9 +1,16 @@
 //! `mtui-datasources` — shared HTTP client, refhosts, openQA/QEM/Gitea/osc-qam.
 //!
-//! Async data-source clients land in Phase 3.
+//! Every outbound integration lives here; consumers (commands, MCP) get typed
+//! clients. The first landed surface is the shared HTTP policy layer
+//! ([`mod@http`]) ported from upstream `mtui/support/http.py`: one client with a
+//! unified timeout and TLS-verify posture that every later Phase-3 client
+//! builds on.
 
-/// Returns the crate name. Placeholder until Phase 3 introduces data sources.
-#[must_use]
-pub fn crate_name() -> &'static str {
-    env!("CARGO_PKG_NAME")
-}
+pub mod error;
+pub mod http;
+
+pub use error::{HttpError, Result};
+pub use http::{
+    HTTP_TIMEOUT, HttpClient, VerifyPolicy, default_pool_size, disable_insecure_warnings,
+    is_ssl_verification_error, resolve_verify, ssl_verification_hint, system_ca_bundle,
+};

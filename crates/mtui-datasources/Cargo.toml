@@ -12,3 +12,15 @@ workspace = true
 [dependencies]
 mtui-types.workspace = true
 mtui-config.workspace = true
+reqwest.workspace = true
+tokio = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+directories.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+wiremock.workspace = true
+tempfile = "3"
