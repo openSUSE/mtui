@@ -25,7 +25,13 @@
 //!   wiring the lock *check* into `connect` needs session RRID plumbing from a
 //!   later phase, so the connect-time hook stays a seam for now,
 //! * system/product parsing (`parse_system`) and package querying — **P2.8**,
-//! * reboot / reconnect / `operation` lifecycle — **P2.9**.
+//! * reboot / reconnect lifecycle — **P2.9**; the install/uninstall
+//!   [`Operation`](operation::Operation) template (skeleton + trait) has landed
+//!   in [`operation`], driving its group via the object-safe
+//!   [`OperationGroup`](operation::OperationGroup) seam. The
+//!   `impl OperationGroup for HostsGroup` binding (which needs the Phase-4
+//!   doer/check registries and the reboot wiring) is deferred to the
+//!   composition root — see the `TODO` in [`operation`].
 //!
 //! Keeping the seams out of P2.4 preserves the acyclic crate graph
 //! (`mtui-hosts` must not depend on `mtui-testreport`) and lets the whole
@@ -35,6 +41,7 @@ pub mod actions;
 pub mod arbiter;
 pub mod hostgroup;
 pub mod locks;
+pub mod operation;
 pub mod package_querier;
 pub mod parsers;
 pub mod reporter;
@@ -45,6 +52,10 @@ pub use hostgroup::HostsGroup;
 pub use locks::{
     Clock, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
     TargetLock, with_locked,
+};
+pub use operation::{
+    Check, CheckArgs, Doer, HostPlan, InstallOperation, LastOutput, Operation, OperationGroup,
+    UninstallOperation,
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::{parse_os_release, parse_product, parse_system};

@@ -142,6 +142,32 @@ pub enum HostError {
     /// "locked by" string (see `TargetLock::locked_by_msg`).
     #[error("{0}")]
     TargetLocked(String),
+
+    /// No installer "doer" is defined for the given product release.
+    ///
+    /// Mirrors upstream `MissingInstallerError` (a `MissingDoerError` with
+    /// `name = "Installer"`), whose message is `Missing Installer for
+    /// {release}`. Raised by [`InstallOperation`](crate::InstallOperation) when
+    /// a target's product has no configured installer, causing the operation to
+    /// log and return before touching any locks.
+    #[error("Missing Installer for {release}")]
+    MissingInstaller {
+        /// The product release with no configured installer.
+        release: String,
+    },
+
+    /// No uninstaller "doer" is defined for the given product release.
+    ///
+    /// Mirrors upstream `MissingUninstallerError` (a `MissingDoerError` with
+    /// `name = "Uninstaller"`), whose message is `Missing Uninstaller for
+    /// {release}`. Raised by [`UninstallOperation`](crate::UninstallOperation)
+    /// under the same early-return contract as
+    /// [`MissingInstaller`](Self::MissingInstaller).
+    #[error("Missing Uninstaller for {release}")]
+    MissingUninstaller {
+        /// The product release with no configured uninstaller.
+        release: String,
+    },
 }
 
 #[cfg(test)]
@@ -184,5 +210,21 @@ mod tests {
             err.to_string(),
             "no valid connection to h2: connection refused"
         );
+    }
+
+    #[test]
+    fn missing_installer_display_matches_upstream_format() {
+        let err = HostError::MissingInstaller {
+            release: "opensuse-15.4".to_owned(),
+        };
+        assert_eq!(err.to_string(), "Missing Installer for opensuse-15.4");
+    }
+
+    #[test]
+    fn missing_uninstaller_display_matches_upstream_format() {
+        let err = HostError::MissingUninstaller {
+            release: "opensuse-15.4".to_owned(),
+        };
+        assert_eq!(err.to_string(), "Missing Uninstaller for opensuse-15.4");
     }
 }
