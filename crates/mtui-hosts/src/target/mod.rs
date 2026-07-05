@@ -44,6 +44,7 @@ pub mod locks;
 pub mod operation;
 pub mod package_querier;
 pub mod parsers;
+pub mod repo_manager;
 pub mod reporter;
 
 pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
@@ -59,6 +60,7 @@ pub use operation::{
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::{parse_os_release, parse_product, parse_system};
+pub use repo_manager::{RepoManager, RepoOp, SetRepo};
 pub use reporter::Reporter;
 
 use std::path::{Path, PathBuf};
@@ -282,6 +284,17 @@ impl Target {
     #[must_use]
     pub fn reporter(&self) -> Reporter<'_> {
         Reporter::new(self)
+    }
+
+    /// Returns a [`RepoManager`] bound to this target for zypper-repo lifecycle.
+    ///
+    /// Unlike [`reporter`](Self::reporter), the repo manager borrows `self`
+    /// *mutably* — it issues commands and, on the unknown-cmd safeguard, force-
+    /// unlocks the target. Like upstream's per-access `Target.repo_manager`
+    /// property it hands out a fresh binding over the live target each call.
+    #[must_use]
+    pub fn repo_manager(&mut self) -> RepoManager<'_> {
+        RepoManager::new(self)
     }
 
     /// Records the parsed host system and its transactional flag.

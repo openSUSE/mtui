@@ -31,7 +31,7 @@ pub use error::{HostError, Result};
 pub use target::{
     Check, CheckArgs, Clock, Command, Doer, HostArbiter, HostPlan, HostsGroup, InstallOperation,
     LastOutput, Lockable, Operation, OperationGroup, Owner, POOL_LOCK_PATH, PackageQuerier,
-    PoolLock, RemoteLock, RunCommand, SystemClock, TARGET_LOCK_PATH, Target, TargetLock,
-    UninstallOperation, get_arbiter, parse_os_release, parse_product, parse_system, run_parallel,
-    sftp_get_all, sftp_put_all, sftp_remove_all, with_locked,
+    PoolLock, RemoteLock, RepoManager, RepoOp, RunCommand, SetRepo, SystemClock, TARGET_LOCK_PATH,
+    Target, TargetLock, UninstallOperation, get_arbiter, parse_os_release, parse_product,
+    parse_system, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all, with_locked,
 };
