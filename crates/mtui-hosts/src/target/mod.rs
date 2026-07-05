@@ -32,10 +32,12 @@
 //! state machine be unit-tested offline against a `MockConnection`.
 
 pub mod actions;
+pub mod arbiter;
 pub mod hostgroup;
 pub mod locks;
 
 pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
+pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::HostsGroup;
 pub use locks::{
     Clock, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
