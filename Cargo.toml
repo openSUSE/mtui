@@ -30,7 +30,7 @@ sandogasa-rpmvercmp = "0.15"
 # http
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 # ssh (Phase 2)
-russh = "0.54"
+russh = "0.62"
 russh-sftp = "2"
 async-trait = "0.1"
 # mcp (Phase 7)

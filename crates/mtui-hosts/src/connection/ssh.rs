@@ -40,6 +40,7 @@ use std::time::Instant;
 use async_trait::async_trait;
 use mtui_types::hostlog::CommandLog;
 use russh::client::{self, Handle};
+use russh::keys::agent::AgentIdentity;
 use russh::keys::agent::client::AgentClient;
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
 use russh::{ChannelMsg, client::Config as ClientConfig};
@@ -314,7 +315,13 @@ async fn authenticate(
     if let Ok(mut agent) = AgentClient::connect_env().await
         && let Ok(identities) = agent.request_identities().await
     {
-        for key in identities {
+        for identity in identities {
+            // russh 0.62 yields `AgentIdentity` (plain key or certificate);
+            // pubkey auth only takes a bare `PublicKey`, so skip certificates
+            // (paramiko parity: agent pubkey auth only).
+            let AgentIdentity::PublicKey { key, .. } = identity else {
+                continue;
+            };
             match handle
                 .authenticate_publickey_with(&resolved.user, key, best_hash(), &mut agent)
                 .await
@@ -704,8 +711,8 @@ mod tests {
     #[tokio::test]
     async fn handler_applies_host_key_policy() {
         // Generate a real Ed25519 key to feed check_server_key.
-        let key = PrivateKey::random(&mut rand::rngs::OsRng, russh::keys::Algorithm::Ed25519)
-            .expect("gen key");
+        let key =
+            PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519).expect("gen key");
         let pubkey = key.public_key().clone();
 
         for (policy, expect) in [

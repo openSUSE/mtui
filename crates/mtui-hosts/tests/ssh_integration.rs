@@ -81,10 +81,12 @@ impl russh::server::Handler for TestSshSession {
     async fn channel_open_session(
         &mut self,
         channel: Channel<Msg>,
+        reply: russh::server::ChannelOpenHandle,
         _session: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         self.channels.lock().await.insert(channel.id(), channel);
-        Ok(true)
+        reply.accept().await;
+        Ok(())
     }
 
     async fn exec_request(
@@ -104,10 +106,10 @@ impl russh::server::Handler for TestSshSession {
         let (stdout, stderr, code) = scripted_command(&command);
 
         if !stdout.is_empty() {
-            session.data(channel_id, stdout.into_bytes().into())?;
+            session.data(channel_id, stdout.into_bytes())?;
         }
         if !stderr.is_empty() {
-            session.extended_data(channel_id, 1, stderr.into_bytes().into())?;
+            session.extended_data(channel_id, 1, stderr.into_bytes())?;
         }
         session.exit_status_request(channel_id, code)?;
         session.eof(channel_id)?;
@@ -338,7 +340,7 @@ impl russh_sftp::server::Handler for SftpHandler {
 
 /// Starts the in-process server, returning its bound port and the shared FS.
 async fn start_server(fs: SharedFs) -> u16 {
-    let key = PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519).expect("host key");
+    let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key");
     let config = Arc::new(russh::server::Config {
         auth_rejection_time: Duration::from_millis(1),
         keys: vec![key],

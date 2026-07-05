@@ -25,5 +25,8 @@ russh-config = "0.58"
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 tempfile = "3"
 insta.workspace = true
-rand = "0.8"
+# rand 0.10 to match russh 0.62's rand_core 0.10 (ssh-key's CryptoRng bound
+# is tied to that exact rand_core; 0.9 pulls a second, incompatible copy).
+# `rand::rng()` mirrors upstream russh's own key-gen in tests.
+rand = "0.10"
 russh-sftp = { workspace = true }
