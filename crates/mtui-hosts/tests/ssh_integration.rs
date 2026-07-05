@@ -24,7 +24,11 @@ use russh_sftp::protocol::{Data, File, FileAttributes, Handle, Name, Status, Sta
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
-use mtui_hosts::{CommandTimeout, Connection, HostKeyPolicy, SshConnection};
+use mtui_hosts::{
+    CommandTimeout, Connection, HostKeyPolicy, HostsGroup, SshConnection, TARGET_LOCK_PATH, Target,
+    TargetLock,
+};
+use mtui_types::enums::{ExecutionMode, TargetState};
 
 // ----------------------------------------------------------------------------
 // In-memory backing filesystem shared by the SFTP handler.
@@ -453,6 +457,18 @@ async fn connect(port: u16, timeout: CommandTimeout) -> SshConnection {
         .expect("connect")
 }
 
+/// Builds a [`Target`] whose live connection is a real [`SshConnection`] to the
+/// in-process fixture on `port`, labelled `name` and gated by `state`/`mode`.
+///
+/// This is the multi-target seam the P2.5 fan-out / P2.6 lock integration tests
+/// need: several `Target`s can point at one shared server (one `SharedFs`), so
+/// `HostsGroup::run` and the remote-lock protocol are exercised over real SSH
+/// rather than a `MockConnection`.
+async fn connect_target(name: &str, port: u16, state: TargetState, mode: ExecutionMode) -> Target {
+    let conn = connect(port, CommandTimeout::from_secs(5)).await;
+    Target::with_connection(name, state, mode, Box::new(conn))
+}
+
 // ----------------------------------------------------------------------------
 // Tests.
 // ----------------------------------------------------------------------------
@@ -757,4 +773,216 @@ async fn shell_spawns_pty_and_bridges_bytes() {
     ch.write(&[0x04]).await.expect("write ctrl-d");
     let n = ch.read(&mut buf).await.expect("read eof");
     assert_eq!(n, 0, "channel close surfaces as EOF");
+}
+
+// ----------------------------------------------------------------------------
+// HostsGroup fan-out over real SSH targets (P2.5 DoD).
+//
+// The colocated `hostgroup.rs` unit tests drive fan-out over `MockConnection`.
+// These prove the same fan-out end-to-end over the in-process russh server:
+// `run` reaches every enabled member across ≥2 real SSH sessions, in both
+// parallel and serial modes, and per-host `TargetState` gating is honoured
+// against a live transport — the epic's "run across ≥2 hosts against a local
+// sshd fixture" line.
+// ----------------------------------------------------------------------------
+
+/// The scripted stdout the fixture returns for an otherwise-unknown command
+/// (see `scripted_command`'s `other` arm) — asserted on to prove a command
+/// actually reached the remote host.
+fn ran(cmd: &str) -> String {
+    format!("ran: {cmd}\n")
+}
+
+#[tokio::test]
+async fn hostsgroup_run_parallel_reaches_every_member() {
+    // Two enabled targets in Parallel mode share one fixture server.
+    let port = start_server(SharedFs::default()).await;
+    let targets = vec![
+        connect_target("h1", port, TargetState::Enabled, ExecutionMode::Parallel).await,
+        connect_target("h2", port, TargetState::Enabled, ExecutionMode::Parallel).await,
+    ];
+    let mut group = HostsGroup::new(targets, false);
+
+    group.run("whoami-probe").await;
+
+    // Every member ran the command and recorded the fixture's scripted stdout.
+    for name in ["h1", "h2"] {
+        let t = group.get(name).expect("member present");
+        assert_eq!(t.lastout(), ran("whoami-probe"), "{name} ran the command");
+        assert_eq!(t.lastexit(), Some(0), "{name} recorded exit 0");
+    }
+}
+
+#[tokio::test]
+async fn hostsgroup_run_serial_reaches_every_member() {
+    // Same as above but Serial mode: the fan-out runs hosts one at a time; the
+    // observable outcome (every host ran, results recorded) is identical.
+    let port = start_server(SharedFs::default()).await;
+    let targets = vec![
+        connect_target("s1", port, TargetState::Enabled, ExecutionMode::Serial).await,
+        connect_target("s2", port, TargetState::Enabled, ExecutionMode::Serial).await,
+    ];
+    let mut group = HostsGroup::new(targets, false);
+
+    group.run("serial-probe").await;
+
+    for name in ["s1", "s2"] {
+        let t = group.get(name).expect("member present");
+        assert_eq!(t.lastout(), ran("serial-probe"), "{name} ran the command");
+        assert_eq!(t.lastexit(), Some(0), "{name} recorded exit 0");
+    }
+}
+
+#[tokio::test]
+async fn hostsgroup_run_honours_per_host_state_end_to_end() {
+    // A mixed-state group over real SSH: enabled runs for real, dryrun echoes
+    // the marker without touching the transport, disabled records nothing.
+    let port = start_server(SharedFs::default()).await;
+    let targets = vec![
+        connect_target("on", port, TargetState::Enabled, ExecutionMode::Parallel).await,
+        connect_target("dry", port, TargetState::Dryrun, ExecutionMode::Parallel).await,
+        connect_target("off", port, TargetState::Disabled, ExecutionMode::Parallel).await,
+    ];
+    let mut group = HostsGroup::new(targets, false);
+
+    group.run("gated").await;
+
+    // Enabled: real remote output.
+    let on = group.get("on").expect("on present");
+    assert_eq!(on.lastout(), ran("gated"));
+    assert_eq!(on.lastexit(), Some(0));
+
+    // Dryrun: the "dryrun\n" marker, exit 0, no remote round-trip.
+    let dry = group.get("dry").expect("dry present");
+    assert_eq!(dry.lastin(), "gated");
+    assert_eq!(dry.lastout(), "dryrun\n");
+    assert_eq!(dry.lastexit(), Some(0));
+
+    // Disabled: an empty entry — nothing ran.
+    let off = group.get("off").expect("off present");
+    assert_eq!(off.lastout(), "");
+    assert!(
+        off.lastexit().is_none() || off.lastexit() == Some(0),
+        "disabled host did not execute the command"
+    );
+}
+
+// ----------------------------------------------------------------------------
+// Remote lock lifecycle over the fixture's real SFTP (P2.6 DoD).
+//
+// `locks.rs` unit-tests the protocol over `MockConnection`. These prove the
+// same protocol over the in-process server's real SFTP subsystem — crucially
+// the atomic `O_EXCL` create the free-host claim relies on (the fixture's
+// `open` honours `OpenFlags::EXCLUDE`), plus release and stale-reap round-trips
+// through actual SFTP write/open/remove.
+// ----------------------------------------------------------------------------
+
+/// Builds a [`Config`] with a fixed session user and reaping enabled, so the
+/// lock's identity and stale-age policy are deterministic in tests.
+fn lock_config(user: &str) -> mtui_config::Config {
+    let mut c = mtui_config::Config::default();
+    c.session_user = user.to_owned();
+    c.lock_reap_stale = true;
+    c.lock_stale_age = 86_400;
+    c.lock_wait = 0; // fail-fast on a live foreign lock (no real sleeps in tests)
+    c
+}
+
+#[tokio::test]
+async fn lock_acquire_release_round_trips_over_sftp() {
+    let fs = SharedFs::default();
+    let port = start_server(fs.clone()).await;
+    let conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let mut lock = TargetLock::new(Box::new(conn), &lock_config("alice"));
+
+    // Free host: the atomic exclusive create wins and the lockfile lands.
+    assert!(!lock.is_locked().await.expect("is_locked"));
+    lock.lock("mtui operation").await.expect("acquire");
+    let contents = fs
+        .lock()
+        .await
+        .files
+        .get(TARGET_LOCK_PATH)
+        .cloned()
+        .expect("lockfile written over sftp");
+    let line = String::from_utf8(contents).expect("utf8");
+    // Wire format is `timestamp:user:pid:comment`; assert the fields the claim
+    // controls (user + comment) survived the real SFTP write.
+    let fields: Vec<&str> = line.splitn(4, ':').collect();
+    assert_eq!(fields.get(1), Some(&"alice"), "lock owned by alice: {line}");
+    assert_eq!(
+        fields.get(3),
+        Some(&"mtui operation"),
+        "comment kept: {line}"
+    );
+
+    // Release removes the lockfile through real SFTP `remove`.
+    lock.unlock(false).await.expect("release");
+    assert!(
+        !fs.lock().await.files.contains_key(TARGET_LOCK_PATH),
+        "lockfile removed on unlock"
+    );
+    assert!(!lock.is_locked().await.expect("is_locked after unlock"));
+}
+
+#[tokio::test]
+async fn lock_refuses_fresh_foreign_lock_over_sftp() {
+    // Seed a fresh foreign lock directly in the fixture FS, then prove a
+    // different owner cannot take it (fail-fast, wait=0) — the atomic create
+    // loses to the existing file and reconciliation refuses.
+    let fs = SharedFs::default();
+    let recent = "9999999999"; // far-future timestamp => never stale
+    fs.lock().await.files.insert(
+        TARGET_LOCK_PATH.to_owned(),
+        format!("{recent}:bob:4242:mtui operation").into_bytes(),
+    );
+    let port = start_server(fs.clone()).await;
+    let conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let mut lock = TargetLock::new(Box::new(conn), &lock_config("alice"));
+
+    assert!(lock.is_locked().await.expect("is_locked"));
+    let err = lock.lock("mine").await.expect_err("foreign lock refused");
+    assert!(matches!(err, mtui_hosts::HostError::TargetLocked(_)));
+    // The foreign lockfile is untouched.
+    let line = String::from_utf8(
+        fs.lock()
+            .await
+            .files
+            .get(TARGET_LOCK_PATH)
+            .cloned()
+            .expect("foreign lock still present"),
+    )
+    .unwrap();
+    assert!(line.contains(":bob:"), "foreign owner preserved: {line}");
+}
+
+#[tokio::test]
+async fn lock_reaps_stale_foreign_lock_over_sftp() {
+    // A very old foreign lock is reaped, then re-taken by us — proving the
+    // stale-reap `remove` + fresh exclusive create both work over real SFTP.
+    let fs = SharedFs::default();
+    let stale = "1"; // 1970 => older than any stale-age
+    fs.lock().await.files.insert(
+        TARGET_LOCK_PATH.to_owned(),
+        format!("{stale}:bob:4242").into_bytes(),
+    );
+    let port = start_server(fs.clone()).await;
+    let conn = connect(port, CommandTimeout::from_secs(5)).await;
+    let mut lock = TargetLock::new(Box::new(conn), &lock_config("alice"));
+
+    // try_claim reaps the stale lock and then claims it for us.
+    assert!(
+        lock.try_claim("mtui operation").await.expect("try_claim"),
+        "stale foreign lock reaped and re-claimed"
+    );
+    let line = String::from_utf8(
+        fs.lock()
+            .await
+            .files
+            .get(TARGET_LOCK_PATH)
+            .cloned()
+            .expect("re-claimed lockfile present"),
+    )
+    .unwrap();
+    assert!(line.contains(":alice:"), "now owned by alice: {line}");
 }
