@@ -219,6 +219,24 @@ impl fmt::Display for RequestKind {
     }
 }
 
+/// Assignment state of a Gitea pull request for a review group.
+///
+/// Mirrors upstream `assignment` (a plain `Enum` in `mtui/types/enums.py`).
+/// The Gitea connector derives this by replaying the group's assign/unassign
+/// marker comments; it is the discriminant of upstream's
+/// `GiteaAssignInvalidError` message. Not a `StrEnum` upstream (no wire-string
+/// contract), so no serde/`FromStr` is ported — it exists purely as an
+/// in-memory state signalled between the connector and its error type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Assignment {
+    /// The PR's group is assigned to the user under consideration.
+    AssignedUser,
+    /// The PR's group is not assigned to anyone.
+    Unassigned,
+    /// The PR's group is assigned to a *different* user.
+    AssignedOther,
+}
+
 /// Error returned by the [`FromStr`] impls of the string-valued enums.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid {kind} value: {got:?}")]
@@ -334,6 +352,19 @@ mod tests {
         let err = RequestKind::from_token("SLE").unwrap_err();
         assert_eq!(err.raw, "SLE");
         assert_eq!(err.to_string(), "unknown request kind: \"SLE\"");
+    }
+
+    // --- Assignment. ---
+
+    #[test]
+    fn assignment_variants_are_distinct() {
+        assert_ne!(Assignment::AssignedUser, Assignment::Unassigned);
+        assert_ne!(Assignment::AssignedUser, Assignment::AssignedOther);
+        assert_ne!(Assignment::Unassigned, Assignment::AssignedOther);
+        // Copy + Eq round-trip.
+        let a = Assignment::AssignedUser;
+        let b = a;
+        assert_eq!(a, b);
     }
 
     #[test]

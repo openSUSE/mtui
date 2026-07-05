@@ -7,11 +7,13 @@
 //! builds on.
 
 pub mod error;
+pub mod gitea;
 pub mod http;
 pub mod openqa;
 pub mod refhost;
 
-pub use error::{HttpError, OpenQAError, RefhostError, Result};
+pub use error::{GiteaError, HttpError, OpenQAError, RefhostError, Result};
+pub use gitea::{Comment, DEFAULT_GROUP, Gitea, assign_marker, pr_api_url, unassign_marker};
 pub use http::{
     HTTP_TIMEOUT, HttpClient, VerifyPolicy, default_pool_size, disable_insecure_warnings,
     is_ssl_verification_error, resolve_verify, ssl_verification_hint, system_ca_bundle,

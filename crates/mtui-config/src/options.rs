@@ -232,6 +232,16 @@ pub(crate) struct TargetSection {
     pub tempdir: Option<PathBuf>,
 }
 
+/// `[gitea]` table — credentials for the Gitea PR review workflow.
+///
+/// Mirrors upstream `mtui/support/config.py`'s `gitea_token` option (INI
+/// `[gitea] token`). The Gitea connector refuses to build without it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct GiteaSection {
+    pub token: Option<String>,
+}
+
 /// `[lock]` table — remote-lock behaviour on target hosts.
 ///
 /// Mirrors upstream `mtui/support/config.py`'s `lock_*` options (which live
@@ -260,6 +270,7 @@ pub(crate) struct RawConfig {
     pub url: UrlSection,
     pub svn: SvnSection,
     pub target: TargetSection,
+    pub gitea: GiteaSection,
     pub lock: LockSection,
 }
 
@@ -291,6 +302,7 @@ impl RawConfig {
         take!(url, fancy_reports);
         take!(svn, path);
         take!(target, tempdir);
+        take!(gitea, token);
         take!(lock, reap_stale);
         take!(lock, stale_age);
         take!(lock, pi_autolock);
@@ -351,6 +363,11 @@ pub struct Config {
     /// SVN base path for test-report checkout.
     pub svn_path: String,
 
+    // [gitea]
+    /// API token for the Gitea PR review workflow. Empty by default; the Gitea
+    /// connector refuses to build without it.
+    pub gitea_token: String,
+
     // [target]
     /// Remote scratch directory on target hosts.
     pub target_tempdir: PathBuf,
@@ -392,6 +409,7 @@ impl Default for Config {
             reports_url: default_reports_url(),
             fancy_reports_url: default_fancy_reports_url(),
             svn_path: default_svn_path(),
+            gitea_token: String::new(),
             target_tempdir: default_target_tempdir(),
             lock_reap_stale: default_lock_reap_stale(),
             lock_stale_age: default_lock_stale_age(),
@@ -446,6 +464,7 @@ impl Config {
             reports_url: raw.url.testreports.unwrap_or(d.reports_url),
             fancy_reports_url: raw.url.fancy_reports.unwrap_or(d.fancy_reports_url),
             svn_path: raw.svn.path.unwrap_or(d.svn_path),
+            gitea_token: raw.gitea.token.unwrap_or(d.gitea_token),
             target_tempdir: raw
                 .target
                 .tempdir
@@ -493,6 +512,15 @@ mod tests {
         assert!(c.lock_pi_autolock);
         assert_eq!(c.lock_wait, 0);
         assert_eq!(c.lock_wait_poll, 15);
+    }
+
+    #[test]
+    fn gitea_token_defaults_empty_and_parses() {
+        // Default is empty (the connector refuses to build without a token).
+        assert_eq!(Config::default().gitea_token, "");
+        // A [gitea] table sets it.
+        let raw: RawConfig = toml::from_str("[gitea]\ntoken = \"abc123\"\n").unwrap();
+        assert_eq!(Config::from_raw(raw).gitea_token, "abc123");
     }
 
     #[test]

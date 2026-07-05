@@ -17,7 +17,7 @@ pub mod updateid;
 pub mod urls;
 pub mod version;
 
-pub use enums::{ExecutionMode, RequestKind, TargetState, Workflow};
+pub use enums::{Assignment, ExecutionMode, RequestKind, TargetState, Workflow};
 pub use error::{
     Error, RefhostsParseError, RequestKindParseError, Result, RpmVersionParseError, RridParseError,
 };

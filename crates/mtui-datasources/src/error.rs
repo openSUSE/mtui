@@ -8,6 +8,7 @@
 //! QEM dashboard, Gitea, oqa-search) as those clients land, so each variant is
 //! exercised by real tests rather than sitting dead.
 
+use mtui_types::Assignment;
 use thiserror::Error;
 
 /// Convenience alias for `Result<T, `[`enum@HttpError`]`>`.
@@ -94,4 +95,116 @@ pub enum OpenQAError {
     /// cannot be computed (required for the `X-API-Microtime` auth header).
     #[error("system clock is before the Unix epoch; cannot compute request microtime")]
     Clock,
+}
+
+/// Errors from the Gitea PR review-workflow connector ([`crate::gitea`]).
+///
+/// Mirrors the `GiteaError` exception family in upstream
+/// `mtui/support/exceptions.py`. Each variant maps to one upstream exception:
+///
+/// * [`MissingToken`](Self::MissingToken) → `MissingGiteaTokenError`;
+/// * [`FailedCall`](Self::FailedCall) → `FailedGiteaCallError` (any transport
+///   failure or non-2xx status from the API);
+/// * [`NoReview`](Self::NoReview) → `GiteaNoReviewError` (no review requested,
+///   or the PR was already approved/rejected);
+/// * [`AssignInvalid`](Self::AssignInvalid) → `GiteaAssignInvalidError`, whose
+///   message is chosen by the [`Assignment`] state exactly as upstream's
+///   `__str__` does;
+/// * [`InvalidPrUrl`](Self::InvalidPrUrl) → the `ValueError` raised by
+///   `pr_api_url` for a non-PR URL.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum GiteaError {
+    /// The Gitea API token is empty, so the client cannot authenticate.
+    #[error("Gitea API token is empty, can't access API")]
+    MissingToken,
+
+    /// An API call failed (transport error or non-2xx status). The payload is
+    /// the upstream `"{method} - {url}"` (optionally with the status) context.
+    #[error("Gitea API call failed: {0}")]
+    FailedCall(String),
+
+    /// The PR has no pending review for the group, or was already decided.
+    #[error("{0}")]
+    NoReview(String),
+
+    /// The PR is not in the assignment state the operation requires. The
+    /// message reproduces upstream `GiteaAssignInvalidError.__str__`.
+    #[error("{}", assign_invalid_message(*state, user))]
+    AssignInvalid {
+        /// The current assignment state that made the operation invalid.
+        state: Assignment,
+        /// The user the operation was attempted on behalf of.
+        user: String,
+    },
+
+    /// A URL passed to [`pr_api_url`](crate::gitea::pr_api_url) is not a
+    /// recognisable Gitea PR URL.
+    #[error("not a Gitea PR URL: {0}")]
+    InvalidPrUrl(String),
+
+    /// The underlying HTTP layer failed to build the request or client.
+    #[error(transparent)]
+    Http(#[from] HttpError),
+}
+
+/// Render the [`GiteaError::AssignInvalid`] message for an assignment state,
+/// mirroring upstream `GiteaAssignInvalidError.__str__` verbatim.
+fn assign_invalid_message(state: Assignment, user: &str) -> String {
+    match state {
+        Assignment::AssignedOther => format!("Gitea PR has assigned different user than {user}"),
+        Assignment::AssignedUser => format!("Gitea PR has already assigned user: {user}"),
+        Assignment::Unassigned => format!("User {user} isnt assigned to Gitea PR"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assign_invalid_display_matches_upstream_messages() {
+        // Reproduces GiteaAssignInvalidError.__str__ for each assignment state.
+        let other = GiteaError::AssignInvalid {
+            state: Assignment::AssignedOther,
+            user: "alice".to_string(),
+        };
+        assert_eq!(
+            other.to_string(),
+            "Gitea PR has assigned different user than alice"
+        );
+
+        let already = GiteaError::AssignInvalid {
+            state: Assignment::AssignedUser,
+            user: "alice".to_string(),
+        };
+        assert_eq!(
+            already.to_string(),
+            "Gitea PR has already assigned user: alice"
+        );
+
+        let none = GiteaError::AssignInvalid {
+            state: Assignment::Unassigned,
+            user: "alice".to_string(),
+        };
+        assert_eq!(none.to_string(), "User alice isnt assigned to Gitea PR");
+    }
+
+    #[test]
+    fn gitea_error_display_variants() {
+        assert_eq!(
+            GiteaError::MissingToken.to_string(),
+            "Gitea API token is empty, can't access API"
+        );
+        assert!(
+            GiteaError::InvalidPrUrl("x".to_string())
+                .to_string()
+                .contains("not a Gitea PR URL")
+        );
+        assert!(
+            GiteaError::FailedCall("GET - /x".to_string())
+                .to_string()
+                .contains("GET - /x")
+        );
+    }
 }
