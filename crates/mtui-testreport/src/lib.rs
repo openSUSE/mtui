@@ -1,9 +1,12 @@
 //! `mtui-testreport` — TestReport lifecycle, metadata parsers, update workflow.
 //!
-//! Real testreport parsing and the update workflow land in Phase 4.
+//! Phase 4.1 lands the skeleton: the [`TestReport`] trait, the shared-state
+//! [`TestReportBase`] carrier, and the [`NullReport`] null object. The concrete
+//! reports, metadata parsers, checkout backends, and update workflow arrive in
+//! the later Phase 4 tasks that depend on this skeleton.
 
-/// Returns the crate name. Placeholder until Phase 4 introduces testreports.
-#[must_use]
-pub fn crate_name() -> &'static str {
-    env!("CARGO_PKG_NAME")
-}
+pub mod reports;
+pub mod testreport;
+
+pub use reports::NullReport;
+pub use testreport::{TestReport, TestReportBase};

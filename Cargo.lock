@@ -1907,6 +1907,7 @@ name = "mtui-testreport"
 version = "0.1.0"
 dependencies = [
  "mtui-config",
+ "mtui-hosts",
  "mtui-types",
 ]
 

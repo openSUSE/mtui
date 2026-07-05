@@ -12,3 +12,4 @@ workspace = true
 [dependencies]
 mtui-types.workspace = true
 mtui-config.workspace = true
+mtui-hosts.workspace = true
