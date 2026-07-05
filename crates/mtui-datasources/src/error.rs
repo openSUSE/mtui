@@ -63,4 +63,14 @@ pub enum RefhostError {
     /// The `refhosts.yml` contents are not a valid document.
     #[error(transparent)]
     Parse(#[from] mtui_types::RefhostsParseError),
+
+    /// No configured resolver could produce a usable `refhosts.yml`.
+    ///
+    /// Mirrors upstream `RefhostsResolveFailedError`: the
+    /// [`RefhostsFactory`](crate::refhost::RefhostsFactory) tried every resolver
+    /// named in `config.refhosts_resolvers` (in order) and each one either was
+    /// unknown or failed. The individual failures are logged at `warn` as they
+    /// happen; this variant is the terminal "all strategies exhausted" signal.
+    #[error("no refhosts resolver could produce a usable database")]
+    ResolveFailed,
 }

@@ -10,9 +10,10 @@
 //!
 //! # Scope
 //! This is the *search* surface (`search`, `is_candidate_match`,
-//! `host_by_name`). The pool-claim engine (`query`/`slot_of`/`search_pool`)
-//! and the resolver chain (`PathResolver`/`HttpsResolver`/`_RefhostsFactory`)
-//! from upstream `store.py` land in later Phase-3 tasks.
+//! `host_by_name`). The resolver chain
+//! (`PathResolver`/`HttpsResolver`/`RefhostsFactory`) lives in
+//! [`super::resolvers`]. The pool-claim engine (`query`/`slot_of`/`search_pool`)
+//! from upstream `store.py` lands in a later Phase-3 task.
 
 use std::path::Path;
 

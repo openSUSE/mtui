@@ -1670,6 +1670,7 @@ dependencies = [
 name = "mtui-datasources"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "directories",
  "mtui-config",
  "mtui-types",
