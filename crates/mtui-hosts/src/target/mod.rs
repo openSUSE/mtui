@@ -37,6 +37,7 @@ pub mod hostgroup;
 pub mod locks;
 pub mod package_querier;
 pub mod parsers;
+pub mod reporter;
 
 pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
@@ -47,6 +48,7 @@ pub use locks::{
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::{parse_os_release, parse_product, parse_system};
+pub use reporter::Reporter;
 
 use std::path::{Path, PathBuf};
 
@@ -247,6 +249,26 @@ impl Target {
     #[must_use]
     pub const fn transactional(&self) -> bool {
         self.transactional
+    }
+
+    /// The connect/command timeout for this target, in whole seconds.
+    ///
+    /// Upstream stores the timeout on the connection (`connection.timeout`);
+    /// the Rust `Target` owns it directly (defaulted from
+    /// [`Config::connection_timeout`](mtui_config::Config)). Exposed for the
+    /// [`Reporter::timeout`](reporter::Reporter::timeout) sink.
+    #[must_use]
+    pub const fn timeout_secs(&self) -> u64 {
+        self.timeout.as_secs()
+    }
+
+    /// Returns a [`Reporter`] bound to this target for status-sink dispatch.
+    ///
+    /// The reporter borrows `self`, so each dispatch reads live field values —
+    /// the Rust analogue of upstream's per-access `Target.reporter` property.
+    #[must_use]
+    pub fn reporter(&self) -> Reporter<'_> {
+        Reporter::new(self)
     }
 
     /// Records the parsed host system and its transactional flag.
