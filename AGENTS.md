@@ -115,8 +115,13 @@ see phase progress. Phase 0 (workspace bootstrap) is already complete (closed).
   be numeric or `spN`) — parse identically to upstream fixtures.
 - **Testreport / export text format**, incl. the `overview_inject` BEGIN/END
   idempotent block under `regression tests:`.
-- **`/var/lock/mtui.lock` format** `(user, pid, timestamp, RRID)` — a Rust mtui and
-  a Python mtui may share a host fleet; snapshot-test this.
+- **Remote lock wire format** — one line `timestamp:user:pid[:comment]` (parsed
+  with a 3-way split so the comment keeps embedded colons). Two locks share this
+  layout: the operation lock `/var/lock/mtui.lock` (PID-based ownership, guards
+  serialized zypper transactions) and the pool-claim lock
+  `/var/lock/mtui-pool.lock` (RRID-based ownership; the comment carries
+  `mtui pool <RRID> [<owner>]`). A Rust mtui and a Python mtui may share a host
+  fleet; snapshot-test this (`crates/mtui-hosts/tests/lock_format.rs`).
 - **MCP tool names/schemas** — downstream LLM configs depend on them; snapshot the
   synthesised + slimmed schemas.
 

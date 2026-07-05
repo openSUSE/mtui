@@ -20,7 +20,10 @@
 //! The remaining upstream responsibilities are owned by later tasks and are
 //! left as clearly-marked seams in [`Target::connect`]:
 //!
-//! * remote locks (zypper op-lock + pool-lock) — **P2.6**,
+//! * remote locks — the [`locks`] module (**P2.6**, landed) provides the
+//!   zypper op-lock ([`TargetLock`]) and the pool-claim lock ([`PoolLock`]);
+//!   wiring the lock *check* into `connect` needs session RRID plumbing from a
+//!   later phase, so the connect-time hook stays a seam for now,
 //! * system/product parsing (`parse_system`) and package querying — **P2.8**,
 //! * reboot / reconnect / `operation` lifecycle — **P2.9**.
 //!
@@ -30,9 +33,14 @@
 
 pub mod actions;
 pub mod hostgroup;
+pub mod locks;
 
 pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
 pub use hostgroup::HostsGroup;
+pub use locks::{
+    Clock, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
+    TargetLock, with_locked,
+};
 
 use std::path::{Path, PathBuf};
 

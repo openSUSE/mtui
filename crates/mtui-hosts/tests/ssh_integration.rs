@@ -195,9 +195,29 @@ impl russh_sftp::server::Handler for SftpHandler {
         &mut self,
         id: u32,
         filename: String,
-        _pflags: russh_sftp::protocol::OpenFlags,
+        pflags: russh_sftp::protocol::OpenFlags,
         _attrs: FileAttributes,
     ) -> Result<Handle, Self::Error> {
+        use russh_sftp::protocol::OpenFlags;
+        // Honour O_EXCL: an exclusive create against an existing file fails,
+        // as a real sshd would — this is what the lock protocol relies on.
+        if pflags.contains(OpenFlags::EXCLUDE) {
+            let fs = self.fs.lock().await;
+            if fs.files.contains_key(&filename) {
+                return Err(StatusCode::Failure);
+            }
+        }
+        // A create (with or without O_EXCL) materialises the file so a
+        // subsequent exclusive create sees it and a read observes the write.
+        // TRUNCATE resets any existing contents (paramiko "w+"/"x" semantics).
+        if pflags.contains(OpenFlags::CREATE) {
+            let mut fs = self.fs.lock().await;
+            if pflags.contains(OpenFlags::TRUNCATE) {
+                fs.files.insert(filename.clone(), Vec::new());
+            } else {
+                fs.files.entry(filename.clone()).or_default();
+            }
+        }
         Ok(Handle {
             id,
             handle: filename,
@@ -464,6 +484,41 @@ async fn sftp_open_reads_remote_bytes() {
         .await
         .expect("open");
     assert_eq!(bytes, b"SLES\n");
+}
+
+#[tokio::test]
+async fn sftp_write_exclusive_then_overwrite_and_read_back() {
+    let fs = SharedFs::default();
+    let port = start_server(fs).await;
+    let mut conn = connect(port, CommandTimeout::from_secs(5)).await;
+
+    let lock = std::path::Path::new("/var/lock/mtui.lock");
+
+    // 1) Atomic exclusive create wins on a free path.
+    conn.sftp_write(lock, b"1700000000:alice:42", true)
+        .await
+        .expect("exclusive create wins on free path");
+
+    // 2) A second exclusive create loses the race (file now exists).
+    let err = conn
+        .sftp_write(lock, b"1700000000:bob:99", true)
+        .await
+        .expect_err("second exclusive create must collide");
+    assert!(
+        matches!(err, mtui_hosts::HostError::AlreadyExists { .. }),
+        "expected AlreadyExists, got {err:?}"
+    );
+
+    // The winner's bytes survive the losing exclusive attempt.
+    let after_collision = conn.sftp_open(lock).await.expect("read after collision");
+    assert_eq!(after_collision, b"1700000000:alice:42");
+
+    // 3) A non-exclusive overwrite ("w+") replaces the contents.
+    conn.sftp_write(lock, b"1700000001:alice:42:comment", false)
+        .await
+        .expect("overwrite ok");
+    let after_overwrite = conn.sftp_open(lock).await.expect("read after overwrite");
+    assert_eq!(after_overwrite, b"1700000001:alice:42:comment");
 }
 
 #[tokio::test]

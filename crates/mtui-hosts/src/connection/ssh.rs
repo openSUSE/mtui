@@ -598,6 +598,49 @@ impl Connection for SshConnection {
         Ok(data)
     }
 
+    async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()> {
+        use russh_sftp::protocol::OpenFlags;
+        use tokio::io::AsyncWriteExt;
+
+        let sftp = self.sftp().await?;
+        let path_str = path.to_string_lossy().to_string();
+
+        if exclusive {
+            // Atomic exclusive create (paramiko mode "x" -> O_CREAT | O_EXCL).
+            // The SFTPv3 protocol has no dedicated "file exists" status, so a
+            // collision surfaces as a generic Failure. Mirroring upstream's
+            // `_write_lockfile(exclusive=True)` — which treats *any* failure of
+            // the exclusive create as "lost the race, reconcile" — we map every
+            // open error here to AlreadyExists, logging the true reason at
+            // debug for diagnosis.
+            let flags =
+                OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE | OpenFlags::EXCLUDE;
+            let mut file = match sftp.open_with_flags(path_str.clone(), flags).await {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::debug!(
+                        host = %self.hostname, path = %path_str, error = %e,
+                        "exclusive sftp create did not win the race"
+                    );
+                    let _ = sftp.close().await;
+                    return Err(HostError::AlreadyExists {
+                        host: self.hostname.clone(),
+                        path: path_str,
+                    });
+                }
+            };
+            file.write_all(data).await.map_err(|e| self.sftp_err(e))?;
+            file.shutdown().await.map_err(|e| self.sftp_err(e))?;
+        } else {
+            // Truncating overwrite (paramiko mode "w+").
+            sftp.write(path_str, data)
+                .await
+                .map_err(|e| self.sftp_err(e))?;
+        }
+        let _ = sftp.close().await;
+        Ok(())
+    }
+
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
         let sftp = self.sftp().await?;
         sftp.remove_file(path.to_string_lossy().to_string())

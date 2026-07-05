@@ -1,9 +1,10 @@
 //! Typed configuration options and their defaults.
 //!
 //! This is the **Phase-1 subset** of upstream `mtui/support/config.py`'s option
-//! table. Options belonging to later phases — `mcp_*` (Phase 7), `lock_*`
-//! (Phase 2), `openqa_*`/`teregen_*`/`qem_dashboard_*` (Phase 3) — are
-//! deliberately omitted; they will be added, additively, as their sections land.
+//! table, since extended with the `[lock]` section (Phase 2). Options belonging
+//! to later phases — `mcp_*` (Phase 7), `openqa_*`/`teregen_*`/`qem_dashboard_*`
+//! (Phase 3) — are deliberately omitted; they will be added, additively, as
+//! their sections land.
 //!
 //! Every default here matches the corresponding upstream default value exactly,
 //! preserving behavioural parity for the options mtui-rs already understands.
@@ -11,7 +12,7 @@
 //! ## Shape
 //!
 //! The on-disk format is **sectioned TOML** (`[mtui]`, `[connection]`,
-//! `[refhosts]`, `[url]`, `[svn]`, `[target]`). `RawConfig` mirrors that
+//! `[refhosts]`, `[url]`, `[svn]`, `[target]`, `[lock]`). `RawConfig` mirrors that
 //! structure for serde; [`Config`] is the flattened, fully-typed view the rest
 //! of the workspace consumes. Every serde field defaults, so an empty (or
 //! partial) TOML document deserialises into all-defaults.
@@ -159,6 +160,21 @@ pub(crate) fn default_session_user() -> String {
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "unknown".to_owned())
 }
+pub(crate) fn default_lock_reap_stale() -> bool {
+    true
+}
+pub(crate) fn default_lock_stale_age() -> u64 {
+    86400
+}
+pub(crate) fn default_lock_pi_autolock() -> bool {
+    true
+}
+pub(crate) fn default_lock_wait() -> u64 {
+    0
+}
+pub(crate) fn default_lock_wait_poll() -> u64 {
+    15
+}
 
 // -- Serde section structs (mirror the TOML tables) --------------------------
 
@@ -216,6 +232,21 @@ pub(crate) struct TargetSection {
     pub tempdir: Option<PathBuf>,
 }
 
+/// `[lock]` table — remote-lock behaviour on target hosts.
+///
+/// Mirrors upstream `mtui/support/config.py`'s `lock_*` options (which live
+/// under the `[lock]` INI section): stale-lock reaping on connect and the
+/// host-arbitration pool-claim wait queue.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct LockSection {
+    pub reap_stale: Option<bool>,
+    pub stale_age: Option<u64>,
+    pub pi_autolock: Option<bool>,
+    pub wait: Option<u64>,
+    pub wait_poll: Option<u64>,
+}
+
 /// Raw, deserialised view of a single TOML document.
 ///
 /// Every field is optional so a partial file leaves absent options untouched
@@ -229,6 +260,7 @@ pub(crate) struct RawConfig {
     pub url: UrlSection,
     pub svn: SvnSection,
     pub target: TargetSection,
+    pub lock: LockSection,
 }
 
 impl RawConfig {
@@ -259,6 +291,11 @@ impl RawConfig {
         take!(url, fancy_reports);
         take!(svn, path);
         take!(target, tempdir);
+        take!(lock, reap_stale);
+        take!(lock, stale_age);
+        take!(lock, pi_autolock);
+        take!(lock, wait);
+        take!(lock, wait_poll);
     }
 }
 
@@ -317,6 +354,22 @@ pub struct Config {
     // [target]
     /// Remote scratch directory on target hosts.
     pub target_tempdir: PathBuf,
+
+    // [lock]
+    /// On connect, force-remove a pre-existing remote lock older than
+    /// [`lock_stale_age`](Self::lock_stale_age) seconds regardless of owner.
+    pub lock_reap_stale: bool,
+    /// Age (seconds) beyond which a remote lock is considered stale and reapable.
+    /// A non-positive value disables reaping.
+    pub lock_stale_age: u64,
+    /// When testing a Product Increment (PI), auto-lock all reference hosts on
+    /// `assign` and unlock them at end of testing.
+    pub lock_pi_autolock: bool,
+    /// Host-arbitration pool-claim queueing budget, in seconds. `0` (the
+    /// default) fails fast on a busy host.
+    pub lock_wait: u64,
+    /// Poll interval (seconds) while waiting for a busy pool lock to free.
+    pub lock_wait_poll: u64,
 }
 
 impl Default for Config {
@@ -340,6 +393,11 @@ impl Default for Config {
             fancy_reports_url: default_fancy_reports_url(),
             svn_path: default_svn_path(),
             target_tempdir: default_target_tempdir(),
+            lock_reap_stale: default_lock_reap_stale(),
+            lock_stale_age: default_lock_stale_age(),
+            lock_pi_autolock: default_lock_pi_autolock(),
+            lock_wait: default_lock_wait(),
+            lock_wait_poll: default_lock_wait_poll(),
         }
     }
 }
@@ -392,6 +450,11 @@ impl Config {
                 .target
                 .tempdir
                 .map_or(d.target_tempdir, |p| expanduser(&p)),
+            lock_reap_stale: raw.lock.reap_stale.unwrap_or(d.lock_reap_stale),
+            lock_stale_age: raw.lock.stale_age.unwrap_or(d.lock_stale_age),
+            lock_pi_autolock: raw.lock.pi_autolock.unwrap_or(d.lock_pi_autolock),
+            lock_wait: raw.lock.wait.unwrap_or(d.lock_wait),
+            lock_wait_poll: raw.lock.wait_poll.unwrap_or(d.lock_wait_poll),
         }
     }
 }
@@ -424,6 +487,37 @@ mod tests {
         );
         assert_eq!(c.install_logs, PathBuf::from("install_logs"));
         assert_eq!(c.target_tempdir, PathBuf::from("/tmp"));
+        // [lock] defaults mirror upstream config.py exactly.
+        assert!(c.lock_reap_stale);
+        assert_eq!(c.lock_stale_age, 86400);
+        assert!(c.lock_pi_autolock);
+        assert_eq!(c.lock_wait, 0);
+        assert_eq!(c.lock_wait_poll, 15);
+    }
+
+    #[test]
+    fn lock_section_parses_and_overrides() {
+        let raw: RawConfig = toml::from_str(
+            "[lock]\nreap_stale = false\nstale_age = 3600\npi_autolock = false\nwait = 30\nwait_poll = 5\n",
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        assert!(!c.lock_reap_stale);
+        assert_eq!(c.lock_stale_age, 3600);
+        assert!(!c.lock_pi_autolock);
+        assert_eq!(c.lock_wait, 30);
+        assert_eq!(c.lock_wait_poll, 5);
+    }
+
+    #[test]
+    fn lock_section_partial_keeps_defaults() {
+        // A partial [lock] table leaves absent keys at their upstream defaults.
+        let raw: RawConfig = toml::from_str("[lock]\nwait = 45\n").unwrap();
+        let c = Config::from_raw(raw);
+        assert_eq!(c.lock_wait, 45);
+        assert!(c.lock_reap_stale);
+        assert_eq!(c.lock_stale_age, 86400);
+        assert_eq!(c.lock_wait_poll, 15);
     }
 
     #[test]

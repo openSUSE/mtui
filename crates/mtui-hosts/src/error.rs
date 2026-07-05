@@ -100,6 +100,31 @@ pub enum HostError {
         /// The host that is not a member of the group.
         host: String,
     },
+
+    /// An exclusive SFTP create ([`Connection::sftp_write`] with
+    /// `exclusive = true`) lost the race: the remote file already exists.
+    ///
+    /// This is the object-safe port of paramiko mode `"x"` mapping to
+    /// `O_CREAT | O_EXCL` and raising `FileExistsError`. The lock protocol
+    /// matches on this variant to reconcile a concurrent claim rather than
+    /// clobbering the winner.
+    ///
+    /// [`Connection::sftp_write`]: crate::Connection::sftp_write
+    #[error("path already exists on {host}: {path}")]
+    AlreadyExists {
+        /// The host the error occurred on.
+        host: String,
+        /// The remote path that already existed.
+        path: String,
+    },
+
+    /// A remote target is locked by another owner and the lock could not be
+    /// acquired (or force-released).
+    ///
+    /// Mirrors upstream `TargetLockedError`; the message is the human-readable
+    /// "locked by" string (see `TargetLock::locked_by_msg`).
+    #[error("{0}")]
+    TargetLocked(String),
 }
 
 #[cfg(test)]

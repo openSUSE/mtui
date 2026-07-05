@@ -54,6 +54,12 @@ fn config_toml_fixture_parses_all_sections() {
         );
     }
 
+    // [lock] section: explicit overrides land, an omitted key keeps its default.
+    assert!(!cfg.lock_reap_stale);
+    assert_eq!(cfg.lock_stale_age, 3600);
+    assert_eq!(cfg.lock_wait, 30);
+    assert_eq!(cfg.lock_wait_poll, 15); // omitted -> upstream default
+
     // An option absent from the fixture keeps its upstream default.
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");
 }

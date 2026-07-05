@@ -26,3 +26,9 @@ testreports = "https://qam.example.com/testreports"
 
 [svn]
 path = "svn+ssh://svn@svn.example/testreports"
+
+[lock]
+reap_stale = false                # boolean value
+stale_age = 3600                  # integer value
+wait = 30
+# wait_poll omitted on purpose: it must keep its upstream default (15)

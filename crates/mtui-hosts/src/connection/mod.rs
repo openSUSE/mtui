@@ -25,6 +25,8 @@
 //!   transfer family (`put` / `get` / `get_folder` / `listdir` / `open` /
 //!   `remove` / `rmdir` / `readlink`), plus the russh-backed
 //!   [`SshConnection`].
+//! * **P2.6** (landed) — `sftp_write` (atomic exclusive create / truncating
+//!   overwrite), the write primitive the remote-lock protocol is built on.
 //!
 //! Still pending: the interactive PTY [`shell`] (P2.10).
 //!
@@ -166,6 +168,26 @@ pub trait Connection: Send + Sync {
     ///
     /// Returns an SFTP/transport error if the file cannot be opened or read.
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>>;
+
+    /// Writes `data` to a remote file over SFTP.
+    ///
+    /// This is the object-safe write counterpart to
+    /// [`sftp_open`](Self::sftp_open) and the primitive the remote-lock
+    /// protocol is built on. It ports upstream's two lockfile write modes:
+    ///
+    /// * `exclusive = true` — an **atomic create** that fails if the file
+    ///   already exists (paramiko mode `"x"` → `O_CREAT | O_EXCL`). A
+    ///   collision returns [`HostError::AlreadyExists`](crate::HostError::AlreadyExists)
+    ///   so a racing caller can reconcile instead of clobbering the winner —
+    ///   this is what closes the read-then-write TOCTOU window.
+    /// * `exclusive = false` — a truncating overwrite (paramiko mode `"w+"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostError::AlreadyExists`](crate::HostError::AlreadyExists)
+    /// when `exclusive` is set and the file exists, or an SFTP/transport error
+    /// if the write otherwise fails.
+    async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()>;
 
     /// Deletes a remote file over SFTP.
     ///

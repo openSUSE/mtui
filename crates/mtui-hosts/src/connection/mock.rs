@@ -55,6 +55,13 @@ pub enum MockSftpOp {
     Listdir(PathBuf),
     /// `sftp_open(path)`.
     Open(PathBuf),
+    /// `sftp_write(path, .., exclusive)`.
+    Write {
+        /// The remote path written.
+        path: PathBuf,
+        /// Whether the write was an exclusive (atomic-create) write.
+        exclusive: bool,
+    },
     /// `sftp_remove(path)`.
     Remove(PathBuf),
     /// `sftp_rmdir(path)`.
@@ -95,8 +102,13 @@ pub struct MockConnection {
     /// Canned directory listings keyed by remote path (for `sftp_listdir` /
     /// `sftp_get_folder`).
     listings: HashMap<PathBuf, Vec<String>>,
-    /// Canned file contents keyed by remote path (for `sftp_open`).
-    files: HashMap<PathBuf, Vec<u8>>,
+    /// File contents keyed by remote path (for `sftp_open` / `sftp_write`).
+    ///
+    /// Shared + mutable so `sftp_write` can create/overwrite entries and a
+    /// later `sftp_open` observes them — this is what makes the lock protocol
+    /// (exclusive create, reconcile, read-back) testable end-to-end against the
+    /// mock. `Clone`d handles share the same table.
+    files: Arc<Mutex<HashMap<PathBuf, Vec<u8>>>>,
     /// Canned symlink targets keyed by remote path (for `sftp_readlink`).
     links: HashMap<PathBuf, String>,
     /// When `true`, [`sftp_remove`](Connection::sftp_remove) fails, exercising a
@@ -121,7 +133,7 @@ impl MockConnection {
             fired: Arc::new(Mutex::new(Vec::new())),
             sftp_ops: Arc::new(Mutex::new(Vec::new())),
             listings: HashMap::new(),
-            files: HashMap::new(),
+            files: Arc::new(Mutex::new(HashMap::new())),
             links: HashMap::new(),
             sftp_remove_fails: false,
         }
@@ -187,9 +199,24 @@ impl MockConnection {
 
     /// Scripts canned file contents for `sftp_open` on `path`.
     #[must_use]
-    pub fn with_file(mut self, path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
-        self.files.insert(path.into(), contents.into());
+    pub fn with_file(self, path: impl Into<PathBuf>, contents: impl Into<Vec<u8>>) -> Self {
+        self.files
+            .lock()
+            .expect("mock files lock")
+            .insert(path.into(), contents.into());
         self
+    }
+
+    /// Returns the current in-memory contents of a remote file written via
+    /// [`sftp_write`](Connection::sftp_write) (or seeded with
+    /// [`with_file`](Self::with_file)), or `None` when absent.
+    #[must_use]
+    pub fn file_contents(&self, path: impl AsRef<Path>) -> Option<Vec<u8>> {
+        self.files
+            .lock()
+            .expect("mock files lock")
+            .get(path.as_ref())
+            .cloned()
     }
 
     /// Scripts a canned symlink target for `sftp_readlink` on `path`.
@@ -320,12 +347,31 @@ impl Connection for MockConnection {
     async fn sftp_open(&mut self, path: &Path) -> Result<Vec<u8>> {
         self.record_sftp(MockSftpOp::Open(path.to_path_buf()));
         self.files
+            .lock()
+            .expect("mock files lock")
             .get(path)
             .cloned()
             .ok_or_else(|| HostError::Sftp {
                 host: self.hostname.clone(),
                 reason: format!("no such file: {}", path.display()),
             })
+    }
+
+    async fn sftp_write(&mut self, path: &Path, data: &[u8], exclusive: bool) -> Result<()> {
+        self.record_sftp(MockSftpOp::Write {
+            path: path.to_path_buf(),
+            exclusive,
+        });
+        let mut files = self.files.lock().expect("mock files lock");
+        if exclusive && files.contains_key(path) {
+            // Atomic exclusive create lost the race: the file already exists.
+            return Err(HostError::AlreadyExists {
+                host: self.hostname.clone(),
+                path: path.display().to_string(),
+            });
+        }
+        files.insert(path.to_path_buf(), data.to_vec());
+        Ok(())
     }
 
     async fn sftp_remove(&mut self, path: &Path) -> Result<()> {
@@ -511,6 +557,53 @@ mod tests {
         let target = conn.sftp_readlink(Path::new("/link")).await.expect("ok");
         assert_eq!(target, "/target");
         assert!(conn.sftp_readlink(Path::new("/nope")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sftp_write_creates_and_is_readable() {
+        let mut conn = MockConnection::new("h1");
+        conn.sftp_write(Path::new("/var/lock/mtui.lock"), b"ts:user:1", false)
+            .await
+            .expect("write ok");
+        let back = conn
+            .sftp_open(Path::new("/var/lock/mtui.lock"))
+            .await
+            .expect("read ok");
+        assert_eq!(back, b"ts:user:1");
+    }
+
+    #[tokio::test]
+    async fn sftp_write_exclusive_collides_when_present() {
+        let mut conn = MockConnection::new("h1");
+        // First exclusive create wins.
+        conn.sftp_write(Path::new("/f"), b"first", true)
+            .await
+            .expect("first exclusive create wins");
+        // A second exclusive create loses the race.
+        let err = conn
+            .sftp_write(Path::new("/f"), b"second", true)
+            .await
+            .expect_err("second exclusive create must collide");
+        assert!(matches!(err, HostError::AlreadyExists { .. }));
+        // The winner's bytes are preserved (loser did not clobber).
+        assert_eq!(conn.file_contents("/f").as_deref(), Some(&b"first"[..]));
+    }
+
+    #[tokio::test]
+    async fn sftp_write_overwrite_replaces_and_records_order() {
+        let mut conn = MockConnection::new("h1").with_file("/f", b"old".to_vec());
+        // Non-exclusive overwrite replaces existing contents.
+        conn.sftp_write(Path::new("/f"), b"new", false)
+            .await
+            .expect("overwrite ok");
+        assert_eq!(conn.file_contents("/f").as_deref(), Some(&b"new"[..]));
+        assert_eq!(
+            conn.sftp_ops(),
+            [MockSftpOp::Write {
+                path: PathBuf::from("/f"),
+                exclusive: false,
+            }]
+        );
     }
 
     #[tokio::test]
