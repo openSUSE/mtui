@@ -48,6 +48,7 @@ use crate::error::{HostError, Result};
 use super::Target;
 use super::actions::{self, Command, RunCommand};
 use super::operation::{HostCommandMap, HostPlan, LastOutput, OperationGroup, PlanProvider};
+use super::repo_manager::{RepoOp, SetRepo};
 
 /// A composite over a group of [`Target`]s, keyed by hostname.
 ///
@@ -254,6 +255,108 @@ impl HostsGroup {
     pub async fn unlock(&mut self) {
         for target in self.data.values_mut() {
             target.unlock(false).await;
+        }
+    }
+
+    /// Fans a repository add/remove out across every host in the group.
+    ///
+    /// Ports upstream `HostsGroup._fanout_set_repo`, which runs
+    /// `t.repo_manager.set(operation, testreport)` on every host. `report` is the
+    /// object-safe [`SetRepo`] hook the composition root supplies (the concrete
+    /// `SlReport`/`ObsReport`/… `set_repo` impl in `mtui-testreport`), so the
+    /// group never depends on the report crate.
+    ///
+    /// Upstream fans these out with `run_parallel`; because [`SetRepo::set_repo`]
+    /// takes `&mut Target` and repo add/remove is order-independent, this drives
+    /// them sequentially — the observable per-host `zypper` effect is identical.
+    /// The per-host `last*` state is left in place so a caller can inspect
+    /// `lasterr()` after the fan-out (upstream's prepare abort-on-`lasterr`).
+    pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
+        for target in self.data.values_mut() {
+            target.repo_manager().set(operation, report).await;
+        }
+    }
+
+    /// Queries every host's tracked package versions and logs update-sanity
+    /// warnings.
+    ///
+    /// Ports the `package_check` closure nested in upstream
+    /// `HostsGroup.perform_update`. Each host's [`Target::query_versions`] runs
+    /// first, populating each package's `current` version; then, per package:
+    ///
+    /// * **pre** (`post == false`): record `current` as the package's `before`
+    ///   version.
+    /// * **post** (`post == true`): record `current` as the package's `after`
+    ///   version (leaving `before` as captured on the pre-pass).
+    ///
+    /// and emit the four upstream warnings:
+    ///
+    /// * *too recent* — pre-update installed version is already `>=` the required
+    ///   version,
+    /// * *not updated* — `after == before` on the post-pass,
+    /// * *below required* — post-update version is `<` the required version,
+    /// * *missing* — the package is not installed (`before` is `None`), collected
+    ///   and logged once per host.
+    ///
+    /// The packages must already be [`seeded`](Target::set_packages) with their
+    /// `required` versions.
+    pub async fn package_check(&mut self, post: bool) {
+        for target in self.data.values_mut() {
+            let hostname = target.hostname().to_owned();
+            target.query_versions().await;
+
+            let mut not_installed: Vec<String> = Vec::new();
+            for pkg in target.packages_mut() {
+                let required = pkg.required().cloned();
+                let current = pkg.current().cloned();
+                if post {
+                    pkg.set_after_version(current.clone());
+                } else {
+                    pkg.set_before_version(current.clone());
+                }
+                let before = pkg.before().cloned();
+                let after = if post { pkg.after().cloned() } else { None };
+
+                match &before {
+                    None => not_installed.push(pkg.name.clone()),
+                    Some(before_v) => {
+                        if let Some(req) = &required
+                            && before_v >= req
+                        {
+                            tracing::warn!(
+                                host = %hostname, package = %pkg.name,
+                                installed = %before_v, required = %req,
+                                "package is too recent"
+                            );
+                        }
+                    }
+                }
+
+                if let (Some(a), Some(b)) = (&after, &before)
+                    && a == b
+                {
+                    tracing::warn!(
+                        host = %hostname, package = %pkg.name, version = %a,
+                        "package was not updated"
+                    );
+                }
+                if let (Some(a), Some(req)) = (&after, &required)
+                    && a < req
+                {
+                    tracing::warn!(
+                        host = %hostname, package = %pkg.name,
+                        installed = %a, required = %req,
+                        "package does not match required version"
+                    );
+                }
+            }
+
+            if !not_installed.is_empty() {
+                tracing::warn!(
+                    host = %hostname, packages = %not_installed.join(", "),
+                    "these packages are missing"
+                );
+            }
         }
     }
 
@@ -965,5 +1068,90 @@ mod tests {
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
         // h2's foreign lock is still present (unlock suppressed the failure).
         assert!(g.get_mut("h2").unwrap().is_locked().await.unwrap());
+    }
+
+    // --- fanout_set_repo ---------------------------------------------------
+
+    /// A [`SetRepo`] test double recording `(hostname, op)` per invocation.
+    #[derive(Clone, Default)]
+    struct RecordingSetRepo {
+        seen: Arc<std::sync::Mutex<Vec<(String, RepoOp)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SetRepo for RecordingSetRepo {
+        async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
+            self.seen
+                .lock()
+                .unwrap()
+                .push((target.hostname().to_owned(), operation));
+        }
+    }
+
+    #[tokio::test]
+    async fn fanout_set_repo_visits_every_host_with_the_operation() {
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], false);
+        let report = RecordingSetRepo::default();
+        g.fanout_set_repo(RepoOp::Add, &report).await;
+        let seen = report.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen,
+            vec![
+                ("h1".to_owned(), RepoOp::Add),
+                ("h2".to_owned(), RepoOp::Add),
+            ]
+        );
+    }
+
+    // --- package_check -----------------------------------------------------
+
+    fn host_with_rpm_output(hostname: &str, stdout: &str) -> Target {
+        let conn =
+            MockConnection::new(hostname).with_default(CommandLog::new("", stdout, "", 0, 0));
+        Target::with_connection(
+            hostname,
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        )
+    }
+
+    #[tokio::test]
+    async fn package_check_records_before_on_pre_and_after_on_post() {
+        use mtui_types::package::Package;
+        use mtui_types::rpmver::RPMVersion;
+
+        let mut pkg = Package::new("bash");
+        pkg.set_required(Some("5.2-1")).unwrap();
+        let mut t = host_with_rpm_output("h1", "bash 5.1-1\n");
+        t.set_packages(vec![pkg]);
+        let mut g = HostsGroup::new(vec![t], false);
+
+        // Pre-pass records the installed version as `before`.
+        g.package_check(false).await;
+        let before = g.get("h1").unwrap().packages()[0].before().cloned();
+        assert_eq!(before, Some(RPMVersion::parse("5.1-1").unwrap()));
+        assert!(g.get("h1").unwrap().packages()[0].after().is_none());
+
+        // Post-pass records `after` (same scripted output ⇒ equals `before`,
+        // the "package was not updated" state), leaving `before` intact.
+        g.package_check(true).await;
+        let p = &g.get("h1").unwrap().packages()[0];
+        assert_eq!(p.after(), Some(&RPMVersion::parse("5.1-1").unwrap()));
+        assert_eq!(p.before(), p.after());
+    }
+
+    #[tokio::test]
+    async fn package_check_marks_missing_package_before_as_none() {
+        use mtui_types::package::Package;
+
+        let mut pkg = Package::new("foo");
+        pkg.set_required(Some("1.0-1")).unwrap();
+        let mut t = host_with_rpm_output("h1", "package foo is not installed\n");
+        t.set_packages(vec![pkg]);
+        let mut g = HostsGroup::new(vec![t], false);
+
+        g.package_check(false).await;
+        assert!(g.get("h1").unwrap().packages()[0].before().is_none());
     }
 }

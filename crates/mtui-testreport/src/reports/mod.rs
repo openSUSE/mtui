@@ -9,6 +9,7 @@ pub mod obs;
 pub mod pi;
 pub mod repoparse;
 pub mod sl;
+pub(crate) mod update_flow;
 
 pub use null::NullReport;
 pub use obs::ObsReport;

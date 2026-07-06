@@ -16,10 +16,15 @@
 //! between the two, and the [`build_plan_provider`] / [`inject_plan_provider`]
 //! helpers the session builder uses to wire it into a [`HostsGroup`].
 //!
-//! Scope (P5.5): the install/uninstall path. The `update` / `prepare` /
-//! `downgrade` roles resolve through the same registry, but their driving
-//! `perform_*` flows (and the group reboot/lock lifecycle) are the bespoke
-//! non-template tasks tracked in `mtui-rs-9lf` / `mtui-rs-owd` / `mtui-rs-fly`.
+//! Scope (P5.5): this adapter wires the install/uninstall path (the
+//! [`Operation`](mtui_hosts::Operation) template resolving `installer` /
+//! `uninstaller` doers through the injected [`PlanProvider`]). The bespoke
+//! `update` / `prepare` / `downgrade` flows (`mtui-rs-9lf`) resolve their doers
+//! directly from the [`WorkflowRegistry`] on the report side
+//! (`mtui-testreport::reports::update_flow`) rather than through this adapter,
+//! because they need `ActionCommands` fields (`installed_only` / `list_command`
+//! / `$repa`) the lossy [`Doer`](mtui_hosts::Doer) does not carry; the group
+//! reboot/lock lifecycle they use landed in `mtui-rs-owd` / `mtui-rs-fly`.
 
 use std::sync::Arc;
 
@@ -116,8 +121,10 @@ impl PlanProvider for WorkflowPlanProvider {
 /// Builds the default update-workflow [`PlanProvider`] from `force` / `testing`
 /// (the prepare-only flags upstream threads into `t.doer("preparer", …)`).
 ///
-/// The other roles ignore these flags; they are carried on the registry so a
-/// later `prepare` flow (mtui-rs-9lf) resolves the right preparer variant.
+/// The other roles ignore these flags; they are carried on the registry so the
+/// install/uninstall path resolves the right preparer variant. The bespoke
+/// `prepare`/`update`/`downgrade` flows build their own registry per call (they
+/// need the `force`/`testing`/`installed_only` combination at invocation time).
 #[must_use]
 pub fn build_plan_provider(force: bool, testing: bool) -> Arc<dyn PlanProvider> {
     Arc::new(WorkflowPlanProvider::new(WorkflowRegistry::new(

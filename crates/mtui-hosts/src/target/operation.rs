@@ -85,6 +85,21 @@ impl Doer {
         self.command_template.replace("$packages", packages)
     }
 
+    /// Substitutes both `$repa` and `$packages` in the command template.
+    ///
+    /// Mirrors upstream `doer["command"].safe_substitute(repa=..., packages=...)`
+    /// used by `perform_update` for the `updater` role. `$repa` is replaced
+    /// first so a `packages` value that happens to contain the literal `$repa`
+    /// is not re-substituted (upstream's `string.Template` is single-pass);
+    /// other `$`-tokens the update templates embed for the remote shell (e.g.
+    /// `$$r`, `awk … $2`) are left untouched, matching `safe_substitute`.
+    #[must_use]
+    pub fn command_with_repa(&self, repa: &str, packages: &str) -> String {
+        self.command_template
+            .replace("$repa", repa)
+            .replace("$packages", packages)
+    }
+
     /// The reboot command for a transactional host.
     ///
     /// Mirrors upstream `doer["reboot"].substitute()` (no variables).
@@ -601,6 +616,23 @@ mod tests {
         let doer = Doer::new("zypper -n in $packages", "systemctl reboot");
         assert_eq!(doer.command("pkg-a pkg-b"), "zypper -n in pkg-a pkg-b");
         assert_eq!(doer.reboot(), "systemctl reboot");
+    }
+
+    #[test]
+    fn doer_command_with_repa_substitutes_both_and_leaves_shell_tokens() {
+        // Mirrors the updater template shape: interpolates $repa + $packages but
+        // must leave the remote-shell `$$r` and `awk … $2` tokens untouched.
+        let doer = Doer::new(
+            "zypper -n patches | grep $repa\nzypper -n in $packages\n\
+             zypper -n lr | awk '/$repa/ {{ print $2; }}' | while read r; do rr $$r; done",
+            "systemctl reboot",
+        );
+        let out = doer.command_with_repa(":p=1:2", "pkg-a pkg-b");
+        assert_eq!(
+            out,
+            "zypper -n patches | grep :p=1:2\nzypper -n in pkg-a pkg-b\n\
+             zypper -n lr | awk '/:p=1:2/ {{ print $2; }}' | while read r; do rr $$r; done"
+        );
     }
 
     // --- collect(): commands per host; reboot only for transactional --------

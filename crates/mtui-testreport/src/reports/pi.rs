@@ -24,12 +24,15 @@
 use std::collections::HashMap;
 
 use mtui_config::options::Config;
-use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
+use mtui_hosts::{
+    HostsGroup, InstallOperation, Operation, RepoOp, SetRepo, Target, UninstallOperation,
+};
 use mtui_types::{RequestReviewID, SystemProduct};
 use tracing::debug;
 
 use super::repoparse::reporepoparse;
 use super::set_repo_with_add_flags;
+use super::update_flow;
 use crate::testreport::{TestReport, TestReportBase};
 
 /// A [`TestReport`] for PI updates (upstream `PITestReport`).
@@ -89,14 +92,43 @@ impl TestReport for PiReport {
     }
 
     fn list_update_commands(&self, _targets: &HostsGroup) {
-        // Deferred: upstream renders per-host commands via
-        // `target.doer('updater')['command'].safe_substitute(repa=..., packages=...)`.
-        // The `OperationGroup`/doer accessor on `Target` is not wired yet
-        // (see `TODO(Phase 4)` in `mtui-hosts::target::operation`). The real
-        // rendering lands with that seam.
-        debug!(
-            "list_update_commands: doer rendering deferred until the OperationGroup seam is wired"
-        );
+        // Upstream renders per-host `updater` commands for display; the bespoke
+        // `perform_update` flow that runs them is implemented below. A standalone
+        // read-only listing has no consumer yet (the `list`/`run` Wave-1 command
+        // lands in mtui-rs-2d3.6), so this stays a no-op until then.
+        debug!("list_update_commands: no listing consumer yet (see mtui-rs-2d3.6)");
+    }
+
+    // Shared `perform_*` flows (upstream defines these once on the base
+    // `TestReport`; SL/PI/OBS behave identically). See `SlReport` for the
+    // rationale behind the per-report delegation.
+    async fn perform_install(&self, targets: &mut HostsGroup, packages: &[String]) {
+        InstallOperation::new(packages.to_vec()).run(targets).await;
+    }
+
+    async fn perform_uninstall(&self, targets: &mut HostsGroup, packages: &[String]) {
+        UninstallOperation::new(packages.to_vec())
+            .run(targets)
+            .await;
+    }
+
+    async fn perform_prepare(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+        force: bool,
+        testing: bool,
+        installed_only: bool,
+    ) {
+        update_flow::perform_prepare(targets, self, packages, force, testing, installed_only).await;
+    }
+
+    async fn perform_downgrade(&self, targets: &mut HostsGroup, packages: &[String]) {
+        update_flow::perform_downgrade(targets, self, packages).await;
+    }
+
+    async fn perform_update(&self, targets: &mut HostsGroup, noprepare: bool, newpackage: bool) {
+        update_flow::perform_update_from_report(self, targets, noprepare, newpackage).await;
     }
 
     async fn check_hash(&self) -> (bool, String, String) {

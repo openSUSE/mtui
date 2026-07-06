@@ -232,6 +232,28 @@ pub trait TestReport {
     /// `list_update_commands`). The null object is a no-op.
     fn list_update_commands(&self, targets: &HostsGroup);
 
+    /// The deduplicated list of every package named in the report metadata
+    /// (upstream `get_package_list`).
+    ///
+    /// Iterates the nested [`packages`](TestReportBase::packages) map
+    /// (`product -> { name -> version }`) and flattens the package **names**
+    /// across all products, deduplicated. Upstream returns them in `set` order;
+    /// the port sorts for determinism (the callers — `perform_update` /
+    /// `perform_prepare` — only join the list into a command string, so order is
+    /// not behaviourally significant, but a stable order keeps snapshots and
+    /// tests reproducible).
+    fn get_package_list(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .base()
+            .packages
+            .values()
+            .flat_map(|per_product| per_product.keys().cloned())
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    }
+
     /// Installs `packages` on every host in `targets` (upstream
     /// `metadata.perform_install` → `targets.perform_install`).
     ///
@@ -249,6 +271,50 @@ pub trait TestReport {
     /// Drives the [`UninstallOperation`](mtui_hosts::UninstallOperation)
     /// template; see [`perform_install`](Self::perform_install). Default no-op.
     async fn perform_uninstall(&self, _targets: &mut HostsGroup, _packages: &[String]) {}
+
+    /// Prepares `packages` on every host (upstream
+    /// `HostsGroup.perform_prepare`).
+    ///
+    /// The bespoke (non-template) preparer flow: fan the issue repo add/remove
+    /// out, install every package in a single transaction (or per-package for
+    /// the `installed_only` variant), run the preparer check, and reboot
+    /// transactional hosts — all under the operation lock. `testing` selects the
+    /// repo-`add` (testing) vs repo-`remove` path and the testing preparer
+    /// variant; `force` toggles `--force-resolution`; `installed_only` only
+    /// touches already-installed packages. Default no-op (the null report has
+    /// nothing to prepare); real reports override.
+    async fn perform_prepare(
+        &self,
+        _targets: &mut HostsGroup,
+        _packages: &[String],
+        _force: bool,
+        _testing: bool,
+        _installed_only: bool,
+    ) {
+    }
+
+    /// Downgrades `packages` on every host (upstream
+    /// `HostsGroup.perform_downgrade`).
+    ///
+    /// Removes the issue repos, resolves each package's available downgrade
+    /// version via the downgrader `list_command`, then downgrades — per-package
+    /// for non-transactional hosts, combined into a single transaction for
+    /// transactional hosts — runs the check, and reboots transactional hosts,
+    /// under the operation lock. Default no-op; real reports override.
+    async fn perform_downgrade(&self, _targets: &mut HostsGroup, _packages: &[String]) {}
+
+    /// Updates the hosts with this report's maintenance update (upstream
+    /// `HostsGroup.perform_update`).
+    ///
+    /// The full bespoke update flow: optional prepare, pre/post package checks,
+    /// repo add, `updater` command render (with the `$repa` RRID selector), the
+    /// per-host update check with failure aggregation, transactional reboot, and
+    /// the two-phase repo cleanup (remove on success, **keep** on failure for
+    /// retry/diagnosis). `noprepare` skips the initial prepare; `newpackage`
+    /// runs a testing prepare after the update. Default no-op; real reports
+    /// override.
+    async fn perform_update(&self, _targets: &mut HostsGroup, _noprepare: bool, _newpackage: bool) {
+    }
 
     /// Verifies the loaded template hash (upstream `check_hash`).
     ///

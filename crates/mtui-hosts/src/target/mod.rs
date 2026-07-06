@@ -68,6 +68,7 @@ use std::path::{Path, PathBuf};
 use mtui_config::Config;
 use mtui_types::enums::{ExecutionMode, TargetState};
 use mtui_types::hostlog::{CommandLog, HostLog};
+use mtui_types::package::Package;
 use mtui_types::system::{System, SystemProduct};
 
 #[cfg(feature = "shell")]
@@ -137,6 +138,13 @@ pub struct Target {
     /// `None` until connected. Drives [`unlock`](Target::unlock) and the
     /// [`RepoManager`] unknown-cmd force-unlock safeguard.
     lock: Option<TargetLock>,
+    /// The per-host packages tracked across an update (upstream
+    /// `Target.packages`, a `dict[str, Package]`). Each entry carries the
+    /// metadata-`required` version and, once [`query_versions`](Target::query_versions)
+    /// runs, the installed `current` version; `perform_update`'s package check
+    /// records `before`/`after` here. Kept as an ordered `Vec` for deterministic
+    /// iteration; seeded via [`set_packages`](Target::set_packages).
+    packages: Vec<Package>,
 }
 
 /// Builds the placeholder [`System`] a freshly-constructed [`Target`] carries
@@ -182,6 +190,7 @@ impl Target {
             transactional: false,
             config: config.clone(),
             lock: None,
+            packages: Vec::new(),
         }
     }
 
@@ -221,6 +230,7 @@ impl Target {
             transactional: false,
             config,
             lock,
+            packages: Vec::new(),
         }
     }
 
@@ -459,6 +469,51 @@ impl Target {
     pub fn set_system(&mut self, system: System, transactional: bool) {
         self.system = system;
         self.transactional = transactional;
+    }
+
+    /// The per-host tracked packages (upstream `Target.packages`).
+    #[must_use]
+    pub fn packages(&self) -> &[Package] {
+        &self.packages
+    }
+
+    /// Mutable access to the tracked packages, so an update flow can record
+    /// `before`/`after` versions across its two [`query_versions`](Target::query_versions)
+    /// passes (upstream mutates `t.packages[...]` in `package_check`).
+    pub fn packages_mut(&mut self) -> &mut [Package] {
+        &mut self.packages
+    }
+
+    /// Seeds the tracked packages (each carrying its metadata-`required`
+    /// version).
+    ///
+    /// The Rust analogue of upstream `Target._parse_packages`, which builds
+    /// `Target.packages` from the report's metadata. Here the report supplies
+    /// the already-resolved [`Package`] list (name + `required`) at the start of
+    /// an update flow, keeping the metadata/product resolution in
+    /// `mtui-testreport` and off this crate.
+    pub fn set_packages(&mut self, packages: Vec<Package>) {
+        self.packages = packages;
+    }
+
+    /// Queries the installed versions of the tracked packages and records them
+    /// as each package's `current` version.
+    ///
+    /// Ports upstream `Target.query_versions()` (the no-argument form): runs the
+    /// [`PackageQuerier`] over `self.packages` and sets `current` from the
+    /// result (`None` when the package is not installed). A no-op when no
+    /// packages are tracked. Only meaningful for an
+    /// [`Enabled`](TargetState::Enabled) host; other states record nothing, as
+    /// their `run` does not touch a live connection.
+    pub async fn query_versions(&mut self) {
+        let names: Vec<String> = self.packages.iter().map(|p| p.name.clone()).collect();
+        if names.is_empty() {
+            return;
+        }
+        let versions = PackageQuerier::new(self).versions(&names).await;
+        for pkg in &mut self.packages {
+            pkg.set_current_version(versions.get(&pkg.name).cloned().flatten());
+        }
     }
 
     /// Establishes the SSH transport for this target.
@@ -1293,5 +1348,41 @@ mod tests {
             t.shell(80, 24).await.is_none(),
             "no connection -> no shell, logged not panicked"
         );
+    }
+
+    // --- packages / query_versions ----------------------------------------
+
+    #[tokio::test]
+    async fn query_versions_records_current_and_none_for_missing() {
+        use mtui_types::package::Package;
+        use mtui_types::rpmver::RPMVersion;
+
+        let conn = MockConnection::new("h1").with_default(CommandLog::new(
+            "",
+            "bash 5.1-1\npackage foo is not installed\n",
+            "",
+            0,
+            0,
+        ));
+        let mut t = enabled_with(conn);
+        t.set_packages(vec![Package::new("bash"), Package::new("foo")]);
+        t.query_versions().await;
+
+        let by_name: std::collections::HashMap<_, _> =
+            t.packages().iter().map(|p| (p.name.as_str(), p)).collect();
+        assert_eq!(
+            by_name["bash"].current(),
+            Some(&RPMVersion::parse("5.1-1").unwrap())
+        );
+        assert_eq!(by_name["foo"].current(), None);
+    }
+
+    #[tokio::test]
+    async fn query_versions_is_noop_without_tracked_packages() {
+        let conn = MockConnection::new("h1").with_default(CommandLog::new("", "x", "", 0, 0));
+        let mut t = enabled_with(conn);
+        t.query_versions().await;
+        // Nothing was queried, so the host log stays empty.
+        assert!(t.out().is_empty());
     }
 }

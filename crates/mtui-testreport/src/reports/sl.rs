@@ -28,6 +28,7 @@ use tracing::debug;
 
 use super::repoparse::{gitrepoparse, reporepoparse, slrepoparse};
 use super::set_repo_with_add_flags;
+use super::update_flow;
 use crate::testreport::{TestReport, TestReportBase};
 
 /// A [`TestReport`] for SUSE Linux updates (upstream `SLTestReport`).
@@ -100,29 +101,48 @@ impl TestReport for SlReport {
     }
 
     fn list_update_commands(&self, _targets: &HostsGroup) {
-        // Deferred to the `updater` workflow (mtui-rs-9lf): upstream renders
-        // per-host commands via `target.doer('updater')['command']
-        // .safe_substitute(repa=..., packages=...)`. That role, its `$repa`
-        // substitution, and `perform_update` are the bespoke non-template
-        // update flow tracked in mtui-rs-9lf. The install/uninstall
-        // `OperationGroup` seam (this task) does not cover it.
-        debug!("list_update_commands: updater-role rendering deferred to mtui-rs-9lf");
+        // Upstream renders per-host `updater` commands for display via
+        // `target.doer('updater')['command'].safe_substitute(...)`. The bespoke
+        // `perform_update` flow that actually runs them is implemented below; a
+        // standalone read-only *listing* has no consumer yet (the `list`/`run`
+        // Wave-1 command lands in mtui-rs-2d3.6), so this stays a no-op until
+        // that command needs it.
+        debug!("list_update_commands: no listing consumer yet (see mtui-rs-2d3.6)");
     }
 
+    // Upstream defines these five `perform_*` flows once on the base
+    // `TestReport`; every report (SL/PI/OBS) inherits identical behaviour and
+    // differs only in `set_repo` / `list_update_commands`. Rust's object-safe
+    // `dyn TestReport` cannot express a `where Self: SetRepo` default, so each
+    // `SetRepo` report delegates to the shared `update_flow` free functions
+    // below (thin, identical across the three reports).
     async fn perform_install(&self, targets: &mut HostsGroup, packages: &[String]) {
-        // Upstream `metadata.perform_install(targets, packages)` →
-        // `targets.perform_install(packages)` → `InstallOperation(...).run()`.
-        // The group resolves each host's installer doer/check through the
-        // injected `PlanProvider`; a missing doer / unwired provider surfaces
-        // inside the template as a logged early-return (no lock taken).
         InstallOperation::new(packages.to_vec()).run(targets).await;
     }
 
     async fn perform_uninstall(&self, targets: &mut HostsGroup, packages: &[String]) {
-        // Upstream `metadata.perform_uninstall` → `targets.perform_uninstall`.
         UninstallOperation::new(packages.to_vec())
             .run(targets)
             .await;
+    }
+
+    async fn perform_prepare(
+        &self,
+        targets: &mut HostsGroup,
+        packages: &[String],
+        force: bool,
+        testing: bool,
+        installed_only: bool,
+    ) {
+        update_flow::perform_prepare(targets, self, packages, force, testing, installed_only).await;
+    }
+
+    async fn perform_downgrade(&self, targets: &mut HostsGroup, packages: &[String]) {
+        update_flow::perform_downgrade(targets, self, packages).await;
+    }
+
+    async fn perform_update(&self, targets: &mut HostsGroup, noprepare: bool, newpackage: bool) {
+        update_flow::perform_update_from_report(self, targets, noprepare, newpackage).await;
     }
 
     async fn check_hash(&self) -> (bool, String, String) {
