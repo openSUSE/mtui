@@ -62,11 +62,11 @@ fn null_list_update_commands_noop() {
     n.list_update_commands(&HostsGroup::new(Vec::new(), false));
 }
 
-#[test]
-fn null_check_hash_returns_true() {
+#[tokio::test]
+async fn null_check_hash_returns_true() {
     let (cfg, _) = config_with_tmp("check-hash");
     assert_eq!(
-        NullReport::new(cfg).check_hash(),
+        NullReport::new(cfg).check_hash().await,
         (true, String::new(), String::new())
     );
 }

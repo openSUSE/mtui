@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
-use mtui_types::Product;
+use mtui_types::SystemProduct;
 
 use crate::testreport::{TestReport, TestReportBase};
 
@@ -35,6 +35,7 @@ impl NullReport {
     }
 }
 
+#[async_trait::async_trait]
 impl TestReport for NullReport {
     fn base(&self) -> &TestReportBase {
         &self.base
@@ -52,7 +53,7 @@ impl TestReport for NullReport {
         HashMap::new()
     }
 
-    fn update_repos_parser(&self) -> HashMap<Product, String> {
+    fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
         HashMap::new()
     }
 
@@ -60,7 +61,7 @@ impl TestReport for NullReport {
         // Null object: does nothing.
     }
 
-    fn check_hash(&self) -> (bool, String, String) {
+    async fn check_hash(&self) -> (bool, String, String) {
         (true, String::new(), String::new())
     }
 

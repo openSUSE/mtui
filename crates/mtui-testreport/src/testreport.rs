@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner};
-use mtui_types::{Product, RequestReviewID, Workflow};
+use mtui_types::{RequestReviewID, SystemProduct, Workflow};
 
 /// Shared state common to every [`TestReport`] implementation.
 ///
@@ -56,8 +56,14 @@ pub struct TestReportBase {
     pub systems: HashMap<String, String>,
     /// Connected reference-host targets.
     pub targets: HostsGroup,
-    /// `Product -> repository` map for the update repositories.
-    pub update_repos: HashMap<Product, String>,
+    /// `SystemProduct -> repository` map for the update repositories.
+    ///
+    /// Keyed on the flat [`SystemProduct`] `(name, version, arch)` tuple —
+    /// upstream's `Product` `NamedTuple`. This is what the `*repoparse` helpers
+    /// build and what [`RepoManager::run_zypper`](mtui_hosts) consumes; keying
+    /// on the refhost `Product` (no `arch`) would be lossy and mismatch that
+    /// consumer.
+    pub update_repos: HashMap<SystemProduct, String>,
     /// Known hostnames for this report.
     pub hostnames: HashSet<String>,
     /// When non-empty, newly connected hosts are locked with this comment
@@ -169,6 +175,10 @@ impl TestReportBase {
 /// surface every report must supply. Non-abstract lifecycle methods
 /// (`connect_target`, `export`, pool selection, …) are added by the later
 /// Phase 4 tasks.
+///
+/// The trait is `#[async_trait]` because [`check_hash`](Self::check_hash) drives
+/// async I/O for git-backed reports (`SLTestReport` awaits `Gitea::get_hash`).
+#[async_trait::async_trait]
 pub trait TestReport {
     /// Borrows the shared state.
     fn base(&self) -> &TestReportBase;
@@ -187,7 +197,10 @@ pub trait TestReport {
     fn parser(&self) -> HashMap<String, String>;
 
     /// The update-repository parser table (upstream `_update_repos_parser`).
-    fn update_repos_parser(&self) -> HashMap<Product, String>;
+    ///
+    /// Keyed on the flat [`SystemProduct`] to match the `*repoparse` helpers and
+    /// [`TestReportBase::update_repos`].
+    fn update_repos_parser(&self) -> HashMap<SystemProduct, String>;
 
     /// Emits the per-host update commands for `targets` (upstream
     /// `list_update_commands`). The null object is a no-op.
@@ -196,8 +209,9 @@ pub trait TestReport {
     /// Verifies the loaded template hash (upstream `check_hash`).
     ///
     /// Returns `(ok, expected, actual)`. The null object reports `(true, "",
-    /// "")` since it has nothing to verify.
-    fn check_hash(&self) -> (bool, String, String);
+    /// "")` since it has nothing to verify. Async because git-backed reports
+    /// compare against a hash fetched from Gitea.
+    async fn check_hash(&self) -> (bool, String, String);
 
     /// The working directory for target artifacts (upstream `target_wd`).
     ///

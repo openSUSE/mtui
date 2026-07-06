@@ -1906,8 +1906,10 @@ dependencies = [
 name = "mtui-testreport"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "insta",
  "mtui-config",
+ "mtui-datasources",
  "mtui-hosts",
  "mtui-types",
  "quick-xml",
@@ -1915,7 +1917,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
