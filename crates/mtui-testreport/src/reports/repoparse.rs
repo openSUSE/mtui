@@ -219,7 +219,7 @@ fn product_from_project(project: &str) -> Option<SystemProduct> {
 fn attr(e: &quick_xml::events::BytesStart<'_>, key: &[u8]) -> Option<String> {
     e.attributes().flatten().find_map(|a| {
         (a.key.local_name().as_ref() == key)
-            .then(|| a.unescape_value().ok())
+            .then(|| a.normalized_value(quick_xml::XmlVersion::Implicit1_0).ok())
             .flatten()
             .map(|v| v.into_owned())
     })

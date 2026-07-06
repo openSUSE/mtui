@@ -286,7 +286,9 @@ fn parse_patchinfo(content: &str) -> Option<HashMap<String, String>> {
 fn issue_id(e: &quick_xml::events::BytesStart<'_>) -> Option<String> {
     e.attributes().flatten().find_map(|attr| {
         if attr.key.local_name().as_ref() == b"id" {
-            let val = attr.unescape_value().ok()?;
+            let val = attr
+                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                .ok()?;
             let trimmed = val.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_owned())
         } else {
