@@ -1,0 +1,259 @@
+//! The `config` command (`show` / `set`).
+
+use async_trait::async_trait;
+use clap::{Arg, ArgMatches, Command as ClapCommand};
+use mtui_config::Config;
+
+use crate::command::{Command, Scope};
+use crate::error::{CommandError, CommandResult};
+use crate::session::Session;
+
+/// The configuration attributes exposed to `show`, each with a value renderer.
+///
+/// Ports the read side of upstream `config show`, which iterates
+/// `config.data`. The Rust [`Config`] is a typed struct (no reflection), so the
+/// attribute↔value mapping is spelled out here — the single place `show`/`set`
+/// and completion agree on the attribute surface.
+fn attr_value(config: &Config, attr: &str) -> Option<String> {
+    let v = match attr {
+        "template_dir" => config.template_dir.display().to_string(),
+        "local_tempdir" => config.local_tempdir.display().to_string(),
+        "session_user" => config.session_user.clone(),
+        "install_logs" => config.install_logs.display().to_string(),
+        "chdir_to_template_dir" => config.chdir_to_template_dir.to_string(),
+        "use_keyring" => config.use_keyring.to_string(),
+        "connection_timeout" => config.connection_timeout.to_string(),
+        "ssh_strict_host_key_checking" => config.ssh_strict_host_key_checking.clone(),
+        "refhosts_resolvers" => config.refhosts_resolvers.clone(),
+        "refhosts_https_uri" => config.refhosts_https_uri.clone(),
+        "refhosts_https_expiration" => config.refhosts_https_expiration.to_string(),
+        "refhosts_path" => config.refhosts_path.display().to_string(),
+        "bugzilla_url" => config.bugzilla_url.clone(),
+        "reports_url" => config.reports_url.clone(),
+        "fancy_reports_url" => config.fancy_reports_url.clone(),
+        "svn_path" => config.svn_path.clone(),
+        "target_tempdir" => config.target_tempdir.display().to_string(),
+        "lock_reap_stale" => config.lock_reap_stale.to_string(),
+        "lock_stale_age" => config.lock_stale_age.to_string(),
+        "lock_pi_autolock" => config.lock_pi_autolock.to_string(),
+        "lock_wait" => config.lock_wait.to_string(),
+        "lock_wait_poll" => config.lock_wait_poll.to_string(),
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// The attribute names `show` lists when given none, in a stable order.
+const ATTRS: [&str; 22] = [
+    "template_dir",
+    "local_tempdir",
+    "session_user",
+    "install_logs",
+    "chdir_to_template_dir",
+    "use_keyring",
+    "connection_timeout",
+    "ssh_strict_host_key_checking",
+    "refhosts_resolvers",
+    "refhosts_https_uri",
+    "refhosts_https_expiration",
+    "refhosts_path",
+    "bugzilla_url",
+    "reports_url",
+    "fancy_reports_url",
+    "svn_path",
+    "target_tempdir",
+    "lock_reap_stale",
+    "lock_stale_age",
+    "lock_pi_autolock",
+    "lock_wait",
+    "lock_wait_poll",
+];
+
+/// Parses `raw` for `attr` and stores it, mirroring upstream's getter/fixup
+/// rejection (an invalid value leaves the attribute unchanged).
+fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
+    let parse_bool = |s: &str| match s {
+        "1" | "yes" | "true" | "on" => Ok(true),
+        "0" | "no" | "false" | "off" => Ok(false),
+        other => Err(format!("invalid boolean: {other}")),
+    };
+    let parse_u64 = |s: &str| {
+        s.parse::<u64>()
+            .map_err(|e| format!("invalid integer: {e}"))
+    };
+
+    match attr {
+        "session_user" => config.session_user = raw.to_owned(),
+        "ssh_strict_host_key_checking" => config.ssh_strict_host_key_checking = raw.to_owned(),
+        "refhosts_resolvers" => config.refhosts_resolvers = raw.to_owned(),
+        "refhosts_https_uri" => config.refhosts_https_uri = raw.to_owned(),
+        "bugzilla_url" => config.bugzilla_url = raw.to_owned(),
+        "reports_url" => config.reports_url = raw.to_owned(),
+        "fancy_reports_url" => config.fancy_reports_url = raw.to_owned(),
+        "svn_path" => config.svn_path = raw.to_owned(),
+        "chdir_to_template_dir" => config.chdir_to_template_dir = parse_bool(raw)?,
+        "use_keyring" => config.use_keyring = parse_bool(raw)?,
+        "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
+        "lock_pi_autolock" => config.lock_pi_autolock = parse_bool(raw)?,
+        "connection_timeout" => config.connection_timeout = parse_u64(raw)?,
+        "refhosts_https_expiration" => config.refhosts_https_expiration = parse_u64(raw)?,
+        "lock_stale_age" => config.lock_stale_age = parse_u64(raw)?,
+        "lock_wait" => config.lock_wait = parse_u64(raw)?,
+        "lock_wait_poll" => config.lock_wait_poll = parse_u64(raw)?,
+        other => return Err(format!("unknown or read-only attribute: {other}")),
+    }
+    Ok(())
+}
+
+/// Shows or sets runtime configuration values.
+///
+/// Ports upstream `mtui.commands.config.Config` (the command). `config show
+/// [attr ...]` prints the current values (all when none named); `config set
+/// <attr> <value>` updates one, going through the same value parsing/fixup as
+/// config-file loading so a runtime `set` cannot store a value the file would
+/// reject. Self-describing, so it runs once ([`Scope::Single`]).
+pub struct ConfigCmd;
+
+#[async_trait]
+impl Command for ConfigCmd {
+    fn name(&self) -> &'static str {
+        "config"
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::Single
+    }
+
+    fn configure(&self, cmd: clap::Command) -> clap::Command {
+        cmd.subcommand_required(true)
+            .subcommand(
+                ClapCommand::new("show").arg(
+                    Arg::new("attributes")
+                        .num_args(0..)
+                        .value_name("ATTR")
+                        .help("Attribute(s) to show; all when omitted"),
+                ),
+            )
+            .subcommand(
+                ClapCommand::new("set")
+                    .arg(Arg::new("attribute").required(true).value_name("ATTR"))
+                    .arg(Arg::new("value").required(true).value_name("VALUE")),
+            )
+    }
+
+    async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        match args.subcommand() {
+            Some(("show", sub)) => {
+                let requested: Vec<String> = sub
+                    .get_many::<String>("attributes")
+                    .map(|it| it.cloned().collect())
+                    .unwrap_or_default();
+                let attrs: Vec<String> = if requested.is_empty() {
+                    ATTRS.iter().map(|s| (*s).to_owned()).collect()
+                } else {
+                    requested
+                };
+                let width = attrs.iter().map(String::len).max().unwrap_or(0);
+                let mut rows: Vec<String> = Vec::new();
+                for attr in &attrs {
+                    match attr_value(&session.config, attr) {
+                        Some(v) => rows.push(format!("{attr:<width$} = {v:?}")),
+                        None => {
+                            return Err(CommandError::Other(format!("unknown attribute: {attr}")));
+                        }
+                    }
+                }
+                for row in rows {
+                    session.display.println(&row);
+                }
+                Ok(())
+            }
+            Some(("set", sub)) => {
+                let attr = sub.get_one::<String>("attribute").expect("required");
+                let value = sub.get_one::<String>("value").expect("required");
+                set_attr(&mut session.config, attr, value).map_err(CommandError::Other)?;
+                session
+                    .display
+                    .println(&format!("option: {attr} set to value : {value}"));
+                Ok(())
+            }
+            _ => Err(CommandError::Other(
+                "config: expected `show` or `set`".to_owned(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::testkit::{empty_session, matches};
+
+    #[test]
+    fn name_and_single_scope() {
+        assert_eq!(ConfigCmd.name(), "config");
+        assert_eq!(ConfigCmd.scope(), Scope::Single);
+    }
+
+    #[tokio::test]
+    async fn show_one_attribute() {
+        let (mut session, buf) = empty_session();
+        session.config.session_user = "alice".to_owned();
+        let args = matches(&ConfigCmd, &["show", "session_user"]);
+        ConfigCmd.call(&mut session, &args).await.unwrap();
+        assert!(buf.contents().contains("session_user"));
+        assert!(buf.contents().contains("\"alice\""));
+    }
+
+    #[tokio::test]
+    async fn show_all_lists_every_attr() {
+        let (mut session, buf) = empty_session();
+        let args = matches(&ConfigCmd, &["show"]);
+        ConfigCmd.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("template_dir"));
+        assert!(out.contains("lock_wait_poll"));
+    }
+
+    #[tokio::test]
+    async fn show_unknown_attr_errors() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&ConfigCmd, &["show", "nope"]);
+        let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("unknown attribute")));
+    }
+
+    #[tokio::test]
+    async fn set_string_updates_value() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&ConfigCmd, &["set", "session_user", "bob"]);
+        ConfigCmd.call(&mut session, &args).await.unwrap();
+        assert_eq!(session.config.session_user, "bob");
+    }
+
+    #[tokio::test]
+    async fn set_bool_parses_config_spellings() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&ConfigCmd, &["set", "use_keyring", "yes"]);
+        ConfigCmd.call(&mut session, &args).await.unwrap();
+        assert!(session.config.use_keyring);
+    }
+
+    #[tokio::test]
+    async fn set_invalid_bool_rejected_and_unchanged() {
+        let (mut session, _buf) = empty_session();
+        let before = session.config.use_keyring;
+        let args = matches(&ConfigCmd, &["set", "use_keyring", "maybe"]);
+        let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("invalid boolean")));
+        assert_eq!(session.config.use_keyring, before);
+    }
+
+    #[tokio::test]
+    async fn set_unknown_attr_errors() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&ConfigCmd, &["set", "nope", "x"]);
+        let err = ConfigCmd.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(m) if m.contains("unknown or read-only")));
+    }
+}

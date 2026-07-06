@@ -101,6 +101,27 @@ impl Registry {
     }
 }
 
+/// Commands that are **REPL-only** and must not be synthesised into MCP tools.
+///
+/// Ports upstream's MCP deny-list (`AGENTS.md`): these commands drive the
+/// interactive shell (exit the loop, move the hidden active-template pointer,
+/// attach a PTY) or otherwise have no meaning for a headless client. The Phase-7
+/// `mtui-mcp` tool synthesiser skips every registry command whose name or alias
+/// appears here, and asserts at boot that the deny-list ∩ registry is exactly
+/// this set (so a renamed/removed command can't silently leak an interactive
+/// tool). Kept here, beside [`register_all`], so the deny-list and the command
+/// surface it filters live in one place.
+///
+/// Names not yet backed by a registered command (`edit`, `help`, `terms`) are
+/// reserved for their later waves; [`mcp_denylist_is_consistent`] tolerates
+/// them so adding the command later does not require touching this list.
+pub const MCP_DENYLIST: &[&str] = &[
+    "quit", "exit", "EOF",    // session exit (Wave 2)
+    "switch", // active-template pointer, REPL-only (Wave 2)
+    "shell",  // interactive PTY attach, Phase 6 (Wave 2)
+    "edit", "help", "terms", // later waves; reserved
+];
+
 /// Builds the process-wide command registry — the single, explicit place every
 /// command is wired (replacing upstream's `__init_subclass__` auto-discovery).
 ///
@@ -124,6 +145,21 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::Reboot));
     registry.register(Arc::new(commands::SetRepo));
     registry.register(Arc::new(commands::ShowUpdateRepos));
+    // Wave 2 — host & session management.
+    registry.register(Arc::new(commands::AddHost));
+    registry.register(Arc::new(commands::RemoveHost));
+    registry.register(Arc::new(commands::HostState));
+    registry.register(Arc::new(commands::HostLock));
+    registry.register(Arc::new(commands::HostsUnlock));
+    registry.register(Arc::new(commands::Switch));
+    registry.register(Arc::new(commands::Unload));
+    registry.register(Arc::new(commands::ListTemplates));
+    registry.register(Arc::new(commands::Whoami));
+    registry.register(Arc::new(commands::ListProducts));
+    registry.register(Arc::new(commands::ReloadProducts));
+    registry.register(Arc::new(commands::ConfigCmd));
+    registry.register(Arc::new(commands::Quit));
+    registry.register(Arc::new(commands::Shell));
     registry
 }
 
@@ -187,7 +223,78 @@ mod tests {
         ] {
             assert!(r.contains(name), "expected {name} to be registered");
         }
-        assert_eq!(r.len(), 10);
+    }
+
+    #[test]
+    fn register_all_wires_wave2_commands() {
+        let r = register_all();
+        // Wave 2 — host & session management.
+        for name in [
+            "add_host",
+            "remove_host",
+            "set_host_state",
+            "lock",
+            "unlock",
+            "switch",
+            "unload",
+            "list_templates",
+            "whoami",
+            "list_products",
+            "reload_products",
+            "config",
+            "quit",
+            "shell",
+        ] {
+            assert!(r.contains(name), "expected {name} to be registered");
+        }
+        // `quit` also answers to its REPL aliases.
+        assert!(r.contains("exit"));
+        assert!(r.contains("EOF"));
+    }
+
+    #[test]
+    fn register_all_command_count() {
+        // 10 Wave 1 + 14 Wave 2 = 24 canonical commands.
+        assert_eq!(register_all().len(), 24);
+    }
+
+    #[test]
+    fn mcp_denylist_covers_wave2_repl_only_commands() {
+        // The REPL-only Wave 2 commands must be denied MCP tool synthesis.
+        for name in ["quit", "exit", "EOF", "switch", "shell"] {
+            assert!(
+                MCP_DENYLIST.contains(&name),
+                "{name} must be on the MCP deny-list"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_denylist_is_consistent() {
+        // Every deny-listed name that is *registered* must be an interactive
+        // command (present as a name or alias); names not yet backed by a
+        // command (reserved for later waves) are tolerated. Nothing in the
+        // deny-list may be a duplicate.
+        let r = register_all();
+        let mut seen = std::collections::HashSet::new();
+        for name in MCP_DENYLIST {
+            assert!(seen.insert(*name), "duplicate deny-list entry: {name}");
+            // A registered deny-listed name resolves; an unregistered one is a
+            // reserved placeholder for a later wave.
+            let _reserved_or_registered = r.contains(name);
+        }
+        // Sanity: the currently-registered deny-listed commands are exactly the
+        // Wave 2 REPL-only set (quit+aliases, switch, shell). Reserved names
+        // (edit/help/terms) are not yet registered.
+        let registered_denied: Vec<&str> = MCP_DENYLIST
+            .iter()
+            .copied()
+            .filter(|n| r.contains(n))
+            .collect();
+        assert_eq!(
+            registered_denied,
+            vec!["quit", "exit", "EOF", "switch", "shell"]
+        );
     }
 
     #[test]

@@ -45,7 +45,7 @@ pub use display::{ColorMode, CommandPromptDisplay, page};
 pub use engine::{EngineError, dispatch_argv, dispatch_line};
 pub use entrypoint::{ExitStatus, run_once};
 pub use error::{CommandError, CommandResult};
-pub use registry::{Registry, register_all};
+pub use registry::{MCP_DENYLIST, Registry, register_all};
 pub use session::Session;
 pub use template_registry::TemplateRegistry;
 pub use wiring::{WorkflowPlanProvider, build_plan_provider, inject_plan_provider};

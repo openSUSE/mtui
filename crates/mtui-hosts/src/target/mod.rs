@@ -269,6 +269,16 @@ impl Target {
         self.mode
     }
 
+    /// Sets the per-host execution mode (the REPL `set_host_state`
+    /// `serial`/`parallel` variants).
+    ///
+    /// The mode counterpart to [`set_state`](Self::set_state): upstream
+    /// `HostState` sets `target.mode` for the `serial`/`parallel` choices and
+    /// `target.state` for the enabled/disabled/dryrun choices.
+    pub fn set_mode(&mut self, mode: ExecutionMode) {
+        self.mode = mode;
+    }
+
     /// Whether a live connection is currently attached.
     #[must_use]
     pub fn is_connected(&self) -> bool {
@@ -469,6 +479,28 @@ impl Target {
     pub fn set_system(&mut self, system: System, transactional: bool) {
         self.system = system;
         self.transactional = transactional;
+    }
+
+    /// Re-parses the host's system/product over the live connection and records
+    /// the result.
+    ///
+    /// Ports upstream `Target.reload_system` (driven by the `reload_products`
+    /// command): re-runs [`parse_system`](parsers::parse_system) and stores the
+    /// `(System, transactional)` pair via [`set_system`](Self::set_system). A
+    /// no-op (logged) when the target is not connected; a parse failure is
+    /// logged and the previously recorded system is left untouched, matching the
+    /// crate's best-effort degradation elsewhere.
+    pub async fn reload_system(&mut self) {
+        let Some(conn) = self.connection.as_mut() else {
+            tracing::debug!(host = %self.hostname, "reload_system: not connected");
+            return;
+        };
+        match parsers::parse_system(conn.as_mut()).await {
+            Ok((system, transactional)) => self.set_system(system, transactional),
+            Err(e) => {
+                tracing::warn!(host = %self.hostname, error = %e, "reload_system: parse failed");
+            }
+        }
     }
 
     /// The per-host tracked packages (upstream `Target.packages`).
@@ -887,6 +919,51 @@ mod tests {
         );
         t.set_state(TargetState::Disabled);
         assert_eq!(t.state(), TargetState::Disabled);
+    }
+
+    #[test]
+    fn set_mode_switches_execution_mode() {
+        let mut t = Target::new(
+            &cfg(),
+            "h.example.com",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+        );
+        t.set_mode(ExecutionMode::Serial);
+        assert_eq!(t.mode(), ExecutionMode::Serial);
+        t.set_mode(ExecutionMode::Parallel);
+        assert_eq!(t.mode(), ExecutionMode::Parallel);
+    }
+
+    #[tokio::test]
+    async fn reload_system_reparses_over_live_connection() {
+        // A SUSE host whose product XML parses to SLES 15-SP5.
+        let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
+        let conn = MockConnection::new("h1")
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file("/etc/products.d/SLES.prod", prod.to_vec());
+        let mut t = enabled_with(conn);
+        // Starts with the `unknown` placeholder before any parse.
+        assert_eq!(t.system().get_base().name, "unknown");
+
+        t.reload_system().await;
+
+        assert_eq!(t.system().get_base().name, "SLES");
+        assert_eq!(t.system().get_base().version, "15-SP5");
+    }
+
+    #[tokio::test]
+    async fn reload_system_on_unconnected_is_noop() {
+        let mut t = Target::new(
+            &cfg(),
+            "h.example.com",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+        );
+        t.reload_system().await;
+        // No connection -> system untouched (still the unknown placeholder).
+        assert_eq!(t.system().get_base().name, "unknown");
     }
 
     // --- run() state machine ------------------------------------------------

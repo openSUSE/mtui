@@ -33,6 +33,15 @@ pub struct Session {
     /// interactive `switch` to pick an active one, an otherwise-unscoped command
     /// fans out across every template instead of silently picking one.
     pub interactive: bool,
+    /// Set by the `quit` command to ask the interactive REPL loop to exit after
+    /// the current dispatch returns.
+    ///
+    /// The Rust replacement for upstream `Quit` raising `SystemExit`/returning a
+    /// truthy value from `onecmd`: rather than routing process-exit through the
+    /// command error channel, `quit` flips this flag and returns `Ok(())`; the
+    /// Phase-6 REPL checks [`should_exit`](Self::should_exit) after each line and
+    /// breaks its loop. Headless callers (MCP) ignore it.
+    should_exit: bool,
 }
 
 impl Session {
@@ -47,6 +56,7 @@ impl Session {
             templates,
             display: CommandPromptDisplay::stdout(),
             interactive,
+            should_exit: false,
         }
     }
 
@@ -59,6 +69,7 @@ impl Session {
             templates,
             display,
             interactive,
+            should_exit: false,
         }
     }
 
@@ -109,6 +120,20 @@ impl Session {
     /// Restores the active report's targets, undoing [`take_targets`](Self::take_targets).
     pub fn restore_targets(&mut self, targets: HostsGroup) {
         self.templates.active_mut().base_mut().targets = targets;
+    }
+
+    /// Requests that the interactive REPL loop exit after the current dispatch.
+    ///
+    /// Set by the `quit` command; read by the Phase-6 REPL via
+    /// [`should_exit`](Self::should_exit).
+    pub fn request_exit(&mut self) {
+        self.should_exit = true;
+    }
+
+    /// Whether the `quit` command has asked the REPL loop to exit.
+    #[must_use]
+    pub fn should_exit(&self) -> bool {
+        self.should_exit
     }
 }
 

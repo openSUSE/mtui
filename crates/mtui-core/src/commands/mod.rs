@@ -24,6 +24,22 @@ mod showrepos;
 mod update;
 mod zypper;
 
+// Wave 2 — host & session management.
+mod addhost;
+mod config;
+mod hostslock;
+mod hoststate;
+mod hostsunlock;
+mod products;
+mod quit;
+mod reload;
+mod removehost;
+mod shell;
+mod switch;
+mod templates;
+mod unload;
+mod whoami;
+
 pub use downgrade::Downgrade;
 pub use localrun::LocalRun;
 pub use prepare::Prepare;
@@ -33,6 +49,21 @@ pub use setrepo::SetRepo;
 pub use showrepos::ShowUpdateRepos;
 pub use update::Update;
 pub use zypper::{Install, Uninstall};
+
+pub use addhost::AddHost;
+pub use config::ConfigCmd;
+pub use hostslock::HostLock;
+pub use hoststate::HostState;
+pub use hostsunlock::HostsUnlock;
+pub use products::ListProducts;
+pub use quit::Quit;
+pub use reload::ReloadProducts;
+pub use removehost::RemoveHost;
+pub use shell::Shell;
+pub use switch::Switch;
+pub use templates::ListTemplates;
+pub use unload::Unload;
+pub use whoami::Whoami;
 
 /// Shared test scaffolding for the Wave-1 command bodies.
 ///
@@ -135,6 +166,26 @@ pub(crate) mod testkit {
             rrid: rrid.to_owned(),
         }));
         (session, buf)
+    }
+
+    /// Builds a standalone loaded report with the named hosts (each mock echoing
+    /// `stdout`), boxed for [`TemplateRegistry::add`](crate::TemplateRegistry).
+    ///
+    /// The building block behind [`session_with_hosts`]; command tests that need
+    /// more than one loaded template call this to `add` extra reports.
+    #[must_use]
+    pub fn fake_report(
+        rrid: &str,
+        hosts: &[&str],
+        stdout: &str,
+    ) -> Box<dyn TestReport + Send + Sync> {
+        let mut base = TestReportBase::new(Config::default());
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
+        base.targets = HostsGroup::new(targets, false);
+        Box::new(FakeReport {
+            base,
+            rrid: rrid.to_owned(),
+        })
     }
 
     /// A session whose single host scripts `command` to a log that echoes the

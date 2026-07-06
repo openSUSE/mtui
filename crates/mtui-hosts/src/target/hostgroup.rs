@@ -198,6 +198,27 @@ impl HostsGroup {
         Ok(group)
     }
 
+    /// Adds (or replaces) a target in the group, keyed by its hostname.
+    ///
+    /// Ports the container half of upstream `add_host`/`HostsGroup.__setitem__`:
+    /// a target with a hostname already present replaces the existing entry
+    /// (upstream's dict assignment is last-writer-wins). The connection-building
+    /// and refhosts-from-testplatform autoconnect stay in the `add_host` command
+    /// / composition root; this is purely the container mutation.
+    pub fn add(&mut self, target: Target) {
+        self.data.insert(target.hostname().to_owned(), target);
+    }
+
+    /// Removes and returns the target named `hostname`, if present.
+    ///
+    /// Ports the container half of upstream `remove_host`/`HostsGroup.__delitem__`
+    /// (upstream disconnects the target and purges its log before dropping the
+    /// dict entry; here dropping the returned [`Target`] closes its owned
+    /// connection). `None` when no such host is in the group.
+    pub fn remove(&mut self, hostname: &str) -> Option<Target> {
+        self.data.remove(hostname)
+    }
+
     /// Runs a command across the group: parallel hosts concurrently, serial
     /// hosts one at a time.
     ///
@@ -687,6 +708,42 @@ mod tests {
         assert!(g.get_mut("h1").is_some());
         assert!(g.get_mut("nope").is_none());
         assert_eq!(g.targets().count(), 1);
+    }
+
+    // --- add / remove ------------------------------------------------------
+
+    #[test]
+    fn add_inserts_keyed_by_hostname() {
+        let mut g = HostsGroup::new(vec![enabled("h1")], true);
+        g.add(enabled("h2"));
+        assert_eq!(g.names(), vec!["h1".to_owned(), "h2".to_owned()]);
+        assert!(g.contains("h2"));
+    }
+
+    #[test]
+    fn add_same_hostname_replaces_last_writer_wins() {
+        let mut g = HostsGroup::new(vec![enabled("h1")], true);
+        // A second target with the same hostname but disabled replaces the first.
+        g.add(tgt("h1", TargetState::Disabled, ExecutionMode::Parallel));
+        assert_eq!(g.len(), 1);
+        assert_eq!(g.get("h1").unwrap().state(), TargetState::Disabled);
+    }
+
+    #[test]
+    fn remove_returns_target_and_drops_entry() {
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
+        let removed = g.remove("h1");
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().hostname(), "h1");
+        assert!(!g.contains("h1"));
+        assert_eq!(g.names(), vec!["h2".to_owned()]);
+    }
+
+    #[test]
+    fn remove_missing_is_none() {
+        let mut g = HostsGroup::new(vec![enabled("h1")], true);
+        assert!(g.remove("nope").is_none());
+        assert_eq!(g.len(), 1);
     }
 
     // --- select ------------------------------------------------------------
