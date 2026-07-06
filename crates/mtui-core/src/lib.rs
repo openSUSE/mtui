@@ -28,6 +28,7 @@ pub mod error;
 pub mod registry;
 pub mod session;
 pub mod template_registry;
+pub mod wiring;
 
 pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope};
@@ -37,3 +38,4 @@ pub use error::{CommandError, CommandResult};
 pub use registry::{Registry, register_all};
 pub use session::Session;
 pub use template_registry::TemplateRegistry;
+pub use wiring::{WorkflowPlanProvider, build_plan_provider, inject_plan_provider};

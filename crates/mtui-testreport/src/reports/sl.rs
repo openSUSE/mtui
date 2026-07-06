@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use mtui_config::options::Config;
 use mtui_datasources::gitea::Gitea;
-use mtui_hosts::HostsGroup;
+use mtui_hosts::{HostsGroup, InstallOperation, Operation, UninstallOperation};
 use mtui_types::{RequestReviewID, SystemProduct};
 use tracing::debug;
 
@@ -97,15 +97,29 @@ impl TestReport for SlReport {
     }
 
     fn list_update_commands(&self, _targets: &HostsGroup) {
-        // Deferred: upstream renders per-host commands via
-        // `target.doer('updater')['command'].safe_substitute(repa=..., packages=...)`.
-        // The `OperationGroup`/doer accessor on `Target` is not wired yet
-        // (see `TODO(Phase 4)` in `mtui-hosts::target::operation`), and
-        // `Doer::command` does not yet substitute `$repa`. The real rendering
-        // lands with that seam.
-        debug!(
-            "list_update_commands: doer rendering deferred until the OperationGroup seam is wired"
-        );
+        // Deferred to the `updater` workflow (mtui-rs-9lf): upstream renders
+        // per-host commands via `target.doer('updater')['command']
+        // .safe_substitute(repa=..., packages=...)`. That role, its `$repa`
+        // substitution, and `perform_update` are the bespoke non-template
+        // update flow tracked in mtui-rs-9lf. The install/uninstall
+        // `OperationGroup` seam (this task) does not cover it.
+        debug!("list_update_commands: updater-role rendering deferred to mtui-rs-9lf");
+    }
+
+    async fn perform_install(&self, targets: &mut HostsGroup, packages: &[String]) {
+        // Upstream `metadata.perform_install(targets, packages)` →
+        // `targets.perform_install(packages)` → `InstallOperation(...).run()`.
+        // The group resolves each host's installer doer/check through the
+        // injected `PlanProvider`; a missing doer / unwired provider surfaces
+        // inside the template as a logged early-return (no lock taken).
+        InstallOperation::new(packages.to_vec()).run(targets).await;
+    }
+
+    async fn perform_uninstall(&self, targets: &mut HostsGroup, packages: &[String]) {
+        // Upstream `metadata.perform_uninstall` → `targets.perform_uninstall`.
+        UninstallOperation::new(packages.to_vec())
+            .run(targets)
+            .await;
     }
 
     async fn check_hash(&self) -> (bool, String, String) {

@@ -354,12 +354,87 @@ impl Operation for UninstallOperation {
     }
 }
 
-// TODO(Phase 4): `impl OperationGroup for HostsGroup`. Requires the injected
-// update-workflow doer/check registries (from `mtui-testreport`, wired through
-// `mtui-core::wiring`) to resolve `plans(role)`, and the P2.9 reboot lifecycle
-// on `HostsGroup` for `reboot(...)`. Landing it here now would pull
-// `mtui-testreport` into `mtui-hosts` and break the acyclic crate graph, so the
-// binding is deferred to the composition root's injection point.
+/// The injectable seam that resolves one target's [`Doer`] + [`Check`] for a
+/// role, keyed on the target's `(release, transactional)` state.
+///
+/// This is the `mtui-hosts`-local half of the composition-root injection: it is
+/// defined here (in terms of `mtui-hosts` types only — [`Doer`] / [`Check`]) so
+/// [`HostsGroup`](super::HostsGroup) can hold it and drive
+/// [`OperationGroup::plans`] **without** depending on `mtui-testreport`. The
+/// concrete implementation lives in `mtui-testreport` (its `WorkflowRegistry`
+/// adapts its own `Role` / `ActionCommands` / `CheckFn` tables into a `Doer` and
+/// a `Check`) and is bound in at the composition root (`mtui-core::wiring`).
+///
+/// Mirrors upstream `Target.doer(role)` / `Target.check(role)`, which key the
+/// registry lookup by `(self.system.get_release(), self.transactional)`.
+pub trait PlanProvider: Send + Sync {
+    /// Resolves the [`Doer`] (command + reboot templates) for `role` at
+    /// `(release, transactional)`.
+    ///
+    /// `role` is the upstream role string (`"installer"` / `"uninstaller"` /
+    /// `"updater"` / `"preparer"` / `"downgrader"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns the role's [`HostError::MissingInstaller`] / etc. when the
+    /// registry has no entry for the key, matching upstream's `Missing*Error`.
+    fn doer(&self, role: &str, release: &str, transactional: bool) -> Result<Doer, HostError>;
+
+    /// Resolves the post-run [`Check`] for `role` at `(release, transactional)`.
+    ///
+    /// A registry with no entry yields a no-op check (upstream's `_no_checks`
+    /// fallback), so this is infallible.
+    fn check(&self, role: &str, release: &str, transactional: bool) -> Check;
+}
+
+#[cfg(test)]
+mod plan_provider_tests {
+    //! Tests for the reboot-map plumbing that exercises [`PlanProvider`] via a
+    //! test double; the full `impl OperationGroup for HostsGroup` binding is
+    //! integration-tested in `crates/mtui-hosts/tests/operation_group.rs`.
+
+    use super::*;
+
+    struct FakeProvider;
+
+    impl PlanProvider for FakeProvider {
+        fn doer(&self, role: &str, release: &str, _transactional: bool) -> Result<Doer, HostError> {
+            if release == "unknown" {
+                return Err(HostError::MissingInstaller {
+                    release: release.to_owned(),
+                });
+            }
+            let _ = role;
+            Ok(Doer::new("zypper -n in $packages", "systemctl reboot"))
+        }
+        fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
+            Box::new(|_a: CheckArgs<'_>| {})
+        }
+    }
+
+    #[test]
+    fn provider_resolves_doer_and_no_op_check() {
+        let p = FakeProvider;
+        let doer = p.doer("installer", "15", false).expect("doer");
+        assert_eq!(doer.command("pkg"), "zypper -n in pkg");
+        // The no-op check does not panic and returns unit.
+        let mut check = p.check("installer", "15", false);
+        check(CheckArgs {
+            hostname: "h1",
+            lastout: "",
+            lastin: "",
+            lasterr: "",
+            lastexit: Some(0),
+        });
+    }
+
+    #[test]
+    fn provider_missing_doer_surfaces_error() {
+        let p = FakeProvider;
+        let err = p.doer("installer", "unknown", false).unwrap_err();
+        assert!(matches!(err, HostError::MissingInstaller { .. }));
+    }
+}
 
 #[cfg(test)]
 mod tests {

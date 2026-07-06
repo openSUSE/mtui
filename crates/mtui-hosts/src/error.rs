@@ -202,6 +202,17 @@ pub enum HostError {
         /// The product release with no configured downgrader.
         release: String,
     },
+
+    /// No update-workflow [`PlanProvider`](crate::PlanProvider) has been wired
+    /// into the [`HostsGroup`](crate::HostsGroup).
+    ///
+    /// This has no upstream analogue — upstream's `Target` always has the
+    /// registries imported at module load. In the Rust redesign the doer/check
+    /// resolver is injected by the composition root (`mtui-core::wiring`) to
+    /// keep the crate graph acyclic; an operation attempted on a group before
+    /// that injection surfaces this rather than silently doing nothing.
+    #[error("no update-workflow provider wired into the host group")]
+    NoPlanProvider,
 }
 
 #[cfg(test)]

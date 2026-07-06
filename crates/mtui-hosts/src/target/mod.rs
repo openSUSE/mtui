@@ -56,7 +56,7 @@ pub use locks::{
 };
 pub use operation::{
     Check, CheckArgs, Doer, HostPlan, InstallOperation, LastOutput, Operation, OperationGroup,
-    UninstallOperation,
+    PlanProvider, UninstallOperation,
 };
 pub use package_querier::PackageQuerier;
 pub use parsers::{parse_os_release, parse_product, parse_system};

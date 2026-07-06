@@ -36,11 +36,13 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::error::{HostError, Result};
 
 use super::Target;
 use super::actions::{self, Command, RunCommand};
+use super::operation::{HostCommandMap, HostPlan, LastOutput, OperationGroup, PlanProvider};
 
 /// A composite over a group of [`Target`]s, keyed by hostname.
 ///
@@ -53,6 +55,14 @@ pub struct HostsGroup {
     /// fan-out helpers as the (Phase 6) spinner/prompt seam; see
     /// [`actions`](super::actions).
     interactive: bool,
+    /// The injected update-workflow doer/check resolver, or `None` before the
+    /// composition root wires one in.
+    ///
+    /// Held as `mtui-hosts`' own [`PlanProvider`] (not the `mtui-testreport`
+    /// registry directly) so the crate graph stays acyclic; `mtui-core::wiring`
+    /// supplies the concrete adapter. When absent, [`OperationGroup::plans`]
+    /// returns [`HostError::NoPlanProvider`] — the update workflow is unwired.
+    plan_provider: Option<Arc<dyn PlanProvider>>,
 }
 
 impl HostsGroup {
@@ -66,7 +76,28 @@ impl HostsGroup {
             .into_iter()
             .map(|h| (h.hostname().to_owned(), h))
             .collect();
-        Self { data, interactive }
+        Self {
+            data,
+            interactive,
+            plan_provider: None,
+        }
+    }
+
+    /// Injects the update-workflow [`PlanProvider`] (builder-style), enabling the
+    /// [`OperationGroup`] surface (install / uninstall).
+    ///
+    /// Called by the composition root (`mtui-core::wiring`) with the concrete
+    /// adapter over the `mtui-testreport` doer/check registries. Without it,
+    /// [`OperationGroup::plans`] returns [`HostError::NoPlanProvider`].
+    #[must_use]
+    pub fn with_plan_provider(mut self, provider: Arc<dyn PlanProvider>) -> Self {
+        self.plan_provider = Some(provider);
+        self
+    }
+
+    /// Sets (or replaces) the injected [`PlanProvider`] in place.
+    pub fn set_plan_provider(&mut self, provider: Arc<dyn PlanProvider>) {
+        self.plan_provider = Some(provider);
     }
 
     /// Whether the surrounding session is interactive.
@@ -133,6 +164,7 @@ impl HostsGroup {
     /// references across the parent and child dicts.
     pub fn select(self, hosts: Option<&[String]>, enabled: bool) -> Result<HostsGroup> {
         let interactive = self.interactive;
+        let provider = self.plan_provider.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
         let selected: Vec<Target> = match hosts {
@@ -155,7 +187,9 @@ impl HostsGroup {
             }
         };
 
-        Ok(HostsGroup::new(selected, interactive))
+        let mut group = HostsGroup::new(selected, interactive);
+        group.plan_provider = provider;
+        Ok(group)
     }
 
     /// Runs a command across the group: parallel hosts concurrently, serial
@@ -184,6 +218,116 @@ impl HostsGroup {
     /// Deletes `path` on every host in parallel.
     pub async fn sftp_remove(&mut self, path: &Path) {
         actions::sftp_remove_all(&mut self.data, path, self.interactive).await;
+    }
+}
+
+/// Drives the install/uninstall [`Operation`](super::operation::Operation)
+/// template against this group.
+///
+/// This is the composition-root binding deferred by the `TODO` in
+/// [`operation`](super::operation): it resolves each target's per-role
+/// [`Doer`](super::operation::Doer) / [`Check`](super::operation::Check) through
+/// the injected [`PlanProvider`], and delegates command/reboot fan-out to
+/// [`HostsGroup::run`] via a [`Command::PerHost`] map.
+///
+/// ## Lock lifecycle is deferred
+///
+/// Upstream `HostsGroup.update_lock` / `unlock` fan the per-host operation lock
+/// (`/var/lock/mtui.lock`) out across the group. That needs each [`Target`] to
+/// own its [`TargetLock`](super::TargetLock) as a connect-time field — a seam
+/// tracked in `mtui-rs-fly` (lock wiring) and the group reboot/lock lifecycle
+/// task `mtui-rs-owd`. Until that lands, [`update_lock`](Self::update_lock) /
+/// [`unlock`](Self::unlock) log a breadcrumb and are otherwise a no-op, so the
+/// template's `lock → run → check → reboot → unlock` ordering is preserved and
+/// the run path is exercised end-to-end offline.
+#[async_trait::async_trait]
+impl OperationGroup for HostsGroup {
+    fn plans(&mut self, role: &str) -> std::result::Result<Vec<HostPlan>, HostError> {
+        let provider = self
+            .plan_provider
+            .as_ref()
+            .ok_or(HostError::NoPlanProvider)?
+            .clone();
+
+        let mut plans = Vec::with_capacity(self.data.len());
+        for target in self.data.values() {
+            // Upstream keys the registry lookup on
+            // `(self.system.get_release(), self.transactional)`. An unknown /
+            // unparsed system has no release, which upstream surfaces as the
+            // role's Missing*Error (no doer for an empty key) — reproduce that.
+            let release = target.system().get_release().map_err(|_| match role {
+                "uninstaller" => HostError::MissingUninstaller {
+                    release: String::new(),
+                },
+                "updater" => HostError::MissingUpdater {
+                    release: String::new(),
+                },
+                "preparer" => HostError::MissingPreparer {
+                    release: String::new(),
+                },
+                "downgrader" => HostError::MissingDowngrader {
+                    release: String::new(),
+                },
+                _ => HostError::MissingInstaller {
+                    release: String::new(),
+                },
+            })?;
+            let transactional = target.transactional();
+            let doer = provider.doer(role, &release, transactional)?;
+            let check = provider.check(role, &release, transactional);
+            plans.push(HostPlan {
+                hostname: target.hostname().to_owned(),
+                transactional,
+                doer,
+                check,
+            });
+        }
+        Ok(plans)
+    }
+
+    async fn update_lock(&mut self) {
+        // Deferred: group-level operation-lock fan-out needs the per-Target
+        // TargetLock field (mtui-rs-fly) and the group lock/reboot lifecycle
+        // (mtui-rs-owd). The template's ordering contract is preserved.
+        tracing::debug!(
+            hosts = %self.names().join(", "),
+            "update_lock: group operation-lock fan-out deferred to the lock-wiring seam"
+        );
+    }
+
+    async fn run(&mut self, commands: HostCommandMap) {
+        let map: BTreeMap<String, String> = commands.into_iter().collect();
+        HostsGroup::run(self, Command::PerHost(map)).await;
+    }
+
+    async fn reboot(&mut self, reboot: HostCommandMap) {
+        if reboot.is_empty() {
+            return;
+        }
+        // Only transactional hosts contribute reboot entries. Running the reboot
+        // command is the observable action here; the reconnect / boot-id
+        // verification lifecycle is the group reboot task (mtui-rs-owd).
+        let map: BTreeMap<String, String> = reboot.into_iter().collect();
+        HostsGroup::run(self, Command::PerHost(map)).await;
+    }
+
+    async fn unlock(&mut self) {
+        tracing::debug!(
+            hosts = %self.names().join(", "),
+            "unlock: group operation-lock release deferred to the lock-wiring seam"
+        );
+    }
+
+    fn last_output(&self, hostname: &str) -> LastOutput {
+        match self.data.get(hostname) {
+            Some(t) => LastOutput {
+                lastout: t.lastout().to_owned(),
+                lastin: t.lastin().to_owned(),
+                lasterr: t.lasterr().to_owned(),
+                lastexit: t.lastexit(),
+            },
+            None => LastOutput::default(),
+        }
     }
 }
 

@@ -232,6 +232,24 @@ pub trait TestReport {
     /// `list_update_commands`). The null object is a no-op.
     fn list_update_commands(&self, targets: &HostsGroup);
 
+    /// Installs `packages` on every host in `targets` (upstream
+    /// `metadata.perform_install` → `targets.perform_install`).
+    ///
+    /// Drives the [`InstallOperation`](mtui_hosts::InstallOperation) template
+    /// through the group's [`OperationGroup`](mtui_hosts::OperationGroup) impl,
+    /// which resolves each host's installer doer/check via the injected
+    /// `PlanProvider` (wired at the composition root). The default is a no-op —
+    /// the null report has nothing to install — so only reports backed by real
+    /// doer tables override it.
+    async fn perform_install(&self, _targets: &mut HostsGroup, _packages: &[String]) {}
+
+    /// Uninstalls `packages` from every host in `targets` (upstream
+    /// `metadata.perform_uninstall` → `targets.perform_uninstall`).
+    ///
+    /// Drives the [`UninstallOperation`](mtui_hosts::UninstallOperation)
+    /// template; see [`perform_install`](Self::perform_install). Default no-op.
+    async fn perform_uninstall(&self, _targets: &mut HostsGroup, _packages: &[String]) {}
+
     /// Verifies the loaded template hash (upstream `check_hash`).
     ///
     /// Returns `(ok, expected, actual)`. The null object reports `(true, "",

@@ -161,3 +161,74 @@ fn list_update_commands_is_a_noop_stub() {
     // Deferred doer-rendering: must not panic and must not require a doer seam.
     r.list_update_commands(&HostsGroup::new(Vec::new(), false));
 }
+
+// --- perform_install / perform_uninstall (OperationGroup seam) --------------
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use mtui_hosts::{Check, CheckArgs, Doer, HostError, MockConnection, PlanProvider, Target};
+use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::hostlog::CommandLog;
+use mtui_types::system::{System, SystemProduct};
+
+/// A minimal provider yielding one fixed installer/uninstaller doer, so the
+/// report's `perform_*` drives a real command through the group.
+struct FixedProvider;
+
+impl PlanProvider for FixedProvider {
+    fn doer(&self, _role: &str, _release: &str, _transactional: bool) -> Result<Doer, HostError> {
+        Ok(Doer::new(
+            "zypper -n in -y -l $packages",
+            "systemctl reboot",
+        ))
+    }
+    fn check(&self, _role: &str, _release: &str, _transactional: bool) -> Check {
+        Box::new(|_a: CheckArgs<'_>| {})
+    }
+}
+
+fn sles_group() -> (HostsGroup, MockConnection) {
+    let conn = MockConnection::new("h1").with_default(CommandLog::new("", "done", "", 0, 1));
+    let handle = conn.clone();
+    let mut t = Target::with_connection(
+        "h1",
+        TargetState::Enabled,
+        ExecutionMode::Parallel,
+        Box::new(conn),
+    );
+    t.set_system(
+        System::new(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            BTreeSet::new(),
+            false,
+        ),
+        false,
+    );
+    let group = HostsGroup::new(vec![t], false).with_plan_provider(Arc::new(FixedProvider));
+    (group, handle)
+}
+
+#[tokio::test]
+async fn perform_install_drives_installer_doer() {
+    let r = SlReport::new(config());
+    let (mut group, handle) = sles_group();
+
+    r.perform_install(&mut group, &["pkg-a".to_owned(), "pkg-b".to_owned()])
+        .await;
+
+    assert_eq!(
+        handle.commands(),
+        vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn perform_uninstall_drives_uninstaller_doer() {
+    let r = SlReport::new(config());
+    let (mut group, handle) = sles_group();
+
+    r.perform_uninstall(&mut group, &["pkg".to_owned()]).await;
+
+    assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg".to_owned()]);
+}
