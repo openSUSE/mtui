@@ -12,11 +12,15 @@
 //! This is a redesign, not a 1:1 transpile (see `AGENTS.md`), so a few surfaces
 //! differ where it improves the tool:
 //!
-//! * **`-V/--version`** prints just `mtui <version>`. Upstream additionally
-//!   listed key Python dependency versions (paramiko, openqa-client) to ease
-//!   bug-report triage; the Rust analogue of that debugging aid — a curated
-//!   dependency-version block — is deferred to a follow-up task, so P5.4 ships
-//!   the app version only.
+//! * **`-V/--version`** prints `mtui <version> (<sha>[-dirty], <profile>,
+//!   <target>)`. Upstream listed separately-installed *runtime* dependency
+//!   versions (paramiko, openqa-client) because those could drift per operator
+//!   environment; a statically-compiled binary has no such drift (deps are
+//!   compiled in at lockfile-pinned versions), so that block would be redundant.
+//!   What *does* vary for an out-of-tree build is the build provenance — commit,
+//!   profile, target — which [`build.rs`](../../build.rs) captures into the
+//!   `MTUI_LONG_VERSION` env var fed to clap's `long_version` below. Outside a
+//!   git checkout the sha field is omitted; profile and target are always shown.
 //! * **`-a/--auto-review-id` vs `-k/--kernel-review-id`** upstream construct two
 //!   distinct `UpdateID` subclasses that later stamp `TestReport.workflow`. Here
 //!   both parse into the same [`UpdateID`] value type (all this crate has today)
@@ -42,7 +46,10 @@ use mtui_types::{UpdateID, Workflow};
 #[derive(Debug, Parser)]
 #[command(
     name = "mtui",
-    version,
+    // Both `-V` and `--version` carry the full provenance block: clap uses
+    // `version` for `-V` and `long_version` for `--version`, so set both.
+    version = env!("MTUI_LONG_VERSION"),
+    long_version = env!("MTUI_LONG_VERSION"),
     about = "Maintenance Test Update Installer",
     long_about = None,
     disable_help_subcommand = true
