@@ -145,7 +145,7 @@ impl ExportContext {
         let mut add_empty_line = false;
         for fn_name in filenames {
             let install_log = format!("{reports_url}/{}/{install_logs}/{fn_name}\n", self.rrid);
-            if !self.template[o..].iter().any(|l| *l == install_log) {
+            if !self.template[o..].contains(&install_log) {
                 index += 1;
                 self.template.insert(index, install_log);
                 add_empty_line = true;

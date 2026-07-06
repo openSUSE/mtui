@@ -79,10 +79,10 @@ impl KernelExport {
         if let Ok(entries) = std::fs::read_dir(&in_path) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("log") {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        filenames.push(name.to_string());
-                    }
+                if path.extension().and_then(|e| e.to_str()) == Some("log")
+                    && let Some(name) = path.file_name().and_then(|n| n.to_str())
+                {
+                    filenames.push(name.to_string());
                 }
             }
         }
@@ -202,5 +202,54 @@ mod tests {
         let before = ex.ctx.template.clone();
         ex.kernel_results("t");
         assert_eq!(ex.ctx.template, before);
+    }
+
+    struct OkFetcher;
+
+    #[async_trait::async_trait]
+    impl BytesFetcher for OkFetcher {
+        async fn get_bytes(&self, _url: &str) -> Result<Vec<u8>, String> {
+            Ok(b"log".to_vec())
+        }
+    }
+
+    fn temp_ctx(template: &[&str]) -> ExportContext {
+        let mut cfg = Config::default();
+        let dir = tempfile::tempdir().unwrap();
+        // Leak the tempdir so the path stays valid for the test's lifetime.
+        cfg.template_dir = dir.keep();
+        let rrid = "SUSE:Maintenance:1:2".parse().unwrap();
+        let lines: Vec<String> = template.iter().map(|s| (*s).to_string()).collect();
+        ExportContext::new(cfg, &lines, false, rrid)
+    }
+
+    #[tokio::test]
+    async fn get_logs_creates_dirs_and_lists_logs() {
+        let ex = KernelExport::new(temp_ctx(&[]), Vec::new(), None);
+        let in_path = ex.ctx.install_logs_dir();
+        std::fs::create_dir_all(&in_path).unwrap();
+        std::fs::write(in_path.join("h-zypper-x86_64.log"), b"x").unwrap();
+        std::fs::write(in_path.join("ignore.txt"), b"x").unwrap();
+
+        let out = ex.get_logs(&OkFetcher).await;
+        assert_eq!(out, vec!["h-zypper-x86_64.log".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn run_returns_template_with_footer() {
+        let mut ex = KernelExport::new(
+            temp_ctx(&[
+                "regression tests:\n",
+                "\n",
+                "(put your details here)\n",
+                "\n",
+                "build log review:\n",
+            ]),
+            Vec::new(),
+            None,
+        );
+        let out = ex.run(&OkFetcher).await;
+        assert!(out.iter().any(|l| l.contains("Results from openQA:")));
+        assert!(out.last().unwrap().starts_with("## export MTUI:"));
     }
 }

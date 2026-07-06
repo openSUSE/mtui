@@ -71,7 +71,7 @@ impl AutoExport {
         let results = self.auto.as_ref().and_then(AutoOpenQA::results);
         match results {
             None => "UNKNOWN",
-            Some(rs) if rs.is_empty() => "UNKNOWN",
+            Some([]) => "UNKNOWN",
             Some(rs) => {
                 if rs
                     .iter()
@@ -341,5 +341,40 @@ mod tests {
         let body = ex.ctx.template.concat();
         assert!(body.contains("Install tests:\n"));
         assert!(body.contains("Installation tests done in openQA with following results: UNKNOWN"));
+    }
+
+    #[tokio::test]
+    async fn get_logs_empty_without_auto() {
+        let ex = AutoExport::new(ctx(), None, None);
+        let out = ex
+            .get_logs(
+                &OkFetcher(b"x".to_vec()),
+                &super::super::base::DenyOverwrite,
+            )
+            .await;
+        assert!(out.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_without_auto_runs_pipeline_and_returns_template() {
+        // With no auto connector, run still executes install_results + sysinfo
+        // + dedup and returns the mutated template.
+        let mut cfg = Config::default();
+        // Point template_dir at a temp dir so any install-logs write is isolated.
+        let dir = tempfile::tempdir().unwrap();
+        cfg.template_dir = dir.path().to_path_buf();
+        let rrid = "SUSE:Maintenance:1:2".parse().unwrap();
+        let ctx = ExportContext::new(cfg, &["body\n".to_string()], false, rrid);
+        let mut ex = AutoExport::new(ctx, None, None);
+
+        let out = ex
+            .run(
+                &OkFetcher(b"x".to_vec()),
+                &super::super::base::DenyOverwrite,
+            )
+            .await;
+
+        assert!(out.iter().any(|l| l.contains("Install tests:")));
+        assert!(out.last().unwrap().starts_with("## export MTUI:"));
     }
 }
