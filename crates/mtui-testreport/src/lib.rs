@@ -6,11 +6,17 @@
 //! product-normalization tables. The remaining concrete reports, checkout
 //! backends, and update workflow arrive in the later Phase 4 tasks.
 
+pub mod checkout;
 pub mod metadata_parsers;
 pub mod products;
 pub mod reports;
 pub mod testreport;
 
+pub use checkout::{
+    CheckoutError, CheckoutRunError, ReadOutcome, SvnOutcome, SvnRunner, TemplateIoError,
+    TestReportNotLoaded, TokioSvnRunner, checkout_and_read, svn_commit_testreport,
+    testreport_svn_checkout,
+};
 pub use metadata_parsers::{JSONParser, MetadataEnvelope, ReducedMetadataParser, patchinfo_titles};
 pub use products::{normalize, normalize_16};
 pub use reports::repoparse::{gitrepoparse, parse_product, reporepoparse, slrepoparse};

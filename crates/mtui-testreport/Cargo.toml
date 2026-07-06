@@ -20,9 +20,10 @@ serde_json.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
 tracing.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
 tempfile = "3"
-tokio.workspace = true
 wiremock.workspace = true
