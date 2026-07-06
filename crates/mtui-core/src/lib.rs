@@ -12,10 +12,13 @@
 //!   [`CommandPromptDisplay`].
 //!
 //! P5.2 adds the explicit command [`Registry`] and the line-dispatch
-//! [`engine`], the single machinery both the REPL and MCP dispatch through. The
-//! wider display surface (P5.3), the argparse↔clap fidelity layer (P5.4), and
-//! the wiring composition root (P5.5) build on top of these.
+//! [`engine`], the single machinery both the REPL and MCP dispatch through. P5.4
+//! adds [`args`] — the top-level process argument parser (`clap`) that mirrors
+//! upstream `mtui.cli.args`, distinct from the per-command parsers the engine
+//! synthesises. The wider display surface (P5.3) and the wiring composition root
+//! (P5.5) build on top of these.
 
+pub mod args;
 pub mod command;
 pub mod display;
 pub mod engine;
@@ -24,6 +27,7 @@ pub mod registry;
 pub mod session;
 pub mod template_registry;
 
+pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope};
 pub use display::{ColorMode, CommandPromptDisplay};
 pub use engine::{EngineError, dispatch_argv, dispatch_line};

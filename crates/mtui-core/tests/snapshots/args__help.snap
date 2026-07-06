@@ -1,0 +1,48 @@
+---
+source: crates/mtui-core/tests/args.rs
+expression: "rendered(&[\"--help\"])"
+---
+Maintenance Test Update Installer
+
+Usage: mtui [OPTIONS]
+
+Options:
+  -t, --template-dir <DIR>
+          Override config `mtui.template_dir`
+
+  -s, --sut <HOSTS>
+          Cumulatively override the default hosts from the template (format: `hostname,hostname2`). May be given more than once
+
+  -w, --connection-timeout <SECONDS>
+          Override config `mtui.connection_timeout` (seconds)
+
+  -d, --debug
+          Enable debugging output
+
+  -c, --config <FILE>
+          Override the default config path
+
+      --color <COLOR>
+          Control coloured output
+
+          Possible values:
+          - auto:   Colour iff stderr is a TTY and `NO_COLOR` is unset. The default
+          - always: Always emit colour escapes
+          - never:  Never emit colour escapes
+          
+          [default: auto]
+
+  -g, --gitea-token <TOKEN>
+          Gitea access token
+
+  -a, --auto-review-id <RequestReviewID>
+          OBS request review id, run under the automatic workflow (example: `SUSE:Maintenance:1:1`)
+
+  -k, --kernel-review-id <RequestReviewID>
+          OBS kernel/live-patch request review id, run under the kernel workflow (example: `SUSE:Maintenance:1:1`)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
