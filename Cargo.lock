@@ -1907,6 +1907,7 @@ name = "mtui-testreport"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "insta",
  "mtui-config",
  "mtui-datasources",
