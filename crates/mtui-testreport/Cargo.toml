@@ -13,3 +13,12 @@ workspace = true
 mtui-types.workspace = true
 mtui-config.workspace = true
 mtui-hosts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+quick-xml.workspace = true
+regex.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+tempfile = "3"

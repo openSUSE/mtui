@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner};
-use mtui_types::{Product, Workflow};
+use mtui_types::{Product, RequestReviewID, Workflow};
 
 /// Shared state common to every [`TestReport`] implementation.
 ///
@@ -93,8 +93,27 @@ pub struct TestReportBase {
     pub reviewer: String,
     /// Update repository string.
     pub repository: String,
-    /// Package `name -> version` map.
-    pub packages: HashMap<String, String>,
+    /// Update repository URLs (upstream `repositories`, a `frozenset[str]`).
+    pub repositories: HashSet<String>,
+    /// Nested package map: `product -> { package name -> version }`.
+    ///
+    /// A test report routinely spans multiple products, each shipping its own
+    /// set of packages and versions (mirrors upstream `self.packages`, a
+    /// `dict[str, dict[str, str]]`). Consumed by the future `get_package_list`
+    /// which iterates products and flattens their package sets.
+    pub packages: HashMap<String, HashMap<String, String>>,
+    /// Parsed Request Review ID (upstream `rrid`), or `None` when unset/invalid.
+    pub rrid: Option<RequestReviewID>,
+    /// Update rating (upstream `rating`).
+    pub rating: Option<String>,
+    /// Raw request id from the metadata envelope (upstream `realid`, JSON `id`).
+    pub realid: Option<String>,
+    /// Gitea pull-request reference (upstream `giteapr`, JSON `gitea_pr`).
+    pub giteapr: Option<String>,
+    /// Gitea pull-request API URL (upstream `giteaprapi`, JSON `gitea_pr_api`).
+    pub giteaprapi: Option<String>,
+    /// Gitea commit hash (upstream `giteacohash`, JSON `gitea_commit_hash`).
+    pub giteacohash: Option<String>,
     /// `hostname -> product-drift warning lines` from the last connect.
     pub product_warnings: HashMap<String, Vec<String>>,
 }
@@ -129,7 +148,14 @@ impl TestReportBase {
             packager: String::new(),
             reviewer: String::new(),
             repository: String::new(),
+            repositories: HashSet::new(),
             packages: HashMap::new(),
+            rrid: None,
+            rating: None,
+            realid: None,
+            giteapr: None,
+            giteaprapi: None,
+            giteacohash: None,
             product_warnings: HashMap::new(),
         }
     }
@@ -227,7 +253,14 @@ mod tests {
         assert_eq!(base.packager, "");
         assert_eq!(base.reviewer, "");
         assert_eq!(base.repository, "");
+        assert!(base.repositories.is_empty());
         assert!(base.packages.is_empty());
+        assert!(base.rrid.is_none());
+        assert!(base.rating.is_none());
+        assert!(base.realid.is_none());
+        assert!(base.giteapr.is_none());
+        assert!(base.giteaprapi.is_none());
+        assert!(base.giteacohash.is_none());
         assert!(base.product_warnings.is_empty());
     }
 }
