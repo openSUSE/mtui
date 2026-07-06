@@ -15,3 +15,17 @@ mtui-config.workspace = true
 mtui-hosts.workspace = true
 mtui-datasources.workspace = true
 mtui-testreport.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+owo-colors.workspace = true
+indexmap.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+mtui-types.workspace = true
+insta.workspace = true
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

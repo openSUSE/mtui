@@ -60,6 +60,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2"
 anyhow = "1"
+# terminal color (CommandPromptDisplay) — supports_color-gated ANSI wrapping
+owo-colors = "4"
+# stable insertion-ordered map (TemplateRegistry entries) + per-registry id
+indexmap = "2"
+uuid = { version = "1", features = ["v4"] }
 # dev / test
 insta = "1"
 wiremock = "0.6"
