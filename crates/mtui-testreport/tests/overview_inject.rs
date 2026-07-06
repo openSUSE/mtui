@@ -212,3 +212,22 @@ fn blank_counts_stable_across_reexports() {
     assert_eq!(blanks_first, blanks_second);
     assert_eq!(blanks_second, blanks_third);
 }
+
+/// Golden snapshot of the fully-injected template.
+///
+/// The `overview_inject` BEGIN/END block is a **cross-implementation text
+/// contract** (see `AGENTS.md`: "the `overview_inject` BEGIN/END idempotent
+/// block under `regression tests:`"). The other tests in this file assert
+/// placement, idempotency, and blank-line invariants structurally; this one
+/// freezes the exact rendered bytes so the block layout cannot silently drift
+/// away from what a Python `mtui` reading the same template would expect.
+#[test]
+fn injected_block_text_is_stable() {
+    let mut template = template_with_regression_section();
+    let (s, a, b) = sample_overview();
+
+    let modified = inject_overview(&mut template, &s, &a, &b, false);
+    assert!(modified);
+
+    insta::assert_snapshot!("overview_inject_block", body(&template));
+}

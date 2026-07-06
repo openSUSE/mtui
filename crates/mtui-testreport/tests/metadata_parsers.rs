@@ -183,6 +183,63 @@ fn json_parser_tolerates_missing_optional_keys() {
     assert!(report.repositories.is_empty());
 }
 
+/// Golden snapshot of the parsed `metadata.json` envelope.
+///
+/// The field-by-field assertions in `json_parser_parses_golden_fixture` pin
+/// individual values; this freezes the whole parsed view of the pinned upstream
+/// fixture as one stable rendering, so a regression in the JSON envelope -> struct
+/// mapping surfaces as a single reviewable snapshot diff. `HashMap`/`HashSet`
+/// fields are rendered in sorted order to keep the snapshot deterministic.
+#[test]
+fn parsed_metadata_json_is_stable() {
+    let mut report = empty_report();
+    JSONParser::parse_str(&mut report, METADATA_JSON).expect("valid metadata.json");
+
+    let mut out = String::new();
+    let mut push = |k: &str, v: String| out.push_str(&format!("{k}: {v}\n"));
+
+    push(
+        "rrid",
+        report
+            .rrid
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+    );
+    push("realid", report.realid.clone().unwrap_or_default());
+    push("category", report.category.clone());
+    push("rating", report.rating.clone().unwrap_or_default());
+    push("packager", report.packager.clone());
+    push("reviewer", report.reviewer.clone());
+    push("repository", report.repository.clone());
+
+    let sorted = |m: &HashMap<String, String>| {
+        let mut v: Vec<_> = m.iter().map(|(k, val)| format!("{k}={val}")).collect();
+        v.sort();
+        v.join(", ")
+    };
+    push("bugs", sorted(&report.bugs));
+    push("jira", sorted(&report.jira));
+
+    let mut products = report.products.clone();
+    products.sort();
+    push("products", products.join(" | "));
+
+    let mut platforms = report.testplatforms.clone();
+    platforms.sort();
+    push("testplatforms", platforms.join(" | "));
+
+    let mut pkgs: Vec<String> = report
+        .packages
+        .iter()
+        .flat_map(|(prod, set)| set.iter().map(move |(n, ver)| format!("{prod}/{n}={ver}")))
+        .collect();
+    pkgs.sort();
+    push("packages", pkgs.join(", "));
+
+    insta::assert_snapshot!("parsed_metadata_json", out);
+}
+
 #[test]
 fn patchinfo_titles_maps_ids_to_titles() {
     // Port of upstream `test_patchinfo_titles`.
