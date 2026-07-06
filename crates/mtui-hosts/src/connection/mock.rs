@@ -437,6 +437,13 @@ impl Connection for MockConnection {
         &self.hostname
     }
 
+    fn clone_box(&self) -> Box<dyn Connection> {
+        // `MockConnection` is `Clone` and shares its scripted state (issued
+        // commands, files, sftp ops) via `Arc`, so the clone observes the same
+        // log — a lock built from it force-unlocks against the same mock.
+        Box::new(self.clone())
+    }
+
     async fn run(&mut self, command: &str) -> Result<CommandLog> {
         self.issued
             .lock()

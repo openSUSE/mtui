@@ -232,3 +232,90 @@ async fn perform_uninstall_drives_uninstaller_doer() {
 
     assert_eq!(handle.commands(), vec!["zypper -n in -y -l pkg".to_owned()]);
 }
+
+// --- set_repo (SetRepo impl -> RepoManager::run_zypper) ---------------------
+
+use mtui_hosts::{RepoOp, SetRepo};
+
+/// Builds an enabled single target over a mock connection whose product matches
+/// `sles`, returning the target plus a handle to inspect issued commands.
+fn sles_target() -> (Target, MockConnection) {
+    let conn = MockConnection::new("h1");
+    let handle = conn.clone();
+    let mut t = Target::with_connection(
+        "h1",
+        TargetState::Enabled,
+        ExecutionMode::Parallel,
+        Box::new(conn),
+    );
+    t.set_system(
+        System::new(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            BTreeSet::new(),
+            false,
+        ),
+        false,
+    );
+    (t, handle)
+}
+
+/// An SL report whose `update_repos` maps the host's product to one URL.
+fn sl_with_repo() -> SlReport {
+    let mut r = SlReport::new(config());
+    r.base_mut().rrid = Some(rrid("SUSE:SLFO:1:2"));
+    r.base_mut().update_repos.insert(
+        SystemProduct::new("SLES", "15.5", "x86_64"),
+        "https://example/repo".to_owned(),
+    );
+    r
+}
+
+#[tokio::test]
+async fn set_repo_add_uses_sl_ar_flags() {
+    let r = sl_with_repo();
+    let (mut t, handle) = sles_target();
+
+    r.set_repo(&mut t, RepoOp::Add).await;
+
+    let cmds = handle.commands();
+    assert!(
+        cmds.iter().any(|c| c.starts_with("zypper -n ar -cfGkn ")
+            && c.contains("issue-SLES:15.5:p=1:2")
+            && c.contains("https://example/repo")),
+        "expected SL `zypper -n ar -cfGkn ... issue-...` add, got {cmds:?}"
+    );
+    assert_eq!(cmds.last().map(String::as_str), Some("zypper -n ref"));
+}
+
+#[tokio::test]
+async fn set_repo_remove_uses_rr() {
+    let r = sl_with_repo();
+    let (mut t, handle) = sles_target();
+
+    r.set_repo(&mut t, RepoOp::Remove).await;
+
+    let cmds = handle.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| c == "zypper -n rr https://example/repo"),
+        "expected `zypper -n rr <url>`, got {cmds:?}"
+    );
+}
+
+#[tokio::test]
+async fn set_repo_no_rrid_is_a_noop() {
+    // No RRID loaded -> nothing to (un)register; must not touch the host.
+    let mut r = SlReport::new(config());
+    r.base_mut().update_repos.insert(
+        SystemProduct::new("SLES", "15.5", "x86_64"),
+        "https://example/repo".to_owned(),
+    );
+    let (mut t, handle) = sles_target();
+
+    r.set_repo(&mut t, RepoOp::Add).await;
+
+    assert!(
+        handle.commands().is_empty(),
+        "no-RRID set_repo must issue no commands"
+    );
+}

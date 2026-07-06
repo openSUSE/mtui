@@ -5,8 +5,6 @@
 //! constant `(true, "", "")`).
 //!
 //! Not covered here (deferred by design, mirroring the `SlReport` boundary):
-//! * `set_repo` — lands with the `SetRepo` impl in task nbv.fly
-//!   (upstream `test_pi_set_repo_add_uses_ar_form` / `_remove` / `_unknown_raises`).
 //! * `list_update_commands` doer-rendering — awaits the `OperationGroup` seam
 //!   (upstream `test_pi_list_update_commands_invokes_display`); only the no-op
 //!   stub is smoke-checked.
@@ -91,4 +89,77 @@ fn list_update_commands_is_a_noop_stub() {
     let r = PiReport::new(config());
     // Deferred doer-rendering: must not panic and must not require a doer seam.
     r.list_update_commands(&HostsGroup::new(Vec::new(), false));
+}
+
+// --- set_repo (SetRepo impl -> RepoManager::run_zypper) ---------------------
+
+use std::collections::BTreeSet;
+
+use mtui_hosts::{MockConnection, RepoOp, SetRepo, Target};
+use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::system::{System, SystemProduct};
+
+/// An enabled single target whose product matches the seeded repo.
+fn sles_target() -> (Target, MockConnection) {
+    let conn = MockConnection::new("h1");
+    let handle = conn.clone();
+    let mut t = Target::with_connection(
+        "h1",
+        TargetState::Enabled,
+        ExecutionMode::Parallel,
+        Box::new(conn),
+    );
+    t.set_system(
+        System::new(
+            SystemProduct::new("SLES", "15.5", "x86_64"),
+            BTreeSet::new(),
+            false,
+        ),
+        false,
+    );
+    (t, handle)
+}
+
+fn pi_with_repo() -> PiReport {
+    let mut r = PiReport::new(config());
+    r.base_mut().rrid = Some(rrid("SUSE:PI:1:2"));
+    r.base_mut().update_repos.insert(
+        SystemProduct::new("SLES", "15.5", "x86_64"),
+        "https://example/repo".to_owned(),
+    );
+    r
+}
+
+#[tokio::test]
+async fn set_repo_add_uses_pi_ar_flags() {
+    let r = pi_with_repo();
+    let (mut t, handle) = sles_target();
+
+    r.set_repo(&mut t, RepoOp::Add).await;
+
+    let cmds = handle.commands();
+    // PI shares SL's add flags: `-n ar -cfGkn`.
+    assert!(
+        cmds.iter()
+            .any(|c| c.starts_with("zypper -n ar -cfGkn ") && c.contains("issue-SLES:15.5:p=1:2")),
+        "expected PI `zypper -n ar -cfGkn ...` add, got {cmds:?}"
+    );
+    assert_eq!(cmds.last().map(String::as_str), Some("zypper -n ref"));
+}
+
+#[tokio::test]
+async fn set_repo_remove_uses_rr() {
+    let r = pi_with_repo();
+    let (mut t, handle) = sles_target();
+
+    r.set_repo(&mut t, RepoOp::Remove).await;
+
+    assert!(
+        handle
+            .commands()
+            .iter()
+            .any(|c| c == "zypper -n rr https://example/repo"),
+        "expected `zypper -n rr <url>`, got {:?}",
+        handle.commands()
+    );
 }

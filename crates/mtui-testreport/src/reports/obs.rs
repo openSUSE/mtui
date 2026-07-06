@@ -12,9 +12,9 @@
 //! ## Scope (task nbv.11)
 //!
 //! Mirrors the `SlReport`/`PiReport` boundaries:
-//! * `set_repo` (the `SetRepo` impl driving `RepoManager::run_zypper`) is **not**
-//!   here: it lands in its dedicated dependent task (nbv.fly) together with the
-//!   Target lock-wiring.
+//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`]) is
+//!   implemented here (task nbv.fly): add uses upstream's OBS-specific
+//!   `-n ar -ckn` (note: no `fG`, unlike SL/PI), remove uses `-n rr`.
 //! * `list_update_commands` renders per-host commands via `target.doer('updater')`
 //!   upstream, but the `OperationGroup`/doer seam on `Target` is deferred (see the
 //!   `TODO(Phase 4)` in `mtui-hosts::target::operation`). Until it is wired this
@@ -27,11 +27,12 @@
 use std::collections::HashMap;
 
 use mtui_config::options::Config;
-use mtui_hosts::HostsGroup;
+use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
 use mtui_types::{RequestReviewID, SystemProduct};
 use tracing::debug;
 
 use super::repoparse::obsrepoparse;
+use super::set_repo_with_add_flags;
 use crate::testreport::{TestReport, TestReportBase};
 
 /// A [`TestReport`] for OBS/IBS updates (upstream `OBSTestReport`).
@@ -112,5 +113,15 @@ impl TestReport for ObsReport {
         // Upstream OBS always returns (True, "", "") — OBS/IBS checkout is via
         // osc qam / SVN, so there is no git commit hash to verify.
         (true, String::new(), String::new())
+    }
+}
+
+#[async_trait::async_trait]
+impl SetRepo for ObsReport {
+    /// Ports `OBSTestReport.set_repo`: add uses OBS's `-n ar -ckn` (no `fG`,
+    /// unlike SL/PI), remove uses `-n rr`, fanned out over
+    /// [`TestReportBase::update_repos`].
+    async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
+        set_repo_with_add_flags(&self.base, target, operation, "-n ar -ckn").await;
     }
 }

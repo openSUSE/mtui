@@ -130,10 +130,11 @@ impl<'a> RepoManager<'a> {
     ///   exit is surfaced as a WARNING (the repo was *not* registered), not
     ///   swallowed.
     /// * **`rr`** (remove-repo, `cmd` contains `"rr"`) → `zypper <cmd> <url>`.
-    /// * **anything else** → force-unlock the target and return
-    ///   [`false`], the Rust analogue of upstream's bare `ValueError`
-    ///   safeguard. (The typed error the caller sees is out of scope for the
-    ///   safeguard itself; the boolean signals "unknown command, bailed".)
+    /// * **anything else** → force-unlock the target ([`Target::unlock`] with
+    ///   `force = true`) and return [`false`], the Rust analogue of upstream's
+    ///   post-`unlock(True)` `ValueError` safeguard. (The typed error the caller
+    ///   sees is out of scope for the safeguard itself; the boolean signals
+    ///   "unknown command, bailed".)
     ///
     /// When no repo product matches the host's flattened system (`matched == 0`)
     /// a WARNING fires listing the update's products vs the host's — reproducing
@@ -149,8 +150,9 @@ impl<'a> RepoManager<'a> {
     /// surfaced as a WARNING.
     ///
     /// Returns `true` on the normal path and `false` on the unknown-cmd
-    /// safeguard (after force-unlocking, and *without* running the refresh —
-    /// matching upstream, which raises before reaching it).
+    /// safeguard (after force-unlocking via [`Target::unlock`], and *without*
+    /// running the refresh — matching upstream, which raises before reaching
+    /// it).
     pub async fn run_zypper(
         &mut self,
         cmd: &str,
@@ -226,23 +228,15 @@ impl<'a> RepoManager<'a> {
             } else {
                 // Unknown sub-command: upstream force-unlocks the target
                 // (`self.target._lock.unlock(True)`) and raises `ValueError`.
-                //
-                // The Rust `Target` does not yet own its `_lock` object as a
-                // field: upstream builds it in `Target.connect`, but that
-                // connect-time lock wiring is a documented seam (see
-                // `Target::connect` and `reporter.rs`) pending the session RRID
-                // plumbing from a later phase. Until that lands the force-unlock
-                // cannot be issued from here, so we log the safeguard and bail
-                // (returning `false`) rather than stubbing an unlock with
-                // behaviour that would not match the upstream contract.
-                //
-                // TODO(lock-wiring): once `Target` stores its `TargetLock`,
-                // call `self.target.<lock>.unlock(true).await` here before
-                // returning, and assert it in `unknown_command_*`.
+                // The `Target` now owns its `TargetLock` (built in
+                // `Target::connect`, or the test seam in `with_connection`), so
+                // we issue the force-unlock and bail with `false` — the Rust
+                // analogue of upstream's post-unlock `ValueError` safeguard.
                 warn!(
                     host = %hostname, %cmd,
-                    "unknown zypper sub-command; force-unlock deferred to lock-wiring seam, bailing"
+                    "unknown zypper sub-command; force-unlocking target and bailing"
                 );
+                self.target.unlock(true).await;
                 return false;
             }
         }
@@ -456,6 +450,46 @@ mod tests {
         assert!(
             !cmds.iter().any(|c| c == "zypper -n ref"),
             "unknown-cmd safeguard must not reach the refresh, got {cmds:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_command_force_unlocks_a_foreign_lock() {
+        use std::path::PathBuf;
+
+        use crate::connection::MockSftpOp;
+        use crate::target::locks::TARGET_LOCK_PATH;
+
+        // Seed a *foreign* operation lock on the host (different user/pid), so
+        // the unknown-cmd safeguard's `unlock(force=true)` has something to
+        // remove. The mock shares state with the lock's cloned connection, so
+        // the lock reads this file and the force-remove is observable here.
+        let sles = product("SLES", "15-SP5");
+        let conn = MockConnection::new("host1.example.com").with_file(
+            TARGET_LOCK_PATH,
+            b"1700000000:someone-else:99999:held".to_vec(),
+        );
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "host1.example.com",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+        t.set_system(system_of(sles.clone(), &[]), false);
+        let mut repos = BTreeMap::new();
+        repos.insert(sles, "https://example/repo".to_owned());
+
+        let ok = t.repo_manager().run_zypper("nosuch", &repos, &rrid()).await;
+
+        assert!(!ok, "unknown command must signal failure");
+        // The force-unlock removed the foreign lockfile.
+        assert!(
+            handle
+                .sftp_ops()
+                .contains(&MockSftpOp::Remove(PathBuf::from(TARGET_LOCK_PATH))),
+            "expected a force-unlock sftp_remove of {TARGET_LOCK_PATH}, got {:?}",
+            handle.sftp_ops()
         );
     }
 

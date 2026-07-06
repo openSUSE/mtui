@@ -67,6 +67,19 @@ pub trait Connection: Send + Sync {
     /// The hostname this connection targets.
     fn hostname(&self) -> &str;
 
+    /// Clones this connection into a fresh `Box<dyn Connection>` that shares the
+    /// same underlying transport channel.
+    ///
+    /// Upstream a [`Target`](crate::Target) and its
+    /// [`TargetLock`](crate::TargetLock) hold the *same* connection object; in
+    /// Rust each owns a `Box<dyn Connection>`, so the lock is built from a clone
+    /// of the target's connection. The clone is cheap and shares the live link
+    /// (russh's `Handle` is an `mpsc` sender; [`MockConnection`] shares its
+    /// scripted state via `Arc`), so a command or SFTP op issued through either
+    /// handle hits the same host — preserving the single-connection-per-host
+    /// contract.
+    fn clone_box(&self) -> Box<dyn Connection>;
+
     /// Runs a command over the channel, blocking until it terminates.
     ///
     /// Returns a [`CommandLog`] capturing the command, its stdout/stderr, the

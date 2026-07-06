@@ -11,9 +11,9 @@
 //! ## Scope (task nbv.12)
 //!
 //! Mirrors the `SlReport` boundaries:
-//! * `set_repo` (the `SetRepo` impl driving `RepoManager::run_zypper`) is **not**
-//!   here: it lands in its dedicated dependent task (nbv.fly) together with the
-//!   Target lock-wiring.
+//! * `set_repo` (the [`SetRepo`] impl driving [`RepoManager::run_zypper`]) is
+//!   implemented here (task nbv.fly): add uses upstream's `-n ar -cfGkn` (same as
+//!   SL), remove uses `-n rr`.
 //! * `list_update_commands` renders per-host commands via `target.doer('updater')`
 //!   upstream, but the `OperationGroup`/doer seam on `Target` is deferred (see the
 //!   `TODO(Phase 4)` in `mtui-hosts::target::operation`). Until it is wired this
@@ -24,11 +24,12 @@
 use std::collections::HashMap;
 
 use mtui_config::options::Config;
-use mtui_hosts::HostsGroup;
+use mtui_hosts::{HostsGroup, RepoOp, SetRepo, Target};
 use mtui_types::{RequestReviewID, SystemProduct};
 use tracing::debug;
 
 use super::repoparse::reporepoparse;
+use super::set_repo_with_add_flags;
 use crate::testreport::{TestReport, TestReportBase};
 
 /// A [`TestReport`] for PI updates (upstream `PITestReport`).
@@ -101,5 +102,14 @@ impl TestReport for PiReport {
     async fn check_hash(&self) -> (bool, String, String) {
         // Upstream PI always returns (True, "", "") — nothing to verify.
         (true, String::new(), String::new())
+    }
+}
+
+#[async_trait::async_trait]
+impl SetRepo for PiReport {
+    /// Ports `PITestReport.set_repo`: add uses `-n ar -cfGkn` (same as SL),
+    /// remove uses `-n rr`, fanned out over [`TestReportBase::update_repos`].
+    async fn set_repo(&self, target: &mut Target, operation: RepoOp) {
+        set_repo_with_add_flags(&self.base, target, operation, "-n ar -cfGkn").await;
     }
 }

@@ -405,6 +405,26 @@ impl Connection for SshConnection {
         &self.hostname
     }
 
+    fn clone_box(&self) -> Box<dyn Connection> {
+        // russh 0.62's `Handle` is neither `Clone` nor cheaply shareable across
+        // the reconnect-swap that `reconnect`/`close` perform, so we cannot
+        // hand out the *same* live channel here. Instead we clone the connection
+        // *identity* (host/policy/timeout) with an empty handle; the first SFTP
+        // op the clone performs opens its own session via `sftp()`'s
+        // `reconnect`-if-inactive path. This means a `TargetLock` built from the
+        // clone uses a second short-lived session to the same host for its
+        // (rare) force-unlock safeguard — functionally correct, at the cost of
+        // one extra channel on that path only. The mock double shares state via
+        // `Arc`, so offline unit tests still observe the lock's SFTP ops.
+        Box::new(Self {
+            hostname: self.hostname.clone(),
+            resolved: self.resolved.clone(),
+            policy: self.policy,
+            timeout: self.timeout,
+            handle: None,
+        })
+    }
+
     async fn run(&mut self, command: &str) -> Result<CommandLog> {
         let started = Instant::now();
 

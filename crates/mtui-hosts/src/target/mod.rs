@@ -126,6 +126,17 @@ pub struct Target {
     /// Whether the host is a transactional (read-only-root) system, set
     /// alongside [`system`](Self::system).
     transactional: bool,
+    /// The config this target was built from, retained so
+    /// [`connect`](Target::connect) can build the operation [`TargetLock`] with
+    /// the session identity / reap / wait settings (upstream keeps `self.config`
+    /// for the same reason).
+    config: Config,
+    /// The operation lock (`/var/lock/mtui.lock`), built in
+    /// [`connect`](Target::connect) from a clone of this target's connection
+    /// (upstream `self._lock = TargetLock(self.connection, self.config)`).
+    /// `None` until connected. Drives [`unlock`](Target::unlock) and the
+    /// [`RepoManager`] unknown-cmd force-unlock safeguard.
+    lock: Option<TargetLock>,
 }
 
 /// Builds the placeholder [`System`] a freshly-constructed [`Target`] carries
@@ -169,6 +180,8 @@ impl Target {
             connection: None,
             system: unknown_system(),
             transactional: false,
+            config: config.clone(),
+            lock: None,
         }
     }
 
@@ -187,6 +200,13 @@ impl Target {
     ) -> Self {
         let hostname = hostname.into();
         let (host, port) = split_host_port(&hostname);
+        let config = Config::default();
+        // Build the operation lock from a clone of the injected connection so
+        // the test seam mirrors the connected state: `unlock` / the RepoManager
+        // force-unlock safeguard have a live lock without a `connect()` call.
+        // The clone shares the mock's scripted state (`Arc`), so a lock SFTP op
+        // is observable through the original handle.
+        let lock = Some(TargetLock::new(connection.clone_box(), &config));
         Self {
             hostname,
             host,
@@ -199,6 +219,8 @@ impl Target {
             connection: Some(connection),
             system: unknown_system(),
             transactional: false,
+            config,
+            lock,
         }
     }
 
@@ -297,6 +319,32 @@ impl Target {
         RepoManager::new(self)
     }
 
+    /// Releases this target's operation lock, best-effort.
+    ///
+    /// Ports upstream `Target.unlock`: delegates to the operation
+    /// [`TargetLock::unlock`], swallowing a [`HostError::TargetLocked`] (the
+    /// lock is held by another owner and `force` was not set) so a cleanup path
+    /// never fails the caller — upstream wraps the call in
+    /// `suppress(TargetLockedError)`. With `force = true` a foreign lock is
+    /// removed anyway (the [`RepoManager`] unknown-cmd safeguard uses this).
+    ///
+    /// A no-op when the target is not connected (no lock built yet).
+    pub async fn unlock(&mut self, force: bool) {
+        let Some(lock) = self.lock.as_mut() else {
+            tracing::debug!(host = %self.hostname, "unlock: no lock (not connected)");
+            return;
+        };
+        match lock.unlock(force).await {
+            Ok(()) => {}
+            Err(HostError::TargetLocked(msg)) => {
+                tracing::debug!(host = %self.hostname, %msg, "unlock: lock held by another owner, ignoring");
+            }
+            Err(e) => {
+                tracing::warn!(host = %self.hostname, error = %e, "unlock failed");
+            }
+        }
+    }
+
     /// Records the parsed host system and its transactional flag.
     ///
     /// Called with the pair returned by
@@ -337,7 +385,12 @@ impl Target {
             .inspect_err(|e| {
                 tracing::error!(host = %self.hostname, error = %e, "connecting to target failed");
             })?;
-        self.connection = Some(Box::new(conn));
+        let conn: Box<dyn Connection> = Box::new(conn);
+        // Build the operation lock over a clone of the live connection, mirroring
+        // upstream `self._lock = TargetLock(self.connection, self.config)`. The
+        // lock uses this handle for its SFTP-based lock protocol and force-unlock.
+        self.lock = Some(TargetLock::new(conn.clone_box(), &self.config));
+        self.connection = Some(conn);
 
         // Deferred seams (do not implement here — they pull crates/behaviour
         // that P2.4 must not depend on):
@@ -346,7 +399,7 @@ impl Target {
         //   * reboot / reconnect / operation         -> P2.9 (operation)
         tracing::debug!(
             host = %self.hostname,
-            "connected; lock/parse/query seams deferred to P2.6/P2.8/P2.9"
+            "connected; lock built; parse/query seams deferred to P2.8/P2.9"
         );
         Ok(())
     }
