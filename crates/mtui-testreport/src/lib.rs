@@ -26,7 +26,9 @@ pub use export::{
 };
 pub use metadata_parsers::{JSONParser, MetadataEnvelope, ReducedMetadataParser, patchinfo_titles};
 pub use products::{normalize, normalize_16};
-pub use reports::repoparse::{gitrepoparse, parse_product, reporepoparse, slrepoparse};
+pub use reports::repoparse::{
+    gitrepoparse, obsrepoparse, parse_product, reporepoparse, slrepoparse,
+};
 pub use reports::{NullReport, PiReport, SlReport};
 pub use support::{FileList, atomic_write_file, detect_system, system_info, timestamp};
 pub use testreport::{TestReport, TestReportBase};
