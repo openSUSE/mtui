@@ -165,6 +165,32 @@ impl TestReportBase {
             product_warnings: HashMap::new(),
         }
     }
+
+    /// The working directory of the loaded report checkout (upstream
+    /// `report_wd`).
+    ///
+    /// Upstream returns `ensure_dir_exists(self.path.parent, *paths)`; the base
+    /// case every current caller needs is the parent directory of the loaded
+    /// report [`path`](Self::path), created if absent. The OBS report feeds this
+    /// to [`obsrepoparse`](crate::reports::repoparse::obsrepoparse), which reads
+    /// `project.xml` from it.
+    ///
+    /// Returns [`io::ErrorKind::NotFound`] when no report is loaded (upstream
+    /// `assert self.path, "empty path"`), and propagates any directory-creation
+    /// error, so callers can degrade explicitly rather than panic.
+    ///
+    /// The variadic `*paths` join upstream accepts is intentionally omitted: no
+    /// current caller needs it. Extend when the load/checkout lifecycle task
+    /// introduces one, rather than speculating on the shape now.
+    pub fn report_wd(&self) -> std::io::Result<PathBuf> {
+        let path = self
+            .path
+            .as_ref()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "empty path"))?;
+        let dir = path.parent().unwrap_or_else(|| std::path::Path::new(""));
+        std::fs::create_dir_all(dir)?;
+        Ok(dir.to_path_buf())
+    }
 }
 
 /// The abstract test-report surface.
@@ -276,5 +302,24 @@ mod tests {
         assert!(base.giteaprapi.is_none());
         assert!(base.giteacohash.is_none());
         assert!(base.product_warnings.is_empty());
+    }
+
+    #[test]
+    fn report_wd_returns_report_parent_and_ensures_it_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wd = tmp.path().join("checkout");
+        let mut base = TestReportBase::new(config());
+        base.path = Some(wd.join("log"));
+
+        let got = base.report_wd().expect("report_wd");
+        assert_eq!(got, wd);
+        assert!(wd.is_dir(), "report_wd must create the directory");
+    }
+
+    #[test]
+    fn report_wd_errors_when_no_report_loaded() {
+        let base = TestReportBase::new(config());
+        let err = base.report_wd().expect_err("no path -> error");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }
