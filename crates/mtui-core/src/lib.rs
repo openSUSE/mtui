@@ -15,8 +15,10 @@
 //! [`engine`], the single machinery both the REPL and MCP dispatch through. P5.4
 //! adds [`args`] — the top-level process argument parser (`clap`) that mirrors
 //! upstream `mtui.cli.args`, distinct from the per-command parsers the engine
-//! synthesises. The wider display surface (P5.3) and the wiring composition root
-//! (P5.5) build on top of these.
+//! synthesises. P5.3 rounds out the [`display`] surface: the full `list_*`
+//! family, [`show_log`](CommandPromptDisplay::show_log), the three-way
+//! [`ColorMode`], and the [`page`](display::page) pager. The wiring composition
+//! root (P5.5) builds on top of these.
 
 pub mod args;
 pub mod command;
@@ -29,7 +31,7 @@ pub mod template_registry;
 
 pub use args::{Args, ColorArg, Sut, Update};
 pub use command::{Command, Scope};
-pub use display::{ColorMode, CommandPromptDisplay};
+pub use display::{ColorMode, CommandPromptDisplay, page};
 pub use engine::{EngineError, dispatch_argv, dispatch_line};
 pub use error::{CommandError, CommandResult};
 pub use registry::{Registry, register_all};
