@@ -5,12 +5,14 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use mtui_config::Config;
 use mtui_hosts::{HostsGroup, MockConnection, Target};
 use mtui_testreport::{TestReport, TestReportBase};
 use mtui_types::SystemProduct;
 use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::hostlog::CommandLog;
 
 /// A minimal [`TestReport`] double with a settable RRID and host group.
 ///
@@ -53,10 +55,58 @@ impl FakeReport {
         }
     }
 
+    /// A report whose hosts each script `command` to a log echoing the command
+    /// back with `stdout` and exit 0 — so a `run` against them yields
+    /// deterministic, assertable per-host output (the golden e2e path).
+    #[must_use]
+    pub fn with_scripted_hosts(rrid: &str, hosts: &[&str], command: &str, stdout: &str) -> Self {
+        let mut base = TestReportBase::new(Config::default());
+        let targets: Vec<Target> = hosts
+            .iter()
+            .map(|h| {
+                let conn = MockConnection::new(*h)
+                    .with_response(command, CommandLog::new(command, stdout, "", 0, 0));
+                Target::with_connection(
+                    *h,
+                    TargetState::Enabled,
+                    ExecutionMode::Serial,
+                    Box::new(conn),
+                )
+            })
+            .collect();
+        base.targets = HostsGroup::new(targets, false);
+        Self {
+            base,
+            rrid: rrid.to_owned(),
+        }
+    }
+
     /// Boxes this report for insertion into a registry.
     #[must_use]
-    pub fn boxed(self) -> Box<dyn TestReport + Send> {
+    pub fn boxed(self) -> Box<dyn TestReport + Send + Sync> {
         Box::new(self)
+    }
+}
+
+/// A shared byte buffer usable as a [`CommandPromptDisplay`] sink.
+#[derive(Clone, Default)]
+pub struct Buffer(Arc<Mutex<Vec<u8>>>);
+
+impl Buffer {
+    /// The captured output as a `String`.
+    #[must_use]
+    pub fn contents(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+impl std::io::Write for Buffer {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(data);
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 

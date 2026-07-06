@@ -131,6 +131,10 @@ impl TestReport for PiReport {
         update_flow::perform_update_from_report(self, targets, noprepare, newpackage).await;
     }
 
+    fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {
+        Some(self)
+    }
+
     async fn check_hash(&self) -> (bool, String, String) {
         // Upstream PI always returns (True, "", "") — nothing to verify.
         (true, String::new(), String::new())

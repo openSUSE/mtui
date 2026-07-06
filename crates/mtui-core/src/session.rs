@@ -65,7 +65,7 @@ impl Session {
     /// The active report (upstream `prompt.metadata`). Never `None` — the
     /// [`TemplateRegistry`] returns a null object when nothing is loaded.
     #[must_use]
-    pub fn metadata(&self) -> &(dyn TestReport + Send) {
+    pub fn metadata(&self) -> &(dyn TestReport + Send + Sync) {
         self.templates.active()
     }
 
@@ -73,6 +73,42 @@ impl Session {
     #[must_use]
     pub fn targets(&self) -> &HostsGroup {
         &self.templates.active().base().targets
+    }
+
+    /// Mutably borrows the active report's connected targets.
+    ///
+    /// The mutable counterpart of [`targets`](Self::targets); command bodies
+    /// that fan a command out across hosts (`run`, `reboot`, `set_repo`) need
+    /// `&mut HostsGroup`.
+    pub fn targets_mut(&mut self) -> &mut HostsGroup {
+        &mut self.templates.active_mut().base_mut().targets
+    }
+
+    /// Moves the active report's targets out, leaving an empty group in place.
+    ///
+    /// The counterpart to [`restore_targets`](Self::restore_targets). The
+    /// report's `perform_*` methods take `&self` **and** `&mut HostsGroup`;
+    /// because the targets live inside the active report, a single
+    /// `&mut Box<dyn TestReport>` cannot hand out both borrows at once. Taking
+    /// the group out by value breaks that tie: the caller then holds an owned
+    /// `HostsGroup` (no borrow of `self`) and can freely re-borrow the report via
+    /// [`metadata`](Self::metadata) to drive `perform_*`, restoring the group
+    /// afterwards.
+    ///
+    /// Mirrors upstream, where a command reads `self.metadata` and `self.targets`
+    /// as two views of the same active report.
+    #[must_use]
+    pub fn take_targets(&mut self) -> HostsGroup {
+        let interactive = self.interactive;
+        std::mem::replace(
+            &mut self.templates.active_mut().base_mut().targets,
+            HostsGroup::new(Vec::new(), interactive),
+        )
+    }
+
+    /// Restores the active report's targets, undoing [`take_targets`](Self::take_targets).
+    pub fn restore_targets(&mut self, targets: HostsGroup) {
+        self.templates.active_mut().base_mut().targets = targets;
     }
 }
 

@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use mtui_config::options::Config;
-use mtui_hosts::{HostArbiter, HostsGroup, Owner};
+use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
 use mtui_types::{RequestReviewID, SystemProduct, Workflow};
 
 /// Shared state common to every [`TestReport`] implementation.
@@ -339,6 +339,18 @@ pub trait TestReport {
     /// `true`; the null object overrides to `false`.
     fn is_loaded(&self) -> bool {
         true
+    }
+
+    /// Exposes this report as a [`SetRepo`] when it can add/remove issue repos.
+    ///
+    /// The `set_repo` command needs a `&dyn SetRepo` to fan the repo add/remove
+    /// out over the group ([`HostsGroup::fanout_set_repo`](mtui_hosts::HostsGroup)),
+    /// but `SetRepo` is a distinct object-safe trait a `dyn TestReport` cannot be
+    /// downcast to. Reports that implement `SetRepo` (SL/PI/OBS) override this to
+    /// return `Some(self)`; the null report (nothing to set) keeps the `None`
+    /// default, which the command surfaces as "no update loaded".
+    fn as_set_repo(&self) -> Option<&dyn SetRepo> {
+        None
     }
 }
 

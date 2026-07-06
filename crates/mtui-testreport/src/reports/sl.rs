@@ -145,6 +145,10 @@ impl TestReport for SlReport {
         update_flow::perform_update_from_report(self, targets, noprepare, newpackage).await;
     }
 
+    fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {
+        Some(self)
+    }
+
     async fn check_hash(&self) -> (bool, String, String) {
         // "1.1" is still served from IBS — no Gitea comparison.
         if self.maintenance_id() == Some("1.1") {

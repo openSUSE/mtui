@@ -141,6 +141,10 @@ impl TestReport for ObsReport {
         update_flow::perform_update_from_report(self, targets, noprepare, newpackage).await;
     }
 
+    fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {
+        Some(self)
+    }
+
     async fn check_hash(&self) -> (bool, String, String) {
         // Upstream OBS always returns (True, "", "") — OBS/IBS checkout is via
         // osc qam / SVN, so there is no git commit hash to verify.

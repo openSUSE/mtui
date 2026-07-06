@@ -110,10 +110,21 @@ impl Registry {
 /// here becomes a REPL command **and** an MCP tool automatically.
 #[must_use]
 pub fn register_all() -> Registry {
-    Registry::new()
-    // Wave commands register here, e.g.:
-    //   registry.register(Arc::new(RunCommand));
-    // (added in P5.6 and later.)
+    use crate::commands;
+
+    let mut registry = Registry::new();
+    // Wave 1 — core workflow (gates the phase).
+    registry.register(Arc::new(commands::Run));
+    registry.register(Arc::new(commands::LocalRun));
+    registry.register(Arc::new(commands::Update));
+    registry.register(Arc::new(commands::Install));
+    registry.register(Arc::new(commands::Uninstall));
+    registry.register(Arc::new(commands::Prepare));
+    registry.register(Arc::new(commands::Downgrade));
+    registry.register(Arc::new(commands::Reboot));
+    registry.register(Arc::new(commands::SetRepo));
+    registry.register(Arc::new(commands::ShowUpdateRepos));
+    registry
 }
 
 #[cfg(test)]
@@ -159,8 +170,24 @@ mod tests {
     }
 
     #[test]
-    fn register_all_starts_empty() {
-        assert!(register_all().is_empty());
+    fn register_all_wires_wave1_commands() {
+        let r = register_all();
+        // Wave 1 — core workflow.
+        for name in [
+            "run",
+            "lrun",
+            "update",
+            "install",
+            "uninstall",
+            "prepare",
+            "downgrade",
+            "reboot",
+            "set_repo",
+            "show_update_repos",
+        ] {
+            assert!(r.contains(name), "expected {name} to be registered");
+        }
+        assert_eq!(r.len(), 10);
     }
 
     #[test]

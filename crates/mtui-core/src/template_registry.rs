@@ -27,11 +27,11 @@ use mtui_testreport::{NullReport, TestReport};
 /// Holds the loaded templates and tracks the active one.
 pub struct TemplateRegistry {
     /// Loaded reports keyed by RRID, in insertion order (for fan-out order).
-    entries: IndexMap<String, Box<dyn TestReport + Send>>,
+    entries: IndexMap<String, Box<dyn TestReport + Send + Sync>>,
     /// The active RRID, or `None` when nothing is loaded.
     active: Option<String>,
     /// The null-object fallback returned by [`active`](Self::active) when empty.
-    null: Box<dyn TestReport + Send>,
+    null: Box<dyn TestReport + Send + Sync>,
     /// Stable per-registry identity; the owner-key seed for host arbitration.
     id: String,
 }
@@ -51,7 +51,7 @@ impl TemplateRegistry {
     ///
     /// Test seam mirroring upstream's injectable `null_factory`.
     #[must_use]
-    pub fn with_null(null: Box<dyn TestReport + Send>) -> Self {
+    pub fn with_null(null: Box<dyn TestReport + Send + Sync>) -> Self {
         Self {
             entries: IndexMap::new(),
             active: None,
@@ -72,7 +72,7 @@ impl TemplateRegistry {
     /// replaces the stored report but leaves the active pointer alone. A report
     /// with an empty RRID is the failed-load sentinel ([`NullReport`]) and is
     /// silently ignored so it never becomes a phantom entry that breaks fan-out.
-    pub fn add(&mut self, report: Box<dyn TestReport + Send>) {
+    pub fn add(&mut self, report: Box<dyn TestReport + Send + Sync>) {
         let rrid = report.id();
         if rrid.is_empty() {
             return;
@@ -104,18 +104,18 @@ impl TemplateRegistry {
 
     /// Returns the loaded report for `rrid`, or `None` if absent.
     #[must_use]
-    pub fn get(&self, rrid: &str) -> Option<&(dyn TestReport + Send)> {
+    pub fn get(&self, rrid: &str) -> Option<&(dyn TestReport + Send + Sync)> {
         self.entries.get(rrid).map(|b| &**b)
     }
 
     /// Mutably returns the loaded report for `rrid`, or `None` if absent.
-    pub fn get_mut(&mut self, rrid: &str) -> Option<&mut Box<dyn TestReport + Send>> {
+    pub fn get_mut(&mut self, rrid: &str) -> Option<&mut Box<dyn TestReport + Send + Sync>> {
         self.entries.get_mut(rrid)
     }
 
     /// The active report, or the [`NullReport`] fallback when nothing is loaded.
     #[must_use]
-    pub fn active(&self) -> &(dyn TestReport + Send) {
+    pub fn active(&self) -> &(dyn TestReport + Send + Sync) {
         match &self.active {
             Some(rrid) => &*self.entries[rrid],
             None => &*self.null,
@@ -123,7 +123,7 @@ impl TemplateRegistry {
     }
 
     /// Mutably borrows the active report, or the null fallback.
-    pub fn active_mut(&mut self) -> &mut Box<dyn TestReport + Send> {
+    pub fn active_mut(&mut self) -> &mut Box<dyn TestReport + Send + Sync> {
         match &self.active {
             Some(rrid) => &mut self.entries[rrid],
             None => &mut self.null,

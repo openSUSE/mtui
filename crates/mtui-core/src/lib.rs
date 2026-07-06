@@ -29,6 +29,7 @@
 
 pub mod args;
 pub mod command;
+pub mod commands;
 pub mod display;
 pub mod engine;
 pub mod entrypoint;
