@@ -11,18 +11,23 @@
 //!   upstream's `CommandPrompt`), holding the [`TemplateRegistry`] and
 //!   [`CommandPromptDisplay`].
 //!
-//! The registry + line-dispatch engine (P5.2), the wider display surface (P5.3),
-//! the argparse↔clap fidelity layer (P5.4), and the wiring composition root
-//! (P5.5) build on top of these.
+//! P5.2 adds the explicit command [`Registry`] and the line-dispatch
+//! [`engine`], the single machinery both the REPL and MCP dispatch through. The
+//! wider display surface (P5.3), the argparse↔clap fidelity layer (P5.4), and
+//! the wiring composition root (P5.5) build on top of these.
 
 pub mod command;
 pub mod display;
+pub mod engine;
 pub mod error;
+pub mod registry;
 pub mod session;
 pub mod template_registry;
 
 pub use command::{Command, Scope};
 pub use display::{ColorMode, CommandPromptDisplay};
+pub use engine::{EngineError, dispatch_argv, dispatch_line};
 pub use error::{CommandError, CommandResult};
+pub use registry::{Registry, register_all};
 pub use session::Session;
 pub use template_registry::TemplateRegistry;

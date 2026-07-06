@@ -17,6 +17,7 @@ mtui-datasources.workspace = true
 mtui-testreport.workspace = true
 async-trait.workspace = true
 clap.workspace = true
+shlex.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
