@@ -11,6 +11,7 @@ pub mod metadata_parsers;
 pub mod products;
 pub mod reports;
 pub mod testreport;
+pub mod update_workflow;
 
 pub use checkout::{
     CheckoutError, CheckoutRunError, ReadOutcome, SvnOutcome, SvnRunner, TemplateIoError,
@@ -22,3 +23,7 @@ pub use products::{normalize, normalize_16};
 pub use reports::repoparse::{gitrepoparse, parse_product, reporepoparse, slrepoparse};
 pub use reports::{NullReport, SlReport};
 pub use testreport::{TestReport, TestReportBase};
+pub use update_workflow::{
+    CheckProvider, DoerProvider, Role, TemplateError, UpdateError, WorkflowKey, WorkflowRegistry,
+    safe_substitute, substitute,
+};

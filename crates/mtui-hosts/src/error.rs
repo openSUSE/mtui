@@ -168,6 +168,40 @@ pub enum HostError {
         /// The product release with no configured uninstaller.
         release: String,
     },
+
+    /// No preparer "doer" is defined for the given product release.
+    ///
+    /// Mirrors upstream `MissingPreparerError` (a `MissingDoerError` with
+    /// `name = "Preparer"`), whose message is `Missing Preparer for {release}`.
+    /// Raised when a target's product has no configured prepare command.
+    #[error("Missing Preparer for {release}")]
+    MissingPreparer {
+        /// The product release with no configured preparer.
+        release: String,
+    },
+
+    /// No updater "doer" is defined for the given product release.
+    ///
+    /// Mirrors upstream `MissingUpdaterError` (a `MissingDoerError` with
+    /// `name = "Updater"`), whose message is `Missing Updater for {release}`.
+    /// Raised when a target's product has no configured update command.
+    #[error("Missing Updater for {release}")]
+    MissingUpdater {
+        /// The product release with no configured updater.
+        release: String,
+    },
+
+    /// No downgrader "doer" is defined for the given product release.
+    ///
+    /// Mirrors upstream `MissingDowngraderError` (a `MissingDoerError` with
+    /// `name = "Downgrader"`), whose message is `Missing Downgrader for
+    /// {release}`. Raised when a target's product has no configured downgrade
+    /// command.
+    #[error("Missing Downgrader for {release}")]
+    MissingDowngrader {
+        /// The product release with no configured downgrader.
+        release: String,
+    },
 }
 
 #[cfg(test)]
@@ -226,5 +260,29 @@ mod tests {
             release: "opensuse-15.4".to_owned(),
         };
         assert_eq!(err.to_string(), "Missing Uninstaller for opensuse-15.4");
+    }
+
+    #[test]
+    fn missing_preparer_display_matches_upstream_format() {
+        let err = HostError::MissingPreparer {
+            release: "opensuse-15.4".to_owned(),
+        };
+        assert_eq!(err.to_string(), "Missing Preparer for opensuse-15.4");
+    }
+
+    #[test]
+    fn missing_updater_display_matches_upstream_format() {
+        let err = HostError::MissingUpdater {
+            release: "opensuse-15.4".to_owned(),
+        };
+        assert_eq!(err.to_string(), "Missing Updater for opensuse-15.4");
+    }
+
+    #[test]
+    fn missing_downgrader_display_matches_upstream_format() {
+        let err = HostError::MissingDowngrader {
+            release: "opensuse-15.4".to_owned(),
+        };
+        assert_eq!(err.to_string(), "Missing Downgrader for opensuse-15.4");
     }
 }
