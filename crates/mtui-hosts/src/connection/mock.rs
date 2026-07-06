@@ -570,6 +570,10 @@ impl Connection for MockConnection {
                 reason: "scripted sftp_remove failure".to_owned(),
             });
         }
+        // Actually drop the file so a later `sftp_open` reflects the removal —
+        // this makes the lock lifecycle (lock → unlock → is_locked) observable
+        // end-to-end against the mock, not just via the recorded op log.
+        self.files.lock().expect("mock files lock").remove(path);
         Ok(())
     }
 

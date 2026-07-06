@@ -180,7 +180,17 @@ pub trait OperationGroup: Send {
 
     /// Acquires the shared operation lock across the group
     /// (`HostsGroup.update_lock`).
-    async fn update_lock(&mut self);
+    ///
+    /// Mirrors upstream `HostsGroup.update_lock`: on success every host is
+    /// locked for this process; on failure (some host is locked by another
+    /// owner) the group has already released the locks it took and returns
+    /// [`HostError::Update`], so the template aborts before running.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostError::Update`] when one or more hosts were locked by
+    /// another owner.
+    async fn update_lock(&mut self) -> Result<(), HostError>;
 
     /// Runs the per-host command map (`HostsGroup.run`).
     async fn run(&mut self, commands: HostCommandMap);
@@ -263,7 +273,14 @@ pub trait Operation: Send + Sync {
 
         let (commands, reboot, mut plans) = self.collect(plans);
 
-        group.update_lock().await;
+        // Upstream calls `update_lock()` *outside* the try/finally: if it raises
+        // `UpdateError` (a host is locked by another owner) it has already
+        // released the locks it took, so `run` aborts here without entering the
+        // run/unlock section — no separate unlock is issued.
+        if let Err(e) = group.update_lock().await {
+            tracing::error!("{e}");
+            return;
+        }
 
         // Upstream wraps run→check→reboot in `try` with `unlock` in `finally`.
         // Rust has no `finally`; drive the fallible section in a nested async
@@ -470,6 +487,9 @@ mod tests {
         last: BTreeMap<String, LastOutput>,
         /// The ordered event log.
         events: Arc<Mutex<Vec<Event>>>,
+        /// When `true`, `update_lock` records its event then returns
+        /// [`HostError::Update`] to model a foreign-locked host.
+        fail_update_lock: bool,
     }
 
     impl MockGroup {
@@ -493,7 +513,14 @@ mod tests {
                 roles_seen: Arc::new(Mutex::new(Vec::new())),
                 last,
                 events,
+                fail_update_lock: false,
             }
+        }
+
+        /// Marks `update_lock` to fail, modelling a foreign-locked host.
+        fn failing_update_lock(mut self) -> Self {
+            self.fail_update_lock = true;
+            self
         }
 
         fn events(&self) -> Vec<Event> {
@@ -514,8 +541,12 @@ mod tests {
                 .expect("plans() called more than once in a test")
         }
 
-        async fn update_lock(&mut self) {
+        async fn update_lock(&mut self) -> Result<(), HostError> {
             self.events.lock().unwrap().push(Event::UpdateLock);
+            if self.fail_update_lock {
+                return Err(HostError::Update("Hosts locked".to_owned()));
+            }
+            Ok(())
         }
 
         async fn run(&mut self, commands: HostCommandMap) {
@@ -679,6 +710,32 @@ mod tests {
             1
         );
         assert_eq!(events.iter().filter(|e| **e == Event::Unlock).count(), 1);
+    }
+
+    // --- run(): update_lock failure aborts before run/unlock ----------------
+    // Upstream: `update_lock()` is called outside the try/finally; if it raises
+    // `UpdateError` (a host is locked by another owner) it has already released
+    // the locks it took, so `run` returns without entering the run/unlock body.
+
+    #[tokio::test]
+    async fn run_aborts_when_update_lock_fails() {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let plans = vec![plan_with_recording_check(
+            "h1",
+            false,
+            Doer::new("in $packages", "r"),
+            sink,
+        )];
+        let mut last = BTreeMap::new();
+        last.insert("h1".to_owned(), LastOutput::default());
+        let mut group = MockGroup::new(Ok(plans), last).failing_update_lock();
+
+        let op = InstallOperation::new(strs(&["pkg-a"]));
+        op.run(&mut group).await;
+
+        // update_lock was attempted, but no run / check / reboot / unlock
+        // followed: the failing lock self-cleaned and aborted the operation.
+        assert_eq!(group.events(), vec![Event::UpdateLock]);
     }
 
     // --- run(): check invoked per target with (hostname, last*) -------------

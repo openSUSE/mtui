@@ -143,6 +143,16 @@ pub enum HostError {
     #[error("{0}")]
     TargetLocked(String),
 
+    /// One or more hosts in the group were locked by another owner when the
+    /// group operation lock was being acquired.
+    ///
+    /// Mirrors upstream `UpdateError("Hosts locked")`, raised by
+    /// [`HostsGroup::update_lock`](crate::HostsGroup) after it has released the
+    /// locks it did take, so a bespoke update/prepare/downgrade workflow aborts
+    /// before running against a fleet it does not fully own.
+    #[error("{0}")]
+    Update(String),
+
     /// No installer "doer" is defined for the given product release.
     ///
     /// Mirrors upstream `MissingInstallerError` (a `MissingDoerError` with

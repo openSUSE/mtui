@@ -124,14 +124,19 @@ async fn install_drives_doer_and_reboots_only_transactional() {
         m1.commands(),
         vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]
     );
-    // The transactional host additionally got the reboot command, after install.
+    // The non-transactional host was never rebooted.
+    assert!(m1.fired_commands().is_empty());
+    assert_eq!(m1.reconnect_count(), 0);
+
+    // The transactional host ran only the install as a normal command; the
+    // reboot is dispatched fire-and-forget (the reboot drops the connection),
+    // then the host is reconnected — the P2.9 `_reboot` lifecycle.
     assert_eq!(
         m2.commands(),
-        vec![
-            "zypper -n in -y -l pkg-a pkg-b".to_owned(),
-            "systemctl reboot".to_owned(),
-        ]
+        vec!["zypper -n in -y -l pkg-a pkg-b".to_owned()]
     );
+    assert_eq!(m2.fired_commands(), vec!["systemctl reboot".to_owned()]);
+    assert_eq!(m2.reconnect_count(), 1);
 
     // The check fired once per host.
     let mut who = checked.lock().unwrap().clone();

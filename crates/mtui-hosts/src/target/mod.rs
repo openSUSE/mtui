@@ -345,6 +345,111 @@ impl Target {
         }
     }
 
+    /// Acquires this target's operation lock with `comment`.
+    ///
+    /// Ports upstream `Target.lock`: delegates to
+    /// [`TargetLock::lock`]. A no-op when the target is not connected (no lock
+    /// built yet), matching the group fan-out's tolerance of unconnected hosts.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`HostError::TargetLocked`] when the lock is held by another
+    /// owner (callers that want best-effort behaviour suppress it, as the group
+    /// [`lock`](HostsGroup::lock) fan-out does).
+    pub async fn lock(&mut self, comment: &str) -> Result<()> {
+        let Some(lock) = self.lock.as_mut() else {
+            tracing::debug!(host = %self.hostname, "lock: no lock (not connected)");
+            return Ok(());
+        };
+        lock.lock(comment).await
+    }
+
+    /// Reports whether this target's operation lock is currently held.
+    ///
+    /// Ports upstream `Target.is_locked`: delegates to
+    /// [`TargetLock::is_locked`]. Returns `false` when the target is not
+    /// connected (no lock built yet).
+    ///
+    /// # Errors
+    ///
+    /// Propagates any transport error raised while reading the remote lock file.
+    pub async fn is_locked(&mut self) -> Result<bool> {
+        match self.lock.as_mut() {
+            Some(lock) => lock.is_locked().await,
+            None => Ok(false),
+        }
+    }
+
+    /// Returns this target's operation lock, loaded, for inspecting ownership.
+    ///
+    /// The group [`update_lock`](HostsGroup::update_lock) fan-out needs to read
+    /// [`is_mine`](TargetLock::is_mine) / [`time`](TargetLock::time) /
+    /// [`locked_by`](TargetLock::locked_by) / [`comment`](TargetLock::comment)
+    /// after establishing the host is locked; exposing the built lock mirrors
+    /// upstream reaching into `t._lock`. `None` when not connected.
+    pub(crate) fn lock_mut(&mut self) -> Option<&mut TargetLock> {
+        self.lock.as_mut()
+    }
+
+    /// Reads the host's current boot id.
+    ///
+    /// Ports upstream `Target.boot_id`: runs
+    /// `cat /proc/sys/kernel/random/boot_id` (regenerated on every boot) and
+    /// returns the trimmed stdout, or `""` if the value cannot be read (no
+    /// connection, command failure, or empty output). Used by the group reboot
+    /// lifecycle to confirm a host actually rebooted.
+    pub async fn boot_id(&mut self) -> String {
+        let Some(conn) = self.connection.as_mut() else {
+            tracing::debug!(host = %self.hostname, "boot_id: not connected");
+            return String::new();
+        };
+        match conn.run("cat /proc/sys/kernel/random/boot_id").await {
+            Ok(log) => log.stdout.trim().to_owned(),
+            Err(e) => {
+                tracing::debug!(host = %self.hostname, error = %e, "boot_id: read failed");
+                String::new()
+            }
+        }
+    }
+
+    /// Sends `command` without waiting for it to return.
+    ///
+    /// Ports upstream `Target.reboot`: dispatches via
+    /// [`Connection::fire_and_forget`]. The command is expected to drop the SSH
+    /// connection, so callers follow up with [`reconnect`](Self::reconnect). A
+    /// no-op (logged) when the target is not connected; a dispatch error is
+    /// logged, not propagated, since a link dropped by the reboot is expected.
+    pub async fn reboot(&mut self, command: &str) {
+        let Some(conn) = self.connection.as_mut() else {
+            tracing::error!(host = %self.hostname, "reboot on unconnected target");
+            return;
+        };
+        if let Err(e) = conn.fire_and_forget(command).await {
+            tracing::error!(host = %self.hostname, error = %e, "failed to dispatch reboot");
+        }
+    }
+
+    /// Re-establishes the transport after a reboot dropped it.
+    ///
+    /// Ports upstream `Target.reconnect(retry, backoff)`: delegates to
+    /// [`Connection::reconnect`], which encapsulates the bounded retry +
+    /// backoff loop upstream passes explicitly. A no-op when the target is not
+    /// connected.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`HostError::ReconnectFailed`] when the retry budget is
+    /// exhausted while the host is still down.
+    pub async fn reconnect(&mut self) -> Result<()> {
+        match self.connection.as_mut() {
+            Some(conn) => conn.reconnect().await,
+            None => {
+                tracing::debug!(host = %self.hostname, "reconnect: not connected");
+                Ok(())
+            }
+        }
+    }
+
     /// Records the parsed host system and its transactional flag.
     ///
     /// Called with the pair returned by
@@ -1000,6 +1105,114 @@ mod tests {
         assert!(t.is_connected());
         t.connect().await.expect("noop connect");
         assert!(t.is_connected());
+    }
+
+    // --- reboot / reconnect / boot_id lifecycle (P2.9) ----------------------
+
+    #[tokio::test]
+    async fn boot_id_reads_proc_and_strips() {
+        let conn = MockConnection::new("h1").with_response(
+            "cat /proc/sys/kernel/random/boot_id",
+            CommandLog::new(
+                "cat /proc/sys/kernel/random/boot_id",
+                "cab001af-4985-41d3-ac1b-e889523076ef\n",
+                "",
+                0,
+                0,
+            ),
+        );
+        let mut t = enabled_with(conn);
+        assert_eq!(t.boot_id().await, "cab001af-4985-41d3-ac1b-e889523076ef");
+    }
+
+    #[tokio::test]
+    async fn boot_id_returns_empty_on_failure() {
+        // No scripted response + a timeout for the boot-id command -> read fails.
+        let conn = MockConnection::new("h1").with_timeout("cat /proc/sys/kernel/random/boot_id");
+        let mut t = enabled_with(conn);
+        assert_eq!(t.boot_id().await, "");
+    }
+
+    #[tokio::test]
+    async fn boot_id_empty_when_unconnected() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        assert_eq!(t.boot_id().await, "");
+    }
+
+    #[tokio::test]
+    async fn reboot_fires_command_without_waiting() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.reboot("systemctl reboot").await;
+        assert_eq!(handle.fired_commands(), vec!["systemctl reboot".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn reboot_on_unconnected_is_noop() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        // Must not panic; nothing to assert beyond the no-op completing.
+        t.reboot("systemctl reboot").await;
+    }
+
+    #[tokio::test]
+    async fn reconnect_delegates_to_connection() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.reconnect().await.expect("reconnect ok");
+        assert_eq!(handle.reconnect_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn reconnect_surfaces_failure() {
+        let conn = MockConnection::new("h1").failing_reconnect();
+        let mut t = enabled_with(conn);
+        assert!(t.reconnect().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reconnect_unconnected_is_ok_noop() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        t.reconnect().await.expect("noop reconnect ok");
+    }
+
+    // --- lock / is_locked delegators ----------------------------------------
+
+    #[tokio::test]
+    async fn is_locked_false_when_no_lock_file() {
+        let conn = MockConnection::new("h1");
+        let mut t = enabled_with(conn);
+        assert!(!t.is_locked().await.expect("is_locked ok"));
+    }
+
+    #[tokio::test]
+    async fn is_locked_true_when_foreign_lock_present() {
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let mut t = enabled_with(conn);
+        assert!(t.is_locked().await.expect("is_locked ok"));
+    }
+
+    #[tokio::test]
+    async fn is_locked_false_when_unconnected() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        assert!(!t.is_locked().await.expect("is_locked ok"));
+    }
+
+    #[tokio::test]
+    async fn lock_writes_lockfile_on_free_host() {
+        let conn = MockConnection::new("h1");
+        let mut t = enabled_with(conn);
+        t.lock("test comment").await.expect("lock ok");
+        // Re-reading now reports locked (the lock file was created).
+        assert!(t.is_locked().await.expect("is_locked ok"));
+    }
+
+    #[tokio::test]
+    async fn lock_unconnected_is_ok_noop() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        t.lock("comment").await.expect("noop lock ok");
     }
 
     // --- shell() (feature `shell`) ------------------------------------------
