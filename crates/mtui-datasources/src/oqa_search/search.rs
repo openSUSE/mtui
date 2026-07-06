@@ -12,8 +12,8 @@
 //!   contract; this port fetches the groups per call. A memo can be reintroduced
 //!   if a consumer needs it.
 //! * Upstream's plain-text renderer (`render_overview` + the `OVERVIEW_*`
-//!   markers) is deferred: its only consumers are the command layer (Phase 5)
-//!   and the export injector (Phase 4), neither of which exists yet.
+//!   markers) lives in the sibling [`super::render`] module, shared by the
+//!   command layer and the Phase 4 export injector.
 //! * The build-check directory-index scan uses the `scraper` HTML parser instead
 //!   of upstream's minimal `html.parser` subclass; the golden test pins the
 //!   extracted `.log` set so any parser drift is caught.

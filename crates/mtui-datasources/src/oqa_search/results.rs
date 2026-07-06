@@ -3,6 +3,8 @@
 //! Ported from `mtui/data_sources/oqa_search/results.py`. These are the typed
 //! rows the command layer renders; the search functions never print.
 
+use mtui_types::OverviewResult;
+
 /// One row in a Single Incidents / Aggregated Updates section.
 ///
 /// `status` is one of: `"passed"`, `"failed"`, `"running"`, `"missing"` (no
@@ -65,9 +67,57 @@ pub struct JobResult {
     pub url: String,
 }
 
+/// The structured payload produced by the `openqa_overview` command.
+///
+/// Ported from upstream `OpenQAOverviewResult` (`mtui/types/oqaresults.py`).
+/// Carries the three sections the oqa-search script prints so consumers such as
+/// the exporters can render them without re-fetching.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OpenQAOverviewResult {
+    /// Results for the single-incidents section.
+    pub single_incidents: Vec<VersionResult>,
+    /// Results for the aggregated-updates section.
+    pub aggregated_updates: Vec<GroupResult>,
+    /// Results for the build-checks section.
+    pub build_checks: Vec<BuildCheckResult>,
+    /// Whether the user requested to skip the aggregated-updates section.
+    ///
+    /// When `true` the aggregated section is omitted from exported output
+    /// entirely because the absence is intentional.
+    pub skip_aggregated: bool,
+}
+
+impl OverviewResult for OpenQAOverviewResult {
+    /// True if any of the three sections has content (upstream `__bool__`).
+    fn has_overview(&self) -> bool {
+        !self.single_incidents.is_empty()
+            || !self.aggregated_updates.is_empty()
+            || !self.build_checks.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overview_truthiness_ignores_skip_flag() {
+        let empty = OpenQAOverviewResult::default();
+        assert!(!empty.has_overview());
+
+        // skip_aggregated alone does not make it truthy.
+        let skipped = OpenQAOverviewResult {
+            skip_aggregated: true,
+            ..Default::default()
+        };
+        assert!(!skipped.has_overview());
+
+        let with_incident = OpenQAOverviewResult {
+            single_incidents: vec![VersionResult::default()],
+            ..Default::default()
+        };
+        assert!(with_incident.has_overview());
+    }
 
     #[test]
     fn version_result_defaults() {

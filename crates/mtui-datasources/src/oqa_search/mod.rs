@@ -24,16 +24,17 @@
 //!   group filtering and log-line extraction.
 //! * [`results`] — the public result shapes.
 //! * [`search`] — the fetch layer, the pure helpers, and the entry points.
-//!
-//! The plain-text renderer (`render_overview` + the `OVERVIEW_*` markers)
-//! upstream ships is intentionally deferred until its consumers land (the
-//! command layer in Phase 5 and the export injector in Phase 4).
+//! * [`render`] — the plain-text renderer (`render_overview`) and the
+//!   `OVERVIEW_*` block markers shared by the command layer and the export
+//!   injector.
 
 pub mod heuristics;
+pub mod render;
 pub mod results;
 pub mod search;
 
-pub use results::{BuildCheckResult, GroupResult, JobResult, VersionResult};
+pub use render::{OVERVIEW_BEGIN_MARKER, OVERVIEW_END_MARKER, render_overview};
+pub use results::{BuildCheckResult, GroupResult, JobResult, OpenQAOverviewResult, VersionResult};
 pub use search::{
     aggregated_updates, build_checks, extract_test_results, get_incident_info, incident_jobs,
     log_matches_package, single_incidents, summarize_test_results,

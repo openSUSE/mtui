@@ -7,9 +7,11 @@
 //! backends, and update workflow arrive in the later Phase 4 tasks.
 
 pub mod checkout;
+pub mod export;
 pub mod metadata_parsers;
 pub mod products;
 pub mod reports;
+pub mod support;
 pub mod testreport;
 pub mod update_workflow;
 

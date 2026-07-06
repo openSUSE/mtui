@@ -21,10 +21,13 @@
 //!   [`OpenQAResults`] generic over the concrete auto (`A`) and kernel (`K`)
 //!   result types, each bounded by [`OpenQAResult`]. Call sites pick the
 //!   concrete connectors.
-//! * **`overview` deferred.** The upstream `overview` field
+//! * **`overview` generic.** The upstream `overview` field
 //!   (`OpenQAOverviewResult`) references the `oqa_search` result types, which
-//!   land in a later task. It is intentionally omitted here and will be added
-//!   when those types exist, to keep this module free of a forward dependency.
+//!   live in the higher `mtui-datasources` crate. Since `mtui-types` must not
+//!   depend upward, [`OpenQAResults`] is generic over the overview type `O`
+//!   bounded by the small [`OverviewResult`] trait (its truthiness predicate),
+//!   mirroring how `auto`/`kernel` are generic over [`OpenQAResult`]. Call sites
+//!   in `mtui-testreport` supply the concrete `OpenQAOverviewResult`.
 
 /// The structural surface shared by all openQA result connectors.
 ///
@@ -42,43 +45,62 @@ pub trait OpenQAResult {
     fn has_results(&self) -> bool;
 }
 
+/// The truthiness surface of the `openqa_overview` payload.
+///
+/// Mirrors the `__bool__` of upstream `OpenQAOverviewResult`: `true` when any of
+/// its sections has content. Defined here so [`OpenQAResults`] can stay in the
+/// dependency-free `mtui-types` crate while the concrete overview type lives in
+/// `mtui-datasources`.
+pub trait OverviewResult {
+    /// Whether the overview carries any renderable section.
+    fn has_overview(&self) -> bool;
+}
+
 /// A typed record of the openQA results attached to a `TestReport`.
 ///
-/// Mirrors the upstream `OpenQAResults` dataclass (minus the deferred
-/// `overview` field — see the module docs):
+/// Mirrors the upstream `OpenQAResults` dataclass:
 ///
 /// * `auto` — the "auto" workflow result, `None` until populated.
 /// * `kernel` — the list of "kernel" workflow results (typically a regular and
 ///   a baremetal openQA instance result for kernel updates).
+/// * `overview` — the `openqa_overview` payload, `None` until the command runs.
+///   Generic over `O` so the concrete `oqa_search` type stays in the higher
+///   `mtui-datasources` crate (see module docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenQAResults<A, K>
+pub struct OpenQAResults<A, K, O>
 where
     A: OpenQAResult,
     K: OpenQAResult,
+    O: OverviewResult,
 {
     /// The "auto" workflow result, `None` until populated.
     pub auto: Option<A>,
     /// The "kernel" workflow results.
     pub kernel: Vec<K>,
+    /// The `openqa_overview` payload, `None` until populated.
+    pub overview: Option<O>,
 }
 
-impl<A, K> Default for OpenQAResults<A, K>
+impl<A, K, O> Default for OpenQAResults<A, K, O>
 where
     A: OpenQAResult,
     K: OpenQAResult,
+    O: OverviewResult,
 {
     fn default() -> Self {
         Self {
             auto: None,
             kernel: Vec::new(),
+            overview: None,
         }
     }
 }
 
-impl<A, K> OpenQAResults<A, K>
+impl<A, K, O> OpenQAResults<A, K, O>
 where
     A: OpenQAResult,
     K: OpenQAResult,
+    O: OverviewResult,
 {
     /// Creates an empty [`OpenQAResults`].
     ///
@@ -92,12 +114,16 @@ where
 
     /// Whether any result is present and truthy.
     ///
-    /// The port of upstream `__bool__`: `true` when `auto` has results or any
-    /// `kernel` entry has results.
+    /// The port of upstream `__bool__`: `true` when `auto` has results, any
+    /// `kernel` entry has results, or the `overview` has content.
     #[must_use]
     pub fn has_results(&self) -> bool {
         self.auto.as_ref().is_some_and(OpenQAResult::has_results)
             || self.kernel.iter().any(OpenQAResult::has_results)
+            || self
+                .overview
+                .as_ref()
+                .is_some_and(OverviewResult::has_overview)
     }
 }
 
@@ -139,7 +165,19 @@ mod tests {
         }
     }
 
-    type Results = OpenQAResults<StubResult, StubResult>;
+    /// An overview stub with controllable truthiness.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct StubOverview {
+        truthy: bool,
+    }
+
+    impl OverviewResult for StubOverview {
+        fn has_overview(&self) -> bool {
+            self.truthy
+        }
+    }
+
+    type Results = OpenQAResults<StubResult, StubResult, StubOverview>;
 
     // TestOpenQAResultsDefaults
 
@@ -148,6 +186,7 @@ mod tests {
         let r = Results::new();
         assert!(r.auto.is_none());
         assert!(r.kernel.is_empty());
+        assert!(r.overview.is_none());
     }
 
     #[test]
@@ -171,6 +210,7 @@ mod tests {
         let r = Results {
             auto: Some(StubResult::truthy()),
             kernel: Vec::new(),
+            overview: None,
         };
         assert!(r.has_results());
     }
@@ -180,6 +220,7 @@ mod tests {
         let r = Results {
             auto: Some(StubResult::falsy()),
             kernel: Vec::new(),
+            overview: None,
         };
         assert!(!r.has_results());
     }
@@ -189,6 +230,7 @@ mod tests {
         let r = Results {
             auto: None,
             kernel: vec![StubResult::truthy()],
+            overview: None,
         };
         assert!(r.has_results());
     }
@@ -198,6 +240,7 @@ mod tests {
         let r = Results {
             auto: None,
             kernel: vec![StubResult::falsy(), StubResult::falsy()],
+            overview: None,
         };
         assert!(!r.has_results());
     }
@@ -207,8 +250,29 @@ mod tests {
         let r = Results {
             auto: None,
             kernel: vec![StubResult::falsy(), StubResult::truthy()],
+            overview: None,
         };
         assert!(r.has_results());
+    }
+
+    #[test]
+    fn truthy_overview_alone_makes_truthy() {
+        let r = Results {
+            auto: None,
+            kernel: Vec::new(),
+            overview: Some(StubOverview { truthy: true }),
+        };
+        assert!(r.has_results());
+    }
+
+    #[test]
+    fn falsy_overview_alone_is_falsy() {
+        let r = Results {
+            auto: None,
+            kernel: Vec::new(),
+            overview: Some(StubOverview { truthy: false }),
+        };
+        assert!(!r.has_results());
     }
 
     // TestOpenQAResultsMutation

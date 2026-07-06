@@ -21,7 +21,7 @@ pub use enums::{Assignment, ExecutionMode, RequestKind, TargetState, Workflow};
 pub use error::{
     Error, RefhostsParseError, RequestKindParseError, Result, RpmVersionParseError, RridParseError,
 };
-pub use oqaresults::{OpenQAResult, OpenQAResults};
+pub use oqaresults::{OpenQAResult, OpenQAResults, OverviewResult};
 pub use product::{Addon, Host, Product};
 pub use refhost::load_refhosts;
 pub use rpmver::RPMVersion;
