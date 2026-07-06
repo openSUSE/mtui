@@ -270,6 +270,26 @@ impl ExportContext {
         self.template.insert(index + 2, "\n".to_string());
     }
 
+    /// Inserts the "installation tests done in openQA" note under the
+    /// `Test results by product-arch:` header (upstream `BaseExport.install_results`).
+    ///
+    /// A no-op when that header is absent (the upstream `.index(...)` would
+    /// raise; a missing header means the file is not mtui-shaped).
+    pub fn install_results(&mut self) {
+        let Some(index) = self
+            .template
+            .iter()
+            .position(|l| l == "Test results by product-arch:\n")
+        else {
+            return;
+        };
+        self.template.insert(
+            index + 3,
+            "All installation tests done in openQA please see installlogs section\n".to_string(),
+        );
+        self.template.insert(index + 4, "\n".to_string());
+    }
+
     /// The index of the `source code change review:` anchor, if present.
     fn anchor_index(&self) -> Option<usize> {
         self.template

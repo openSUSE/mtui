@@ -61,6 +61,15 @@ impl KernelOpenQA {
         &self.pp
     }
 
+    /// The openQA instance host this connector targets.
+    ///
+    /// Exposes the shared-base host so the export downloader can build the
+    /// per-instance log URLs (upstream reads `host.host`).
+    #[must_use]
+    pub fn host(&self) -> &str {
+        self.base.host()
+    }
+
     /// Fetch jobs, filter to kernel jobs, parse, and render.
     ///
     /// Mirrors upstream `run`.
