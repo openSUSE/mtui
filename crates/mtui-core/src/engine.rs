@@ -42,8 +42,20 @@ pub enum EngineError {
     /// The command's arguments failed to parse or `--help`/`--version` was
     /// requested. Carries clap's already-rendered message so the caller can
     /// present it verbatim, exactly as argparse's usage text was shown.
-    #[error("{0}")]
-    Parse(String),
+    ///
+    /// `help_or_version` records whether the "error" was actually clap emitting
+    /// `--help`/`--version` text (a success in argparse terms, exit 0) rather
+    /// than a genuine usage error (argparse exit 2). The non-interactive
+    /// entrypoint ([`run_once`](crate::entrypoint::run_once)) reads it to pick
+    /// the right process exit code; the REPL ignores it and just renders the
+    /// message.
+    #[error("{message}")]
+    Parse {
+        /// clap's already-rendered help/usage text.
+        message: String,
+        /// `true` iff this is `--help`/`--version` output, not a usage error.
+        help_or_version: bool,
+    },
 
     /// The command ran but failed. Bridges the command-layer error hierarchy so
     /// a single `EngineError` covers the whole dispatch path.
@@ -97,10 +109,17 @@ pub async fn dispatch_argv(
 /// Builds `command`'s clap parser and parses `argv` into [`ArgMatches`] without
 /// ever exiting the process.
 fn parse_command(command: &dyn Command, argv: &[String]) -> Result<ArgMatches, EngineError> {
+    use clap::error::ErrorKind;
+
     let parser = command.configure(base_subcommand(command.name()));
-    parser
-        .try_get_matches_from(argv)
-        .map_err(|e| EngineError::Parse(e.to_string()))
+    parser.try_get_matches_from(argv).map_err(|e| {
+        let help_or_version =
+            matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);
+        EngineError::Parse {
+            message: e.to_string(),
+            help_or_version,
+        }
+    })
 }
 
 /// The base clap parser shared by every command.
@@ -248,7 +267,14 @@ mod tests {
         let err = dispatch_line(&r, &mut s, "echo --no-such-flag")
             .await
             .unwrap_err();
-        assert!(matches!(err, EngineError::Parse(_)));
+        // A genuine usage error, not `--help`/`--version` output.
+        assert!(matches!(
+            err,
+            EngineError::Parse {
+                help_or_version: false,
+                ..
+            }
+        ));
         // The body never ran.
         assert_eq!(runs.load(Ordering::SeqCst), 0);
     }
@@ -258,9 +284,15 @@ mod tests {
         let (r, runs, _) = registry_with_echo();
         let mut s = session();
         // clap emits `--help` text as an Error; the engine must carry it, not
-        // exit the process.
+        // exit the process, and flag it as help/version output (exit 0).
         let err = dispatch_line(&r, &mut s, "echo --help").await.unwrap_err();
-        assert!(matches!(err, EngineError::Parse(_)));
+        assert!(matches!(
+            err,
+            EngineError::Parse {
+                help_or_version: true,
+                ..
+            }
+        ));
         assert_eq!(runs.load(Ordering::SeqCst), 0);
     }
 
