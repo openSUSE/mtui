@@ -198,6 +198,12 @@ pub struct TargetLock<C: Clock = SystemClock> {
     lock_wait: u64,
     lock_wait_poll: u64,
     lock: RemoteLock,
+    /// The remote lockfile this instance manages. Defaults to
+    /// [`TARGET_LOCK_PATH`]; [`PoolLock`] builds its inner lock over
+    /// [`POOL_LOCK_PATH`] instead, so the shared lock/unlock/load machinery
+    /// touches the correct file (upstream expresses this via `PoolLock`
+    /// overriding `filename()`).
+    path: PathBuf,
 }
 
 /// The default operation-lock path, `/var/lock/mtui.lock` — a cross-mtui
@@ -220,6 +226,20 @@ impl<C: Clock> TargetLock<C> {
     /// Builds a `TargetLock` with an explicit [`Clock`] (for tests).
     #[must_use]
     pub fn with_clock(connection: Box<dyn Connection>, config: &Config, clock: C) -> Self {
+        Self::with_clock_and_path(connection, config, clock, PathBuf::from(TARGET_LOCK_PATH))
+    }
+
+    /// Builds a `TargetLock` with an explicit [`Clock`] and lockfile `path`.
+    ///
+    /// The path seam lets [`PoolLock`] reuse the whole lock/unlock/load
+    /// machinery over [`POOL_LOCK_PATH`] instead of the operation-lock path.
+    #[must_use]
+    pub fn with_clock_and_path(
+        connection: Box<dyn Connection>,
+        config: &Config,
+        clock: C,
+        path: PathBuf,
+    ) -> Self {
         Self {
             connection,
             clock,
@@ -230,12 +250,14 @@ impl<C: Clock> TargetLock<C> {
             lock_wait: config.lock_wait,
             lock_wait_poll: config.lock_wait_poll,
             lock: RemoteLock::default(),
+            path,
         }
     }
 
-    /// The lockfile path this lock manages. Overridden by [`PoolLock`].
+    /// The lockfile path this lock manages. Set at construction; defaults to
+    /// [`TARGET_LOCK_PATH`], overridden to [`POOL_LOCK_PATH`] for [`PoolLock`].
     fn filename(&self) -> PathBuf {
-        PathBuf::from(TARGET_LOCK_PATH)
+        self.path.clone()
     }
 
     /// The remote hostname (for messages).
@@ -620,7 +642,12 @@ impl<C: Clock> PoolLock<C> {
         clock: C,
     ) -> Self {
         Self {
-            inner: TargetLock::with_clock(connection, config, clock),
+            inner: TargetLock::with_clock_and_path(
+                connection,
+                config,
+                clock,
+                PathBuf::from(POOL_LOCK_PATH),
+            ),
             i_am_rrid: rrid.into(),
         }
     }
@@ -663,6 +690,79 @@ impl<C: Clock> PoolLock<C> {
     #[must_use]
     pub fn filename(&self) -> PathBuf {
         PathBuf::from(POOL_LOCK_PATH)
+    }
+
+    /// Sets the ownership RRID (the report layer pushes this down after the
+    /// claim is built; see [`Target::set_rrid`](crate::Target::set_rrid)).
+    pub fn set_rrid(&mut self, rrid: impl Into<String>) {
+        self.i_am_rrid = rrid.into();
+    }
+
+    /// Whether the pool claim is currently held (by anyone).
+    ///
+    /// Delegates to the inner [`TargetLock`], which reads the pool lockfile.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the load path.
+    pub async fn is_locked(&mut self) -> Result<bool> {
+        self.inner.is_locked().await
+    }
+
+    /// Claims the pool lock, recording `comment` (the
+    /// `mtui pool <RRID> [<owner>]` stamp).
+    ///
+    /// Delegates to the inner [`TargetLock::lock`], which writes the pool
+    /// lockfile atomically.
+    ///
+    /// # Errors
+    /// Returns [`HostError::TargetLocked`] when the host is claimed by another
+    /// owner, or an SFTP error from the write path.
+    pub async fn lock(&mut self, comment: &str) -> Result<()> {
+        self.inner.lock(comment).await
+    }
+
+    /// Claims the pool lock without raising when it is already claimed.
+    ///
+    /// The non-raising counterpart to [`lock`](Self::lock), used by host
+    /// arbitration. Ownership is RRID-based: a claim recording *our* RRID (even
+    /// from another process) counts as ours.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the underlying calls.
+    pub async fn try_claim(&mut self, comment: &str) -> Result<bool> {
+        if self.is_locked().await? && !self.is_mine()? {
+            return Ok(false);
+        }
+        match self.lock(comment).await {
+            Ok(()) => Ok(true),
+            Err(HostError::TargetLocked(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Releases the pool claim.
+    ///
+    /// Unlike [`TargetLock::unlock`] (PID-based ownership), a foreign claim is
+    /// decided by **RRID** ([`is_mine`](Self::is_mine)): with `force = false` a
+    /// claim owned by another template is refused; with `force = true` any
+    /// claim is removed. A no-op on an unclaimed host.
+    ///
+    /// # Errors
+    /// Returns [`HostError::TargetLocked`] when the claim is foreign and not
+    /// forced, or an SFTP error from the remove path.
+    pub async fn unlock(&mut self, force: bool) -> Result<()> {
+        if !self.is_locked().await? {
+            return Ok(());
+        }
+        if !self.is_mine()? && !force {
+            return Err(HostError::TargetLocked(self.inner.locked_by_msg().await?));
+        }
+        let path = self.filename();
+        if let Err(e) = self.inner.connection.sftp_remove(&path).await {
+            tracing::debug!(error = %e, "ignoring pool-unlock remove error");
+        }
+        self.inner.lock = RemoteLock::default();
+        Ok(())
     }
 }
 
@@ -1282,6 +1382,120 @@ mod tests {
     fn pool_is_mine_raises_when_not_locked() {
         let p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
         assert!(p.is_mine().is_err());
+    }
+
+    #[tokio::test]
+    async fn pool_lock_writes_to_pool_lockfile() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        p.lock("mtui pool SUSE:Maintenance:1:2 [alice]")
+            .await
+            .unwrap();
+        // The claim is written to the pool file, never the operation-lock file.
+        assert!(handle.file_contents(POOL_LOCK_PATH).is_some());
+        assert!(handle.file_contents(TARGET_LOCK_PATH).is_none());
+        assert_eq!(
+            handle.file_contents(POOL_LOCK_PATH).unwrap(),
+            format!(
+                "1700000000:testuser:{}:mtui pool SUSE:Maintenance:1:2 [alice]",
+                std::process::id()
+            )
+            .into_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_removes_own_claim() {
+        let mine = format!(
+            "1700000000:testuser:{}:mtui pool SUSE:Maintenance:1:2 [alice]",
+            std::process::id()
+        );
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, mine.into_bytes());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        p.unlock(false).await.unwrap();
+        assert!(handle.file_contents(POOL_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_removes_own_claim_from_other_process() {
+        // RRID-based ownership: a claim recording our RRID but a *different* PID
+        // is still ours (a tester reconnecting from a fresh process).
+        let mine = format!(
+            "1700000000:testuser:{}:mtui pool SUSE:Maintenance:1:2 [alice]",
+            std::process::id() + 1
+        );
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, mine.into_bytes());
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        p.unlock(false).await.unwrap();
+        assert!(handle.file_contents(POOL_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_refuses_foreign_claim_without_force() {
+        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        let err = p.unlock(false).await.unwrap_err();
+        assert!(matches!(err, HostError::TargetLocked(_)));
+        // The foreign claim is left in place.
+        assert!(handle.file_contents(POOL_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_force_removes_foreign_claim() {
+        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        p.unlock(true).await.unwrap();
+        assert!(handle.file_contents(POOL_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_noop_when_unclaimed() {
+        let mut p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
+        p.unlock(false).await.unwrap(); // must not raise
+    }
+
+    #[tokio::test]
+    async fn pool_try_claim_succeeds_on_free_host() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(
+            p.try_claim("mtui pool SUSE:Maintenance:1:2 [alice]")
+                .await
+                .unwrap()
+        );
+        assert!(handle.file_contents(POOL_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn pool_try_claim_returns_false_on_foreign_claim() {
+        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(
+            !p.try_claim("mtui pool SUSE:Maintenance:1:2 [alice]")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_set_rrid_updates_ownership_identity() {
+        let mut p = pool(MockConnection::new("h1"), "");
+        p.set_rrid("SUSE:Maintenance:1:2");
+        p.inner.lock = RemoteLock {
+            user: "testuser".into(),
+            comment: "mtui pool SUSE:Maintenance:1:2 [alice]".into(),
+            ..Default::default()
+        };
+        assert!(p.is_mine().unwrap());
     }
 
     // --- with_locked (LockedTargets) ---------------------------------------

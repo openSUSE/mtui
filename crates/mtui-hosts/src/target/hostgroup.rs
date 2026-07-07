@@ -279,6 +279,32 @@ impl HostsGroup {
         }
     }
 
+    /// Releases every host's pool claim, best-effort.
+    ///
+    /// Ports upstream `HostsGroup.pool_unlock`: delegates to the per-target
+    /// [`Target::pool_unlock`] (which suppresses [`HostError::TargetLocked`] for
+    /// a claim owned by another template), so one contended host never aborts
+    /// the fan-out. `force` removes claims owned by other templates too.
+    pub async fn pool_unlock(&mut self, force: bool) {
+        for target in self.data.values_mut() {
+            target.pool_unlock(force).await;
+        }
+    }
+
+    /// Stamps the owning template's RRID onto every host in the group.
+    ///
+    /// The single push-down point for pool-claim ownership identity: the report
+    /// layer calls this after attaching its targets so each [`Target`]'s
+    /// [`PoolLock`](crate::PoolLock) adopts the RRID (upstream builds each
+    /// `Target` with `_rrid` directly; here the group is built before the owning
+    /// report's RRID is known, so it is pushed down).
+    pub fn set_rrid(&mut self, rrid: impl Into<String>) {
+        let rrid = rrid.into();
+        for target in self.data.values_mut() {
+            target.set_rrid(rrid.clone());
+        }
+    }
+
     /// Fans a repository add/remove out across every host in the group.
     ///
     /// Ports upstream `HostsGroup._fanout_set_repo`, which runs
@@ -1099,6 +1125,76 @@ mod tests {
         g.unlock().await;
         assert!(!g.get_mut("h1").unwrap().is_locked().await.unwrap());
         assert!(!g.get_mut("h2").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_fans_out_over_group() {
+        use crate::target::POOL_LOCK_PATH;
+        // Two hosts each carry our pool claim; pool_unlock removes both. The
+        // claim's user must match the target's identity (config `session_user`,
+        // which defaults to $USER), so stamp it dynamically.
+        let me = mtui_config::Config::default().session_user;
+        let mine = format!("1700000000:{me}:1:mtui pool SUSE:Maintenance:1:2 [me]").into_bytes();
+        let c1 = echo("h1").with_file(POOL_LOCK_PATH, mine.clone());
+        let c2 = echo("h2").with_file(POOL_LOCK_PATH, mine);
+        let (h1, h2) = (c1.clone(), c2.clone());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(c1),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(c2),
+                ),
+            ],
+            false,
+        );
+        // Stamp the group's RRID so both claims are recognised as ours.
+        g.set_rrid("SUSE:Maintenance:1:2");
+        g.pool_unlock(false).await;
+        assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
+        assert!(h2.file_contents(POOL_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_suppresses_foreign_claim_and_continues() {
+        use crate::target::POOL_LOCK_PATH;
+        // h1 is ours, h2 is a foreign template's claim: pool_unlock skips h2
+        // without aborting and still removes h1's.
+        let me = mtui_config::Config::default().session_user;
+        let mine = format!("1700000000:{me}:1:mtui pool SUSE:Maintenance:1:2 [me]").into_bytes();
+        let foreign = b"1700000000:alice:4242:mtui pool SUSE:Maintenance:9:9 [alice]".to_vec();
+        let c1 = echo("h1").with_file(POOL_LOCK_PATH, mine);
+        let c2 = echo("h2").with_file(POOL_LOCK_PATH, foreign);
+        let (h1, h2) = (c1.clone(), c2.clone());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(c1),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(c2),
+                ),
+            ],
+            false,
+        );
+        g.set_rrid("SUSE:Maintenance:1:2");
+        g.pool_unlock(false).await;
+        assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
+        // h2's foreign claim is left in place (the failure was suppressed).
+        assert!(h2.file_contents(POOL_LOCK_PATH).is_some());
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ use clap::{Arg, ArgAction, ArgMatches};
 
 use super::support::add_hosts_arg;
 use crate::command::{Command, Scope};
-use crate::error::{CommandError, CommandResult};
+use crate::error::CommandResult;
 use crate::session::Session;
 
 /// Unlocks hosts previously locked with `lock`.
@@ -14,10 +14,9 @@ use crate::session::Session;
 /// zypper/operation lock; `-f`/`--force` also removes locks set by other users
 /// or sessions.
 ///
-/// `-p`/`--pool` (remove the host *pool* claim instead) is **not yet wired**:
-/// the pool-claim lock requires per-`Target` `PoolLock` wiring that is still
-/// deferred in `mtui-hosts` (tracked as a follow-up). Passing `--pool` returns a
-/// clear error rather than silently removing the wrong lock.
+/// `-p`/`--pool` removes the host *pool* claim (RRID-based ownership) instead of
+/// the zypper/operation lock, fanning [`HostsGroup::pool_unlock`] out across the
+/// active group. With `--force` a claim owned by another template is removed too.
 ///
 /// Like `lock`, host sub-selection via `-t` is not yet honoured for the fan-out
 /// (whole active group), matching the group-merge follow-up (`mtui-rs-qd9`).
@@ -61,14 +60,12 @@ impl Command for HostsUnlock {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
-        if args.get_flag("pool") {
-            return Err(CommandError::Other(
-                "pool-claim unlock (--pool) is not yet available: per-host pool-lock wiring \
-                 is deferred in mtui-hosts"
-                    .to_owned(),
-            ));
-        }
         let force = args.get_flag("force");
+        if args.get_flag("pool") {
+            // Remove the pool claim (RRID-based) instead of the operation lock.
+            session.targets_mut().pool_unlock(force).await;
+            return Ok(());
+        }
         // The group `unlock` fan-out always passes force=false; iterate targets
         // so `--force` can remove foreign locks. Best-effort, like the group.
         let targets = session.targets_mut();
@@ -107,11 +104,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pool_unlock_is_deferred_error() {
+    async fn pool_unlock_routes_to_pool_branch() {
+        // `--pool` fans HostsGroup::pool_unlock out over the group. On an
+        // unclaimed host this is a clean no-op (upstream routes to
+        // `hosts.pool_unlock(force=False)`); the command must succeed rather than
+        // return the old deferred error.
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&HostsUnlock, &["-p"]);
-        let err = HostsUnlock.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(m) if m.contains("not yet available")));
+        HostsUnlock.call(&mut session, &args).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_with_force_succeeds() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&HostsUnlock, &["-p", "-f"]);
+        HostsUnlock.call(&mut session, &args).await.unwrap();
     }
 
     #[test]

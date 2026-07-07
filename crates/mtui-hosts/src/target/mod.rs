@@ -138,6 +138,18 @@ pub struct Target {
     /// `None` until connected. Drives [`unlock`](Target::unlock) and the
     /// [`RepoManager`] unknown-cmd force-unlock safeguard.
     lock: Option<TargetLock>,
+    /// The pool-claim lock (`/var/lock/mtui-pool.lock`), built in
+    /// [`connect`](Target::connect) / [`with_connection`](Target::with_connection)
+    /// from a clone of this target's connection and seeded with [`rrid`](Self::rrid)
+    /// (upstream `self._pool_lock = PoolLock(self.connection, self.config,
+    /// self._rrid)`). `None` until connected. Drives
+    /// [`pool_unlock`](Target::pool_unlock).
+    pool_lock: Option<PoolLock>,
+    /// The owning template's RRID, used as the [`PoolLock`] ownership identity
+    /// (upstream `Target._rrid`). Empty for directly-constructed reports that
+    /// never use pool selection; the report layer pushes it down via
+    /// [`set_rrid`](Self::set_rrid).
+    rrid: String,
     /// The per-host packages tracked across an update (upstream
     /// `Target.packages`, a `dict[str, Package]`). Each entry carries the
     /// metadata-`required` version and, once [`query_versions`](Target::query_versions)
@@ -190,6 +202,8 @@ impl Target {
             transactional: false,
             config: config.clone(),
             lock: None,
+            pool_lock: None,
+            rrid: String::new(),
             packages: Vec::new(),
         }
     }
@@ -216,6 +230,14 @@ impl Target {
         // The clone shares the mock's scripted state (`Arc`), so a lock SFTP op
         // is observable through the original handle.
         let lock = Some(TargetLock::new(connection.clone_box(), &config));
+        // Build the pool-claim lock from a clone of the injected connection too,
+        // so the test seam mirrors the connected state (a fresh target has no
+        // RRID yet — the report layer pushes it down via `set_rrid`).
+        let pool_lock = Some(PoolLock::new(
+            connection.clone_box(),
+            &config,
+            String::new(),
+        ));
         Self {
             hostname,
             host,
@@ -230,6 +252,8 @@ impl Target {
             transactional: false,
             config,
             lock,
+            pool_lock,
+            rrid: String::new(),
             packages: Vec::new(),
         }
     }
@@ -373,6 +397,49 @@ impl Target {
             }
             Err(e) => {
                 tracing::warn!(host = %self.hostname, error = %e, "unlock failed");
+            }
+        }
+    }
+
+    /// Sets the owning template's RRID, the [`PoolLock`] ownership identity.
+    ///
+    /// The report layer pushes the RRID down onto each target (see
+    /// [`HostsGroup::set_rrid`]) so a pool claim already built for a connected
+    /// target adopts the identity too. Upstream sets `Target._rrid` at
+    /// construction; here it is pushed down after the fact because the target is
+    /// built before the report that owns it is known.
+    pub fn set_rrid(&mut self, rrid: impl Into<String>) {
+        self.rrid = rrid.into();
+        if let Some(pool) = self.pool_lock.as_mut() {
+            pool.set_rrid(self.rrid.clone());
+        }
+    }
+
+    /// The owning template's RRID (empty when unset).
+    #[must_use]
+    pub fn rrid(&self) -> &str {
+        &self.rrid
+    }
+
+    /// Releases this target's pool claim, best-effort.
+    ///
+    /// Ports upstream `Target.pool_unlock`: delegates to [`PoolLock::unlock`]
+    /// (RRID-based ownership), swallowing a [`HostError::TargetLocked`] (the
+    /// claim is owned by another template and `force` was not set) so a cleanup
+    /// path never fails. A no-op when the target is not connected (no pool lock
+    /// built yet).
+    pub async fn pool_unlock(&mut self, force: bool) {
+        let Some(pool) = self.pool_lock.as_mut() else {
+            tracing::debug!(host = %self.hostname, "pool_unlock: no pool lock (not connected)");
+            return;
+        };
+        match pool.unlock(force).await {
+            Ok(()) => {}
+            Err(HostError::TargetLocked(msg)) => {
+                tracing::debug!(host = %self.hostname, %msg, "pool_unlock: claim held by another template, ignoring");
+            }
+            Err(e) => {
+                tracing::warn!(host = %self.hostname, error = %e, "pool_unlock failed");
             }
         }
     }
@@ -594,6 +661,14 @@ impl Target {
         // upstream `self._lock = TargetLock(self.connection, self.config)`. The
         // lock uses this handle for its SFTP-based lock protocol and force-unlock.
         self.lock = Some(TargetLock::new(conn.clone_box(), &self.config));
+        // Pool claims use a separate remote file + RRID-based ownership, mirroring
+        // upstream `self._pool_lock = PoolLock(self.connection, self.config,
+        // self._rrid)`.
+        self.pool_lock = Some(PoolLock::new(
+            conn.clone_box(),
+            &self.config,
+            self.rrid.clone(),
+        ));
         self.connection = Some(conn);
 
         // Deferred seams (do not implement here — they pull crates/behaviour
@@ -1488,5 +1563,46 @@ mod tests {
         t.query_versions().await;
         // Nothing was queried, so the host log stays empty.
         assert!(t.out().is_empty());
+    }
+
+    // --- pool claim ---------------------------------------------------------
+
+    #[tokio::test]
+    async fn pool_unlock_noop_when_not_connected() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        // No pool lock built yet (unconnected): must not panic or fail.
+        t.pool_unlock(false).await;
+    }
+
+    #[tokio::test]
+    async fn with_connection_builds_a_live_pool_lock() {
+        let conn = MockConnection::new("h1")
+            .with_file(crate::POOL_LOCK_PATH, b"1700000000:testuser:99".to_vec());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        // A `with_connection` target has a live pool lock; force-unlock removes
+        // the pool file (proving the pool lock drives SFTP over the pool path).
+        t.pool_unlock(true).await;
+        assert!(handle.file_contents(crate::POOL_LOCK_PATH).is_none());
+    }
+
+    #[tokio::test]
+    async fn pool_unlock_swallows_foreign_claim() {
+        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
+        let conn = MockConnection::new("h1").with_file(crate::POOL_LOCK_PATH, foreign);
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.set_rrid("SUSE:Maintenance:1:2");
+        // Best-effort: a foreign claim without force is swallowed (no panic), and
+        // left in place.
+        t.pool_unlock(false).await;
+        assert!(handle.file_contents(crate::POOL_LOCK_PATH).is_some());
+    }
+
+    #[test]
+    fn set_rrid_records_ownership_identity() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        t.set_rrid("SUSE:Maintenance:1:2");
+        assert_eq!(t.rrid(), "SUSE:Maintenance:1:2");
     }
 }

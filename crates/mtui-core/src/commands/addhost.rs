@@ -66,10 +66,16 @@ impl Command for AddHost {
         }
 
         let config = session.config.clone();
+        // The active report's RRID is the pool-claim ownership identity; stamp it
+        // onto each new target so its `PoolLock` (built at connect) is owned by
+        // this template (upstream builds each `Target` with `_rrid`).
+        let rrid = session.metadata().id();
         let targets = session.targets_mut();
         for host in hosts {
             // Added unconnected: the live SSH connect is the deferred half.
-            let target = Target::new(&config, host, TargetState::Enabled, ExecutionMode::Parallel);
+            let mut target =
+                Target::new(&config, host, TargetState::Enabled, ExecutionMode::Parallel);
+            target.set_rrid(rrid.clone());
             targets.add(target);
         }
         Ok(())
@@ -96,6 +102,16 @@ mod tests {
         assert!(names.contains(&"h2".to_owned()));
         assert!(names.contains(&"h3".to_owned()));
         assert_eq!(session.targets().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn stamps_active_report_rrid_onto_new_hosts() {
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&AddHost, &["-t", "h2"]);
+        AddHost.call(&mut session, &args).await.unwrap();
+        // The new host carries the active report's RRID (the pool-claim identity).
+        let rrid = session.targets().get("h2").unwrap().rrid().to_owned();
+        assert_eq!(rrid, "SUSE:Maintenance:1:1");
     }
 
     #[tokio::test]
