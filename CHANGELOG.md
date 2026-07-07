@@ -231,6 +231,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   entry from `~/.mtui_history`, which — since the answer itself is never
   written there — silently deleted the real command you had just run,
   from both the up-arrow stack and the persisted file.
+- Replacing an already-loaded template in the registry (e.g. `regenerate`
+  rebuilding a report without a prior `unload`) now tears the previous report
+  down — releasing its host-arbitration pool claims and closing its refhost SSH
+  connections — instead of silently overwriting it. Repeated `regenerate`
+  cycles no longer leak file descriptors or leave stale arbiter claims that
+  could block later slot re-acquisition on the same refhost pool.
 - An unscoped multi-template fan-out of a host-phase command (e.g. `lock`,
   `run`) no longer fails the whole fan-out — or, for `lock`, pretends to
   succeed — when a loaded template has no connected host. A host-less template
