@@ -178,6 +178,19 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::SetTimeout));
     registry.register(Arc::new(commands::SftpPut));
     registry.register(Arc::new(commands::SftpGet));
+    // Wave 4 — backend APIs, openQA/QEM queue & workflow. (reload_openqa and
+    // set_workflow are deferred with the openQA state holder: mtui-rs-zs4/plt.)
+    registry.register(Arc::new(commands::Checkers));
+    registry.register(Arc::new(commands::Updates));
+    registry.register(Arc::new(commands::OpenQAOverview));
+    registry.register(Arc::new(commands::OpenQAJobs));
+    registry.register(Arc::new(commands::SetLogLevel));
+    registry.register(Arc::new(commands::Assign));
+    registry.register(Arc::new(commands::Unassign));
+    registry.register(Arc::new(commands::Reject));
+    registry.register(Arc::new(commands::Comment));
+    registry.register(Arc::new(commands::Approve));
+    registry.register(Arc::new(commands::Regenerate));
     registry
 }
 
@@ -298,9 +311,31 @@ mod tests {
     }
 
     #[test]
+    fn register_all_wires_wave4_commands() {
+        let r = register_all();
+        // Wave 4 — backend APIs, openQA/QEM queue & workflow.
+        for name in [
+            "checkers",
+            "updates",
+            "openqa_overview",
+            "openqa_jobs",
+            "set_log_level",
+            "assign",
+            "unassign",
+            "reject",
+            "comment",
+            "approve",
+            "regenerate",
+        ] {
+            assert!(r.contains(name), "expected {name} to be registered");
+        }
+    }
+
+    #[test]
     fn register_all_command_count() {
-        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 = 41 canonical commands.
-        assert_eq!(register_all().len(), 41);
+        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 11 Wave 4 = 52 canonical commands.
+        // (reload_openqa + set_workflow are deferred: mtui-rs-zs4 / mtui-rs-plt.)
+        assert_eq!(register_all().len(), 52);
     }
 
     #[test]

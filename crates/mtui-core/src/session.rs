@@ -42,7 +42,57 @@ pub struct Session {
     /// Phase-6 REPL checks [`should_exit`](Self::should_exit) after each line and
     /// breaks its loop. Headless callers (MCP) ignore it.
     should_exit: bool,
+    /// Optional sink for runtime log-level changes (upstream
+    /// `prompt.log.setLevel`).
+    ///
+    /// `set_log_level` calls this with the requested [`LogLevel`] when present.
+    /// The Phase-6 REPL installs a callback backed by a
+    /// `tracing_subscriber::reload` handle; headless callers and tests leave it
+    /// `None`, so the command still logs the change but mutates nothing.
+    log_level_sink: Option<LogLevelSink>,
 }
+
+/// The log levels `set_log_level` accepts (upstream `info`/`warning`/`error`/
+/// `debug`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    /// Only errors.
+    Error,
+    /// Warnings and above.
+    Warning,
+    /// Informational and above (the default).
+    Info,
+    /// Everything, incl. debug tracing.
+    Debug,
+}
+
+impl LogLevel {
+    /// Parses the upstream level name, or `None` if unrecognised.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "error" => Some(Self::Error),
+            "warning" => Some(Self::Warning),
+            "info" => Some(Self::Info),
+            "debug" => Some(Self::Debug),
+            _ => None,
+        }
+    }
+
+    /// The corresponding [`tracing::Level`].
+    #[must_use]
+    pub fn as_tracing(self) -> tracing::Level {
+        match self {
+            Self::Error => tracing::Level::ERROR,
+            Self::Warning => tracing::Level::WARN,
+            Self::Info => tracing::Level::INFO,
+            Self::Debug => tracing::Level::DEBUG,
+        }
+    }
+}
+
+/// A callback the REPL installs to apply a runtime log-level change.
+pub type LogLevelSink = Box<dyn FnMut(LogLevel) + Send>;
 
 impl Session {
     /// Builds a session for `config`, defaulting the display to stdout.
@@ -57,6 +107,7 @@ impl Session {
             display: CommandPromptDisplay::stdout(),
             interactive,
             should_exit: false,
+            log_level_sink: None,
         }
     }
 
@@ -70,6 +121,7 @@ impl Session {
             display,
             interactive,
             should_exit: false,
+            log_level_sink: None,
         }
     }
 
@@ -135,6 +187,29 @@ impl Session {
     pub fn should_exit(&self) -> bool {
         self.should_exit
     }
+
+    /// Installs the callback `set_log_level` uses to apply a runtime level change.
+    ///
+    /// The Phase-6 REPL wires this to a `tracing_subscriber::reload` handle so
+    /// `set_log_level debug` takes effect immediately; headless callers leave it
+    /// unset.
+    pub fn set_log_level_sink(&mut self, sink: LogLevelSink) {
+        self.log_level_sink = Some(sink);
+    }
+
+    /// Applies `level` through the installed sink, if any (upstream
+    /// `prompt.log.setLevel`).
+    ///
+    /// Returns `true` when a sink was present and invoked; `false` when none is
+    /// installed (headless/tests), so the caller can still log the change.
+    pub fn apply_log_level(&mut self, level: LogLevel) -> bool {
+        if let Some(sink) = self.log_level_sink.as_mut() {
+            sink(level);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[cfg(test)]
@@ -163,6 +238,31 @@ mod tests {
     fn targets_of_unloaded_session_is_empty() {
         let s = Session::new(config(), true);
         assert!(s.targets().is_empty());
+    }
+
+    #[test]
+    fn log_level_parse_and_tracing_mapping() {
+        assert_eq!(LogLevel::parse("error"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::parse("warning"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::parse("info"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::parse("debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::parse("bogus"), None);
+        assert_eq!(LogLevel::Debug.as_tracing(), tracing::Level::DEBUG);
+        assert_eq!(LogLevel::Error.as_tracing(), tracing::Level::ERROR);
+    }
+
+    #[test]
+    fn apply_log_level_invokes_sink_when_installed() {
+        use std::sync::{Arc, Mutex};
+        let mut s = Session::new(config(), true);
+        // No sink installed → returns false, no panic.
+        assert!(!s.apply_log_level(LogLevel::Debug));
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        s.set_log_level_sink(Box::new(move |lvl| sink_seen.lock().unwrap().push(lvl)));
+        assert!(s.apply_log_level(LogLevel::Warning));
+        assert_eq!(*seen.lock().unwrap(), vec![LogLevel::Warning]);
     }
 
     #[test]

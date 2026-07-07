@@ -26,9 +26,11 @@ indexmap.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 regex.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 mtui-types.workspace = true
 insta.workspace = true
 tempfile = "3"
+wiremock.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }

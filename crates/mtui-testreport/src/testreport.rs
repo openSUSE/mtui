@@ -461,6 +461,101 @@ pub trait TestReport {
     fn as_set_repo(&self) -> Option<&dyn SetRepo> {
         None
     }
+
+    /// The report's parsed [`RequestReviewID`], if loaded (upstream
+    /// `metadata.rrid`).
+    ///
+    /// Reads [`TestReportBase::rrid`]; `None` for the null report.
+    fn rrid(&self) -> Option<&RequestReviewID> {
+        self.base().rrid.as_ref()
+    }
+
+    /// The report's workflow mode (upstream `metadata.workflow`).
+    fn workflow(&self) -> Workflow {
+        self.base().workflow
+    }
+
+    /// The Gitea pull-request API URL (upstream `metadata.giteaprapi`), if any.
+    fn giteaprapi(&self) -> Option<&str> {
+        self.base().giteaprapi.as_deref()
+    }
+
+    /// The Gitea checkout hash recorded in the template (upstream
+    /// `metadata.giteacohash`), if any.
+    fn giteacohash(&self) -> Option<&str> {
+        self.base().giteacohash.as_deref()
+    }
+
+    /// The openQA incident id used by the QEM Dashboard / oqa-search queries.
+    ///
+    /// Ports upstream's use of `rrid.maintenance_id` as the incident number.
+    /// `None` for the null report (no RRID).
+    fn incident_id(&self) -> Option<String> {
+        self.base().rrid.as_ref().map(|r| r.maintenance_id.clone())
+    }
+
+    /// Records the reviewer in the loaded testreport template on disk (upstream
+    /// `set_reviewer`).
+    ///
+    /// Replaces the `Test Plan Reviewer:` metadata line with `name`, rewrites
+    /// the template file atomically, and updates the in-memory
+    /// [`reviewer`](TestReportBase::reviewer) only after the write succeeds
+    /// (older `Suggested …` phrasings are normalised away). `name` is trimmed.
+    ///
+    /// # Errors
+    ///
+    /// * [`ReviewerError::Empty`] when `name` is empty/whitespace.
+    /// * [`ReviewerError::NoTemplate`] when no template is loaded (`path` unset).
+    /// * [`ReviewerError::NoReviewerLine`] when the template has no
+    ///   `Test Plan Reviewer:` line to replace.
+    /// * [`ReviewerError::Io`] when reading or atomically rewriting the file fails.
+    fn set_reviewer(&mut self, name: &str) -> Result<(), ReviewerError> {
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return Err(ReviewerError::Empty);
+        }
+        let path = self.base().path.clone().ok_or(ReviewerError::NoTemplate)?;
+
+        let text = std::fs::read_to_string(&path).map_err(ReviewerError::Io)?;
+        let re = reviewer_line_re();
+        if !re.is_match(&text) {
+            return Err(ReviewerError::NoReviewerLine);
+        }
+        let new_text = re
+            .replace(&text, format!("Test Plan Reviewer: {name}").as_str())
+            .into_owned();
+
+        crate::support::atomic_write_file(new_text.as_bytes(), &path).map_err(ReviewerError::Io)?;
+        self.base_mut().reviewer = name;
+        Ok(())
+    }
+}
+
+/// Matches the `Test Plan Reviewer:` (or legacy `Suggested Test Plan
+/// Reviewer:`) metadata line, ported from upstream `_reviewer_line`.
+///
+/// Compiled on demand; only [`TestReport::set_reviewer`] uses it.
+fn reviewer_line_re() -> regex::Regex {
+    regex::Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
+        .expect("static reviewer-line regex is valid")
+}
+
+/// Failure recording a reviewer into the loaded template (upstream raises
+/// `ValueError` / `RuntimeError` / `TemplateFormatError`).
+#[derive(Debug, thiserror::Error)]
+pub enum ReviewerError {
+    /// The reviewer name was empty or whitespace-only.
+    #[error("reviewer must be a non-empty string")]
+    Empty,
+    /// No template is loaded (upstream "Called while missing path").
+    #[error("Called while missing path")]
+    NoTemplate,
+    /// The template has no `Test Plan Reviewer:` line to replace.
+    #[error("no 'Test Plan Reviewer:' line found in template")]
+    NoReviewerLine,
+    /// Reading or atomically rewriting the template file failed.
+    #[error("failed to write reviewer to template: {0}")]
+    Io(#[source] std::io::Error),
 }
 
 #[cfg(test)]
@@ -605,5 +700,89 @@ mod tests {
         // Build checks strips the trailing "log".
         let build = rows.iter().find(|(l, _)| l == "Build checks").unwrap();
         assert!(build.1.ends_with("build_checks"), "{}", build.1);
+    }
+
+    #[test]
+    fn rrid_workflow_gitea_incident_accessors() {
+        let empty = MetaReport {
+            base: TestReportBase::new(config()),
+        };
+        assert!(empty.rrid().is_none());
+        assert!(empty.incident_id().is_none());
+
+        let mut base = TestReportBase::new(config());
+        base.rrid = Some("SUSE:Maintenance:12345:67890".parse().unwrap());
+        base.giteaprapi = Some("https://gitea/api/pr/1".to_owned());
+        base.giteacohash = Some("deadbeef".to_owned());
+        base.workflow = Workflow::Kernel;
+        let r = MetaReport { base };
+        assert_eq!(r.rrid().unwrap().maintenance_id, "12345");
+        assert_eq!(r.incident_id().as_deref(), Some("12345"));
+        assert_eq!(r.giteaprapi(), Some("https://gitea/api/pr/1"));
+        assert_eq!(r.giteacohash(), Some("deadbeef"));
+        assert_eq!(r.workflow(), Workflow::Kernel);
+    }
+
+    #[test]
+    fn set_reviewer_rewrites_template_line_and_updates_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log");
+        std::fs::write(
+            &path,
+            "Category: recommended\nTest Plan Reviewer: old\nEnd\n",
+        )
+        .unwrap();
+        let mut base = TestReportBase::new(config());
+        base.path = Some(path.clone());
+        let mut r = MetaReport { base };
+
+        r.set_reviewer("  bob  ").unwrap();
+        assert_eq!(r.base().reviewer, "bob");
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("Test Plan Reviewer: bob"), "{written}");
+        assert!(!written.contains("old"), "{written}");
+    }
+
+    #[test]
+    fn set_reviewer_normalizes_legacy_suggested_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log");
+        std::fs::write(&path, "Suggested Test Plan Reviewer: \n").unwrap();
+        let mut base = TestReportBase::new(config());
+        base.path = Some(path.clone());
+        let mut r = MetaReport { base };
+        r.set_reviewer("carol").unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written.trim(), "Test Plan Reviewer: carol");
+    }
+
+    #[test]
+    fn set_reviewer_rejects_empty_missing_path_and_missing_line() {
+        // Empty name.
+        assert!(matches!(
+            MetaReport {
+                base: TestReportBase::new(config())
+            }
+            .set_reviewer("   "),
+            Err(ReviewerError::Empty)
+        ));
+        // No template path loaded.
+        assert!(matches!(
+            MetaReport {
+                base: TestReportBase::new(config())
+            }
+            .set_reviewer("bob"),
+            Err(ReviewerError::NoTemplate)
+        ));
+        // Path set but no reviewer line.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("log");
+        std::fs::write(&path, "Category: recommended\n").unwrap();
+        let mut base = TestReportBase::new(config());
+        base.path = Some(path);
+        assert!(matches!(
+            MetaReport { base }.set_reviewer("bob"),
+            Err(ReviewerError::NoReviewerLine)
+        ));
     }
 }

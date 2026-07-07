@@ -121,6 +121,21 @@ pub(crate) fn default_reports_url() -> String {
 pub(crate) fn default_fancy_reports_url() -> String {
     "https://qam.suse.de/reports".to_owned()
 }
+pub(crate) fn default_qem_dashboard_api() -> String {
+    "http://dashboard.qam.suse.de/api".to_owned()
+}
+pub(crate) fn default_teregen_api() -> String {
+    "https://qam.suse.de/api/v1".to_owned()
+}
+pub(crate) fn default_openqa_instance() -> String {
+    "https://openqa.suse.de".to_owned()
+}
+pub(crate) fn default_openqa_instance_baremetal() -> String {
+    "http://openqa.qam.suse.cz".to_owned()
+}
+pub(crate) fn default_openqa_install_distri() -> String {
+    "sle".to_owned()
+}
 pub(crate) fn default_refhosts_resolvers() -> String {
     "https,path".to_owned()
 }
@@ -218,6 +233,29 @@ pub(crate) struct UrlSection {
     pub fancy_reports: Option<String>,
 }
 
+/// `[qem_dashboard]` table — the QEM Dashboard API base URL.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct QemDashboardSection {
+    pub api: Option<String>,
+}
+
+/// `[teregen]` table — the TeReGen report/queue API base URL.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct TeregenSection {
+    pub api: Option<String>,
+}
+
+/// `[openqa]` table — openQA instance URLs and the install distri.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct OpenqaSection {
+    pub openqa: Option<String>,
+    pub baremetal: Option<String>,
+    pub distri: Option<String>,
+}
+
 /// `[svn]` table.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -268,6 +306,9 @@ pub(crate) struct RawConfig {
     pub connection: ConnectionSection,
     pub refhosts: RefhostsSection,
     pub url: UrlSection,
+    pub qem_dashboard: QemDashboardSection,
+    pub teregen: TeregenSection,
+    pub openqa: OpenqaSection,
     pub svn: SvnSection,
     pub target: TargetSection,
     pub gitea: GiteaSection,
@@ -300,6 +341,11 @@ impl RawConfig {
         take!(url, bugzilla);
         take!(url, testreports);
         take!(url, fancy_reports);
+        take!(qem_dashboard, api);
+        take!(teregen, api);
+        take!(openqa, openqa);
+        take!(openqa, baremetal);
+        take!(openqa, distri);
         take!(svn, path);
         take!(target, tempdir);
         take!(gitea, token);
@@ -359,6 +405,22 @@ pub struct Config {
     /// "Fancy" reports base URL.
     pub fancy_reports_url: String,
 
+    // [qem_dashboard]
+    /// QEM Dashboard API base URL (upstream `qem_dashboard_api`).
+    pub qem_dashboard_api: String,
+
+    // [teregen]
+    /// TeReGen report/queue API base URL (upstream `teregen_api`).
+    pub teregen_api: String,
+
+    // [openqa]
+    /// openQA instance URL (upstream `openqa_instance`).
+    pub openqa_instance: String,
+    /// Baremetal openQA instance URL (upstream `openqa_instance_baremetal`).
+    pub openqa_instance_baremetal: String,
+    /// openQA install `distri` parameter (upstream `openqa_install_distri`).
+    pub openqa_install_distri: String,
+
     // [svn]
     /// SVN base path for test-report checkout.
     pub svn_path: String,
@@ -408,6 +470,11 @@ impl Default for Config {
             bugzilla_url: default_bugzilla_url(),
             reports_url: default_reports_url(),
             fancy_reports_url: default_fancy_reports_url(),
+            qem_dashboard_api: default_qem_dashboard_api(),
+            teregen_api: default_teregen_api(),
+            openqa_instance: default_openqa_instance(),
+            openqa_instance_baremetal: default_openqa_instance_baremetal(),
+            openqa_install_distri: default_openqa_install_distri(),
             svn_path: default_svn_path(),
             gitea_token: String::new(),
             target_tempdir: default_target_tempdir(),
@@ -463,6 +530,11 @@ impl Config {
             bugzilla_url: raw.url.bugzilla.unwrap_or(d.bugzilla_url),
             reports_url: raw.url.testreports.unwrap_or(d.reports_url),
             fancy_reports_url: raw.url.fancy_reports.unwrap_or(d.fancy_reports_url),
+            qem_dashboard_api: raw.qem_dashboard.api.unwrap_or(d.qem_dashboard_api),
+            teregen_api: raw.teregen.api.unwrap_or(d.teregen_api),
+            openqa_instance: raw.openqa.openqa.unwrap_or(d.openqa_instance),
+            openqa_instance_baremetal: raw.openqa.baremetal.unwrap_or(d.openqa_instance_baremetal),
+            openqa_install_distri: raw.openqa.distri.unwrap_or(d.openqa_install_distri),
             svn_path: raw.svn.path.unwrap_or(d.svn_path),
             gitea_token: raw.gitea.token.unwrap_or(d.gitea_token),
             target_tempdir: raw
@@ -512,6 +584,35 @@ mod tests {
         assert!(c.lock_pi_autolock);
         assert_eq!(c.lock_wait, 0);
         assert_eq!(c.lock_wait_poll, 15);
+        // openQA / QEM Dashboard / TeReGen defaults mirror upstream config.py.
+        assert_eq!(c.qem_dashboard_api, "http://dashboard.qam.suse.de/api");
+        assert_eq!(c.teregen_api, "https://qam.suse.de/api/v1");
+        assert_eq!(c.openqa_instance, "https://openqa.suse.de");
+        assert_eq!(c.openqa_instance_baremetal, "http://openqa.qam.suse.cz");
+        assert_eq!(c.openqa_install_distri, "sle");
+    }
+
+    #[test]
+    fn openqa_teregen_dashboard_sections_override_defaults() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [qem_dashboard]
+            api = "http://dash.local/api"
+            [teregen]
+            api = "http://tere.local/api/v1"
+            [openqa]
+            openqa = "http://oqa.local"
+            baremetal = "http://oqa-bm.local"
+            distri = "sle-micro"
+            "#,
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        assert_eq!(c.qem_dashboard_api, "http://dash.local/api");
+        assert_eq!(c.teregen_api, "http://tere.local/api/v1");
+        assert_eq!(c.openqa_instance, "http://oqa.local");
+        assert_eq!(c.openqa_instance_baremetal, "http://oqa-bm.local");
+        assert_eq!(c.openqa_install_distri, "sle-micro");
     }
 
     #[test]

@@ -7,6 +7,48 @@
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_hosts::HostsGroup;
 
+use crate::error::CommandError;
+use crate::session::Session;
+
+/// Guards a command body that requires a loaded update (upstream
+/// `@requires_update`).
+///
+/// Returns [`CommandError::Other`] with the upstream message when no report is
+/// loaded, so a data-source command errors cleanly instead of building a client
+/// for an empty RRID. On success returns the active report's
+/// [`RequestReviewID`](mtui_types::RequestReviewID).
+///
+/// # Errors
+///
+/// [`CommandError::Other`] when the active report is the null object.
+pub fn require_update(session: &Session) -> Result<mtui_types::RequestReviewID, CommandError> {
+    let meta = session.metadata();
+    if !meta.is_loaded() {
+        return Err(CommandError::Other(
+            "Metadata not loaded, please use load_template first".to_owned(),
+        ));
+    }
+    meta.rrid().cloned().ok_or_else(|| {
+        CommandError::Other("Metadata not loaded, please use load_template first".to_owned())
+    })
+}
+
+/// Tab-completion candidates that offer every loaded template RRID (upstream
+/// `template_completion`).
+///
+/// Returned RRIDs that start with `text` are offered; the caller merges these
+/// with any flag candidates. Mirrors upstream, which lets `-T/--template` be
+/// completed with the loaded RRIDs.
+#[must_use]
+pub fn template_completion(session: &Session, text: &str) -> Vec<String> {
+    session
+        .templates
+        .rrids()
+        .into_iter()
+        .filter(|rrid| rrid.starts_with(text))
+        .collect()
+}
+
 /// Adds the repeatable `-t/--target` host argument (upstream `_add_hosts_arg`).
 ///
 /// `action="append"` upstream → [`ArgAction::Append`] here: the flag may be
@@ -202,6 +244,37 @@ mod tests {
         let mut names = select_names(&g, &parse(&["-t", "all"]), true).unwrap();
         names.sort();
         assert_eq!(names, vec!["h1", "h2"]);
+    }
+
+    #[test]
+    fn require_update_errors_when_unloaded() {
+        use crate::commands::testkit::{empty_session, session_with_hosts};
+        let (session, _buf) = empty_session();
+        let err = require_update(&session).unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+
+        // A loaded report yields its RRID.
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let rrid = require_update(&session).unwrap();
+        assert_eq!(rrid.to_string(), "SUSE:Maintenance:1:1");
+    }
+
+    #[test]
+    fn template_completion_offers_loaded_rrids_by_prefix() {
+        use crate::commands::testkit::{fake_report, session_with_hosts};
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));
+        let mut all = template_completion(&session, "");
+        all.sort();
+        assert_eq!(all, vec!["SUSE:Maintenance:1:1", "SUSE:Maintenance:2:2"]);
+        // Prefix filter.
+        assert_eq!(
+            template_completion(&session, "SUSE:Maintenance:2"),
+            vec!["SUSE:Maintenance:2:2"]
+        );
+        assert!(template_completion(&session, "nope").is_empty());
     }
 
     #[test]

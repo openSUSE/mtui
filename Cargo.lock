@@ -1754,12 +1754,14 @@ dependencies = [
  "mtui-types",
  "owo-colors",
  "regex",
+ "serde_json",
  "shlex",
  "tempfile",
  "thiserror",
  "tokio",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

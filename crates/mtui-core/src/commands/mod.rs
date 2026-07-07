@@ -40,6 +40,16 @@ mod templates;
 mod unload;
 mod whoami;
 
+// Wave 4 — backend APIs, openQA/QEM queue & workflow.
+mod apicall;
+mod approve;
+mod checkers;
+mod openqa_jobs;
+mod openqa_overview;
+mod regenerate;
+mod simpleset;
+mod updates;
+
 // Wave 3 — testreport lifecycle, metadata & host-info commands.
 mod checkout;
 mod commit;
@@ -82,6 +92,15 @@ pub use switch::Switch;
 pub use templates::ListTemplates;
 pub use unload::Unload;
 pub use whoami::Whoami;
+
+pub use apicall::{Assign, Comment, Reject, Unassign};
+pub use approve::Approve;
+pub use checkers::Checkers;
+pub use openqa_jobs::OpenQAJobs;
+pub use openqa_overview::OpenQAOverview;
+pub use regenerate::Regenerate;
+pub use simpleset::SetLogLevel;
+pub use updates::Updates;
 
 pub use checkout::Checkout;
 pub use commit::Commit;
@@ -196,6 +215,7 @@ pub(crate) mod testkit {
         let mut base = TestReportBase::new(Config::default());
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
         base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
         session.templates.add(Box::new(FakeReport {
             base,
             rrid: rrid.to_owned(),
@@ -217,6 +237,7 @@ pub(crate) mod testkit {
         let mut base = TestReportBase::new(Config::default());
         let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
         base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
         Box::new(FakeReport {
             base,
             rrid: rrid.to_owned(),
@@ -246,6 +267,7 @@ pub(crate) mod testkit {
         );
         let mut base = TestReportBase::new(Config::default());
         base.targets = HostsGroup::new(vec![target], false);
+        base.rrid = rrid.parse().ok();
         session.templates.add(Box::new(FakeReport {
             base,
             rrid: rrid.to_owned(),
