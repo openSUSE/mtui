@@ -219,6 +219,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   swallows the template-scoping flag, so the message stays intact, the call
   is scoped to the intended template (instead of silently fanning out to
   every one), and no stray `-T <RRID>` leaks into the remote command.
+- `qam reject` messages and `qam comment` text are no longer corrupted with
+  literal quote characters. They were being run through `shlex.quote` before
+  being placed into the `osc` argv list, but that list is executed without a
+  shell, so the escaping was delivered verbatim — a message like
+  `does not build` reached osc as `'does not build'` and `won't build` became
+  garbled. The message and comment are now passed through unmodified.
 - An unscoped multi-template fan-out of a host-phase command (e.g. `lock`,
   `run`) no longer fails the whole fan-out — or, for `lock`, pretends to
   succeed — when a loaded template has no connected host. A host-less template

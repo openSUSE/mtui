@@ -2,7 +2,6 @@
 
 from logging import getLogger
 from shlex import join as shlex_join
-from shlex import quote
 from subprocess import DEVNULL, CalledProcessError, TimeoutExpired, run
 
 from ..support.config import Config
@@ -56,8 +55,15 @@ class OSC:
     ) -> bool:
         """Constructs and executes `osc qam` commands safely.
 
-        This method builds the command as a list of arguments to
-        prevent command injection vulnerabilities.
+        The command is built as an argv list and handed to
+        ``subprocess.run`` without ``shell=True``, so each element is
+        passed verbatim to ``execve`` and no shell ever interprets the
+        tokens -- that alone is what prevents command injection. Because
+        there is no shell, ``shlex.quote`` must NOT be applied to the
+        message or comment: it would only add shell-escaping syntax that
+        osc then receives as literal characters, corrupting the recorded
+        text (e.g. ``does not build`` -> ``'does not build'``).
+        ``shlex_join`` is used solely to render the readable debug log.
 
         Args:
             operation: The `qam` subcommand to perform (e.g., 'approve').
@@ -83,7 +89,7 @@ class OSC:
 
         # Conditionally add optional arguments to the command list.
         reason_args = ["-R", reason] if reason else []
-        message_args = ["-M", quote(message)] if message else []
+        message_args = ["-M", message] if message else []
 
         # Add a specific workaround for 'PI' kinds which have a different RRID format
         # that oscqam does not expect by default.
@@ -98,7 +104,7 @@ class OSC:
 
         # must be converted to str -> shlex.join accepts only str or bytestr
         rrid_args = [str(self.rrid.review_id)]
-        comment_args = [quote(comment)] if comment else []
+        comment_args = [comment] if comment else []
 
         # Combine all parts into the final command list in the correct order.
         command: list[str] = (
