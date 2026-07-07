@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.cli import colors as colorctl
-from mtui.cli._history import default_history_path
+from mtui.cli._history import default_history_path, get_history
 from mtui.cli.colors import green
 from mtui.cli.term import ask_user, filter_ansi, page, prompt_user
 
@@ -68,54 +68,72 @@ def test_prompt_user_non_interactive_returns_default():
     assert prompt_user("? ", ["yes", "y"], False, default=False) is False
 
 
-def test_prompt_user_pops_history_after_answer():
-    """A typed confirmation answer triggers the defensive history scrub.
+def test_prompt_user_preserves_last_command_in_history(tmp_path, monkeypatch):
+    """A confirmation answer must not erase the user's last REPL command.
 
-    Even though the in-line ``InMemoryHistory`` keeps the answer out of
-    ``~/.mtui_history``, :func:`pop_last_entry` is still invoked so a
-    stale entry written by an older ``readline``-era mtui (or by a
-    hand-edit) gets cleaned up. Locking this contract keeps the
-    leftover answer out of the up-arrow stack and out of
-    acceptance-test history snapshots.
+    Regression guard for the history-scrub bug. ``prompt_user`` used to
+    pop the newest entry from the shared on-disk history in a ``finally``
+    block. Because the answer itself is read through an ephemeral
+    ``InMemoryHistory`` and never reaches that file, the entry actually
+    removed was the *real* command the user had just run in the REPL —
+    silently deleting it from both the up-arrow deque and the persisted
+    file. ``prompt_user`` must now leave history completely untouched.
     """
-    with (
-        _patch_prompt("y"),
-        patch("mtui.cli.term.pop_last_entry") as pop_mock,
-    ):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Point the shared history at a throwaway file under the fake HOME so
+    # any stray scrub would hit *this* file, not the developer's real one.
+    hist_path = default_history_path()
+    assert hist_path == tmp_path / ".mtui_history"
+
+    # Seed a genuine command line the way the REPL's PromptSession would.
+    history = get_history(hist_path)
+    history.append_string("approve -r joe")
+
+    with _patch_prompt("y"):
         assert prompt_user("Y? ", ("y",)) is True
-    pop_mock.assert_called_once_with(default_history_path())
+
+    # The real command survives in both the cached in-memory strings and
+    # the persisted file — prompt_user touched neither.
+    assert get_history(hist_path).get_strings()[-1] == "approve -r joe"
+    assert "approve -r joe" in hist_path.read_text()
 
 
-def test_prompt_user_does_not_pop_on_empty_input():
+def test_prompt_user_does_not_touch_history_on_empty_input(tmp_path, monkeypatch):
     """An empty submission must leave the history file alone.
 
-    Nothing was typed, so there is nothing to scrub. The previous
-    ``readline``-based code shared this property and tests relied on
-    it; preserved here so the migration is behaviourally inert.
+    Nothing was typed, so there is nothing to act on; the seeded command
+    stays put and the default is returned.
     """
-    with (
-        _patch_prompt(""),
-        patch("mtui.cli.term.pop_last_entry") as pop_mock,
-    ):
-        prompt_user("Y? ", ("y",), default=False)
-    pop_mock.assert_not_called()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    hist_path = default_history_path()
+    history = get_history(hist_path)
+    history.append_string("approve -r joe")
+
+    with _patch_prompt(""):
+        assert prompt_user("Y? ", ("y",), default=False) is False
+
+    assert get_history(hist_path).get_strings()[-1] == "approve -r joe"
+    assert "approve -r joe" in hist_path.read_text()
 
 
 @pytest.mark.parametrize("bail", [KeyboardInterrupt, EOFError])
-def test_prompt_user_bailout_returns_false(bail):
+def test_prompt_user_bailout_returns_false(bail, tmp_path, monkeypatch):
     """Ctrl-C / Ctrl-D at the confirmation reads as a "no" answer.
 
     Both interrupts must short-circuit to ``False`` regardless of
     ``default`` so a stray Ctrl-C never auto-confirms a destructive
     action, and so a closed stdin (EOF) does not propagate up and crash
-    the surrounding REPL loop.
+    the surrounding REPL loop. History must remain untouched either way.
     """
-    with (
-        _patch_prompt(bail),
-        patch("mtui.cli.term.pop_last_entry") as pop_mock,
-    ):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    hist_path = default_history_path()
+    history = get_history(hist_path)
+    history.append_string("approve -r joe")
+
+    with _patch_prompt(bail):
         assert prompt_user("Y? ", ("y",), default=True) is False
-    pop_mock.assert_not_called()
+
+    assert get_history(hist_path).get_strings()[-1] == "approve -r joe"
 
 
 def test_ask_user_returns_stripped_response():

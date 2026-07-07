@@ -13,8 +13,11 @@ Public surface:
 * :func:`get_history` — memoised :class:`FileHistory` accessor keyed on the
   resolved absolute path.
 * :func:`pop_last_entry` — drop the most recent entry from both the
-  in-memory cache and the on-disk file. Used to scrub a yes/no answer
-  typed at :func:`prompt_user` so it does not pollute the up-arrow stack.
+  in-memory cache and the on-disk file. A standalone utility with no
+  current caller: :func:`mtui.cli.term.prompt_user` used to call it to
+  scrub a yes/no answer, but the answer is now read through an ephemeral
+  in-memory history and never reaches this shared file, so the pop was
+  removed.
 """
 
 from __future__ import annotations
@@ -73,9 +76,10 @@ def get_history(path: Path) -> FileHistory:
 def pop_last_entry(path: Path) -> str | None:
     """Remove and return the most recent history entry at ``path``.
 
-    Mirrors the legacy ``readline.remove_history_item`` call previously
-    living in :func:`mtui.cli.term.prompt_user`: keeps confirmation answers
-    (``y``/``n``) out of the up-arrow stack and out of the persisted file.
+    Mirrors the legacy ``readline.remove_history_item`` behaviour. It once
+    scrubbed a yes/no answer typed at :func:`mtui.cli.term.prompt_user`, but
+    that caller now reads through an ephemeral in-memory history and no longer
+    needs (or calls) this; it is retained as a standalone utility.
 
     Both the on-disk file and any in-memory deque held by a cached
     :class:`FileHistory` for the same path are updated, so the next prompt

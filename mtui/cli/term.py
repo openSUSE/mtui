@@ -17,8 +17,6 @@ from collections.abc import Callable, Collection
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 
-from ._history import default_history_path, pop_last_entry
-
 
 def termsize() -> tuple[int, int]:
     """Gets the size of the terminal.
@@ -103,7 +101,6 @@ def prompt_user(
 
     """
     result = False
-    response = ""
 
     if not interactive:
         print(text)  # noqa: T201
@@ -117,14 +114,6 @@ def prompt_user(
             result = True
     except (KeyboardInterrupt, EOFError):
         pass
-    finally:
-        if response:
-            # Defensive scrub: even with the ephemeral in-memory history
-            # used inside ``_read_line``, a stale ``readline``-era entry
-            # written by an older mtui (or a hand-edit) would still be
-            # popped, matching the previous behaviour the acceptance
-            # tests lock in.
-            pop_last_entry(default_history_path())
 
     return result
 

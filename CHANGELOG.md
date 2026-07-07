@@ -225,6 +225,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   shell, so the escaping was delivered verbatim — a message like
   `does not build` reached osc as `'does not build'` and `won't build` became
   garbled. The message and comment are now passed through unmodified.
+- Answering a yes/no confirmation prompt (e.g. `approve`, `remove_host`,
+  `regenerate` overwrite, or `q` at the pager) no longer erases the last
+  command from your REPL history. The prompt used to scrub the newest
+  entry from `~/.mtui_history`, which — since the answer itself is never
+  written there — silently deleted the real command you had just run,
+  from both the up-arrow stack and the persisted file.
 - An unscoped multi-template fan-out of a host-phase command (e.g. `lock`,
   `run`) no longer fails the whole fan-out — or, for `lock`, pretends to
   succeed — when a loaded template has no connected host. A host-less template
