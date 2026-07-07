@@ -213,6 +213,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
+  `template` argument, nor a backgrounded `run` that fans out across several
+  loaded templates. A `-m`/`-c` message or a `run` command line no longer
+  swallows the template-scoping flag, so the message stays intact, the call
+  is scoped to the intended template (instead of silently fanning out to
+  every one), and no stray `-T <RRID>` leaks into the remote command.
 - An unscoped multi-template fan-out of a host-phase command (e.g. `lock`,
   `run`) no longer fails the whole fan-out — or, for `lock`, pretends to
   succeed — when a loaded template has no connected host. A host-less template
