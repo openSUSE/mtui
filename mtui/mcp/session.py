@@ -1012,7 +1012,12 @@ class McpSession:
             self._job_counter += 1
             token = rrid.replace(":", "_")
             job_id = f"{cmd_cls.command}-{token}-{self._job_counter}"
-            scoped_argv = [*argv, "-T", rrid]
+            # Prepend the scope flag: a positional ``nargs=REMAINDER`` command
+            # (``run``) or an append-REMAINDER flag at the tail of ``argv``
+            # would swallow a trailing ``-T <rrid>`` into its own value,
+            # leaving ``template=None`` (wrong fan-out) and leaking ``-T`` into
+            # the remote command. Emitting it first keeps it a real flag.
+            scoped_argv = ["-T", rrid, *argv]
             job_ids.append(self._mint_job(cmd_cls, scoped_argv, job_id))
         return job_ids
 

@@ -12,7 +12,9 @@ inverse of :func:`mtui.mcp._schema.action_to_parameter`:
   when the action's ``nargs`` consumes a remainder/multi
   (``REMAINDER``/``*``/``+``/integer ``N`` — e.g. ``commit -m``, ``lock -c``):
   there the flag is emitted once followed by every token, so argparse rebuilds
-  ``[[v1, v2, ...]]`` instead of swallowing a repeated flag as a value.
+  ``[[v1, v2, ...]]`` instead of swallowing a repeated flag as a value — and,
+  like the optional-REMAINDER case below, **into the positional tail** so a
+  later flag (e.g. ``-T/--template``) declared after it cannot be swallowed.
 * Positional ``nargs=REMAINDER``/``*``/``+`` → append elements verbatim
   at the end (after every flag-shaped argument), preserving order.
 * Optional ``nargs=REMAINDER`` (e.g. ``reject --message``) → emit the
@@ -194,8 +196,20 @@ def kwargs_to_argv(
                 # argparse rebuilds ``[[v1, v2, ...]]``; ``--flag v1 --flag v2``
                 # would let REMAINDER swallow the second ``--flag`` as a value,
                 # producing ``[[v1, '--flag', v2]]`` and a corrupted message.
-                flag_tokens.append(flag)
-                flag_tokens.extend(str(item) for item in value)
+                #
+                # Route into the positional tail (not ``flag_tokens``) for the
+                # same reason as the optional-REMAINDER branch below: a
+                # REMAINDER/multi append consumes every token after its flag, so
+                # any flag declared *after* it (e.g. ``-T/--template`` added by
+                # ``_add_template_arg`` for ``commit``/``lock``) would be
+                # swallowed into the message/comment and lost. Emitting after
+                # every other flag keeps later flags safe regardless of
+                # ``parser._actions`` declaration order. (Assumes at most one
+                # REMAINDER-shaped tail contributor per command: no current
+                # command declares a real positional *after* an append+REMAINDER
+                # flag, which would be emitted ahead of it here and swallowed.)
+                positional_tail.append(flag)
+                positional_tail.extend(str(item) for item in value)
             else:
                 for item in value:
                     flag_tokens.extend([flag, str(item)])
