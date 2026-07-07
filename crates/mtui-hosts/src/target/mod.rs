@@ -319,6 +319,18 @@ impl Target {
         self.timeout.as_secs()
     }
 
+    /// Sets the connect/command timeout for this target, in whole seconds.
+    ///
+    /// Ports upstream `Target.set_timeout` (which sets `connection.timeout`);
+    /// the Rust `Target` owns the timeout directly, so this updates the field
+    /// that later [`connect`](Self::connect) calls apply and that
+    /// [`timeout_secs`](Self::timeout_secs) reports. `0` disables the timeout
+    /// (upstream semantics), which [`CommandTimeout`] represents as a zero
+    /// duration.
+    pub const fn set_timeout(&mut self, secs: u64) {
+        self.timeout = CommandTimeout::from_secs(secs);
+    }
+
     /// Returns a [`Reporter`] bound to this target for status-sink dispatch.
     ///
     /// The reporter borrows `self`, so each dispatch reads live field values —
@@ -907,6 +919,21 @@ mod tests {
             ExecutionMode::Parallel,
         );
         assert_eq!(t.timeout, CommandTimeout::from_secs(600));
+    }
+
+    #[test]
+    fn set_timeout_updates_reported_seconds() {
+        let mut t = Target::new(
+            &cfg(),
+            "h.example.com",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+        );
+        t.set_timeout(120);
+        assert_eq!(t.timeout_secs(), 120);
+        // `0` disables the timeout (upstream semantics): zero duration.
+        t.set_timeout(0);
+        assert_eq!(t.timeout_secs(), 0);
     }
 
     #[test]

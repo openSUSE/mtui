@@ -160,6 +160,24 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::ConfigCmd));
     registry.register(Arc::new(commands::Quit));
     registry.register(Arc::new(commands::Shell));
+    // Wave 3 — testreport lifecycle, metadata & host-info commands.
+    registry.register(Arc::new(commands::Checkout));
+    registry.register(Arc::new(commands::Commit));
+    registry.register(Arc::new(commands::ShowDiff));
+    registry.register(Arc::new(commands::AnalyzeDiff));
+    registry.register(Arc::new(commands::ListBugs));
+    registry.register(Arc::new(commands::ListMetadata));
+    registry.register(Arc::new(commands::ListHosts));
+    registry.register(Arc::new(commands::ListTimeout));
+    registry.register(Arc::new(commands::ListUpdateCommands));
+    registry.register(Arc::new(commands::ListSessions));
+    registry.register(Arc::new(commands::ListHistory));
+    registry.register(Arc::new(commands::ShowLog));
+    registry.register(Arc::new(commands::ListVersions));
+    registry.register(Arc::new(commands::ListPackages));
+    registry.register(Arc::new(commands::SetTimeout));
+    registry.register(Arc::new(commands::SftpPut));
+    registry.register(Arc::new(commands::SftpGet));
     registry
 }
 
@@ -253,9 +271,36 @@ mod tests {
     }
 
     #[test]
+    fn register_all_wires_wave3_commands() {
+        let r = register_all();
+        // Wave 3 — testreport lifecycle, metadata & host-info.
+        for name in [
+            "checkout",
+            "commit",
+            "show_diff",
+            "analyze_diff",
+            "list_bugs",
+            "list_metadata",
+            "list_hosts",
+            "list_timeout",
+            "list_update_commands",
+            "list_sessions",
+            "list_history",
+            "show_log",
+            "list_versions",
+            "list_packages",
+            "set_timeout",
+            "put",
+            "get",
+        ] {
+            assert!(r.contains(name), "expected {name} to be registered");
+        }
+    }
+
+    #[test]
     fn register_all_command_count() {
-        // 10 Wave 1 + 14 Wave 2 = 24 canonical commands.
-        assert_eq!(register_all().len(), 24);
+        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 = 41 canonical commands.
+        assert_eq!(register_all().len(), 41);
     }
 
     #[test]

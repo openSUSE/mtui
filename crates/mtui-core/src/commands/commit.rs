@@ -1,0 +1,106 @@
+//! The `commit` command (commits the testing template to SVN).
+
+use async_trait::async_trait;
+use clap::{Arg, ArgAction, ArgMatches};
+use mtui_testreport::{TokioSvnRunner, detect_system, svn_commit_testreport, system_info};
+
+use crate::command::{Command, Scope};
+use crate::error::{CommandError, CommandResult};
+use crate::session::Session;
+
+/// Commits the testing template working copy to SVN.
+///
+/// Ports upstream `mtui.commands.commit.Commit`. Run after testing to persist
+/// the final template. With `-m/--msg` the given message is used; without it a
+/// message is generated from the local system info (upstream reuses the export
+/// footer via `system_info(..., prefix="committed from")`) so the commit is
+/// non-interactive rather than opening `svn`'s editor. Requires a loaded report.
+pub struct Commit;
+
+#[async_trait]
+impl Command for Commit {
+    fn name(&self) -> &'static str {
+        "commit"
+    }
+
+    fn scope(&self) -> Scope {
+        Scope::Fanout
+    }
+
+    fn configure(&self, cmd: clap::Command) -> clap::Command {
+        cmd.arg(
+            Arg::new("msg")
+                .short('m')
+                .long("msg")
+                .action(ArgAction::Append)
+                .num_args(1..)
+                .value_name("MSG")
+                .help("commit message"),
+        )
+    }
+
+    async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        let checkout = session
+            .metadata()
+            .base()
+            .report_wd()
+            .map_err(|e| CommandError::Other(format!("no report loaded: {e}")))?;
+        let install_logs = session.config.install_logs.clone();
+
+        // -m tokens join into one message; without it, a generated system-info
+        // message keeps the commit non-interactive (upstream behaviour).
+        let msg: Vec<String> = match args
+            .try_get_many::<String>("msg")
+            .ok()
+            .flatten()
+            .map(|it| it.cloned().collect::<Vec<_>>())
+        {
+            Some(tokens) if !tokens.is_empty() => {
+                vec!["-m".to_owned(), format!("\"{}\"", tokens.join(" "))]
+            }
+            _ => {
+                let (distro, verid, kernel) = detect_system();
+                let default = system_info(
+                    &distro,
+                    &verid,
+                    &kernel,
+                    &session.config.session_user,
+                    "committed from",
+                )
+                .trim_end()
+                .to_owned();
+                vec!["-m".to_owned(), default]
+            }
+        };
+
+        let runner = TokioSvnRunner;
+        svn_commit_testreport(&runner, &checkout, &install_logs, &msg)
+            .await
+            .map_err(|e| CommandError::Other(format!("committing template failed: {e}")))?;
+        tracing::info!(
+            report = %session.metadata().fancy_report_url(),
+            "testreport committed"
+        );
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::testkit::{empty_session, matches};
+
+    #[test]
+    fn name_and_fanout_scope() {
+        assert_eq!(Commit.name(), "commit");
+        assert_eq!(Commit.scope(), Scope::Fanout);
+    }
+
+    #[tokio::test]
+    async fn no_report_errors_before_shelling_out() {
+        let (mut session, _buf) = empty_session();
+        let args = matches(&Commit, &[]);
+        let err = Commit.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+    }
+}

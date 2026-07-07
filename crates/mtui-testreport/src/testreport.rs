@@ -254,6 +254,115 @@ pub trait TestReport {
         names
     }
 
+    /// The plain-text test-report log URL (upstream `_testreport_url`):
+    /// `{reports_url}/{id}/log`.
+    fn testreport_url(&self) -> String {
+        format!("{}/{}/log", self.base().config.reports_url, self.id())
+    }
+
+    /// The "fancy" test-report log URL (upstream `fancy_report_url`):
+    /// `{fancy_reports_url}/{id}/log`.
+    fn fancy_report_url(&self) -> String {
+        format!("{}/{}/log", self.base().config.fancy_reports_url, self.id())
+    }
+
+    /// The Bugzilla `id -> title` and Jira `id -> title` maps (upstream
+    /// `list_bugs`, which forwards `self.bugs`/`self.jira` to the display sink).
+    ///
+    /// Returned as sorted [`BTreeMap`](std::collections::BTreeMap)s so the
+    /// display renders ids in a stable order (upstream sorts at render time).
+    /// The `list_bugs` command feeds these to
+    /// [`CommandPromptDisplay::list_bugs`](../../mtui_core/display); an empty
+    /// map renders the upstream "No bugs…"/"No Jira…" sentinels.
+    fn bug_maps(
+        &self,
+    ) -> (
+        std::collections::BTreeMap<String, String>,
+        std::collections::BTreeMap<String, String>,
+    ) {
+        let base = self.base();
+        (
+            base.bugs
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            base.jira
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    }
+
+    /// The aligned `(label, value)` metadata rows for `list_metadata` (upstream
+    /// `_show_yourself_data` + `_aligned_write`).
+    ///
+    /// Rows with an empty value are dropped, and the whole set is sorted by
+    /// label, matching upstream's `sorted(data)` + `if value:` filter. The
+    /// caller renders each surviving row as `{label:15}: {value}`.
+    fn show_yourself_data(&self) -> Vec<(String, String)> {
+        let base = self.base();
+        let mut systems: Vec<&String> = base.systems.keys().collect();
+        systems.sort();
+        let hosts = systems
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let mut bug_ids: Vec<&String> = base.bugs.keys().collect();
+        bug_ids.sort();
+        let mut jira_ids: Vec<&String> = base.jira.keys().collect();
+        jira_ids.sort();
+
+        let build_checks = {
+            let url = self.testreport_url();
+            // Upstream `_testreport_url()[:-3] + "build_checks"` strips the
+            // trailing "log" and appends "build_checks".
+            format!("{}build_checks", &url[..url.len().saturating_sub(3)])
+        };
+
+        let mut rows: Vec<(String, String)> = vec![
+            ("Category".to_owned(), base.category.clone()),
+            ("Hosts".to_owned(), hosts),
+            ("Reviewer".to_owned(), base.reviewer.clone()),
+            ("Packager".to_owned(), base.packager.clone()),
+            (
+                "Bugs".to_owned(),
+                bug_ids
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            (
+                "Jira".to_owned(),
+                jira_ids
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            ("Packages".to_owned(), self.get_package_list().join(" ")),
+            ("Build checks".to_owned(), build_checks),
+            ("Testreport".to_owned(), self.testreport_url()),
+            ("Repository".to_owned(), base.repository.clone()),
+        ];
+        rows.extend(
+            base.testplatforms
+                .iter()
+                .map(|x| ("Testplatform".to_owned(), x.clone())),
+        );
+        rows.extend(
+            base.products
+                .iter()
+                .map(|x| ("Products".to_owned(), x.clone())),
+        );
+
+        rows.retain(|(_, value)| !value.is_empty());
+        rows.sort();
+        rows
+    }
+
     /// Installs `packages` on every host in `targets` (upstream
     /// `metadata.perform_install` → `targets.perform_install`).
     ///
@@ -417,5 +526,84 @@ mod tests {
         let base = TestReportBase::new(config());
         let err = base.report_wd().expect_err("no path -> error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// A minimal report over a [`TestReportBase`] with a fixed id, so the
+    /// trait-default metadata helpers (`bug_maps`, `show_yourself_data`,
+    /// `testreport_url`, `fancy_report_url`) can be exercised directly.
+    struct MetaReport {
+        base: TestReportBase,
+    }
+
+    #[async_trait::async_trait]
+    impl TestReport for MetaReport {
+        fn base(&self) -> &TestReportBase {
+            &self.base
+        }
+        fn base_mut(&mut self) -> &mut TestReportBase {
+            &mut self.base
+        }
+        fn id(&self) -> String {
+            "SUSE:Maintenance:1:1".to_owned()
+        }
+        fn parser(&self) -> HashMap<String, String> {
+            HashMap::new()
+        }
+        fn update_repos_parser(&self) -> HashMap<SystemProduct, String> {
+            HashMap::new()
+        }
+        fn list_update_commands(&self, _targets: &HostsGroup) {}
+        async fn check_hash(&self) -> (bool, String, String) {
+            (true, String::new(), String::new())
+        }
+    }
+
+    fn meta_report() -> MetaReport {
+        let mut base = TestReportBase::new(config());
+        base.category = "recommended".to_owned();
+        base.reviewer = "alice".to_owned();
+        base.bugs.insert("1200000".to_owned(), "boom".to_owned());
+        base.jira.insert("PED-1".to_owned(), "epic".to_owned());
+        base.systems.insert("h1".to_owned(), "SLES-15.5".to_owned());
+        base.testplatforms.push("base=sles".to_owned());
+        MetaReport { base }
+    }
+
+    #[test]
+    fn report_urls_are_derived_from_id_and_config() {
+        let r = meta_report();
+        assert!(r.testreport_url().ends_with("/SUSE:Maintenance:1:1/log"));
+        assert!(r.fancy_report_url().ends_with("/SUSE:Maintenance:1:1/log"));
+    }
+
+    #[test]
+    fn bug_maps_returns_sorted_maps() {
+        let r = meta_report();
+        let (bugs, jira) = r.bug_maps();
+        assert_eq!(bugs.get("1200000").map(String::as_str), Some("boom"));
+        assert_eq!(jira.get("PED-1").map(String::as_str), Some("epic"));
+    }
+
+    #[test]
+    fn show_yourself_data_drops_empty_and_sorts() {
+        let r = meta_report();
+        let rows = r.show_yourself_data();
+        // Every emitted row has a non-empty value.
+        assert!(rows.iter().all(|(_, v)| !v.is_empty()));
+        // Sorted by label.
+        let labels: Vec<&str> = rows.iter().map(|(l, _)| l.as_str()).collect();
+        let mut sorted = labels.clone();
+        sorted.sort_unstable();
+        assert_eq!(labels, sorted);
+        // Populated fields surface; empty ones (Packager) do not.
+        let has = |name: &str| rows.iter().any(|(l, _)| l == name);
+        assert!(has("Category"));
+        assert!(has("Reviewer"));
+        assert!(has("Bugs"));
+        assert!(has("Testplatform"));
+        assert!(!has("Packager"));
+        // Build checks strips the trailing "log".
+        let build = rows.iter().find(|(l, _)| l == "Build checks").unwrap();
+        assert!(build.1.ends_with("build_checks"), "{}", build.1);
     }
 }

@@ -25,6 +25,7 @@ owo-colors.workspace = true
 indexmap.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 mtui-types.workspace = true

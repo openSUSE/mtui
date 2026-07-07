@@ -1753,6 +1753,7 @@ dependencies = [
  "mtui-testreport",
  "mtui-types",
  "owo-colors",
+ "regex",
  "shlex",
  "tempfile",
  "thiserror",

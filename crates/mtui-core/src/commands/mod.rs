@@ -40,6 +40,24 @@ mod templates;
 mod unload;
 mod whoami;
 
+// Wave 3 — testreport lifecycle, metadata & host-info commands.
+mod checkout;
+mod commit;
+mod listbugs;
+mod listhistory;
+mod listhosts;
+mod listmetadata;
+mod listpackages;
+mod listsessions;
+mod listtimeout;
+mod listupdatecommands;
+mod listversions;
+mod settimeout;
+mod sftpget;
+mod sftpput;
+mod showdiff;
+mod showlog;
+
 pub use downgrade::Downgrade;
 pub use localrun::LocalRun;
 pub use prepare::Prepare;
@@ -64,6 +82,23 @@ pub use switch::Switch;
 pub use templates::ListTemplates;
 pub use unload::Unload;
 pub use whoami::Whoami;
+
+pub use checkout::Checkout;
+pub use commit::Commit;
+pub use listbugs::ListBugs;
+pub use listhistory::ListHistory;
+pub use listhosts::ListHosts;
+pub use listmetadata::ListMetadata;
+pub use listpackages::ListPackages;
+pub use listsessions::ListSessions;
+pub use listtimeout::ListTimeout;
+pub use listupdatecommands::ListUpdateCommands;
+pub use listversions::ListVersions;
+pub use settimeout::SetTimeout;
+pub use sftpget::SftpGet;
+pub use sftpput::SftpPut;
+pub use showdiff::{AnalyzeDiff, ShowDiff};
+pub use showlog::ShowLog;
 
 /// Shared test scaffolding for the Wave-1 command bodies.
 ///
