@@ -68,6 +68,9 @@ mod sftpput;
 mod showdiff;
 mod showlog;
 
+// Phase 5 follow-ups — deferred commands whose machinery has since landed.
+mod export;
+
 pub use downgrade::Downgrade;
 pub use localrun::LocalRun;
 pub use prepare::Prepare;
@@ -104,6 +107,7 @@ pub use updates::Updates;
 
 pub use checkout::Checkout;
 pub use commit::Commit;
+pub use export::Export;
 pub use listbugs::ListBugs;
 pub use listhistory::ListHistory;
 pub use listhosts::ListHosts;

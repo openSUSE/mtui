@@ -31,7 +31,11 @@ use crate::support::sysinfo::{EXPORT_PREFIX, detect_system, system_info};
 /// The port of upstream `prompt_user(f"Should I overwrite {fn}", ...)`. `mtui`
 /// (Phase 6) supplies an interactive implementation; library and test callers
 /// use [`DenyOverwrite`].
-pub trait OverwritePrompt {
+///
+/// The bound is `Send + Sync` because [`AutoExport::run`](crate::AutoExport) is
+/// `async` and holds the injected prompt across an `.await`, so a boxed prompt
+/// must be shareable across the executor's threads.
+pub trait OverwritePrompt: Send + Sync {
     /// Returns `true` to overwrite `path` in place, `false` to write to a
     /// timestamp-suffixed sibling instead.
     fn should_overwrite(&self, path: &Path) -> bool;

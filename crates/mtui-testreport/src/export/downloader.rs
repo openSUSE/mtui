@@ -202,25 +202,29 @@ pub async fn download_logs(
     installlogsdir: &Path,
     mode: ErrorMode,
 ) -> Result<(), ResultsMissingError> {
-    // Flatten to (host, test) pairs, keeping only those with a log to fetch.
-    let jobs: Vec<(&str, &Test, String, PathBuf)> = connectors
+    // Flatten to jobs, keeping only those with a log to fetch. The `Test` is
+    // cloned into each job so the download future owns all its data — a borrow
+    // of `test` across the async block below defeats higher-ranked-lifetime
+    // inference when the whole batch is awaited inside a spawned/boxed future.
+    let jobs: Vec<(Test, String, PathBuf)> = connectors
         .iter()
         .flat_map(|(host, tests)| {
             tests.iter().filter_map(move |test| {
                 plan(host, test, resultsdir, installlogsdir)
-                    .map(|(remote, local)| (host.as_str(), test, remote, local))
+                    .map(|(remote, local)| (test.clone(), remote, local))
             })
         })
         .collect();
 
     let total = jobs.len();
-    let results: Vec<Result<(), ResultsMissingError>> = stream::iter(jobs)
-        .map(|(_host, test, remote, local)| async move {
-            subdl(fetcher, &remote, &local, test, mode).await
-        })
-        .buffer_unordered(DOWNLOAD_CONCURRENCY)
-        .collect()
-        .await;
+    let results: Vec<Result<(), ResultsMissingError>> =
+        stream::iter(jobs)
+            .map(|(test, remote, local)| async move {
+                subdl(fetcher, &remote, &local, &test, mode).await
+            })
+            .buffer_unordered(DOWNLOAD_CONCURRENCY)
+            .collect()
+            .await;
 
     let failures: Vec<ResultsMissingError> = results.into_iter().filter_map(Result::err).collect();
     if !failures.is_empty() {
