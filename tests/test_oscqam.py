@@ -1,6 +1,7 @@
 """Tests for the mtui connector oscqam module."""
 
 import logging
+import shlex
 from subprocess import (
     DEVNULL,
     CalledProcessError,
@@ -127,6 +128,65 @@ class TestOSCCommandBuilding:
         assert "-A" in cmd
         api_index = cmd.index("-A")
         assert cmd[api_index + 1] == "https://api.suse.de"
+
+
+# Payloads that shell-quoting would corrupt but argv-mode execution must carry
+# byte-for-byte: spaces, an apostrophe (the worst shlex.quote case), embedded
+# double + mixed quotes, non-ASCII, and a value that looks like an option.
+_VERBATIM_PAYLOADS = [
+    "does not build",
+    "won't build",
+    'has "double" quotes',
+    "mixes ' and \" quotes",
+    "naïve café ☃",
+    "--looks-like-a-flag",
+]
+
+
+class TestOSCArgvVerbatim:
+    """Message/comment must reach osc verbatim, never shlex-quoted.
+
+    The command is an argv list run without ``shell=True``; adding
+    ``shlex.quote`` would ship literal quote characters to osc and
+    corrupt the recorded rejection message / comment.
+    """
+
+    def _argv(self, mock_run):
+        return mock_run.call_args[0][0]
+
+    @pytest.mark.parametrize("message", _VERBATIM_PAYLOADS)
+    def test_reject_message_is_verbatim_argv_element(self, mock_run, osc, message):
+        """The reject message appears as one raw argv element after -M."""
+        osc.reject(["qam-sle"], "bug found", message)
+
+        cmd = self._argv(mock_run)
+        assert message in cmd  # exact string, not a quoted variant
+        assert cmd[cmd.index("-M") + 1] == message
+        # no shell-escaping artifacts leaked into any argv element
+        assert not any(x.startswith("'") for x in cmd)
+
+    @pytest.mark.parametrize("comment", _VERBATIM_PAYLOADS)
+    def test_comment_is_verbatim_argv_element(self, mock_run, osc, comment):
+        """The comment appears as one raw argv element (last position)."""
+        osc.comment(comment)
+
+        cmd = self._argv(mock_run)
+        assert comment in cmd
+        assert cmd[-1] == comment
+        assert not any(x.startswith("'") for x in cmd)
+
+    def test_debug_log_still_renders_safely(self, mock_run, osc, caplog):
+        """shlex_join quotes for the debug log only, not the argv itself."""
+        with caplog.at_level(logging.DEBUG, logger=_LOGGER):
+            osc.reject(["qam-sle"], "bug found", "won't build")
+        cmd = self._argv(mock_run)
+        # The real argv element stays raw (verbatim, no shell escaping)...
+        assert cmd[cmd.index("-M") + 1] == "won't build"
+        # ...while the debug log renders the whole command shlex-quoted for
+        # display: the apostrophe message shows up escaped, never verbatim.
+        assert f"Executing command: {shlex.join(cmd)}" in caplog.text
+        assert shlex.quote("won't build") in caplog.text
+        assert "won't build" not in caplog.text
 
 
 class TestOSCInvocation:
