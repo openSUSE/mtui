@@ -69,17 +69,31 @@ class TemplateRegistry:
         """Insert (or replace) ``report`` keyed by its RRID.
 
         The first template added becomes active. Re-adding an existing RRID
-        replaces the stored report but does not change the active pointer.
+        replaces the stored report but does not change the active pointer; the
+        previously stored report is torn down first (its host-arbitration/pool
+        claims released and its refhost connections closed via
+        :meth:`_teardown`) so a bare ``add`` overwrite -- e.g. ``regenerate``
+        rebuilding a template without a prior :meth:`remove` -- never leaks the
+        old report's SSH sockets or leaves stale arbiter claims behind.
+        Re-adding the *same* object is a no-op that never tears it down.
 
         A :class:`NullTestReport` (empty RRID) is the sentinel a *failed* load
         returns; it is never keyed into the collection. Keying it would leave a
         phantom empty-RRID entry that breaks every unscoped fan-out with
         ``TestReportNotLoadedError``. Such a report is silently ignored here so
-        a failed load leaves the registry unchanged.
+        a failed load leaves the registry unchanged (in particular it must not
+        tear down whatever template is currently loaded).
         """
         rrid = str(report.id)
         if not rrid:
             return
+        # Replacing an existing RRID with a *different* report: tear the old one
+        # down (release pool claims, close its targets) so the overwrite does
+        # not leak the previous report's connections. Re-adding the identical
+        # object must not self-close, hence the ``old is not report`` guard.
+        old = self._entries.get(rrid)
+        if old is not None and old is not report:
+            self._teardown(old)
         # Wire host-arbitration ownership so connect_targets can draw distinct
         # pool hosts; reports stay legacy (remote-lock-only) until this is set.
         report._arbiter = self.arbiter  # noqa: SLF001
@@ -96,6 +110,18 @@ class TemplateRegistry:
         order) becomes active, or ``None`` when the registry empties.
         """
         report = self._entries.pop(rrid)
+        self._teardown(report)
+        if self._active == rrid:
+            self._active = next(iter(self._entries), None)
+
+    def _teardown(self, report: TestReport) -> None:
+        """Release ``report``'s pool claims and close its refhost connections.
+
+        Shared best-effort teardown (mirrors ``McpSession._disconnect_targets``)
+        used by both :meth:`remove` and the replace path of :meth:`add`: drop
+        arbiter ownership and remote pool locks first (no-op when pool selection
+        was never used), then close every target, then clear the host group.
+        """
         # Drop arbiter ownership and remote pool locks before tearing down
         # the connections (no-op when pool selection was never used).
         self.release_claims(report)
@@ -106,8 +132,6 @@ class TemplateRegistry:
             with contextlib.suppress(Exception):
                 targets[name].close()
         targets.clear()
-        if self._active == rrid:
-            self._active = next(iter(self._entries), None)
 
     def get(self, rrid: str) -> TestReport:
         """Return the loaded report for ``rrid`` (raises ``KeyError`` if absent)."""
