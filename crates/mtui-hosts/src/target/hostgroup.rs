@@ -11,7 +11,10 @@
 //! This module ports the **container + fan-out** surface (P2.5) and the
 //! **operation-lock + reboot lifecycle** (P2.9):
 //!
-//! * construction and [`select`](HostsGroup::select)ion of a host subset,
+//! * construction and [`select`](HostsGroup::select)ion of a host subset (plus
+//!   the non-consuming [`select_split`](HostsGroup::select_split) +
+//!   [`merge`](HostsGroup::merge) pair that lets a `-t` subset operation preserve
+//!   the unselected hosts, standing in for upstream's shared-reference dict),
 //! * [`names`](HostsGroup::names) / iteration,
 //! * command fan-out via [`run`](HostsGroup::run) (delegating to
 //!   [`super::actions::RunCommand`]),
@@ -196,6 +199,83 @@ impl HostsGroup {
         let mut group = HostsGroup::new(selected, interactive);
         group.plan_provider = provider;
         Ok(group)
+    }
+
+    /// Splits the group into the `-t` selection and the unselected remainder,
+    /// preserving both halves.
+    ///
+    /// This is the non-consuming counterpart to [`select`](Self::select) used by
+    /// the `perform_*` / `set_repo` drivers: because a `Target` owns a live
+    /// connection and cannot be shared, a plain `select` moves the subset out and
+    /// **drops** the rest. `select_split` instead partitions the group in one pass
+    /// so the caller can run the operation over the selected subset and then
+    /// [`merge`](Self::merge) the remainder back — the Rust stand-in for
+    /// upstream's shared-reference parent dict, where the unselected hosts always
+    /// survive the operation.
+    ///
+    /// Selection semantics match [`select`](Self::select):
+    ///
+    /// * `hosts = None` → every host (or, when `enabled`, only the non-disabled)
+    ///   is *selected*; the remainder holds whatever the `enabled` filter drops.
+    /// * `hosts = Some([..])` → exactly those hosts are selected (and, when
+    ///   `enabled`, only the non-disabled among them); every other host — plus any
+    ///   named-but-disabled host filtered out by `enabled` — lands in the
+    ///   remainder.
+    ///
+    /// An unknown hostname is a [`HostError::NotConnected`], as in
+    /// [`select`](Self::select). Both returned groups inherit `interactive` and
+    /// the injected [`PlanProvider`].
+    ///
+    /// # Errors
+    ///
+    /// [`HostError::NotConnected`] when a named host is not a member of the group.
+    pub fn select_split(
+        self,
+        hosts: Option<&[String]>,
+        enabled: bool,
+    ) -> Result<(HostsGroup, HostsGroup)> {
+        let interactive = self.interactive;
+        let provider = self.plan_provider.clone();
+        let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
+
+        if let Some(names) = hosts {
+            for name in names {
+                if !self.data.contains_key(name) {
+                    return Err(HostError::NotConnected { host: name.clone() });
+                }
+            }
+        }
+
+        let mut selected: Vec<Target> = Vec::new();
+        let mut remainder: Vec<Target> = Vec::new();
+        for (hn, t) in self.data {
+            let named = hosts.is_none_or(|names| names.contains(&hn));
+            if named && (!enabled || is_enabled(&t)) {
+                selected.push(t);
+            } else {
+                remainder.push(t);
+            }
+        }
+
+        let mut selected = HostsGroup::new(selected, interactive);
+        selected.plan_provider = provider.clone();
+        let mut remainder = HostsGroup::new(remainder, interactive);
+        remainder.plan_provider = provider;
+        Ok((selected, remainder))
+    }
+
+    /// Folds every target of `other` into `self`, keyed by hostname.
+    ///
+    /// The group-extend counterpart to [`select_split`](Self::select_split): after
+    /// a subset operation the driver merges the untouched remainder back so the
+    /// live report regains its unselected hosts. Delegates to [`add`](Self::add),
+    /// so a hostname present in both is last-writer-wins (the `other` target
+    /// replaces `self`'s). Callers pass disjoint halves, so no collision occurs in
+    /// practice.
+    pub fn merge(&mut self, other: HostsGroup) {
+        for t in other.data.into_values() {
+            self.add(t);
+        }
     }
 
     /// Adds (or replaces) a target in the group, keyed by its hostname.
@@ -831,6 +911,78 @@ mod tests {
                 other.is_ok()
             ),
         }
+    }
+
+    // --- select_split / merge ----------------------------------------------
+
+    #[test]
+    fn select_split_by_name_returns_subset_and_remainder() {
+        let g = HostsGroup::new(vec![enabled("h1"), enabled("h2"), enabled("h3")], true);
+        let (sel, rem) = g.select_split(Some(&["h1".to_owned()]), true).unwrap();
+        assert_eq!(sel.names(), vec!["h1".to_owned()]);
+        assert_eq!(rem.names(), vec!["h2".to_owned(), "h3".to_owned()]);
+        // Both halves inherit `interactive`.
+        assert!(sel.is_interactive());
+        assert!(rem.is_interactive());
+    }
+
+    #[test]
+    fn select_split_none_selects_all_empty_remainder() {
+        let g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
+        let (sel, rem) = g.select_split(None, true).unwrap();
+        assert_eq!(sel.names(), vec!["h1".to_owned(), "h2".to_owned()]);
+        assert!(rem.is_empty());
+    }
+
+    #[test]
+    fn select_split_named_disabled_lands_in_remainder() {
+        // A named host filtered out by `enabled` is preserved in the remainder,
+        // not dropped — this is the whole point of the split.
+        let g = HostsGroup::new(
+            vec![
+                enabled("h1"),
+                tgt("h2", TargetState::Disabled, ExecutionMode::Parallel),
+            ],
+            true,
+        );
+        let (sel, rem) = g
+            .select_split(Some(&["h1".to_owned(), "h2".to_owned()]), true)
+            .unwrap();
+        assert_eq!(sel.names(), vec!["h1".to_owned()]);
+        assert_eq!(rem.names(), vec!["h2".to_owned()]);
+    }
+
+    #[test]
+    fn select_split_unknown_host_is_not_connected_error() {
+        let g = HostsGroup::new(vec![enabled("h1")], true);
+        match g.select_split(Some(&["ghost".to_owned()]), false) {
+            Err(HostError::NotConnected { host }) => assert_eq!(host, "ghost"),
+            other => panic!("expected NotConnected error, got ok: {}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn merge_folds_other_into_self() {
+        let mut g = HostsGroup::new(vec![enabled("h1")], true);
+        let other = HostsGroup::new(vec![enabled("h2"), enabled("h3")], true);
+        g.merge(other);
+        assert_eq!(
+            g.names(),
+            vec!["h1".to_owned(), "h2".to_owned(), "h3".to_owned()]
+        );
+    }
+
+    #[test]
+    fn merge_collision_is_last_writer_wins() {
+        let mut g = HostsGroup::new(vec![enabled("h1")], true);
+        // `other`'s h1 is disabled and must replace `self`'s enabled h1.
+        let other = HostsGroup::new(
+            vec![tgt("h1", TargetState::Disabled, ExecutionMode::Parallel)],
+            true,
+        );
+        g.merge(other);
+        assert_eq!(g.len(), 1);
+        assert_eq!(g.get("h1").unwrap().state(), TargetState::Disabled);
     }
 
     // --- fan-out delegation ------------------------------------------------

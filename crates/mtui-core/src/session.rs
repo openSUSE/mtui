@@ -174,6 +174,49 @@ impl Session {
         self.templates.active_mut().base_mut().targets = targets;
     }
 
+    /// Takes the active report's targets and splits them into the `-t` selection
+    /// and the unselected remainder.
+    ///
+    /// The lossless replacement for `take_targets()` + `HostsGroup::select` in
+    /// the `perform_*` / `set_repo` drivers. A `-t` subset operation must run over
+    /// only the selected hosts, yet the unselected hosts must survive in the live
+    /// report — upstream gets this for free because its child group shares
+    /// `Target` references with the parent dict, but a Rust `Target` owns its
+    /// connection and cannot be shared. This hands back both halves so the driver
+    /// can drive the op over `selected`, then hand both back to
+    /// [`restore_split_targets`](Self::restore_split_targets), which merges the
+    /// remainder back in.
+    ///
+    /// `hosts` is the parsed `-t` value: `None` (or `-t all`, which callers pass
+    /// as `None`) selects every enabled host with an empty remainder; `Some` names
+    /// exactly those hosts and keeps the rest in the remainder. Selection is
+    /// `enabled`-filtered (disabled hosts land in the remainder, never dropped).
+    ///
+    /// # Errors
+    ///
+    /// [`mtui_hosts::HostError::NotConnected`] when a named `-t` host is not a
+    /// member of the active report's group.
+    ///
+    /// On error the group is left empty in the report (the taken group is
+    /// consumed by the failed split); callers surface the error immediately, so
+    /// no host is observable in that window.
+    pub fn split_targets(
+        &mut self,
+        hosts: Option<&[String]>,
+    ) -> mtui_hosts::Result<(HostsGroup, HostsGroup)> {
+        self.take_targets().select_split(hosts, true)
+    }
+
+    /// Merges the untouched `remainder` back into the operated `selected` group
+    /// and restores it as the active report's targets.
+    ///
+    /// The counterpart to [`split_targets`](Self::split_targets): recombining the
+    /// two halves preserves the hosts a `-t` subset operation did not touch.
+    pub fn restore_split_targets(&mut self, mut selected: HostsGroup, remainder: HostsGroup) {
+        selected.merge(remainder);
+        self.restore_targets(selected);
+    }
+
     /// Requests that the interactive REPL loop exit after the current dispatch.
     ///
     /// Set by the `quit` command; read by the Phase-6 REPL via

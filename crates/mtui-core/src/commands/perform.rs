@@ -5,11 +5,14 @@
 //! report's `perform_*` flows over the selected [`HostsGroup`].
 //!
 //! Those flows take `&self` (the report) **and** `&mut HostsGroup` at once, and
-//! the group lives inside the report — so the body moves the group out
-//! ([`Session::take_targets`](crate::Session::take_targets)), re-borrows the
-//! report immutably, drives the op, and restores the group. Modelling the op as
-//! an enum (rather than a borrowing async closure) keeps the future `Send`
-//! without wrestling higher-ranked lifetimes.
+//! the group lives inside the report — so the body splits the group out
+//! ([`Session::split_targets`](crate::Session::split_targets)), re-borrows the
+//! report immutably, drives the op over the selected subset, and recombines the
+//! selected subset with the untouched remainder
+//! ([`Session::restore_split_targets`](crate::Session::restore_split_targets)) so
+//! a `-t` subset never drops the unselected hosts. Modelling the op as an enum
+//! (rather than a borrowing async closure) keeps the future `Send` without
+//! wrestling higher-ranked lifetimes.
 
 use clap::ArgMatches;
 use mtui_hosts::HostsGroup;
@@ -38,11 +41,13 @@ pub(super) enum PerformOp {
 
 /// Resolves the `-t` selection and drives `op` over it, restoring the group.
 ///
-/// When `-t` names a strict subset, the unselected hosts are dropped from the
-/// live report for the operation: Rust `HostsGroup::select` moves the chosen
-/// targets out and there is no group-merge API yet (follow-up bead). With no
-/// `-t` — the common path, and what the tests and the e2e gate exercise —
-/// selection is lossless.
+/// A `-t` subset operation runs over only the selected hosts, but the unselected
+/// hosts are preserved: the group is split via
+/// [`Session::split_targets`](crate::Session::split_targets) and the untouched
+/// remainder is merged back by
+/// [`Session::restore_split_targets`](crate::Session::restore_split_targets)
+/// afterwards. With no `-t` — the common path, and what the tests and the e2e
+/// gate exercise — the remainder is empty and selection is lossless.
 ///
 /// # Errors
 ///
@@ -54,19 +59,18 @@ pub(super) async fn drive(
     op: PerformOp,
 ) -> CommandResult {
     let hosts = super::support::hosts_arg(args);
-    let whole = session.take_targets();
-    let selected = match &hosts {
+    let names = match &hosts {
         Some(names) if !names.is_empty() && !names.iter().any(|h| h == "all") => {
-            whole.select(Some(names), true)
+            Some(names.as_slice())
         }
-        _ => whole.select(None, true),
+        _ => None,
     };
-    let mut selected: HostsGroup = match selected {
-        Ok(g) => g,
+    let (mut selected, remainder): (HostsGroup, HostsGroup) = match session.split_targets(names) {
+        Ok(split) => split,
         Err(e) => return Err(CommandError::Other(e.to_string())),
     };
     if selected.is_empty() {
-        session.restore_targets(selected);
+        session.restore_split_targets(selected, remainder);
         return Err(CommandError::NoRefhostsDefined);
     }
 
@@ -95,6 +99,6 @@ pub(super) async fn drive(
         }
     }
 
-    session.restore_targets(selected);
+    session.restore_split_targets(selected, remainder);
     Ok(())
 }

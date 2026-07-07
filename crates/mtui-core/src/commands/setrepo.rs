@@ -59,19 +59,20 @@ impl Command for SetRepo {
         };
 
         let hosts = super::support::hosts_arg(args);
-        let whole = session.take_targets();
-        let selected = match &hosts {
+        let names = match &hosts {
             Some(names) if !names.is_empty() && !names.iter().any(|h| h == "all") => {
-                whole.select(Some(names), true)
+                Some(names.as_slice())
             }
-            _ => whole.select(None, true),
+            _ => None,
         };
-        let mut selected = match selected {
-            Ok(g) => g,
+        // Split rather than select: a `-t` subset operation must preserve the
+        // unselected hosts in the live report (see `Session::split_targets`).
+        let (mut selected, remainder) = match session.split_targets(names) {
+            Ok(split) => split,
             Err(e) => return Err(CommandError::Other(e.to_string())),
         };
         if selected.is_empty() {
-            session.restore_targets(selected);
+            session.restore_split_targets(selected, remainder);
             return Err(CommandError::NoRefhostsDefined);
         }
 
@@ -84,7 +85,7 @@ impl Command for SetRepo {
             }
             None => Err(CommandError::Other("No update loaded".to_owned())),
         };
-        session.restore_targets(selected);
+        session.restore_split_targets(selected, remainder);
         result
     }
 }
@@ -141,5 +142,18 @@ mod tests {
         assert!(matches!(err, CommandError::Other(m) if m == "No update loaded"));
         // The group is restored even on the capability-miss path.
         assert_eq!(session.targets().names(), vec!["h1"]);
+    }
+
+    #[tokio::test]
+    async fn set_repo_t_subset_keeps_unselected_host() {
+        // A `-t` subset must not drop the unselected host, even when the op
+        // itself no-ops on the capability miss: split+merge preserves h2.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
+        let args = matches(&SetRepo, &["-A", "-t", "h1"]);
+        let _ = SetRepo.call(&mut session, &args).await;
+        assert_eq!(
+            session.targets().names(),
+            vec!["h1".to_owned(), "h2".to_owned()]
+        );
     }
 }

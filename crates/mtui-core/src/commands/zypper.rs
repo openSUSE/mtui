@@ -131,6 +131,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_t_subset_keeps_unselected_host() {
+        // The bead's required regression: `install -t h1` on a two-host report
+        // must leave h2 in the live report afterwards (upstream shares Target
+        // references; the Rust split+merge preserves the unselected host).
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "ok");
+        let args = matches(&Install, &["-t", "h1", "pkg"]);
+        Install.call(&mut session, &args).await.unwrap();
+        assert_eq!(
+            session.targets().names(),
+            vec!["h1".to_owned(), "h2".to_owned()]
+        );
+    }
+
+    #[tokio::test]
     async fn uninstall_unknown_host_errors() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         let args = matches(&Uninstall, &["-t", "ghost", "pkg"]);
