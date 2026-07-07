@@ -150,6 +150,26 @@ include = ["mtui/cli/notification.py"]
 [tool.ty.overrides.rules]
 unused-ignore-comment = "ignore"
 
+[tool.coverage.run]
+# Branch coverage records both directions of every conditional, not merely
+# whether the line executed. Most of mtui's branches are already exercised,
+# so the headline number only dips ~1.5pp, but new code (the codecov/patch
+# gate) must now cover the untaken guard arcs -- exactly where edge-case bugs
+# hide. Only active when a run passes --cov (CI); a plain pytest run is
+# unaffected.
+branch = true
+source = ["mtui"]
+
+[tool.coverage.report]
+# Suppress structurally-unreachable arcs that would otherwise show as
+# permanently-partial branches (type-checking-only imports, abstract stubs,
+# the __main__ guard).
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["mtui*"]
