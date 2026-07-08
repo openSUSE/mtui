@@ -13,8 +13,13 @@
 //! bodies and tests keep working as the registry grows past one entry.
 
 use mtui_config::Config;
-use mtui_hosts::HostsGroup;
-use mtui_testreport::TestReport;
+use mtui_datasources::http::VerifyPolicy;
+use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig};
+use mtui_hosts::{HostsGroup, Target};
+use mtui_testreport::{TestReport, UpdateKind, make_testreport};
+use mtui_types::UpdateID;
+use mtui_types::enums::{ExecutionMode, TargetState};
+use tracing::{info, warn};
 
 use crate::display::CommandPromptDisplay;
 use crate::template_registry::TemplateRegistry;
@@ -217,6 +222,196 @@ impl Session {
         self.restore_targets(selected);
     }
 
+    /// Loads a template into the registry and, when requested, connects its
+    /// reference hosts (upstream `prompt.load_update`).
+    ///
+    /// Mirrors upstream `CommandPrompt.load_update`:
+    ///
+    /// 1. [`make_testreport`] checks out and reads the report (or returns a null
+    ///    report on failure, which [`TemplateRegistry::add`] silently ignores).
+    /// 2. The report is added to the registry and — when it carries a real RRID —
+    ///    made active. Re-loading an already-loaded RRID replaces its stored
+    ///    report and makes it active; sibling templates are untouched.
+    /// 3. If the report asked for autoconnect ([`TestReportBase::autoconnect_pending`],
+    ///    set by `make_testreport` for `-a` with `autoconnect`), its reference
+    ///    hosts are connected. The connect is driven **here** (the composition
+    ///    root) rather than inside `mtui-testreport`, so that crate never depends
+    ///    on `mtui-hosts`/`mtui-datasources` — no crate cycle.
+    ///
+    /// The connect resolves hosts from two sources, matching upstream
+    /// `TestReport.autoconnect`: the template's own `reference host:` lines
+    /// (already parsed into `hostnames`) plus one host per matching slot resolved
+    /// from each testplatform through the refhosts inventory. Every connect is
+    /// best-effort: an unreachable host is logged and skipped so one dead host
+    /// never aborts the load.
+    ///
+    /// Returns the loaded report's RRID (empty when the load failed and the null
+    /// report was substituted).
+    pub async fn load_update(
+        &mut self,
+        update: &UpdateID,
+        autoconnect: bool,
+        kind: UpdateKind,
+    ) -> String {
+        let report = make_testreport(update, self.config.clone(), kind, autoconnect).await;
+        let rrid = report.id();
+        let pending = report.base().autoconnect_pending;
+
+        // `templates.add` ignores the empty-RRID null sentinel; a real report
+        // becomes active (re-load replaces + re-activates).
+        self.templates.add(report);
+        if !rrid.is_empty() {
+            self.templates.set_active(&rrid);
+        }
+
+        if pending && !rrid.is_empty() {
+            self.autoconnect_active(&rrid).await;
+        }
+        rrid
+    }
+
+    /// Connects the active report's reference hosts (the deferred half of
+    /// [`load_update`](Self::load_update)).
+    ///
+    /// Computes the wanted host list via [`autoconnect_hosts`](Self::autoconnect_hosts)
+    /// — the template's parsed `reference host:` names plus one host per matching
+    /// slot resolved from each testplatform — then builds and connects a
+    /// [`Target`] for each, stamping the report's RRID as the pool-claim
+    /// ownership identity. Connect failures are logged and the host dropped
+    /// (best-effort, upstream `connect_targets`).
+    ///
+    /// The offline host-selection is factored into the pure, unit-tested
+    /// [`autoconnect_hosts`](Self::autoconnect_hosts); this thin connect loop
+    /// builds real [`Target`]s and is exercised by the gated sshd integration
+    /// path (the same seam `list_refhosts --free` uses for its live probe).
+    async fn autoconnect_active(&mut self, rrid: &str) {
+        // Snapshot everything needed from the active report *synchronously* (no
+        // `&Session` may cross the resolver await — `Session` is not `Sync`, so a
+        // borrow held across the await would make this future non-`Send`, which
+        // the `Command::call` trait requires).
+        let config = self.config.clone();
+        let (ref_hosts, already, testplatforms) = {
+            let base = self.templates.active().base();
+            (
+                base.hostnames.iter().cloned().collect::<Vec<_>>(),
+                base.targets.names(),
+                base.testplatforms.clone(),
+            )
+        };
+        let wanted = Self::autoconnect_hosts(&config, ref_hosts, already, testplatforms).await;
+
+        let targets = self.targets_mut();
+        for host in wanted {
+            let mut target = Target::new(
+                &config,
+                host.clone(),
+                TargetState::Enabled,
+                ExecutionMode::Parallel,
+            );
+            target.set_rrid(rrid.to_owned());
+            match target.connect().await {
+                Ok(()) => targets.add(target),
+                Err(e) => warn!(host = %host, "autoconnect: connect failed, skipping: {e}"),
+            }
+        }
+    }
+
+    /// Computes the deduplicated host list to autoconnect from plain inputs (the
+    /// offline, unit-tested half of [`autoconnect_active`](Self::autoconnect_active)).
+    ///
+    /// Combines `ref_hosts` (the template's parsed `reference host:` names) with
+    /// one candidate per matching slot resolved from each testplatform
+    /// ([`resolve_testplatform_hosts`](Self::resolve_testplatform_hosts)), drops
+    /// hosts in `already` (connected in the active group), and dedups — the exact
+    /// set [`autoconnect_active`](Self::autoconnect_active) then connects.
+    ///
+    /// A **static** async fn (owned/borrowed plain data, no `&Session`) so the
+    /// caller's connect future stays `Send` — `Session` is not `Sync`, so a
+    /// borrow across the resolver await would violate the `Command::call` bound.
+    async fn autoconnect_hosts(
+        config: &Config,
+        ref_hosts: Vec<String>,
+        already: Vec<String>,
+        testplatforms: Vec<String>,
+    ) -> Vec<String> {
+        let mut wanted = ref_hosts;
+        // Deterministic order so the connect sequence (and tests) are stable;
+        // `hostnames` is a HashSet with no inherent order.
+        wanted.sort();
+        wanted.dedup();
+
+        for host in Self::resolve_testplatform_hosts(config, &testplatforms).await {
+            if !wanted.contains(&host) {
+                wanted.push(host);
+            }
+        }
+
+        // Skip hosts already in the active group (upstream connect is a no-op for
+        // already-connected targets).
+        wanted.retain(|h| !already.contains(h));
+        wanted
+    }
+
+    /// Resolves one candidate host per matching slot from the given
+    /// testplatforms (the refhosts-from-testplatform half of autoconnect).
+    ///
+    /// Builds the refhosts factory on demand from `config` (the same pattern
+    /// `list_refhosts`/`add_host` use — no cached Session state), resolves the
+    /// inventory, and for each testplatform searches for matching host names. A
+    /// resolver failure degrades to an empty result (upstream `except
+    /// RefhostsResolveFailedError: return`), so autoconnect still connects the
+    /// template's own reference hosts.
+    ///
+    /// Takes owned/borrowed plain data (not `&Session`) so the caller's connect
+    /// future stays `Send` across this await.
+    async fn resolve_testplatform_hosts(config: &Config, testplatforms: &[String]) -> Vec<String> {
+        if testplatforms.is_empty() {
+            return Vec::new();
+        }
+
+        let factory = match RefhostsFactory::production(
+            config.refhosts_path.clone(),
+            VerifyPolicy::from_config(&config.ssl_verify),
+        ) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("autoconnect: refhosts resolver init failed: {e}");
+                return Vec::new();
+            }
+        };
+        let store = match factory
+            .resolve(ResolveConfig {
+                refhosts_resolvers: &config.refhosts_resolvers,
+                refhosts_path: &config.refhosts_path,
+                refhosts_https_uri: &config.refhosts_https_uri,
+                refhosts_https_expiration: config.refhosts_https_expiration,
+                ssl_verify: &config.ssl_verify,
+            })
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("autoconnect: refhosts resolve failed: {e}");
+                return Vec::new();
+            }
+        };
+
+        let mut hosts: Vec<String> = Vec::new();
+        for tp in testplatforms {
+            let attrs = Attributes::from_testplatform(tp);
+            let found = store.search(&attrs);
+            if found.is_empty() {
+                info!("autoconnect: nothing found for testplatform {tp:?}");
+            }
+            for host in found {
+                if !hosts.contains(&host) {
+                    hosts.push(host);
+                }
+            }
+        }
+        hosts
+    }
+
     /// Requests that the interactive REPL loop exit after the current dispatch.
     ///
     /// Set by the `quit` command; read by the Phase-6 REPL via
@@ -315,5 +510,163 @@ mod tests {
         let s = Session::with_display(config(), false, display);
         assert_eq!(s.display.color(), ColorMode::Always);
         assert!(!s.interactive);
+    }
+
+    // --- Sub-bead B: load_update + autoconnect host resolution -------------
+
+    use mtui_testreport::{ObsReport, TestReport};
+    use mtui_types::RequestReviewID;
+
+    const REFHOSTS_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../mtui-datasources/tests/fixtures/refhosts.yml"
+    );
+
+    /// A config whose refhosts resolver is the offline file-backed `path`
+    /// resolver pointed at the ported fixture (no network).
+    fn config_with_path_refhosts() -> Config {
+        let mut c = Config::default();
+        c.refhosts_resolvers = "path".to_owned();
+        c.refhosts_path = REFHOSTS_FIXTURE.into();
+        c
+    }
+
+    /// Adds an active `ObsReport` with the given reference hostnames and
+    /// testplatforms to `session`.
+    fn seed_active_report(
+        session: &mut Session,
+        rrid: &str,
+        hostnames: &[&str],
+        testplatforms: &[&str],
+    ) {
+        let mut report = ObsReport::new(session.config.clone());
+        report.base_mut().rrid = Some(RequestReviewID::parse(rrid).unwrap());
+        for h in hostnames {
+            report.base_mut().hostnames.insert((*h).to_owned());
+        }
+        report.base_mut().testplatforms = testplatforms.iter().map(|s| (*s).to_owned()).collect();
+        session.templates.add(Box::new(report));
+        session.templates.set_active(rrid);
+    }
+
+    /// Snapshots the active report's autoconnect inputs and runs the static
+    /// [`Session::autoconnect_hosts`] resolver — mirrors what
+    /// [`Session::autoconnect_active`] does synchronously before connecting.
+    async fn autoconnect_hosts_of(s: &Session) -> Vec<String> {
+        let config = s.config.clone();
+        let (ref_hosts, already, testplatforms) = {
+            let base = s.templates.active().base();
+            (
+                base.hostnames.iter().cloned().collect::<Vec<_>>(),
+                base.targets.names(),
+                base.testplatforms.clone(),
+            )
+        };
+        Session::autoconnect_hosts(&config, ref_hosts, already, testplatforms).await
+    }
+
+    /// `autoconnect_hosts` combines the template's reference hosts with the
+    /// hosts resolved from its testplatforms (offline `path` resolver), sorted
+    /// and deduplicated.
+    #[tokio::test]
+    async fn autoconnect_hosts_merges_reference_and_testplatform_hosts() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        // A testplatform matching the sles 15.5 x86_64 hosts in the fixture
+        // (fixture minor is the numeric `5`, so the query must use `minor=5`).
+        seed_active_report(
+            &mut s,
+            "SUSE:Maintenance:1:1",
+            &["ref-a.example.com"],
+            &["base=sles(major=15,minor=5);arch=[x86_64]"],
+        );
+
+        let hosts = autoconnect_hosts_of(&s).await;
+
+        // The explicit reference host is always present.
+        assert!(hosts.contains(&"ref-a.example.com".to_owned()));
+        // The testplatform resolved at least one fixture host (sles 15-SP5 x86_64).
+        assert!(
+            hosts.iter().any(|h| h.contains("x86")),
+            "expected a resolved x86 refhost, got: {hosts:?}"
+        );
+        // Deduplicated: no host appears twice.
+        let mut sorted = hosts.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), hosts.len(), "hosts must be deduplicated");
+    }
+
+    /// With no testplatforms, `autoconnect_hosts` is exactly the reference-host
+    /// set (no resolver call needed).
+    #[tokio::test]
+    async fn autoconnect_hosts_reference_only_when_no_testplatforms() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &["only.example.com"], &[]);
+
+        let hosts = autoconnect_hosts_of(&s).await;
+        assert_eq!(hosts, vec!["only.example.com".to_owned()]);
+    }
+
+    /// A testplatform matching nothing in the inventory contributes no hosts;
+    /// the reference hosts still stand.
+    #[tokio::test]
+    async fn autoconnect_hosts_unmatched_testplatform_yields_reference_only() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(
+            &mut s,
+            "SUSE:Maintenance:1:1",
+            &["ref-only.example.com"],
+            &["base=sles(major=99,minor=sp9);arch=[nonesuch]"],
+        );
+
+        let hosts = autoconnect_hosts_of(&s).await;
+        assert_eq!(hosts, vec!["ref-only.example.com".to_owned()]);
+    }
+
+    /// `load_update` for a kernel update loads the on-disk template, activates
+    /// it, and does **not** autoconnect (so no live-host access on load).
+    #[tokio::test]
+    async fn load_update_kernel_loads_and_activates_without_connect() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rrid = "SUSE:Maintenance:24993:275518";
+        let dir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("log"), "log\n").unwrap();
+        std::fs::write(
+            dir.join("metadata.json"),
+            format!("{{\"rrid\": \"{rrid}\", \"repository\": \"http://x/\"}}"),
+        )
+        .unwrap();
+
+        let mut config = config_with_path_refhosts();
+        config.template_dir = tmp.path().to_path_buf();
+        let mut s = Session::new(config, false);
+
+        let update = UpdateID::parse(rrid).unwrap();
+        let loaded = s.load_update(&update, true, UpdateKind::Kernel).await;
+
+        assert_eq!(loaded, rrid);
+        assert!(s.templates.contains(rrid));
+        assert_eq!(s.templates.active_rrid(), Some(rrid));
+        // Kernel does not autoconnect: no targets were connected.
+        assert!(s.targets().is_empty());
+    }
+
+    /// `load_update` for an unloadable RRID (no template, offline `svn`) falls
+    /// back to the null report: nothing is registered, empty RRID returned.
+    #[tokio::test]
+    async fn load_update_missing_report_returns_empty_and_registers_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = config_with_path_refhosts();
+        config.template_dir = tmp.path().to_path_buf();
+        // Force the internal `svn co` to fail fast offline.
+        config.svn_path = format!("file://{}/no-such-repo", tmp.path().display());
+        let mut s = Session::new(config, false);
+
+        let update = UpdateID::parse("SUSE:Maintenance:1:1").unwrap();
+        let loaded = s.load_update(&update, true, UpdateKind::Auto).await;
+
+        assert_eq!(loaded, "");
+        assert!(s.templates.is_empty());
     }
 }

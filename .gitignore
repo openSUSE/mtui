@@ -4,3 +4,6 @@
 
 # bv (beads viewer) local config and caches
 .bv/
+
+# Upstream mtui reference clone (behavioral reference, not part of this repo)
+python-mtui/

@@ -19,11 +19,14 @@
 //! depend on this skeleton.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mtui_config::options::Config;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
 use mtui_types::{RequestReviewID, SystemProduct, Workflow};
+
+use crate::checkout::TemplateIoError;
+use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_titles};
 
 /// Shared state common to every [`TestReport`] implementation.
 ///
@@ -227,6 +230,72 @@ pub trait TestReport {
     /// Keyed on the flat [`SystemProduct`] to match the `*repoparse` helpers and
     /// [`TestReportBase::update_repos`].
     fn update_repos_parser(&self) -> HashMap<SystemProduct, String>;
+
+    /// Reads and parses a checkout's test-report template into this report
+    /// (upstream `TestReport.read` → `_open_and_parse` + `_update_repos_parse`).
+    ///
+    /// `path` names the checkout's `log` file; `metadata.json` is read from the
+    /// same directory. The two-parser pipeline mirrors upstream `_parse_json`:
+    /// the `hosts` parser ([`ReducedMetadataParser`]) is fed the `log` lines
+    /// (reference hosts + bug/jira titles), then the `json` parser
+    /// ([`JSONParser`]) applies the metadata envelope, and finally
+    /// `patchinfo.xml` overlays real bug/jira titles onto the ids the envelope
+    /// carried. On success [`path`](TestReportBase::path) is set and the
+    /// update-repo map is derived via [`update_repos_parser`](Self::update_repos_parser).
+    ///
+    /// The Gitea-hash verification upstream runs at the tail of `read`
+    /// (`check_hash` → `InvalidGiteaHashError`) is intentionally left to the
+    /// caller: [`make_testreport`](crate::make_testreport) owns the
+    /// checkout/regeneration lifecycle, and the null report has nothing to
+    /// verify. This method is the parse-and-populate slice only.
+    ///
+    /// # Errors
+    ///
+    /// * [`ReadError::Template`] when the `log` file cannot be read (missing →
+    ///   `ENOENT`, which the checkout seam treats as "needs checkout").
+    /// * [`ReadError::MetadataMissing`] when `metadata.json` is absent.
+    /// * [`ReadError::MetadataInvalid`] when `metadata.json` is not valid JSON.
+    fn read(&mut self, path: &Path) -> Result<(), ReadError> {
+        // `_open_and_parse`: read the template `log` and the sibling metadata.
+        let tpl = std::fs::read_to_string(path).map_err(|e| {
+            // A missing/unreadable template must carry its errno so the checkout
+            // seam can branch on ENOENT (upstream `TemplateIOError`).
+            ReadError::Template(TemplateIoError::from_io(&e))
+        })?;
+
+        let dir = path.parent().unwrap_or_else(|| Path::new(""));
+        let metadata_path = dir.join("metadata.json");
+        if !metadata_path.is_file() {
+            return Err(ReadError::MetadataMissing);
+        }
+        let metadata = std::fs::read_to_string(&metadata_path)
+            .map_err(|e| ReadError::Template(TemplateIoError::from_io(&e)))?;
+
+        // `_parse_json`: hosts parser over the log lines, then the JSON envelope.
+        let base = self.base_mut();
+        for line in tpl.lines() {
+            ReducedMetadataParser::parse(base, line);
+        }
+        JSONParser::parse_str(base, &metadata).map_err(|_| ReadError::MetadataInvalid)?;
+
+        // `_enrich_issue_titles`: overlay real bug/jira titles from patchinfo.xml
+        // onto the ids the envelope already carried, leaving the id set
+        // authoritative (no new ids introduced).
+        let titles = patchinfo_titles(dir);
+        for (iid, title) in titles {
+            if let Some(slot) = base.bugs.get_mut(&iid) {
+                *slot = title;
+            } else if let Some(slot) = base.jira.get_mut(&iid) {
+                *slot = title;
+            }
+        }
+
+        // Upstream `read` resolves the path and then derives update repos.
+        self.base_mut().path = Some(path.to_path_buf());
+        let repos = self.update_repos_parser();
+        self.base_mut().update_repos = repos;
+        Ok(())
+    }
 
     /// Emits the per-host update commands for `targets` (upstream
     /// `list_update_commands`). The null object is a no-op.
@@ -538,6 +607,26 @@ pub trait TestReport {
 fn reviewer_line_re() -> regex::Regex {
     regex::Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
         .expect("static reviewer-line regex is valid")
+}
+
+/// Failure reading/parsing a checkout's template (upstream `TemplateIOError` /
+/// `MetadataNotLoadedError` raised from `_open_and_parse`).
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    /// The template `log` file could not be read.
+    ///
+    /// Carries the [`TemplateIoError`] so the checkout seam can branch on
+    /// [`is_not_found`](TemplateIoError::is_not_found) (upstream `e.errno !=
+    /// ENOENT`) to decide whether a missing template triggers a fresh checkout.
+    #[error(transparent)]
+    Template(#[from] TemplateIoError),
+    /// The sibling `metadata.json` is absent (upstream `MetadataNotLoadedError`).
+    #[error("metadata.json is missing from the checkout")]
+    MetadataMissing,
+    /// The `metadata.json` is not valid JSON (upstream `JSONDecodeError` →
+    /// `MetadataNotLoadedError`).
+    #[error("metadata.json is not valid JSON")]
+    MetadataInvalid,
 }
 
 /// Failure recording a reviewer into the loaded template (upstream raises

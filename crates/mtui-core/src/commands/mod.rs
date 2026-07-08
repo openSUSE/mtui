@@ -71,6 +71,7 @@ mod showlog;
 // Phase 5 follow-ups — deferred commands whose machinery has since landed.
 mod export;
 mod list_refhosts;
+mod load_template;
 
 pub use downgrade::Downgrade;
 pub use localrun::LocalRun;
@@ -119,6 +120,7 @@ pub use listsessions::ListSessions;
 pub use listtimeout::ListTimeout;
 pub use listupdatecommands::ListUpdateCommands;
 pub use listversions::ListVersions;
+pub use load_template::LoadTemplate;
 pub use settimeout::SetTimeout;
 pub use sftpget::SftpGet;
 pub use sftpput::SftpPut;
