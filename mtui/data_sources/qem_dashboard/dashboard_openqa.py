@@ -98,9 +98,17 @@ class DashboardAutoOpenQA:
                     )
                     future.cancel()
                     continue
-                jobs.extend(
-                    self._normalize_job(job, source, setting) for job in setting_jobs
-                )
+                for job in setting_jobs:
+                    normalized = self._normalize_job(job, source, setting)
+                    if self._is_obsolete(normalized):
+                        logger.debug(
+                            "dropping obsoleted %s job %s (%s)",
+                            source,
+                            normalized.get("id"),
+                            normalized.get("test"),
+                        )
+                        continue
+                    jobs.append(normalized)
 
         return jobs
 
@@ -153,6 +161,20 @@ class DashboardAutoOpenQA:
             normalized["repohash"] = setting.get("repohash")
             normalized["incidents"] = setting.get("incidents") or []
         return normalized
+
+    @staticmethod
+    def _is_obsolete(job: dict[str, Any]) -> bool:
+        """True for a superseded run that must not count toward results.
+
+        When an openQA job is retriggered the dashboard keeps the older
+        run but marks it superseded — either with an ``obsolete`` flag or
+        an ``"obsoleted"`` result. Both must be dropped so a stale failure
+        does not poison the install verdict (:meth:`_has_passed_install_jobs`)
+        or surface as a phantom entry in the failed-jobs listing. Mirrors
+        :func:`mtui.data_sources.oqa_search.search.incident_jobs`, which
+        filters ``result == "obsoleted"``; only the current run matters.
+        """
+        return bool(job.get("obsolete")) or job.get("result") == "obsoleted"
 
     @staticmethod
     def _normalize_result(result: str | None) -> bool:
@@ -429,6 +451,16 @@ class DashboardAutoOpenQA:
                         ret.append(f"      {test.ljust(width)}{suffix}\n")
                     else:
                         ret.append(f"      {test.ljust(width)}  [{result}]{suffix}\n")
+        elif problem_keys:
+            # Problem groups exist but none carry a failed/incomplete/
+            # timeout_exceeded job, so `failed_by_group` is empty — their
+            # problems are entirely in the `other` bucket (still-running,
+            # parallel_failed, skipped, ...). The Summary already flags
+            # them; don't claim success (the old bug) and don't print an
+            # empty `Failed jobs:` block.
+            ret.append(
+                "  No failed jobs, but some groups need review (see Summary above).\n"
+            )
         else:
             ret.append("  All jobs passed.\n")
         ret.append("\n")
