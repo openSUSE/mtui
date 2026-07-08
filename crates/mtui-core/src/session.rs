@@ -18,7 +18,7 @@ use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig};
 use mtui_hosts::{HostsGroup, Target};
 use mtui_testreport::{TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
-use mtui_types::enums::{ExecutionMode, TargetState};
+use mtui_types::enums::{ExecutionMode, TargetState, Workflow};
 use tracing::{info, warn};
 
 use crate::display::CommandPromptDisplay;
@@ -135,6 +135,18 @@ impl Session {
     #[must_use]
     pub fn metadata(&self) -> &(dyn TestReport + Send + Sync) {
         self.templates.active()
+    }
+
+    /// Sets the active report's [`Workflow`] mode (upstream
+    /// `metadata.workflow = …`).
+    ///
+    /// The one mutable window onto the active report's workflow. `add_host`
+    /// (and later `set_workflow`) uses it to move an automatic session to
+    /// manual. Upstream additionally calls `prompt.set_prompt()` to refresh the
+    /// REPL prompt string; that prompt refresh is a Phase-6 REPL concern, so the
+    /// command only mutates the report here.
+    pub fn set_workflow(&mut self, workflow: Workflow) {
+        self.templates.active_mut().base_mut().workflow = workflow;
     }
 
     /// The active report's connected targets (upstream `prompt.targets`).
@@ -300,8 +312,24 @@ impl Session {
         };
         let wanted = Self::autoconnect_hosts(&config, ref_hosts, already, testplatforms).await;
 
+        self.connect_and_add_hosts(wanted, rrid).await;
+    }
+
+    /// Builds a live [`Target`] for each host in `hosts`, connects it, and adds
+    /// the ones that connect to the active report's group; connect failures are
+    /// logged and skipped so one bad host never aborts the batch.
+    ///
+    /// The shared connect loop behind [`autoconnect_active`](Self::autoconnect_active)
+    /// and the `add_host` command. Each target is stamped with `rrid` (the
+    /// pool-claim ownership identity) before connecting, mirroring upstream's
+    /// `Target(..., _rrid=...)`. A target built via [`Target::new`] is
+    /// unconnected, so [`Target::connect`] performs the live SSH connect; a
+    /// caller that pre-builds connected targets (tests over a mock connection)
+    /// sees `connect` short-circuit as a no-op.
+    async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) {
+        let config = self.config.clone();
         let targets = self.targets_mut();
-        for host in wanted {
+        for host in hosts {
             let mut target = Target::new(
                 &config,
                 host.clone(),
@@ -311,9 +339,40 @@ impl Session {
             target.set_rrid(rrid.to_owned());
             match target.connect().await {
                 Ok(()) => targets.add(target),
-                Err(e) => warn!(host = %host, "autoconnect: connect failed, skipping: {e}"),
+                Err(e) => warn!(host = %host, "connect failed, skipping: {e}"),
             }
         }
+    }
+
+    /// Resolves the active report's testplatforms to candidate hosts (offline)
+    /// and connects+adds them to the active group.
+    ///
+    /// The `add_host`-without-`-t` path (upstream `for tp in
+    /// metadata.testplatforms: refhosts_from_tp(tp)` then `connect_targets()`):
+    /// each testplatform contributes one candidate host per matching slot,
+    /// deduplicated against the hosts already in the group, then connected.
+    pub async fn add_testplatform_hosts(&mut self) {
+        let config = self.config.clone();
+        let (already, testplatforms) = {
+            let base = self.templates.active().base();
+            (base.targets.names(), base.testplatforms.clone())
+        };
+        let mut wanted = Self::resolve_testplatform_hosts(&config, &testplatforms).await;
+        wanted.retain(|h| !already.contains(h));
+        wanted.sort();
+        wanted.dedup();
+
+        let rrid = self.metadata().id();
+        self.connect_and_add_hosts(wanted, &rrid).await;
+    }
+
+    /// Connects+adds the explicitly-named `hosts` to the active report's group.
+    ///
+    /// The `add_host`-with-`-t` path (upstream `add_target(hostname)` per host):
+    /// each host is stamped with the active report's RRID and connected.
+    pub async fn add_named_hosts(&mut self, hosts: Vec<String>) {
+        let rrid = self.metadata().id();
+        self.connect_and_add_hosts(hosts, &rrid).await;
     }
 
     /// Computes the deduplicated host list to autoconnect from plain inputs (the
@@ -668,5 +727,52 @@ mod tests {
 
         assert_eq!(loaded, "");
         assert!(s.templates.is_empty());
+    }
+
+    /// `set_workflow` mutates the active report's workflow mode.
+    #[test]
+    fn set_workflow_mutates_active_report() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        assert_eq!(s.metadata().workflow(), Workflow::Manual);
+        s.set_workflow(Workflow::Auto);
+        assert_eq!(s.metadata().workflow(), Workflow::Auto);
+    }
+
+    /// `add_named_hosts` drives the connect loop; unreachable hosts fail their
+    /// live connect and are skipped rather than added.
+    #[tokio::test]
+    async fn add_named_hosts_skips_unconnectable() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        s.add_named_hosts(vec!["unreachable.invalid".to_owned()])
+            .await;
+        assert!(s.targets().is_empty());
+    }
+
+    /// `add_testplatform_hosts` resolves the active report's testplatforms via
+    /// the offline `path` resolver, then connects them; unreachable fixture
+    /// hosts are skipped, but the resolution path is exercised without panicking.
+    #[tokio::test]
+    async fn add_testplatform_hosts_resolves_and_connects() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(
+            &mut s,
+            "SUSE:Maintenance:1:1",
+            &[],
+            &["base=sles(major=15,minor=5);arch=[x86_64]"],
+        );
+        s.add_testplatform_hosts().await;
+        // Fixture hosts are not reachable, so none are added.
+        assert!(s.targets().is_empty());
+    }
+
+    /// With no testplatforms, `add_testplatform_hosts` is a no-op.
+    #[tokio::test]
+    async fn add_testplatform_hosts_no_testplatforms_is_noop() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        s.add_testplatform_hosts().await;
+        assert!(s.targets().is_empty());
     }
 }
