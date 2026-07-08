@@ -48,10 +48,12 @@ use std::sync::Arc;
 
 use crate::error::{HostError, Result};
 
-use super::Target;
+use mtui_types::system::System;
+
 use super::actions::{self, Command, RunCommand};
 use super::operation::{HostCommandMap, HostPlan, LastOutput, OperationGroup, PlanProvider};
 use super::repo_manager::{RepoOp, SetRepo};
+use super::{LockRow, Target};
 
 /// A composite over a group of [`Target`]s, keyed by hostname.
 ///
@@ -368,6 +370,28 @@ impl HostsGroup {
     pub async fn pool_unlock(&mut self, force: bool) {
         for target in self.data.values_mut() {
             target.pool_unlock(force).await;
+        }
+    }
+
+    /// Reports the lock state of every host in the group to `sink`.
+    ///
+    /// Ports upstream `HostsGroup.report_locks`: for each host in sorted name
+    /// order (the [`BTreeMap`] iteration order matches upstream's
+    /// `sorted(self.data.keys())`), resolve the operation lock — or the
+    /// pool-claim lock when `pool` is `true` — via
+    /// [`Target::lock_status`](Target::lock_status), then forward
+    /// `(hostname, system, &row)` through the per-target
+    /// [`Reporter::locks`](crate::Reporter::locks) sink. `sink` is `FnMut` so it
+    /// is invoked once per host. Async because each host's lock is read over
+    /// SFTP; best-effort per host (a read failure resolves to the unlocked row
+    /// rather than aborting the fan-out).
+    pub async fn report_locks<F>(&mut self, mut sink: F, pool: bool)
+    where
+        F: FnMut(&str, &System, &LockRow),
+    {
+        for target in self.data.values_mut() {
+            let row = target.lock_status(pool).await;
+            target.reporter().locks(&row, &mut sink);
         }
     }
 
@@ -1347,6 +1371,78 @@ mod tests {
         assert!(h1.file_contents(POOL_LOCK_PATH).is_none());
         // h2's foreign claim is left in place (the failure was suppressed).
         assert!(h2.file_contents(POOL_LOCK_PATH).is_some());
+    }
+
+    // --- report_locks (list_locks fan-out) ----------------------------------
+
+    #[tokio::test]
+    async fn report_locks_forwards_each_host_in_sorted_order() {
+        // h2 is foreign-locked, h1 is free: the sink sees both, sorted by name.
+        let c2 = echo("h2").with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(c2),
+                ),
+                enabled("h1"),
+            ],
+            false,
+        );
+        let mut rows: Vec<(String, LockRow)> = Vec::new();
+        g.report_locks(
+            |host, _system, row| rows.push((host.to_owned(), row.clone())),
+            false,
+        )
+        .await;
+        assert_eq!(rows.len(), 2);
+        // BTreeMap → sorted: h1 first (free), then h2 (foreign-locked).
+        assert_eq!(rows[0].0, "h1");
+        assert!(!rows[0].1.is_locked);
+        assert_eq!(rows[1].0, "h2");
+        assert!(rows[1].1.is_locked);
+        assert!(!rows[1].1.is_mine);
+        assert_eq!(rows[1].1.locked_by, "alice");
+        assert_eq!(rows[1].1.comment, "busy");
+    }
+
+    #[tokio::test]
+    async fn report_locks_pool_variant_reads_pool_claims() {
+        use crate::target::POOL_LOCK_PATH;
+        let c1 = echo("h1").with_file(
+            POOL_LOCK_PATH,
+            b"1700000000:bob:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec(),
+        );
+        let mut g = HostsGroup::new(
+            vec![Target::with_connection(
+                "h1",
+                TargetState::Enabled,
+                ExecutionMode::Parallel,
+                Box::new(c1),
+            )],
+            false,
+        );
+        let mut rows: Vec<(String, LockRow)> = Vec::new();
+        g.report_locks(
+            |host, _system, row| rows.push((host.to_owned(), row.clone())),
+            true,
+        )
+        .await;
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].1.is_locked);
+        assert_eq!(rows[0].1.locked_by, "bob");
+        // The pool path surfaces the parsed RRID in the detail slot.
+        assert_eq!(rows[0].1.comment, "SUSE:Maintenance:9:9");
+    }
+
+    #[tokio::test]
+    async fn report_locks_empty_group_calls_sink_zero_times() {
+        let mut g = HostsGroup::new(vec![], false);
+        let mut n = 0;
+        g.report_locks(|_, _, _| n += 1, false).await;
+        assert_eq!(n, 0);
     }
 
     #[tokio::test]

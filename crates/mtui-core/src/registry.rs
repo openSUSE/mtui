@@ -171,6 +171,7 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::ListTimeout));
     registry.register(Arc::new(commands::ListUpdateCommands));
     registry.register(Arc::new(commands::ListSessions));
+    registry.register(Arc::new(commands::ListLocks));
     registry.register(Arc::new(commands::ListHistory));
     registry.register(Arc::new(commands::ShowLog));
     registry.register(Arc::new(commands::ListVersions));
@@ -302,6 +303,7 @@ mod tests {
             "list_timeout",
             "list_update_commands",
             "list_sessions",
+            "list_locks",
             "list_history",
             "show_log",
             "list_versions",
@@ -337,10 +339,11 @@ mod tests {
 
     #[test]
     fn register_all_command_count() {
-        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 11 Wave 4 + 3 P5 follow-ups
-        // (export, list_refhosts, load_template) = 55 canonical commands.
-        // (reload_openqa + set_workflow are deferred: mtui-rs-zs4 / mtui-rs-plt.)
-        assert_eq!(register_all().len(), 55);
+        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 11 Wave 4 + 4 P5 follow-ups
+        // (export, list_refhosts, load_template, list_locks) = 56 canonical
+        // commands. (reload_openqa + set_workflow are deferred: mtui-rs-zs4 /
+        // mtui-rs-plt.)
+        assert_eq!(register_all().len(), 56);
     }
 
     #[test]

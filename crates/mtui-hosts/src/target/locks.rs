@@ -112,6 +112,32 @@ pub struct RemoteLock {
     pub comment: String,
 }
 
+/// A resolved snapshot of a host's lock ownership, produced by
+/// [`Target::lock_status`](crate::Target::lock_status) and forwarded by the
+/// [`Reporter`](crate::Reporter)/[`HostsGroup`](crate::HostsGroup) lock sinks to
+/// the display layer.
+///
+/// The upstream lock accessors are async `&mut self`; the resolving code does
+/// that I/O once and hands these already-resolved (sync) values downstream so
+/// the display stays sync and snapshot-testable. Mirrors the fields the upstream
+/// `display.list_locks` reads off the lock object.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LockRow {
+    /// Whether the host is currently locked/claimed.
+    pub is_locked: bool,
+    /// Whether the lock belongs to the current owner (renders as "me").
+    pub is_mine: bool,
+    /// The lock owner (ignored by the display when `is_mine`).
+    pub locked_by: String,
+    /// Human-readable lock timestamp.
+    pub time: String,
+    /// The claim's trailing detail line: the free-form comment for an operation
+    /// lock, or the owning template's RRID for a pool claim (see
+    /// [`Target::lock_status`](crate::Target::lock_status)). Empty when there is
+    /// none.
+    pub comment: String,
+}
+
 impl RemoteLock {
     /// Serializes to a lockfile line: `timestamp:user:pid[:comment]`.
     ///
@@ -690,6 +716,44 @@ impl<C: Clock> PoolLock<C> {
     #[must_use]
     pub fn filename(&self) -> PathBuf {
         PathBuf::from(POOL_LOCK_PATH)
+    }
+
+    /// The user who currently holds the pool claim (empty when unclaimed).
+    ///
+    /// Delegates to the inner [`TargetLock::locked_by`]; used by `list_locks
+    /// --pool` to report a foreign claimant.
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the load path.
+    pub async fn locked_by(&mut self) -> Result<String> {
+        self.inner.locked_by().await
+    }
+
+    /// The RRID of the owning template for the current pool claim (empty when
+    /// unclaimed or the comment is not a `mtui pool <RRID> [<owner>]` stamp).
+    ///
+    /// A pool claim's meaningful identity is the RRID, not the raw comment
+    /// string; this loads the claim and parses it out via
+    /// [`rrid_of`](Self::rrid_of). (The base [`TargetLock`] exposes `comment`
+    /// for the free-form operation-lock comment; a pool claim exposes `rrid`
+    /// instead.)
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the load path.
+    pub async fn rrid(&mut self) -> Result<String> {
+        let comment = self.inner.comment().await?;
+        Ok(Self::rrid_of(&comment))
+    }
+
+    /// A formatted pool-claim creation time, or `"unknown"` when the stored
+    /// timestamp is missing/malformed.
+    ///
+    /// Delegates to the inner [`TargetLock::time`].
+    ///
+    /// # Errors
+    /// Propagates an SFTP error from the load path.
+    pub async fn time(&mut self) -> Result<String> {
+        self.inner.time().await
     }
 
     /// Sets the ownership RRID (the report layer pushes this down after the
@@ -1496,6 +1560,37 @@ mod tests {
             ..Default::default()
         };
         assert!(p.is_mine().unwrap());
+    }
+    #[tokio::test]
+    async fn pool_accessors_report_foreign_claim() {
+        // `list_locks --pool` reads locked_by/rrid/time off a foreign claim.
+        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, foreign);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(p.is_locked().await.unwrap());
+        assert_eq!(p.locked_by().await.unwrap(), "otheruser");
+        // A pool claim surfaces the parsed RRID, not the raw comment.
+        assert_eq!(p.rrid().await.unwrap(), "SUSE:Maintenance:9:9");
+        // 1700000000 → a real formatted UTC time (not "unknown").
+        assert!(p.time().await.unwrap().ends_with("UTC"));
+    }
+
+    #[tokio::test]
+    async fn pool_accessors_empty_on_unclaimed_host() {
+        let mut p = pool(MockConnection::new("h1"), "SUSE:Maintenance:1:2");
+        assert!(!p.is_locked().await.unwrap());
+        assert_eq!(p.locked_by().await.unwrap(), "");
+        assert_eq!(p.rrid().await.unwrap(), "");
+    }
+
+    #[tokio::test]
+    async fn pool_rrid_empty_for_non_pool_comment() {
+        // A claim whose comment is not a `mtui pool …` stamp parses to no RRID.
+        let weird = b"1700000000:otheruser:99:some other comment".to_vec();
+        let conn = MockConnection::new("h1").with_file(POOL_LOCK_PATH, weird);
+        let mut p = pool(conn, "SUSE:Maintenance:1:2");
+        assert!(p.is_locked().await.unwrap());
+        assert_eq!(p.rrid().await.unwrap(), "");
     }
 
     // --- with_locked (LockedTargets) ---------------------------------------

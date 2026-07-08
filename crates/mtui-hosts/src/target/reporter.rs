@@ -23,28 +23,26 @@
 //! analogue of upstream's per-access `Target.reporter` property, which allocates
 //! a fresh binding each time), so every dispatch sees live field values.
 //!
-//! ## Deferred lock sinks
+//! ## Lock sinks
 //!
 //! Upstream also exposes `report_locks` and `report_pool_locks`, which forward
-//! the target's stored `_lock` / `_pool_lock` objects. The Rust [`Target`] does
-//! **not** yet store those lock objects as fields: upstream constructs them in
-//! `Target.connect`, but that connect-time lock wiring is a documented seam in
-//! [`Target::connect`](super::Target::connect) pending the session RRID plumbing
-//! from a later phase. The two lock sinks therefore land together with that
-//! wiring — see the `TODO` below — rather than being stubbed here with behaviour
-//! that would not match the upstream contract.
+//! the target's stored `_lock` / `_pool_lock` objects to a sink. Those lock
+//! accessors are async `&mut self` in `mtui-hosts` (they read the remote
+//! lockfile over SFTP), whereas a [`Reporter`] borrows its [`Target`]
+//! immutably. So the async resolution is done up front by
+//! [`Target::lock_status`](super::Target::lock_status) — producing a resolved
+//! [`LockRow`] — and the [`locks`](Reporter::locks) sink forwards
+//! `(hostname, system, &LockRow)` synchronously, mirroring upstream's
+//! `report_locks` / `report_pool_locks` (the `pool` variant differs only in
+//! which lock [`Target::lock_status`] resolves). The group driver
+//! [`HostsGroup::report_locks`](super::HostsGroup::report_locks) sequences the
+//! per-host resolve-then-forward.
 
 use mtui_types::enums::{ExecutionMode, TargetState};
 use mtui_types::hostlog::HostLog;
 use mtui_types::system::System;
 
-use super::Target;
-
-// TODO(P2.x): `locks` and `pool_locks` sinks — port `Reporter.locks` /
-// `Reporter.pool_locks` once `Target::connect` wires the `_lock` / `_pool_lock`
-// objects onto the target (they are built at connect time upstream). Each will
-// forward `(hostname, system, &lock)` to its sink, mirroring `report_locks` /
-// `report_pool_locks`.
+use super::{LockRow, Target};
 
 /// Adapter that drives the per-target status sinks for one [`Target`].
 ///
@@ -144,6 +142,23 @@ impl<'a> Reporter<'a> {
     {
         let t = self.target;
         sink(t.hostname(), t.system());
+    }
+
+    /// Reports `(hostname, system, &row)` to `sink`.
+    ///
+    /// Ports `Reporter.locks` / `Reporter.pool_locks` (upstream `report_locks` /
+    /// `report_pool_locks`). Upstream forwards the live lock object; the Rust
+    /// port forwards an already-resolved [`LockRow`] (see
+    /// [`Target::lock_status`](super::Target::lock_status)) because the lock
+    /// accessors are async while a [`Reporter`] borrows its [`Target`]
+    /// immutably. The operation-vs-pool distinction lives in how the caller
+    /// resolves `row`, not here, so a single sink covers both upstream methods.
+    pub fn locks<F>(&self, row: &LockRow, sink: F)
+    where
+        F: FnOnce(&str, &System, &LockRow),
+    {
+        let t = self.target;
+        sink(t.hostname(), t.system(), row);
     }
 }
 
@@ -298,5 +313,29 @@ mod tests {
         let (host, base) = out.into_inner().expect("sink called");
         assert_eq!(host, "prod-host");
         assert_eq!(base, "unknown");
+    }
+
+    #[test]
+    fn locks_forwards_hostname_system_and_row() {
+        use crate::target::LockRow;
+        let t = Target::new(
+            &mtui_config::Config::default(),
+            "lock-host",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+        );
+        let row = LockRow {
+            is_locked: true,
+            is_mine: true,
+            time: "some time".to_owned(),
+            ..LockRow::default()
+        };
+        let out = RefCell::new(None);
+        t.reporter().locks(&row, |host, _system, got| {
+            *out.borrow_mut() = Some((host.to_owned(), got.clone()));
+        });
+        let (host, got) = out.into_inner().expect("sink called");
+        assert_eq!(host, "lock-host");
+        assert_eq!(got, row);
     }
 }

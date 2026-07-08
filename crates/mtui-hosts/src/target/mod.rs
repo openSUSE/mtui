@@ -51,7 +51,7 @@ pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all,
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
 pub use hostgroup::HostsGroup;
 pub use locks::{
-    Clock, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
+    Clock, LockRow, Lockable, POOL_LOCK_PATH, PoolLock, RemoteLock, SystemClock, TARGET_LOCK_PATH,
     TargetLock, with_locked,
 };
 pub use operation::{
@@ -488,6 +488,53 @@ impl Target {
     /// upstream reaching into `t._lock`. `None` when not connected.
     pub(crate) fn lock_mut(&mut self) -> Option<&mut TargetLock> {
         self.lock.as_mut()
+    }
+
+    /// Resolves this target's current lock ownership into a [`LockRow`].
+    ///
+    /// Ports the read side of upstream `Reporter.locks` / `Reporter.pool_locks`:
+    /// loads the operation lock (or the pool-claim lock when `pool` is `true`),
+    /// then reads `is_mine` / `time` / `locked_by` / `comment` — the same
+    /// resolution [`update_lock`](HostsGroup::update_lock) performs — and returns
+    /// the already-resolved (sync) values so the display layer stays sync. An
+    /// unconnected target (no built lock) resolves to the empty, unlocked row.
+    ///
+    /// Best-effort like upstream: a read error on an individual accessor
+    /// degrades to its default rather than aborting the whole `list_locks`
+    /// fan-out.
+    pub async fn lock_status(&mut self, pool: bool) -> LockRow {
+        if pool {
+            let Some(lock) = self.pool_lock.as_mut() else {
+                return LockRow::default();
+            };
+            if !lock.is_locked().await.unwrap_or(false) {
+                return LockRow::default();
+            }
+            LockRow {
+                is_locked: true,
+                is_mine: lock.is_mine().unwrap_or(false),
+                locked_by: lock.locked_by().await.unwrap_or_default(),
+                time: lock.time().await.unwrap_or_default(),
+                // A pool claim's detail is the owning template's RRID (parsed
+                // from the `mtui pool <RRID> [<owner>]` stamp), not the raw
+                // comment the operation lock carries.
+                comment: lock.rrid().await.unwrap_or_default(),
+            }
+        } else {
+            let Some(lock) = self.lock.as_mut() else {
+                return LockRow::default();
+            };
+            if !lock.is_locked().await.unwrap_or(false) {
+                return LockRow::default();
+            }
+            LockRow {
+                is_locked: true,
+                is_mine: lock.is_mine().unwrap_or(false),
+                locked_by: lock.locked_by().await.unwrap_or_default(),
+                time: lock.time().await.unwrap_or_default(),
+                comment: lock.comment().await.unwrap_or_default(),
+            }
+        }
     }
 
     /// Reads the host's current boot id.
@@ -1447,6 +1494,53 @@ mod tests {
     async fn lock_unconnected_is_ok_noop() {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
         t.lock("comment").await.expect("noop lock ok");
+    }
+
+    // --- lock_status (list_locks read side) ---------------------------------
+
+    #[tokio::test]
+    async fn lock_status_unlocked_on_free_host() {
+        let mut t = enabled_with(MockConnection::new("h1"));
+        let row = t.lock_status(false).await;
+        assert!(!row.is_locked);
+        assert_eq!(row, LockRow::default());
+    }
+
+    #[tokio::test]
+    async fn lock_status_reports_foreign_operation_lock() {
+        let conn = MockConnection::new("h1").with_file(
+            TARGET_LOCK_PATH,
+            b"1700000000:alice:4242:busy testing".to_vec(),
+        );
+        let mut t = enabled_with(conn);
+        let row = t.lock_status(false).await;
+        assert!(row.is_locked);
+        assert!(!row.is_mine);
+        assert_eq!(row.locked_by, "alice");
+        assert_eq!(row.comment, "busy testing");
+        assert!(row.time.ends_with("UTC"));
+    }
+
+    #[tokio::test]
+    async fn lock_status_pool_reports_foreign_claim() {
+        let conn = MockConnection::new("h1").with_file(
+            POOL_LOCK_PATH,
+            b"1700000000:bob:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec(),
+        );
+        let mut t = enabled_with(conn);
+        let row = t.lock_status(true).await;
+        assert!(row.is_locked);
+        assert!(!row.is_mine);
+        assert_eq!(row.locked_by, "bob");
+        // The pool path fills the detail slot with the parsed RRID.
+        assert_eq!(row.comment, "SUSE:Maintenance:9:9");
+    }
+
+    #[tokio::test]
+    async fn lock_status_unconnected_is_unlocked() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        assert!(!t.lock_status(false).await.is_locked);
+        assert!(!t.lock_status(true).await.is_locked);
     }
 
     // --- shell() (feature `shell`) ------------------------------------------
