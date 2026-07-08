@@ -451,6 +451,56 @@ def test_close_disconnects_every_loaded_templates_hosts(tmp_path: Path) -> None:
     assert other.targets == {}
 
 
+def test_disconnect_targets_bounded_wait_survives_a_wedged_close(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A host whose ``close()`` never returns must not block teardown.
+
+    ``Executor.__exit__`` runs ``shutdown(wait=True)``, so bounding the
+    wait with only the ``with`` block would re-block on a wedged paramiko
+    close and hang ``close()`` (and the http idle-sweep behind it)
+    forever. The explicit ``shutdown(wait=False)`` keeps the timed wait
+    real: teardown returns despite the stuck close, the healthy host is
+    still closed, the stuck one is reported, and every template's host
+    group is cleared.
+    """
+    sess = _make_session(tmp_path)
+
+    release = threading.Event()
+    wedged_host = MagicMock()
+    wedged_host.close.side_effect = lambda: release.wait(30)
+    good_host = MagicMock()
+
+    report = MagicMock()
+    report.id = "SUSE:Maintenance:1:1"
+    report.targets = {"wedged-host": wedged_host, "good-host": good_host}
+    sess.templates.add(report)
+    sess.templates.set_active("SUSE:Maintenance:1:1")
+
+    worker = threading.Thread(target=sess._disconnect_targets, kwargs={"timeout": 0.2})
+    try:
+        with caplog.at_level(logging.WARNING):
+            worker.start()
+            # Generous guard: the fix returns in ~0.2 s; a regression that
+            # relies on the ``with`` exit would still be blocked here.
+            worker.join(timeout=15)
+
+        assert not worker.is_alive()
+        # The healthy host was closed even though a sibling close hung.
+        good_host.close.assert_called_once()
+        # The stuck host was reported, not silently dropped.
+        assert any(
+            "wedged-host" in r.getMessage() and "did not disconnect" in r.getMessage()
+            for r in caplog.records
+        )
+        # Host groups are emptied regardless of the stuck close.
+        assert report.targets == {}
+    finally:
+        # Let the abandoned worker thread finish so it does not linger.
+        release.set()
+        worker.join(timeout=5)
+
+
 # --------------------------------------------------------------------------- #
 # Fan-out dispatch honours the ``template`` parameter (Phase 4)               #
 # --------------------------------------------------------------------------- #

@@ -103,6 +103,14 @@ _current_stdout: contextvars.ContextVar[io.StringIO | None] = contextvars.Contex
 #: on ``run`` / ``update`` / ``set_repo`` / ``commit`` etc.).
 DEFAULT_PROGRESS_INTERVAL_SECONDS: float = 10.0
 
+#: Upper bound (seconds) that :meth:`McpSession._disconnect_targets` waits
+#: for the parallel per-host ``Target.close()`` calls to finish before it
+#: gives up and returns. A wedged paramiko close (dead peer, no RST) can
+#: block its worker thread forever; the bound guarantees session teardown
+#: still completes, abandoning the stuck close rather than blocking the
+#: whole disconnect (and, under http, the registry idle-sweep behind it).
+DISCONNECT_TIMEOUT_SECONDS: float = 45.0
+
 
 class _LogCaptureHandler(Handler):
     """Tee ``mtui`` log records emitted *during a command* into its stdout.
@@ -553,14 +561,29 @@ class McpSession:
             return
         await asyncio.to_thread(self._disconnect_targets)
 
-    def _disconnect_targets(self) -> None:
+    def _disconnect_targets(self, timeout: float = DISCONNECT_TIMEOUT_SECONDS) -> None:
         """Synchronous parallel host-disconnect core for :meth:`close`.
 
         Runs in a worker thread. Closes every loaded template's
         :class:`Target` on its own pool thread (paramiko teardown is
-        blocking) with a bounded wait, then clears each template's host
-        group regardless of individual outcomes. Per-host errors are
-        logged at WARNING, never raised.
+        blocking) with a genuinely bounded wait, then clears each
+        template's host group regardless of individual outcomes.
+        Per-host errors are logged at WARNING, never raised.
+
+        The bound is enforced by shutting the pool down with
+        ``wait=False`` after the timed :func:`concurrent.futures.wait`,
+        *not* by the ``with`` block's exit — ``Executor.__exit__`` calls
+        ``shutdown(wait=True)``, which would re-block on a wedged close
+        (a dead peer with no RST keeps its worker thread alive forever)
+        and defeat the whole point of the timeout. A close that overruns
+        ``timeout`` is logged and abandoned: its worker thread leaks, but
+        ``close()`` — and, under http, the registry idle-sweep awaiting
+        it — always returns. (That worker is a non-daemon pool thread, so
+        a close that stays wedged forever can still delay a *clean*
+        interpreter exit via ``concurrent.futures``' atexit join; that is
+        strictly better than the old behaviour, which blocked ``close()``
+        itself during steady-state operation, and is bounded in practice
+        by the OS TCP timeout.)
         """
         # (HostsGroup, hostname) for every host across every loaded template.
         work = [
@@ -575,9 +598,20 @@ class McpSession:
             except Exception as exc:  # noqa: BLE001 - best-effort teardown
                 self.log.warning("error disconnecting host %s: %s", name, exc)
 
-        with ContextExecutor() as executor:
-            futures = [executor.submit(_close_one, t, name) for t, name in work]
-            concurrent.futures.wait(futures, timeout=45)
+        executor = ContextExecutor()
+        try:
+            futures = {executor.submit(_close_one, t, name): name for t, name in work}
+            _done, not_done = concurrent.futures.wait(futures, timeout=timeout)
+            for future in not_done:
+                self.log.warning(
+                    "host %s did not disconnect within %ss; abandoning its close",
+                    futures[future],
+                    timeout,
+                )
+        finally:
+            # Never join a wedged close: wait=False keeps the bound above real,
+            # cancel_futures drops any per-host close still queued behind it.
+            executor.shutdown(wait=False, cancel_futures=True)
 
         for report in self.templates.all():
             report.targets.clear()

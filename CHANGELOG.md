@@ -237,6 +237,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   connections — instead of silently overwriting it. Repeated `regenerate`
   cycles no longer leak file descriptors or leave stale arbiter claims that
   could block later slot re-acquisition on the same refhost pool.
+- `mtui-mcp` session teardown (idle-TTL sweep or explicit eviction) is now
+  genuinely time-bounded. A wedged refhost close (a dead peer that never sends
+  an RST can hang paramiko's disconnect forever) no longer blocks the whole
+  disconnect: the stuck close is waited on only up to a fixed budget, then
+  logged and abandoned so `close()` — and the http registry's idle-sweep behind
+  it — always returns. Previously the bound was defeated by the thread pool's
+  context-manager exit, which re-joined every worker regardless of the timeout.
 - An unscoped multi-template fan-out of a host-phase command (e.g. `lock`,
   `run`) no longer fails the whole fan-out — or, for `lock`, pretends to
   succeed — when a loaded template has no connected host. A host-less template
