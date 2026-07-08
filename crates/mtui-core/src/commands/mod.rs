@@ -47,6 +47,7 @@ mod checkers;
 mod openqa_jobs;
 mod openqa_overview;
 mod regenerate;
+mod reload_openqa;
 mod simpleset;
 mod updates;
 
@@ -105,7 +106,8 @@ pub use checkers::Checkers;
 pub use openqa_jobs::OpenQAJobs;
 pub use openqa_overview::OpenQAOverview;
 pub use regenerate::Regenerate;
-pub use simpleset::SetLogLevel;
+pub use reload_openqa::ReloadOpenQA;
+pub use simpleset::{SetLogLevel, SetWorkflow};
 pub use updates::Updates;
 
 pub use checkout::Checkout;

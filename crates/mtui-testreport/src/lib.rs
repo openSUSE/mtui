@@ -33,7 +33,7 @@ pub use reports::repoparse::{
 };
 pub use reports::{NullReport, ObsReport, PiReport, SlReport};
 pub use support::{FileList, atomic_write_file, detect_system, system_info, timestamp};
-pub use testreport::{ReadError, ReviewerError, TestReport, TestReportBase};
+pub use testreport::{ReadError, ReportOpenQA, ReviewerError, TestReport, TestReportBase};
 pub use update_workflow::{
     CheckProvider, DoerProvider, Role, TemplateError, UpdateError, WorkflowKey, WorkflowRegistry,
     safe_substitute, substitute,

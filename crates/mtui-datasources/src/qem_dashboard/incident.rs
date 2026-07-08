@@ -14,6 +14,7 @@ use mtui_types::{RequestKind, RequestReviewID};
 
 use crate::error::QemDashboardError;
 use crate::http::VerifyPolicy;
+use crate::openqa::base::IncidentName;
 
 use super::client::QemDashboardClient;
 
@@ -104,6 +105,19 @@ impl QemIncident {
     #[must_use]
     pub fn is_present(&self) -> bool {
         self.data.is_some()
+    }
+}
+
+impl IncidentName for QemIncident {
+    /// The incident's short name for openQA build queries.
+    ///
+    /// Delegates to the inherent [`get_incident_name`](Self::get_incident_name),
+    /// falling back to an empty string when no incident record / package is
+    /// available (upstream passes the raw `get_incident_name()` value straight
+    /// into the build string; an empty name yields the same `:prefix:mid:` shape
+    /// the connectors already tolerate).
+    fn get_incident_name(&self) -> String {
+        Self::get_incident_name(self).unwrap_or_default()
     }
 }
 

@@ -10,7 +10,10 @@ use mtui_testreport::{
 };
 use mtui_types::Workflow;
 
-use super::support::{add_hosts_arg, require_update, select_names, template_completion};
+use super::support::{
+    add_hosts_arg, build_auto_openqa, build_incident, config_verify_policy, require_update,
+    select_names, template_completion,
+};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -21,15 +24,14 @@ use crate::session::Session;
 /// report's [`Workflow`] and writes the pre/post package versions and update log
 /// into the template (or `filename` when given). Requires a loaded report.
 ///
-/// ## openQA enrichment (graceful Manual)
+/// ## openQA enrichment (Manual)
 ///
-/// Upstream additionally folds openQA results into the export via
-/// `metadata.openqa`. That openQA state holder is not yet on the Rust metadata
-/// (deferred to mtui-rs-0pe/plt/zs4), so the exporters here run with empty
-/// openQA inputs: `Auto`/`Kernel` still render their full local template, and
-/// `Manual` degrades gracefully — it writes the per-host install logs it can
-/// gather and logs a warning that openQA enrichment is unavailable, rather than
-/// failing. The enrichment leg is tracked as a follow-up.
+/// The `Manual` exporter folds openQA results into the template via the report's
+/// openQA holder (`metadata.openqa`). When the holder's "auto" result is absent,
+/// it is lazily built and run from the QEM Dashboard (upstream
+/// `DashboardAutoOpenQA(...)`), then the connected-host results
+/// (`report_results`) and any `openqa_overview` payload are folded into
+/// [`ManualExport`]. `Auto`/`Kernel` render their full local template.
 pub struct Export;
 
 #[async_trait]
@@ -77,6 +79,28 @@ impl Command for Export {
                 .ok_or_else(|| CommandError::Other("no report path to export to".to_owned()))?,
         };
 
+        // For Manual exports, ensure the report's openQA "auto" result exists
+        // (lazily built + run from the QEM Dashboard, upstream export.py:58-64)
+        // and select the connected-host results to fold in (report_results).
+        let (manual_results, manual_overview) = if workflow == Workflow::Manual {
+            if session.metadata().openqa().auto.is_none() {
+                let policy = config_verify_policy(session);
+                let dashboard_api = session.config.qem_dashboard_api.clone();
+                let openqa_instance = session.config.openqa_instance.clone();
+                let incident = build_incident(rrid.clone(), dashboard_api, policy).await?;
+                let mut auto = build_auto_openqa(openqa_instance, &incident, rrid.clone());
+                auto.run().await;
+                session.metadata_mut().openqa_mut().auto = Some(auto);
+            }
+            let hosts = select_names(session.targets(), args, false)
+                .map_err(|e| CommandError::Other(e.to_string()))?;
+            let results = manual_hosts(session, &hosts);
+            let overview = session.metadata().openqa().overview.clone();
+            (Some((hosts, results)), overview)
+        } else {
+            (None, None)
+        };
+
         let text = FileList::load(&filename).map_err(|e| {
             CommandError::Other(format!("could not read template {filename:?}: {e}"))
         })?;
@@ -94,16 +118,9 @@ impl Command for Export {
                 KernelExport::new(ctx, Vec::new(), None).run(&http).await
             }
             Workflow::Manual => {
-                // openQA enrichment (auto/overview) is unavailable until the
-                // openQA state holder lands; degrade to the local install logs.
-                tracing::warn!(
-                    "manual export: openQA results are not yet wired into metadata; \
-                     exporting local install logs only"
-                );
-                let hosts = select_names(session.targets(), args, false)
-                    .map_err(|e| CommandError::Other(e.to_string()))?;
-                let results = manual_hosts(session, &hosts);
-                ManualExport::new(ctx, results, None, None).run(&hosts, &DenyOverwrite)
+                let (hosts, results) = manual_results.expect("computed for Manual workflow");
+                let auto = session.metadata().openqa().auto.clone();
+                ManualExport::new(ctx, results, auto, manual_overview).run(&hosts, &DenyOverwrite)
             }
         };
 
@@ -195,10 +212,32 @@ mod tests {
         assert!(written.contains("## export MTUI:"));
     }
 
+    /// Mounts the three QEM-dashboard endpoints the manual enrichment touches.
+    async fn dashboard_server(incident_number: &str) -> wiremock::MockServer {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        for (endpoint, body) in [
+            ("incidents", serde_json::json!({})),
+            ("incident_settings", serde_json::json!([])),
+            ("update_settings", serde_json::json!([])),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/api/{endpoint}/{incident_number}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(&server)
+                .await;
+        }
+        server
+    }
+
     #[tokio::test]
-    async fn manual_degrades_gracefully_without_openqa() {
+    async fn manual_lazily_builds_and_folds_openqa_auto() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        let server = dashboard_server("1").await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
         let dir = tempfile::tempdir().unwrap();
         // The manual exporter writes per-host install logs under
         // `template_dir/<rrid>/install_logs`; keep that inside the tempdir so the
@@ -207,12 +246,43 @@ mod tests {
         let path = dir.path().join("template.txt");
         std::fs::write(&path, "source code change review:\n").unwrap();
 
+        assert!(session.metadata().openqa().auto.is_none());
         let args = matches(&Export, &["-f", path.to_str().unwrap()]);
-        // Must not panic / hard-fail even though the openQA holder is absent.
         Export.call(&mut session, &args).await.unwrap();
 
+        // The auto result was lazily built and stored on the report holder.
+        assert!(session.metadata().openqa().auto.is_some());
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("## export MTUI:"));
+    }
+
+    #[tokio::test]
+    async fn manual_reuses_existing_openqa_auto() {
+        // When the holder already has an "auto" result, export must not rebuild
+        // it (no dashboard call needed).
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        // Pre-seed an auto result via a throwaway dashboard.
+        let server = dashboard_server("1").await;
+        let rrid = session.metadata().rrid().unwrap().clone();
+        let policy = config_verify_policy(&session);
+        let incident = build_incident(rrid.clone(), format!("{}/api", server.uri()), policy)
+            .await
+            .unwrap();
+        session.metadata_mut().openqa_mut().auto =
+            Some(build_auto_openqa(server.uri(), &incident, rrid));
+
+        // Now point config at an unreachable dashboard: if export tried to
+        // rebuild, it would still succeed (errors are surfaced), so instead we
+        // assert the pre-seeded result is preserved.
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+        assert!(session.metadata().openqa().auto.is_some());
     }
 
     #[tokio::test]

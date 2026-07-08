@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 use tokio::time::timeout;
 
-use mtui_types::{RequestReviewID, URLs};
+use mtui_types::{OpenQAResult, RequestReviewID, URLs};
 
 use crate::openqa::{OPENQA_INSTALL_DISTRI, install_logfile_for};
 
@@ -227,7 +227,7 @@ impl Counts {
 /// Mirrors upstream `DashboardAutoOpenQA`: [`run`](Self::run) loads the jobs,
 /// resolves the install-log [`results`](Self::results) when the install jobs
 /// passed, and renders the [`pp`](Self::pp) text block.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DashboardAutoOpenQA {
     /// The openQA host (base URL) used in rendered URLs.
     pub host: String,
@@ -613,6 +613,19 @@ impl DashboardAutoOpenQA {
             }
         }
         ret.push("\n".to_string());
+    }
+}
+
+impl OpenQAResult for DashboardAutoOpenQA {
+    fn kind(&self) -> &str {
+        Self::KIND
+    }
+
+    /// The port of upstream `DashboardAutoOpenQA.__bool__`: truthy when the
+    /// rendered block or the resolved install-log results are non-empty
+    /// (delegates to [`is_present`](Self::is_present)).
+    fn has_results(&self) -> bool {
+        self.is_present()
     }
 }
 

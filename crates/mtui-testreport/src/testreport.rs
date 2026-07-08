@@ -22,8 +22,19 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use mtui_config::options::Config;
+use mtui_datasources::openqa::kernel::KernelOpenQA;
+use mtui_datasources::oqa_search::results::OpenQAOverviewResult;
+use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
-use mtui_types::{RequestReviewID, SystemProduct, Workflow};
+use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, Workflow};
+
+/// The concrete openQA state holder carried on a report.
+///
+/// Monomorphizes upstream `metadata.openqa` (`OpenQAResults`) to the concrete
+/// connectors: the QEM-dashboard "auto" result, the per-instance "kernel"
+/// results, and the `openqa_overview` payload. `mtui-testreport` already depends
+/// on `mtui-datasources`, so pinning these types here adds no new crate edge.
+pub type ReportOpenQA = OpenQAResults<DashboardAutoOpenQA, KernelOpenQA, OpenQAOverviewResult>;
 
 use crate::checkout::TemplateIoError;
 use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_titles};
@@ -36,11 +47,10 @@ use crate::metadata_parsers::{JSONParser, ReducedMetadataParser, patchinfo_title
 /// arbitration, connect) are carried here as pure state — no logic is wired to
 /// them yet.
 ///
-/// The upstream `openqa: OpenQAResults` field is intentionally **not** included
-/// yet: [`mtui_types::OpenQAResults`] is generic over concrete `OpenQAResult`
-/// implementations that do not exist until the exporter tasks (P4.7). Adding it
-/// now would force inventing result types ahead of their scope; it lands with
-/// those tasks.
+/// The [`openqa`](Self::openqa) holder carries the report's openQA state
+/// ([`ReportOpenQA`]) — the QEM-dashboard "auto" result, the per-instance
+/// "kernel" results, and the `openqa_overview` payload — populated by the
+/// `reload_openqa` / `set_workflow` commands and consumed by the exporters.
 ///
 /// Note: no `#[derive(Debug)]` — several embedded `mtui-hosts` collaborators
 /// (`HostsGroup`, `HostArbiter`) do not implement `Debug`. A hand-written
@@ -125,6 +135,11 @@ pub struct TestReportBase {
     pub giteacohash: Option<String>,
     /// `hostname -> product-drift warning lines` from the last connect.
     pub product_warnings: HashMap<String, Vec<String>>,
+    /// The report's openQA results (upstream `metadata.openqa`).
+    ///
+    /// Empty until `reload_openqa` / `set_workflow` populate it; consumed by the
+    /// exporters for openQA-enriched templates.
+    pub openqa: ReportOpenQA,
 }
 
 impl TestReportBase {
@@ -166,6 +181,7 @@ impl TestReportBase {
             giteaprapi: None,
             giteacohash: None,
             product_warnings: HashMap::new(),
+            openqa: ReportOpenQA::new(),
         }
     }
 
@@ -542,6 +558,21 @@ pub trait TestReport {
     /// The report's workflow mode (upstream `metadata.workflow`).
     fn workflow(&self) -> Workflow {
         self.base().workflow
+    }
+
+    /// The report's openQA state holder (upstream `metadata.openqa`).
+    ///
+    /// Reads [`TestReportBase::openqa`]; empty for the null report.
+    fn openqa(&self) -> &ReportOpenQA {
+        &self.base().openqa
+    }
+
+    /// Mutably borrows the report's openQA state holder.
+    ///
+    /// The mutable counterpart of [`openqa`](Self::openqa); the
+    /// `reload_openqa` / `set_workflow` commands populate it in place.
+    fn openqa_mut(&mut self) -> &mut ReportOpenQA {
+        &mut self.base_mut().openqa
     }
 
     /// The Gitea pull-request API URL (upstream `metadata.giteaprapi`), if any.

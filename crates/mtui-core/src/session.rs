@@ -137,6 +137,16 @@ impl Session {
         self.templates.active()
     }
 
+    /// Mutably borrows the active report (upstream `prompt.metadata`, mutated).
+    ///
+    /// The mutable counterpart of [`metadata`](Self::metadata). The
+    /// `reload_openqa` / `set_workflow` commands populate the report's openQA
+    /// holder ([`TestReport::openqa_mut`]) through it; never `None` (the registry
+    /// returns a null object when nothing is loaded).
+    pub fn metadata_mut(&mut self) -> &mut (dyn TestReport + Send + Sync) {
+        self.templates.active_mut().as_mut()
+    }
+
     /// Sets the active report's [`Workflow`] mode (upstream
     /// `metadata.workflow = …`).
     ///

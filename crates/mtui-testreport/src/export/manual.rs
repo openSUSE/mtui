@@ -17,7 +17,7 @@
 use std::sync::LazyLock;
 
 use mtui_datasources::OpenQAOverviewResult;
-use mtui_datasources::openqa::standard::AutoOpenQA;
+use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_types::hostlog::HostLog;
 use mtui_types::package::Package;
 use regex::Regex;
@@ -65,7 +65,11 @@ pub struct ManualExport {
     /// The connected-host views (upstream `self.results`).
     pub results: Vec<ManualHost>,
     /// The "auto" openQA connector (for `inject_openqa`), if present.
-    pub auto: Option<AutoOpenQA>,
+    ///
+    /// Upstream's manual export reads `metadata.openqa.auto`, a
+    /// [`DashboardAutoOpenQA`]; only its rendered [`pp`](DashboardAutoOpenQA::pp)
+    /// block is consumed here.
+    pub auto: Option<DashboardAutoOpenQA>,
     /// The openqa_overview payload, if the overview command ran.
     pub overview: Option<OpenQAOverviewResult>,
 }
@@ -76,7 +80,7 @@ impl ManualExport {
     pub fn new(
         ctx: ExportContext,
         results: Vec<ManualHost>,
-        auto: Option<AutoOpenQA>,
+        auto: Option<DashboardAutoOpenQA>,
         overview: Option<OpenQAOverviewResult>,
     ) -> Self {
         Self {
@@ -279,11 +283,7 @@ impl ManualExport {
     /// Runs the exporter (upstream `run`).
     pub fn run(&mut self, hosts: &[String], prompt: &dyn OverwritePrompt) -> Vec<String> {
         self.install_results();
-        let pp: Vec<String> = self
-            .auto
-            .as_ref()
-            .map(|a| a.pp().to_vec())
-            .unwrap_or_default();
+        let pp: Vec<String> = self.auto.as_ref().map(|a| a.pp.clone()).unwrap_or_default();
         self.ctx.inject_openqa(&pp);
         if let Some(overview) = self.overview.clone() {
             self.ctx.inject_overview(&overview);
