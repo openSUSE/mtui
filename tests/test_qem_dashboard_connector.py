@@ -759,3 +759,146 @@ def test_has_passed_install_jobs_counts_slfo_jobs(mock_config):
     assert DashboardAutoOpenQA._has_passed_install_jobs(jobs) is True
     failed = [{"test": "qam-incidentinstall-SLFO", "result": "failed"}]
     assert DashboardAutoOpenQA._has_passed_install_jobs(failed) is False
+
+
+# --------------------------------------------------------------------------- #
+# Finding #7: a problem group whose only problem is in the `other` bucket      #
+# (still-running / parallel_failed / ...) must not be reported "All passed".   #
+# --------------------------------------------------------------------------- #
+
+
+def test_pretty_print_parallel_failed_not_reported_as_all_passed(mock_config):
+    """A `parallel_failed` job flags a problem group; the section must not lie.
+
+    `parallel_failed` is not in `FAILED_RESULTS`, so it lands in the `other`
+    bucket and populates no `failed_by_group` entry. The old trailer gated on
+    `failed_by_group` and therefore printed "All jobs passed." even though the
+    Summary listed the group as a problem.
+    """
+    dashboard = _make_dashboard(mock_config)
+    # A clean group (folds into an all-passed row) plus a distinct group whose
+    # only job is parallel_failed (a problem living entirely in `other`).
+    jobs = [_incident_job(4000 + i, f"qam-pass-{i}", "passed") for i in range(3)]
+    jobs.append(
+        _incident_job(4100, "qam-parallel", "parallel_failed", flavor="Other-Flavor")
+    )
+    out = "".join(dashboard._pretty_print(jobs))
+
+    # The parallel_failed job is counted under `other`, so its group is a problem.
+    assert "other: 1" in out
+    # It must NOT claim success while the Summary flags a problem group.
+    assert "All jobs passed." not in out
+    # No failed/incomplete/timeout job -> no (empty) `Failed jobs:` block either.
+    assert "Failed jobs:" not in out
+    # Instead, an explicit needs-review note is emitted.
+    assert "some groups need review" in out
+
+
+def test_pretty_print_running_job_not_reported_as_all_passed(mock_config):
+    """A still-running job (openQA result ``none``) must not read as all-passed."""
+    dashboard = _make_dashboard(mock_config)
+    jobs = [_incident_job(4200 + i, f"qam-pass-{i}", "passed") for i in range(2)]
+    jobs.append(_incident_job(4300, "qam-running", "none"))
+    out = "".join(dashboard._pretty_print(jobs))
+
+    assert "other: 1" in out
+    assert "All jobs passed." not in out
+    assert "some groups need review" in out
+
+
+# --------------------------------------------------------------------------- #
+# Finding #8: obsoleted (superseded) jobs must be dropped from the working set #
+# so a stale failure poisons neither the install verdict nor the listing.     #
+# --------------------------------------------------------------------------- #
+
+
+def test_is_obsolete_flags_superseded_runs():
+    """Both the `obsolete` flag and an `obsoleted` result mark a stale run."""
+    assert DashboardAutoOpenQA._is_obsolete({"obsolete": True}) is True
+    assert DashboardAutoOpenQA._is_obsolete({"result": "obsoleted"}) is True
+    assert (
+        DashboardAutoOpenQA._is_obsolete({"obsolete": False, "result": "failed"})
+        is False
+    )
+    assert DashboardAutoOpenQA._is_obsolete({}) is False
+
+
+@responses.activate
+def test_load_jobs_drops_obsoleted_runs(mock_config):
+    """A retriggered install's stale failed run must not sink the verdict.
+
+    The dashboard returns the superseded run alongside the current one. If it
+    is not filtered, `_has_passed_install_jobs` sees a failed
+    `qam-incidentinstall` and returns False, so `results` is None and the
+    failed run shows up as a phantom failure.
+    """
+    rrid = RequestReviewID("SUSE:Maintenance:12358:199773")
+    responses.add(
+        responses.GET,
+        f"{API}/incidents/12358",
+        json={"number": 12358, "packages": ["bash"], "channels": []},
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"{API}/incident_settings/12358",
+        json=[
+            {
+                "id": 7,
+                "incident": 12358,
+                "version": "15-SP5",
+                "flavor": "Server-DVD-Incidents",
+                "arch": "x86_64",
+                "settings": {"DISTRI": "sle"},
+            }
+        ],
+        status=200,
+    )
+
+    def _install_job(job_id, status, *, obsolete=False):
+        return {
+            "job_id": job_id,
+            "incident_settings": 7,
+            "update_settings": None,
+            "name": "qam-incidentinstall",
+            "job_group": "Maintenance",
+            "group_id": 1,
+            "status": status,
+            "distri": "sle",
+            "flavor": "Server-DVD-Incidents",
+            "arch": "x86_64",
+            "version": "15-SP5",
+            "build": ":12358:bash",
+            "obsolete": obsolete,
+        }
+
+    responses.add(
+        responses.GET,
+        f"{API}/jobs/incident/7",
+        json=[
+            _install_job(1000, "failed", obsolete=True),  # superseded (flag)
+            _install_job(999, "obsoleted"),  # superseded (result marker)
+            _install_job(1001, "passed"),  # the current run
+        ],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"{API}/update_settings/12358",
+        json=[],
+        status=200,
+    )
+
+    incident = QEMIncident(rrid, API)
+    dashboard = DashboardAutoOpenQA(mock_config, OPENQA_HOST, incident, rrid).run()
+
+    # Only the current (non-superseded) run survives.
+    assert len(dashboard.jobs) == 1
+    assert dashboard.jobs[0]["id"] == 1001
+    # The stale failed run did not poison the install verdict.
+    assert dashboard.results is not None
+    assert len(dashboard.results) == 1
+    # And it is not listed as a phantom failure.
+    pp = "".join(dashboard.pp)
+    assert "Failed jobs:" not in pp
+    assert "obsoleted" not in pp

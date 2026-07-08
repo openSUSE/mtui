@@ -349,6 +349,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   logged and abandoned so `close()` — and the http registry's idle-sweep behind
   it — always returns. Previously the bound was defeated by the thread pool's
   context-manager exit, which re-joined every worker regardless of the timeout.
+- The dashboard-backed auto-workflow openQA report no longer counts superseded
+  (obsoleted) jobs. When a job is retriggered the dashboard keeps the older run;
+  its stale result was still folded into the install verdict and listed as a
+  phantom failure. Obsoleted runs (marked by the dashboard's `obsolete` flag or
+  an `obsoleted` result) are now dropped, matching the openQA-search connector,
+  so a retriggered-and-now-passing install is reported as passed and only the
+  current run per scenario is shown.
+- The dashboard-backed auto-workflow openQA section no longer prints
+  "All jobs passed." while its own Summary lists a problem group. A group whose
+  only problem is a still-running, `parallel_failed`, or otherwise non-failed
+  job (i.e. it has no failed/incomplete/timeout job) is now reported with a
+  "some groups need review" note instead of a contradictory all-passed verdict.
 - An unscoped multi-template fan-out of a host-phase command (e.g. `lock`,
   `run`) no longer fails the whole fan-out — or, for `lock`, pretends to
   succeed — when a loaded template has no connected host. A host-less template
