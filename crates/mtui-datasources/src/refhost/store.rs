@@ -10,15 +10,23 @@
 //!
 //! # Scope
 //! This is the *search* surface (`search`, `is_candidate_match`,
-//! `host_by_name`). The resolver chain
+//! `host_by_name`) plus the ad-hoc [`query`](Refhosts::query) filter and the
+//! [`slot_of`](Refhosts::slot_of) test-target key that `list_refhosts` (and the
+//! host-arbitration pool) consume. The resolver chain
 //! (`PathResolver`/`HttpsResolver`/`RefhostsFactory`) lives in
-//! [`super::resolvers`]. The pool-claim engine (`query`/`slot_of`/`search_pool`)
-//! from upstream `store.py` lands in a later Phase-3 task.
+//! [`super::resolvers`]. The remaining pool-claim helpers
+//! (`search_pool`/`search_pool_by_query`) from upstream `store.py` land with the
+//! pool arbiter in a later task.
 
 use std::path::Path;
 
 use mtui_types::version::VersionField;
 use mtui_types::{Addon, Host, Product, Version, load_refhosts};
+
+/// A test-target slot key: `(product, version, arch, sorted addon names)`.
+///
+/// The full identity an update distinguishes (upstream `slot_of`'s 4-tuple).
+pub type Slot = (String, String, String, Vec<String>);
 
 use super::models::Attributes;
 use crate::error::RefhostError;
@@ -110,6 +118,142 @@ impl Refhosts {
         self.data.iter().find(|c| c.name == name)
     }
 
+    /// Return refhosts matching the filters, de-duplicated by host name.
+    ///
+    /// Ports upstream `Refhosts.query`. `attributes` (parsed from a
+    /// `testplatform`) and the ad-hoc field filters (`name` glob, `arch` list,
+    /// `product` substring, `version` loose, `addon` substring list) are
+    /// alternatives — when `attributes` is `Some` the field filters are ignored.
+    /// With neither, every host is returned. A host matches an `attributes`
+    /// query when it satisfies **any** of the alternatives (upstream `any`).
+    ///
+    /// The loaded `data` is already de-duplicated by name at load time
+    /// (`mtui-types::load_refhosts`), so the extra dedup upstream performs here
+    /// is a no-op guard kept for byte-parity with the upstream contract.
+    #[must_use]
+    pub fn query(
+        &self,
+        attributes: Option<&[Attributes]>,
+        name: Option<&str>,
+        arch: &[String],
+        product: Option<&str>,
+        version: Option<&str>,
+        addon: &[String],
+    ) -> Vec<Host> {
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut out: Vec<Host> = Vec::new();
+        for host in &self.data {
+            if !seen.insert(host.name.as_str()) {
+                continue;
+            }
+            let keep = match attributes {
+                Some(attrs) => attrs.iter().any(|a| Self::is_candidate_match(host, a)),
+                None => Self::field_match(host, name, arch, product, version, addon),
+            };
+            if keep {
+                out.push(host.clone());
+            }
+        }
+        out
+    }
+
+    /// Return `true` iff `host` satisfies every supplied ad-hoc field filter.
+    ///
+    /// An unset filter (empty/`None`) imposes no constraint. Ports upstream
+    /// `_field_match`: `name` is a shell glob, `arch` is membership in a list,
+    /// `product` is a case-insensitive substring of the base product name,
+    /// `version` is the loose form matched by [`version_str_match`], and each
+    /// `addon` term is a case-insensitive substring of some installed addon.
+    #[must_use]
+    fn field_match(
+        host: &Host,
+        name: Option<&str>,
+        arch: &[String],
+        product: Option<&str>,
+        version: Option<&str>,
+        addon: &[String],
+    ) -> bool {
+        if let Some(name) = name.filter(|n| !n.is_empty())
+            && !name_glob(&host.name, name)
+        {
+            return false;
+        }
+        if !arch.is_empty() && !arch.iter().any(|a| a == &host.arch) {
+            return false;
+        }
+        if let Some(product) = product.filter(|p| !p.is_empty())
+            && !host
+                .product
+                .name
+                .to_lowercase()
+                .contains(&product.to_lowercase())
+        {
+            return false;
+        }
+        if let Some(version) = version.filter(|v| !v.is_empty())
+            && !Self::version_str_match(host.product.version.as_ref(), version)
+        {
+            return false;
+        }
+        if !addon.is_empty() {
+            let have: Vec<String> = host.addons.iter().map(|a| a.name.to_lowercase()).collect();
+            let all = addon
+                .iter()
+                .all(|want| have.iter().any(|n| n.contains(&want.to_lowercase())));
+            if !all {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Loosely match a host version against `15-SP6` / `15.6` / `15`.
+    ///
+    /// Ports upstream `_version_str_match`: `SP` is optional and
+    /// case-insensitive; a bare major matches any minor. A host with no version
+    /// never matches a versioned query.
+    #[must_use]
+    fn version_str_match(hostver: Option<&Version>, want: &str) -> bool {
+        let Some(hostver) = hostver else {
+            return false;
+        };
+        let want = want.replace('.', "-").to_lowercase();
+        let mut parts = want.splitn(2, '-');
+        let major = parts.next().unwrap_or_default();
+        if hostver.major.to_string().to_lowercase() != major {
+            return false;
+        }
+        match parts.next() {
+            Some(minor) if !minor.is_empty() => {
+                let host_minor = hostver
+                    .minor
+                    .as_ref()
+                    .map(|m| m.to_string().to_lowercase())
+                    .unwrap_or_default();
+                host_minor.replace("sp", "") == minor.replace("sp", "")
+            }
+            _ => true,
+        }
+    }
+
+    /// Return the test-target [`Slot`] key for `host`.
+    ///
+    /// Ports upstream `slot_of`: the full `(product, version, arch, addons)` an
+    /// update distinguishes, so only genuine duplicates collapse to one slot.
+    /// Addon names are sorted for a stable key.
+    #[must_use]
+    pub fn slot_of(host: &Host) -> Slot {
+        let ver_str = version_display(host.product.version.as_ref());
+        let mut addons: Vec<String> = host.addons.iter().map(|a| a.name.clone()).collect();
+        addons.sort();
+        (
+            host.product.name.clone(),
+            ver_str,
+            host.arch.clone(),
+            addons,
+        )
+    }
+
     /// A `base=<name>` query is satisfied when the host's base product matches
     /// **or** when the host carries that product as an addon.
     ///
@@ -178,6 +322,56 @@ impl Refhosts {
         }
         true
     }
+}
+
+/// Render a [`Version`] as upstream `slot_of` / `_ver_str` does.
+///
+/// `None` → empty; a missing/empty minor → bare major; else `major-minor`.
+fn version_display(ver: Option<&Version>) -> String {
+    match ver {
+        None => String::new(),
+        Some(v) => match &v.minor {
+            None => v.major.to_string(),
+            Some(VersionField::Text(s)) if s.is_empty() => v.major.to_string(),
+            Some(minor) => format!("{}-{minor}", v.major),
+        },
+    }
+}
+
+/// Match `text` against a shell glob supporting `*` and `?` (upstream uses
+/// Python's `fnmatch` for the `--name` filter).
+///
+/// `*` matches any run (including empty), `?` matches exactly one character;
+/// every other character is literal. Matching is case-sensitive, mirroring
+/// `fnmatch.fnmatch` on a case-sensitive filesystem for the hostnames mtui
+/// deals with. Implemented inline to avoid a glob dependency (no-runtime-deps
+/// goal).
+fn name_glob(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    // Classic two-pointer wildcard match with backtracking on `*`.
+    let (mut ti, mut pi) = (0usize, 0usize);
+    let (mut star, mut mark) = (None::<usize>, 0usize);
+    while ti < t.len() {
+        if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            ti += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == '*' {
+            star = Some(pi);
+            mark = ti;
+            pi += 1;
+        } else if let Some(s) = star {
+            pi = s + 1;
+            mark += 1;
+            ti = mark;
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && p[pi] == '*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
 #[cfg(test)]
@@ -466,5 +660,143 @@ mod tests {
             &ltss_host("SP6", "SP6", true),
             &attr
         ));
+    }
+
+    // --- query -------------------------------------------------------------
+
+    fn names(hosts: &[Host]) -> Vec<String> {
+        hosts.iter().map(|h| h.name.clone()).collect()
+    }
+
+    #[test]
+    fn query_no_filters_returns_all_deduped() {
+        let got = names(&pool().query(None, None, &[], None, None, &[]));
+        assert_eq!(
+            got,
+            [
+                "host-default-x86",
+                "host-nbg-x86",
+                "host-default-noaddon",
+                "host-nbg-only-here",
+            ]
+        );
+    }
+
+    #[test]
+    fn query_by_attributes_matches_any() {
+        let attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
+        let got = names(&pool().query(Some(&attrs), None, &[], None, None, &[]));
+        assert_eq!(got, ["host-default-x86", "host-nbg-x86"]);
+    }
+
+    #[test]
+    fn query_name_glob_and_arch_filter() {
+        // name glob
+        let got = names(&pool().query(None, Some("host-nbg-*"), &[], None, None, &[]));
+        assert_eq!(got, ["host-nbg-x86", "host-nbg-only-here"]);
+        // arch list membership
+        let got = names(&pool().query(None, None, &["ppc64le".to_owned()], None, None, &[]));
+        assert_eq!(got, ["host-nbg-only-here"]);
+    }
+
+    #[test]
+    fn query_product_substring_and_version_loose() {
+        // product substring is case-insensitive
+        let got = names(&pool().query(None, None, &[], Some("SLE"), None, &[]));
+        assert_eq!(got.len(), 4);
+        // loose version: "15" matches any 15.x minor
+        let got = names(&pool().query(None, None, &[], None, Some("15"), &[]));
+        assert_eq!(
+            got,
+            ["host-default-x86", "host-nbg-x86", "host-nbg-only-here"]
+        );
+        // loose version with SP-optional minor
+        let got = names(&pool().query(None, None, &[], None, Some("15-SP5"), &[]));
+        assert_eq!(
+            got,
+            ["host-default-x86", "host-nbg-x86", "host-nbg-only-here"]
+        );
+        // dotted form
+        let got = names(&pool().query(None, None, &[], None, Some("12.sp4"), &[]));
+        assert_eq!(got, ["host-default-noaddon"]);
+    }
+
+    #[test]
+    fn query_addon_substring_requires_all() {
+        let got = names(&pool().query(None, None, &[], None, None, &["sdk".to_owned()]));
+        assert_eq!(got, ["host-default-x86"]);
+        // a term that matches nothing excludes every host
+        let got = names(&pool().query(None, None, &[], None, None, &["nope".to_owned()]));
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn version_str_match_forms() {
+        let v = ver(15, Some(VersionField::Num(6)));
+        assert!(Refhosts::version_str_match(Some(&v), "15"));
+        assert!(Refhosts::version_str_match(Some(&v), "15-SP6"));
+        assert!(Refhosts::version_str_match(Some(&v), "15.6"));
+        assert!(!Refhosts::version_str_match(Some(&v), "15-SP5"));
+        assert!(!Refhosts::version_str_match(Some(&v), "12"));
+        assert!(!Refhosts::version_str_match(None, "15"));
+    }
+
+    // --- slot_of -----------------------------------------------------------
+
+    #[test]
+    fn slot_of_formats_version_and_sorts_addons() {
+        let h = host(
+            "h",
+            "x86_64",
+            sles(15, Some(VersionField::Num(6))),
+            vec![
+                Addon {
+                    name: "sle-module-web".to_owned(),
+                    version: None,
+                },
+                Addon {
+                    name: "sdk".to_owned(),
+                    version: None,
+                },
+            ],
+        );
+        assert_eq!(
+            Refhosts::slot_of(&h),
+            (
+                "sles".to_owned(),
+                "15-6".to_owned(),
+                "x86_64".to_owned(),
+                vec!["sdk".to_owned(), "sle-module-web".to_owned()],
+            )
+        );
+    }
+
+    #[test]
+    fn slot_of_bare_major_when_no_minor() {
+        let h = host("h", "aarch64", sles(15, None), vec![]);
+        assert_eq!(
+            Refhosts::slot_of(&h),
+            (
+                "sles".to_owned(),
+                "15".to_owned(),
+                "aarch64".to_owned(),
+                Vec::new(),
+            )
+        );
+    }
+
+    // --- name_glob ---------------------------------------------------------
+
+    #[test]
+    fn name_glob_wildcards() {
+        assert!(name_glob("whale-01.qam.suse.cz", "whale-*"));
+        assert!(name_glob("whale-01.qam.suse.cz", "*.qam.suse.cz"));
+        assert!(name_glob("whale-01", "whale-??"));
+        assert!(name_glob("abc", "*"));
+        assert!(name_glob("abc", "a?c"));
+        assert!(!name_glob("whale-01", "whale-???"));
+        assert!(!name_glob("whale-01.qam.suse.cz", "*.suse.de"));
+        assert!(name_glob("exact", "exact"));
+        assert!(!name_glob("exact", "exac"));
     }
 }

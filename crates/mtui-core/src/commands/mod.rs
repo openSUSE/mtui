@@ -70,6 +70,7 @@ mod showlog;
 
 // Phase 5 follow-ups — deferred commands whose machinery has since landed.
 mod export;
+mod list_refhosts;
 
 pub use downgrade::Downgrade;
 pub use localrun::LocalRun;
@@ -108,6 +109,7 @@ pub use updates::Updates;
 pub use checkout::Checkout;
 pub use commit::Commit;
 pub use export::Export;
+pub use list_refhosts::ListRefhosts;
 pub use listbugs::ListBugs;
 pub use listhistory::ListHistory;
 pub use listhosts::ListHosts;
@@ -178,6 +180,12 @@ pub(crate) mod testkit {
     pub struct Buffer(Arc<Mutex<Vec<u8>>>);
 
     impl Buffer {
+        /// A fresh, empty capture buffer (for tests building a custom session).
+        #[must_use]
+        pub fn new() -> Self {
+            Self(Arc::new(Mutex::new(Vec::new())))
+        }
+
         /// The captured output as a `String`.
         #[must_use]
         pub fn contents(&self) -> String {

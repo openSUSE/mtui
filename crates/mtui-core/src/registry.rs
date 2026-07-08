@@ -193,6 +193,7 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::Regenerate));
     // Phase 5 follow-ups — deferred commands now unblocked.
     registry.register(Arc::new(commands::Export));
+    registry.register(Arc::new(commands::ListRefhosts));
     registry
 }
 
@@ -335,10 +336,10 @@ mod tests {
 
     #[test]
     fn register_all_command_count() {
-        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 11 Wave 4 + 1 P5 follow-up (export)
-        // = 53 canonical commands. (reload_openqa + set_workflow are deferred:
-        // mtui-rs-zs4 / mtui-rs-plt.)
-        assert_eq!(register_all().len(), 53);
+        // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 11 Wave 4 + 2 P5 follow-ups
+        // (export, list_refhosts) = 54 canonical commands. (reload_openqa +
+        // set_workflow are deferred: mtui-rs-zs4 / mtui-rs-plt.)
+        assert_eq!(register_all().len(), 54);
     }
 
     #[test]
