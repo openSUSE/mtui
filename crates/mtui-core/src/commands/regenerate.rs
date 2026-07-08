@@ -3,6 +3,9 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::TeReGen;
+use mtui_testreport::UpdateKind;
+use mtui_types::{UpdateID, Workflow};
+use tracing::info;
 
 use crate::command::{Command, Scope};
 use crate::commands::support::{require_update, template_completion};
@@ -17,10 +20,10 @@ use crate::session::Session;
 /// template, `--ignore-inconsistent` regenerates despite inconsistent metadata,
 /// and `--no-wait` enqueues and returns immediately.
 ///
-/// Deviation from upstream: the post-success **reload** of the freshly built
-/// template (upstream drops the stale checkout and calls `load_update`) is
-/// deferred until `load_update` lands in mtui-core (`mtui-rs-7h2`); this command
-/// reports success and tells the operator to reload.
+/// After a successful wait, the freshly built template is **reloaded** (upstream
+/// `_reload`): the stale local checkout is dropped and the update is re-loaded
+/// via [`Session::load_update`] without autoconnect, so the new build is picked
+/// up in place without leaving mtui.
 pub struct Regenerate;
 
 #[async_trait]
@@ -116,13 +119,55 @@ impl Command for Regenerate {
             return Ok(());
         }
 
-        // Success. The reload leg (drop stale checkout + load_update) is deferred
-        // to mtui-rs-7h2; tell the operator to reload for now.
-        session.display.println(&format!(
-            "Template for {rrid_str} regenerated — reload it with load_template to pick up the new build"
-        ));
+        // Success. Drop the stale checkout and reload the freshly built template
+        // in place (upstream `_reload`).
+        session
+            .display
+            .println(&format!("Template for {rrid_str} regenerated — reloading"));
+        reload(session, &rrid_str).await;
         Ok(())
     }
+}
+
+/// Drops the stale local checkout and reloads the freshly built template
+/// (upstream `Regenerate._reload`).
+///
+/// Reconstructs the update kind from the active report's workflow
+/// ([`Workflow::Kernel`] → [`UpdateKind::Kernel`], else [`UpdateKind::Auto`],
+/// mirroring the upstream `KernelOBSUpdateID`/`AutoOBSUpdateID` factory choice),
+/// removes `template_dir/<rrid>` best-effort, then re-loads the update **without**
+/// autoconnect (no live-host grab on a regen-reload).
+async fn reload(session: &mut Session, rrid: &str) {
+    let kind = match session.metadata().workflow() {
+        Workflow::Kernel => UpdateKind::Kernel,
+        _ => UpdateKind::Auto,
+    };
+
+    // Drop the stale checkout so the reload re-checks-out the new build. Upstream
+    // uses `shutil.rmtree(..., ignore_errors=True)`: a missing/undeletable dir is
+    // not fatal.
+    let trdir = session.config.template_dir.join(rrid);
+    if trdir.exists() {
+        match std::fs::remove_dir_all(&trdir) {
+            Ok(()) => info!("Removed stale checked out template {}", trdir.display()),
+            Err(e) => info!(
+                "Could not remove stale template {}: {e} (continuing)",
+                trdir.display()
+            ),
+        }
+    }
+
+    // The RRID came from a loaded report, so it parses; if it somehow does not,
+    // skip the reload rather than abort the command.
+    let update = match UpdateID::parse(rrid) {
+        Ok(u) => u,
+        Err(e) => {
+            info!("Skipping reload of {rrid}: could not parse RRID: {e}");
+            return;
+        }
+    };
+
+    session.load_update(&update, false, kind).await;
 }
 
 /// Reports the `--no-wait` enqueue outcome (upstream `_report_enqueue`).
@@ -253,6 +298,81 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("--force"), "{out}");
+    }
+
+    /// Mounts the success mocks (regenerate → 202, status → finished) on `server`.
+    async fn mount_success(server: &MockServer, rrid: &str) {
+        Mock::given(method("POST"))
+            .and(path(format!("/reports/{rrid}/regenerate")))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({"job": 5})))
+            .mount(server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/reports/{rrid}/status")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"minion_state": "finished"})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn success_reloads_and_drops_stale_checkout() {
+        let rrid = "SUSE:Maintenance:1:1";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+
+        let (mut session, buf) = session_with_hosts(rrid, &["h1"], "ok");
+        let tmp = tempfile::tempdir().unwrap();
+        // Seed a stale checkout with a marker file; the reload must remove it.
+        let trdir = tmp.path().join(rrid);
+        std::fs::create_dir_all(&trdir).unwrap();
+        let marker = trdir.join("stale-marker");
+        std::fs::write(&marker, "old\n").unwrap();
+
+        session.config = config_for(&server);
+        session.config.template_dir = tmp.path().to_path_buf();
+        // Offline svn: the post-removal re-checkout yields a NullReport, so the
+        // reload degrades gracefully without touching the network.
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let args = matches(&Regenerate, &[]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("regenerated — reloading"), "{out}");
+        // The stale checkout (and its marker) were dropped by the reload leg.
+        assert!(!marker.exists(), "stale checkout should have been removed");
+        assert!(
+            !trdir.exists(),
+            "stale checkout dir should have been removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn success_reload_does_not_autoconnect() {
+        // Kernel workflow selects UpdateKind::Kernel, which never autoconnects;
+        // more generally the reload passes autoconnect=false, so no hosts are
+        // connected as a side effect of reloading.
+        let rrid = "SUSE:Maintenance:2:2";
+        let server = MockServer::start().await;
+        mount_success(&server, rrid).await;
+
+        let (mut session, _buf) = session_with_hosts(rrid, &["h1"], "ok");
+        session.templates.active_mut().base_mut().workflow = Workflow::Kernel;
+        let tmp = tempfile::tempdir().unwrap();
+        session.config = config_for(&server);
+        session.config.template_dir = tmp.path().to_path_buf();
+        session.config.svn_path = format!("file://{}/no-repo", tmp.path().display());
+
+        let before = session.targets().len();
+        let args = matches(&Regenerate, &[]);
+        Regenerate.call(&mut session, &args).await.unwrap();
+
+        // The reload passes autoconnect=false: it never grabs additional pool
+        // hosts, so the target count is unchanged by the regen-reload.
+        assert_eq!(session.targets().len(), before);
     }
 
     #[tokio::test]
