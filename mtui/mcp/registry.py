@@ -330,6 +330,23 @@ class SessionRegistry:
                     if now - touched >= self._idle_timeout
                 ]
                 for key in stale:
+                    # Re-validate right before evicting: while an earlier
+                    # eviction in this round awaited a slow close(),
+                    # get_or_create() may have handed this session back to
+                    # a client and refreshed its last-touch -- reaping it
+                    # now would tear down a session in active use. The
+                    # re-check and evict()'s pop run with no await in
+                    # between, so a refresh cannot slip into that gap.
+                    touched = self._last_touch.get(key)
+                    if touched is None:
+                        continue  # already evicted/released elsewhere
+                    if time.monotonic() - touched < self._idle_timeout:
+                        logger.info(
+                            "skipping sweep of MCP session (key=%s): "
+                            "re-activated during this sweep",
+                            key,
+                        )
+                        continue
                     logger.info("sweeping idle MCP session (key=%s)", key)
                     await self.evict(key)
         except asyncio.CancelledError:

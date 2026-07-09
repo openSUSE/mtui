@@ -249,6 +249,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   exactly in that range: it survived the first export and vanished on every
   one after. The overview is now injected after the results stage, so both
   the refreshed kernel results and the overview block survive re-exports.
+- The `mtui-mcp` http idle sweeper no longer tears down a session that a
+  client re-activated while the same sweep round was running. The sweep
+  snapshotted the stale keys and then evicted them one by one; while one
+  eviction waited on a slow host disconnect, a client could be handed a
+  later stale-listed session (its idle clock freshly reset) — and the sweep
+  still closed it, cutting SSH host connections out from under the active
+  client's command. Staleness is now re-checked immediately before each
+  eviction, so a just-re-activated session is spared.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

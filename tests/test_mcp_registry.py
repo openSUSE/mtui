@@ -425,6 +425,112 @@ def test_sweeper_disabled_when_idle_timeout_zero(tmp_path: Path) -> None:
     assert asyncio.run(driver()) is None
 
 
+def test_sweep_spares_session_reactivated_during_the_sweep(tmp_path: Path) -> None:
+    """A session re-activated while the sweep runs must not be reaped.
+
+    The sweep snapshots the stale keys, then evicts them one by one.
+    Eviction awaits ``close()``; while one eviction is blocked on a slow
+    close, ``get_or_create`` can hand a *later* stale key's session to a
+    client (refreshing its last-touch). The sweep used to evict it anyway,
+    closing SSH host connections out from under the active client.
+    Staleness is now re-validated immediately before each eviction.
+    """
+    reg = _registry(tmp_path, idle_timeout=4.0)  # sweep interval = 2s
+    import time as _time
+
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+    k2_closed = {"n": 0}
+
+    async def driver() -> None:
+        s1 = await reg.get_or_create("k1")
+        s2 = await reg.get_or_create("k2")
+
+        async def _slow_close() -> None:
+            close_started.set()
+            await release_close.wait()
+
+        async def _k2_close() -> None:
+            k2_closed["n"] += 1
+
+        s1.close = _slow_close  # ty: ignore[invalid-assignment]
+        s2.close = _k2_close  # ty: ignore[invalid-assignment]
+
+        # Age both sessions well past the TTL so the next sweep round
+        # snapshots stale = [k1, k2] (insertion order).
+        aged = _time.monotonic() - 100
+        reg._last_touch["k1"] = aged  # noqa: SLF001
+        reg._last_touch["k2"] = aged  # noqa: SLF001
+
+        # Wait until the sweeper is mid-eviction of k1 (blocked in close),
+        # then do what a live client does: grab k2, refreshing its touch.
+        await asyncio.wait_for(close_started.wait(), timeout=10)
+        again = await reg.get_or_create("k2")
+        assert again is s2
+
+        # Let the k1 eviction finish; the sweep round proceeds to k2.
+        release_close.set()
+        await asyncio.sleep(0.5)
+
+        assert "k1" not in reg._sessions  # noqa: SLF001 -- genuinely idle: reaped
+        assert "k2" in reg._sessions  # noqa: SLF001 -- re-activated: spared
+        assert k2_closed["n"] == 0
+        await reg.aclose()
+
+    asyncio.run(driver())
+
+
+def test_sweep_skips_key_already_evicted_during_the_sweep(tmp_path: Path) -> None:
+    """A stale-listed key evicted by someone else mid-sweep is skipped.
+
+    While the sweep round is blocked in the first eviction's ``close()``,
+    a client disconnect can evict a later stale-listed key directly. When
+    the round reaches that key its last-touch is gone; the re-check must
+    skip it rather than close the session a second time.
+    """
+    reg = _registry(tmp_path, idle_timeout=4.0)  # sweep interval = 2s
+    import time as _time
+
+    close_started = asyncio.Event()
+    release_close = asyncio.Event()
+    k2_closed = {"n": 0}
+
+    async def driver() -> None:
+        s1 = await reg.get_or_create("k1")
+        s2 = await reg.get_or_create("k2")
+
+        async def _slow_close() -> None:
+            close_started.set()
+            await release_close.wait()
+
+        async def _k2_close() -> None:
+            k2_closed["n"] += 1
+
+        s1.close = _slow_close  # ty: ignore[invalid-assignment]
+        s2.close = _k2_close  # ty: ignore[invalid-assignment]
+
+        aged = _time.monotonic() - 100
+        reg._last_touch["k1"] = aged  # noqa: SLF001
+        reg._last_touch["k2"] = aged  # noqa: SLF001
+
+        # Mid-sweep (blocked in k1's close), a client disconnect evicts k2.
+        await asyncio.wait_for(close_started.wait(), timeout=10)
+        await reg.evict("k2")
+        assert k2_closed["n"] == 1
+
+        # The round proceeds to k2: last-touch is gone -> skipped, close
+        # is NOT called a second time.
+        release_close.set()
+        await asyncio.sleep(0.5)
+
+        assert "k1" not in reg._sessions  # noqa: SLF001
+        assert "k2" not in reg._sessions  # noqa: SLF001
+        assert k2_closed["n"] == 1
+        await reg.aclose()
+
+    asyncio.run(driver())
+
+
 def test_aclose_cancels_sweeper_and_closes_all(tmp_path: Path) -> None:
     """``aclose`` cancels the sweeper task and evicts every live session."""
     reg = _registry(tmp_path, idle_timeout=30.0)
