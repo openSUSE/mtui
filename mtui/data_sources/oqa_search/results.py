@@ -43,9 +43,12 @@ class JobResult:
 
     ``result`` is openQA's job result: ``passed``, ``softfailed``,
     ``failed``, ``parallel_failed``, ``incomplete``, ``skipped`` or
-    ``obsoleted`` (superseded by a retrigger). ``test`` is the scenario
-    name (the meaningful field for judging relevance — unlike the full
-    job name it does not embed the build string).
+    ``obsoleted`` (superseded by a retrigger). A job that has not
+    finished carries result ``none`` — its ``state`` (``scheduled``,
+    ``running``, ...; ``done`` once finished) tells what it is actually
+    doing. ``test`` is the scenario name (the meaningful field for
+    judging relevance — unlike the full job name it does not embed the
+    build string).
     """
 
     job_id: int
@@ -54,3 +57,4 @@ class JobResult:
     result: str
     group: str = ""
     url: str = ""
+    state: str = ""

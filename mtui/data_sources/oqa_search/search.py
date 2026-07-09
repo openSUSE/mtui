@@ -118,6 +118,7 @@ def incident_jobs(
                 result=result,
                 group=job.get("group", ""),
                 url=f"{url_openqa.rstrip('/')}/t{job.get('id', '')}",
+                state=job.get("state", ""),
             )
         )
     rows.sort(key=lambda r: (r.result, r.arch, r.test))
