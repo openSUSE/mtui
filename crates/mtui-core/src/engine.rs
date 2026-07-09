@@ -45,10 +45,9 @@ pub enum EngineError {
     ///
     /// `help_or_version` records whether the "error" was actually clap emitting
     /// `--help`/`--version` text (a success in argparse terms, exit 0) rather
-    /// than a genuine usage error (argparse exit 2). The non-interactive
-    /// entrypoint ([`run_once`](crate::entrypoint::run_once)) reads it to pick
-    /// the right process exit code; the REPL ignores it and just renders the
-    /// message.
+    /// than a genuine usage error (argparse exit 2). The headless entrypoint
+    /// ([`run_once`](crate::entrypoint::run_once)) reads it to pick the right
+    /// process exit code; the REPL ignores it and just renders the message.
     #[error("{message}")]
     Parse {
         /// clap's already-rendered help/usage text.

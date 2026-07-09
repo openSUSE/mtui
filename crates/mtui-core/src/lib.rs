@@ -20,12 +20,14 @@
 //! [`ColorMode`], and the [`page`](display::page) pager. The wiring composition
 //! root (P5.5) builds on top of these.
 //!
-//! P5.10 adds [`entrypoint`] — the non-interactive single-command driver
-//! ([`run_once`]) that runs one Layer-2 REPL command to completion and yields a
-//! process [`ExitStatus`]. It is the seam between the top-level [`Args`] parser
-//! (Layer 1) and the per-command engine (Layer 2), distinct from both and from
-//! the MCP schema synthesis (Layer 3, Phase 7); the `mtui` binary (Phase 6)
-//! calls it for its headless single-command mode.
+//! P5.10 adds [`entrypoint`] — the single-command driver ([`run_once`]) that
+//! runs one Layer-2 REPL command to completion and yields a process
+//! [`ExitStatus`]. It is the seam between the top-level [`Args`] parser (Layer 1)
+//! and the per-command engine (Layer 2), distinct from both and from the MCP
+//! schema synthesis (Layer 3, Phase 7). It is consumed by `mtui-mcp` and
+//! embedding callers that dispatch a single command headlessly; the interactive
+//! `mtui` binary (Phase 6) is REPL-only — like upstream, the CLI has no
+//! single-command mode.
 
 pub mod args;
 pub mod command;

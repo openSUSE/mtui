@@ -199,7 +199,7 @@ pub async fn step(registry: &Registry, session: &mut Session, line: &str) -> Con
 /// `logger.error(e)`), and mirrors it to `tracing` for the log sink.
 ///
 /// Mirrors [`mtui_core::entrypoint::run_once`]'s error rendering so the REPL and
-/// the non-interactive single-command mode present failures identically.
+/// the headless (`mtui-mcp`/embedding) entrypoint present failures identically.
 fn render_error(session: &mut Session, err: &EngineError) {
     let msg = err.to_string();
     tracing::error!(%err, "command failed");

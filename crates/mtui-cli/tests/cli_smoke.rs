@@ -6,7 +6,9 @@
 //! bare invocation enters the interactive REPL. Arg-parsing internals are
 //! already covered in `mtui-core::args`; this only exercises the binary's own
 //! wiring. The REPL loop's dispatch logic is unit-tested off the TTY seam in
-//! `repl::tests` (the `step` function).
+//! `repl::tests` (the `step` function), and the startup seeding logic
+//! (`-a`/`-k` update load + `--sut`, incl. the explicit-update exit-1 path)
+//! hermetically in `startup::tests` (the `seed_session` function).
 
 use std::process::Command;
 

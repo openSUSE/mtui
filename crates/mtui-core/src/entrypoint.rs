@@ -1,4 +1,4 @@
-//! Non-interactive single-command dispatch entrypoint.
+//! Headless single-command dispatch entrypoint (`mtui-mcp` / embedding).
 //!
 //! This is the glue between the **three distinct argparse layers** mtui carries
 //! (the correction that shaped P5.10 — do not conflate them):
@@ -17,12 +17,16 @@
 //! 3. **MCP tool schema** — `mtui-mcp` translating each command's parser into
 //!    JSON parameters (Phase 7). Not touched here.
 //!
-//! [`run_once`] is the analogue of upstream `mtui.main.run_mtui` **minus the
-//! interactive `cmdloop`**: given the parsed top-level `Args` and one command
-//! line, it dispatches exactly one Layer-2 command against a fresh session and
-//! yields a process [`ExitStatus`]. The Phase-6 `mtui` binary calls it for its
-//! non-interactive single-command mode; `mtui-mcp` (Phase 7) shares the same
-//! engine underneath.
+//! [`run_once`] dispatches exactly one Layer-2 command against a session and
+//! yields a process [`ExitStatus`]: given the parsed top-level `Args` and one
+//! command line, it resolves, parses, and runs a single command with no
+//! interactive loop. It is the headless single-command primitive for
+//! `mtui-mcp` (Phase 7) and embedding callers.
+//!
+//! It is **not** a CLI mode: upstream `mtui` — and the mtui-rs `mtui` binary —
+//! has only two surfaces, the interactive REPL and `mtui-mcp`, and neither takes
+//! a positional command. The interactive binary seeds the session and enters the
+//! REPL (`mtui-cli::seed_session` + `Repl`); it never calls `run_once`.
 //!
 //! ## Exit-code contract
 //!
@@ -77,7 +81,8 @@ impl From<ExitStatus> for i32 {
 
 /// Runs exactly one command non-interactively and returns its [`ExitStatus`].
 ///
-/// This is the single-command-mode driver. It:
+/// This is the headless single-command driver (consumed by `mtui-mcp` and
+/// embedding callers, not the interactive CLI). It:
 ///
 /// 1. dispatches `command_line` through the shared [`engine`](crate::engine)
 ///    (Layer 2 — resolve, parse, run), never exiting the process;

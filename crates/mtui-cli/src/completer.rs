@@ -4,7 +4,8 @@
 //! prompt_toolkit's `Completer` onto the `cmd.Cmd`-style `complete_<name>`
 //! methods. Here the bridge is from [`reedline::Completer`] onto the
 //! [`Command::complete`](mtui_core::Command::complete) surface every command
-//! already implements (P5), plus [`Registry::names`] for first-token completion.
+//! already implements (P5), plus [`Registry::keys`] (names **and** aliases) for
+//! first-token completion.
 //!
 //! This is an **adapter**, not new completion logic: it translates reedline's
 //! `(line, pos)` into the `(text, line)` the registry commands expect,
@@ -66,8 +67,9 @@ impl Completer for MtuiCompleter {
     ///
     /// * The buffer before the cursor is `&line[..pos]`, then left-trimmed so
     ///   column offsets match upstream's `lstrip`.
-    /// * `begidx == 0` → **first-token** completion: registry command names by
-    ///   case-sensitive prefix match.
+    /// * `begidx == 0` → **first-token** completion: registry command names
+    ///   **and aliases** by case-sensitive prefix match (upstream
+    ///   `_completer.py` iterates `prompt.commands`, which includes aliases).
     /// * otherwise → **per-command**: look up the first token in the registry
     ///   and delegate to its `complete(session, text, line)`; an unknown token
     ///   or a command with no completer yields nothing.
@@ -87,10 +89,11 @@ impl Completer for MtuiCompleter {
         let span = Span::new(leading + begidx_in_stripped, pos.min(line.len()));
 
         let candidates = if begidx_in_stripped == 0 {
-            // First-token completion: registry names by prefix.
+            // First-token completion: registry names *and aliases* by prefix
+            // (upstream parity — `prompt.commands` carries aliases as keys).
             self.registry
-                .names()
-                .filter(|name| name.starts_with(text))
+                .keys()
+                .filter(|key| key.starts_with(text))
                 .map(str::to_owned)
                 .collect::<Vec<_>>()
         } else {
@@ -136,6 +139,9 @@ mod tests {
     impl Command for FixedCmd {
         fn name(&self) -> &'static str {
             "run"
+        }
+        fn aliases(&self) -> &'static [&'static str] {
+            &["r"]
         }
         fn scope(&self) -> Scope {
             Scope::Single
@@ -243,11 +249,12 @@ mod tests {
     // ---- first-token completion -------------------------------------------
 
     #[test]
-    fn first_token_empty_offers_all_names() {
+    fn first_token_empty_offers_all_names_and_aliases() {
         let mut c = completer();
         let s = c.complete("", 0);
-        // Registration order is canonical.
-        assert_eq!(values(&s), vec!["run", "shell", "reboot"]);
+        // Insertion order, each command's name before its own aliases
+        // (`run` carries alias `r`) — upstream `prompt.commands` parity.
+        assert_eq!(values(&s), vec!["run", "r", "shell", "reboot"]);
     }
 
     #[test]
@@ -256,7 +263,21 @@ mod tests {
         let s = c.complete("r", 1);
         let mut got = values(&s);
         got.sort_unstable();
-        assert_eq!(got, vec!["reboot", "run"]);
+        // `r` matches the alias `r`, plus `reboot` and `run`.
+        assert_eq!(got, vec!["r", "reboot", "run"]);
+    }
+
+    #[test]
+    fn first_token_completes_aliases() {
+        // An alias-only prefix must surface the alias: `run` carries alias `r`,
+        // so completing `r` (before any space) offers the alias itself —
+        // upstream parity with `prompt.commands` iteration.
+        let mut c = completer();
+        let s = c.complete("r", 1);
+        assert!(
+            values(&s).contains(&"r"),
+            "alias `r` must be a first-token candidate"
+        );
     }
 
     #[test]

@@ -88,6 +88,19 @@ impl Registry {
         self.canonical.iter().copied()
     }
 
+    /// Every command key — canonical names **and** aliases — in insertion
+    /// order (a command's own name precedes its aliases).
+    ///
+    /// This mirrors upstream `_completer.py`, whose first-token completion
+    /// iterates `prompt.commands` (which carries aliases as distinct keys). Use
+    /// this for alias-aware first-token completion; contrast with [`names`],
+    /// which is canonical-only and drives the REPL/MCP command listing.
+    ///
+    /// [`names`]: Registry::names
+    pub fn keys(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.by_key.keys().copied()
+    }
+
     /// The number of distinct commands registered (aliases not counted).
     #[must_use]
     pub fn len(&self) -> usize {
@@ -423,6 +436,19 @@ mod tests {
         r.register(stub("add", &["a"]));
         let names: Vec<&str> = r.names().collect();
         assert_eq!(names, vec!["run", "list", "add"]);
+    }
+
+    #[test]
+    fn keys_lists_names_and_aliases_in_insertion_order() {
+        let mut r = Registry::new();
+        r.register(stub("run", &["r"]));
+        r.register(stub("list", &[]));
+        r.register(stub("add", &["a"]));
+        // Each command's canonical name precedes its own aliases (upstream
+        // `prompt.commands` dict-iteration order); commands stay in
+        // registration order.
+        let keys: Vec<&str> = r.keys().collect();
+        assert_eq!(keys, vec!["run", "r", "list", "add", "a"]);
     }
 
     #[test]
