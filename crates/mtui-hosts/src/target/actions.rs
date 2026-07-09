@@ -26,13 +26,15 @@
 //! concurrent tasks hold **disjoint** mutable borrows — there is no shared
 //! output to guard and the lock is unnecessary.
 //!
-//! ### Deferred: the TTY spinner
+//! ### The TTY spinner
 //!
 //! Upstream's `run_parallel` optionally drives a `|/-\` TTY spinner labelled
-//! with a `desc`. Display concerns live in `mtui-cli` (Phase 6), so [`Command`]
-//! and [`run_parallel`] thread the `interactive` flag / `desc` seam through
-//! without rendering anything yet; behaviour is identical to a `desc=None`
-//! upstream call.
+//! with a `desc`. [`run_parallel`] starts a [`TtySpinner`](super::spinner) for
+//! the duration of the fan-out when a `desc` is given; it is a strict no-op off
+//! a TTY (tests, redirected output, `mtui-mcp`), so behaviour with `desc=None`
+//! (or off a terminal) is identical to the plain `join_all`. The spinner erases
+//! its frame on stop, and the serialised prompter's `suspend` guard erases it
+//! during an interactive read.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -45,9 +47,10 @@ use super::Target;
 /// Drives every future in `futures` to completion concurrently.
 ///
 /// The async replacement for upstream's `run_parallel` thread pool. An empty
-/// input returns immediately. `desc` is accepted to match upstream's spinner
-/// label seam but is not rendered here (display is Phase 6); it is only used for
-/// a `tracing` breadcrumb.
+/// input returns immediately. When `desc` is `Some`, a labelled
+/// [`TtySpinner`](super::spinner::TtySpinner) paints for the duration of the
+/// fan-out (a no-op off a TTY, so tests and `mtui-mcp` stay clean) and is
+/// stopped — erasing its frame — when the batch completes.
 ///
 /// Unlike upstream — whose first worker exception re-raises and cancels the rest
 /// — the per-target futures built by [`RunCommand`] and the `sftp_*_all`
@@ -64,10 +67,19 @@ where
     if futs.is_empty() {
         return;
     }
-    if let Some(d) = desc {
+    // Drive a labelled spinner for the batch; `TtySpinner` is a no-op off a TTY,
+    // so this stays silent in tests / MCP. Dropping it (or the explicit `stop`)
+    // erases the frame.
+    let mut spinner = desc.map(|d| {
         tracing::debug!(action = d, count = futs.len(), "running in parallel");
-    }
+        let mut s = super::spinner::TtySpinner::new(d);
+        s.start();
+        s
+    });
     join_all(futs).await;
+    if let Some(mut s) = spinner.take() {
+        s.stop();
+    }
 }
 
 /// A command to run across a group: one string for every host, or a per-host

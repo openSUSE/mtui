@@ -55,6 +55,16 @@ pub struct Session {
     /// `tracing_subscriber::reload` handle; headless callers and tests leave it
     /// `None`, so the command still logs the change but mutates nothing.
     log_level_sink: Option<LogLevelSink>,
+    /// Optional sink for best-effort desktop notifications (upstream
+    /// `prompt.notify_user`).
+    ///
+    /// [`notify_user`](Self::notify_user) calls this with the message and an
+    /// error flag when present. The Phase-6 REPL installs a callback backed by
+    /// `mtui-cli`'s `notification::notify_user` (a headless no-op); headless
+    /// callers (`mtui-mcp`) and tests leave it `None`, so a command that fires a
+    /// toast silently does nothing — keeping notifications a REPL-only courtesy
+    /// and `mtui-core` free of any dependency on the CLI notification backend.
+    notify_sink: Option<NotifySink>,
 }
 
 /// The log levels `set_log_level` accepts (upstream `info`/`warning`/`error`/
@@ -99,6 +109,11 @@ impl LogLevel {
 /// A callback the REPL installs to apply a runtime log-level change.
 pub type LogLevelSink = Box<dyn FnMut(LogLevel) + Send>;
 
+/// A callback the REPL installs to surface a desktop notification. Called with
+/// the message and `true` for error-class toasts (upstream's
+/// `stock_dialog-error` icon). Headless callers leave it unset.
+pub type NotifySink = Box<dyn FnMut(&str, bool) + Send>;
+
 impl Session {
     /// Builds a session for `config`, defaulting the display to stdout.
     ///
@@ -113,6 +128,7 @@ impl Session {
             interactive,
             should_exit: false,
             log_level_sink: None,
+            notify_sink: None,
         }
     }
 
@@ -127,6 +143,7 @@ impl Session {
             interactive,
             should_exit: false,
             log_level_sink: None,
+            notify_sink: None,
         }
     }
 
@@ -512,6 +529,31 @@ impl Session {
     pub fn apply_log_level(&mut self, level: LogLevel) -> bool {
         if let Some(sink) = self.log_level_sink.as_mut() {
             sink(level);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Installs the callback [`notify_user`](Self::notify_user) uses to surface a
+    /// desktop notification.
+    ///
+    /// The Phase-6 REPL wires this to `mtui-cli`'s `notification::notify_user`;
+    /// headless callers (`mtui-mcp`) and tests leave it unset, making
+    /// notifications a silent no-op.
+    pub fn set_notify_sink(&mut self, sink: NotifySink) {
+        self.notify_sink = Some(sink);
+    }
+
+    /// Surfaces a best-effort desktop notification through the installed sink, if
+    /// any (upstream `prompt.notify_user`).
+    ///
+    /// `error` selects the error-class toast (upstream's `stock_dialog-error`).
+    /// Returns `true` when a sink was present and invoked; `false` when none is
+    /// installed (headless/tests).
+    pub fn notify_user(&mut self, msg: &str, error: bool) -> bool {
+        if let Some(sink) = self.notify_sink.as_mut() {
+            sink(msg, error);
             true
         } else {
             false

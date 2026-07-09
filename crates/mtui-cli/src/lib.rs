@@ -9,6 +9,7 @@
 pub mod completer;
 pub mod highlighter;
 pub mod history;
+pub mod notification;
 pub mod prompt;
 pub mod repl;
 pub mod shell;
@@ -17,6 +18,7 @@ pub mod startup;
 pub use completer::MtuiCompleter;
 pub use highlighter::MtuiHighlighter;
 pub use history::file_backed_history;
+pub use notification::{display, notify_user};
 pub use prompt::MtuiPrompt;
 pub use repl::{Repl, step};
 pub use shell::{is_shell_line, run_shell};

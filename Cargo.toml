@@ -73,6 +73,11 @@ thiserror = "2"
 anyhow = "1"
 # terminal color (CommandPromptDisplay) — supports_color-gated ANSI wrapping
 owo-colors = "4"
+# optional desktop notifications (feature `notify`, Phase 6). Pure-Rust
+# freedesktop/DBus (Linux) + NSUserNotification (macOS) toast backend, keeping
+# the single-static-binary / no-Python-runtime contract. Best-effort + headless
+# no-op, so a build without the feature never pulls it.
+notify-rust = "4"
 # stable insertion-ordered map (TemplateRegistry entries) + per-registry id
 indexmap = "2"
 uuid = { version = "1", features = ["v4"] }

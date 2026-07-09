@@ -46,6 +46,7 @@ pub mod package_querier;
 pub mod parsers;
 pub mod repo_manager;
 pub mod reporter;
+pub mod spinner;
 
 pub use actions::{Command, RunCommand, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all};
 pub use arbiter::{HostArbiter, Owner, get_arbiter};
@@ -62,6 +63,7 @@ pub use package_querier::PackageQuerier;
 pub use parsers::{parse_os_release, parse_product, parse_system};
 pub use repo_manager::{RepoManager, RepoOp, SetRepo};
 pub use reporter::Reporter;
+pub use spinner::{Suspend, SuspendAsync, TtySpinner, suspend, suspend_async};
 
 use std::path::{Path, PathBuf};
 
@@ -157,6 +159,14 @@ pub struct Target {
     /// records `before`/`after` here. Kept as an ordered `Vec` for deterministic
     /// iteration; seeded via [`set_packages`](Target::set_packages).
     packages: Vec<Package>,
+    /// Optional interactive command-timeout prompt, applied to the transport in
+    /// [`connect`](Target::connect) via
+    /// [`SshConnection::with_timeout_prompt`](crate::connection::SshConnection::with_timeout_prompt).
+    /// `None` (the default, and always headless / under `mtui-mcp`) keeps a
+    /// no-output timeout an immediate abort; the composition root installs a
+    /// [`Prompter`](crate::prompter::Prompter)-backed prompt via
+    /// [`set_timeout_prompt`](Target::set_timeout_prompt) for the REPL.
+    timeout_prompt: Option<crate::connection::TimeoutPrompt>,
 }
 
 /// Builds the placeholder [`System`] a freshly-constructed [`Target`] carries
@@ -205,6 +215,7 @@ impl Target {
             pool_lock: None,
             rrid: String::new(),
             packages: Vec::new(),
+            timeout_prompt: None,
         }
     }
 
@@ -255,6 +266,7 @@ impl Target {
             pool_lock,
             rrid: String::new(),
             packages: Vec::new(),
+            timeout_prompt: None,
         }
     }
 
@@ -654,6 +666,17 @@ impl Target {
         self.packages = packages;
     }
 
+    /// Installs the interactive command-timeout prompt applied by the next
+    /// [`connect`](Target::connect).
+    ///
+    /// The composition root (`mtui-cli`) wires a
+    /// [`Prompter`](crate::prompter::Prompter)-backed prompt here for the REPL so
+    /// a stuck command asks the user whether to keep waiting; headless callers
+    /// (`mtui-mcp`) leave it unset and a timeout aborts immediately.
+    pub fn set_timeout_prompt(&mut self, prompt: crate::connection::TimeoutPrompt) {
+        self.timeout_prompt = Some(prompt);
+    }
+
     /// Queries the installed versions of the tracked packages and records them
     /// as each package's `current` version.
     ///
@@ -703,6 +726,12 @@ impl Target {
             .inspect_err(|e| {
                 tracing::error!(host = %self.hostname, error = %e, "connecting to target failed");
             })?;
+        // Wire the interactive command-timeout prompt when the composition root
+        // supplied one (REPL); headless targets leave it unset (immediate abort).
+        let conn = match &self.timeout_prompt {
+            Some(prompt) => conn.with_timeout_prompt(prompt.clone()),
+            None => conn,
+        };
         let conn: Box<dyn Connection> = Box::new(conn);
         // Build the operation lock over a clone of the live connection, mirroring
         // upstream `self._lock = TargetLock(self.connection, self.config)`. The

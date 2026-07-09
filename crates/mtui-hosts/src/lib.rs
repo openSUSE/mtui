@@ -20,19 +20,22 @@
 
 pub mod connection;
 pub mod error;
+pub mod prompter;
 pub mod target;
 
 #[cfg(feature = "shell")]
 pub use connection::ShellChannel;
 pub use connection::{
     CommandTimeout, Connection, HostKeyPolicy, MockConnection, MockSftpOp, SshConnection,
+    TimeoutPrompt,
 };
 pub use error::{HostError, Result};
+pub use prompter::{Prompter, Reader};
 pub use target::{
     Check, CheckArgs, Clock, Command, Doer, HostArbiter, HostPlan, HostsGroup, InstallOperation,
     LastOutput, Lockable, Operation, OperationGroup, Owner, POOL_LOCK_PATH, PackageQuerier,
-    PlanProvider, PoolLock, RemoteLock, RepoManager, RepoOp, RunCommand, SetRepo, SystemClock,
-    TARGET_LOCK_PATH, Target, TargetLock, UninstallOperation, get_arbiter, parse_os_release,
-    parse_product, parse_system, run_parallel, sftp_get_all, sftp_put_all, sftp_remove_all,
-    with_locked,
+    PlanProvider, PoolLock, RemoteLock, RepoManager, RepoOp, RunCommand, SetRepo, Suspend,
+    SystemClock, TARGET_LOCK_PATH, Target, TargetLock, TtySpinner, UninstallOperation, get_arbiter,
+    parse_os_release, parse_product, parse_system, run_parallel, sftp_get_all, sftp_put_all,
+    sftp_remove_all, suspend, with_locked,
 };

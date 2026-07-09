@@ -35,7 +35,9 @@
 //!   object-safe [`ShellChannel`] duplex over the PTY; the raw-`termios` local
 //!   terminal bridge that consumes it is a CLI concern (Phase 6).
 
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -62,6 +64,57 @@ const RETRIES: usize = 5;
 /// The exit-code sentinel upstream uses when a command produced no exit status
 /// (killed / channel lost). Kept in sync with [`CommandLog`]'s `-1` convention.
 const NO_EXIT_CODE: i16 = -1;
+
+/// An async prompt invoked when a command hits its no-output timeout window.
+///
+/// Called with the prompt text; resolves to the user's answer (empty / `y` to
+/// keep waiting, `n` to abort). The composition root (`mtui-cli`) wires a
+/// [`Prompter::ask`](crate::prompter::Prompter::ask) here so the prompt is
+/// serialised across parallel host tasks and suspends any live spinner. `None`
+/// (headless / `mtui-mcp`) leaves the timeout an immediate abort (upstream's
+/// `timeout_prompt=None`).
+pub type TimeoutPrompt = Arc<
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = std::io::Result<String>> + Send>> + Send + Sync,
+>;
+
+/// The outcome of a command-timeout: resume the wait loop or abort the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimeoutDecision {
+    /// Keep waiting for output (user answered empty / `y`).
+    KeepWaiting,
+    /// Abort with [`HostError::Timeout`] (user answered `n`, or headless).
+    Abort,
+}
+
+/// Decides what to do when a command hits its no-output timeout window.
+///
+/// Extracted from [`SshConnection::run`] so the wait/abort/headless-WARN policy
+/// is unit-testable without a live SSH channel. Mirrors upstream
+/// `connection.py`'s timeout branch: interactive + a prompt → ask (empty / `y`
+/// keep waiting, `n` abort); otherwise abort immediately and emit one WARN so
+/// the non-interactive silence is observable.
+async fn on_command_timeout(
+    hostname: &str,
+    command: &str,
+    interactive: bool,
+    prompt: Option<&TimeoutPrompt>,
+) -> TimeoutDecision {
+    if interactive && let Some(prompt) = prompt {
+        let text = format!("command '{command}' timed out on {hostname}; keep waiting? [Y/n] ");
+        let answer = prompt(text).await.unwrap_or_default();
+        if answer.trim().eq_ignore_ascii_case("n") {
+            return TimeoutDecision::Abort;
+        }
+        // Empty / `y` / anything else: keep waiting (upstream Enter/Y default).
+        return TimeoutDecision::KeepWaiting;
+    }
+    tracing::warn!(
+        host = %hostname,
+        command,
+        "command timed out with no output; aborting (non-interactive)",
+    );
+    TimeoutDecision::Abort
+}
 
 /// The russh client handler: its sole job is applying the [`HostKeyPolicy`] to
 /// the server's host key, mirroring paramiko's `MissingHostKeyPolicy`.
@@ -133,6 +186,13 @@ pub struct SshConnection {
     policy: HostKeyPolicy,
     timeout: CommandTimeout,
     handle: Option<Handle<ClientHandler>>,
+    /// Whether a TTY-backed user can answer the command-timeout prompt. `false`
+    /// (the default, and always under `mtui-mcp`) makes a no-output timeout
+    /// abort instead of asking. Mirrors upstream `Connection.interactive`.
+    interactive: bool,
+    /// Optional serialised prompt for the command-timeout branch. Wired from the
+    /// composition root; `None` keeps the timeout an immediate abort.
+    timeout_prompt: Option<TimeoutPrompt>,
 }
 
 impl std::fmt::Debug for SshConnection {
@@ -171,7 +231,23 @@ impl SshConnection {
             policy,
             timeout,
             handle: Some(handle),
+            interactive: false,
+            timeout_prompt: None,
         })
+    }
+
+    /// Enables the interactive command-timeout prompt on this connection.
+    ///
+    /// When set, a no-output timeout asks the user (via `prompt`, typically a
+    /// [`Prompter::ask`](crate::prompter::Prompter::ask) bound closure) whether
+    /// to keep waiting (empty / `y`) or abort (`n`), instead of aborting
+    /// immediately. Builder-style so the composition root can wire it after
+    /// `connect` without widening the object-safe [`Connection`] trait.
+    #[must_use]
+    pub fn with_timeout_prompt(mut self, prompt: TimeoutPrompt) -> Self {
+        self.interactive = true;
+        self.timeout_prompt = Some(prompt);
+        self
     }
 
     /// Returns the live handle or a [`HostError::Transport`] "not connected".
@@ -422,6 +498,8 @@ impl Connection for SshConnection {
             policy: self.policy,
             timeout: self.timeout,
             handle: None,
+            interactive: self.interactive,
+            timeout_prompt: self.timeout_prompt.clone(),
         })
     }
 
@@ -465,11 +543,28 @@ impl Connection for SshConnection {
 
         loop {
             match timeout(window, channel.wait()).await {
-                // No message within the no-output window -> stuck; abort.
+                // No message within the no-output window -> command looks stuck.
                 Err(_) => {
-                    return Err(HostError::Timeout {
-                        command: command.to_owned(),
-                    });
+                    // Interactive: ask the user whether to keep waiting. Empty /
+                    // `y` resumes the wait loop (upstream's Enter/Y default);
+                    // `n` aborts. Headless (no prompt / not interactive): abort
+                    // immediately, emitting one WARN so the silence is
+                    // observable (upstream's `timeout_prompt=None` branch).
+                    let decision = on_command_timeout(
+                        &self.hostname,
+                        command,
+                        self.interactive,
+                        self.timeout_prompt.as_ref(),
+                    )
+                    .await;
+                    match decision {
+                        TimeoutDecision::KeepWaiting => continue,
+                        TimeoutDecision::Abort => {
+                            return Err(HostError::Timeout {
+                                command: command.to_owned(),
+                            });
+                        }
+                    }
                 }
                 // Channel closed cleanly.
                 Ok(None) => break,
@@ -863,6 +958,72 @@ impl ShellChannel for SshShellChannel {
 mod tests {
     use super::*;
 
+    /// A prompt that always returns `answer`, recording whether it was called.
+    fn fixed_prompt(
+        answer: &'static str,
+        called: Arc<std::sync::atomic::AtomicBool>,
+    ) -> TimeoutPrompt {
+        Arc::new(move |_text: String| {
+            let called = Arc::clone(&called);
+            Box::pin(async move {
+                called.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(answer.to_owned())
+            }) as Pin<Box<dyn Future<Output = std::io::Result<String>> + Send>>
+        })
+    }
+
+    #[tokio::test]
+    async fn timeout_headless_aborts_without_prompting() {
+        // No prompt + not interactive: abort (and, in practice, WARN).
+        let decision = on_command_timeout("h", "sleep 999", false, None).await;
+        assert_eq!(decision, TimeoutDecision::Abort);
+    }
+
+    #[tokio::test]
+    async fn timeout_interactive_but_no_prompt_aborts() {
+        // interactive=true but prompt=None still degrades to abort.
+        let decision = on_command_timeout("h", "sleep 999", true, None).await;
+        assert_eq!(decision, TimeoutDecision::Abort);
+    }
+
+    #[tokio::test]
+    async fn timeout_prompt_empty_keeps_waiting() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let p = fixed_prompt("", Arc::clone(&called));
+        let decision = on_command_timeout("h", "sleep 999", true, Some(&p)).await;
+        assert_eq!(decision, TimeoutDecision::KeepWaiting);
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn timeout_prompt_y_keeps_waiting() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let p = fixed_prompt("Y\n", Arc::clone(&called));
+        let decision = on_command_timeout("h", "sleep 999", true, Some(&p)).await;
+        assert_eq!(decision, TimeoutDecision::KeepWaiting);
+    }
+
+    #[tokio::test]
+    async fn timeout_prompt_n_aborts() {
+        let called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let p = fixed_prompt("n", Arc::clone(&called));
+        let decision = on_command_timeout("h", "sleep 999", true, Some(&p)).await;
+        assert_eq!(decision, TimeoutDecision::Abort);
+        assert!(called.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn timeout_prompt_reader_error_keeps_waiting() {
+        // A read error is treated as the Enter/Y default (keep waiting), never a
+        // spurious abort.
+        let p: TimeoutPrompt = Arc::new(|_t: String| {
+            Box::pin(async move { Err(std::io::Error::other("eof")) })
+                as Pin<Box<dyn Future<Output = std::io::Result<String>> + Send>>
+        });
+        let decision = on_command_timeout("h", "sleep 999", true, Some(&p)).await;
+        assert_eq!(decision, TimeoutDecision::KeepWaiting);
+    }
+
     #[test]
     fn resolve_uses_explicit_port_and_defaults_for_unknown_host() {
         // A host that cannot appear in any real ~/.ssh/config: the resolver
@@ -922,6 +1083,8 @@ mod tests {
             policy: HostKeyPolicy::AutoAdd,
             timeout: CommandTimeout::default(),
             handle: None,
+            interactive: false,
+            timeout_prompt: None,
         };
         let s = format!("{conn:?}");
         assert!(s.contains("example.host"), "{s}");

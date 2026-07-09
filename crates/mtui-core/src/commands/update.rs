@@ -50,7 +50,10 @@ impl Command for Update {
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let noprepare = args.get_flag("noprepare");
         let newpackage = args.get_flag("newpackage");
-        drive(
+        // Upstream fires a desktop toast on both outcomes (`prompt.notify_user`);
+        // the RRID is read before the drive so it survives an error path.
+        let rrid = session.metadata().id();
+        let result = drive(
             session,
             args,
             PerformOp::Update {
@@ -58,7 +61,16 @@ impl Command for Update {
                 newpackage,
             },
         )
-        .await
+        .await;
+        match &result {
+            Ok(()) => {
+                session.notify_user(&format!("updating {rrid} finished"), false);
+            }
+            Err(_) => {
+                session.notify_user(&format!("updating {rrid} failed"), true);
+            }
+        }
+        result
     }
 }
 
@@ -88,6 +100,32 @@ mod tests {
         let args = matches(&Update, &["--noprepare"]);
         Update.call(&mut session, &args).await.unwrap();
         assert_eq!(session.targets().names(), vec!["h1"]);
+    }
+
+    #[tokio::test]
+    async fn success_fires_finished_notification() {
+        use std::sync::{Arc, Mutex};
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let seen = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
+        let sink = Arc::clone(&seen);
+        session.set_notify_sink(Box::new(move |msg: &str, err: bool| {
+            sink.lock().unwrap().push((msg.to_owned(), err));
+        }));
+        let args = matches(&Update, &["--noprepare"]);
+        Update.call(&mut session, &args).await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "expected exactly one toast: {seen:?}");
+        assert!(seen[0].0.contains("finished"), "got: {:?}", seen[0]);
+        assert!(!seen[0].1, "success toast must not be error-class");
+    }
+
+    #[tokio::test]
+    async fn no_notification_when_sink_unset() {
+        // Headless (no sink): notify_user is a no-op, the command still succeeds.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(&Update, &["--noprepare"]);
+        assert!(!session.notify_user("probe", false));
+        Update.call(&mut session, &args).await.unwrap();
     }
 
     #[tokio::test]

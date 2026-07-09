@@ -41,6 +41,15 @@ fn main() -> anyhow::Result<()> {
     let registry = Arc::new(register_all());
     let mut session = Session::new(Config::default(), true);
 
+    // Composition root: wire the REPL-only desktop-notification sink to the
+    // headless-safe `notification::notify_user`. `mtui-mcp` never installs it, so
+    // toasts stay a REPL courtesy (upstream `prompt.notify_user`). The backend is
+    // itself a no-op off a TTY / without the `notify` feature, so this is safe
+    // even when the REPL runs piped.
+    session.set_notify_sink(Box::new(|msg: &str, error: bool| {
+        mtui_cli::notify_user(msg, error);
+    }));
+
     // Seed the session from `-a`/`-k` (load the update) and `--sut` (add hosts)
     // before the loop — the pre-`cmdloop` half of upstream `run_mtui`. A failed
     // explicit update exits here rather than entering an empty REPL.

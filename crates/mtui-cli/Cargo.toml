@@ -41,3 +41,12 @@ mtui-testreport.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Optional desktop-notification backend (feature `notify`); a headless no-op
+# without it (see `notification.rs`).
+notify-rust = { workspace = true, optional = true }
+
+[features]
+default = []
+# Desktop toast notifications on start/finish of long operations (upstream
+# `notify` extra). No-op when the process is headless (no TTY / no display).
+notify = ["dep:notify-rust"]
