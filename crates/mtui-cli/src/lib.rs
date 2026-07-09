@@ -6,8 +6,10 @@
 //! REPL as a library lets the `tests/**` suite (and the P6.8 test task) exercise
 //! the loop's [`step`](repl::step) seam without a TTY.
 
+pub mod completer;
 pub mod prompt;
 pub mod repl;
 
+pub use completer::MtuiCompleter;
 pub use prompt::MtuiPrompt;
 pub use repl::{Repl, step};

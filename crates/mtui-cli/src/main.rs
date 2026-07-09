@@ -7,6 +7,8 @@
 //! (P6.2). Non-interactive single-command mode lands in P6.7; full config
 //! loading + `Args` merge is Phase-6 config work.
 
+use std::sync::{Arc, Mutex};
+
 use clap::Parser;
 use mtui_cli::Repl;
 use mtui_config::Config;
@@ -29,10 +31,15 @@ fn main() -> anyhow::Result<()> {
 
     // Full config loading + `Args` merge is Phase-6 config work; P6.2 uses the
     // defaults so the REPL is usable.
-    let mut session = Session::new(Config::default(), true);
-    let mut repl = Repl::new(register_all());
+    //
+    // The session and registry are shared behind `Arc`/`Arc<Mutex>` so the tab
+    // completer (P6.3), owned by the reedline editor, reads the same live
+    // session the loop dispatches against (see `Repl`).
+    let session = Arc::new(Mutex::new(Session::new(Config::default(), true)));
+    let registry = Arc::new(register_all());
+    let mut repl = Repl::new(registry, session);
 
-    runtime.block_on(repl.run(&mut session))
+    runtime.block_on(repl.run())
 }
 
 /// Initialises the `tracing` subscriber.

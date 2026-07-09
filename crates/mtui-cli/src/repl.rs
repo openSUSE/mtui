@@ -22,56 +22,129 @@
 //! [`MtuiPrompt`] later without changing this loop.
 
 use std::ops::ControlFlow;
+use std::sync::{Arc, Mutex};
 
 use mtui_core::{EngineError, Registry, Session, dispatch_line};
-use reedline::{Reedline, Signal};
+use reedline::{
+    ColumnarMenu, Emacs, KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu,
+    Signal, default_emacs_keybindings,
+};
 
+use crate::completer::MtuiCompleter;
 use crate::prompt::MtuiPrompt;
+
+/// The reedline menu name the Tab keybinding activates.
+const COMPLETION_MENU: &str = "completion_menu";
 
 /// The banner printed once before the first prompt (upstream
 /// `cmdloop(intro="Maintenance Test Update Installer")`).
 const INTRO: &str = "Maintenance Test Update Installer";
 
 /// The interactive REPL, owning the line editor and the command registry.
+///
+/// The registry and session are held behind [`Arc`]/[`Arc<Mutex>`] so the
+/// [`MtuiCompleter`] (owned by the [`Reedline`] editor) can share them: reedline
+/// hands the completer no session, so it reads the live one through the same
+/// `Arc<Mutex<Session>>` this loop drives. Completion runs *during*
+/// `read_line`; dispatch runs *after* it returns, so the two never hold the lock
+/// at once.
 pub struct Repl {
     line_editor: Reedline,
-    registry: Registry,
+    registry: Arc<Registry>,
+    session: Arc<Mutex<Session>>,
     prompt: MtuiPrompt,
 }
 
 impl Repl {
-    /// Builds a REPL over `registry` with a bare line editor.
+    /// Builds a REPL over `registry` and `session`, wiring tab completion.
     ///
-    /// The editor carries no completer/history/highlighter yet — those are
-    /// P6.3/P6.4, added to this builder later.
+    /// The line editor is given an [`MtuiCompleter`] sharing `registry`/`session`
+    /// plus a columnar completion menu bound to <kbd>Tab</kbd>. History (P6.4),
+    /// the dynamic prompt/toolbar (P6.5), and the prompter (P6.6) slot into this
+    /// builder later without changing the loop.
     #[must_use]
-    pub fn new(registry: Registry) -> Self {
+    pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
+        let completer = Box::new(MtuiCompleter::new(
+            Arc::clone(&registry),
+            Arc::clone(&session),
+        ));
+        let menu = Box::new(ColumnarMenu::default().with_name(COMPLETION_MENU));
+
+        let mut keybindings = default_emacs_keybindings();
+        keybindings.add_binding(
+            KeyModifiers::NONE,
+            KeyCode::Tab,
+            ReedlineEvent::UntilFound(vec![
+                ReedlineEvent::Menu(COMPLETION_MENU.to_owned()),
+                ReedlineEvent::MenuNext,
+            ]),
+        );
+        let edit_mode = Box::new(Emacs::new(keybindings));
+
+        let line_editor = Reedline::create()
+            .with_completer(completer)
+            .with_menu(ReedlineMenu::EngineCompleter(menu))
+            .with_edit_mode(edit_mode);
+
         Self {
-            line_editor: Reedline::create(),
+            line_editor,
             registry,
+            session,
             prompt: MtuiPrompt,
         }
     }
 
-    /// Runs the read → dispatch loop until `quit`/Ctrl-D, driving `session`.
+    /// Runs the read → dispatch loop until `quit`/Ctrl-D, driving the session.
     ///
     /// # Errors
     ///
     /// Propagates a fatal editor I/O error from [`Reedline::read_line`] (e.g. a
     /// broken terminal). Command failures are *not* errors here: they are
     /// rendered to the session display and the loop continues.
-    pub async fn run(&mut self, session: &mut Session) -> anyhow::Result<()> {
-        session.display.println(INTRO);
+    ///
+    /// The session guard is held across `step`'s `.await`
+    /// (`clippy::await_holding_lock`, allowed below). It is sound: this REPL runs
+    /// on a current-thread `block_on`, and the editor's synchronous `read_line`
+    /// (the only other lock holder, via the completer) has already returned
+    /// before we lock. Nothing else contends — no host tasks are in flight
+    /// mid-line — so the guard can never block another task at the await point. A
+    /// `tokio::sync::Mutex` is the usual remedy, but its `blocking_lock` panics
+    /// inside `read_line`'s runtime context and its async `lock` is unreachable
+    /// from the synchronous completer, so the std `Mutex` + a scoped allow is the
+    /// correct fit for this single-threaded editor↔dispatch bridge.
+    #[allow(clippy::await_holding_lock)]
+    pub async fn run(&mut self) -> anyhow::Result<()> {
+        {
+            let mut session = self
+                .session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            session.display.println(INTRO);
+        }
 
         loop {
             match self.line_editor.read_line(&self.prompt)? {
                 Signal::Success(line) => {
-                    if step(&self.registry, session, &line).await.is_break() {
+                    // Lock only for the dispatch; the completer's own lock during
+                    // `read_line` was released before this returned. (Guard held
+                    // across the await — justified on `run`'s doc comment.)
+                    let should_break = {
+                        let mut session = self
+                            .session
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        step(&self.registry, &mut session, &line).await.is_break()
+                    };
+                    if should_break {
                         break;
                     }
                 }
                 // Ctrl-C on a partial line: clear it and reprompt, never exit.
                 Signal::CtrlC => {
+                    let mut session = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     session.display.println("");
                 }
                 // Ctrl-D: graceful session exit (upstream EOF → quit).
