@@ -881,6 +881,46 @@ def test_incident_jobs_include_obsoleted():
     assert rows[0].result == "obsoleted"
 
 
+@responses.activate
+def test_incident_jobs_captures_job_state():
+    """The job ``state`` is kept so callers can tell pending from failed.
+
+    A job that has not finished carries result ``none``; without its
+    state (scheduled/running) the openqa_jobs command could not
+    distinguish in-progress work from a genuine failure.
+    """
+    responses.add(
+        responses.GET,
+        f"{OPENQA}/api/v1/jobs",
+        json={
+            "jobs": [
+                {
+                    "id": 4,
+                    "test": "mau_extratests",
+                    "result": "none",
+                    "state": "running",
+                    "settings": {"ARCH": "x86_64"},
+                },
+                {
+                    "id": 5,
+                    "test": "fips_smoke",
+                    "result": "passed",
+                    "state": "done",
+                    "settings": {"ARCH": "x86_64"},
+                },
+            ]
+        },
+        status=200,
+    )
+
+    rows = oqa_search.incident_jobs(":git:5137:libica", OPENQA)
+
+    by_test = {r.test: r for r in rows}
+    assert by_test["mau_extratests"].state == "running"
+    assert by_test["mau_extratests"].result == "none"
+    assert by_test["fips_smoke"].state == "done"
+
+
 def test_incident_jobs_empty_build_makes_no_request():
     """A falsy build short-circuits with no HTTP call."""
     assert oqa_search.incident_jobs("", OPENQA) == []

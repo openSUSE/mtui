@@ -213,6 +213,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `openqa_jobs --failed` no longer lists still-running or scheduled jobs as
+  failures. openQA reports an unfinished job's result as `none`, which the
+  filter treated as "not passing" — during active testing an in-progress
+  build looked like it had a dozen failures (all red, counted as `none=12`
+  in the summary), risking a wrong verdict. Unfinished jobs are now
+  excluded from `--failed`, and the listing shows their actual state
+  (`running`, `scheduled`, ...) in yellow instead of a red `none`. When the
+  filter leaves nothing, the message now distinguishes an in-progress build
+  ("No failed openQA jobs ...; 12 of 12 still pending") from a build with no
+  jobs at all.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
