@@ -7,3 +7,6 @@
 
 # Upstream mtui reference clone (behavioral reference, not part of this repo)
 python-mtui/
+
+# Local planning artifacts (work aids, not part of the repo)
+plans/
