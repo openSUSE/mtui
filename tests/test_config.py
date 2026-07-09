@@ -257,17 +257,32 @@ def test_ssl_verify_explicit_true_equals_unset_default(tmpdir, monkeypatch):
     assert config.Config(cfg_file).ssl_verify == "/etc/ssl/ca-bundle.pem"
 
 
-def test_ssl_verify_blank_keeps_verification_off_with_warning(
-    tmpdir, caplog, monkeypatch
-):
-    """A blank value historically disabled verification; that must survive."""
+def test_ssl_verify_blank_treated_as_unset_stays_secure(tmpdir, caplog, monkeypatch):
+    """A blank value must NOT disable TLS verification.
+
+    ``ssl_verify =`` is almost always an unfinished edit, not intent.
+    Historically the blank passed through as a falsy ``verify`` and turned
+    certificate verification off for every HTTPS call (requests treats
+    ""/False as CERT_NONE). It now falls back to the secure default, with
+    a warning; only an explicit false spelling disables verification.
+    """
     monkeypatch.setattr(config, "system_ca_bundle", lambda: None)
     cfg_file = Path(tmpdir.join("ssl.cfg"))
     cfg_file.write_text("[mtui]\nssl_verify =\n")
     with caplog.at_level("WARNING", logger="mtui.config"):
         cfg = config.Config(cfg_file)
-    assert cfg.ssl_verify is False
+    assert cfg.ssl_verify is True
     assert any("blank ssl_verify" in r.message for r in caplog.records)
+
+
+def test_ssl_verify_blank_prefers_system_bundle(tmpdir, caplog, monkeypatch):
+    """The blank fallback is the same default as an unset option."""
+    monkeypatch.setattr(config, "system_ca_bundle", lambda: "/etc/ssl/ca-bundle.pem")
+    cfg_file = Path(tmpdir.join("ssl.cfg"))
+    cfg_file.write_text("[mtui]\nssl_verify =  \n")
+    with caplog.at_level("WARNING", logger="mtui.config"):
+        cfg = config.Config(cfg_file)
+    assert cfg.ssl_verify == "/etc/ssl/ca-bundle.pem"
 
 
 def test_unexpected_fixup_error_keeps_traceback(tmpdir, caplog):
