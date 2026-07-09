@@ -133,6 +133,35 @@ def test_run_command_success(mock_ssh_client, mock_ssh_config, mock_path):
     mock_session.exec_command.assert_called_once_with("ls -l")
 
 
+def test_run_tolerates_non_utf8_output(mock_ssh_client, mock_ssh_config, mock_path):
+    """Non-UTF-8 bytes in command output must not blow up run().
+
+    Command output is arbitrary bytes (Latin-1 locales, binary dumps, odd
+    rpm metadata). The final decode used to be strict, so one bad byte
+    raised UnicodeDecodeError out of run(); Target.run() swallowed it and
+    recorded a successful command as failed (exitcode -1) with its output
+    lost. Undecodable bytes must instead be replaced and the rest kept.
+    """
+    conn = Connection("test_host", 22, 300)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+
+    mock_session.recv_exit_status.return_value = 0
+    # \xe9 is Latin-1 'é', invalid as a UTF-8 sequence here.
+    mock_session.recv.side_effect = [b"caf\xe9 ok\n", b""]
+    mock_session.recv_stderr.side_effect = [b"warn\xff\n", b""]
+    mock_session.recv_ready.side_effect = [True, False]
+    mock_session.recv_stderr_ready.side_effect = [True, False]
+
+    with patch("select.select", return_value=([mock_session], [], [])):
+        exit_code = conn.run("rpm -qi weird-package")
+
+    assert exit_code == 0
+    assert conn.stdout == "caf� ok\n"
+    assert conn.stderr == "warn�\n"
+
+
 def test_run_closes_stdin_after_exec(mock_ssh_client, mock_ssh_config, mock_path):
     """run() must close the channel's write half so the remote command's
     stdin gets EOF and can't block forever waiting for input."""

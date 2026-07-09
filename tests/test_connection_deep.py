@@ -237,6 +237,37 @@ def test_shell_handles_stdin_branch(
         conn.shell()
 
 
+def test_shell_tolerates_split_multibyte_and_invalid_bytes(
+    mock_ssh_client, mock_ssh_config, mock_path, monkeypatch
+):
+    """``shell()`` must survive non-UTF-8 output and chunk-split characters.
+
+    The PTY stream arrives in arbitrary 1024-byte chunks; a strict
+    per-chunk decode raised ``UnicodeDecodeError`` on a multibyte
+    character straddling a chunk boundary (or on any genuinely invalid
+    byte), killing the interactive session mid-use. The incremental
+    decoder buffers the split sequence and replaces the bad byte.
+    """
+    conn = Connection("h", 22, 300)
+    sess = MagicMock()
+    # 'é' (0xC3 0xA9) split across two chunks, plus a lone invalid 0xFF.
+    sess.recv.side_effect = [b"caf\xc3", b"\xa9 ok \xff!", b""]
+    mock_ssh_client.get_transport.return_value.open_session.return_value = sess
+    _stub_terminal(monkeypatch)
+    fake_stdout = MagicMock()
+    monkeypatch.setattr("mtui.hosts.connection.connection.sys.stdout", fake_stdout)
+
+    with patch(
+        "mtui.hosts.connection.connection.select.select",
+        return_value=([sess], [], []),
+    ):
+        conn.shell()
+
+    written = "".join(c.args[0] for c in fake_stdout.write.call_args_list)
+    assert "café ok " in written  # the split character survived intact
+    assert "�!" in written  # the invalid byte was replaced, not fatal
+
+
 # ---------------------------------------------------------------------------
 # __sftp_open returns None on AttributeError (line 523)
 # ---------------------------------------------------------------------------
