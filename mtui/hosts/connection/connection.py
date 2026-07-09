@@ -5,6 +5,7 @@ functionality for running commands, transferring files, and opening
 remote shells on a remote host.
 """
 
+import codecs
 import errno
 import logging
 import select
@@ -479,8 +480,12 @@ class Connection:
         exitcode = session.recv_exit_status()
 
         self.close_session(session)
-        self.stdout = stdout.decode("utf-8")
-        self.stderr = stderr.decode("utf-8")
+        # "replace", not strict: command output is arbitrary bytes (binary
+        # dumps, non-UTF-8 locales, odd rpm metadata). A strict decode would
+        # raise here and turn a successful command into a phantom failure
+        # with its output lost -- mirror the tolerant per-line decode above.
+        self.stdout = stdout.decode("utf-8", "replace")
+        self.stderr = stderr.decode("utf-8", "replace")
         return exitcode
 
     def __invoke_shell(self, width: int, height: int) -> Channel | None:
@@ -522,6 +527,13 @@ class Connection:
             tty.setraw(sys.stdin.fileno())
             tty.setcbreak(sys.stdin.fileno())
 
+            # The PTY stream arrives in arbitrary 1024-byte chunks, so a
+            # plain per-chunk strict decode would raise on any non-UTF-8
+            # byte -- and even on a valid multibyte character straddling a
+            # chunk boundary -- killing the interactive shell mid-use. The
+            # incremental decoder buffers partial sequences across chunks
+            # and replaces genuinely invalid bytes instead.
+            decoder = codecs.getincrementaldecoder("utf-8")("replace")
             while True:
                 r, _, _ = select.select([session, sys.stdin], [], [])
                 if session in r:
@@ -529,7 +541,7 @@ class Connection:
                         x = session.recv(1024)
                         if len(x) == 0:
                             break
-                        sys.stdout.write(x.decode())
+                        sys.stdout.write(decoder.decode(x))
                         sys.stdout.flush()
                     except TimeoutError:
                         pass

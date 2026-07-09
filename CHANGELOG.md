@@ -223,6 +223,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   filter leaves nothing, the message now distinguishes an in-progress build
   ("No failed openQA jobs ...; 12 of 12 still pending") from a build with no
   jobs at all.
+- A command whose output contains non-UTF-8 bytes (a Latin-1 locale, `rpm`
+  metadata with odd bytes, `cat` of a binary) is no longer recorded as
+  failed. The final decode of the captured stdout/stderr was strict, so a
+  single invalid byte raised `UnicodeDecodeError` out of the SSH run; the
+  command — which may have exited 0 — was then logged as "failed to run"
+  with exit code -1 and its whole output lost. Undecodable bytes are now
+  replaced (U+FFFD) and the rest of the output is preserved, matching the
+  tolerant per-line debug logging that already existed. The interactive
+  `shell` mirror had the same defect, plus a sharper edge: it decoded each
+  1024-byte chunk separately, so even a valid multibyte character straddling
+  a chunk boundary killed the shell; it now uses an incremental decoder.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
