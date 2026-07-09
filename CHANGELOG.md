@@ -257,6 +257,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   still closed it, cutting SSH host connections out from under the active
   client's command. Staleness is now re-checked immediately before each
   eviction, so a just-re-activated session is spared.
+- Concurrent `mtui-mcp` commands no longer race on the shared `mtui` logger
+  level, which could silently drop captured `INFO` log lines from a reply.
+  Two overlapping calls (different templates or different client sessions)
+  each lowered/restored the process-global level around their log capture;
+  the first call to finish restored the stricter level while the other was
+  still running, filtering its remaining INFO records before the capture
+  handler saw them. The lowering is now reference-counted, so the level is
+  restored only when the last concurrent capture ends.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
