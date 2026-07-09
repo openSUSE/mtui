@@ -677,6 +677,15 @@ impl Target {
         self.timeout_prompt = Some(prompt);
     }
 
+    /// Whether an interactive command-timeout prompt is installed (test seam for
+    /// the [`HostsGroup::set_prompter`](crate::HostsGroup::set_prompter) /
+    /// [`Session`] push-down).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn has_timeout_prompt(&self) -> bool {
+        self.timeout_prompt.is_some()
+    }
+
     /// Queries the installed versions of the tracked packages and records them
     /// as each package's `current` version.
     ///

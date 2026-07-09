@@ -106,6 +106,27 @@ impl Prompter {
         let _quiet = suspend_async();
         (self.reader)(text.to_owned()).await
     }
+
+    /// Builds a [`TimeoutPrompt`](crate::connection::TimeoutPrompt) that routes
+    /// the SSH command-timeout question through this prompter's serialised
+    /// [`ask`](Prompter::ask).
+    ///
+    /// The single place the boxed-closure shape lives, so the composition root
+    /// (`Session` → [`Target::set_timeout_prompt`]) and the serial-barrier path
+    /// both wire the same serialised prompt (spinner-suspend + cross-task lock)
+    /// instead of a bare closure. Upstream `Target.connect` passes
+    /// `self._prompter.ask`; this is the Rust analogue.
+    ///
+    /// [`Target::set_timeout_prompt`]: crate::Target::set_timeout_prompt
+    #[must_use]
+    pub fn as_timeout_prompt(&self) -> crate::connection::TimeoutPrompt {
+        let this = self.clone();
+        Arc::new(move |text: String| {
+            let this = this.clone();
+            Box::pin(async move { this.ask(&text).await })
+                as Pin<Box<dyn Future<Output = io::Result<String>> + Send>>
+        })
+    }
 }
 
 #[cfg(test)]
@@ -211,6 +232,17 @@ mod tests {
         }));
         assert_eq!(p.ask("q").await.unwrap(), "answer");
         s.stop();
+    }
+
+    #[tokio::test]
+    async fn as_timeout_prompt_routes_through_ask() {
+        let _serial = crate::target::spinner::TEST_SERIAL.lock().await;
+        let p = Prompter::new(Arc::new(|text: String| {
+            Box::pin(async move { Ok(format!("via-ask:{text}")) })
+                as Pin<Box<dyn Future<Output = io::Result<String>> + Send>>
+        }));
+        let tp = p.as_timeout_prompt();
+        assert_eq!(tp("q".to_owned()).await.unwrap(), "via-ask:q");
     }
 
     #[tokio::test]

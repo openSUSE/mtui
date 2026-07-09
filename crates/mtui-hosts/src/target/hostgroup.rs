@@ -74,6 +74,18 @@ pub struct HostsGroup {
     /// supplies the concrete adapter. When absent, [`OperationGroup::plans`]
     /// returns [`HostError::NoPlanProvider`] — the update workflow is unwired.
     plan_provider: Option<Arc<dyn PlanProvider>>,
+    /// The session-level serialised [`Prompter`](crate::Prompter), or `None`
+    /// under headless callers (`mtui-mcp`).
+    ///
+    /// Pushed down from the composition root (`mtui-core::Session`) via
+    /// [`set_prompter`](Self::set_prompter), which mirrors
+    /// [`set_rrid`](Self::set_rrid): it stores the prompter on the group (for the
+    /// serial-barrier Enter prompt in [`RunCommand`]) **and** installs the
+    /// derived command-timeout prompt on every member [`Target`] via
+    /// [`Target::set_timeout_prompt`]. `None` keeps the serial barrier
+    /// back-to-back and a command timeout an immediate abort (upstream
+    /// `prompter=None`).
+    prompter: Option<crate::Prompter>,
 }
 
 impl HostsGroup {
@@ -91,6 +103,7 @@ impl HostsGroup {
             data,
             interactive,
             plan_provider: None,
+            prompter: None,
         }
     }
 
@@ -287,7 +300,16 @@ impl HostsGroup {
     /// (upstream's dict assignment is last-writer-wins). The connection-building
     /// and refhosts-from-testplatform autoconnect stay in the `add_host` command
     /// / composition root; this is purely the container mutation.
-    pub fn add(&mut self, target: Target) {
+    ///
+    /// When the group already carries a [`Prompter`](crate::Prompter) (installed
+    /// via [`set_prompter`](Self::set_prompter)), the incoming target inherits the
+    /// derived command-timeout prompt, so a target moved in by
+    /// [`merge`](Self::merge) (the split→run→restore round-trip) or added after
+    /// the prompter was set still surfaces the interactive timeout prompt.
+    pub fn add(&mut self, mut target: Target) {
+        if let Some(prompter) = self.prompter.as_ref() {
+            target.set_timeout_prompt(prompter.as_timeout_prompt());
+        }
         self.data.insert(target.hostname().to_owned(), target);
     }
 
@@ -308,7 +330,7 @@ impl HostsGroup {
     /// [`Command::PerHost`] map (hosts absent from the map are skipped). See
     /// [`RunCommand`].
     pub async fn run(&mut self, cmd: impl Into<Command>) {
-        RunCommand::new(&mut self.data, cmd, self.interactive)
+        RunCommand::new(&mut self.data, cmd, self.interactive, self.prompter.clone())
             .run()
             .await;
     }
@@ -407,6 +429,26 @@ impl HostsGroup {
         for target in self.data.values_mut() {
             target.set_rrid(rrid.clone());
         }
+    }
+
+    /// Installs the session-level serialised [`Prompter`](crate::Prompter) on the
+    /// group and every member host.
+    ///
+    /// The single push-down point for interactive prompting, mirroring
+    /// [`set_rrid`](Self::set_rrid): it stores the prompter on the group (used by
+    /// the serial-barrier Enter prompt in [`RunCommand`]) and installs the
+    /// derived command-timeout prompt on each member [`Target`] via
+    /// [`Target::set_timeout_prompt`], so a target connected *after* this call
+    /// (and one already connected via the builder) both surface the timeout
+    /// prompt. The composition root (`mtui-core::Session`) calls this when a
+    /// prompter is present; headless callers (`mtui-mcp`) never do, leaving the
+    /// serial barrier back-to-back and command timeouts an immediate abort.
+    pub fn set_prompter(&mut self, prompter: crate::Prompter) {
+        let timeout_prompt = prompter.as_timeout_prompt();
+        for target in self.data.values_mut() {
+            target.set_timeout_prompt(timeout_prompt.clone());
+        }
+        self.prompter = Some(prompter);
     }
 
     /// Fans a repository add/remove out across every host in the group.
@@ -848,6 +890,46 @@ mod tests {
         g.add(enabled("h2"));
         assert_eq!(g.names(), vec!["h1".to_owned(), "h2".to_owned()]);
         assert!(g.contains("h2"));
+    }
+
+    /// A no-op [`Prompter`] whose reader returns Enter without touching stdin.
+    fn noop_prompter() -> crate::Prompter {
+        crate::Prompter::new(std::sync::Arc::new(|_t: String| {
+            Box::pin(async move { Ok(String::new()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }))
+    }
+
+    #[test]
+    fn set_prompter_installs_timeout_prompt_on_all_members() {
+        let mut g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
+        assert!(!g.get("h1").unwrap().has_timeout_prompt());
+
+        g.set_prompter(noop_prompter());
+
+        assert!(g.get("h1").unwrap().has_timeout_prompt());
+        assert!(g.get("h2").unwrap().has_timeout_prompt());
+    }
+
+    #[test]
+    fn add_after_set_prompter_inherits_timeout_prompt() {
+        let mut g = HostsGroup::new(vec![enabled("h1")], true);
+        g.set_prompter(noop_prompter());
+        // A host added (or merged) after the prompter was set still gets it, so a
+        // split→run→restore round-trip never loses the interactive timeout prompt.
+        g.add(enabled("h2"));
+        assert!(g.get("h2").unwrap().has_timeout_prompt());
+    }
+
+    #[test]
+    fn merge_carries_prompter_to_incoming_hosts() {
+        let mut g = HostsGroup::new(vec![enabled("h1")], true);
+        g.set_prompter(noop_prompter());
+        let other = HostsGroup::new(vec![enabled("h2")], true);
+        g.merge(other);
+        assert!(g.get("h2").unwrap().has_timeout_prompt());
     }
 
     #[test]

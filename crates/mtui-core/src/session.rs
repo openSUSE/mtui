@@ -15,7 +15,7 @@
 use mtui_config::Config;
 use mtui_datasources::http::VerifyPolicy;
 use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig};
-use mtui_hosts::{HostsGroup, Target};
+use mtui_hosts::{HostsGroup, Prompter, Target};
 use mtui_testreport::{TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{ExecutionMode, TargetState, Workflow};
@@ -65,6 +65,19 @@ pub struct Session {
     /// toast silently does nothing — keeping notifications a REPL-only courtesy
     /// and `mtui-core` free of any dependency on the CLI notification backend.
     notify_sink: Option<NotifySink>,
+    /// The session-level serialised interactive [`Prompter`], or `None` under
+    /// headless callers (`mtui-mcp`).
+    ///
+    /// The composition root (`mtui-cli`'s `main.rs`) installs a
+    /// [`Prompter::stdin`]-backed prompter via [`set_prompter`](Self::set_prompter)
+    /// for the REPL; `mtui-mcp` leaves it unset (upstream `prompter=None`). It is
+    /// pushed down two ways: the command-timeout prompt onto each freshly-built
+    /// [`Target`] in [`connect_and_add_hosts`](Self::connect_and_add_hosts), and
+    /// onto the active report's [`HostsGroup`] via
+    /// [`HostsGroup::set_prompter`] (for the serial-barrier Enter prompt). When
+    /// `None`, a command timeout aborts immediately and serial hosts run
+    /// back-to-back.
+    prompter: Option<Prompter>,
 }
 
 /// The log levels `set_log_level` accepts (upstream `info`/`warning`/`error`/
@@ -129,6 +142,7 @@ impl Session {
             should_exit: false,
             log_level_sink: None,
             notify_sink: None,
+            prompter: None,
         }
     }
 
@@ -144,6 +158,7 @@ impl Session {
             should_exit: false,
             log_level_sink: None,
             notify_sink: None,
+            prompter: None,
         }
     }
 
@@ -355,7 +370,20 @@ impl Session {
     /// sees `connect` short-circuit as a no-op.
     async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) {
         let config = self.config.clone();
+        // Snapshot the command-timeout prompt (a `Clone`-able closure) before the
+        // connect loop: a `&Session`/`&Prompter` borrow held across the connect
+        // `.await` would make this future non-`Send`, which `Command::call`
+        // requires. `None` (headless / `mtui-mcp`) leaves the timeout an
+        // immediate abort (upstream `prompter=None`).
+        let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
+        let prompter = self.prompter.clone();
         let targets = self.targets_mut();
+        // Ensure the (possibly freshly-loaded) active group carries the prompter
+        // so its serial-barrier Enter prompt fires; a group built by a later
+        // `load_update` would otherwise start without it.
+        if let Some(prompter) = prompter {
+            targets.set_prompter(prompter);
+        }
         for host in hosts {
             let mut target = Target::new(
                 &config,
@@ -364,6 +392,11 @@ impl Session {
                 ExecutionMode::Parallel,
             );
             target.set_rrid(rrid.to_owned());
+            // Wire the interactive command-timeout prompt before connecting so
+            // `Target::connect` applies it to the transport (REPL only).
+            if let Some(tp) = timeout_prompt.as_ref() {
+                target.set_timeout_prompt(tp.clone());
+            }
             match target.connect().await {
                 Ok(()) => targets.add(target),
                 Err(e) => warn!(host = %host, "connect failed, skipping: {e}"),
@@ -559,6 +592,28 @@ impl Session {
             false
         }
     }
+
+    /// Installs the session-level serialised interactive [`Prompter`].
+    ///
+    /// The composition root (`mtui-cli`'s `main.rs`) wires a
+    /// [`Prompter::stdin`](mtui_hosts::Prompter::stdin)-backed prompter here for
+    /// the REPL; `mtui-mcp` leaves it unset. Also pushes the prompter onto the
+    /// active report's [`HostsGroup`] so any already-connected hosts (and the
+    /// serial-barrier Enter prompt) pick it up immediately; freshly-connected
+    /// hosts inherit the derived command-timeout prompt via
+    /// [`connect_and_add_hosts`](Self::connect_and_add_hosts).
+    pub fn set_prompter(&mut self, prompter: Prompter) {
+        // Push onto the active report's group first (already-connected hosts +
+        // the serial-barrier prompt), then retain a clone for future connects.
+        self.targets_mut().set_prompter(prompter.clone());
+        self.prompter = Some(prompter);
+    }
+
+    /// The session-level serialised [`Prompter`], if installed.
+    #[must_use]
+    pub fn prompter(&self) -> Option<&Prompter> {
+        self.prompter.as_ref()
+    }
 }
 
 #[cfg(test)]
@@ -587,6 +642,21 @@ mod tests {
     fn targets_of_unloaded_session_is_empty() {
         let s = Session::new(config(), true);
         assert!(s.targets().is_empty());
+    }
+
+    #[test]
+    fn prompter_is_none_until_installed_then_some() {
+        let mut s = Session::new(config(), true);
+        assert!(s.prompter().is_none());
+        // A no-op prompter (no stdin) installed by the composition root.
+        let p = mtui_hosts::Prompter::new(std::sync::Arc::new(|_t: String| {
+            Box::pin(async move { Ok(String::new()) })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }));
+        s.set_prompter(p);
+        assert!(s.prompter().is_some());
     }
 
     #[test]

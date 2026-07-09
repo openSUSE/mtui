@@ -43,6 +43,7 @@ use futures::future::join_all;
 use mtui_types::enums::ExecutionMode;
 
 use super::Target;
+use crate::prompter::Prompter;
 
 /// Drives every future in `futures` to completion concurrently.
 ///
@@ -136,29 +137,37 @@ impl From<BTreeMap<String, String>> for Command {
 /// [`PerHost`](Command::PerHost) map is given, hosts it does not cover are
 /// skipped entirely.
 ///
-/// The upstream serial barrier prompts the user (`press Enter to proceed …`)
-/// before each serial host. That prompt is an interactive-display concern owned
-/// by `mtui-cli` (Phase 6); here the `interactive` flag is retained as a seam
-/// and serial hosts simply run back-to-back. No stdin/TTY code lives in this
-/// crate.
+/// The upstream serial barrier prompts the user (`press Enter key to proceed
+/// with <host>`) before each serial host. When a serialised [`Prompter`] is
+/// supplied and `interactive` is set (the REPL), [`run`](RunCommand::run) asks
+/// that prompt before each serial host; headless callers (`mtui-mcp`) pass
+/// `None` and serial hosts run back-to-back. No stdin/TTY code lives in this
+/// crate — the reader is injected via the [`Prompter`].
 pub struct RunCommand<'a> {
     targets: &'a mut BTreeMap<String, Target>,
     command: Command,
     interactive: bool,
+    prompter: Option<Prompter>,
 }
 
 impl<'a> RunCommand<'a> {
     /// Builds a run over `targets` with `command`.
+    ///
+    /// `prompter` is the session-level serialised [`Prompter`] (or `None` when
+    /// headless); when present and `interactive` is set, the serial barrier
+    /// prompts before each serial host.
     #[must_use]
     pub fn new(
         targets: &'a mut BTreeMap<String, Target>,
         command: impl Into<Command>,
         interactive: bool,
+        prompter: Option<Prompter>,
     ) -> Self {
         Self {
             targets,
             command: command.into(),
             interactive,
+            prompter,
         }
     }
 
@@ -169,6 +178,7 @@ impl<'a> RunCommand<'a> {
             targets,
             command,
             interactive,
+            prompter,
         } = self;
 
         // Split into parallel and serial, skipping hosts a PerHost map does not
@@ -199,13 +209,20 @@ impl<'a> RunCommand<'a> {
         });
         run_parallel(parallel_futs, desc).await;
 
-        // Serial barrier: one host at a time (the interactive Enter prompt is a
-        // Phase 6 display concern; see the type docs).
+        // Serial barrier: one host at a time. Under an interactive session with
+        // a serialised prompter, ask the user to press Enter before each serial
+        // host (upstream `prompt_user("press Enter key to proceed with …")`);
+        // headless callers (no prompter) run them back-to-back. The answer is
+        // discarded — any input (incl. empty) proceeds, matching upstream.
         for t in serial {
             let cmd = command
                 .for_host(t.hostname())
                 .expect("host was filtered to be covered")
                 .to_owned();
+            if interactive && let Some(prompter) = prompter.as_ref() {
+                let text = format!("press Enter key to proceed with {} ", t.hostname());
+                let _ = prompter.ask(&text).await;
+            }
             t.run(&cmd).await;
         }
     }
@@ -362,7 +379,7 @@ mod tests {
             target("h2", ExecutionMode::Parallel, m2),
         ]);
 
-        RunCommand::new(&mut g, "uptime", false).run().await;
+        RunCommand::new(&mut g, "uptime", false, None).run().await;
 
         assert_eq!(h1.commands(), vec!["uptime".to_owned()]);
         assert_eq!(h2.commands(), vec!["uptime".to_owned()]);
@@ -380,7 +397,7 @@ mod tests {
 
         let mut map = BTreeMap::new();
         map.insert("h1".to_owned(), "only-h1".to_owned());
-        RunCommand::new(&mut g, map, false).run().await;
+        RunCommand::new(&mut g, map, false, None).run().await;
 
         assert_eq!(h1.commands(), vec!["only-h1".to_owned()]);
         assert!(h2.commands().is_empty(), "uncovered host must be skipped");
@@ -389,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn run_command_runs_parallel_and_serial_hosts() {
         // Both a parallel and a serial host receive the command; the serial
-        // barrier runs after the parallel batch (no interactive prompt here).
+        // barrier runs after the parallel batch (no prompter here, so no prompt).
         let (mp, ms) = (echo("par", "p"), echo("ser", "s"));
         let (hp, hs) = (mp.clone(), ms.clone());
         let mut g = group(vec![
@@ -397,10 +414,81 @@ mod tests {
             target("ser", ExecutionMode::Serial, ms),
         ]);
 
-        RunCommand::new(&mut g, "cmd", true).run().await;
+        RunCommand::new(&mut g, "cmd", true, None).run().await;
 
         assert_eq!(hp.commands(), vec!["cmd".to_owned()]);
         assert_eq!(hs.commands(), vec!["cmd".to_owned()]);
+    }
+
+    /// A recording [`Prompter`] that appends every prompt text to a shared vec
+    /// and returns an empty answer (Enter). Used to assert the serial-barrier
+    /// prompt is reached (interactive) or skipped (headless).
+    fn recording_prompter(seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Prompter {
+        Prompter::new(std::sync::Arc::new(move |text: String| {
+            let seen = std::sync::Arc::clone(&seen);
+            Box::pin(async move {
+                seen.lock().unwrap().push(text);
+                Ok(String::new())
+            })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }))
+    }
+
+    #[tokio::test]
+    async fn serial_barrier_prompts_before_each_serial_host_when_interactive() {
+        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
+        let (ma, mb) = (echo("s-a", "a"), echo("s-b", "b"));
+        let (ha, hb) = (ma.clone(), mb.clone());
+        let mut g = group(vec![
+            target("s-a", ExecutionMode::Serial, ma),
+            target("s-b", ExecutionMode::Serial, mb),
+        ]);
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let prompter = recording_prompter(std::sync::Arc::clone(&seen));
+
+        RunCommand::new(&mut g, "cmd", true, Some(prompter))
+            .run()
+            .await;
+
+        // Both serial hosts ran, prompted in sorted hostname order.
+        assert_eq!(ha.commands(), vec!["cmd".to_owned()]);
+        assert_eq!(hb.commands(), vec!["cmd".to_owned()]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "press Enter key to proceed with s-a ".to_owned(),
+                "press Enter key to proceed with s-b ".to_owned(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn serial_barrier_does_not_prompt_when_headless() {
+        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
+        let (ma, mb) = (echo("s-a", "a"), echo("s-b", "b"));
+        let (ha, hb) = (ma.clone(), mb.clone());
+        let mut g = group(vec![
+            target("s-a", ExecutionMode::Serial, ma),
+            target("s-b", ExecutionMode::Serial, mb),
+        ]);
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let prompter = recording_prompter(std::sync::Arc::clone(&seen));
+
+        // Headless: interactive == false → no prompt even with a prompter set.
+        RunCommand::new(&mut g, "cmd", false, Some(prompter))
+            .run()
+            .await;
+
+        assert_eq!(ha.commands(), vec!["cmd".to_owned()]);
+        assert_eq!(hb.commands(), vec!["cmd".to_owned()]);
+        assert!(
+            seen.lock().unwrap().is_empty(),
+            "headless run must not prompt"
+        );
     }
 
     // --- SFTP fan-out -------------------------------------------------------

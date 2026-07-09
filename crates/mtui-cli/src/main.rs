@@ -50,6 +50,15 @@ fn main() -> anyhow::Result<()> {
         mtui_cli::notify_user(msg, error);
     }));
 
+    // Composition root: install the REPL-only serialised interactive prompter
+    // (upstream `main.py`'s `prompter = Prompter()`). It backs the SSH
+    // command-timeout question ("keep waiting? [Y/n]") and the serial-barrier
+    // Enter prompt, serialised across parallel host tasks and suspending any live
+    // spinner. Installed *before* `seed_session` so hosts connected during `-a`
+    // seeding already carry the timeout prompt. `mtui-mcp` never installs one
+    // (headless → immediate abort / back-to-back, upstream `prompter=None`).
+    session.set_prompter(mtui_hosts::Prompter::stdin());
+
     // Seed the session from `-a`/`-k` (load the update) and `--sut` (add hosts)
     // before the loop — the pre-`cmdloop` half of upstream `run_mtui`. A failed
     // explicit update exits here rather than entering an empty REPL.
