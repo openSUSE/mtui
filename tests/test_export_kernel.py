@@ -58,6 +58,64 @@ def test_kernel_results_inserts_results_into_regression_section(
     assert "Result line 1" in joined
 
 
+def test_reexport_keeps_openqa_overview_block(tmp_path: Path) -> None:
+    """The overview block must survive a re-export.
+
+    From the second export on, kernel_results' placeholder-absent branch
+    bulk-deletes the regression-section body up to "build log review:" to
+    drop the previous run's results. inject_overview used to run first in
+    run(), so the freshly injected marker-bounded openqa_overview block sat
+    exactly in that range and was deleted again on every export after the
+    first -- the report silently lost its overview data.
+
+    Runs the real run() pipeline (template-mutating stages live, the
+    network/filesystem stages patched out) twice, like a tester exporting,
+    refreshing results, and exporting again.
+    """
+    from mtui.data_sources.oqa_search import VersionResult
+
+    template = [
+        "regression tests:\n",
+        "(put your details here)\n",
+        "\n",
+        "build log review:\n",
+    ]
+    exporter = _make(tmp_path, template=template)
+    fake_result = MagicMock()
+    fake_result.pp = ["Result line 1\n"]
+    exporter.openqa.kernel = [fake_result]
+    exporter.openqa.auto = None  # inject_openqa: nothing to inject
+    overview = MagicMock()
+    overview.single_incidents = [
+        VersionResult(version="15-SP6", url="https://oqa/t1", status="passed")
+    ]
+    overview.aggregated_updates = []
+    overview.build_checks = []
+    overview.skip_aggregated = True
+    exporter.openqa.overview = overview
+
+    def _export_once() -> str:
+        with (
+            patch.object(exporter, "install_results"),
+            patch.object(exporter, "get_logs", return_value=[]),
+            patch.object(exporter, "installlogs_lines"),
+            patch.object(exporter, "add_sysinfo"),
+            patch.object(exporter, "dedup_lines"),
+        ):
+            exporter.run()
+        return "".join(exporter.template)
+
+    first = _export_once()
+    assert "openqa_overview begin" in first
+    assert "15-SP6" in first
+
+    second = _export_once()
+    # Exactly one overview block and one results run survive the re-export.
+    assert second.count("openqa_overview begin") == 1
+    assert "15-SP6" in second
+    assert second.count("Results from openQA:\n") == 1
+
+
 # ---------------------------------------------------------------------------
 # get_logs
 # ---------------------------------------------------------------------------

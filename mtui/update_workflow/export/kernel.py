@@ -86,8 +86,14 @@ class KernelExport(BaseExport):
         """
         self.install_results()
         self.inject_openqa()
-        self.inject_overview()
+        # kernel_results() must run BEFORE inject_overview(). On a re-export
+        # (the "(put your details here)" placeholder is gone) kernel_results
+        # bulk-deletes the whole regression-section body up to
+        # "build log review:" to drop the previous run's results -- injecting
+        # the marker-bounded openqa_overview block first meant that deletion
+        # wiped it again on every export after the first.
         self.kernel_results()
+        self.inject_overview()
         filenames = self.get_logs()
         self.installlogs_lines(filenames)
         self.add_sysinfo()
