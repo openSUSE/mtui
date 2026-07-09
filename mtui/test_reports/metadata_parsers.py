@@ -87,8 +87,8 @@ class JSONParser:
         results.rating = data.get("rating")
         results.repository = data.get("repository")
         results.category = data.get("category")
-        results.testplatforms = data.get("testplatform")
-        results.products = data.get("products")
+        results.testplatforms = data.get("testplatform") or []
+        results.products = data.get("products") or []
         results.realid = data.get("id")
         results.giteapr = data.get("gitea_pr")
         results.giteaprapi = data.get("gitea_pr_api")
@@ -98,7 +98,7 @@ class JSONParser:
         for prod, pkgvers in (data.get("packages") or {}).items():
             pkgs = {pkg: ver for pkg, _, ver in (p.split() for p in pkgvers)}
             packages[prod] = pkgs
-        results.repositories = frozenset(data.get("repositories", []))
+        results.repositories = frozenset(data.get("repositories") or [])
         results.packages = packages
 
 
