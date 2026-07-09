@@ -58,6 +58,10 @@ pub fn display(summary: Option<&str>, text: Option<&str>, icon: Option<&str>) {
     if !desktop_available() {
         return;
     }
+    // Only reached with a real desktop TTY, so the offline test suite exercises
+    // the guard's `return` above but not this backend hop; `display_backend` is
+    // covered directly in tests, and the guard→backend edge needs a pty harness
+    // (out of scope — see module docs).
     display_backend(summary, text, icon);
 }
 
@@ -125,5 +129,34 @@ mod tests {
         display(Some("MTUI"), Some("hello"), None);
         notify_user("done", false);
         notify_user("boom", true);
+    }
+
+    #[test]
+    fn backend_handles_all_field_combinations() {
+        // Drive `display_backend` directly — the harness stdin is not a TTY, so
+        // `display`'s guard would short-circuit before ever reaching it. Under
+        // the default build (`notify` off) this exercises the no-op body; under
+        // `--features notify` it builds the `Notification` and swallows the
+        // `show()` error on a headless bus. Either way it must not panic across
+        // the present/absent matrix of every optional field.
+        display_backend(None, None, None);
+        display_backend(Some("MTUI"), None, None);
+        display_backend(Some("MTUI"), Some("body"), None);
+        display_backend(Some("MTUI"), Some("body"), Some("dialog-error"));
+    }
+
+    #[test]
+    fn desktop_available_reads_the_real_environment() {
+        // Exercise the real (un-injected) entry point so the closure that reads
+        // `std::env::var_os` and the `std::io::stdin().is_terminal()` probe are
+        // covered. The result depends on the harness environment (typically not
+        // a TTY → false), so we only assert it returns a bool without panicking
+        // and agrees with the pure core on the same inputs.
+        let real = desktop_available();
+        let expected =
+            desktop_available_with(std::io::stdin().is_terminal(), std::env::consts::OS, |k| {
+                std::env::var_os(k).is_some()
+            });
+        assert_eq!(real, expected);
     }
 }

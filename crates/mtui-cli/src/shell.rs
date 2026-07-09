@@ -510,6 +510,39 @@ mod tests {
             k(KeyCode::Char('d'), KeyModifiers::CONTROL),
             Some(vec![0x04])
         );
+        // Remaining CSI navigation keys.
+        assert_eq!(
+            k(KeyCode::Down, KeyModifiers::NONE),
+            Some(b"\x1b[B".to_vec())
+        );
+        assert_eq!(
+            k(KeyCode::Right, KeyModifiers::NONE),
+            Some(b"\x1b[C".to_vec())
+        );
+        assert_eq!(
+            k(KeyCode::Left, KeyModifiers::NONE),
+            Some(b"\x1b[D".to_vec())
+        );
+        assert_eq!(
+            k(KeyCode::Home, KeyModifiers::NONE),
+            Some(b"\x1b[H".to_vec())
+        );
+        assert_eq!(
+            k(KeyCode::End, KeyModifiers::NONE),
+            Some(b"\x1b[F".to_vec())
+        );
+        assert_eq!(
+            k(KeyCode::Delete, KeyModifiers::NONE),
+            Some(b"\x1b[3~".to_vec())
+        );
+        // Ctrl with a non-letter falls through to the raw UTF-8 byte (line 203+):
+        // Ctrl-'1' has no control-char mapping, so it encodes as plain "1".
+        assert_eq!(
+            k(KeyCode::Char('1'), KeyModifiers::CONTROL),
+            Some(b"1".to_vec())
+        );
+        // A key with no encoding (a function key here) is dropped.
+        assert_eq!(k(KeyCode::F(5), KeyModifiers::NONE), None);
     }
 
     /// Builds a session with a group of enabled hosts, each backed by a
@@ -562,5 +595,44 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!err.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_shell_renders_per_host_failure_and_continues() {
+        // Drives the per-host loop against enabled mock hosts. Offline (no
+        // controlling TTY) `run_bridge_on` fails at `RawModeGuard::new`, so each
+        // host takes the error-render branch; the loop must render the failure to
+        // the display and keep going, returning `Ok` overall (a per-host attach
+        // failure never aborts the command). This is the hermetic reach of the
+        // loop body — the raw-mode/PTY wiring past that point needs a real TTY
+        // and is left to the manual/gated path.
+        let out = Arc::new(Mutex::new(Vec::new()));
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        use mtui_config::Config;
+        use mtui_core::{ColorMode, CommandPromptDisplay};
+        let display =
+            CommandPromptDisplay::with_sink(Box::new(Sink(Arc::clone(&out))), ColorMode::Never);
+        let mut session = Session::with_display(Config::default(), true, display);
+        *session.targets_mut() =
+            group(&[("h1", TargetState::Enabled), ("h2", TargetState::Enabled)]);
+
+        // Ok overall despite per-host attach failures.
+        run_shell(&mut session, &[]).await.unwrap();
+
+        let rendered = String::from_utf8(out.lock().unwrap().clone()).unwrap();
+        // Both hosts were attempted and each failure was rendered ("shell on <h>:").
+        assert!(
+            rendered.contains("shell on h1:") && rendered.contains("shell on h2:"),
+            "each host's attach failure must be rendered, got: {rendered:?}"
+        );
     }
 }
