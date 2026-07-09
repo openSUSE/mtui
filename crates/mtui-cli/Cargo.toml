@@ -16,9 +16,22 @@ workspace = true
 [dependencies]
 mtui-core.workspace = true
 mtui-config.workspace = true
+# Direct dep (previously transitive via mtui-core): the interactive `shell` TTY
+# bridge drives `Target::shell`/`ShellChannel` directly, and enables the
+# `mtui-hosts` `shell` feature so the primitive is compiled into the `mtui`
+# binary under default features.
+mtui-hosts = { workspace = true, features = ["shell"] }
 clap.workspace = true
 anyhow.workspace = true
 reedline.workspace = true
+# Raw-mode terminal + async EventStream for the `shell` bridge (mtui-rs-jww).
+crossterm.workspace = true
+# `StreamExt` for the crossterm `EventStream` in the bridge input pump.
+futures.workspace = true
+# dyn-compatible async `BridgeIo` trait for the (offline-testable) shell bridge.
+async-trait.workspace = true
+# shlex-split the `shell` line to route it to the bridge (mirrors the engine).
+shlex.workspace = true
 nu-ansi-term.workspace = true
 # `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
 mtui-types.workspace = true
@@ -28,6 +41,3 @@ mtui-testreport.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-[dev-dependencies]
-async-trait.workspace = true

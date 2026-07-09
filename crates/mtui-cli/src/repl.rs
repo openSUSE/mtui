@@ -141,6 +141,23 @@ impl Repl {
         loop {
             match self.line_editor.read_line(&self.prompt)? {
                 Signal::Success(line) => {
+                    // `shell` attaches an interactive PTY, which needs the local
+                    // TTY this REPL owns — the engine (shared with headless MCP)
+                    // can't do that, so its `shell` command is a headless-error
+                    // stub. Intercept the line *before* dispatch and drive the
+                    // raw-mode bridge here instead (mtui-rs-jww). Any other line
+                    // takes the normal engine path. A shell line never exits.
+                    if let Some(argv) = crate::shell::is_shell_line(&line) {
+                        let mut session = self
+                            .session
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Err(e) = crate::shell::run_shell(&mut session, &argv).await {
+                            let msg = session.display.red(&e.to_string());
+                            session.display.println(&msg);
+                        }
+                        continue;
+                    }
                     // Lock only for the dispatch; the completer's own lock during
                     // `read_line` was released before this returned. (Guard held
                     // across the await — justified on `run`'s doc comment.)

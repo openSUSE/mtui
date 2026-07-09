@@ -17,6 +17,11 @@ futures = "0.3"
 clap = { version = "4", features = ["derive", "env"] }
 clap_complete = "4"
 reedline = "0.49"
+# raw-mode terminal + async input/resize stream for the interactive `shell`
+# TTY bridge (P6, mtui-rs-jww). Pinned to reedline 0.49's `crossterm` major so
+# the two share one copy; `event-stream` enables the async `EventStream` the
+# bridge selects over (keystrokes + `Event::Resize` → SIGWINCH forwarding).
+crossterm = { version = "0.29", features = ["event-stream"] }
 # terminal styling for the REPL input highlighter; pinned to reedline 0.49's
 # `nu-ansi-term` major so `StyledText.buffer: Vec<(Style, String)>` types match.
 nu-ansi-term = "0.50"
