@@ -265,6 +265,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   still running, filtering its remaining INFO records before the capture
   handler saw them. The lowering is now reference-counted, so the level is
   restored only when the last concurrent capture ends.
+- A blank `[mtui] ssl_verify` value (`ssl_verify =`, usually an unfinished
+  edit) no longer turns TLS certificate verification off. The empty string
+  used to reach `requests` as a falsy `verify` — silently disabling
+  certificate checks for every HTTPS call (openQA, dashboard, TeReGen,
+  Gitea). A blank value is now treated exactly like an unset option: the
+  verifying default applies and a warning explains how to disable
+  verification explicitly (`ssl_verify = false`) if that was really meant.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

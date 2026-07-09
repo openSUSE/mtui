@@ -75,9 +75,11 @@ def _parse_ssl_verify(raw: str) -> bool | str:
     must exist: a typo like ``false1`` or a missing file would otherwise
     surface only at the first HTTPS call as an opaque ``OSError`` deep
     inside :mod:`requests`, so it is rejected here at parse time and the
-    option falls back to its (verifying) default. A blank value keeps its
-    historical requests semantics (verification off) but warns, since it
-    is almost always an unfinished edit.
+    option falls back to its (verifying) default. A blank value is treated
+    as unset (verification stays on) and warns: it is almost always an
+    unfinished edit, and passing it through as ``""`` would silently hand
+    requests a falsy ``verify`` — TLS off for every call. Only an explicit
+    ``false`` spelling disables verification.
 
     Raises:
         ValueError: If the value is neither a boolean spelling nor the
@@ -87,10 +89,10 @@ def _parse_ssl_verify(raw: str) -> bool | str:
     token = raw.strip()
     if not token:
         logger.warning(
-            "blank ssl_verify disables TLS verification; write "
-            "'ssl_verify = false' to make that explicit"
+            "blank ssl_verify treated as unset: TLS verification stays "
+            "enabled; write 'ssl_verify = false' to disable it explicitly"
         )
-        return False
+        return _default_verify()
     lowered = token.lower()
     if lowered in _TRUE_STRINGS:
         return _default_verify()

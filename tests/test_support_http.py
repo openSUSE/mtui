@@ -138,10 +138,18 @@ def test_parse_ssl_verify_false_spellings(raw):
     assert _parse_ssl_verify(raw) is False
 
 
-def test_parse_ssl_verify_blank_disables_with_warning(caplog):
-    """A blank value keeps its historical requests semantics (verify off)."""
+def test_parse_ssl_verify_blank_stays_secure_with_warning(caplog, monkeypatch):
+    """A blank value must fall back to the verifying default, not disable TLS.
+
+    Passing the empty string through would hand requests a falsy ``verify``
+    (CERT_NONE) — verification silently off for every HTTPS call. Blank is
+    treated as unset; only an explicit false spelling disables.
+    """
+    import mtui.support.config as _config
+
+    monkeypatch.setattr(_config, "system_ca_bundle", lambda: None)
     with caplog.at_level("WARNING", logger="mtui.config"):
-        assert _parse_ssl_verify("  ") is False
+        assert _parse_ssl_verify("  ") is True
     assert any("blank ssl_verify" in r.message for r in caplog.records)
 
 
