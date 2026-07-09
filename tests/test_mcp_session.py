@@ -404,6 +404,76 @@ def test_run_command_excludes_records_without_capture_token(tmp_path: Path) -> N
     assert "from a raw thread" not in out
 
 
+def test_concurrent_captures_keep_info_after_first_call_finishes(
+    tmp_path: Path,
+) -> None:
+    """A finishing command must not restore the logger level under a peer.
+
+    The ``mtui`` logger is process-global; two commands (different client
+    sessions here, different templates in production) capture
+    concurrently. The plain save/lower/restore raced: the first call
+    lowered WARNING->INFO, the overlapping call saw INFO and saved
+    nothing, then the first call's ``finally`` restored WARNING while the
+    second was still running — its INFO records were filtered at the
+    logger before its capture handler saw them and silently vanished from
+    the MCP reply. The lowering is now reference-counted; only the last
+    concurrent capture restores.
+    """
+    mtui_logger = logging.getLogger("mtui")
+    prev_level = mtui_logger.level
+    mtui_logger.setLevel(logging.WARNING)
+    a_entered = threading.Event()
+    a_proceed = threading.Event()
+    b_entered = threading.Event()
+    b_proceed = threading.Event()
+
+    class _FirstCommand(Command):
+        command = "_mcp_test_levelrace_first"
+
+        def __call__(self) -> None:  # pragma: no cover - exercised by test
+            a_entered.set()
+            assert a_proceed.wait(15)
+            self.println("first out")
+
+    class _SecondCommand(Command):
+        command = "_mcp_test_levelrace_second"
+
+        def __call__(self) -> None:  # pragma: no cover - exercised by test
+            b_entered.set()
+            assert b_proceed.wait(15)
+            # Logged after the first command has finished (and, before the
+            # fix, restored the level to WARNING out from under us).
+            logging.getLogger("mtui.commands._levelrace").info("late info")
+            self.println("second out")
+
+    try:
+        sess_a = _make_session(tmp_path)
+        sess_b = _make_session(tmp_path)
+
+        async def driver() -> tuple[str, str]:
+            a_task = asyncio.create_task(sess_a.run_command(_FirstCommand, []))
+            await asyncio.to_thread(a_entered.wait, 15)  # A lowered the level
+            b_task = asyncio.create_task(sess_b.run_command(_SecondCommand, []))
+            await asyncio.to_thread(b_entered.wait, 15)  # B's capture is live
+            a_proceed.set()
+            out_a = await a_task  # A finishes mid-B
+            b_proceed.set()
+            out_b = await b_task
+            return out_a, out_b
+
+        out_a, out_b = asyncio.run(driver())
+
+        assert "first out" in out_a
+        assert "second out" in out_b
+        assert "INFO: late info" in out_b
+        # The last concurrent capture restored the original level.
+        assert mtui_logger.level == logging.WARNING
+    finally:
+        a_proceed.set()
+        b_proceed.set()
+        mtui_logger.setLevel(prev_level)
+
+
 # --------------------------------------------------------------------------- #
 # close() releases host-arbitration pool claims (Phase 3B)                    #
 # --------------------------------------------------------------------------- #

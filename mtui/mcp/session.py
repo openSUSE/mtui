@@ -45,6 +45,7 @@ import contextvars
 import io
 import logging
 import shlex
+import threading
 import time
 from logging import Handler, Logger, LogRecord, getLogger
 from types import SimpleNamespace
@@ -173,6 +174,41 @@ class _LogCaptureHandler(Handler):
             self._stream.write(f"{level}: {record.getMessage()}\n")
         except Exception:  # noqa: BLE001 - logging must never raise into callers
             self.handleError(record)
+
+
+# The ``mtui`` logger's level is process-global state, but commands on
+# different templates (or different client sessions) run concurrently in
+# worker threads. A plain save/lower/restore per call races: the first
+# call lowers WARNING -> INFO, an overlapping call observes INFO and saves
+# nothing, then the first call restores WARNING while the second is still
+# running -- silently filtering the second call's INFO records before its
+# capture handler sees them. Reference-count the lowering instead: the
+# first concurrent capture lowers and remembers the prior level, the last
+# one restores it.
+_cap_level_guard = threading.Lock()
+_cap_level_depth = 0
+_cap_level_prev: int | None = None
+
+
+def _push_capture_level() -> None:
+    """Lower the shared ``mtui`` logger to INFO for one capture (refcounted)."""
+    global _cap_level_depth, _cap_level_prev
+    with _cap_level_guard:
+        cap_logger = getLogger("mtui")
+        if _cap_level_depth == 0 and cap_logger.getEffectiveLevel() > logging.INFO:
+            _cap_level_prev = cap_logger.level
+            cap_logger.setLevel(logging.INFO)
+        _cap_level_depth += 1
+
+
+def _pop_capture_level() -> None:
+    """Undo one :func:`_push_capture_level`; the last pop restores the level."""
+    global _cap_level_depth, _cap_level_prev
+    with _cap_level_guard:
+        _cap_level_depth -= 1
+        if _cap_level_depth == 0 and _cap_level_prev is not None:
+            getLogger("mtui").setLevel(_cap_level_prev)
+            _cap_level_prev = None
 
 
 class McpCommandError(RuntimeError):
@@ -805,19 +841,19 @@ class McpSession:
         # The ``mtui`` logger defaults to an effective level of WARNING
         # (inherited from root), which would drop INFO records before any
         # handler sees them, so temporarily lower it to INFO for the call
-        # when it is currently stricter. The raw level is saved and
-        # restored in ``finally`` so a user's ``set_log_level`` choice is
-        # left untouched (under MCP that command targets the separate
-        # ``mtui-mcp`` logger, but restoring the exact prior value keeps
-        # this safe regardless).
+        # when it is currently stricter. Commands can overlap (different
+        # templates / different client sessions), so the lowering is
+        # reference-counted (:func:`_push_capture_level`): the first
+        # concurrent call lowers and remembers the prior level, the last
+        # one restores it in ``finally`` — a user's ``set_log_level``
+        # choice is left untouched (under MCP that command targets the
+        # separate ``mtui-mcp`` logger, but restoring the exact prior
+        # value keeps this safe regardless).
         cap_logger = getLogger("mtui")
         cap_token = object()
         cap_handler = _LogCaptureHandler(fake_sys.stdout, cap_token)
         token_reset = _capture_token.set(cap_token)
-        prev_cap_level = cap_logger.level
-        lowered_cap_level = cap_logger.getEffectiveLevel() > logging.INFO
-        if lowered_cap_level:
-            cap_logger.setLevel(logging.INFO)
+        _push_capture_level()
         cap_logger.addHandler(cap_handler)
         try:
             try:
@@ -868,8 +904,7 @@ class McpSession:
         finally:
             cap_logger.removeHandler(cap_handler)
             _capture_token.reset(token_reset)
-            if lowered_cap_level:
-                cap_logger.setLevel(prev_cap_level)
+            _pop_capture_level()
             _current_display.reset(display_reset)
             _current_stdout.reset(stdout_reset)
 
