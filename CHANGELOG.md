@@ -242,6 +242,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fall back to an empty list, like the sibling `jira`/`bugs`/`packages` keys
   already did. An explicitly null `repositories` key — which crashed the
   parse itself (`frozenset(None)`) — is guarded the same way.
+- Re-exporting a kernel-workflow testreport no longer silently deletes the
+  injected `openqa_overview` block. From the second export on, the kernel
+  results stage clears the regression-section body to drop the previous
+  run's results — and the overview block, injected just before it, sat
+  exactly in that range: it survived the first export and vanished on every
+  one after. The overview is now injected after the results stage, so both
+  the refreshed kernel results and the overview block survive re-exports.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
