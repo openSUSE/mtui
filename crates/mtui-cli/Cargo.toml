@@ -19,9 +19,16 @@ mtui-config.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 reedline.workspace = true
+nu-ansi-term.workspace = true
+# `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
+mtui-types.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+# test-only: seed a loaded report (RRID + workflow) so the prompt tests can
+# exercise the workflow-aware left prompt and the RRID status right prompt,
+# mirroring `mtui-core`'s own `seed_active_report` helper.
+mtui-testreport.workspace = true

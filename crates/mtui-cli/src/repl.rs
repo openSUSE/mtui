@@ -18,9 +18,9 @@
 //!
 //! The read loop and dispatch are independent of the editor's input features:
 //! tab completion (P6.3), persistent history + Ctrl-R reverse-search + inline
-//! hint (P6.4) live in the [`Reedline`] builder in [`Repl::new`]; the
-//! workflow-aware prompt/toolbar (P6.5) and the command-timeout prompter (P6.6)
-//! slot into the builder / [`MtuiPrompt`] later without changing this loop.
+//! hint (P6.4), and the workflow-aware prompt + RRID status + input highlighter
+//! (P6.5) all live in the [`Reedline`] builder / [`MtuiPrompt`] in [`Repl::new`];
+//! the command-timeout prompter (P6.6) slots in later without changing this loop.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,7 @@ use reedline::{
 };
 
 use crate::completer::MtuiCompleter;
+use crate::highlighter::MtuiHighlighter;
 use crate::prompt::MtuiPrompt;
 
 /// The reedline menu name the Tab keybinding activates.
@@ -74,6 +75,10 @@ impl Repl {
             Arc::clone(&registry),
             Arc::clone(&session),
         ));
+        let highlighter = Box::new(MtuiHighlighter::new(
+            Arc::clone(&registry),
+            Arc::clone(&session),
+        ));
         let menu = Box::new(ColumnarMenu::default().with_name(COMPLETION_MENU));
 
         let mut keybindings = default_emacs_keybindings();
@@ -89,16 +94,19 @@ impl Repl {
 
         let line_editor = Reedline::create()
             .with_completer(completer)
+            .with_highlighter(highlighter)
             .with_menu(ReedlineMenu::EngineCompleter(menu))
             .with_edit_mode(edit_mode)
             .with_history(crate::history::file_backed_history())
             .with_hinter(Box::new(DefaultHinter::default()));
 
+        let prompt = MtuiPrompt::new(Arc::clone(&session));
+
         Self {
             line_editor,
             registry,
             session,
-            prompt: MtuiPrompt,
+            prompt,
         }
     }
 
