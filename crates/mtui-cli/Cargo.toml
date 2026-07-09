@@ -15,8 +15,13 @@ workspace = true
 
 [dependencies]
 mtui-core.workspace = true
+mtui-config.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+reedline.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true

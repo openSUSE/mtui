@@ -1,10 +1,12 @@
-//! Smoke tests for the `mtui` binary skeleton (P6.1).
+//! Smoke tests for the `mtui` binary (P6.1 skeleton + P6.2 REPL entry).
 //!
-//! These drive the built binary via `CARGO_BIN_EXE_mtui` and assert the four
+//! These drive the built binary via `CARGO_BIN_EXE_mtui` and assert the
 //! top-level surfaces: `--version` (provenance block), `--help` (real `Args`
-//! flags — not the old empty stub), an unknown-flag usage error, and the
-//! not-yet-implemented REPL bail. Arg-parsing internals are already covered in
-//! `mtui-core::args`; this only exercises the binary's own wiring.
+//! flags — not the old empty stub), an unknown-flag usage error, and that a
+//! bare invocation enters the interactive REPL. Arg-parsing internals are
+//! already covered in `mtui-core::args`; this only exercises the binary's own
+//! wiring. The REPL loop's dispatch logic is unit-tested off the TTY seam in
+//! `repl::tests` (the `step` function).
 
 use std::process::Command;
 
@@ -58,16 +60,25 @@ fn unknown_flag_is_usage_error_exit_two() {
 }
 
 #[test]
-fn no_args_bails_with_repl_message_and_nonzero_exit() {
-    let out = mtui().output().expect("run with no args");
-    assert!(
-        !out.status.success(),
-        "a bare invocation must fail until the REPL exists"
-    );
+fn no_args_enters_the_interactive_repl() {
+    // A bare invocation now drops into the REPL (P6.2) instead of bailing. The
+    // test harness has no controlling TTY, so `reedline::read_line` fails and
+    // the process exits non-zero — but the DEBUG breadcrumb proves we reached
+    // the REPL entry rather than an earlier error, and stderr must NOT carry the
+    // old "not yet implemented" bail.
+    let out = mtui()
+        .arg("-d")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run with no args");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("REPL not yet implemented"),
-        "expected the not-yet-implemented REPL message, got: {stderr:?}"
+        stderr.contains("mtui starting"),
+        "a bare invocation must reach the REPL entry, got: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("not yet implemented"),
+        "the REPL bail placeholder must be gone, got: {stderr:?}"
     );
 }
 

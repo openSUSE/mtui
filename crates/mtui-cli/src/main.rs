@@ -1,14 +1,16 @@
 //! `mtui` — interactive REPL + non-interactive single-command entry point.
 //!
-//! P6.1 skeleton: parse the top-level [`Args`](mtui_core::Args) (clap handles
+//! Parses the top-level [`Args`](mtui_core::Args) (clap handles
 //! `--help`/`--version` — the latter carrying the build-provenance block baked
-//! into `mtui-core` — and usage errors, exiting the process itself), initialise
-//! `tracing` from `-d/--debug` + `RUST_LOG`, then bail at the point the
-//! interactive REPL will occupy. The REPL read loop and engine dispatch land in
-//! P6.2; non-interactive single-command mode lands in P6.7.
+//! into `mtui-core` — and usage errors, exiting the process itself), initialises
+//! `tracing` from `-d/--debug` + `RUST_LOG`, then enters the interactive REPL
+//! (P6.2). Non-interactive single-command mode lands in P6.7; full config
+//! loading + `Args` merge is Phase-6 config work.
 
 use clap::Parser;
-use mtui_core::Args;
+use mtui_cli::Repl;
+use mtui_config::Config;
+use mtui_core::{Args, Session, register_all};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> anyhow::Result<()> {
@@ -19,10 +21,18 @@ fn main() -> anyhow::Result<()> {
     init_tracing(args.debug);
     tracing::debug!(debug = args.debug, "mtui starting");
 
-    // The REPL (P6.2) and non-interactive single-command dispatch (P6.7) do not
-    // exist yet. Fail loudly rather than silently exiting so an accidental
-    // interactive invocation is visible; P6.2 replaces this with the read loop.
-    anyhow::bail!("interactive REPL not yet implemented (Phase 6.2)")
+    // Bridge the synchronous reedline editor to the async engine on one runtime.
+    // A per-line `block_on` inside the loop keeps the sync/async seam explicit
+    // and single-sited (see PLAN risk: sync editor ↔ async dispatch); no host
+    // tasks are in flight mid-line in the REPL, so there is no deadlock.
+    let runtime = tokio::runtime::Runtime::new()?;
+
+    // Full config loading + `Args` merge is Phase-6 config work; P6.2 uses the
+    // defaults so the REPL is usable.
+    let mut session = Session::new(Config::default(), true);
+    let mut repl = Repl::new(register_all());
+
+    runtime.block_on(repl.run(&mut session))
 }
 
 /// Initialises the `tracing` subscriber.
