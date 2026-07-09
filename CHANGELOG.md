@@ -234,6 +234,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `shell` mirror had the same defect, plus a sharper edge: it decoded each
   1024-byte chunk separately, so even a valid multibyte character straddling
   a chunk boundary killed the shell; it now uses an incremental decoder.
+- Loading a report whose `metadata.json` omits (or nulls) the `testplatform`
+  or `products` key no longer breaks later commands. The parser stored the
+  raw `None` over the report's list defaults, so a PI/SL report load died in
+  repository parsing with a `TypeError`, and on other report kinds
+  `list_metadata` and refhost autoconnect crashed the same way. Both keys now
+  fall back to an empty list, like the sibling `jira`/`bugs`/`packages` keys
+  already did. An explicitly null `repositories` key — which crashed the
+  parse itself (`frozenset(None)`) — is guarded the same way.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

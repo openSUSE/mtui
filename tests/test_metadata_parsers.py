@@ -144,10 +144,16 @@ def test_json_parser_parse_tolerates_missing_optional_keys():
     results.jira = {}
     results.bugs = {}
 
-    # Minimal metadata: the list/dict-shaped keys are absent entirely, and one
-    # is explicitly null. Previously `.get()` returned None and iterating /
-    # `.items()` raised TypeError.
-    data = {"rrid": "SUSE:Maintenance:1:1", "packages": None}
+    # Minimal metadata: the list/dict-shaped keys are absent entirely
+    # (testplatform among them), and packages/products/repositories are
+    # explicitly null. Previously `.get()` returned None and iterating /
+    # `.items()` / `frozenset()` raised TypeError.
+    data = {
+        "rrid": "SUSE:Maintenance:1:1",
+        "packages": None,
+        "products": None,
+        "repositories": None,
+    }
 
     JSONParser.parse(results, data)
 
@@ -155,6 +161,11 @@ def test_json_parser_parse_tolerates_missing_optional_keys():
     assert results.bugs == {}
     assert results.packages == {}
     assert results.repositories == frozenset()
+    # None here silently overwrote the [] defaults of TestReport.__init__ and
+    # blew up much later (reporepoparse / list_metadata / autoconnect iterate
+    # these); they must stay lists.
+    assert results.testplatforms == []
+    assert results.products == []
 
 
 # ---------------------------------------------------------------------------
