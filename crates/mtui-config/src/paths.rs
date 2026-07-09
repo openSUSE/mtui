@@ -78,6 +78,19 @@ pub fn cache_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.cache_dir().to_path_buf())
 }
 
+/// The user data directory for mtui (`$XDG_DATA_HOME/mtui`), if resolvable.
+///
+/// Where mtui-rs persists durable per-user state such as the REPL history file.
+/// Distinct from [`cache_dir`] (disposable) and the config dir (user-authored):
+/// history is data the user grows and expects to survive a cache wipe.
+///
+/// Deliberate deviation from upstream, which keeps history at `~/.mtui_history`;
+/// mtui-rs is XDG-first for config/cache/data alike.
+#[must_use]
+pub fn data_dir() -> Option<PathBuf> {
+    ProjectDirs::from("", "", "mtui").map(|p| p.data_dir().to_path_buf())
+}
+
 /// Compute the ordered list of config files to load, lowest precedence first.
 ///
 /// Resolution rules (mirrors upstream's short-circuit for the explicit forms):
@@ -188,6 +201,18 @@ mod tests {
         // exactly that, regardless of ambient env.
         let paths = config_search_paths(Some(PathBuf::from("/x.toml")));
         assert_eq!(paths, vec![PathBuf::from("/x.toml")]);
+    }
+
+    #[test]
+    fn data_dir_lives_under_an_mtui_directory() {
+        // On any environment where a data dir resolves, it must be the mtui
+        // subdir (parallel to `cache_dir`), so the history file lands under it.
+        if let Some(dir) = data_dir() {
+            assert!(
+                dir.ends_with("mtui"),
+                "data dir should end in `mtui`, got {dir:?}"
+            );
+        }
     }
 
     #[test]

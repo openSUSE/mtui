@@ -16,18 +16,19 @@
 //! * `Signal::CtrlD` → graceful session exit (upstream Ctrl-D → `EOF` alias of
 //!   `quit`): break the loop, process exit 0.
 //!
-//! P6.2 scope: the read loop and dispatch only. Tab completion (P6.3), history +
-//! reverse-search (P6.4), the workflow-aware prompt/toolbar (P6.5), and the
-//! command-timeout prompter (P6.6) slot into the [`Reedline`] builder / the
-//! [`MtuiPrompt`] later without changing this loop.
+//! The read loop and dispatch are independent of the editor's input features:
+//! tab completion (P6.3), persistent history + Ctrl-R reverse-search + inline
+//! hint (P6.4) live in the [`Reedline`] builder in [`Repl::new`]; the
+//! workflow-aware prompt/toolbar (P6.5) and the command-timeout prompter (P6.6)
+//! slot into the builder / [`MtuiPrompt`] later without changing this loop.
 
 use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
 use mtui_core::{EngineError, Registry, Session, dispatch_line};
 use reedline::{
-    ColumnarMenu, Emacs, KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent, ReedlineMenu,
-    Signal, default_emacs_keybindings,
+    ColumnarMenu, DefaultHinter, Emacs, KeyCode, KeyModifiers, MenuBuilder, Reedline,
+    ReedlineEvent, ReedlineMenu, Signal, default_emacs_keybindings,
 };
 
 use crate::completer::MtuiCompleter;
@@ -56,12 +57,17 @@ pub struct Repl {
 }
 
 impl Repl {
-    /// Builds a REPL over `registry` and `session`, wiring tab completion.
+    /// Builds a REPL over `registry` and `session`, wiring tab completion,
+    /// persistent history, and the inline history hint.
     ///
     /// The line editor is given an [`MtuiCompleter`] sharing `registry`/`session`
-    /// plus a columnar completion menu bound to <kbd>Tab</kbd>. History (P6.4),
-    /// the dynamic prompt/toolbar (P6.5), and the prompter (P6.6) slot into this
-    /// builder later without changing the loop.
+    /// plus a columnar completion menu bound to <kbd>Tab</kbd>; a
+    /// [`file_backed_history`](crate::history::file_backed_history) persisting to
+    /// `$XDG_DATA_HOME/mtui/history` (with Ctrl-R reverse-search from the default
+    /// emacs bindings); and a [`DefaultHinter`] showing the greyed inline
+    /// suggestion (upstream `AutoSuggestFromHistory`). The dynamic prompt/toolbar
+    /// (P6.5) and the prompter (P6.6) slot into this builder later without
+    /// changing the loop.
     #[must_use]
     pub fn new(registry: Arc<Registry>, session: Arc<Mutex<Session>>) -> Self {
         let completer = Box::new(MtuiCompleter::new(
@@ -84,7 +90,9 @@ impl Repl {
         let line_editor = Reedline::create()
             .with_completer(completer)
             .with_menu(ReedlineMenu::EngineCompleter(menu))
-            .with_edit_mode(edit_mode);
+            .with_edit_mode(edit_mode)
+            .with_history(crate::history::file_backed_history())
+            .with_hinter(Box::new(DefaultHinter::default()));
 
         Self {
             line_editor,
