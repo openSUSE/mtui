@@ -121,9 +121,31 @@ def test_slim_registered_tools_reduces_bytes_keeps_count() -> None:
     assert len(tools) == before_count  # no tool lost
     # At least a 15% schema shrink (titles alone are ~16%).
     assert after_bytes < before_bytes * 0.85
-    # No residual boilerplate anywhere.
+
+    # No residual boilerplate anywhere. Structural, not a blob substring
+    # scan: a property legitimately NAMED "title" must be allowed to
+    # appear (the slimmer preserves it), only the schema KEYWORD "title"
+    # must be gone.
+    def _assert_no_title_keyword(node, keys_are_names=False):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if not keys_are_names:
+                    assert key != "title"
+                _assert_no_title_keyword(
+                    value,
+                    keys_are_names=(
+                        not keys_are_names
+                        and key
+                        in ("properties", "patternProperties", "$defs", "definitions")
+                    ),
+                )
+        elif isinstance(node, list):
+            for item in node:
+                _assert_no_title_keyword(item)
+
+    for t in tools.values():
+        _assert_no_title_keyword(t.parameters)
     blob = " ".join(json.dumps(t.parameters) for t in tools.values())
-    assert '"title"' not in blob
     assert '{"type": "null"}' not in blob
 
 
@@ -165,3 +187,45 @@ def test_cap_output_result_is_valid_utf8_on_codepoint_boundary() -> None:
     out = cap_output(text, 101)  # odd cut lands mid-codepoint
     out.encode("utf-8")  # must not raise
     assert "truncated" in out
+
+
+def test_slim_keeps_property_named_title() -> None:
+    """A parameter literally named ``title`` is a name, not a keyword.
+
+    The unconditional key skip deleted ``properties.title`` while the
+    name survived in ``required`` -- the tool then advertised a required
+    property with no schema, so the model could never supply it.
+    """
+    schema = {
+        "title": "tool_addBugArguments",
+        "type": "object",
+        "properties": {
+            "title": {"title": "Title", "type": "string"},
+            "description": {"title": "Description", "type": "string"},
+        },
+        "required": ["title", "description"],
+    }
+    out = slim_tool_schema(schema)
+    assert "title" not in out  # the schema keyword is still stripped
+    # the properties NAMED title/description survive, their keyword
+    # "title" stripped and types intact
+    assert out["properties"]["title"] == {"type": "string"}
+    assert out["properties"]["description"] == {"type": "string"}
+    assert out["required"] == ["title", "description"]
+
+
+def test_slim_keeps_nested_defs_property_names() -> None:
+    """$defs entries and nested object properties are names too."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "cfg": {
+                "type": "object",
+                "properties": {"title": {"type": "string", "title": "T"}},
+            },
+        },
+        "$defs": {"title": {"type": "integer", "title": "X"}},
+    }
+    out = slim_tool_schema(schema)
+    assert out["properties"]["cfg"]["properties"]["title"] == {"type": "string"}
+    assert out["$defs"]["title"] == {"type": "integer"}

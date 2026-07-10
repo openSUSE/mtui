@@ -114,20 +114,39 @@ def slim_tool_schema(schema: Any) -> Any:
       :data:`_TERSE_DESCRIPTIONS`.
 
     The input is not mutated; a new structure is returned.
+
+    The keys of a ``properties`` / ``$defs``-style map are *names*, not
+    schema keywords, so the transforms are suspended for that one level:
+    a tool parameter (or nested object property) literally named
+    ``title`` or ``description`` must survive -- dropping it left the
+    name dangling in ``required`` while its schema vanished.
     """
+    return _slim(schema, keys_are_names=False)
+
+
+#: Schema keywords whose value is a mapping of *names* to sub-schemas.
+_NAME_MAPS = frozenset({"properties", "patternProperties", "$defs", "definitions"})
+
+
+def _slim(schema: Any, *, keys_are_names: bool) -> Any:
     if isinstance(schema, dict):
         out: dict[str, Any] = {}
         for key, value in schema.items():
-            if key == "title":
-                continue
-            if key == "description" and isinstance(value, str):
-                out[key] = _TERSE_DESCRIPTIONS.get(value, value)
-                continue
-            out[key] = slim_tool_schema(value)
-        _flatten_nullable(out)
+            if not keys_are_names:
+                if key == "title":
+                    continue
+                if key == "description" and isinstance(value, str):
+                    out[key] = _TERSE_DESCRIPTIONS.get(value, value)
+                    continue
+            out[key] = _slim(
+                value,
+                keys_are_names=(not keys_are_names and key in _NAME_MAPS),
+            )
+        if not keys_are_names:
+            _flatten_nullable(out)
         return out
     if isinstance(schema, list):
-        return [slim_tool_schema(item) for item in schema]
+        return [_slim(item, keys_are_names=False) for item in schema]
     return schema
 
 
