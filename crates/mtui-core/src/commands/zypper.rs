@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
 use super::perform::{PerformOp, drive};
-use super::support::add_hosts_arg;
+use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
@@ -53,6 +53,16 @@ impl Command for Install {
         add_hosts_arg(add_package_arg(cmd, "package to install"))
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(
+            session,
+            &[],
+            session.metadata().get_package_list(),
+            line,
+            text,
+        )
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         drive(session, args, PerformOp::Install(packages(args))).await
     }
@@ -82,6 +92,16 @@ impl Command for Uninstall {
         add_hosts_arg(add_package_arg(cmd, "package to remove"))
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(
+            session,
+            &[],
+            session.metadata().get_package_list(),
+            line,
+            text,
+        )
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         drive(session, args, PerformOp::Uninstall(packages(args))).await
     }
@@ -99,6 +119,29 @@ mod tests {
         assert_eq!(Uninstall.name(), "uninstall");
         assert_eq!(Install.scope(), Scope::Fanout);
         assert_eq!(Uninstall.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn complete_offers_target_and_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
+        for out in [
+            Install.complete(&session, "", "install "),
+            Uninstall.complete(&session, "", "uninstall "),
+        ] {
+            assert!(out.contains(&"-t".to_owned()), "{out:?}");
+            assert!(out.contains(&"h1".to_owned()), "{out:?}");
+            assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
+        }
+    }
+
+    #[test]
+    fn complete_empty_session_offers_flags() {
+        let (session, _buf) = empty_session();
+        assert!(
+            Install
+                .complete(&session, "--t", "install --t")
+                .contains(&"--target".to_owned())
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
+use super::support::complete_choices_filelist;
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -57,6 +58,17 @@ impl Command for SftpPut {
         )
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        // Upstream `complete_choices_filelist(template_completion(state), …)`:
+        // file paths merged with the template synonym groups + loaded RRIDs.
+        complete_choices_filelist(
+            &[&["-T", "--template"], &["--all-templates"]],
+            session.templates.rrids(),
+            line,
+            text,
+        )
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let filename = args
             .get_one::<PathBuf>("filename")
@@ -96,6 +108,29 @@ mod tests {
     fn name_and_fanout_scope() {
         assert_eq!(SftpPut.name(), "put");
         assert_eq!(SftpPut.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn complete_offers_files_and_template_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("payload.bin"), "x").unwrap();
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
+
+        // Empty tail → template synonym flags + loaded RRID (files need a path).
+        let flags = SftpPut.complete(&session, "", "put ");
+        assert!(flags.contains(&"-T".to_owned()), "{flags:?}");
+        assert!(
+            flags.contains(&"SUSE:Maintenance:1:1".to_owned()),
+            "{flags:?}"
+        );
+
+        // A path prefix surfaces matching files.
+        let path = format!("{}/pay", dir.path().display());
+        let files = SftpPut.complete(&session, &path, &format!("put {path}"));
+        assert!(
+            files.iter().any(|c| c.ends_with("payload.bin")),
+            "{files:?}"
+        );
     }
 
     #[test]

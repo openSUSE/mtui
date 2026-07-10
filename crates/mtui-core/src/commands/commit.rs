@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_testreport::{TokioSvnRunner, detect_system, svn_commit_testreport, system_info};
 
+use super::support::complete_with_templates;
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -41,6 +42,10 @@ impl Command for Commit {
                 .value_name("MSG")
                 .help("commit message"),
         )
+    }
+
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_with_templates(session, &[&["-m", "--msg"]], Vec::new(), line, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
@@ -92,7 +97,19 @@ impl Command for Commit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches};
+    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+
+    #[test]
+    fn complete_offers_msg_flag_and_templates_no_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let out = Commit.complete(&session, "", "commit ");
+        assert!(
+            out.contains(&"-m".to_owned()) && out.contains(&"--msg".to_owned()),
+            "{out:?}"
+        );
+        assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
+        assert!(!out.contains(&"h1".to_owned()), "{out:?}");
+    }
 
     #[test]
     fn name_and_fanout_scope() {

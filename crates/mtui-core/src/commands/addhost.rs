@@ -5,6 +5,7 @@ use clap::{Arg, ArgAction, ArgMatches};
 use mtui_types::Workflow;
 use tracing::info;
 
+use super::support::complete_with_templates;
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
@@ -55,6 +56,16 @@ impl Command for AddHost {
                 .long("keep-mode")
                 .action(ArgAction::SetTrue)
                 .help("Do not switch to the manual workflow when in automatic mode"),
+        )
+    }
+
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_with_templates(
+            session,
+            &[&["-t", "--target"], &["-k", "--keep-mode"]],
+            Vec::new(),
+            line,
+            text,
         )
     }
 
@@ -128,6 +139,18 @@ mod tests {
     fn name_and_fanout_scope() {
         assert_eq!(AddHost.name(), "add_host");
         assert_eq!(AddHost.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn complete_offers_flags_and_templates_but_no_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
+        let out = AddHost.complete(&session, "", "add_host ");
+        assert!(out.contains(&"-t".to_owned()), "{out:?}");
+        assert!(out.contains(&"-k".to_owned()), "{out:?}");
+        assert!(out.contains(&"--keep-mode".to_owned()), "{out:?}");
+        assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
+        // add_host connects *new* hosts, so it does not offer already-loaded ones.
+        assert!(!out.contains(&"h1".to_owned()), "{out:?}");
     }
 
     /// Explicit `-t` hosts are connected and added to the active group. The

@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
+use super::support::complete_with_templates;
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
@@ -31,6 +32,10 @@ impl Command for ListBugs {
         Scope::Fanout
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_with_templates(session, &[&["-p", "--pool"]], Vec::new(), line, text)
+    }
+
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let (bugs, jira) = session.metadata().bug_maps();
         let url = session.config.bugzilla_url.clone();
@@ -42,12 +47,23 @@ impl Command for ListBugs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches};
+    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(ListBugs.name(), "list_bugs");
         assert_eq!(ListBugs.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn complete_offers_pool_flag_and_templates() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let out = ListBugs.complete(&session, "", "list_bugs ");
+        assert!(
+            out.contains(&"-p".to_owned()) && out.contains(&"--pool".to_owned()),
+            "{out:?}"
+        );
+        assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
-use super::support::{add_hosts_arg, per_host, select_names};
+use super::support::{add_hosts_arg, complete_fanout, per_host, select_names};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -44,6 +44,10 @@ impl Command for Run {
                 .value_name("COMMAND")
                 .help("Command to run on refhost"),
         )
+    }
+
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(session, &[], Vec::new(), line, text)
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
@@ -115,6 +119,34 @@ mod tests {
         assert_eq!(fmt_exit(None), "None");
         assert_eq!(fmt_exit(Some(0)), "0");
         assert_eq!(fmt_exit(Some(7)), "7");
+    }
+
+    #[test]
+    fn complete_offers_target_flag_templates_and_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1", "h2"], "linux");
+        // Empty tail → the -t flag, the loaded RRID, and every host name.
+        let all = Run.complete(&session, "", "run ");
+        assert!(all.contains(&"-t".to_owned()), "{all:?}");
+        assert!(all.contains(&"--target".to_owned()), "{all:?}");
+        assert!(all.contains(&"SUSE:Maintenance:1:1".to_owned()), "{all:?}");
+        assert!(
+            all.contains(&"h1".to_owned()) && all.contains(&"h2".to_owned()),
+            "{all:?}"
+        );
+
+        // Prefix filter on a host name.
+        assert_eq!(Run.complete(&session, "h1", "run h1"), vec!["h1"]);
+
+        // Once -t is on the line it is no longer offered (synonym removal).
+        let after = Run.complete(&session, "", "run -t h1 ");
+        assert!(!after.contains(&"-t".to_owned()) && !after.contains(&"--target".to_owned()));
+    }
+
+    #[test]
+    fn complete_on_empty_session_does_not_panic() {
+        let (session, _buf) = empty_session();
+        let out = Run.complete(&session, "-", "run -");
+        assert!(out.contains(&"-t".to_owned()));
     }
 
     #[tokio::test]

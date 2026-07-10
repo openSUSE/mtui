@@ -290,6 +290,26 @@ impl Command for ListRefhosts {
         )
     }
 
+    fn complete(&self, _session: &Session, text: &str, line: &str) -> Vec<String> {
+        super::support::complete_choices(
+            &[
+                &["-T", "--testplatform"],
+                &["-n", "--name"],
+                &["-a", "--arch"],
+                &["-p", "--product"],
+                &["--version"],
+                &["--addon"],
+                &["--pool"],
+                &["--json"],
+                &["--free"],
+                &["-v", "--verbose"],
+            ],
+            Vec::new(),
+            line,
+            text,
+        )
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let config = session.config.clone();
 
@@ -577,6 +597,36 @@ mod tests {
         // Version with no minor → bare major.
         let h = host("h", "x86_64", None, vec![]);
         assert_eq!(ver_str(&h), "15");
+    }
+
+    #[test]
+    fn complete_offers_all_search_flags() {
+        use crate::commands::testkit::empty_session;
+        let (session, _buf) = empty_session();
+        let all = ListRefhosts.complete(&session, "", "list_refhosts ");
+        for f in [
+            "-T",
+            "--testplatform",
+            "-n",
+            "--name",
+            "-a",
+            "--arch",
+            "-p",
+            "--product",
+            "--version",
+            "--addon",
+            "--pool",
+            "--json",
+            "--free",
+            "-v",
+            "--verbose",
+        ] {
+            assert!(all.contains(&f.to_owned()), "missing {f}: {all:?}");
+        }
+        assert_eq!(
+            ListRefhosts.complete(&session, "--ver", "list_refhosts --ver"),
+            vec!["--version", "--verbose"]
+        );
     }
 
     #[test]

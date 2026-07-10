@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::ArgMatches;
 
-use super::support::{add_hosts_arg, named_hosts};
+use super::support::{add_hosts_arg, complete_fanout, named_hosts};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -39,6 +39,10 @@ impl Command for Reboot {
         add_hosts_arg(cmd)
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(session, &[], Vec::new(), line, text)
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         // `HostsGroup::reboot` reboots the whole group; honour `-t` by rejecting
         // an explicit host that is not connected (upstream `parse_hosts`), then
@@ -71,6 +75,16 @@ impl Command for Reboot {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+
+    #[test]
+    fn complete_offers_target_and_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let out = Reboot.complete(&session, "", "reboot ");
+        assert!(
+            out.contains(&"-t".to_owned()) && out.contains(&"h1".to_owned()),
+            "{out:?}"
+        );
+    }
 
     #[test]
     fn name_and_fanout_scope() {

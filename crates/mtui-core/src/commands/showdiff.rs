@@ -14,6 +14,7 @@ use clap::ArgMatches;
 use regex::Regex;
 use std::sync::LazyLock;
 
+use super::support::complete_with_templates;
 use crate::command::{Command, Scope};
 use crate::display::page;
 use crate::error::{CommandError, CommandResult};
@@ -178,6 +179,10 @@ impl Command for ShowDiff {
 
     fn scope(&self) -> Scope {
         Scope::Fanout
+    }
+
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_with_templates(session, &[], Vec::new(), line, text)
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
@@ -346,7 +351,7 @@ impl AnalyzeDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches};
+    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
     fn names_and_scopes() {
@@ -354,6 +359,15 @@ mod tests {
         assert_eq!(ShowDiff.scope(), Scope::Fanout);
         assert_eq!(AnalyzeDiff.name(), "analyze_diff");
         assert_eq!(AnalyzeDiff.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn show_diff_complete_offers_templates_no_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let out = ShowDiff.complete(&session, "", "show_diff ");
+        assert!(out.contains(&"-T".to_owned()), "{out:?}");
+        assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
+        assert!(!out.contains(&"h1".to_owned()), "{out:?}");
     }
 
     #[test]

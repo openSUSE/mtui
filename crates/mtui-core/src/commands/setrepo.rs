@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgGroup, ArgMatches};
 use mtui_hosts::RepoOp;
 
-use super::support::add_hosts_arg;
+use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -55,6 +55,18 @@ impl Command for SetRepo {
             )
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        // Upstream groups add/remove as one synonym tuple, so typing any of the
+        // four drops all four from further suggestions.
+        complete_fanout(
+            session,
+            &[&["-A", "--add", "-R", "--remove"]],
+            Vec::new(),
+            line,
+            text,
+        )
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let operation = if args.get_flag("add") {
             RepoOp::Add
@@ -98,6 +110,23 @@ impl Command for SetRepo {
 mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+
+    #[test]
+    fn complete_offers_addremove_group_and_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
+        let out = SetRepo.complete(&session, "", "set_repo ");
+        for f in ["-t", "-A", "--add", "-R", "--remove"] {
+            assert!(out.contains(&f.to_owned()), "missing {f}: {out:?}");
+        }
+        assert!(out.contains(&"h1".to_owned()), "{out:?}");
+        // Typing -A drops the whole add/remove synonym group.
+        let after = SetRepo.complete(&session, "-", "set_repo -A ");
+        assert!(
+            !after
+                .iter()
+                .any(|c| ["-A", "--add", "-R", "--remove"].contains(&c.as_str()))
+        );
+    }
 
     #[test]
     fn name_and_fanout_scope() {

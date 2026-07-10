@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use clap::ArgMatches;
 use mtui_testreport::{SvnRunner, TokioSvnRunner};
 
+use super::support::complete_with_templates;
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -28,6 +29,10 @@ impl Command for Checkout {
 
     fn scope(&self) -> Scope {
         Scope::Fanout
+    }
+
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_with_templates(session, &[], Vec::new(), line, text)
     }
 
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
@@ -56,12 +61,23 @@ impl Command for Checkout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches};
+    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
 
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(Checkout.name(), "checkout");
         assert_eq!(Checkout.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn complete_offers_template_flags_and_rrids_but_no_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
+        let out = Checkout.complete(&session, "", "checkout ");
+        assert!(out.contains(&"-T".to_owned()), "{out:?}");
+        assert!(out.contains(&"--all-templates".to_owned()), "{out:?}");
+        assert!(out.contains(&"SUSE:Maintenance:1:1".to_owned()), "{out:?}");
+        // No host names for a template-scoped command.
+        assert!(!out.contains(&"h1".to_owned()), "{out:?}");
     }
 
     #[tokio::test]

@@ -88,6 +88,22 @@ impl Command for Updates {
         )
     }
 
+    fn complete(&self, _session: &Session, text: &str, line: &str) -> Vec<String> {
+        super::support::complete_choices(
+            &[
+                &["--review-group"],
+                &["--status"],
+                &["--limit"],
+                &["--assignee"],
+                &["--mine"],
+                &["--all-assignees"],
+            ],
+            Vec::new(),
+            line,
+            text,
+        )
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let review_group = args.get_one::<String>("review_group").cloned();
         let status_arg = args
@@ -209,6 +225,27 @@ mod tests {
     fn name_and_single_scope() {
         assert_eq!(Updates.name(), "updates");
         assert_eq!(Updates.scope(), Scope::Single);
+    }
+
+    #[test]
+    fn complete_offers_static_flags() {
+        let (session, _buf) = empty_session();
+        let all = Updates.complete(&session, "", "updates ");
+        for f in [
+            "--review-group",
+            "--status",
+            "--limit",
+            "--assignee",
+            "--mine",
+            "--all-assignees",
+        ] {
+            assert!(all.contains(&f.to_owned()), "missing {f}: {all:?}");
+        }
+        // Prefix filter.
+        assert_eq!(
+            Updates.complete(&session, "--r", "updates --r"),
+            vec!["--review-group"]
+        );
     }
 
     #[test]

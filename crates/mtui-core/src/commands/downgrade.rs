@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::ArgMatches;
 
 use super::perform::{PerformOp, drive};
-use super::support::add_hosts_arg;
+use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
@@ -42,6 +42,10 @@ impl Command for Downgrade {
         add_hosts_arg(cmd)
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(session, &[], Vec::new(), line, text)
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let packages = session.metadata().get_package_list();
         drive(session, args, PerformOp::Downgrade(packages)).await
@@ -53,6 +57,16 @@ mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
     use crate::error::CommandError;
+
+    #[test]
+    fn complete_offers_target_and_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let out = Downgrade.complete(&session, "", "downgrade ");
+        assert!(
+            out.contains(&"-t".to_owned()) && out.contains(&"h1".to_owned()),
+            "{out:?}"
+        );
+    }
 
     #[test]
     fn name_and_fanout_scope() {

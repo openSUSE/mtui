@@ -127,6 +127,211 @@ pub fn template_completion(session: &Session, text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Filters flag/value choices for tab completion (upstream `complete_choices`).
+///
+/// `synonyms` groups interchangeable flags — e.g. `[["-t", "--target"]]`; `extra`
+/// carries the free-form candidates (host names, package names, template RRIDs).
+/// `line` is the command line typed so far and `text` the partial word under the
+/// cursor.
+///
+/// Behaviour mirrors upstream exactly:
+/// * A synonym group already present on the line is dropped from the offered set
+///   (once you type `-t`, neither `-t` nor `--target` is suggested again).
+/// * A bundled short-flag token (`-abc`, i.e. a single `-` followed by two or
+///   more non-`-` chars) is expanded to `-a`, `-b`, `-c` for that matching.
+/// * If `text` exactly equals a candidate, only that candidate is returned (the
+///   completion is already satisfied).
+/// * Otherwise every candidate starting with `text` is returned.
+///
+/// Unlike upstream — which derives the result from a `set` and so returns an
+/// unstable order — this preserves the input order (flags first in the order
+/// given, then `extra`), which keeps the menu deterministic and testable.
+#[must_use]
+pub fn complete_choices(
+    synonyms: &[&[&str]],
+    extra: Vec<String>,
+    line: &str,
+    text: &str,
+) -> Vec<String> {
+    // Ordered candidate list (flags in given order, then extras), de-duplicated
+    // while preserving first-seen order.
+    let mut choices: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let push =
+        |c: String, choices: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
+            if seen.insert(c.clone()) {
+                choices.push(c);
+            }
+        };
+    for group in synonyms {
+        for &flag in *group {
+            push(flag.to_owned(), &mut choices, &mut seen);
+        }
+    }
+    for e in extra {
+        push(e, &mut choices, &mut seen);
+    }
+
+    // Walk the already-typed tokens (skip the command name) and remove any
+    // synonym group the user has already committed to. Expand bundled short
+    // flags (`-abc` → `-a -b -c`) first, exactly like upstream.
+    let mut tokens: Vec<String> = line.split(' ').map(str::to_owned).collect();
+    if !tokens.is_empty() {
+        tokens.remove(0);
+    }
+    let mut i = 0;
+    while i < tokens.len() {
+        let tok = tokens[i].clone();
+        let bytes = tok.as_bytes();
+        if bytes.len() > 2 && bytes[0] == b'-' && bytes[1] != b'-' {
+            // Bundled short flags: enqueue each as its own `-x` token.
+            for ch in tok[1..].chars() {
+                tokens.push(format!("-{ch}"));
+            }
+            i += 1;
+            continue;
+        }
+        for group in synonyms {
+            if group.contains(&tok.as_str()) {
+                let drop: std::collections::HashSet<&str> = group.iter().copied().collect();
+                choices.retain(|c| !drop.contains(c.as_str()));
+            }
+        }
+        i += 1;
+    }
+
+    // Exact match short-circuits to just that candidate (upstream parity).
+    if let Some(exact) = choices.iter().find(|c| c.as_str() == text) {
+        return vec![exact.clone()];
+    }
+    choices
+        .into_iter()
+        .filter(|c| c.starts_with(text))
+        .collect()
+}
+
+/// Completion for a command that offers its own flags plus the template synonym
+/// groups (`-T/--template`, `--all-templates`) and the loaded RRIDs, but **no**
+/// host names (upstream commands like `add_host`, `commit`, `checkout`,
+/// `show_diff`, `put` that pass only `template_completion` to `complete_choices`).
+///
+/// `extra` carries any command-specific free-form candidates.
+#[must_use]
+pub fn complete_with_templates(
+    session: &Session,
+    own_flags: &[&[&str]],
+    extra: Vec<String>,
+    line: &str,
+    text: &str,
+) -> Vec<String> {
+    let mut groups: Vec<&[&str]> = own_flags.to_vec();
+    groups.push(&["-T", "--template"]);
+    groups.push(&["--all-templates"]);
+    let mut candidates = extra;
+    candidates.extend(session.templates.rrids());
+    complete_choices(&groups, candidates, line, text)
+}
+
+/// Completion for a host-phase (fan-out) command: `-t/--target`, the loaded
+/// template RRIDs (upstream `template_completion`), and the connected host names.
+///
+/// `extra_flags` are prepended as additional synonym groups (e.g. a command's own
+/// `--force`/`--installed` options). This is the shared shape behind `run`,
+/// `reboot`, `prepare`, `update`, `downgrade`, `install`, `uninstall`, `set_repo`,
+/// and `add_host`.
+#[must_use]
+pub fn complete_fanout(
+    session: &Session,
+    extra_flags: &[&[&str]],
+    extra: Vec<String>,
+    line: &str,
+    text: &str,
+) -> Vec<String> {
+    // `-t/--target`, the command's own flags, then the template synonym groups
+    // (`-T/--template`, `--all-templates`) — upstream `template_completion`.
+    let mut groups: Vec<&[&str]> = vec![&["-t", "--target"]];
+    groups.extend_from_slice(extra_flags);
+    groups.push(&["-T", "--template"]);
+    groups.push(&["--all-templates"]);
+    // Loaded RRIDs, then any command-specific extras (packages), then host names.
+    let mut candidates: Vec<String> = extra;
+    candidates.extend(session.templates.rrids());
+    candidates.extend(session.targets().names());
+    complete_choices(&groups, candidates, line, text)
+}
+
+/// File-path variant of [`complete_choices`] (upstream `complete_choices_filelist`).
+///
+/// Offers directory entries under the directory part of `text` (basename-prefix
+/// filtered, directories carrying a trailing `/`) merged with the flag/value
+/// choices from [`complete_choices`]. A `~` prefix expands to the home directory;
+/// an unreadable directory yields no file candidates (a transient typo must not
+/// tear down completion).
+#[must_use]
+pub fn complete_choices_filelist(
+    synonyms: &[&[&str]],
+    extra: Vec<String>,
+    line: &str,
+    text: &str,
+) -> Vec<String> {
+    let mut merged = extra;
+    merged.extend(complete_path(text));
+    complete_choices(synonyms, merged, line, text)
+}
+
+/// Lists directory entries matching the basename prefix in `text` (shared by the
+/// `edit`/`put` file completers).
+///
+/// Splits `text` into a directory part and a basename prefix, lists that
+/// directory, and offers entries whose name starts with the prefix (directories
+/// carry a trailing `/`). A `~` prefix expands to `$HOME`. A bare prefix
+/// completes against the current directory. Best-effort: an unreadable directory
+/// yields no candidates.
+#[must_use]
+pub fn complete_path(text: &str) -> Vec<String> {
+    use std::path::Path;
+
+    // `~` / `~/…` → expand to the home directory (upstream `expanduser`).
+    let expanded: String = if let Some(rest) = text.strip_prefix('~') {
+        match std::env::var_os("HOME") {
+            Some(home) => format!("{}{rest}", home.to_string_lossy()),
+            None => text.to_owned(),
+        }
+    } else {
+        text.to_owned()
+    };
+
+    let (dir, prefix) = match expanded.rfind('/') {
+        // Keep the trailing slash so the re-joined candidate stays anchored.
+        Some(idx) => (expanded[..=idx].to_owned(), expanded[idx + 1..].to_owned()),
+        None => (String::new(), expanded.clone()),
+    };
+    let read_dir = if dir.is_empty() {
+        std::fs::read_dir(Path::new("."))
+    } else {
+        std::fs::read_dir(Path::new(&dir))
+    };
+    let Ok(entries) = read_dir else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let mut candidate = format!("{dir}{name}");
+        if is_dir {
+            candidate.push('/');
+        }
+        out.push(candidate);
+    }
+    out.sort();
+    out
+}
+
 /// Adds the repeatable `-t/--target` host argument (upstream `_add_hosts_arg`).
 ///
 /// `action="append"` upstream → [`ArgAction::Append`] here: the flag may be
@@ -246,6 +451,109 @@ mod tests {
 
     fn cmd() -> clap::Command {
         add_hosts_arg(clap::Command::new("t").no_binary_name(true))
+    }
+
+    #[test]
+    fn complete_choices_offers_flags_and_extras_by_prefix() {
+        let out = complete_choices(
+            &[&["-t", "--target"]],
+            vec!["host1".to_owned(), "host2".to_owned()],
+            "run ",
+            "",
+        );
+        assert_eq!(out, vec!["-t", "--target", "host1", "host2"]);
+
+        // Prefix filter on a flag.
+        assert_eq!(
+            complete_choices(&[&["-t", "--target"]], vec![], "run ", "--"),
+            vec!["--target"]
+        );
+        // Prefix filter on an extra.
+        assert_eq!(
+            complete_choices(&[&["-t"]], vec!["host1".to_owned()], "run ", "ho"),
+            vec!["host1"]
+        );
+    }
+
+    #[test]
+    fn complete_choices_drops_used_synonym_group() {
+        // `-t` already typed → neither `-t` nor `--target` is offered again.
+        let out = complete_choices(
+            &[&["-t", "--target"]],
+            vec!["host1".to_owned()],
+            "run -t host1 ",
+            "",
+        );
+        assert_eq!(out, vec!["host1"]);
+        // The long form counts too.
+        let out = complete_choices(&[&["-t", "--target"]], vec![], "run --target host1 ", "-");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn complete_choices_expands_bundled_short_flags() {
+        // `-if` on the line consumes both the `-i/-f` groups.
+        let out = complete_choices(
+            &[
+                &["-i", "--installed"],
+                &["-f", "--force"],
+                &["-t", "--target"],
+            ],
+            vec![],
+            "prepare -if ",
+            "-",
+        );
+        // Only the -t group survives.
+        assert_eq!(out, vec!["-t", "--target"]);
+    }
+
+    #[test]
+    fn complete_choices_exact_match_short_circuits() {
+        let out = complete_choices(
+            &[&["-t", "--target"]],
+            vec!["host1".to_owned()],
+            "run ",
+            "host1",
+        );
+        assert_eq!(out, vec!["host1"]);
+    }
+
+    #[test]
+    fn complete_choices_dedupes_preserving_order() {
+        let out = complete_choices(
+            &[&["-t"]],
+            vec!["-t".to_owned(), "host1".to_owned(), "host1".to_owned()],
+            "run ",
+            "",
+        );
+        assert_eq!(out, vec!["-t", "host1"]);
+    }
+
+    #[test]
+    fn complete_path_lists_and_marks_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "x").unwrap();
+        std::fs::create_dir(dir.path().join("apex")).unwrap();
+        let base = format!("{}/", dir.path().display());
+
+        let a = complete_path(&format!("{base}a"));
+        assert!(a.iter().any(|c| c.ends_with("alpha.txt")));
+        assert!(a.iter().any(|c| c.ends_with("apex/")));
+    }
+
+    #[test]
+    fn complete_path_unreadable_is_empty() {
+        assert!(complete_path("/no/such/dir/x").is_empty());
+    }
+
+    #[test]
+    fn complete_choices_filelist_merges_files_and_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("payload.bin"), "x").unwrap();
+        let path = format!("{}/pay", dir.path().display());
+
+        let out = complete_choices_filelist(&[&["-t"]], vec![], "put ", &path);
+        assert!(out.iter().any(|c| c.ends_with("payload.bin")));
     }
 
     fn parse(argv: &[&str]) -> ArgMatches {

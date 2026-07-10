@@ -99,14 +99,26 @@ impl Completer for MtuiCompleter {
         } else {
             // Per-command completion: first token names the command.
             let first_token = stripped.split(' ').next().unwrap_or("");
-            match self.registry.get(first_token) {
-                None => Vec::new(),
-                Some(cmd) => {
-                    let session = self
-                        .session
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    cmd.complete(&session, text, stripped)
+            // `help <cmd>` completes over command names. Upstream `Help.complete`
+            // reaches the registry via the base-class command set; the trait's
+            // `complete(session, …)` has no registry handle, so the adapter — which
+            // does — supplies the candidates here (canonical names + aliases).
+            if first_token == "help" {
+                self.registry
+                    .keys()
+                    .filter(|key| key.starts_with(text))
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            } else {
+                match self.registry.get(first_token) {
+                    None => Vec::new(),
+                    Some(cmd) => {
+                        let session = self
+                            .session
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        cmd.complete(&session, text, stripped)
+                    }
                 }
             }
         };
@@ -324,6 +336,42 @@ mod tests {
         let mut c = completer();
         // `reboot` (BareCmd) has the default empty `complete()`.
         assert!(c.complete("reboot ", 7).is_empty());
+    }
+
+    /// A bare command named `help` so the adapter's `help`-argument special case
+    /// (registry-backed, since the trait `complete` has no registry) is reachable.
+    struct HelpCmd;
+
+    #[async_trait]
+    impl Command for HelpCmd {
+        fn name(&self) -> &'static str {
+            "help"
+        }
+        fn scope(&self) -> Scope {
+            Scope::Single
+        }
+        async fn call(&self, _session: &mut Session, _args: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn help_argument_completes_over_command_names() {
+        let mut registry = Registry::new();
+        registry.register(Arc::new(FixedCmd)); // name "run", alias "r"
+        registry.register(Arc::new(HelpCmd));
+        let session = Session::new(Config::default(), true);
+        let mut c = MtuiCompleter::new(Arc::new(registry), Arc::new(Mutex::new(session)));
+
+        // `help r` → the registry names/aliases starting with "r" (run, r).
+        let s = c.complete("help r", 6);
+        let mut got = values(&s);
+        got.sort_unstable();
+        assert_eq!(got, vec!["r", "run"]);
+        // `help ` (empty tail) offers every command key.
+        let s = c.complete("help ", 5);
+        let all = values(&s);
+        assert!(all.contains(&"run") && all.contains(&"help"));
     }
 
     // ---- session-aware completion (the Arc<Mutex<Session>> bridge) ---------

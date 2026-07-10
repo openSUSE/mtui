@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 
 use super::perform::{PerformOp, drive};
-use super::support::add_hosts_arg;
+use super::support::{add_hosts_arg, complete_fanout};
 use crate::command::{Command, Scope};
 use crate::error::CommandResult;
 use crate::session::Session;
@@ -51,6 +51,16 @@ impl Command for Update {
             )
     }
 
+    fn complete(&self, session: &Session, text: &str, line: &str) -> Vec<String> {
+        complete_fanout(
+            session,
+            &[&["--noprepare"], &["--newpackage"]],
+            Vec::new(),
+            line,
+            text,
+        )
+    }
+
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
         let noprepare = args.get_flag("noprepare");
         let newpackage = args.get_flag("newpackage");
@@ -83,6 +93,16 @@ mod tests {
     use super::*;
     use crate::commands::testkit::{empty_session, matches, session_with_hosts};
     use crate::error::CommandError;
+
+    #[test]
+    fn complete_offers_own_flags_target_and_hosts() {
+        let (session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "linux");
+        let out = Update.complete(&session, "", "update ");
+        for f in ["-t", "--noprepare", "--newpackage"] {
+            assert!(out.contains(&f.to_owned()), "missing {f}: {out:?}");
+        }
+        assert!(out.contains(&"h1".to_owned()), "{out:?}");
+    }
 
     #[test]
     fn name_and_fanout_scope() {

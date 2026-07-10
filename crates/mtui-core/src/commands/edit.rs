@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches};
 
+use super::support::complete_path;
 use crate::command::Command;
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
@@ -50,47 +51,6 @@ impl Command for Edit {
             "interactive editor is not available in this mode (REPL only)".to_owned(),
         ))
     }
-}
-
-/// Minimal file-path completion for the `filename` argument (upstream
-/// `complete_choices_filelist`).
-///
-/// Splits `text` into a directory part and a basename prefix, lists that
-/// directory, and offers entries whose name starts with the prefix (directories
-/// carry a trailing `/`). A bare prefix completes against the current directory.
-/// Best-effort: an unreadable directory yields no candidates.
-fn complete_path(text: &str) -> Vec<String> {
-    use std::path::Path;
-
-    let (dir, prefix) = match text.rfind('/') {
-        // Keep the trailing slash so the re-joined candidate stays anchored.
-        Some(idx) => (&text[..=idx], &text[idx + 1..]),
-        None => ("", text),
-    };
-    let read_dir = if dir.is_empty() {
-        std::fs::read_dir(Path::new("."))
-    } else {
-        std::fs::read_dir(Path::new(dir))
-    };
-    let Ok(entries) = read_dir else {
-        return Vec::new();
-    };
-
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with(prefix) {
-            continue;
-        }
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let mut candidate = format!("{dir}{name}");
-        if is_dir {
-            candidate.push('/');
-        }
-        out.push(candidate);
-    }
-    out.sort();
-    out
 }
 
 #[cfg(test)]
