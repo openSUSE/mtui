@@ -13,6 +13,10 @@ use crate::session::Session;
 /// Ports upstream `mtui.commands.simpleset.SetTimeout`, which calls
 /// `target.set_timeout(value)` per host. `0` disables the timeout. Selection
 /// acts on the named `-t` hosts, or all enabled hosts when omitted.
+///
+/// A host-phase command that takes only `-t/--target` (upstream `_add_hosts_arg`
+/// without `_add_template_arg`), so it is [`Scope::Active`] to match upstream:
+/// it acts on the active template's host set, not once per loaded template.
 pub struct SetTimeout;
 
 #[async_trait]
@@ -26,7 +30,7 @@ impl Command for SetTimeout {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Active
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -69,9 +73,11 @@ mod tests {
     use crate::commands::testkit::{matches, session_with_hosts};
 
     #[test]
-    fn name_and_fanout_scope() {
+    fn name_and_active_scope() {
         assert_eq!(SetTimeout.name(), "set_timeout");
-        assert_eq!(SetTimeout.scope(), Scope::Fanout);
+        // Upstream `SetTimeout` is `-t`-only (no `_add_template_arg`), so it
+        // stays active rather than fanning out per loaded template.
+        assert_eq!(SetTimeout.scope(), Scope::Active);
     }
 
     #[tokio::test]

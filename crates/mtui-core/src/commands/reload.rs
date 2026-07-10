@@ -15,6 +15,10 @@ use crate::session::Session;
 /// [`Target::reload_system`](mtui_hosts::Target::reload_system). Best-effort: a
 /// host whose parse fails logs a warning and keeps its previously recorded
 /// system.
+///
+/// A host-phase command that takes only `-t/--target` (upstream `_add_hosts_arg`
+/// without `_add_template_arg`), so it is [`Scope::Active`] to match upstream:
+/// it acts on the active template's host set, not once per loaded template.
 pub struct ReloadProducts;
 
 #[async_trait]
@@ -28,7 +32,7 @@ impl Command for ReloadProducts {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Active
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -66,9 +70,11 @@ mod tests {
     use mtui_types::enums::{ExecutionMode, TargetState};
 
     #[test]
-    fn name_and_fanout_scope() {
+    fn name_and_active_scope() {
         assert_eq!(ReloadProducts.name(), "reload_products");
-        assert_eq!(ReloadProducts.scope(), Scope::Fanout);
+        // Upstream `ReloadProducts` is `-t`-only (no `_add_template_arg`), so it
+        // stays active rather than fanning out per loaded template.
+        assert_eq!(ReloadProducts.scope(), Scope::Active);
     }
 
     #[tokio::test]

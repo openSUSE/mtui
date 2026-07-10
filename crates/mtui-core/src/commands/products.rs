@@ -14,6 +14,10 @@ use crate::session::Session;
 /// host's parsed [`System`](mtui_types::system::System) through the display's
 /// `list_products` sink (base product + addons). Reflects whatever was last
 /// parsed; `reload_products` refreshes it.
+///
+/// A host-phase command that takes only `-t/--target` (upstream `_add_hosts_arg`
+/// without `_add_template_arg`), so it is [`Scope::Active`] to match upstream:
+/// it acts on the active template's host set, not once per loaded template.
 pub struct ListProducts;
 
 #[async_trait]
@@ -27,7 +31,7 @@ impl Command for ListProducts {
     }
 
     fn scope(&self) -> Scope {
-        Scope::Fanout
+        Scope::Active
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
@@ -70,9 +74,11 @@ mod tests {
     use crate::commands::testkit::{matches, session_with_hosts};
 
     #[test]
-    fn name_and_fanout_scope() {
+    fn name_and_active_scope() {
         assert_eq!(ListProducts.name(), "list_products");
-        assert_eq!(ListProducts.scope(), Scope::Fanout);
+        // Upstream `ListProducts` is `-t`-only (no `_add_template_arg`), so it
+        // stays active rather than fanning out per loaded template.
+        assert_eq!(ListProducts.scope(), Scope::Active);
     }
 
     #[tokio::test]
