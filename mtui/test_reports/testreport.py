@@ -531,6 +531,7 @@ class TestReport(ABC):
             string, or `(False, False)` if the connection fails.
 
         """
+        target = None
         try:
             target = Target(
                 self.config,
@@ -563,14 +564,27 @@ class TestReport(ABC):
                 self._autolock_new_target(target)
         except KeyboardInterrupt:
             logger.warning("Connection to %s canceled by user", host)
+            self._close_failed_target(target)
             return False, False
         except Exception:
             logger.debug(format_exc())
             msg = f"failed to add host {host} to target list"
             logger.warning(msg)
+            # A failure after a successful connect (e.g. try_claim/lock
+            # writing the remote lock file) must not leak the open SSH
+            # session: it is not stored in self.targets, and paramiko
+            # transports are not reliably closed by GC.
+            self._close_failed_target(target)
             return False, False
         else:
             return target, new_system
+
+    @staticmethod
+    def _close_failed_target(target) -> None:
+        """Best-effort close of a target whose setup failed mid-way."""
+        if target is not None:
+            with suppress(Exception):
+                target.close()
 
     def connect_targets(self) -> None:
         """Connects to all targets."""
@@ -619,6 +633,10 @@ class TestReport(ABC):
             for host in list(targets.keys()):
                 del targets[host]
             targets = {}
+            # Discard the partially collected batch entirely: keeping
+            # new_systems entries whose Target objects were just dropped
+            # would merge phantom hosts into self.systems below.
+            new_systems = {}
             logger.warning("Connection to refhosts cancelled by user")
         finally:
             executor.shutdown(wait=False)
@@ -629,11 +647,19 @@ class TestReport(ABC):
         # sibling candidate in the same slot (RFC §5.7 backup-refhost).
         self._connect_pool_backups(hosts, targets, new_systems)
 
-        # We need to be sure that only the system property only have the  connected hosts
-        self.systems = {host: system for host, system in new_systems.items() if system}
+        # Merge: new_systems only holds hosts connected by THIS invocation
+        # (hosts already in self.targets are excluded above), so rebuilding
+        # self.systems from it dropped every earlier-connected host --
+        # autoconnect calls connect_targets twice, and list_metadata's
+        # "Hosts" line then showed only the second batch while self.targets
+        # (which accumulates) still held them all.
+        self.systems.update(
+            {host: system for host, system in new_systems.items() if system}
+        )
         for t in self.targets.copy():
             if not self.targets[t].connection.is_active():
                 del self.targets[t]
+                self.systems.pop(t, None)
 
         self.targets.update(
             {host: target for host, target in targets.items() if target}
@@ -739,6 +765,10 @@ class TestReport(ABC):
 
         except Exception:
             if hostname in self.targets:
+                # Same leak as connect_target: a failure after a successful
+                # connect() must close the open SSH session before the last
+                # reference to it is dropped.
+                self._close_failed_target(self.targets[hostname])
                 del self.targets[hostname]
             if hostname in self.systems:
                 del self.systems[hostname]

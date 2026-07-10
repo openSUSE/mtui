@@ -995,3 +995,130 @@ def test_list_versions_aggregates_by_host_then_package(tmp_path: Path) -> None:
     assert out == "ok"
     sink.assert_called_once()
     targets.run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# connect_target / connect_targets: leak on late failure, systems merge
+# ---------------------------------------------------------------------------
+
+
+def test_connect_target_closes_target_when_lock_raises(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failure after a successful connect must close the SSH session.
+
+    An error from autolock (target.lock) after connect() succeeded fell
+    into the broad except, which returned (False, False) without closing:
+    the open Target was never stored in self.targets, so the paramiko
+    transport leaked (GC does not reliably close it).
+    """
+    r = _make(tmp_path)
+    r.lock_comment = "testing of SUSE:Maintenance:12358:199773"
+    fake = MagicMock()
+    fake.system = "sys"
+    fake.lock.side_effect = RuntimeError("ssh dropped writing lock file")
+    monkeypatch.setattr(
+        "mtui.test_reports.testreport.Target", MagicMock(return_value=fake)
+    )
+    monkeypatch.setattr(r, "_verify_target_products", lambda *_a: None)
+
+    target, system = r.connect_target("h1")
+
+    assert (target, system) == (False, False)
+    fake.close.assert_called_once()
+
+
+def test_connect_targets_second_batch_keeps_first_batch_systems(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """self.systems must accumulate across connect_targets invocations.
+
+    autoconnect calls connect_targets twice; the second call rebuilt
+    self.systems from only the newly connected hosts, so the first
+    batch vanished from the "Hosts" line while self.targets kept them.
+    """
+    r = _make(tmp_path)
+
+    def _fake_connect(host):
+        t = MagicMock()
+        t.hostname = host
+        t.connection.is_active.return_value = True
+        return t, f"sys-{host}"
+
+    monkeypatch.setattr(r, "connect_target", _fake_connect)
+
+    r.hostnames = {"foo"}
+    r.connect_targets()
+    assert set(r.systems) == {"foo"}
+
+    r.hostnames = {"foo", "bar"}
+    r.connect_targets()  # only bar is new; foo is already connected
+
+    assert set(r.targets) == {"foo", "bar"}
+    assert set(r.systems) == {"foo", "bar"}  # foo must not vanish
+
+
+def test_connect_target_closes_target_on_keyboard_interrupt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Ctrl-C after a successful connect must also close the session."""
+    r = _make(tmp_path)
+    r.lock_comment = "testing of SUSE:Maintenance:12358:199773"
+    fake = MagicMock()
+    fake.system = "sys"
+    fake.lock.side_effect = KeyboardInterrupt
+    monkeypatch.setattr(
+        "mtui.test_reports.testreport.Target", MagicMock(return_value=fake)
+    )
+    monkeypatch.setattr(r, "_verify_target_products", lambda *_a: None)
+
+    target, system = r.connect_target("h1")
+
+    assert (target, system) == (False, False)
+    fake.close.assert_called_once()
+
+
+def test_connect_targets_prunes_systems_of_inactive_targets(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A dropped connection leaves neither a target nor a systems entry."""
+    r = _make(tmp_path)
+
+    def _fake_connect(host):
+        t = MagicMock()
+        t.hostname = host
+        t.connection.is_active.return_value = True
+        return t, f"sys-{host}"
+
+    monkeypatch.setattr(r, "connect_target", _fake_connect)
+
+    r.hostnames = {"foo"}
+    r.connect_targets()
+    # foo's connection dies before the next round
+    r.targets["foo"].connection.is_active.return_value = False  # ty: ignore[unresolved-attribute]
+
+    r.hostnames = {"foo", "bar"}
+    r.connect_targets()
+
+    assert set(r.targets) == {"bar"}
+    # the stale systems entry must be gone with the inactive target
+    assert "foo" not in r.systems
+    assert "bar" in r.systems
+
+
+def test_add_target_closes_target_when_setup_fails(tmp_path: Path, monkeypatch) -> None:
+    """add_host -t: a post-connect failure must close the session too."""
+    r = _make(tmp_path)
+    r.lock_comment = "testing of SUSE:Maintenance:12358:199773"
+    fake = MagicMock()
+    fake.system = "sys"
+    fake.lock.side_effect = RuntimeError("lockfile write failed")
+    monkeypatch.setattr(
+        "mtui.test_reports.testreport.Target", MagicMock(return_value=fake)
+    )
+    monkeypatch.setattr(r, "_verify_target_products", lambda *_a: None)
+
+    r.add_target("h1")
+
+    assert "h1" not in r.targets
+    fake.close.assert_called_once()
