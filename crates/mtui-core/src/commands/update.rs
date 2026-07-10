@@ -62,6 +62,7 @@ impl Command for Update {
     }
 
     async fn call(&self, session: &mut Session, args: &ArgMatches) -> CommandResult {
+        tracing::info!("Updating");
         let noprepare = args.get_flag("noprepare");
         let newpackage = args.get_flag("newpackage");
         // Upstream fires a desktop toast on both outcomes (`prompt.notify_user`);
@@ -79,6 +80,7 @@ impl Command for Update {
         match &result {
             Ok(()) => {
                 session.notify_user(&format!("updating {rrid} finished"), false);
+                tracing::info!("done");
             }
             Err(_) => {
                 session.notify_user(&format!("updating {rrid} failed"), true);
@@ -91,7 +93,9 @@ impl Command for Update {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{
+        empty_session, matches, session_with_failing_update, session_with_hosts,
+    };
     use crate::error::CommandError;
 
     #[test]
@@ -150,6 +154,26 @@ mod tests {
         let args = matches(&Update, &["--noprepare"]);
         assert!(!session.notify_user("probe", false));
         Update.call(&mut session, &args).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failure_fires_failed_notification_and_returns_err() {
+        use std::sync::{Arc, Mutex};
+        // The report's perform_update returns Err ⇒ the command must surface the
+        // failure (Err result) and fire exactly one *error*-class toast.
+        let (mut session, _buf) = session_with_failing_update("SUSE:Maintenance:1:1", &["h1"]);
+        let seen = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
+        let sink = Arc::clone(&seen);
+        session.set_notify_sink(Box::new(move |msg: &str, err: bool| {
+            sink.lock().unwrap().push((msg.to_owned(), err));
+        }));
+        let args = matches(&Update, &["--noprepare"]);
+        let err = Update.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)), "got: {err:?}");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "expected exactly one toast: {seen:?}");
+        assert!(seen[0].0.contains("failed"), "got: {:?}", seen[0]);
+        assert!(seen[0].1, "failure toast must be error-class");
     }
 
     #[tokio::test]

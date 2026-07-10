@@ -26,11 +26,33 @@
 use std::collections::{BTreeMap, HashMap};
 
 use mtui_hosts::{Command, HostsGroup, OperationGroup, RepoOp, SetRepo};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::update_workflow::actions::ActionCommands;
 use crate::update_workflow::checks::{CheckArgs, CheckFn};
 use crate::update_workflow::{CheckProvider, DoerProvider, Role, UpdateError, WorkflowRegistry};
+
+/// A per-host command map paired with the transactional-host reboot map, as
+/// built by [`build_update_maps`] (`(commands, reboot)`).
+type UpdateMaps = (BTreeMap<String, String>, BTreeMap<String, String>);
+
+/// Why an update did not apply — distinguishes a *check* failure (packages may be
+/// half-applied, so roll back) from a *config* failure (a concrete target has no
+/// updater doer, so nothing was installed and there is nothing to roll back).
+///
+/// Both map to a single [`UpdateError`] at the command boundary; the distinction
+/// exists only so [`perform_update_with_rollback`] rolls back on `Check` and
+/// skips rollback on `MissingUpdater`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UpdateFailure {
+    /// One or more hosts failed the `updater` check after the command ran.
+    Check(UpdateError),
+    /// A concrete target has no updater doer (upstream `MissingUpdaterError`);
+    /// unlike upstream — which logs and returns as if successful — mtui-rs treats
+    /// this as a hard failure so a target that cannot be updated never reports
+    /// "finished".
+    MissingUpdater(UpdateError),
+}
 
 /// Drives [`perform_update`] from a concrete report, reading the package list
 /// and `$repa` selector (`maintenance_id` / `review_id`) off the report's RRID.
@@ -45,12 +67,13 @@ pub async fn perform_update_from_report<R>(
     targets: &mut HostsGroup,
     noprepare: bool,
     newpackage: bool,
-) where
+) -> Result<(), UpdateFailure>
+where
     R: crate::testreport::TestReport + SetRepo,
 {
     let Some(rrid) = report.base().rrid.as_ref() else {
         debug!("perform_update: no RRID loaded; nothing to update");
-        return;
+        return Ok(());
     };
     let maintenance_id = rrid.maintenance_id.clone();
     let review_id = rrid.review_id.to_string();
@@ -64,7 +87,43 @@ pub async fn perform_update_from_report<R>(
         noprepare,
         newpackage,
     )
-    .await;
+    .await
+}
+
+/// Drives [`perform_update_from_report`] and, on a *check* failure, rolls the
+/// packages back via [`perform_downgrade`] before re-surfacing the original
+/// error — the port of upstream `testreport.perform_update`'s
+/// `except UpdateError: ... perform_downgrade(...); raise`.
+///
+/// A `MissingUpdater` failure installed nothing, so it re-surfaces without a
+/// rollback attempt. The rollback is best-effort ([`perform_downgrade`] returns
+/// `()`), so it can never bury the original update error.
+pub async fn perform_update_with_rollback<R>(
+    report: &R,
+    targets: &mut HostsGroup,
+    noprepare: bool,
+    newpackage: bool,
+) -> Result<(), UpdateError>
+where
+    R: crate::testreport::TestReport + SetRepo,
+{
+    match perform_update_from_report(report, targets, noprepare, newpackage).await {
+        Ok(()) => Ok(()),
+        Err(UpdateFailure::MissingUpdater(e)) => {
+            // Hard fail, but nothing was installed → no rollback.
+            error!(error = %e, "update failed");
+            Err(e)
+        }
+        Err(UpdateFailure::Check(e)) => {
+            error!("Update failed");
+            warn!("Error while updating. Rolling back changes");
+            let pkgs = report.get_package_list();
+            let id = report.base().rrid.as_ref().map(ToString::to_string);
+            add_op_history(targets, "downgrade", id.as_deref(), &pkgs).await;
+            perform_downgrade(targets, report, &pkgs).await;
+            Err(e)
+        }
+    }
 }
 
 /// Records a workflow op in every target's remote history file before fan-out.
@@ -549,7 +608,7 @@ pub async fn perform_update(
     review_id: &str,
     noprepare: bool,
     newpackage: bool,
-) {
+) -> Result<(), UpdateFailure> {
     let registry = WorkflowRegistry::default();
 
     if !noprepare {
@@ -560,8 +619,10 @@ pub async fn perform_update(
 
     targets.package_check(false).await;
 
-    if targets.update_lock().await.is_err() {
-        return;
+    if let Err(e) = targets.update_lock().await {
+        return Err(UpdateFailure::Check(UpdateError::reason_only(
+            e.to_string(),
+        )));
     }
 
     targets.fanout_set_repo(RepoOp::Add, report).await;
@@ -569,26 +630,28 @@ pub async fn perform_update(
     let repa = repa_for(maintenance_id, review_id);
     let joined = packages.join(" ");
     let (commands, reboot) = match build_update_maps(targets, &registry, &repa, &joined) {
-        Some(maps) => maps,
-        None => {
-            // MissingUpdaterError: remove the repo we just added and abort.
+        Ok(maps) => maps,
+        Err(e) => {
+            // MissingUpdaterError: remove the repo we just added and abort. Unlike
+            // upstream (log + return as success), a target with no updater doer is
+            // a hard failure so it never reports "finished".
             targets.fanout_set_repo(RepoOp::Remove, report).await;
             targets.unlock().await;
-            return;
+            return Err(UpdateFailure::MissingUpdater(e));
         }
     };
 
     // Two-phase: run + check + reboot under the lock (unlock always), then the
     // repo cleanup only on success.
-    let update_ok = update_run_phase(targets, &registry, commands, reboot).await;
+    let update_result = update_run_phase(targets, &registry, commands, reboot).await;
 
-    if !update_ok {
+    if let Err(e) = update_result {
         // KEEP the test update repositories in place for retry/diagnosis.
         warn!(
             "update did not complete; leaving the test update repositories in place \
              for retry/diagnosis (remove later with `set_repo --remove`)"
         );
-        return;
+        return Err(UpdateFailure::Check(e));
     }
 
     if newpackage {
@@ -600,27 +663,29 @@ pub async fn perform_update(
     // Success: remove the test update repositories.
     if targets.update_lock().await.is_err() {
         warn!("could not lock hosts to remove update repositories; skipping repo cleanup");
-        return;
+        return Ok(());
     }
     targets.fanout_set_repo(RepoOp::Remove, report).await;
     targets.unlock().await;
+    Ok(())
 }
 
 /// Runs the update commands, checks every host (collecting failures), reboots on
 /// success, and **always** unlocks (upstream's inner `finally`).
 ///
-/// Returns `true` when every host's check passed, `false` otherwise. The
-/// failure aggregation mirrors upstream: a single failure is logged as-is; more
-/// than one is summarised.
+/// Returns `Ok(())` when every host's check passed, otherwise `Err` with the
+/// aggregated [`UpdateError`]. The aggregation mirrors upstream
+/// (`hostgroup.py:661-667`): a single failure is returned verbatim; more than
+/// one is summarised into `"update failed on {hosts} ({detail})"`.
 async fn update_run_phase(
     targets: &mut HostsGroup,
     registry: &WorkflowRegistry,
     commands: BTreeMap<String, String>,
     reboot: BTreeMap<String, String>,
-) -> bool {
+) -> Result<(), UpdateError> {
     targets.run(Command::PerHost(commands)).await;
 
-    let failures = run_checks(targets, registry, Role::Update);
+    let mut failures = run_checks(targets, registry, Role::Update);
     let failed_hosts: std::collections::HashSet<String> =
         failures.iter().filter_map(|e| e.host.clone()).collect();
     let ok_hosts: Vec<String> = targets
@@ -629,55 +694,64 @@ async fn update_run_phase(
         .filter(|hn| !failed_hosts.contains(hn))
         .collect();
     if !ok_hosts.is_empty() {
-        debug!(hosts = %ok_hosts.join(", "), "update succeeded");
+        info!(hosts = %ok_hosts.join(", "), "update succeeded on");
     }
     for e in &failures {
         error!(error = %e, "update failed");
     }
 
-    let ok = failures.is_empty();
-    if ok {
+    let result = if failures.is_empty() {
         reboot_transactional(targets, reboot).await;
+        Ok(())
     } else if failures.len() == 1 {
-        error!(error = %failures[0], "update failed on one host");
+        // Preserve the exact single-host error the caller used to get.
+        Err(failures.remove(0))
     } else {
-        let hosts: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
+        let hosts: Vec<String> = {
+            let mut h: Vec<String> = failures.iter().filter_map(|e| e.host.clone()).collect();
+            h.sort();
+            h
+        };
         let detail: Vec<String> = failures.iter().map(ToString::to_string).collect();
-        error!(
-            hosts = %hosts.join(", "),
-            detail = %detail.join("; "),
-            "update failed on multiple hosts"
-        );
-    }
+        Err(UpdateError::reason_only(format!(
+            "update failed on {} ({})",
+            hosts.join(", "),
+            detail.join("; ")
+        )))
+    };
 
     targets.unlock().await;
-    ok
+    result
 }
 
 /// Builds the per-host updater command map (with `$repa` + `$packages`) and the
-/// transactional reboot map. Returns `None` if any host is missing an updater
-/// (upstream's `MissingUpdaterError`).
+/// transactional reboot map. Returns `Err` with the offending host's
+/// [`UpdateError`] if any host is missing an updater (upstream's
+/// `MissingUpdaterError`) — a hard failure in mtui-rs.
 fn build_update_maps(
     targets: &HostsGroup,
     registry: &WorkflowRegistry,
     repa: &str,
     packages: &str,
-) -> Option<(BTreeMap<String, String>, BTreeMap<String, String>)> {
+) -> Result<UpdateMaps, UpdateError> {
     let mut commands = BTreeMap::new();
     let mut reboot = BTreeMap::new();
     for target in targets.targets() {
-        let (release, transactional) = host_key(target)?;
-        let doer = registry.doer(Role::Update, &release, transactional).ok()?;
+        let missing = || UpdateError::new("missing updater", target.hostname());
+        let (release, transactional) = host_key(target).ok_or_else(missing)?;
+        let doer = registry
+            .doer(Role::Update, &release, transactional)
+            .map_err(|_| missing())?;
         let vars: HashMap<&str, &str> = [("repa", repa), ("packages", packages)]
             .into_iter()
             .collect();
-        let command = doer.render_command(&vars).ok()?;
+        let command = doer.render_command(&vars).map_err(|_| missing())?;
         commands.insert(target.hostname().to_owned(), command);
         if transactional && let Ok(Some(reboot_cmd)) = doer.render_reboot() {
             reboot.insert(target.hostname().to_owned(), reboot_cmd);
         }
     }
-    Some((commands, reboot))
+    Ok((commands, reboot))
 }
 
 #[cfg(test)]
@@ -850,7 +924,8 @@ mod tests {
         // noprepare=true keeps the flow to update + checks; the report drives the
         // repo fan-out through its own (real) set_repo, which no-ops with an
         // empty update_repos map.
-        perform_update(&mut group, &report, &packages, "42", "7", true, false).await;
+        let res = perform_update(&mut group, &report, &packages, "42", "7", true, false).await;
+        assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         // The updater command interpolates the `$repa` selector `:p=42:7`.
         let cmds = handle.commands();
@@ -862,8 +937,9 @@ mod tests {
 
     #[tokio::test]
     async fn perform_update_aborts_cleanly_when_no_updater_doer() {
-        // An unknown release has no updater doer; the flow removes the repo and
-        // returns without issuing an updater command.
+        // An unknown release has no updater doer. mtui-rs treats this as a hard
+        // fail: Err(MissingUpdater), no updater command issued, and the repo the
+        // flow added is removed on the abort path.
         let conn = MockConnection::new("h1").with_default(CommandLog::new("", "", "", 0, 0));
         let handle = conn.clone();
         let mut t = Target::with_connection(
@@ -881,11 +957,13 @@ mod tests {
             false,
         );
         let mut group = HostsGroup::new(vec![t], false);
+        let repo = RecordingRepo::default();
         let report = report_with_rrid();
+        let _ = report;
 
-        perform_update(
+        let res = perform_update(
             &mut group,
-            &report,
+            &repo,
             &["pkg-a".to_owned()],
             "42",
             "7",
@@ -893,11 +971,27 @@ mod tests {
             false,
         )
         .await;
+        let err = match res {
+            Err(UpdateFailure::MissingUpdater(e)) => e,
+            other => panic!("missing updater is a hard fail Err(MissingUpdater): {other:?}"),
+        };
+        assert_eq!(err.host.as_deref(), Some("h1"));
+        assert!(
+            err.reason.contains("missing updater"),
+            "reason: {}",
+            err.reason
+        );
 
         let cmds = handle.commands();
         assert!(
             !cmds.iter().any(|c| c.contains(":p=42:7")),
             "no updater doer ⇒ no updater command issued: {cmds:?}"
+        );
+        let ops = repo.ops.lock().unwrap().clone();
+        assert!(ops.contains(&RepoOp::Add), "repo add ran: {ops:?}");
+        assert!(
+            ops.contains(&RepoOp::Remove),
+            "abort removes the repo: {ops:?}"
         );
     }
 
@@ -986,7 +1080,8 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        perform_update(&mut group, &report, &packages, "42", "7", true, false).await;
+        let res = perform_update(&mut group, &report, &packages, "42", "7", true, false).await;
+        assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         // The slmicro updater is transactional, so a reboot command is fired on
         // success (upstream `_reboot`); reboot uses fire-and-forget, recorded
@@ -1012,7 +1107,11 @@ mod tests {
 
         // Drive perform_update with the recording repo as the SetRepo hook by
         // calling the module fn directly (SlReport delegates to it).
-        perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        let res = perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        assert!(
+            matches!(res, Err(UpdateFailure::Check(_))),
+            "a check failure returns Err(Check): {res:?}"
+        );
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(ops.contains(&RepoOp::Add), "repo add must run: {ops:?}");
@@ -1035,13 +1134,45 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        let res = perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        let err = match res {
+            Err(UpdateFailure::Check(e)) => e,
+            other => panic!("multi-host failure returns Err(Check): {other:?}"),
+        };
+        // Aggregated message names both hosts (sorted) — upstream's summary form.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("update failed on h1, h2"),
+            "aggregated message names both hosts: {msg}"
+        );
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(ops.contains(&RepoOp::Add));
         assert!(
             !ops.contains(&RepoOp::Remove),
             "multi-host failure keeps repos: {ops:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn perform_update_with_rollback_downgrades_on_check_failure() {
+        // A check failure (exit 104) drives the rollback wrapper: it re-surfaces
+        // the original UpdateError AND issues a downgrade (rollback). The mock
+        // returns a resolvable version line so the downgrade command renders.
+        let (t, handle) = sles_target_with_exit("h1", "pkg-a = 1.0-1\n", 104);
+        let mut group = HostsGroup::new(vec![t], false);
+        let mut report = crate::reports::SlReport::new(Config::default());
+        seed_rrid_and_package(&mut report);
+
+        let res = report.perform_update(&mut group, true, false).await;
+        assert!(res.is_err(), "check failure surfaces as Err: {res:?}");
+
+        // The downgrade list_command / downgrade command ran as part of rollback.
+        let cmds = handle.commands();
+        assert!(
+            cmds.iter()
+                .any(|c| c.contains("pkg-a") && c.contains("1.0-1")),
+            "rollback must issue a downgrade command: {cmds:?}"
         );
     }
 
@@ -1053,7 +1184,8 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        let res = perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         let ops = repo.ops.lock().unwrap().clone();
         assert!(ops.contains(&RepoOp::Add));
@@ -1072,7 +1204,8 @@ mod tests {
 
         // noprepare=false ⇒ the initial prepare runs (a preparer install) before
         // the updater command.
-        perform_update(&mut group, &report, &packages, "42", "7", false, false).await;
+        let res = perform_update(&mut group, &report, &packages, "42", "7", false, false).await;
+        assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         let cmds = handle.commands();
         assert!(
@@ -1168,7 +1301,8 @@ mod tests {
 
         // Drive the report's own trait method (not the free fn) to prove PI
         // inherits the flow.
-        report.perform_update(&mut group, true, false).await;
+        let res = report.perform_update(&mut group, true, false).await;
+        assert!(res.is_ok(), "PI update succeeds: {res:?}");
 
         assert!(
             handle.commands().iter().any(|c| c.contains(":p=42:7")),
@@ -1185,7 +1319,8 @@ mod tests {
         let mut report = ObsReport::new(Config::default());
         seed_rrid_and_package(&mut report);
 
-        report.perform_update(&mut group, true, false).await;
+        let res = report.perform_update(&mut group, true, false).await;
+        assert!(res.is_ok(), "OBS update succeeds: {res:?}");
 
         assert!(
             handle.commands().iter().any(|c| c.contains(":p=42:7")),

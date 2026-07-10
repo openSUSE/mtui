@@ -164,6 +164,9 @@ pub(crate) mod testkit {
     pub struct FakeReport {
         base: TestReportBase,
         rrid: String,
+        /// When `true`, `perform_update` returns an `Err` so the command's
+        /// failure path (error toast, non-`Ok` result) can be exercised.
+        fail_update: bool,
     }
 
     #[async_trait]
@@ -176,6 +179,21 @@ pub(crate) mod testkit {
         }
         fn id(&self) -> String {
             self.rrid.clone()
+        }
+        async fn perform_update(
+            &self,
+            _targets: &mut HostsGroup,
+            _noprepare: bool,
+            _newpackage: bool,
+        ) -> Result<(), mtui_testreport::UpdateError> {
+            if self.fail_update {
+                Err(mtui_testreport::UpdateError::new(
+                    "update stack locked",
+                    "h1",
+                ))
+            } else {
+                Ok(())
+            }
         }
         fn parser(&self) -> HashMap<String, String> {
             HashMap::new()
@@ -256,6 +274,28 @@ pub(crate) mod testkit {
         session.templates.add(Box::new(FakeReport {
             base,
             rrid: rrid.to_owned(),
+            fail_update: false,
+        }));
+        (session, buf)
+    }
+
+    /// A session whose active report's `perform_update` returns `Err`, so the
+    /// `update` command's failure path (error toast, non-`Ok` result) can be
+    /// exercised end-to-end.
+    #[must_use]
+    pub fn session_with_failing_update(rrid: &str, hosts: &[&str]) -> (Session, Buffer) {
+        let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
+        let mut session = Session::with_display(Config::default(), false, display);
+
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, "")).collect();
+        let mut base = TestReportBase::new(Config::default());
+        base.targets = HostsGroup::new(targets, false);
+        base.rrid = rrid.parse().ok();
+        session.templates.add(Box::new(FakeReport {
+            base,
+            rrid: rrid.to_owned(),
+            fail_update: true,
         }));
         (session, buf)
     }
@@ -278,6 +318,7 @@ pub(crate) mod testkit {
         Box::new(FakeReport {
             base,
             rrid: rrid.to_owned(),
+            fail_update: false,
         })
     }
 
@@ -308,6 +349,7 @@ pub(crate) mod testkit {
         session.templates.add(Box::new(FakeReport {
             base,
             rrid: rrid.to_owned(),
+            fail_update: false,
         }));
         (session, buf)
     }

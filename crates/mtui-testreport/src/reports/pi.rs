@@ -131,11 +131,16 @@ impl TestReport for PiReport {
         update_flow::perform_downgrade(targets, self, packages).await;
     }
 
-    async fn perform_update(&self, targets: &mut HostsGroup, noprepare: bool, newpackage: bool) {
+    async fn perform_update(
+        &self,
+        targets: &mut HostsGroup,
+        noprepare: bool,
+        newpackage: bool,
+    ) -> Result<(), crate::update_workflow::UpdateError> {
         let id = self.rrid().map(ToString::to_string);
         let packages = self.get_package_list();
         update_flow::add_op_history(targets, "update", id.as_deref(), &packages).await;
-        update_flow::perform_update_from_report(self, targets, noprepare, newpackage).await;
+        update_flow::perform_update_with_rollback(self, targets, noprepare, newpackage).await
     }
 
     fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {

@@ -102,9 +102,16 @@ pub(super) async fn drive(
             noprepare,
             newpackage,
         } => {
-            report
+            // Unlike the other flows, `update` surfaces a failure verdict: a
+            // per-host `updater` check failure (post-rollback) or a hard
+            // missing-updater failure. Restore the split group *before*
+            // returning so a failed update still merges the unselected hosts
+            // back, then map the update error onto CommandError.
+            let update_result = report
                 .perform_update(&mut selected, *noprepare, *newpackage)
-                .await
+                .await;
+            session.restore_split_targets(selected, remainder);
+            return update_result.map_err(|e| CommandError::Other(e.to_string()));
         }
     }
 

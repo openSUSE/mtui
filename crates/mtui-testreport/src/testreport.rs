@@ -541,7 +541,17 @@ pub trait TestReport {
     /// retry/diagnosis). `noprepare` skips the initial prepare; `newpackage`
     /// runs a testing prepare after the update. Default no-op; real reports
     /// override.
-    async fn perform_update(&self, _targets: &mut HostsGroup, _noprepare: bool, _newpackage: bool) {
+    ///
+    /// Returns `Err` when the update did not apply: a per-host `updater` check
+    /// failure (after a best-effort downgrade rollback) or a hard
+    /// missing-updater failure. The null object's default is a no-op `Ok(())`.
+    async fn perform_update(
+        &self,
+        _targets: &mut HostsGroup,
+        _noprepare: bool,
+        _newpackage: bool,
+    ) -> Result<(), crate::update_workflow::UpdateError> {
+        Ok(())
     }
 
     /// Verifies the loaded template hash (upstream `check_hash`).
