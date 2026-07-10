@@ -153,8 +153,7 @@ impl Repl {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if let Err(e) = crate::shell::run_shell(&mut session, &argv).await {
-                            let msg = session.display.red(&e.to_string());
-                            session.display.println(&msg);
+                            tracing::error!("{e}");
                         }
                         continue;
                     }
@@ -162,16 +161,16 @@ impl Repl {
                     // reason as `shell`): the shared engine has no terminal, so
                     // its `edit` command is a headless-error stub. Intercept the
                     // line here and spawn the (blocking, foregrounded) editor,
-                    // which owns the TTY for its lifetime; render any failure in
-                    // red. An edit line never exits.
+                    // which owns the TTY for its lifetime; report any failure
+                    // through `tracing::error!` like every other error. An edit
+                    // line never exits.
                     if let Some(argv) = crate::edit::is_edit_line(&line) {
                         let mut session = self
                             .session
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         if let Err(e) = crate::edit::run_edit(&mut session, &argv) {
-                            let msg = session.display.red(&e.to_string());
-                            session.display.println(&msg);
+                            tracing::error!("{e}");
                         }
                         continue;
                     }
@@ -225,14 +224,15 @@ impl Repl {
 ///
 /// This is the testable heart of the loop, deliberately independent of the
 /// TTY-bound [`Reedline`] editor: it dispatches through the shared engine,
-/// renders any error to the session display exactly once, and reports
+/// reports any error through `tracing::error!` exactly once (the single
+/// operator log channel, alongside `info`/`warn`), and reports
 /// [`ControlFlow::Break`] iff the `quit` command asked the session to exit.
 ///
 /// An empty/whitespace line is a no-op ([`ControlFlow::Continue`]) — the engine
 /// already treats it as such.
 pub async fn step(registry: &Registry, session: &mut Session, line: &str) -> ControlFlow<()> {
     if let Err(err) = dispatch_line(registry, session, line).await {
-        render_error(session, &err);
+        render_error(&err);
     }
     if session.should_exit() {
         ControlFlow::Break(())
@@ -241,21 +241,26 @@ pub async fn step(registry: &Registry, session: &mut Session, line: &str) -> Con
     }
 }
 
-/// Renders a dispatch error to the session display exactly once (upstream
-/// `logger.error(e)` through `ColorFormatter("%(levelname)s: %(message)s")`).
+/// Reports a dispatch error through `tracing::error!`, the single operator log
+/// channel (upstream `logger.error(e)`).
 ///
-/// The session display is the single operator-facing channel: the line is
-/// `error: <message>` with the `error` level token colorized red. No `tracing`
-/// event is emitted on this user path — otherwise the failure would print twice
-/// (the stderr log sink *and* the stdout display), which was the noisy/duplicated
-/// output this fixes.
+/// Errors, warnings, and info all flow through the *same* path here: the
+/// `tracing` subscriber installed by [`init_tracing`](crate::init_tracing), whose
+/// [`CompactLevelFormat`](crate::logfmt::CompactLevelFormat) renders every level
+/// as a lowercased, colorized token — `error: <message>` (red), `warn: …`
+/// (yellow), `info: …` (green) — with one shared `--color` decision, exactly
+/// like upstream's single `ColorFormatter`. The error message is the event's
+/// *message* (not a structured field), so no `err=` noise appears; the default
+/// format carries no timestamp/target either.
 ///
-/// Mirrors [`mtui_core::entrypoint::run_once`]'s error rendering byte-for-byte so
-/// the REPL and the headless (`mtui-mcp`/embedding) entrypoint present failures
-/// identically. Keep the two in lockstep.
-fn render_error(session: &mut Session, err: &EngineError) {
-    let level = session.display.red("error");
-    session.display.println(&format!("{level}: {err}"));
+/// This deliberately differs from the headless
+/// [`run_once`](mtui_core::entrypoint::run_once) entrypoint (`mtui-mcp` /
+/// embedding), which has no `tracing` subscriber and renders the same
+/// `error: <message>` text through its captured display buffer. The two present
+/// failures with identical *text*; each uses the channel appropriate to its
+/// surface (REPL → operator log on stderr; headless → captured display sink).
+fn render_error(err: &EngineError) {
+    tracing::error!("{err}");
 }
 
 #[cfg(test)]
@@ -340,6 +345,47 @@ mod tests {
         String::from_utf8(buf.lock().unwrap().clone()).unwrap()
     }
 
+    /// A `MakeWriter` over a shared buffer, so a scoped `tracing` subscriber's
+    /// output (where `render_error` now sends the error) can be inspected.
+    #[derive(Clone)]
+    struct BufMaker(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufMaker {
+        type Writer = SharedBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedBuf(Arc::clone(&self.0))
+        }
+    }
+
+    /// Runs `step` on `line` with the REPL's real [`CompactLevelFormat`] layer
+    /// installed on a *scoped* subscriber, returning the captured log output.
+    /// This exercises the exact operator-facing error path the REPL uses.
+    ///
+    /// A local current-thread runtime drives the async `step` inside the
+    /// `with_default` scope, so the scoped subscriber (thread-local) is the one
+    /// `render_error`'s `tracing::error!` resolves against.
+    fn step_capturing_log(
+        registry: &Registry,
+        session: &mut Session,
+        line: &str,
+        ansi: bool,
+    ) -> (ControlFlow<()>, String) {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .event_format(crate::logfmt::CompactLevelFormat::new(ansi))
+            .with_writer(BufMaker(Arc::clone(&buf)))
+            .finish();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let flow = tracing::subscriber::with_default(subscriber, || {
+            rt.block_on(step(registry, session, line))
+        });
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        (flow, out)
+    }
+
     fn registry() -> (Registry, Arc<AtomicUsize>) {
         let runs = Arc::new(AtomicUsize::new(0));
         let mut r = Registry::new();
@@ -380,57 +426,47 @@ mod tests {
         assert!(s.should_exit());
     }
 
-    #[tokio::test]
-    async fn unknown_command_renders_error_and_continues() {
+    #[test]
+    fn unknown_command_renders_error_and_continues() {
         let (r, runs) = registry();
-        let (mut s, buf) = session_with_buffer();
-        let flow = step(&r, &mut s, "nope").await;
+        let (mut s, _buf) = session_with_buffer();
+        let (flow, out) = step_capturing_log(&r, &mut s, "nope", false);
         assert_eq!(flow, ControlFlow::Continue(()));
         assert_eq!(runs.load(Ordering::SeqCst), 0);
-        let out = rendered(&buf);
         assert!(out.contains("Unknown command"), "got: {out:?}");
-        assert_eq!(out.matches('\n').count(), 1, "rendered exactly once");
+        assert_eq!(out.lines().count(), 1, "rendered exactly once");
     }
 
-    /// The de-noised, single-channel error contract (mtui-rs-7h9): a failing
-    /// command yields exactly one `error: <message>` line with none of the old
-    /// `tracing` noise (`ERROR mtui_cli::repl`, a timestamp, or an `err=` field).
-    #[tokio::test]
-    async fn error_line_is_prefixed_and_free_of_tracing_noise() {
+    /// The de-noised, single-channel error contract (mtui-rs-7h9 / -ilt): a
+    /// failing command yields exactly one `error: <message>` line through the
+    /// operator log, with none of the old `tracing` noise (a target, a
+    /// timestamp, or an `err=` field).
+    #[test]
+    fn error_line_is_prefixed_and_free_of_tracing_noise() {
         let (r, _) = registry();
-        let (mut s, buf) = session_with_buffer();
-        let _ = step(&r, &mut s, "nope").await;
-        let out = rendered(&buf);
-        assert_eq!(out.matches('\n').count(), 1, "rendered exactly once");
+        let (mut s, _buf) = session_with_buffer();
+        let (_flow, out) = step_capturing_log(&r, &mut s, "nope", false);
+        assert_eq!(out.lines().count(), 1, "rendered exactly once");
         assert!(
             out.starts_with("error: "),
             "must carry the upstream `error: ` prefix, got: {out:?}"
         );
-        assert!(!out.contains("ERROR mtui_cli::repl"), "no tracing target");
+        assert!(!out.contains("mtui_cli"), "no tracing target");
         assert!(!out.contains("err="), "no structured field noise");
         assert!(!out.contains('Z'), "no ISO-8601 timestamp");
     }
 
-    /// Under `ColorMode::Always` the `error` level token is red-wrapped while the
-    /// message text is not colorized (mirrors upstream's colorized levelname).
-    #[tokio::test]
-    async fn error_level_token_is_colorized_message_is_not() {
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let display = CommandPromptDisplay::with_sink(
-            Box::new(SharedBuf(Arc::clone(&buf))),
-            ColorMode::Always,
-        );
-        let mut s = Session::with_display(Config::default(), true, display);
+    /// Under color, the `error` level token is red-wrapped while the message
+    /// text is not colorized — the same single `CompactLevelFormat` layer that
+    /// colors `info`/`warn`, so all three levels share one look (mtui-rs-ilt).
+    #[test]
+    fn error_level_token_is_colorized_message_is_not() {
         let (r, _) = registry();
-        let _ = step(&r, &mut s, "nope").await;
-        let out = rendered(&buf);
-        // The red escape wraps only the `error` token, immediately before `: `.
-        let red_error =
-            CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Always).red("error");
-        assert!(
-            out.starts_with(&format!("{red_error}: ")),
-            "colorized `error` token then plain message, got: {out:?}"
-        );
+        let (mut s, _buf) = session_with_buffer();
+        let (_flow, out) = step_capturing_log(&r, &mut s, "nope", true);
+        // The red escape wraps the lowercased `error` token before `: `.
+        assert!(out.contains('\u{1b}'), "colorized, got: {out:?}");
+        assert!(out.contains("error"), "level token present: {out:?}");
         assert!(out.contains("Unknown command"), "message present: {out:?}");
     }
 
@@ -444,13 +480,13 @@ mod tests {
         assert!(rendered(&buf).is_empty());
     }
 
-    #[tokio::test]
-    async fn bad_flag_renders_error_and_continues() {
+    #[test]
+    fn bad_flag_renders_error_and_continues() {
         let (r, runs) = registry();
-        let (mut s, buf) = session_with_buffer();
-        let flow = step(&r, &mut s, "echo --no-such-flag").await;
+        let (mut s, _buf) = session_with_buffer();
+        let (flow, out) = step_capturing_log(&r, &mut s, "echo --no-such-flag", false);
         assert_eq!(flow, ControlFlow::Continue(()));
         assert_eq!(runs.load(Ordering::SeqCst), 0, "the body never ran");
-        assert!(!rendered(&buf).is_empty(), "usage error is rendered");
+        assert!(!out.is_empty(), "usage error is rendered");
     }
 }

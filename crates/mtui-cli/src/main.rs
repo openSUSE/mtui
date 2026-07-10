@@ -26,9 +26,12 @@ fn main() -> anyhow::Result<()> {
     // and usage errors (exit 2) before returning here.
     let args = Args::parse();
 
-    // The `--color` choice governs both the tracing level token and (later, via
-    // the display) command output through one resolved `ColorMode`.
-    init_tracing(args.debug, ColorMode::from(args.color));
+    // The `--color` choice resolves once into a `ColorMode`. In the REPL every
+    // operator-facing level — `error`/`warn`/`info` — flows through this one
+    // `tracing` subscriber, so a single color decision drives them all
+    // (upstream's single `ColorFormatter`).
+    let color = ColorMode::from(args.color);
+    init_tracing(args.debug, color);
     tracing::debug!(debug = args.debug, "mtui starting");
 
     // Bridge the synchronous reedline editor to the async engine on one runtime.

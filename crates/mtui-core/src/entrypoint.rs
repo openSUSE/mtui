@@ -130,15 +130,17 @@ pub async fn run_once(
     }
 }
 
-/// Renders a dispatch error to the session display exactly once (upstream
-/// `logger.error(e)` through `ColorFormatter("%(levelname)s: %(message)s")`).
+/// Renders a dispatch error to the session display exactly once as
+/// `error: <message>`, the `error` token colorized red (upstream's
+/// lowercased-red levelname + `": "`).
 ///
-/// The session display is the single operator-facing channel: the line is
-/// `error: <message>` with the `error` level token colorized red (mirroring
-/// upstream's lowercased-red levelname + `": "`). No `tracing` event is emitted
-/// on this user path — otherwise the failure would surface twice (the log sink
-/// *and* the display). Real diagnostics still flow through `tracing` from other
-/// call sites under `-d`/`RUST_LOG`.
+/// This is the **headless** rendering path (`mtui-mcp` / embedding). Unlike the
+/// interactive REPL — which routes errors through `tracing::error!` so `error`,
+/// `warn`, and `info` share one operator log channel — the headless entrypoint
+/// has no `tracing` subscriber and must capture output through the session
+/// display buffer. The two present the same `error: <message>` *text*; each uses
+/// the channel appropriate to its surface. No `tracing` event is emitted here so
+/// the failure never surfaces twice.
 fn render_error(session: &mut Session, err: &EngineError) {
     let level = session.display.red("error");
     session.display.println(&format!("{level}: {err}"));
