@@ -131,12 +131,17 @@ pub async fn run_once(
 }
 
 /// Renders a dispatch error to the session display exactly once (upstream
-/// `logger.error(e)`), and mirrors it to `tracing` for the binary's log sink.
+/// `logger.error(e)` through `ColorFormatter("%(levelname)s: %(message)s")`).
+///
+/// The session display is the single operator-facing channel: the line is
+/// `error: <message>` with the `error` level token colorized red (mirroring
+/// upstream's lowercased-red levelname + `": "`). No `tracing` event is emitted
+/// on this user path — otherwise the failure would surface twice (the log sink
+/// *and* the display). Real diagnostics still flow through `tracing` from other
+/// call sites under `-d`/`RUST_LOG`.
 fn render_error(session: &mut Session, err: &EngineError) {
-    let msg = err.to_string();
-    tracing::error!(%err, "command failed");
-    let line = session.display.red(&msg);
-    session.display.println(&line);
+    let level = session.display.red("error");
+    session.display.println(&format!("{level}: {err}"));
 }
 
 #[cfg(test)]
@@ -320,6 +325,22 @@ mod tests {
         assert_eq!(status, ExitStatus::Failure);
         assert_eq!(runs.load(Ordering::SeqCst), 1, "the body ran, then failed");
         assert!(rendered(&buf).contains("boom"));
+    }
+
+    /// Headless `run_once` presents a failure as the same single, de-noised
+    /// `error: <message>` line the REPL does (mtui-rs-7h9 shared contract): one
+    /// line, `error: ` prefix, no `tracing` target / timestamp / `err=` noise.
+    #[tokio::test]
+    async fn error_line_matches_repl_prefix_and_is_denoised() {
+        let (r, _) = registry_with(true);
+        let (mut s, buf) = session_with_buffer();
+        let _ = run_once(&r, &mut s, &args(), "echo hi").await;
+        let out = rendered(&buf);
+        assert_eq!(out.matches('\n').count(), 1, "rendered exactly once");
+        assert!(out.starts_with("error: "), "upstream prefix, got: {out:?}");
+        assert!(out.contains("boom"), "message present, got: {out:?}");
+        assert!(!out.contains("command failed"), "no tracing message");
+        assert!(!out.contains("err="), "no structured field noise");
     }
 
     #[tokio::test]

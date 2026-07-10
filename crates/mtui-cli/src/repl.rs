@@ -213,15 +213,20 @@ pub async fn step(registry: &Registry, session: &mut Session, line: &str) -> Con
 }
 
 /// Renders a dispatch error to the session display exactly once (upstream
-/// `logger.error(e)`), and mirrors it to `tracing` for the log sink.
+/// `logger.error(e)` through `ColorFormatter("%(levelname)s: %(message)s")`).
 ///
-/// Mirrors [`mtui_core::entrypoint::run_once`]'s error rendering so the REPL and
-/// the headless (`mtui-mcp`/embedding) entrypoint present failures identically.
+/// The session display is the single operator-facing channel: the line is
+/// `error: <message>` with the `error` level token colorized red. No `tracing`
+/// event is emitted on this user path — otherwise the failure would print twice
+/// (the stderr log sink *and* the stdout display), which was the noisy/duplicated
+/// output this fixes.
+///
+/// Mirrors [`mtui_core::entrypoint::run_once`]'s error rendering byte-for-byte so
+/// the REPL and the headless (`mtui-mcp`/embedding) entrypoint present failures
+/// identically. Keep the two in lockstep.
 fn render_error(session: &mut Session, err: &EngineError) {
-    let msg = err.to_string();
-    tracing::error!(%err, "command failed");
-    let line = session.display.red(&msg);
-    session.display.println(&line);
+    let level = session.display.red("error");
+    session.display.println(&format!("{level}: {err}"));
 }
 
 #[cfg(test)]
@@ -342,6 +347,48 @@ mod tests {
         let out = rendered(&buf);
         assert!(out.contains("Unknown command"), "got: {out:?}");
         assert_eq!(out.matches('\n').count(), 1, "rendered exactly once");
+    }
+
+    /// The de-noised, single-channel error contract (mtui-rs-7h9): a failing
+    /// command yields exactly one `error: <message>` line with none of the old
+    /// `tracing` noise (`ERROR mtui_cli::repl`, a timestamp, or an `err=` field).
+    #[tokio::test]
+    async fn error_line_is_prefixed_and_free_of_tracing_noise() {
+        let (r, _) = registry();
+        let (mut s, buf) = session_with_buffer();
+        let _ = step(&r, &mut s, "nope").await;
+        let out = rendered(&buf);
+        assert_eq!(out.matches('\n').count(), 1, "rendered exactly once");
+        assert!(
+            out.starts_with("error: "),
+            "must carry the upstream `error: ` prefix, got: {out:?}"
+        );
+        assert!(!out.contains("ERROR mtui_cli::repl"), "no tracing target");
+        assert!(!out.contains("err="), "no structured field noise");
+        assert!(!out.contains('Z'), "no ISO-8601 timestamp");
+    }
+
+    /// Under `ColorMode::Always` the `error` level token is red-wrapped while the
+    /// message text is not colorized (mirrors upstream's colorized levelname).
+    #[tokio::test]
+    async fn error_level_token_is_colorized_message_is_not() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let display = CommandPromptDisplay::with_sink(
+            Box::new(SharedBuf(Arc::clone(&buf))),
+            ColorMode::Always,
+        );
+        let mut s = Session::with_display(Config::default(), true, display);
+        let (r, _) = registry();
+        let _ = step(&r, &mut s, "nope").await;
+        let out = rendered(&buf);
+        // The red escape wraps only the `error` token, immediately before `: `.
+        let red_error =
+            CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Always).red("error");
+        assert!(
+            out.starts_with(&format!("{red_error}: ")),
+            "colorized `error` token then plain message, got: {out:?}"
+        );
+        assert!(out.contains("Unknown command"), "message present: {out:?}");
     }
 
     #[tokio::test]

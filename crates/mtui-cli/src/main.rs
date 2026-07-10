@@ -81,11 +81,28 @@ fn main() -> anyhow::Result<()> {
 /// Honours `RUST_LOG` (mtui-rs logging contract); `-d/--debug` raises the
 /// default level to `DEBUG` when `RUST_LOG` is unset, mirroring upstream's
 /// `if args.debug: logger.setLevel(DEBUG)`.
+///
+/// Format mirrors upstream's `ColorFormatter`: at the default level the output
+/// is compact — no timestamp, no module target — so operator-facing tracing
+/// stays quiet (`LEVEL message`). Under `-d/--debug` the full verbose Rust
+/// format is kept (timestamp + level + target, e.g.
+/// `2026-07-10T09:41:39.891821Z DEBUG mtui_cli::repl: …`) for diagnostics. The
+/// user-facing *command error* is rendered by the session display, not this
+/// subscriber (see `repl::render_error`), so a failing command never prints
+/// twice.
 fn init_tracing(debug: bool) {
     let default = if debug { "debug" } else { "info" };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .init();
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    if debug {
+        // Verbose diagnostics: keep timestamp + level + target.
+        builder.with_writer(std::io::stderr).init();
+    } else {
+        // Compact operator output: drop timestamp and target noise.
+        builder
+            .without_time()
+            .with_target(false)
+            .with_writer(std::io::stderr)
+            .init();
+    }
 }
