@@ -298,6 +298,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   edits — or silently wrote mojibake that the next load misread. The
   refhosts.yml store now reads with explicit UTF-8 to match (it read with
   the locale codec, which would have mis-decoded the now-UTF-8 cache).
+- `commit -m <message>` no longer stores literal double quotes around the
+  message in the SVN log. The message was manually wrapped in `"` for a
+  shell that is never involved — svn receives the argv list directly — so
+  `commit -m fix the thing` recorded `"fix the thing"` verbatim.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

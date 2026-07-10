@@ -36,7 +36,10 @@ class Commit(Command):
         checkout = self.metadata.report_wd()
 
         if self.args.msg:
-            msg = ["-m", '"' + " ".join(self.args.msg[0]) + '"']
+            # No manual quoting: the argv list reaches svn without a shell,
+            # so wrapping in '"' stored literal double quotes in the SVN log
+            # message (a leftover from a former shell-based invocation).
+            msg = ["-m", " ".join(self.args.msg[0])]
         else:
             # No -m given: commit non-interactively with a generated message
             # reusing the testreport export footer (instead of letting svn
