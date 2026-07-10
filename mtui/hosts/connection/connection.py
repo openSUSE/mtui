@@ -401,81 +401,94 @@ class Connection:
             session = self.__run_command(command)
             counter += 1
 
-        while True:
-            buffer = b""
+        try:
+            while True:
+                buffer = b""
 
-            # wait for data to be transmitted. if the timeout is hit,
-            # ask the user on how to procceed
-            if select.select([session], [], [], self.timeout) == ([], [], []):
-                if not session:
-                    raise ConnectionError(
-                        f"Session lost during command execution on {self.hostname}"
-                    )
+                # wait for data to be transmitted. if the timeout is hit,
+                # ask the user on how to procceed
+                if select.select([session], [], [], self.timeout) == ([], [], []):
+                    if not session:
+                        raise ConnectionError(
+                            f"Session lost during command execution on {self.hostname}"
+                        )
 
-                # Non-interactive (e.g. mtui-mcp): there is no human to ask
-                # whether to keep waiting, so a command that produced no output
-                # for the whole timeout window is treated as stuck and aborted,
-                # rather than looping forever (which previously wedged the run
-                # until the session was killed). The window is
-                # ``connection_timeout`` (default 300s); raise it in config for
-                # legitimately long, fully silent commands.
-                if not self._interactive:
-                    logger.warning(
-                        'command "%s" timed out on %s after %ss with no output; '
-                        "aborting (non-interactive session)",
-                        command,
-                        self.hostname,
-                        self.timeout,
+                    # Non-interactive (e.g. mtui-mcp): there is no human to ask
+                    # whether to keep waiting, so a command that produced no output
+                    # for the whole timeout window is treated as stuck and aborted,
+                    # rather than looping forever (which previously wedged the run
+                    # until the session was killed). The window is
+                    # ``connection_timeout`` (default 300s); raise it in config for
+                    # legitimately long, fully silent commands.
+                    if not self._interactive:
+                        logger.warning(
+                            'command "%s" timed out on %s after %ss with no output; '
+                            "aborting (non-interactive session)",
+                            command,
+                            self.hostname,
+                            self.timeout,
+                        )
+                        raise CommandTimeoutError
+
+                    # No prompt callback wired: silently wait. Matches the
+                    # long-standing Enter / Y default but emits a WARNING
+                    # so the silence is observable in logs.
+                    if self._timeout_prompt is None:
+                        logger.warning(
+                            'command "%s" timed out on %s; no prompt callback wired, '
+                            "waiting for completion",
+                            command,
+                            self.hostname,
+                        )
+                        continue
+
+                    # Prompt callback wired: ask the user. The callback is
+                    # responsible for any cross-thread serialisation (the
+                    # production wiring uses ``Prompter.ask`` which holds a
+                    # single lock so workers don't race for stdin).
+                    answer = self._timeout_prompt(
+                        f'command "{command}" timed out on {self.hostname}. wait? (Y/n) ',
                     )
+                    if answer.lower() not in ("no", "n", "ne", "nein"):
+                        continue
+                    # If the user don't want to wait, raise CommandTimeoutError
+                    # and procceed.
                     raise CommandTimeoutError
 
-                # No prompt callback wired: silently wait. Matches the
-                # long-standing Enter / Y default but emits a WARNING
-                # so the silence is observable in logs.
-                if self._timeout_prompt is None:
-                    logger.warning(
-                        'command "%s" timed out on %s; no prompt callback wired, '
-                        "waiting for completion",
-                        command,
-                        self.hostname,
-                    )
-                    continue
+                try:
+                    # wait for data on the session's stdout/stderr. if debug is enabled,
+                    # print the received data
+                    if session.recv_ready():
+                        buffer = session.recv(1024)
+                        stdout += buffer
+                        for line in buffer.decode("utf-8", "ignore").split("\n"):
+                            if line:
+                                logger.debug(line)
 
-                # Prompt callback wired: ask the user. The callback is
-                # responsible for any cross-thread serialisation (the
-                # production wiring uses ``Prompter.ask`` which holds a
-                # single lock so workers don't race for stdin).
-                answer = self._timeout_prompt(
-                    f'command "{command}" timed out on {self.hostname}. wait? (Y/n) ',
-                )
-                if answer.lower() not in ("no", "n", "ne", "nein"):
-                    continue
-                # If the user don't want to wait, raise CommandTimeoutError
-                # and procceed.
-                raise CommandTimeoutError
+                    if session.recv_stderr_ready():
+                        buffer = session.recv_stderr(1024)
+                        stderr += buffer
+                        for line in buffer.decode("utf-8", "ignore").split("\n"):
+                            if line:
+                                logger.debug(line)
 
-            try:
-                # wait for data on the session's stdout/stderr. if debug is enabled,
-                # print the received data
-                if session.recv_ready():
-                    buffer = session.recv(1024)
-                    stdout += buffer
-                    for line in buffer.decode("utf-8", "ignore").split("\n"):
-                        if line:
-                            logger.debug(line)
+                    if not buffer:
+                        break
 
-                if session.recv_stderr_ready():
-                    buffer = session.recv_stderr(1024)
-                    stderr += buffer
-                    for line in buffer.decode("utf-8", "ignore").split("\n"):
-                        if line:
-                            logger.debug(line)
-
-                if not buffer:
-                    break
-
-            except TimeoutError:
-                select.select([], [], [], 1)
+                except TimeoutError:
+                    select.select([], [], [], 1)
+        except BaseException:
+            # Abandoning the command must not leak its channel: without
+            # this close the Channel stays registered on the paramiko
+            # Transport (never reclaimed by GC) and the remote command
+            # keeps running -- repeated timeouts accumulated orphaned
+            # channels and remote processes until the connection died.
+            # BaseException, not just CommandTimeoutError: the wrapped
+            # region includes the interactive timeout prompt, so Ctrl-D
+            # (EOFError) or Ctrl-C (KeyboardInterrupt) at the prompt
+            # abandons the command the same way and must clean up too.
+            self.close_session(session)
+            raise
         # save the exitcode of the last command and return it
         exitcode = session.recv_exit_status()
 

@@ -329,6 +329,57 @@ def test_run_command_timeout_noninteractive_aborts(
     ):
         conn.run("sleep infinity")
 
+    # Abandoning the command must not leak its channel: the Channel stays
+    # registered on the paramiko Transport (never reclaimed by GC) and the
+    # remote command keeps running until it is closed.
+    mock_session.close.assert_called_once()
+
+
+def test_run_command_timeout_declined_wait_closes_channel(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """The user-declines-to-wait timeout path must close the channel too."""
+    conn = Connection("test_host", 22, 300, timeout_prompt=lambda _text: "n")
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+
+    with (
+        patch("select.select", return_value=([], [], [])),
+        pytest.raises(CommandTimeoutError),
+    ):
+        conn.run("sleep 10")
+
+    mock_session.close.assert_called_once()
+
+
+def test_run_command_prompt_eof_closes_channel(
+    mock_ssh_client, mock_ssh_config, mock_path
+):
+    """Ctrl-D at the wait prompt abandons the command -- channel closed.
+
+    The prompt executes inside the guarded read loop; input() raising
+    EOFError (Ctrl-D) abandons the command exactly like answering 'n',
+    so it must not leak the channel either (adversarial-review catch:
+    an except limited to CommandTimeoutError missed this).
+    """
+
+    def _eof_prompt(_text: str) -> str:
+        raise EOFError
+
+    conn = Connection("test_host", 22, 300, timeout_prompt=_eof_prompt)
+
+    mock_session = MagicMock()
+    mock_ssh_client.get_transport.return_value.open_session.return_value = mock_session
+
+    with (
+        patch("select.select", return_value=([], [], [])),
+        pytest.raises(EOFError),
+    ):
+        conn.run("sleep 10")
+
+    mock_session.close.assert_called_once()
+
 
 def test_run_command_timeout_callback_runs_on_calling_thread(
     mock_ssh_client, mock_ssh_config, mock_path
