@@ -1,7 +1,7 @@
 //! The `shell` command.
 
 use async_trait::async_trait;
-use clap::{Arg, ArgMatches};
+use clap::ArgMatches;
 
 use super::support::{add_hosts_arg, select_names};
 use crate::command::Command;
@@ -25,14 +25,9 @@ impl Command for Shell {
     }
 
     fn configure(&self, cmd: clap::Command) -> clap::Command {
-        add_hosts_arg(cmd).arg(
-            Arg::new("command")
-                .num_args(0..)
-                .trailing_var_arg(true)
-                .allow_hyphen_values(true)
-                .value_name("COMMAND")
-                .help("Optional command to run in the shell"),
-        )
+        // Upstream `shell` takes only `-t/--target` and opens an interactive
+        // root shell per host; no command positional (strict parity, gap #5).
+        add_hosts_arg(cmd)
     }
 
     fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
