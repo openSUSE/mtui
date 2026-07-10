@@ -423,6 +423,62 @@ impl Session {
         // borrow held across the connect `.await` would make the future
         // non-`Send`): `Some(lines)` records drift, `None` clears any stale entry
         // for a host that now matches / is absent. Applied after the loop.
+        // Connect every host concurrently: each host's connect + autolock +
+        // package-seed + drift-verify runs as an independent future and the
+        // whole batch is driven together, so attaching N hosts costs one slow
+        // handshake, not the sum of all of them. The futures share `&config` /
+        // `&store` / `&package_meta` (all plain data), so no per-host clone of
+        // those is needed; each produces its own owned `Target` + drift entry.
+        let store_ref = store.as_ref();
+        let package_meta = &package_meta;
+        let timeout_prompt = &timeout_prompt;
+        let lock_comment = &lock_comment;
+        let config = &config;
+        let connect_futs = hosts.into_iter().map(|host| {
+            async move {
+                let mut target = Target::new(
+                    config,
+                    host.clone(),
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                );
+                target.set_rrid(rrid.to_owned());
+                // Wire the interactive command-timeout prompt before connecting
+                // so `Target::connect` applies it to the transport (REPL only).
+                if let Some(tp) = timeout_prompt.as_ref() {
+                    target.set_timeout_prompt(tp.clone());
+                }
+                match target.connect().await {
+                    Ok(()) => {
+                        Self::autolock_target(&mut target, lock_comment).await;
+                        // Seed the host's tracked packages with their metadata
+                        // `required` versions (upstream `_parse_packages`),
+                        // keyed by the just-parsed base product version, then
+                        // query current versions so `list_packages` /
+                        // `package_check` / `downgrade` all see a populated
+                        // list. `connect()` already parsed the system, so
+                        // `get_base().version` is authoritative here.
+                        let base_version = target.system().get_base().version.clone();
+                        let seeded = mtui_testreport::testreport::packages_for_map(
+                            package_meta,
+                            &base_version,
+                        );
+                        if !seeded.is_empty() {
+                            target.set_packages(seeded);
+                            target.query_versions().await;
+                        }
+                        let drift = Self::verify_target_products(store_ref, &target);
+                        Some((target, (host, drift)))
+                    }
+                    Err(e) => {
+                        warn!(host = %host, "connect failed, skipping: {e}");
+                        None
+                    }
+                }
+            }
+        });
+        let connected = futures::future::join_all(connect_futs).await;
+
         let mut drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
         let targets = self.targets_mut();
         // Ensure the (possibly freshly-loaded) active group carries the prompter
@@ -431,43 +487,11 @@ impl Session {
         if let Some(prompter) = prompter {
             targets.set_prompter(prompter);
         }
-        for host in hosts {
-            let mut target = Target::new(
-                &config,
-                host.clone(),
-                TargetState::Enabled,
-                ExecutionMode::Parallel,
-            );
-            target.set_rrid(rrid.to_owned());
-            // Wire the interactive command-timeout prompt before connecting so
-            // `Target::connect` applies it to the transport (REPL only).
-            if let Some(tp) = timeout_prompt.as_ref() {
-                target.set_timeout_prompt(tp.clone());
-            }
-            match target.connect().await {
-                Ok(()) => {
-                    Self::autolock_target(&mut target, &lock_comment).await;
-                    // Seed the host's tracked packages with their metadata
-                    // `required` versions (upstream `_parse_packages`), keyed by
-                    // the just-parsed base product version, then query current
-                    // versions so `list_packages`/`package_check`/`downgrade`
-                    // all see a populated list. `connect()` already parsed the
-                    // system, so `get_base().version` is authoritative here.
-                    let base_version = target.system().get_base().version.clone();
-                    let seeded =
-                        mtui_testreport::testreport::packages_for_map(&package_meta, &base_version);
-                    if !seeded.is_empty() {
-                        target.set_packages(seeded);
-                        target.query_versions().await;
-                    }
-                    drift.push((
-                        host.clone(),
-                        Self::verify_target_products(store.as_ref(), &target),
-                    ));
-                    targets.add(target);
-                }
-                Err(e) => warn!(host = %host, "connect failed, skipping: {e}"),
-            }
+        // Fold the successful connects into the group (sorted-keyed BTreeMap, so
+        // the concurrent completion order is irrelevant) and collect drift.
+        for (target, drift_entry) in connected.into_iter().flatten() {
+            targets.add(target);
+            drift.push(drift_entry);
         }
         // Surface + persist drift now that the `targets_mut()` borrow is released.
         self.apply_product_warnings(drift);
