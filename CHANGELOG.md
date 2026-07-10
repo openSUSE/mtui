@@ -218,6 +218,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   fallback returned (rows, cols) while the normal path returns
   (width, height), so the pager wrapped at the row count and printed a
   column-count of lines per page.
+- `put` of a directory now preserves the directory tree on the remote
+  hosts. Every nested file used to be uploaded flat under its basename, so
+  two files with the same name in different subdirectories silently
+  overwrote each other (only the last survived, while the per-file success
+  log suggested both were transferred).
 - `openqa_jobs --failed` no longer lists still-running or scheduled jobs as
   failures. openQA reports an unfinished job's result as `none`, which the
   filter treated as "not passing" — during active testing an in-progress
