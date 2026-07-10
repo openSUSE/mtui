@@ -226,12 +226,23 @@ pub(crate) mod testkit {
     /// and the buffer handle.
     #[must_use]
     pub fn session_with_hosts(rrid: &str, hosts: &[&str], stdout: &str) -> (Session, Buffer) {
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
+        session_with_targets(rrid, targets)
+    }
+
+    /// A session (interactive `false`) whose active report has the given
+    /// already-built `targets`, plus a captured display. The building block
+    /// behind [`session_with_hosts`] for callers that need to pre-wire a
+    /// target beyond the uniform stdout-echo mock — e.g. calling `.connect()`
+    /// on a [`Target::with_connection`] host scripted with a system-parse
+    /// fixture before adding it to the group.
+    #[must_use]
+    pub fn session_with_targets(rrid: &str, targets: Vec<Target>) -> (Session, Buffer) {
         let buf = Buffer(Arc::new(Mutex::new(Vec::new())));
         let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Never);
         let mut session = Session::with_display(Config::default(), false, display);
 
         let mut base = TestReportBase::new(Config::default());
-        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
         base.targets = HostsGroup::new(targets, false);
         base.rrid = rrid.parse().ok();
         session.templates.add(Box::new(FakeReport {

@@ -15,7 +15,10 @@
 //!   sentinel and never-propagate error handling,
 //! * the `last*` output accessors,
 //! * state-gated SFTP delegation ([`Target::sftp_put`] / [`Target::sftp_get`]),
-//! * and a connection-only [`Target::connect`] that establishes the transport.
+//! * and [`Target::connect`], which establishes the transport and then mirrors
+//!   upstream's post-connect ordering: system/product parse
+//!   ([`parse_system`](parsers::parse_system)) and package version query
+//!   ([`Target::query_versions`]).
 //!
 //! The remaining upstream responsibilities are owned by later tasks and are
 //! left as clearly-marked seams in [`Target::connect`]:
@@ -24,7 +27,6 @@
 //!   zypper op-lock ([`TargetLock`]) and the pool-claim lock ([`PoolLock`]);
 //!   wiring the lock *check* into `connect` needs session RRID plumbing from a
 //!   later phase, so the connect-time hook stays a seam for now,
-//! * system/product parsing (`parse_system`) and package querying — **P2.8**,
 //! * reboot / reconnect lifecycle — **P2.9**; the install/uninstall
 //!   [`Operation`](operation::Operation) template (skeleton + trait) has landed
 //!   in [`operation`], driving its group via the object-safe
@@ -706,65 +708,79 @@ impl Target {
         }
     }
 
-    /// Establishes the SSH transport for this target.
+    /// Establishes the SSH transport for this target and parses its system.
     ///
-    /// This is the **connection-only** port of upstream `Target.connect`: it
-    /// builds an [`SshConnection`] from the host/port/timeout/policy resolved at
-    /// construction and stores it. If a connection is already attached (e.g. a
-    /// test-injected [`MockConnection`](crate::MockConnection)), it is a no-op.
+    /// Ports upstream `Target.connect`: builds an [`SshConnection`] from the
+    /// host/port/timeout/policy resolved at construction, builds the two
+    /// remote locks over it, then — mirroring upstream's post-dial ordering —
+    /// parses the system/product ([`parse_system`](parsers::parse_system)) and
+    /// queries installed package versions ([`Target::query_versions`]). If a
+    /// connection is already attached (e.g. a test-injected
+    /// [`MockConnection`](crate::MockConnection)), the dial + lock-building
+    /// step is skipped, but the parse/query step still runs — this is what
+    /// lets the whole flow be unit-tested against a scripted `MockConnection`
+    /// without a live socket.
     ///
-    /// Upstream's `connect` also, in order, checks the remote lock, parses the
-    /// system/product, and queries installed package versions. Those steps are
-    /// owned by later Phase 2 tasks and are intentionally **not** performed
-    /// here — see the module docs. When they land they hook in right after the
-    /// transport is established.
+    /// A parse failure is best-effort: logged and left at the `unknown`
+    /// sentinel, matching [`reload_system`](Target::reload_system)'s
+    /// degradation. The remote lock *check* (as opposed to the lock objects
+    /// built here) and the reboot/reconnect/operation lifecycle remain later
+    /// seams — see the module docs.
     ///
     /// # Errors
     ///
     /// Propagates [`HostError::Connect`] / [`HostError::Auth`] from
     /// [`SshConnection::connect`] when the host is unreachable or auth fails.
     pub async fn connect(&mut self) -> Result<()> {
-        if self.connection.is_some() {
-            tracing::debug!(host = %self.hostname, "already connected");
-            return Ok(());
+        if self.connection.is_none() {
+            tracing::info!(host = %self.hostname, "connecting");
+            let port = self.port.parse::<u16>().unwrap_or(0);
+            let conn = SshConnection::connect(self.host.clone(), port, self.policy, self.timeout)
+                .await
+                .inspect_err(|e| {
+                    tracing::error!(host = %self.hostname, error = %e, "connecting to target failed");
+                })?;
+            // Wire the interactive command-timeout prompt when the composition
+            // root supplied one (REPL); headless targets leave it unset
+            // (immediate abort).
+            let conn = match &self.timeout_prompt {
+                Some(prompt) => conn.with_timeout_prompt(prompt.clone()),
+                None => conn,
+            };
+            let conn: Box<dyn Connection> = Box::new(conn);
+            // Build the operation lock over a clone of the live connection,
+            // mirroring upstream `self._lock = TargetLock(self.connection,
+            // self.config)`. The lock uses this handle for its SFTP-based lock
+            // protocol and force-unlock.
+            self.lock = Some(TargetLock::new(conn.clone_box(), &self.config));
+            // Pool claims use a separate remote file + RRID-based ownership,
+            // mirroring upstream `self._pool_lock = PoolLock(self.connection,
+            // self.config, self._rrid)`.
+            self.pool_lock = Some(PoolLock::new(
+                conn.clone_box(),
+                &self.config,
+                self.rrid.clone(),
+            ));
+            self.connection = Some(conn);
+        } else {
+            tracing::debug!(host = %self.hostname, "already connected; skipping re-dial");
         }
-        tracing::info!(host = %self.hostname, "connecting");
-        let port = self.port.parse::<u16>().unwrap_or(0);
-        let conn = SshConnection::connect(self.host.clone(), port, self.policy, self.timeout)
-            .await
-            .inspect_err(|e| {
-                tracing::error!(host = %self.hostname, error = %e, "connecting to target failed");
-            })?;
-        // Wire the interactive command-timeout prompt when the composition root
-        // supplied one (REPL); headless targets leave it unset (immediate abort).
-        let conn = match &self.timeout_prompt {
-            Some(prompt) => conn.with_timeout_prompt(prompt.clone()),
-            None => conn,
-        };
-        let conn: Box<dyn Connection> = Box::new(conn);
-        // Build the operation lock over a clone of the live connection, mirroring
-        // upstream `self._lock = TargetLock(self.connection, self.config)`. The
-        // lock uses this handle for its SFTP-based lock protocol and force-unlock.
-        self.lock = Some(TargetLock::new(conn.clone_box(), &self.config));
-        // Pool claims use a separate remote file + RRID-based ownership, mirroring
-        // upstream `self._pool_lock = PoolLock(self.connection, self.config,
-        // self._rrid)`.
-        self.pool_lock = Some(PoolLock::new(
-            conn.clone_box(),
-            &self.config,
-            self.rrid.clone(),
-        ));
-        self.connection = Some(conn);
 
-        // Deferred seams (do not implement here — they pull crates/behaviour
-        // that P2.4 must not depend on):
-        //   * remote lock check + stale-reap        -> P2.6 (locks)
-        //   * parse_system / package version query  -> P2.8 (parsers)
-        //   * reboot / reconnect / operation         -> P2.9 (operation)
-        tracing::debug!(
-            host = %self.hostname,
-            "connected; lock built; parse/query seams deferred to P2.8/P2.9"
-        );
+        // Mirror upstream `connect()`'s post-dial ordering: `self.system,
+        // self.transactional = parse_system(self.connection)` then
+        // `self.query_versions()`. Runs whether the connection was just dialed
+        // or already attached, so a short-circuited re-`connect()` still picks
+        // up the real system instead of leaving the `unknown` sentinel.
+        if let Some(conn) = self.connection.as_mut() {
+            match parsers::parse_system(conn.as_mut()).await {
+                Ok((system, transactional)) => self.set_system(system, transactional),
+                Err(e) => {
+                    tracing::warn!(host = %self.hostname, error = %e, "connect: system parse failed");
+                }
+            }
+        }
+        self.query_versions().await;
+
         Ok(())
     }
 
@@ -1418,12 +1434,75 @@ mod tests {
 
     #[tokio::test]
     async fn connect_is_noop_when_already_connected() {
-        // A pre-injected (mock) connection means connect() short-circuits and
-        // never touches the network.
+        // A pre-injected (mock) connection means connect() skips the SSH
+        // re-dial, but still attempts the post-connect system parse: a bare
+        // mock has no `/etc/products.d` listing or `baseproduct` symlink
+        // scripted, so `sftp_listdir` succeeds with an empty listing (SUSE
+        // branch) but `resolve_basefile`'s `sftp_readlink` errors (not
+        // `SftpNotFound`) and `parse_system` surfaces that — best-effort
+        // degrade, `connect()` still returns `Ok` and leaves the `unknown`
+        // sentinel (see `connect_parse_failure_leaves_sentinel` for the
+        // matching malformed-XML case).
         let mut t = enabled_with(MockConnection::new("test-host.example.com"));
         assert!(t.is_connected());
-        t.connect().await.expect("noop connect");
+        t.connect().await.expect("noop re-dial");
         assert!(t.is_connected());
+        assert_eq!(t.system().get_base().name, "unknown");
+    }
+
+    #[tokio::test]
+    async fn connect_parses_system_over_live_connection() {
+        // Same SLES fixture as `reload_system_reparses_over_live_connection`,
+        // but scripted through a short-circuited `connect()` (the only way to
+        // reach the post-dial parse step without a live socket).
+        let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
+        let conn = MockConnection::new("h1")
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file("/etc/products.d/SLES.prod", prod.to_vec());
+        let mut t = enabled_with(conn);
+        assert_eq!(t.system().get_base().name, "unknown");
+
+        t.connect().await.expect("connect");
+
+        assert_eq!(t.system().get_base().name, "SLES");
+        assert_eq!(t.system().get_base().version, "15-SP5");
+    }
+
+    #[tokio::test]
+    async fn connect_parse_failure_leaves_sentinel() {
+        // A SUSE host whose base product file is present but has malformed
+        // XML: `parse_system` surfaces the XML error, `connect()` logs it and
+        // leaves the `unknown` sentinel (best-effort, matches `reload_system`).
+        let conn = MockConnection::new("h1")
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file(
+                "/etc/products.d/SLES.prod",
+                b"<product><name>x</wrong></product>".to_vec(),
+            );
+        let mut t = enabled_with(conn);
+
+        t.connect().await.expect("connect degrades, does not fail");
+
+        assert_eq!(t.system().get_base().name, "unknown");
+    }
+
+    #[tokio::test]
+    async fn connect_queries_package_versions() {
+        // Seed a tracked package before `connect()`, script its installed
+        // version, and confirm `connect()` runs `query_versions()` (not just
+        // `parse_system`) — mirrors
+        // `query_versions_records_current_and_none_for_missing`.
+        let conn =
+            MockConnection::new("h1").with_default(CommandLog::new("", "bash 5.1-1\n", "", 0, 0));
+        let mut t = enabled_with(conn);
+        t.set_packages(vec![Package::new("bash")]);
+        assert!(t.packages()[0].current().is_none());
+
+        t.connect().await.expect("connect");
+
+        assert!(t.packages()[0].current().is_some());
     }
 
     // --- reboot / reconnect / boot_id lifecycle (P2.9) ----------------------

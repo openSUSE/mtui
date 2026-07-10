@@ -57,8 +57,10 @@ impl Command for ListHosts {
 
 #[cfg(test)]
 mod tests {
+    use mtui_hosts::{MockConnection, Target};
+
     use super::*;
-    use crate::commands::testkit::{matches, session_with_hosts};
+    use crate::commands::testkit::{matches, session_with_hosts, session_with_targets};
 
     #[test]
     fn name_and_fanout_scope() {
@@ -75,5 +77,32 @@ mod tests {
         assert!(out.contains("h1"), "{out}");
         assert!(out.contains("h2"), "{out}");
         assert!(out.contains("Enabled"), "{out}");
+    }
+
+    /// Regression test for mtui-rs-xlt: a host whose `Target::connect()` ran
+    /// over a connection carrying real system-parse data must render its
+    /// parsed system, not the pre-parse `unknown--` sentinel.
+    #[tokio::test]
+    async fn connected_host_shows_parsed_system_not_unknown_sentinel() {
+        let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>5</patchlevel><arch>x86_64</arch></product>"#;
+        let conn = MockConnection::new("dove.qam.suse.cz")
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file("/etc/products.d/SLES.prod", prod.to_vec());
+        let mut target = Target::with_connection(
+            "dove.qam.suse.cz",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+        target.connect().await.expect("connect parses the system");
+
+        let (mut session, buf) = session_with_targets("SUSE:Maintenance:1:1", vec![target]);
+        let args = matches(&ListHosts, &[]);
+        ListHosts.call(&mut session, &args).await.unwrap();
+
+        let out = buf.contents();
+        assert!(out.contains("sles-15-SP5-x86_64"), "{out}");
+        assert!(!out.contains("unknown--"), "{out}");
     }
 }
