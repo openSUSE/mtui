@@ -971,11 +971,21 @@ def test_sftp_remove_calls_paramiko_remove(conn_with_sftp, sftp_client):
     sftp_client.close.assert_called()
 
 
-def test_sftp_remove_logs_oserror(conn_with_sftp, sftp_client, caplog):
+def test_sftp_remove_reraises_oserror(conn_with_sftp, sftp_client, caplog):
+    """A failed removal must propagate, not be swallowed.
+
+    The old internal 'log and return' made Target.sftp_remove's whole
+    ENOENT / directory-rmdir fallback dead code: removing a directory (or
+    hitting permission denied) was silently reported as success and the
+    path was left in place.
+    """
     from pathlib import Path as _Path
 
     sftp_client.remove.side_effect = OSError("perm")
-    with caplog.at_level("ERROR", logger="mtui.connection"):
+    with (
+        caplog.at_level("DEBUG", logger="mtui.connection"),
+        pytest.raises(OSError, match="perm"),
+    ):
         conn_with_sftp.sftp_remove(_Path("/x"))
     assert any("Can't remove" in r.message for r in caplog.records)
 

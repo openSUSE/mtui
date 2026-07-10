@@ -788,7 +788,13 @@ class Connection:
             with self._sftp() as sftp:
                 sftp.remove(str(path))
         except OSError:
-            logger.exception("Can't remove %s from %s", path, self.hostname)
+            # Re-raise: both callers (Target.sftp_remove's directory/rmdir
+            # fallback, TargetLock's ENOENT tolerance) carry their own
+            # ``except OSError`` logic that was dead code while this layer
+            # swallowed the error -- a failed removal (directory, permission
+            # denied) was silently reported as success.
+            logger.debug("Can't remove %s from %s", path, self.hostname, exc_info=True)
+            raise
 
     def sftp_rmdir(self, path: Path) -> None:
         """Deletes a remote directory.
