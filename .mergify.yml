@@ -1,4 +1,13 @@
 pull_request_rules:
+  - name: automatic merge for dependabot updates
+    conditions:
+      - and: *base_checks
+      - and:
+          - base=main
+          - author=dependabot[bot]
+    actions:
+      merge:
+        method: squash
   - name: automatic merge
     conditions:
       - and: &base_checks
