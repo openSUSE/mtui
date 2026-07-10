@@ -540,11 +540,12 @@ class Target:
             logger.warning(e)
             raise
 
-    def add_history(self, comment: str) -> None:
+    def add_history(self, comment: list[str]) -> None:
         """Adds a history entry to the target.
 
         Args:
-            comment: The history entry to add.
+            comment: The history entry's fields (flat strings; they are
+                ``:``-joined into the log line).
 
         """
         if self.state == "enabled":
@@ -562,7 +563,15 @@ class Target:
                 historyfile.write("{}:{}:{}\n".format(now, user, ":".join(comment)))
                 historyfile.close()
             except Exception:
-                pass
+                # Best-effort (a read-only or full remote fs must not break
+                # the operation), but never silent: the old bare pass hid a
+                # TypeError from a nested comment list for years, so no
+                # install/uninstall event was ever recorded.
+                logger.warning(
+                    "%s: failed to write history entry",
+                    self.hostname,
+                    exc_info=True,
+                )
 
     def sftp_listdir(self, path: Path) -> list[str]:
         """Lists the contents of a directory on the target.
