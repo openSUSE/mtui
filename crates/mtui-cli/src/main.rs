@@ -17,17 +17,18 @@ use std::ops::ControlFlow;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use mtui_cli::{Repl, seed_session};
+use mtui_cli::{Repl, init_tracing, seed_session};
 use mtui_config::Config;
-use mtui_core::{Args, Session, register_all};
-use tracing_subscriber::EnvFilter;
+use mtui_core::{Args, ColorMode, Session, register_all};
 
 fn main() -> anyhow::Result<()> {
     // Layer 1 (app invocation). clap auto-handles `--help`/`--version` (exit 0)
     // and usage errors (exit 2) before returning here.
     let args = Args::parse();
 
-    init_tracing(args.debug);
+    // The `--color` choice governs both the tracing level token and (later, via
+    // the display) command output through one resolved `ColorMode`.
+    init_tracing(args.debug, ColorMode::from(args.color));
     tracing::debug!(debug = args.debug, "mtui starting");
 
     // Bridge the synchronous reedline editor to the async engine on one runtime.
@@ -74,35 +75,4 @@ fn main() -> anyhow::Result<()> {
     let mut repl = Repl::new(registry, session);
 
     runtime.block_on(repl.run())
-}
-
-/// Initialises the `tracing` subscriber.
-///
-/// Honours `RUST_LOG` (mtui-rs logging contract); `-d/--debug` raises the
-/// default level to `DEBUG` when `RUST_LOG` is unset, mirroring upstream's
-/// `if args.debug: logger.setLevel(DEBUG)`.
-///
-/// Format mirrors upstream's `ColorFormatter`: at the default level the output
-/// is compact — no timestamp, no module target — so operator-facing tracing
-/// stays quiet (`LEVEL message`). Under `-d/--debug` the full verbose Rust
-/// format is kept (timestamp + level + target, e.g.
-/// `2026-07-10T09:41:39.891821Z DEBUG mtui_cli::repl: …`) for diagnostics. The
-/// user-facing *command error* is rendered by the session display, not this
-/// subscriber (see `repl::render_error`), so a failing command never prints
-/// twice.
-fn init_tracing(debug: bool) {
-    let default = if debug { "debug" } else { "info" };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
-    let builder = tracing_subscriber::fmt().with_env_filter(filter);
-    if debug {
-        // Verbose diagnostics: keep timestamp + level + target.
-        builder.with_writer(std::io::stderr).init();
-    } else {
-        // Compact operator output: drop timestamp and target noise.
-        builder
-            .without_time()
-            .with_target(false)
-            .with_writer(std::io::stderr)
-            .init();
-    }
 }

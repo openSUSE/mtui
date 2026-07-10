@@ -2074,6 +2074,7 @@ dependencies = [
  "mtui-types",
  "notify-rust",
  "nu-ansi-term",
+ "owo-colors",
  "reedline",
  "shlex",
  "tempfile",

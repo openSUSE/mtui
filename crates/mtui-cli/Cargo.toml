@@ -33,6 +33,9 @@ async-trait.workspace = true
 # shlex-split the `shell` line to route it to the bridge (mirrors the engine).
 shlex.workspace = true
 nu-ansi-term.workspace = true
+# Level-token coloring in the custom tracing format layer (mtui-rs-ilt), matching
+# the escapes `mtui-core`'s display uses for the `error` token.
+owo-colors.workspace = true
 # `Workflow` drives the workflow-aware left prompt (`mtui[-mode]> `).
 mtui-types.workspace = true
 # `UpdateKind` maps the `-a`/`-k` workflow onto `Session::load_update` in the

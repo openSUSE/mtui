@@ -154,6 +154,23 @@ pub enum ColorArg {
     Never,
 }
 
+impl From<ColorArg> for crate::display::ColorMode {
+    /// Resolves the parsed `--color` choice into the display/logging
+    /// [`ColorMode`](crate::display::ColorMode).
+    ///
+    /// A straight arm-for-arm mapping: the `auto` → TTY/`NO_COLOR` decision is
+    /// deferred to [`ColorMode::resolve`](crate::display::ColorMode::resolve) at
+    /// render time, so both the command display and the tracing subscriber share
+    /// one source of truth for whether escapes are emitted.
+    fn from(arg: ColorArg) -> Self {
+        match arg {
+            ColorArg::Auto => Self::Auto,
+            ColorArg::Always => Self::Always,
+            ColorArg::Never => Self::Never,
+        }
+    }
+}
+
 /// A comma-separated SUT (System Under Test) host override.
 ///
 /// Port of upstream `mtui.support.misc.SUTParse`: `"a,b,c"` becomes the argv
@@ -336,6 +353,14 @@ mod tests {
     #[test]
     fn color_arg_default_is_auto() {
         assert_eq!(ColorArg::default(), ColorArg::Auto);
+    }
+
+    #[test]
+    fn color_arg_maps_arm_for_arm_to_color_mode() {
+        use crate::display::ColorMode;
+        assert_eq!(ColorMode::from(ColorArg::Auto), ColorMode::Auto);
+        assert_eq!(ColorMode::from(ColorArg::Always), ColorMode::Always);
+        assert_eq!(ColorMode::from(ColorArg::Never), ColorMode::Never);
     }
 
     #[test]
