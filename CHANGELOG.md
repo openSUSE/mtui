@@ -309,6 +309,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   running — repeated timeouts accumulated orphaned channels and remote
   processes. The channel is now closed before the timeout error propagates,
   and likewise when the wait-prompt is abandoned with Ctrl-D or Ctrl-C.
+- Connecting a reference host no longer fails outright when one of its addon
+  product files under `/etc/products.d/` is a dangling symlink or otherwise
+  unreadable. The base-product path already tolerated exactly this; the addon
+  loop did not, so a single stale `.prod` entry made the whole host
+  impossible to add. The offending addon is now skipped with a warning.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
