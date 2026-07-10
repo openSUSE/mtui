@@ -28,6 +28,10 @@ impl Command for Checkers {
         "checkers"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the build-check (checker) result runs for the loaded update.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

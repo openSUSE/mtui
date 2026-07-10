@@ -37,6 +37,12 @@ impl Command for LoadTemplate {
         "load_template"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some(
+            "Loads a maintenance-update template into the session and connects its reference hosts.",
+        )
+    }
+
     fn scope(&self) -> Scope {
         Scope::Single
     }

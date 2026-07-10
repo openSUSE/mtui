@@ -30,6 +30,10 @@ impl Command for Downgrade {
         "downgrade"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Downgrades all related packages to the last released version.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

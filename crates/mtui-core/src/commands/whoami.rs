@@ -20,6 +20,10 @@ impl Command for Whoami {
         "whoami"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Displays the current user name and session PID.")
+    }
+
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let user = session.config.session_user.clone();
         let pid = std::process::id();

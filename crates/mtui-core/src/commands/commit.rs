@@ -23,6 +23,10 @@ impl Command for Commit {
         "commit"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Commits the testing template working copy to SVN.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

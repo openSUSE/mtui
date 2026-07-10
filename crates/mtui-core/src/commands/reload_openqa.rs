@@ -28,6 +28,10 @@ impl Command for ReloadOpenQA {
         "reload_openqa"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Reloads information from the openQA instances.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

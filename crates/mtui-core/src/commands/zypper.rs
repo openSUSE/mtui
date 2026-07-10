@@ -41,6 +41,10 @@ impl Command for Install {
         "install"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Installs packages from the current active repositories.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }
@@ -64,6 +68,10 @@ pub struct Uninstall;
 impl Command for Uninstall {
     fn name(&self) -> &'static str {
         "uninstall"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Removes packages from the system.")
     }
 
     fn scope(&self) -> Scope {

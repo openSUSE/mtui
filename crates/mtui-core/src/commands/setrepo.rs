@@ -24,6 +24,10 @@ impl Command for SetRepo {
         "set_repo"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Adds or removes an issue repository to or from hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

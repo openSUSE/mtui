@@ -33,6 +33,10 @@ impl Command for OpenQAOverview {
         "openqa_overview"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Prints an openQA / QAM Dashboard / build-checks overview for the loaded MU.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

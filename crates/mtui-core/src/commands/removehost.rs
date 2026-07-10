@@ -22,6 +22,10 @@ impl Command for RemoveHost {
         "remove_host"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Disconnects from a host and removes it from the list.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

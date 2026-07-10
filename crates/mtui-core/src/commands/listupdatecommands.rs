@@ -22,6 +22,10 @@ impl Command for ListUpdateCommands {
         "list_update_commands"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the commands mtui would invoke to apply the update on the hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

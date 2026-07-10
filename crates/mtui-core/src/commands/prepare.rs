@@ -26,6 +26,10 @@ impl Command for Prepare {
         "prepare"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Installs missing packages and updates existing packages.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

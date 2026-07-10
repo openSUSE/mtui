@@ -28,6 +28,10 @@ impl Command for ListHosts {
         "list_hosts"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists all connected hosts with their system, state, and execution mode.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

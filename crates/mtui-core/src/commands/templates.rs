@@ -25,6 +25,10 @@ impl Command for ListTemplates {
         "list_templates"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists all loaded templates, marking the active one.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Single
     }

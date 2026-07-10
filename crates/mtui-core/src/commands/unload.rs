@@ -23,6 +23,10 @@ impl Command for Unload {
         "unload"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Unloads one loaded template, closing only its host connections.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Single
     }

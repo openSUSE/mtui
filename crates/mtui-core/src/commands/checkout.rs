@@ -22,6 +22,10 @@ impl Command for Checkout {
         "checkout"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Updates the loaded template's files from SVN (`svn up`).")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

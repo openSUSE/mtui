@@ -23,6 +23,10 @@ impl Command for SftpGet {
         "get"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Downloads a remote file from every enabled reference host.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

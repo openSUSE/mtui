@@ -24,6 +24,10 @@ impl Command for Shell {
         "shell"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Opens an interactive shell on a reference host.")
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         // Upstream `shell` takes only `-t/--target` and opens an interactive
         // root shell per host; no command positional (strict parity, gap #5).

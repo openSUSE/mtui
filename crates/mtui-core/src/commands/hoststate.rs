@@ -31,6 +31,10 @@ impl Command for HostState {
         "set_host_state"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Sets the state and execution mode of a host.")
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         add_hosts_arg(cmd).arg(
             Arg::new("state")

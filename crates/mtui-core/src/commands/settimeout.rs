@@ -21,6 +21,10 @@ impl Command for SetTimeout {
         "set_timeout"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Sets the command-execution timeout, in seconds, for the selected hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

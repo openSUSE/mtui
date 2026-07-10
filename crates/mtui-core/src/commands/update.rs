@@ -27,6 +27,10 @@ impl Command for Update {
         "update"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Applies the testing update to the target hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

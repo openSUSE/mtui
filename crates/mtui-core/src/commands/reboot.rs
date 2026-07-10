@@ -27,6 +27,10 @@ impl Command for Reboot {
         "reboot"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Reboots reference hosts and reconnects once they are back up.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

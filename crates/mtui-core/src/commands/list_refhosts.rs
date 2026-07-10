@@ -211,6 +211,10 @@ impl Command for ListRefhosts {
         "list_refhosts"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists reference hosts from `refhosts.yml` (offline search, no connect).")
+    }
+
     fn scope(&self) -> Scope {
         // Inventory query — independent of any loaded template; never fan out.
         Scope::Single

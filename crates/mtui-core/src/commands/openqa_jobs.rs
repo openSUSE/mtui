@@ -31,6 +31,10 @@ impl Command for OpenQAJobs {
         "openqa_jobs"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the individual openQA jobs for the loaded update's incident build.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

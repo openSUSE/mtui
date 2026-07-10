@@ -27,6 +27,10 @@ impl Command for Run {
         "run"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Runs a command on a specified host or on all enabled targets.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

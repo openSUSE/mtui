@@ -23,6 +23,10 @@ impl Command for ListBugs {
         "list_bugs"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists related bugs and their Bugzilla/Jira URLs.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

@@ -32,6 +32,10 @@ impl Command for AddHost {
         "add_host"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Adds one or more reference hosts to the target host list.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

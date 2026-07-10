@@ -40,6 +40,10 @@ impl Command for Export {
         "export"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Exports the gathered update data to the testing template.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

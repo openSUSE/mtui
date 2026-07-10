@@ -49,6 +49,10 @@ impl Command for ListVersions {
         "list_versions"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the available versions of packages in the enabled repositories.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

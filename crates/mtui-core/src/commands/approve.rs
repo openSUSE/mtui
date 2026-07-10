@@ -28,6 +28,12 @@ impl Command for Approve {
         "approve"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some(
+            "Approves the loaded update, dispatching to OSC or Gitea like the other backend-API commands.",
+        )
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

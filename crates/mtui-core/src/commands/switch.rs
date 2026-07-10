@@ -23,6 +23,10 @@ impl Command for Switch {
         "switch"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Switches the active template to another loaded one.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Single
     }

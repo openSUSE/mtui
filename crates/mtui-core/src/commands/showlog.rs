@@ -24,6 +24,10 @@ impl Command for ShowLog {
         "show_log"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Prints the command protocol (issued commands + output) from the hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

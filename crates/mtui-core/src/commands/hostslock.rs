@@ -26,6 +26,10 @@ impl Command for HostLock {
         "lock"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Locks hosts for exclusive usage (the operation/zypper lock).")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

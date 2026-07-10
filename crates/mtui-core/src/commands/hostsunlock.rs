@@ -28,6 +28,10 @@ impl Command for HostsUnlock {
         "unlock"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Unlocks hosts previously locked with `lock`.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

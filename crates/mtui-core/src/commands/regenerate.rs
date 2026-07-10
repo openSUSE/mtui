@@ -32,6 +32,10 @@ impl Command for Regenerate {
         "regenerate"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Regenerates the loaded update's test-report template via the TeReGen API.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

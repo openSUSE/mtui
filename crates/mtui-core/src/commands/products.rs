@@ -22,6 +22,10 @@ impl Command for ListProducts {
         "list_products"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Prints the installed products on the reference hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

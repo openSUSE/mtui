@@ -21,6 +21,10 @@ impl Command for ListMetadata {
         "list_metadata"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the patchinfo metadata for the loaded test report.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

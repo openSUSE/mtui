@@ -172,6 +172,10 @@ impl Command for ShowDiff {
         "show_diff"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Shows the raw OBS source diff.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }
@@ -193,6 +197,10 @@ pub struct AnalyzeDiff;
 impl Command for AnalyzeDiff {
     fn name(&self) -> &'static str {
         "analyze_diff"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Analyzes the OBS source diff to assist code review.")
     }
 
     fn scope(&self) -> Scope {

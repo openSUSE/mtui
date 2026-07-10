@@ -120,6 +120,10 @@ impl Command for ConfigCmd {
         "config"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Shows or sets runtime configuration values.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Single
     }

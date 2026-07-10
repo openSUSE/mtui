@@ -23,6 +23,10 @@ impl Command for ReloadProducts {
         "reload_products"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Reloads and re-parses the products on the target reference hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

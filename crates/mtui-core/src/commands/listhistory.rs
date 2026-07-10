@@ -43,6 +43,10 @@ impl Command for ListHistory {
         "list_history"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the history of mtui events recorded on the reference hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

@@ -40,6 +40,10 @@ impl Command for SftpPut {
         "put"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Uploads a local file (or directory tree) to every enabled reference host.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

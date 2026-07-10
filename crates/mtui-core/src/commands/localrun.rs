@@ -28,6 +28,10 @@ impl Command for LocalRun {
         "lrun"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Runs a command in the local shell.")
+    }
+
     fn scope(&self) -> Scope {
         // Local execution never touches hosts or templates: run exactly once.
         Scope::Single

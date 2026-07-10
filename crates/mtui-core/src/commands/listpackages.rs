@@ -59,6 +59,10 @@ impl Command for ListPackages {
         "list_packages"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists packages and their installed versions on the reference hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

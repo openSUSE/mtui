@@ -32,6 +32,10 @@ impl Command for ListLocks {
         "list_locks"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the lock state of all connected hosts.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

@@ -133,6 +133,10 @@ impl Command for Assign {
     fn name(&self) -> &'static str {
         "assign"
     }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Assigns a review request to a user or group.")
+    }
     fn scope(&self) -> Scope {
         Scope::Fanout
     }
@@ -179,6 +183,10 @@ pub struct Unassign;
 impl Command for Unassign {
     fn name(&self) -> &'static str {
         "unassign"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Unassigns a review request.")
     }
     fn scope(&self) -> Scope {
         Scope::Fanout
@@ -228,6 +236,10 @@ pub struct Reject;
 impl Command for Reject {
     fn name(&self) -> &'static str {
         "reject"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Rejects a review request.")
     }
     fn scope(&self) -> Scope {
         Scope::Fanout
@@ -298,6 +310,10 @@ pub struct Comment;
 impl Command for Comment {
     fn name(&self) -> &'static str {
         "comment"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Adds a comment to a review request.")
     }
     fn scope(&self) -> Scope {
         Scope::Fanout

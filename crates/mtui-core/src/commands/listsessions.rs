@@ -26,6 +26,10 @@ impl Command for ListSessions {
         "list_sessions"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Lists the active SSH sessions connected to each reference host.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

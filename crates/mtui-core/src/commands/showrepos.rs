@@ -20,6 +20,10 @@ impl Command for ShowUpdateRepos {
         "show_update_repos"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Shows the update repositories that are valid for the current update.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

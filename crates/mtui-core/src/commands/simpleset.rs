@@ -37,6 +37,10 @@ impl Command for SetLogLevel {
         "set_log_level"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Changes the current mtui log level.")
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         cmd.arg(
             Arg::new("level")
@@ -85,6 +89,10 @@ pub struct SetWorkflow;
 impl Command for SetWorkflow {
     fn name(&self) -> &'static str {
         "set_workflow"
+    }
+
+    fn about(&self) -> Option<&'static str> {
+        Some("Sets the workflow and reloads data from openQA.")
     }
 
     fn scope(&self) -> Scope {

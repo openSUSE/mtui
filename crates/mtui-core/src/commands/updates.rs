@@ -29,6 +29,12 @@ impl Command for Updates {
         "updates"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some(
+            "Lists the update queue (unassigned + in-testing by default), fetched live from the TeReGen API.",
+        )
+    }
+
     fn scope(&self) -> Scope {
         Scope::Single
     }

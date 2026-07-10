@@ -23,6 +23,10 @@ impl Command for ListTimeout {
         "list_timeout"
     }
 
+    fn about(&self) -> Option<&'static str> {
+        Some("Prints the current command timeout per host, in seconds.")
+    }
+
     fn scope(&self) -> Scope {
         Scope::Fanout
     }

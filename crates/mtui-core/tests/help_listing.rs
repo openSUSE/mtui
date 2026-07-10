@@ -39,3 +39,21 @@ async fn help_listing_is_the_command_surface_contract() {
     let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
     insta::assert_snapshot!("help_listing", out);
 }
+
+/// Every registered command must document itself via
+/// [`about`](mtui_core::Command::about). This keeps the `help` listing's
+/// "Undocumented commands" bucket empty (matching upstream, whose commands all
+/// carry a docstring) and guarantees each command contributes a description to
+/// the MCP tool synthesiser in Phase 7.
+#[test]
+fn every_registered_command_is_documented() {
+    let registry = register_all();
+    let undocumented: Vec<&str> = registry
+        .names()
+        .filter(|name| registry.get(name).and_then(|c| c.about()).is_none())
+        .collect();
+    assert!(
+        undocumented.is_empty(),
+        "these commands are missing an about() one-liner: {undocumented:?}"
+    );
+}
