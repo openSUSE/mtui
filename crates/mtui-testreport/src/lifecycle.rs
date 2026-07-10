@@ -5,19 +5,23 @@
 //! read), and `AutoOBSUpdateID.make_testreport` / `KernelOBSUpdateID.make_testreport`
 //! (workflow selection + deferred-autoconnect flag).
 //!
-//! The Rust split keeps this crate free of the host-connect and openQA layers:
+//! The Rust split keeps this crate free of the host-connect layer:
 //! * The actual host connect is **deferred to the caller** (the composition
 //!   root, `mtui-core::Session::load_update`), which owns the arbiter wiring and
 //!   the refhosts-from-testplatform resolution. `make_testreport` only records
 //!   the intent via [`TestReportBase::autoconnect_pending`].
-//! * The QEM Dashboard / auto-openQA enrichment upstream runs inside
-//!   `make_testreport` (`QEMIncident`, `DashboardAutoOpenQA`, and the
-//!   auto→manual fallback it drives) is a documented **no-op stub** here; it
-//!   lands with its own beads (`mtui-rs-m1w` export enrichment, `mtui-rs-zs4`
-//!   reload_openqa, `mtui-rs-plt` set_workflow). See [`ReportKind::autoconnect_default`].
+//! * The QEM Dashboard / auto-openQA enrichment runs inside `make_testreport`
+//!   for the `-a` (auto) kind, mirroring upstream `AutoOBSUpdateID.make_testreport`:
+//!   it builds the [`QemIncident`], runs [`DashboardAutoOpenQA`], and — when the
+//!   auto result has no install jobs (or they failed) — **downgrades the workflow
+//!   to [`Workflow::Manual`]** and defers the reference-host connect (upstream
+//!   only autoconnects on that manual-downgrade path). See
+//!   [`UpdateKind::autoconnect_default`].
 
 use mtui_config::options::Config;
-use mtui_datasources::TeReGen;
+use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
+use mtui_datasources::qem_dashboard::incident::QemIncident;
+use mtui_datasources::{TeReGen, VerifyPolicy, resolve_verify};
 use mtui_hosts::Prompter;
 use mtui_types::enums::RequestKind;
 use mtui_types::{UpdateID, Workflow};
@@ -54,13 +58,16 @@ impl UpdateKind {
         }
     }
 
-    /// Whether `make_testreport` defaults to autoconnect for this kind.
+    /// Whether the `autoconnect` argument to [`make_testreport`] is *eligible*
+    /// to defer a reference-host connect for this kind.
     ///
     /// Mirrors the upstream `make_testreport` signatures: `AutoOBSUpdateID`
     /// defaults `autoconnect=True`, `KernelOBSUpdateID` defaults
-    /// `autoconnect=False`. The explicit `autoconnect` argument to
-    /// [`make_testreport`] still overrides this (e.g. non-interactive startup
-    /// with `--sut` suppresses it).
+    /// `autoconnect=False`. Note that even for the auto kind the connect is only
+    /// actually deferred when the load **downgrades to `MANUAL`** (no install
+    /// jobs) — upstream `AutoOBSUpdateID.make_testreport` sets
+    /// `_autoconnect_pending` only on that path. The auto *happy* path (install
+    /// jobs present, workflow stays `AUTO`) does not autoconnect.
     #[must_use]
     pub fn autoconnect_default(self) -> bool {
         matches!(self, Self::Auto)
@@ -95,16 +102,18 @@ fn tr_factory(update: &UpdateID, config: Config) -> Box<dyn TestReport + Send + 
 ///    template hash logs the upstream message and abandons the load (a
 ///    [`NullReport`]). The interactive TeReGen regenerate / force-continue /
 ///    delete-checkout handling for a stale hash lands in Phase C.
-/// 5. Sets the workflow from `kind` and records the deferred-autoconnect intent.
+/// 5. Sets the workflow from `kind`. For the `-a` (auto) kind, builds the
+///    [`QemIncident`] and runs [`DashboardAutoOpenQA`]; when the auto result has
+///    no install jobs (or the dashboard is unreachable) the workflow is
+///    **downgraded to [`Workflow::Manual`]** (upstream's auto→manual fallback).
 ///
 /// `autoconnect` is the caller's explicit choice (upstream's `make_testreport`
-/// argument); when `true` **and** the update kind autoconnects by default
-/// ([`UpdateKind::autoconnect_default`]), [`TestReportBase::autoconnect_pending`]
-/// is set so the composition root connects the report's reference hosts *after*
-/// wiring the host arbiter.
-///
-/// The QEM/auto-openQA enrichment and its auto→manual fallback are a documented
-/// no-op here (see the module docs); it lands with `mtui-rs-m1w`/`zs4`/`plt`.
+/// argument). A reference-host connect is deferred (via
+/// [`TestReportBase::autoconnect_pending`], honoured by the composition root
+/// *after* wiring the host arbiter) **only** when `autoconnect` is `true` **and**
+/// the auto load downgraded to `MANUAL` — matching upstream, which sets
+/// `_autoconnect_pending` only on that path. The auto happy-path (workflow stays
+/// `AUTO`) and the kernel kind never autoconnect on load.
 pub async fn make_testreport(
     update: &UpdateID,
     config: Config,
@@ -213,13 +222,58 @@ pub async fn make_testreport(
     }
 
     report.base_mut().workflow = kind.workflow();
-    if autoconnect && kind.autoconnect_default() {
-        // Defer the connect to the composition root, which wires the arbiter
-        // first so refhosts_from_tp draws one host per slot.
-        report.base_mut().autoconnect_pending = true;
+
+    // Upstream `AutoOBSUpdateID.make_testreport`: the `-a` (auto) kind fetches
+    // the QEM-dashboard auto-openQA result at load time and downgrades the
+    // working mode to MANUAL when there are no install jobs (or they failed).
+    // The `-k` (kernel) kind keeps its KERNEL workflow and never autoconnects.
+    if kind == UpdateKind::Auto {
+        // Snapshot config primitives before the awaits (no `&report`/borrow
+        // crosses `.await`).
+        let dashboard_api = report.base().config.qem_dashboard_api.clone();
+        let openqa_instance = report.base().config.openqa_instance.clone();
+        let policy = resolve_verify(
+            VerifyPolicy::Default(true),
+            Some(VerifyPolicy::from_config(&report.base().config.ssl_verify)),
+        );
+
+        // Build the incident handle (a failed dashboard fetch folds into
+        // `data = None`, not an error) and run the auto connector. Both are
+        // best-effort — network failure leaves `results = None`, which the
+        // fallback below treats exactly like "no install jobs".
+        match QemIncident::new(rrid.clone(), dashboard_api, policy).await {
+            Ok(incident) => {
+                info!("Getting data from QEM Dashboard");
+                let mut auto = DashboardAutoOpenQA::new(openqa_instance, &incident, rrid.clone());
+                auto.run().await;
+                let no_results = auto.results.is_none();
+                report.base_mut().openqa.auto = Some(auto);
+
+                if no_results {
+                    warn!("No install jobs or install jobs failed");
+                    info!("Switch mode to manual");
+                    report.base_mut().workflow = Workflow::Manual;
+                    if autoconnect {
+                        // Defer the connect to the composition root, which wires
+                        // the arbiter first so refhosts_from_tp draws one host
+                        // per slot. Upstream connects only on this manual path.
+                        report.base_mut().autoconnect_pending = true;
+                    }
+                }
+            }
+            Err(e) => {
+                // Could not even build the dashboard client: treat as no
+                // results (downgrade to manual), mirroring the best-effort
+                // upstream behaviour where a missing auto result flips to manual.
+                warn!(error = %e, "QEM Dashboard unavailable; switching mode to manual");
+                report.base_mut().workflow = Workflow::Manual;
+                if autoconnect {
+                    report.base_mut().autoconnect_pending = true;
+                }
+            }
+        }
     }
-    // TODO(mtui-rs-m1w/zs4/plt): QEM Dashboard + auto-openQA enrichment and
-    // its auto→manual fallback are deferred to their own beads.
+
     report
 }
 

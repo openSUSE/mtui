@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use mtui_config::options::Config;
 use mtui_testreport::{ObsReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::{UpdateID, Workflow};
-use wiremock::matchers::method;
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const RRID: &str = "SUSE:Maintenance:24993:275518";
@@ -90,6 +90,64 @@ fn cfg(template_dir: PathBuf) -> Config {
     let mut c = Config::default();
     c.template_dir = template_dir;
     c
+}
+
+/// Points a config's QEM-dashboard + openQA URLs at a mock `server` so a
+/// `make_testreport(-a)` load resolves openQA offline instead of hitting the
+/// production instances baked into `Config::default()`.
+fn point_dashboard(config: &mut Config, server: &MockServer) {
+    config.qem_dashboard_api = format!("{}/api", server.uri());
+    config.openqa_instance = server.uri();
+    config.openqa_instance_baremetal = server.uri();
+}
+
+/// Mounts the three QEM-dashboard endpoints the auto path touches for
+/// `incident_number`, each returning an empty-but-valid body. With no incident
+/// settings there are no install jobs, so `DashboardAutoOpenQA` yields
+/// `results = None` — the auto→manual downgrade trigger.
+async fn mount_dashboard_no_results(server: &MockServer, incident_number: &str) {
+    for (endpoint, body) in [
+        ("incidents", serde_json::json!({})),
+        ("incident_settings", serde_json::json!([])),
+        ("update_settings", serde_json::json!([])),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/api/{endpoint}/{incident_number}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+}
+
+/// Mounts a dashboard with one passing `qam-incidentinstall` job for
+/// `incident_number`, so `DashboardAutoOpenQA` resolves `results = Some(..)` and
+/// the auto workflow is kept (no downgrade).
+async fn mount_dashboard_with_install(server: &MockServer, incident_number: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/api/incidents/{incident_number}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(server)
+        .await;
+    // One incident setting whose jobs contain a passing install job.
+    Mock::given(method("GET"))
+        .and(path(format!("/api/incident_settings/{incident_number}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"id": 1, "settings": {"DISTRI": "sle", "VERSION": "15-SP5", "ARCH": "x86_64"}}
+        ])))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/api/update_settings/{incident_number}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/jobs/incident/1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"job_id": 42, "name": "qam-incidentinstall-x86_64", "status": "passed"}
+        ])))
+        .mount(server)
+        .await;
 }
 
 /// `read` populates the base from the `log` (hosts parser) and `metadata.json`
@@ -195,29 +253,62 @@ fn read_invalid_metadata_errors() {
 }
 
 /// `make_testreport` with an on-disk template loads it, selects the OBS report
-/// (Maintenance kind), sets the AUTO workflow, and — since `-a` autoconnects by
-/// default — marks the report autoconnect-pending.
+/// (Maintenance kind), and — when the dashboard reports **no install jobs** —
+/// downgrades the AUTO workflow to MANUAL and (autoconnect=true) marks the
+/// report autoconnect-pending (upstream connects only on the manual-downgrade
+/// path).
 #[tokio::test]
-async fn make_testreport_auto_loads_and_marks_pending() {
+async fn make_testreport_auto_no_install_jobs_downgrades_to_manual() {
     let tmp = tempfile::tempdir().unwrap();
     make_checkout(tmp.path(), false);
     let update = UpdateID::parse(RRID).unwrap();
 
-    let report = make_testreport(
-        &update,
-        cfg(tmp.path().to_path_buf()),
-        UpdateKind::Auto,
-        true,
-        false,
-        None,
-    )
-    .await;
+    let server = MockServer::start().await;
+    mount_dashboard_no_results(&server, "24993").await;
+    let mut config = cfg(tmp.path().to_path_buf());
+    point_dashboard(&mut config, &server);
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
 
     assert_eq!(report.id(), RRID);
-    assert_eq!(report.workflow(), Workflow::Auto);
+    assert_eq!(
+        report.workflow(),
+        Workflow::Manual,
+        "no install jobs must switch mode to manual"
+    );
+    assert!(report.base().openqa.auto.is_some(), "auto result populated");
     assert!(
         report.base().autoconnect_pending,
-        "auto -a should defer a connect"
+        "the manual-downgrade path defers a connect when autoconnect=true"
+    );
+}
+
+/// When the dashboard reports passing install jobs, the AUTO workflow is kept
+/// and — matching upstream — the auto happy-path does **not** autoconnect.
+#[tokio::test]
+async fn make_testreport_auto_with_install_jobs_stays_auto_no_connect() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_checkout(tmp.path(), false);
+    let update = UpdateID::parse(RRID).unwrap();
+
+    let server = MockServer::start().await;
+    mount_dashboard_with_install(&server, "24993").await;
+    let mut config = cfg(tmp.path().to_path_buf());
+    point_dashboard(&mut config, &server);
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+
+    assert_eq!(report.id(), RRID);
+    assert_eq!(
+        report.workflow(),
+        Workflow::Auto,
+        "install jobs present must keep the auto workflow"
+    );
+    let auto = report.base().openqa.auto.as_ref().expect("auto populated");
+    assert!(auto.results.is_some(), "install results resolved");
+    assert!(
+        !report.base().autoconnect_pending,
+        "the auto happy-path must not autoconnect on load"
     );
 }
 
@@ -247,25 +338,24 @@ async fn make_testreport_kernel_does_not_autoconnect() {
     );
 }
 
-/// Even for `-a`, an explicit `autoconnect=false` (e.g. `--sut` at startup)
-/// suppresses the deferred connect.
+/// Even on the manual-downgrade path, an explicit `autoconnect=false` (e.g.
+/// `--sut` at startup) suppresses the deferred connect.
 #[tokio::test]
 async fn make_testreport_auto_respects_explicit_no_autoconnect() {
     let tmp = tempfile::tempdir().unwrap();
     make_checkout(tmp.path(), false);
     let update = UpdateID::parse(RRID).unwrap();
 
-    let report = make_testreport(
-        &update,
-        cfg(tmp.path().to_path_buf()),
-        UpdateKind::Auto,
-        false,
-        false,
-        None,
-    )
-    .await;
+    let server = MockServer::start().await;
+    mount_dashboard_no_results(&server, "24993").await;
+    let mut config = cfg(tmp.path().to_path_buf());
+    point_dashboard(&mut config, &server);
 
-    assert_eq!(report.workflow(), Workflow::Auto);
+    let report = make_testreport(&update, config, UpdateKind::Auto, false, false, None).await;
+
+    // No install jobs → downgraded to manual, but autoconnect=false suppresses
+    // the deferred connect.
+    assert_eq!(report.workflow(), Workflow::Manual);
     assert!(!report.base().autoconnect_pending);
 }
 
@@ -335,18 +425,25 @@ async fn mount_pr_head_sha(server: &MockServer, sha: &str) {
         .await;
 }
 
-/// A matching hash loads the SLFO report normally (workflow set,
-/// autoconnect-pending for `-a`) — no regression to the pre-check behaviour.
+/// A matching hash loads the SLFO report normally (workflow set from the auto
+/// enrichment) — no regression to the pre-check behaviour. The dashboard is
+/// mocked with passing install jobs on a *separate* server so the load keeps the
+/// AUTO workflow (the gitea server uses a catch-all GET matcher, which must not
+/// swallow the dashboard requests).
 #[tokio::test]
 async fn make_testreport_slfo_hash_match_loads() {
     let server = MockServer::start().await;
     mount_pr_head_sha(&server, "deadbeef").await;
+
+    let dashboard = MockServer::start().await;
+    mount_dashboard_with_install(&dashboard, "4413").await;
 
     let tmp = tempfile::tempdir().unwrap();
     make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "deadbeef");
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
     let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
@@ -354,7 +451,8 @@ async fn make_testreport_slfo_hash_match_loads() {
     assert!(report.is_loaded(), "matching hash should load the report");
     assert_eq!(report.id(), SLFO_RRID);
     assert_eq!(report.workflow(), Workflow::Auto);
-    assert!(report.base().autoconnect_pending);
+    // Auto happy-path (install jobs present) keeps AUTO and does not autoconnect.
+    assert!(!report.base().autoconnect_pending);
 }
 
 /// A missing Gitea token abandons the load (null report). The `Gitea` client
@@ -431,11 +529,18 @@ async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {
     let server = MockServer::start().await;
     mount_pr_head_sha(&server, "freshsha").await;
 
+    // The forced-continue report loads, so it reaches the auto enrichment; keep
+    // that offline by pointing the dashboard at a mock (no install jobs → the
+    // workflow downgrades to manual, which this test does not assert).
+    let dashboard = MockServer::start().await;
+    mount_dashboard_no_results(&dashboard, "4413").await;
+
     let tmp = tempfile::tempdir().unwrap();
     make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
 
     let mut config = cfg(tmp.path().to_path_buf());
     config.gitea_token = "tok".to_owned();
+    point_dashboard(&mut config, &dashboard);
     let update = UpdateID::parse(SLFO_RRID).unwrap();
 
     // Regenerate? no.  Force continue? yes.
