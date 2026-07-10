@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use clap::{Arg, ArgMatches, Command as ClapCommand};
-use mtui_config::Config;
+use mtui_config::{Config, SslVerify};
 
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -22,6 +22,7 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "install_logs" => config.install_logs.display().to_string(),
         "chdir_to_template_dir" => config.chdir_to_template_dir.to_string(),
         "use_keyring" => config.use_keyring.to_string(),
+        "ssl_verify" => ssl_verify_to_string(&config.ssl_verify),
         "connection_timeout" => config.connection_timeout.to_string(),
         "ssh_strict_host_key_checking" => config.ssh_strict_host_key_checking.clone(),
         "refhosts_resolvers" => config.refhosts_resolvers.clone(),
@@ -32,6 +33,21 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
         "reports_url" => config.reports_url.clone(),
         "fancy_reports_url" => config.fancy_reports_url.clone(),
         "svn_path" => config.svn_path.clone(),
+        "qem_dashboard_api" => config.qem_dashboard_api.clone(),
+        "teregen_api" => config.teregen_api.clone(),
+        "openqa_instance" => config.openqa_instance.clone(),
+        "openqa_instance_baremetal" => config.openqa_instance_baremetal.clone(),
+        "openqa_install_distri" => config.openqa_install_distri.clone(),
+        // A secret: never render the token verbatim (it lands in scrollback and
+        // logs). Show only whether one is set, mirroring how `show` should treat
+        // credentials while still confirming presence.
+        "gitea_token" => {
+            if config.gitea_token.is_empty() {
+                String::new()
+            } else {
+                "<set>".to_owned()
+            }
+        }
         "target_tempdir" => config.target_tempdir.display().to_string(),
         "lock_reap_stale" => config.lock_reap_stale.to_string(),
         "lock_stale_age" => config.lock_stale_age.to_string(),
@@ -43,14 +59,26 @@ fn attr_value(config: &Config, attr: &str) -> Option<String> {
     Some(v)
 }
 
+/// Render an [`SslVerify`] back to the string form `config set`/the config file
+/// accept, so `show` round-trips into `set`: `"true"`/`"false"` for the
+/// enabled/disabled postures, or the CA-bundle path verbatim.
+fn ssl_verify_to_string(v: &SslVerify) -> String {
+    match v {
+        SslVerify::Enabled => "true".to_owned(),
+        SslVerify::Disabled => "false".to_owned(),
+        SslVerify::CaBundle(path) => path.display().to_string(),
+    }
+}
+
 /// The attribute names `show` lists when given none, in a stable order.
-const ATTRS: [&str; 22] = [
+const ATTRS: [&str; 29] = [
     "template_dir",
     "local_tempdir",
     "session_user",
     "install_logs",
     "chdir_to_template_dir",
     "use_keyring",
+    "ssl_verify",
     "connection_timeout",
     "ssh_strict_host_key_checking",
     "refhosts_resolvers",
@@ -61,6 +89,12 @@ const ATTRS: [&str; 22] = [
     "reports_url",
     "fancy_reports_url",
     "svn_path",
+    "qem_dashboard_api",
+    "teregen_api",
+    "openqa_instance",
+    "openqa_instance_baremetal",
+    "openqa_install_distri",
+    "gitea_token",
     "target_tempdir",
     "lock_reap_stale",
     "lock_stale_age",
@@ -91,6 +125,16 @@ fn set_attr(config: &mut Config, attr: &str, raw: &str) -> Result<(), String> {
         "reports_url" => config.reports_url = raw.to_owned(),
         "fancy_reports_url" => config.fancy_reports_url = raw.to_owned(),
         "svn_path" => config.svn_path = raw.to_owned(),
+        "qem_dashboard_api" => config.qem_dashboard_api = raw.to_owned(),
+        "teregen_api" => config.teregen_api = raw.to_owned(),
+        "openqa_instance" => config.openqa_instance = raw.to_owned(),
+        "openqa_instance_baremetal" => config.openqa_instance_baremetal = raw.to_owned(),
+        "openqa_install_distri" => config.openqa_install_distri = raw.to_owned(),
+        "gitea_token" => config.gitea_token = raw.to_owned(),
+        // Goes through the same coercion as config-file loading (a boolean
+        // spelling toggles verification, anything else is a CA-bundle path), so
+        // a runtime `set` cannot store a value the file would reject.
+        "ssl_verify" => config.ssl_verify = SslVerify::parse(raw),
         "chdir_to_template_dir" => config.chdir_to_template_dir = parse_bool(raw)?,
         "use_keyring" => config.use_keyring = parse_bool(raw)?,
         "lock_reap_stale" => config.lock_reap_stale = parse_bool(raw)?,
@@ -217,6 +261,110 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("template_dir"));
         assert!(out.contains("lock_wait_poll"));
+        // Regression: ssl_verify and the later-phase datasource options must be
+        // visible in `show` (they load and are honored, but were missing from
+        // the command's attribute table).
+        assert!(out.contains("ssl_verify"));
+        assert!(out.contains("qem_dashboard_api"));
+        assert!(out.contains("teregen_api"));
+        assert!(out.contains("openqa_instance"));
+        assert!(out.contains("openqa_instance_baremetal"));
+        assert!(out.contains("openqa_install_distri"));
+        assert!(out.contains("gitea_token"));
+    }
+
+    #[tokio::test]
+    async fn show_ssl_verify_renders_enum_forms() {
+        let (mut session, buf) = empty_session();
+        // Default posture renders as "true".
+        session.config.ssl_verify = SslVerify::Enabled;
+        ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
+            .await
+            .unwrap();
+        assert!(buf.contents().contains("ssl_verify"));
+        assert!(buf.contents().contains("\"true\""));
+
+        // Disabled renders as "false".
+        let (mut session, buf) = empty_session();
+        session.config.ssl_verify = SslVerify::Disabled;
+        ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
+            .await
+            .unwrap();
+        assert!(buf.contents().contains("\"false\""));
+
+        // A CA bundle path is shown verbatim.
+        let (mut session, buf) = empty_session();
+        session.config.ssl_verify = SslVerify::CaBundle(std::path::PathBuf::from("/etc/ca.pem"));
+        ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show", "ssl_verify"]))
+            .await
+            .unwrap();
+        assert!(buf.contents().contains("/etc/ca.pem"));
+    }
+
+    #[tokio::test]
+    async fn set_ssl_verify_bool_and_path() {
+        let (mut session, _buf) = empty_session();
+        // Boolean spelling disables verification.
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "ssl_verify", "false"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.config.ssl_verify, SslVerify::Disabled);
+
+        // A non-boolean value becomes a CA-bundle path (config-file coercion).
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "ssl_verify", "/x/ca.pem"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            session.config.ssl_verify,
+            SslVerify::CaBundle(std::path::PathBuf::from("/x/ca.pem"))
+        );
+    }
+
+    #[tokio::test]
+    async fn set_datasource_url_and_token() {
+        let (mut session, _buf) = empty_session();
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "openqa_instance", "http://oqa.local"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.config.openqa_instance, "http://oqa.local");
+
+        ConfigCmd
+            .call(
+                &mut session,
+                &matches(&ConfigCmd, &["set", "gitea_token", "secret123"]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.config.gitea_token, "secret123");
+    }
+
+    #[tokio::test]
+    async fn show_gitea_token_is_masked() {
+        let (mut session, buf) = empty_session();
+        session.config.gitea_token = "secret123".to_owned();
+        ConfigCmd
+            .call(&mut session, &matches(&ConfigCmd, &["show", "gitea_token"]))
+            .await
+            .unwrap();
+        let out = buf.contents();
+        // The secret is never rendered verbatim; presence is confirmed instead.
+        assert!(!out.contains("secret123"));
+        assert!(out.contains("<set>"));
     }
 
     #[tokio::test]
