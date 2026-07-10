@@ -26,6 +26,7 @@ use mtui_datasources::openqa::kernel::KernelOpenQA;
 use mtui_datasources::oqa_search::results::OpenQAOverviewResult;
 use mtui_datasources::qem_dashboard::dashboard_openqa::DashboardAutoOpenQA;
 use mtui_hosts::{HostArbiter, HostsGroup, Owner, SetRepo};
+use mtui_types::package::Package;
 use mtui_types::{OpenQAResults, RequestReviewID, SystemProduct, Workflow};
 
 /// The concrete openQA state holder carried on a report.
@@ -210,6 +211,77 @@ impl TestReportBase {
         std::fs::create_dir_all(dir)?;
         Ok(dir.to_path_buf())
     }
+
+    /// Resolves the [`Package`] list to seed onto a host whose base product
+    /// version is `base_version`, each carrying its metadata-`required` version.
+    ///
+    /// Ports upstream `Target._parse_packages` (`mtui/hosts/target/target.py`),
+    /// which selects the right product sub-map of
+    /// [`packages`](Self::packages) (`product -> { name -> version }`):
+    ///
+    /// * if the map holds exactly the single key `"standard"`, use it (a report
+    ///   that ships one product-agnostic set — e.g. SLFO metadata);
+    /// * otherwise use the sub-map keyed by the host's `base_version` (the
+    ///   `parse_product` string, e.g. `"15-SP6"`, which equals the metadata
+    ///   product key);
+    /// * additionally, when `base_version` starts with `"12"`, merge in the
+    ///   `"12"` sub-map (upstream's SLE-12 special case).
+    ///
+    /// Each resolved `name -> version` becomes a [`Package`] with its
+    /// [`required`](Package::required) set. An unparseable version is skipped
+    /// (best-effort, mirroring upstream's tolerant setters), leaving that
+    /// package unseeded rather than aborting the whole host. Returns an empty
+    /// vec when no sub-map matches (upstream returns `{}`).
+    #[must_use]
+    pub fn packages_for(&self, base_version: &str) -> Vec<Package> {
+        packages_for_map(&self.packages, base_version)
+    }
+}
+
+/// The free-standing body of [`TestReportBase::packages_for`], operating on a
+/// borrowed `product -> { name -> version }` map.
+///
+/// Factored out so the composition root (`mtui-core::session`) can resolve seed
+/// packages from a *snapshot* of the metadata map (cloned before a
+/// `targets_mut()` borrow, to keep the connect future `Send`) without needing a
+/// live `&TestReportBase` across the connect `.await`.
+#[must_use]
+pub fn packages_for_map(
+    map: &HashMap<String, HashMap<String, String>>,
+    base_version: &str,
+) -> Vec<Package> {
+    let mut selected: HashMap<&String, &String> = HashMap::new();
+
+    if map.len() == 1 && map.contains_key("standard") {
+        for (name, ver) in &map["standard"] {
+            selected.insert(name, ver);
+        }
+    } else if let Some(per_product) = map.get(base_version) {
+        for (name, ver) in per_product {
+            selected.insert(name, ver);
+        }
+    }
+    if base_version.starts_with("12")
+        && let Some(sle12) = map.get("12")
+    {
+        for (name, ver) in sle12 {
+            selected.insert(name, ver);
+        }
+    }
+
+    let mut packages: Vec<Package> = Vec::with_capacity(selected.len());
+    for (name, ver) in selected {
+        let mut pkg = Package::new(name.clone());
+        if pkg.set_required(Some(ver)).is_err() {
+            tracing::warn!(
+                package = %name, version = %ver,
+                "unparseable required version in metadata; leaving package unseeded"
+            );
+        }
+        packages.push(pkg);
+    }
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+    packages
 }
 
 /// The abstract test-report surface.
@@ -819,6 +891,86 @@ mod tests {
         let base = TestReportBase::new(config());
         let err = base.report_wd().expect_err("no path -> error");
         assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    /// Builds a `TestReportBase` whose `packages` map has one product `key`
+    /// carrying `entries` (`name -> version`).
+    fn base_with_packages(entries: &[(&str, &str, &str)]) -> TestReportBase {
+        let mut base = TestReportBase::new(config());
+        for (product, name, ver) in entries {
+            base.packages
+                .entry((*product).to_owned())
+                .or_default()
+                .insert((*name).to_owned(), (*ver).to_owned());
+        }
+        base
+    }
+
+    #[test]
+    fn packages_for_selects_by_base_version_and_sets_required() {
+        // The user's exact case: metadata keyed by "15-SP6" (== parse_product
+        // version string), five hplip packages, host base version "15-SP6".
+        let base = base_with_packages(&[
+            ("15-SP6", "hplip", "3.26.4-150600.4.12.1"),
+            ("15-SP6", "hplip-devel", "3.26.4-150600.4.12.1"),
+            (
+                "15-SP5",
+                "release-notes-sles",
+                "15.5.20260709-150500.3.35.1",
+            ),
+        ]);
+        let pkgs = base.packages_for("15-SP6");
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["hplip", "hplip-devel"]);
+        for p in &pkgs {
+            assert_eq!(
+                p.required().map(ToString::to_string),
+                Some("3.26.4-150600.4.12.1".to_owned()),
+                "required must be set for {}",
+                p.name
+            );
+        }
+    }
+
+    #[test]
+    fn packages_for_standard_only_map_used_regardless_of_base_version() {
+        // SLFO metadata ships a single "standard" product set; it applies to any
+        // host base version.
+        let base = base_with_packages(&[("standard", "patch", "2.7.6-999999_stage.1.1")]);
+        let pkgs = base.packages_for("16.0");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "patch");
+        assert_eq!(
+            pkgs[0].required().map(ToString::to_string),
+            Some("2.7.6-999999_stage.1.1".to_owned())
+        );
+    }
+
+    #[test]
+    fn packages_for_merges_sle12_special_case() {
+        // Upstream merges the "12" sub-map for any 12.x host on top of the
+        // base-version sub-map.
+        let base = base_with_packages(&[("12-SP5", "bash", "5.0-1"), ("12", "glibc", "2.31-1")]);
+        let pkgs = base.packages_for("12-SP5");
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["bash", "glibc"]);
+    }
+
+    #[test]
+    fn packages_for_returns_empty_when_no_submap_matches() {
+        let base = base_with_packages(&[("15-SP6", "hplip", "3.26.4-1")]);
+        assert!(base.packages_for("15-SP5").is_empty());
+    }
+
+    #[test]
+    fn packages_for_skips_unparseable_version() {
+        // A garbage version leaves the package unseeded rather than aborting.
+        let base = base_with_packages(&[("15-SP6", "goodpkg", "1.0-1"), ("15-SP6", "badpkg", "")]);
+        let pkgs = base.packages_for("15-SP6");
+        // Empty string clears required (parse_opt treats "" as None), so badpkg
+        // is present but with no required version; goodpkg has one.
+        let good = pkgs.iter().find(|p| p.name == "goodpkg").unwrap();
+        assert!(good.required().is_some());
     }
 
     /// A minimal report over a [`TestReportBase`] with a fixed id, so the

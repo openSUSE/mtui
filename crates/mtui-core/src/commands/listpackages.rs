@@ -329,6 +329,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seeded_report_package_installed_is_not_labeled_not_installed() {
+        // Regression for the reported bug: a report package that is *installed*
+        // (rpm -q returns a version) and seeded with its required version must
+        // render a comparison state — never "not installed" while a version is
+        // shown. Before seeding was wired, `wanted` was always None and this
+        // fell into the (Some, None) => NotInstalled arm.
+        use std::collections::HashMap;
+
+        use mtui_types::package::Package;
+        let (mut session, buf) = session_with_hosts(
+            "SUSE:Maintenance:44759:413589",
+            &["h1"],
+            "hplip 3.26.4-150600.4.9.1\n",
+        );
+        {
+            // Populate the report's package metadata so `get_package_list()`
+            // surfaces hplip (mirrors a loaded report), and seed the target's
+            // tracked package with its required version (what
+            // `connect_and_add_hosts` now does in production).
+            let base = session.metadata_mut().base_mut();
+            let mut per_product = HashMap::new();
+            per_product.insert("hplip".to_owned(), "3.26.4-150600.4.12.1".to_owned());
+            base.packages.insert("15-SP6".to_owned(), per_product);
+
+            let t = session.targets_mut().get_mut("h1").unwrap();
+            let mut pkg = Package::new("hplip");
+            pkg.set_required(Some("3.26.4-150600.4.12.1")).unwrap();
+            t.set_packages(vec![pkg]);
+        }
+        let args = matches(&ListPackages, &["-t", "h1"]);
+        ListPackages.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // Installed older than required → "update needed", and crucially the
+        // installed line must NOT say "not installed".
+        assert!(out.contains("3.26.4-150600.4.9.1"), "version shown: {out}");
+        assert!(out.contains("update needed"), "{out}");
+        assert!(
+            !out.lines()
+                .any(|l| l.contains("3.26.4-150600.4.9.1") && l.contains("not installed")),
+            "installed package must never be labeled 'not installed': {out}"
+        );
+    }
+
+    #[tokio::test]
     async fn wanted_prints_report_versions_without_hosts() {
         use std::collections::HashMap;
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");

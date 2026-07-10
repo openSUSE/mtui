@@ -398,6 +398,15 @@ impl Session {
         // the `config`/`timeout_prompt` snapshots below exist for. Empty when no
         // PI assignment is active (upstream `lock_comment == ""`).
         let lock_comment = self.templates.active().base().lock_comment.clone();
+        // Snapshot the active report's package metadata (`product -> { name ->
+        // required-version }`) before the `targets_mut()` borrow below. Cloning
+        // it up front keeps the connect future `Send` (a `base()` borrow held
+        // across the connect `.await` would not be) and is the port of upstream
+        // `Target._parse_packages`, which seeds each host's tracked packages —
+        // with their required versions — right after connect(). Empty when no
+        // report (or a report with no packages) is loaded, in which case seeding
+        // is a no-op, matching upstream's empty `self.packages` pre-load.
+        let package_meta = self.templates.active().base().packages.clone();
         // Snapshot the command-timeout prompt (a `Clone`-able closure) before the
         // connect loop: a `&Session`/`&Prompter` borrow held across the connect
         // `.await` would make this future non-`Send`, which `Command::call`
@@ -438,6 +447,19 @@ impl Session {
             match target.connect().await {
                 Ok(()) => {
                     Self::autolock_target(&mut target, &lock_comment).await;
+                    // Seed the host's tracked packages with their metadata
+                    // `required` versions (upstream `_parse_packages`), keyed by
+                    // the just-parsed base product version, then query current
+                    // versions so `list_packages`/`package_check`/`downgrade`
+                    // all see a populated list. `connect()` already parsed the
+                    // system, so `get_base().version` is authoritative here.
+                    let base_version = target.system().get_base().version.clone();
+                    let seeded =
+                        mtui_testreport::testreport::packages_for_map(&package_meta, &base_version);
+                    if !seeded.is_empty() {
+                        target.set_packages(seeded);
+                        target.query_versions().await;
+                    }
                     drift.push((
                         host.clone(),
                         Self::verify_target_products(store.as_ref(), &target),
