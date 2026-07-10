@@ -98,13 +98,38 @@ class BaseExport(ABC):
                 o = i + 1
                 break
 
-        index = len(self.template)
-        if "## export MTUI:" in self.template[-1]:
-            index -= 1
-        self.template.insert(index, "\n")
-        self.template.insert(index + 1, "Links for update logs:\n")
-        self.template.insert(index + 2, "\n")
-        index += 2
+        marker = "Links for update logs:\n"
+        try:
+            # Reuse an existing section: manual/kernel exports run this on
+            # every export, and unconditionally inserting a fresh header
+            # stacked empty 'Links for update logs:' sections that grew
+            # with each re-export (the links themselves were de-duplicated,
+            # the header was not). New links are appended after the
+            # section's existing links.
+            index = self.template.index(marker) + 1
+            self._drop_empty_link_sections(marker, index)
+            if index >= len(self.template) or (
+                self.template[index] != "\n"
+                and str(self.config.reports_url) not in self.template[index]
+            ):
+                # Hand-trimmed template: the header is followed directly by
+                # foreign content (e.g. the export footer). Restore the
+                # canonical blank so the links land inside the section, not
+                # after the footer.
+                self.template.insert(index, "\n")
+            while (
+                index + 1 < len(self.template)
+                and str(self.config.reports_url) in self.template[index + 1]
+            ):
+                index += 1
+        except ValueError:
+            index = len(self.template)
+            if "## export MTUI:" in self.template[-1]:
+                index -= 1
+            self.template.insert(index, "\n")
+            self.template.insert(index + 1, marker)
+            self.template.insert(index + 2, "\n")
+            index += 2
 
         add_empty_line = False
         for fn in filenames:
@@ -114,8 +139,47 @@ class BaseExport(ABC):
                 self.template.insert(index, install_log)
                 add_empty_line = True
 
-        if add_empty_line:
+        if add_empty_line and (
+            index + 1 >= len(self.template) or self.template[index + 1] != "\n"
+        ):
             self.template.insert(index + 1, "\n")
+
+    def _drop_empty_link_sections(self, marker: str, search_from: int) -> None:
+        """Remove empty duplicate 'Links for update logs:' headers.
+
+        Pre-fix exports stacked one fresh header per run while the links
+        stayed under the original section, so damaged templates carry
+        trailing header blocks with nothing but blanks under them. They
+        would otherwise survive forever (``dedup_lines`` never collapses
+        blank-separated duplicates). A duplicate section that does hold
+        links is left alone -- never delete content.
+
+        Args:
+            marker: The section header line.
+            search_from: Index to start scanning at (just past the first,
+                kept, header).
+
+        """
+        i = search_from
+        while True:
+            try:
+                j = self.template.index(marker, i)
+            except ValueError:
+                return
+            k = j + 1
+            while k < len(self.template) and self.template[k] == "\n":
+                k += 1
+            if (
+                k < len(self.template)
+                and str(self.config.reports_url) in (self.template[k])
+            ):
+                i = k  # a section with real links: keep it
+                continue
+            # Empty duplicate: drop the header, its trailing blanks, and the
+            # framing blank the old code inserted before it.
+            start = j - 1 if j > 0 and self.template[j - 1] == "\n" else j
+            del self.template[start:k]
+            i = start
 
     def dedup_lines(self) -> None:
         """Deduplicates lines in the template."""
@@ -214,8 +278,17 @@ class BaseExport(ABC):
     def install_results(self) -> None:
         """Adds installation results to the template."""
         index = self.template.index("Test results by product-arch:\n", 0)
-        self.template.insert(
-            index + 3,
-            "All installation tests done in openQA please see installlogs section\n",
-        )
-        self.template.insert(index + 4, "\n")
+        line = "All installation tests done in openQA please see installlogs section\n"
+        # Idempotent: on a kernel re-export the previous run's notice is
+        # still there, separated from a fresh insert by the blank line, so
+        # dedup_lines() never collapsed them and the notice multiplied with
+        # every export. Copies stacked by pre-fix exports are dropped so a
+        # damaged template converges back to a single notice.
+        while self.template.count(line) > 1:
+            extra = len(self.template) - 1 - self.template[::-1].index(line)
+            del self.template[extra]
+            if extra < len(self.template) and self.template[extra] == "\n":
+                del self.template[extra]
+        if line not in self.template:
+            self.template.insert(index + 3, line)
+            self.template.insert(index + 4, "\n")

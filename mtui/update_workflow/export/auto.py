@@ -66,10 +66,20 @@ class AutoExport(BaseExport):
             while end > start and self.template[end - 1] == "\n":
                 end -= 1
         except ValueError:
-            try:
-                end = self.template.index("## export MTUI:", start)
-            except ValueError:
-                end = len(self.template)
+            # Substring scan for the footer: the actual line is
+            # '## export MTUI:<version>, ... by <user>\n', never exactly
+            # '## export MTUI:', so list.index() could not match it -- end
+            # ran to len(template) and the replacement deleted everything
+            # after the Install-tests section (footer included, plus any
+            # free-text notes a tester had appended).
+            end = next(
+                (
+                    i
+                    for i in range(max(start, 0), len(self.template))
+                    if "## export MTUI:" in self.template[i]
+                ),
+                len(self.template),
+            )
 
         block = [
             "##############\n",
