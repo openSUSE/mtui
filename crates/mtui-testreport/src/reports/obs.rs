@@ -36,7 +36,7 @@ use tracing::debug;
 use super::repoparse::obsrepoparse;
 use super::set_repo_with_add_flags;
 use super::update_flow;
-use crate::testreport::{TestReport, TestReportBase};
+use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
 /// A [`TestReport`] for OBS/IBS updates (upstream `OBSTestReport`).
 pub struct ObsReport {
@@ -145,10 +145,10 @@ impl TestReport for ObsReport {
         Some(self)
     }
 
-    async fn check_hash(&self) -> (bool, String, String) {
+    async fn check_hash(&self) -> HashCheck {
         // Upstream OBS always returns (True, "", "") — OBS/IBS checkout is via
         // osc qam / SVN, so there is no git commit hash to verify.
-        (true, String::new(), String::new())
+        HashCheck::Ok
     }
 }
 

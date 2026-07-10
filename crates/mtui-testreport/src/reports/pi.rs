@@ -33,7 +33,7 @@ use tracing::debug;
 use super::repoparse::reporepoparse;
 use super::set_repo_with_add_flags;
 use super::update_flow;
-use crate::testreport::{TestReport, TestReportBase};
+use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
 /// A [`TestReport`] for PI updates (upstream `PITestReport`).
 pub struct PiReport {
@@ -135,9 +135,9 @@ impl TestReport for PiReport {
         Some(self)
     }
 
-    async fn check_hash(&self) -> (bool, String, String) {
+    async fn check_hash(&self) -> HashCheck {
         // Upstream PI always returns (True, "", "") — nothing to verify.
-        (true, String::new(), String::new())
+        HashCheck::Ok
     }
 }
 

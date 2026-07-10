@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 
 use mtui_config::options::Config;
+use mtui_datasources::error::GiteaError;
 use mtui_datasources::gitea::Gitea;
 use mtui_hosts::{
     HostsGroup, InstallOperation, Operation, RepoOp, SetRepo, Target, UninstallOperation,
@@ -29,7 +30,7 @@ use tracing::debug;
 use super::repoparse::{gitrepoparse, reporepoparse, slrepoparse};
 use super::set_repo_with_add_flags;
 use super::update_flow;
-use crate::testreport::{TestReport, TestReportBase};
+use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
 /// A [`TestReport`] for SUSE Linux updates (upstream `SLTestReport`).
 pub struct SlReport {
@@ -149,26 +150,34 @@ impl TestReport for SlReport {
         Some(self)
     }
 
-    async fn check_hash(&self) -> (bool, String, String) {
+    async fn check_hash(&self) -> HashCheck {
         // "1.1" is still served from IBS — no Gitea comparison.
         if self.maintenance_id() == Some("1.1") {
-            return (true, String::new(), String::new());
+            return HashCheck::Ok;
         }
 
         let old = self.base.giteacohash.clone().unwrap_or_default();
         let giteaprapi = self.base.giteaprapi.clone().unwrap_or_default();
         let gitea = match Gitea::new(&self.base.config, &giteaprapi, None) {
             Ok(g) => g,
+            // A missing token is a distinct, actionable failure upstream
+            // surfaces as `MissingGiteaTokenError`; anything else building the
+            // client is a failed call.
+            Err(GiteaError::MissingToken) => return HashCheck::MissingToken,
             Err(e) => {
                 debug!(error = %e, "check_hash: could not build Gitea client");
-                return (false, old, String::new());
+                return HashCheck::Failed(e.to_string());
             }
         };
         match gitea.get_hash().await {
-            Ok(new) => (old == new, old, new),
+            Ok(new) if old == new => HashCheck::Ok,
+            Ok(new) => HashCheck::Mismatch {
+                expected: old,
+                actual: new,
+            },
             Err(e) => {
                 debug!(error = %e, "check_hash: Gitea get_hash failed");
-                (false, old, String::new())
+                HashCheck::Failed(e.to_string())
             }
         }
     }

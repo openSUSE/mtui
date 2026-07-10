@@ -307,7 +307,15 @@ impl Session {
         autoconnect: bool,
         kind: UpdateKind,
     ) -> String {
-        let report = make_testreport(update, self.config.clone(), kind, autoconnect).await;
+        let report = make_testreport(
+            update,
+            self.config.clone(),
+            kind,
+            autoconnect,
+            self.interactive,
+            self.prompter.as_ref(),
+        )
+        .await;
         let rrid = report.id();
         let pending = report.base().autoconnect_pending;
 

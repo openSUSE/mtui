@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use clap::{Arg, ArgAction, ArgMatches};
 use mtui_datasources::Osc;
-use mtui_testreport::{TokioSvnRunner, svn_commit_testreport};
+use mtui_testreport::{HashCheck, TokioSvnRunner, svn_commit_testreport};
 
 use crate::command::{Command, Scope};
 use crate::commands::apicall::{PiAction, gitea_client, is_gitea_workflow, pi_autolock};
@@ -95,8 +95,18 @@ impl Command for Approve {
 
         if is_gitea_workflow(&rrid) {
             let gitea = gitea_client(session)?;
-            let (ok, expected, actual) = session.metadata().check_hash().await;
-            if !ok && !session.interactive {
+            // Any non-matching hash (a real mismatch, a missing token, or a
+            // failed Gitea call) refuses a non-interactive approval, matching
+            // the previous `!ok` guard.
+            if let check @ (HashCheck::Mismatch { .. }
+            | HashCheck::MissingToken
+            | HashCheck::Failed(_)) = session.metadata().check_hash().await
+                && !session.interactive
+            {
+                let (expected, actual) = match check {
+                    HashCheck::Mismatch { expected, actual } => (expected, actual),
+                    _ => (String::new(), String::new()),
+                };
                 return Err(CommandError::Other(format!(
                     "GiteaPR hash differs from testreport ({expected} -> {actual}); \
                      refusing to approve non-interactively"
@@ -258,8 +268,11 @@ mod tests {
                 HashMap::new()
             }
             fn list_update_commands(&self, _t: &mtui_hosts::HostsGroup) {}
-            async fn check_hash(&self) -> (bool, String, String) {
-                (false, "old".to_owned(), "new".to_owned())
+            async fn check_hash(&self) -> HashCheck {
+                HashCheck::Mismatch {
+                    expected: "old".to_owned(),
+                    actual: "new".to_owned(),
+                }
             }
         }
 

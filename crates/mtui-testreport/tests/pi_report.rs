@@ -13,7 +13,7 @@
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
-use mtui_testreport::{PiReport, TestReport};
+use mtui_testreport::{HashCheck, PiReport, TestReport};
 use mtui_types::RequestReviewID;
 
 fn config() -> Config {
@@ -81,7 +81,7 @@ fn update_repos_parser_empty_when_no_repositories() {
 async fn check_hash_always_true() {
     let mut r = PiReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:PI:42:99"));
-    assert_eq!(r.check_hash().await, (true, String::new(), String::new()));
+    assert_eq!(r.check_hash().await, HashCheck::Ok);
 }
 
 #[test]

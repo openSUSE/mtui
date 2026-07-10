@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
-use mtui_testreport::{NullReport, TestReport};
+use mtui_testreport::{HashCheck, NullReport, TestReport};
 
 /// Builds a config whose `template_dir`/`target_tempdir` point under a unique,
 /// deterministic base — the Rust analogue of the upstream `MagicMock` config
@@ -65,8 +65,5 @@ fn null_list_update_commands_noop() {
 #[tokio::test]
 async fn null_check_hash_returns_true() {
     let (cfg, _) = config_with_tmp("check-hash");
-    assert_eq!(
-        NullReport::new(cfg).check_hash().await,
-        (true, String::new(), String::new())
-    );
+    assert_eq!(NullReport::new(cfg).check_hash().await, HashCheck::Ok);
 }

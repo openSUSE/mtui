@@ -12,7 +12,7 @@ use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
 use mtui_types::SystemProduct;
 
-use crate::testreport::{TestReport, TestReportBase};
+use crate::testreport::{HashCheck, TestReport, TestReportBase};
 
 /// A null-object [`TestReport`], active when nothing is loaded.
 pub struct NullReport {
@@ -61,8 +61,8 @@ impl TestReport for NullReport {
         // Null object: does nothing.
     }
 
-    async fn check_hash(&self) -> (bool, String, String) {
-        (true, String::new(), String::new())
+    async fn check_hash(&self) -> HashCheck {
+        HashCheck::Ok
     }
 
     fn is_loaded(&self) -> bool {

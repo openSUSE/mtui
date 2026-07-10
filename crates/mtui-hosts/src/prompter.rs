@@ -107,6 +107,34 @@ impl Prompter {
         (self.reader)(text.to_owned()).await
     }
 
+    /// Asks a yes/no question, returning whether the user confirmed.
+    ///
+    /// The Rust analogue of upstream `mtui.cli.term.prompt_user(text, ["yes",
+    /// "y"], interactive=True, default)`: reads a line via [`ask`](Prompter::ask),
+    /// lowercases it, and returns `true` for an empty response iff `default` is
+    /// `true`, or for a response in `{"yes", "y"}`; anything else (including an
+    /// I/O error, the analogue of upstream's Ctrl-C/Ctrl-D swallow) is `false`.
+    ///
+    /// Callers gate this behind an `interactive` check: upstream's
+    /// non-interactive mode never requests input and always returns `false` (so
+    /// a defaulted destructive prompt never auto-confirms unattended), so a
+    /// headless caller must not call `confirm` at all — see the load-time
+    /// stale-hash handling in `mtui-testreport`.
+    pub async fn confirm(&self, text: &str, default: bool) -> bool {
+        match self.ask(text).await {
+            Ok(response) => {
+                let response = response.trim().to_ascii_lowercase();
+                if response.is_empty() {
+                    default
+                } else {
+                    matches!(response.as_str(), "yes" | "y")
+                }
+            }
+            // Upstream swallows KeyboardInterrupt / EOFError and returns False.
+            Err(_) => false,
+        }
+    }
+
     /// Builds a [`TimeoutPrompt`](crate::connection::TimeoutPrompt) that routes
     /// the SSH command-timeout question through this prompter's serialised
     /// [`ask`](Prompter::ask).
@@ -254,5 +282,54 @@ mod tests {
         }));
         let err = p.ask("x").await.unwrap_err();
         assert_eq!(err.to_string(), "boom");
+    }
+
+    /// Builds a prompter that always answers `answer`.
+    fn fixed_prompter(answer: &'static str) -> Prompter {
+        Prompter::new(Arc::new(move |_text: String| {
+            Box::pin(async move { Ok(answer.to_owned()) })
+                as Pin<Box<dyn Future<Output = io::Result<String>> + Send>>
+        }))
+    }
+
+    #[tokio::test]
+    async fn confirm_yes_tokens_are_true() {
+        let _serial = crate::target::spinner::TEST_SERIAL.lock().await;
+        for ans in ["y", "Y", "yes", "YES", " yes "] {
+            assert!(
+                fixed_prompter(ans).confirm("go? ", false).await,
+                "{ans:?} should confirm"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn confirm_other_input_is_false() {
+        let _serial = crate::target::spinner::TEST_SERIAL.lock().await;
+        for ans in ["n", "no", "nope", "maybe"] {
+            assert!(
+                !fixed_prompter(ans).confirm("go? ", true).await,
+                "{ans:?} should decline"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn confirm_empty_uses_default() {
+        let _serial = crate::target::spinner::TEST_SERIAL.lock().await;
+        assert!(fixed_prompter("").confirm("go? ", true).await);
+        assert!(!fixed_prompter("").confirm("go? ", false).await);
+    }
+
+    #[tokio::test]
+    async fn confirm_reader_error_is_false() {
+        let _serial = crate::target::spinner::TEST_SERIAL.lock().await;
+        let p = Prompter::new(Arc::new(|_text: String| {
+            Box::pin(async move { Err(io::Error::other("eof")) })
+                as Pin<Box<dyn Future<Output = io::Result<String>> + Send>>
+        }));
+        // Upstream swallows Ctrl-C / Ctrl-D and returns False, even with a
+        // default of true.
+        assert!(!p.confirm("go? ", true).await);
     }
 }

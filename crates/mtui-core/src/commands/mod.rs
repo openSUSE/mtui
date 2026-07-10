@@ -152,7 +152,7 @@ pub(crate) mod testkit {
     use async_trait::async_trait;
     use mtui_config::Config;
     use mtui_hosts::{HostsGroup, MockConnection, Target};
-    use mtui_testreport::{TestReport, TestReportBase};
+    use mtui_testreport::{HashCheck, TestReport, TestReportBase};
     use mtui_types::SystemProduct;
     use mtui_types::enums::{ExecutionMode, TargetState};
     use mtui_types::hostlog::CommandLog;
@@ -184,8 +184,8 @@ pub(crate) mod testkit {
             HashMap::new()
         }
         fn list_update_commands(&self, _targets: &HostsGroup) {}
-        async fn check_hash(&self) -> (bool, String, String) {
-            (true, String::new(), String::new())
+        async fn check_hash(&self) -> HashCheck {
+            HashCheck::Ok
         }
     }
 

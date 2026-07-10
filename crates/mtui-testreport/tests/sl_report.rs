@@ -11,7 +11,7 @@
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
-use mtui_testreport::{SlReport, TestReport};
+use mtui_testreport::{HashCheck, SlReport, TestReport};
 use mtui_types::RequestReviewID;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -101,7 +101,7 @@ fn update_repos_parser_falls_back_to_gitrepoparse() {
 async fn check_hash_maintenance_id_1_1_bypasses_gitea() {
     let mut r = SlReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:SLFO:1.1:7"));
-    assert_eq!(r.check_hash().await, (true, String::new(), String::new()));
+    assert_eq!(r.check_hash().await, HashCheck::Ok);
 }
 
 /// Mount a GET on the PR endpoint returning `{ "head": { "sha": <sha> } }`,
@@ -133,10 +133,7 @@ async fn check_hash_gitea_compare_match() {
     r.base_mut().giteacohash = Some("abc".to_string());
     r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
 
-    let (ok, old, new) = r.check_hash().await;
-    assert!(ok);
-    assert_eq!(old, "abc");
-    assert_eq!(new, "abc");
+    assert_eq!(r.check_hash().await, HashCheck::Ok);
 }
 
 #[tokio::test]
@@ -149,10 +146,13 @@ async fn check_hash_gitea_compare_mismatch() {
     r.base_mut().giteacohash = Some("abc".to_string());
     r.base_mut().giteaprapi = Some(format!("{}/api/v1/repos/owner/repo/pulls/1", server.uri()));
 
-    let (ok, old, new) = r.check_hash().await;
-    assert!(!ok);
-    assert_eq!(old, "abc");
-    assert_eq!(new, "xyz");
+    assert_eq!(
+        r.check_hash().await,
+        HashCheck::Mismatch {
+            expected: "abc".to_string(),
+            actual: "xyz".to_string(),
+        }
+    );
 }
 
 #[test]

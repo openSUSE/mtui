@@ -14,7 +14,7 @@
 
 use mtui_config::options::Config;
 use mtui_hosts::HostsGroup;
-use mtui_testreport::{ObsReport, TestReport};
+use mtui_testreport::{HashCheck, ObsReport, TestReport};
 use mtui_types::{RequestReviewID, SystemProduct};
 
 fn config() -> Config {
@@ -83,7 +83,7 @@ fn update_repos_parser_empty_when_no_report_loaded() {
 async fn check_hash_always_true() {
     let mut r = ObsReport::new(config());
     r.base_mut().rrid = Some(rrid("SUSE:Maintenance:12358:199773"));
-    assert_eq!(r.check_hash().await, (true, String::new(), String::new()));
+    assert_eq!(r.check_hash().await, HashCheck::Ok);
 }
 
 /// Upstream `test_obs_list_update_commands_invokes_display` — the doer-rendering

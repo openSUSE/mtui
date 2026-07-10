@@ -15,8 +15,14 @@ use std::path::{Path, PathBuf};
 use mtui_config::options::Config;
 use mtui_testreport::{ObsReport, TestReport, UpdateKind, make_testreport};
 use mtui_types::{UpdateID, Workflow};
+use wiremock::matchers::method;
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const RRID: &str = "SUSE:Maintenance:24993:275518";
+
+/// An SLFO RRID — `tr_factory` routes it to `SlReport`, whose `check_hash`
+/// performs the real Gitea comparison the load-time verification exercises.
+const SLFO_RRID: &str = "SUSE:SLFO:1.2:4413";
 
 /// The metadata envelope the checkout fixtures embed (a trimmed real report).
 const METADATA_JSON: &str = r#"{
@@ -202,6 +208,8 @@ async fn make_testreport_auto_loads_and_marks_pending() {
         cfg(tmp.path().to_path_buf()),
         UpdateKind::Auto,
         true,
+        false,
+        None,
     )
     .await;
 
@@ -227,6 +235,8 @@ async fn make_testreport_kernel_does_not_autoconnect() {
         cfg(tmp.path().to_path_buf()),
         UpdateKind::Kernel,
         true,
+        false,
+        None,
     )
     .await;
 
@@ -250,6 +260,8 @@ async fn make_testreport_auto_respects_explicit_no_autoconnect() {
         cfg(tmp.path().to_path_buf()),
         UpdateKind::Auto,
         false,
+        false,
+        None,
     )
     .await;
 
@@ -270,11 +282,419 @@ async fn make_testreport_falls_back_to_null_on_load_failure() {
     config.svn_path = format!("file://{}/no-such-svn-repo", tmp.path().display());
     let update = UpdateID::parse(RRID).unwrap();
 
-    let report = make_testreport(&update, config, UpdateKind::Auto, true).await;
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
 
     assert!(
         !report.is_loaded(),
         "unloaded report should be the null object"
     );
     assert_eq!(report.id(), "");
+}
+
+// --- Gitea token + hash verification on load (SLFO / `SlReport`) ------------
+//
+// Upstream runs `check_hash` at the tail of `TestReport.read` inside
+// `UpdateID._checkout`; mtui-rs runs it in `make_testreport` (async seam). These
+// exercise the three non-`Ok` branches (the interactive TeReGen regenerate path
+// is covered in Phase C) plus the happy path.
+
+/// Places an SLFO checkout on disk whose `metadata.json` carries a Gitea PR API
+/// URL (pointed at `gitea_pr_api`) and a recorded commit hash (`giteacohash`).
+/// Returns nothing; the caller drives `make_testreport` against the template dir.
+fn make_slfo_checkout(root: &Path, gitea_pr_api: &str, commit_hash: &str) {
+    let dir = root.join(SLFO_RRID);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("log"),
+        "Testreport for SUSE:SLFO:1.2:4413\n\n  x86_64 (reference host: refhost-a.example.com)\n",
+    )
+    .unwrap();
+    let metadata = format!(
+        r#"{{
+            "category": "recommended",
+            "packager": "someone@suse.com",
+            "rating": "low",
+            "rrid": "{SLFO_RRID}",
+            "gitea_pr_api": "{gitea_pr_api}",
+            "gitea_commit_hash": "{commit_hash}",
+            "packages": {{}},
+            "testplatform": []
+        }}"#
+    );
+    std::fs::write(dir.join("metadata.json"), metadata).unwrap();
+}
+
+/// Mounts a Gitea PR GET returning `{ "head": { "sha": <sha> } }` — what
+/// `Gitea::get_hash` reads.
+async fn mount_pr_head_sha(server: &MockServer, sha: &str) {
+    Mock::given(method("GET"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({ "head": { "sha": sha } })),
+        )
+        .mount(server)
+        .await;
+}
+
+/// A matching hash loads the SLFO report normally (workflow set,
+/// autoconnect-pending for `-a`) — no regression to the pre-check behaviour.
+#[tokio::test]
+async fn make_testreport_slfo_hash_match_loads() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "deadbeef").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "deadbeef");
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+
+    assert!(report.is_loaded(), "matching hash should load the report");
+    assert_eq!(report.id(), SLFO_RRID);
+    assert_eq!(report.workflow(), Workflow::Auto);
+    assert!(report.base().autoconnect_pending);
+}
+
+/// A missing Gitea token abandons the load (null report). The `Gitea` client
+/// refuses to build without a token, so no network call is made.
+#[tokio::test]
+async fn make_testreport_slfo_missing_token_yields_null() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A PR API URL is present in metadata, but the config has no token (default).
+    make_slfo_checkout(tmp.path(), "http://gitea.invalid/pulls/1", "deadbeef");
+
+    let config = cfg(tmp.path().to_path_buf());
+    assert!(config.gitea_token.is_empty(), "precondition: no token");
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+
+    assert!(
+        !report.is_loaded(),
+        "a missing Gitea token must abandon the load"
+    );
+    assert_eq!(report.id(), "");
+}
+
+/// A stale template hash (differs from the Gitea PR head) abandons the load
+/// (null report) in the non-interactive path — matching upstream's
+/// `InvalidGiteaHashError` degradation before the TeReGen prompt (Phase C).
+#[tokio::test]
+async fn make_testreport_slfo_hash_mismatch_yields_null() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "freshsha").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    // Stored hash "stalesha" differs from the PR head "freshsha".
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    let report = make_testreport(&update, config, UpdateKind::Auto, true, false, None).await;
+
+    assert!(
+        !report.is_loaded(),
+        "a stale template hash must abandon the load (non-interactive)"
+    );
+    assert_eq!(report.id(), "");
+}
+
+// --- Interactive stale-hash handling (upstream `_checkout` prompt sequence) --
+//
+// A scripted `Prompter` answers each `[y/n]` question by matching a substring of
+// its prompt text, so a test can drive the regenerate / force-continue / delete
+// branches deterministically without a real terminal.
+
+/// Builds a `Prompter` whose answer to each prompt is chosen by the first
+/// `(needle, answer)` whose `needle` the prompt text contains. Unmatched prompts
+/// answer with an empty string (i.e. the prompt's default).
+fn scripted_prompter(script: &'static [(&'static str, &'static str)]) -> mtui_hosts::Prompter {
+    mtui_hosts::Prompter::new(std::sync::Arc::new(move |text: String| {
+        let answer = script
+            .iter()
+            .find(|(needle, _)| text.contains(needle))
+            .map_or(String::new(), |(_, a)| (*a).to_owned());
+        Box::pin(async move { Ok(answer) })
+            as std::pin::Pin<Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>>
+    }))
+}
+
+/// Interactive, stale hash, decline TeReGen, then **force continue**: the stale
+/// report is kept (loaded), matching upstream's "Template is loaded, but hash
+/// differs".
+#[tokio::test]
+async fn make_testreport_slfo_mismatch_force_continue_keeps_stale() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "freshsha").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    // Regenerate? no.  Force continue? yes.
+    let prompter = scripted_prompter(&[("Regenerate", "n"), ("Force continue", "y")]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+    )
+    .await;
+
+    assert!(
+        report.is_loaded(),
+        "force-continue keeps the stale report loaded"
+    );
+    assert_eq!(report.id(), SLFO_RRID);
+}
+
+/// Interactive, stale hash, decline TeReGen and decline force-continue, then
+/// **confirm delete**: the checkout dir is removed and the load is abandoned.
+#[tokio::test]
+async fn make_testreport_slfo_mismatch_decline_deletes_checkout() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "freshsha").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+    let checkout_dir = tmp.path().join(SLFO_RRID);
+    assert!(checkout_dir.exists(), "precondition: checkout present");
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    // Regenerate? no.  Force continue? no.  Delete? yes.
+    let prompter = scripted_prompter(&[
+        ("Regenerate", "n"),
+        ("Force continue", "n"),
+        ("Delete", "y"),
+    ]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+    )
+    .await;
+
+    assert!(!report.is_loaded(), "declining both abandons the load");
+    assert_eq!(report.id(), "");
+    assert!(
+        !checkout_dir.exists(),
+        "confirming delete must remove the stale checkout"
+    );
+}
+
+/// Interactive, stale hash, decline TeReGen and force-continue, and **decline
+/// delete**: the load is abandoned but the checkout is left in place.
+#[tokio::test]
+async fn make_testreport_slfo_mismatch_decline_keeps_checkout_when_delete_declined() {
+    let server = MockServer::start().await;
+    mount_pr_head_sha(&server, "freshsha").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", server.uri()), "stalesha");
+    let checkout_dir = tmp.path().join(SLFO_RRID);
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    // Regenerate? no.  Force continue? no.  Delete? no (default is yes, but an
+    // explicit "n" declines).
+    let prompter = scripted_prompter(&[
+        ("Regenerate", "n"),
+        ("Force continue", "n"),
+        ("Delete", "n"),
+    ]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+    )
+    .await;
+
+    assert!(!report.is_loaded(), "declining both abandons the load");
+    assert!(
+        checkout_dir.exists(),
+        "declining delete must leave the checkout in place"
+    );
+}
+
+/// Interactive, stale hash, **accept regenerate** but TeReGen refuses the job:
+/// regeneration fails, so the flow falls back to the manual prompts; declining
+/// both (and delete) abandons the load. Exercises the TeReGen-refused path.
+#[tokio::test]
+async fn make_testreport_slfo_regenerate_refused_falls_back_to_manual() {
+    use wiremock::matchers::{method, path};
+
+    let gitea = MockServer::start().await;
+    mount_pr_head_sha(&gitea, "freshsha").await;
+
+    // TeReGen refuses the regeneration with an `{"error": …}` body.
+    let teregen = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!("/reports/{SLFO_RRID}/regenerate")))
+        .respond_with(
+            ResponseTemplate::new(409)
+                .set_body_json(serde_json::json!({ "error": "template was edited" })),
+        )
+        .mount(&teregen)
+        .await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", gitea.uri()), "stalesha");
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    config.teregen_api = teregen.uri();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    // Regenerate? yes (but it's refused) → manual: Force continue? no. Delete? no.
+    let prompter = scripted_prompter(&[
+        ("Regenerate", "y"),
+        ("Force continue", "n"),
+        ("Delete", "n"),
+    ]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+    )
+    .await;
+
+    assert!(
+        !report.is_loaded(),
+        "a refused regeneration falls back to manual, which was declined"
+    );
+}
+
+/// Mounts a TeReGen server that accepts the regenerate POST (returning a job id)
+/// and reports the given terminal `minion_state` on the status poll.
+async fn mount_teregen(server: &MockServer, minion_state: &str) {
+    use wiremock::matchers::method;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "job": 42 })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({ "minion_state": minion_state, "minion_error": "boom" }),
+        ))
+        .mount(server)
+        .await;
+}
+
+/// Interactive, stale hash, accept regenerate; TeReGen enqueues the job but it
+/// does **not finish** (`minion_state=failed`). Regeneration fails → manual
+/// fallback (declined) → null. Exercises the `!outcome.ok` branch and the
+/// stale-checkout removal after a job is accepted.
+#[tokio::test]
+async fn make_testreport_slfo_regenerate_job_unfinished_removes_checkout() {
+    let gitea = MockServer::start().await;
+    mount_pr_head_sha(&gitea, "freshsha").await;
+
+    let teregen = MockServer::start().await;
+    mount_teregen(&teregen, "failed").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", gitea.uri()), "stalesha");
+    let checkout_dir = tmp.path().join(SLFO_RRID);
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    config.teregen_api = teregen.uri();
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    // Regenerate? yes (job accepted, doesn't finish) → manual declined.
+    let prompter = scripted_prompter(&[
+        ("Regenerate", "y"),
+        ("Force continue", "n"),
+        ("Delete", "n"),
+    ]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+    )
+    .await;
+
+    assert!(!report.is_loaded(), "an unfinished job abandons the load");
+    // A job was accepted, so the stale checkout is dropped before the failure.
+    assert!(
+        !checkout_dir.exists(),
+        "an accepted-but-unfinished job removes the stale checkout"
+    );
+}
+
+/// Interactive, stale hash, accept regenerate; TeReGen finishes the job, but the
+/// fresh checkout fails offline (bad `svn_path`), so the reload fails and the
+/// load is abandoned. Exercises the job-finished path through the fresh
+/// checkout/read "Reload after regeneration failed" branch.
+#[tokio::test]
+async fn make_testreport_slfo_regenerate_finished_but_reload_fails() {
+    let gitea = MockServer::start().await;
+    mount_pr_head_sha(&gitea, "freshsha").await;
+
+    let teregen = MockServer::start().await;
+    mount_teregen(&teregen, "finished").await;
+
+    let tmp = tempfile::tempdir().unwrap();
+    make_slfo_checkout(tmp.path(), &format!("{}/pulls/1", gitea.uri()), "stalesha");
+
+    let mut config = cfg(tmp.path().to_path_buf());
+    config.gitea_token = "tok".to_owned();
+    config.teregen_api = teregen.uri();
+    // The stale checkout is removed after the job is accepted; the fresh `svn co`
+    // then fails fast offline against a nonexistent local repo.
+    config.svn_path = format!("file://{}/no-such-svn-repo", tmp.path().display());
+    let update = UpdateID::parse(SLFO_RRID).unwrap();
+
+    // Regenerate? yes (finishes) → fresh checkout fails → manual declined.
+    let prompter = scripted_prompter(&[
+        ("Regenerate", "y"),
+        ("Force continue", "n"),
+        ("Delete", "n"),
+    ]);
+
+    let report = make_testreport(
+        &update,
+        config,
+        UpdateKind::Auto,
+        true,
+        true,
+        Some(&prompter),
+    )
+    .await;
+
+    assert!(
+        !report.is_loaded(),
+        "a finished job whose fresh checkout fails abandons the load"
+    );
 }

@@ -260,10 +260,12 @@ pub trait TestReport {
     /// update-repo map is derived via [`update_repos_parser`](Self::update_repos_parser).
     ///
     /// The Gitea-hash verification upstream runs at the tail of `read`
-    /// (`check_hash` → `InvalidGiteaHashError`) is intentionally left to the
-    /// caller: [`make_testreport`](crate::make_testreport) owns the
-    /// checkout/regeneration lifecycle, and the null report has nothing to
-    /// verify. This method is the parse-and-populate slice only.
+    /// (`check_hash` → `InvalidGiteaHashError`) is deferred to
+    /// [`make_testreport`](crate::make_testreport): `read` is sync while
+    /// [`check_hash`](Self::check_hash) is async (it fetches the PR head from
+    /// Gitea), so the check fires in the async load orchestrator right after a
+    /// successful read, before the report is handed back. This method is the
+    /// parse-and-populate slice only.
     ///
     /// # Errors
     ///
@@ -544,10 +546,17 @@ pub trait TestReport {
 
     /// Verifies the loaded template hash (upstream `check_hash`).
     ///
-    /// Returns `(ok, expected, actual)`. The null object reports `(true, "",
-    /// "")` since it has nothing to verify. Async because git-backed reports
-    /// compare against a hash fetched from Gitea.
-    async fn check_hash(&self) -> (bool, String, String);
+    /// Returns a [`HashCheck`] describing the outcome. The null object and the
+    /// non-git reports (OBS/PI) report [`HashCheck::Ok`] since they have nothing
+    /// to verify. Async because git-backed reports compare against a hash
+    /// fetched from Gitea.
+    ///
+    /// Unlike upstream — which raises `MissingGiteaTokenError`,
+    /// `FailedGiteaCallError`, or `InvalidGiteaHashError` from inside `read` —
+    /// this returns the outcome so the async load orchestrator
+    /// ([`make_testreport`](crate::make_testreport)) can branch on it (`read`
+    /// is sync; `check_hash` is async).
+    async fn check_hash(&self) -> HashCheck;
 
     /// The working directory for target artifacts (upstream `target_wd`).
     ///
@@ -670,6 +679,33 @@ pub trait TestReport {
 fn reviewer_line_re() -> regex::Regex {
     regex::Regex::new(r"(?m)^(?:Suggested )?Test Plan Reviewer:.*$")
         .expect("static reviewer-line regex is valid")
+}
+
+/// The outcome of [`TestReport::check_hash`] (upstream's `check_hash` plus the
+/// exception family `_checkout` catches around it).
+///
+/// Upstream signals these four states by raising exceptions from inside `read`
+/// (`MissingGiteaTokenError`, `FailedGiteaCallError`, `InvalidGiteaHashError`)
+/// or returning a `(True, …)` tuple; the Rust load path branches on this enum
+/// instead (see [`make_testreport`](crate::make_testreport)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HashCheck {
+    /// The template hash matches the Gitea PR head, or there is nothing to
+    /// verify (null / OBS / PI reports, or the legacy `1.1` maintenance id).
+    Ok,
+    /// The template hash differs from the Gitea PR head — the template is stale
+    /// (upstream `InvalidGiteaHashError`).
+    Mismatch {
+        /// The hash recorded in the checked-out template (`giteacohash`).
+        expected: String,
+        /// The hash currently at the PR head, fetched from Gitea.
+        actual: String,
+    },
+    /// No Gitea API token is configured (upstream `MissingGiteaTokenError`).
+    MissingToken,
+    /// The Gitea API call failed (upstream `FailedGiteaCallError`); carries the
+    /// underlying error text for logging.
+    Failed(String),
 }
 
 /// Failure reading/parsing a checkout's template (upstream `TemplateIOError` /
@@ -800,8 +836,8 @@ mod tests {
             HashMap::new()
         }
         fn list_update_commands(&self, _targets: &HostsGroup) {}
-        async fn check_hash(&self) -> (bool, String, String) {
-            (true, String::new(), String::new())
+        async fn check_hash(&self) -> HashCheck {
+            HashCheck::Ok
         }
     }
 
