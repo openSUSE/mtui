@@ -302,6 +302,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   message in the SVN log. The message was manually wrapped in `"` for a
   shell that is never involved — svn receives the argv list directly — so
   `commit -m fix the thing` recorded `"fix the thing"` verbatim.
+- A command that hits the inactivity timeout no longer leaks its SSH channel.
+  Both timeout paths (the non-interactive abort used under `mtui-mcp` and an
+  interactive "don't wait" answer) raised without closing the channel, so it
+  stayed registered on the paramiko transport and the remote command kept
+  running — repeated timeouts accumulated orphaned channels and remote
+  processes. The channel is now closed before the timeout error propagates,
+  and likewise when the wait-prompt is abandoned with Ctrl-D or Ctrl-C.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
