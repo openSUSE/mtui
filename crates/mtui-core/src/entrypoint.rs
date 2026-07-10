@@ -199,6 +199,7 @@ mod tests {
             config: None,
             color: crate::args::ColorArg::Never,
             gitea_token: None,
+            ssl_verify: None,
             auto_review_id: None,
             kernel_review_id: None,
         }

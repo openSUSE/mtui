@@ -26,15 +26,19 @@
 //!   both parse into the same [`UpdateID`] value type (all this crate has today)
 //!   paired with the [`Workflow`] the flag selects, surfaced as [`Args::update`].
 //!
-//! Config merging (`Config::merge_args`) and the `auto` → TTY/`NO_COLOR`
-//! resolution of [`ColorArg`] into [`ColorMode`](crate::display::ColorMode) are
-//! owned by their consuming tasks (the non-interactive dispatch entrypoint and
-//! the REPL binary), not by this parser.
+//! Config merging lives here as [`Args::apply_to`] / [`Args::resolve_config`]:
+//! the CLI overrides are the highest-precedence config layer, overlaid on top of
+//! the loaded file chain. (It lives in `mtui-core`, not `mtui-config`, because it
+//! needs [`Args`]; `mtui-config` must not depend on `mtui-core`.) The `auto` →
+//! TTY/`NO_COLOR` resolution of [`ColorArg`] into
+//! [`ColorMode`](crate::display::ColorMode) remains the consumer's job, not this
+//! parser's.
 
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use clap::{Parser, ValueEnum};
+use mtui_config::{Config, SslVerify};
 use mtui_types::{UpdateID, Workflow};
 
 /// Top-level `mtui` process arguments.
@@ -84,6 +88,12 @@ pub struct Args {
     #[arg(short = 'g', long = "gitea-token", value_name = "TOKEN")]
     pub gitea_token: Option<String>,
 
+    /// Override config `mtui.ssl_verify`: TLS certificate verification for all
+    /// outbound HTTP. Accepts `true`/`false` (and the spellings `yes`/`no`/
+    /// `on`/`off`/`1`/`0`), or a path to a custom CA bundle/certificate.
+    #[arg(long = "ssl-verify", value_name = "BOOL|PATH")]
+    pub ssl_verify: Option<String>,
+
     /// OBS request review id, run under the automatic workflow
     /// (example: `SUSE:Maintenance:1:1`).
     #[arg(
@@ -124,6 +134,49 @@ impl Args {
             }),
             (None, None) => None,
         }
+    }
+
+    /// Overlay the process-level CLI overrides onto an already-loaded [`Config`].
+    ///
+    /// This is the highest-precedence config layer (upstream `Config.merge_args`):
+    /// it runs *after* [`Config::load`] has merged the file chain (`/etc` →
+    /// `~/.mtui.toml` → XDG, or the single `--config`/`$MTUI_CONF` file), so a
+    /// flag given on the command line wins over every config file.
+    ///
+    /// Only the flags that map to a config key are applied, and only when the
+    /// user actually passed them (`Option::Some` / a non-empty `--sut`): an
+    /// omitted flag leaves the loaded value untouched. `--ssl-verify` goes
+    /// through [`SslVerify::parse`], the same coercion the config file uses, so
+    /// the CLI cannot express a value the file could not.
+    ///
+    /// `--config`, `--debug`, `--color`, `--sut`, and `-a`/`-k` are *not* config
+    /// keys — they steer path resolution, logging, host seeding, and workflow
+    /// selection respectively — so they are intentionally not merged here.
+    pub fn apply_to(&self, config: &mut Config) {
+        if let Some(dir) = &self.template_dir {
+            config.template_dir = dir.clone();
+        }
+        if let Some(timeout) = self.connection_timeout {
+            config.connection_timeout = timeout;
+        }
+        if let Some(token) = &self.gitea_token {
+            config.gitea_token = token.clone();
+        }
+        if let Some(raw) = &self.ssl_verify {
+            config.ssl_verify = SslVerify::parse(raw);
+        }
+    }
+
+    /// Load the config from the file chain (keyed on `--config`) and overlay the
+    /// CLI overrides, returning the fully-resolved [`Config`].
+    ///
+    /// The one-call composition both binaries use: [`Config::load`] for the file
+    /// layers followed by [`apply_to`](Self::apply_to) for the CLI layer.
+    #[must_use]
+    pub fn resolve_config(&self) -> Config {
+        let mut config = Config::load(self.config.clone());
+        self.apply_to(&mut config);
+        config
     }
 }
 
@@ -236,6 +289,7 @@ mod tests {
         assert!(a.config.is_none());
         assert_eq!(a.color, ColorArg::Auto);
         assert!(a.gitea_token.is_none());
+        assert!(a.ssl_verify.is_none());
         assert!(a.update().is_none());
     }
 
@@ -361,6 +415,79 @@ mod tests {
         assert_eq!(ColorMode::from(ColorArg::Auto), ColorMode::Auto);
         assert_eq!(ColorMode::from(ColorArg::Always), ColorMode::Always);
         assert_eq!(ColorMode::from(ColorArg::Never), ColorMode::Never);
+    }
+
+    #[test]
+    fn ssl_verify_flag_parses_bool_and_path() {
+        assert_eq!(
+            parse(&["--ssl-verify", "false"])
+                .unwrap()
+                .ssl_verify
+                .unwrap(),
+            "false"
+        );
+        assert_eq!(
+            parse(&["--ssl-verify", "/etc/ca.pem"])
+                .unwrap()
+                .ssl_verify
+                .unwrap(),
+            "/etc/ca.pem"
+        );
+    }
+
+    #[test]
+    fn apply_to_overlays_only_given_flags() {
+        use mtui_config::{Config, SslVerify};
+
+        // Start from defaults; a no-flag Args must leave everything untouched.
+        let base = Config::default();
+        let mut cfg = base.clone();
+        parse(&[]).unwrap().apply_to(&mut cfg);
+        assert_eq!(cfg, base, "no flags must not change any config value");
+
+        // Each mapped flag overrides its config key; unset keys are preserved.
+        let mut cfg = Config::default();
+        parse(&[
+            "--connection-timeout",
+            "42",
+            "--gitea-token",
+            "tok",
+            "--ssl-verify",
+            "false",
+            "--template-dir",
+            "/tmp/tpl",
+        ])
+        .unwrap()
+        .apply_to(&mut cfg);
+        assert_eq!(cfg.connection_timeout, 42);
+        assert_eq!(cfg.gitea_token, "tok");
+        assert_eq!(cfg.ssl_verify, SslVerify::Disabled);
+        assert_eq!(cfg.template_dir, std::path::PathBuf::from("/tmp/tpl"));
+        // A key with no corresponding flag keeps its default.
+        assert_eq!(cfg.bugzilla_url, Config::default().bugzilla_url);
+    }
+
+    #[test]
+    fn apply_to_ssl_verify_path_becomes_ca_bundle() {
+        use mtui_config::{Config, SslVerify};
+        let mut cfg = Config::default();
+        parse(&["--ssl-verify", "/my/ca.pem"])
+            .unwrap()
+            .apply_to(&mut cfg);
+        assert_eq!(
+            cfg.ssl_verify,
+            SslVerify::CaBundle(std::path::PathBuf::from("/my/ca.pem"))
+        );
+    }
+
+    #[test]
+    fn resolve_config_applies_cli_over_file_defaults() {
+        use mtui_config::SslVerify;
+        // With no --config the file chain yields defaults; the CLI layer then
+        // overrides ssl_verify. (No file is written, so this exercises the
+        // load→apply composition against the default baseline.)
+        let cfg = parse(&["--ssl-verify", "false"]).unwrap().resolve_config();
+        assert_eq!(cfg.ssl_verify, SslVerify::Disabled);
     }
 
     #[test]

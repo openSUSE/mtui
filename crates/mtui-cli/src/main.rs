@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use mtui_cli::{Repl, init_tracing, seed_session};
-use mtui_config::Config;
 use mtui_core::{Args, ColorMode, Session, register_all};
 
 fn main() -> anyhow::Result<()> {
@@ -40,10 +39,12 @@ fn main() -> anyhow::Result<()> {
     // tasks are in flight mid-line in the REPL, so there is no deadlock.
     let runtime = tokio::runtime::Runtime::new()?;
 
-    // Full config loading + `Args` merge is Phase-6 config work; P6.2 uses the
-    // defaults so the REPL is usable.
+    // Resolve the config: the file chain (/etc → ~/.mtui.toml → XDG mtui.toml,
+    // or the single --config/$MTUI_CONF file) merged, then the CLI overrides
+    // (--template-dir, --connection-timeout, --gitea-token, --ssl-verify)
+    // overlaid on top so command-line flags win over every config file.
     let registry = Arc::new(register_all());
-    let mut session = Session::new(Config::default(), true);
+    let mut session = Session::new(args.resolve_config(), true);
 
     // Composition root: wire the REPL-only desktop-notification sink to the
     // headless-safe `notification::notify_user`. `mtui-mcp` never installs it, so

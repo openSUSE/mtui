@@ -2,10 +2,11 @@
 //!
 //! ## What this crate does
 //!
-//! Loads mtui's configuration from a **TOML** file, resolved from (highest
-//! precedence first): the `--config` flag, then `$MTUI_CONF`, then the XDG
-//! per-user file (`$XDG_CONFIG_HOME/mtui/config.toml`), then `/etc/mtui.toml`.
-//! Missing keys fall back to defaults that match upstream mtui exactly.
+//! Loads mtui's configuration from a **TOML** file named `mtui.toml`, resolved
+//! from (highest precedence first): the `--config` flag, then `$MTUI_CONF`, then
+//! the XDG per-user file (`$XDG_CONFIG_HOME/mtui/mtui.toml`), then the home
+//! dotfile (`~/.mtui.toml`), then `/etc/mtui.toml`. Missing keys fall back to
+//! defaults that match upstream mtui exactly.
 //!
 //! ## Intentional deviation from upstream
 //!
@@ -31,7 +32,9 @@ use std::path::{Path, PathBuf};
 
 pub use error::ConfigError;
 pub use options::{Config, SslVerify};
-pub use paths::{cache_dir, config_search_paths, data_dir, terms_path, xdg_config_file};
+pub use paths::{
+    cache_dir, config_search_paths, data_dir, home_config_file, terms_path, xdg_config_file,
+};
 
 use options::RawConfig;
 
@@ -39,8 +42,9 @@ impl Config {
     /// Load configuration from the resolved search paths.
     ///
     /// `explicit` is the optional `--config` path. Files are merged
-    /// **lowest-precedence first** (see [`config_search_paths`]), so a per-user
-    /// file overrides `/etc` on shared keys. A file that does not exist is
+    /// **lowest-precedence first** (see [`config_search_paths`]): `/etc` →
+    /// `~/.mtui.toml` → the XDG file, so a per-user file overrides `/etc` on
+    /// shared keys and the XDG file wins over the home dotfile. A file that does not exist is
     /// silently skipped; a file that fails to read or parse is logged at ERROR
     /// and skipped — loading never hard-fails. Absent options take their
     /// upstream defaults.

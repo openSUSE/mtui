@@ -278,7 +278,7 @@ pub fn ssl_verification_hint(host: Option<&str>) -> String {
          install the missing CA (e.g. the SUSE root CA) into your system trust \
          store, point 'ssl_verify' at a CA bundle file that contains the \
          server's CA ('ssl_verify = /path/to/ca.pem' under the [mtui] section \
-         of your mtui config, e.g. ~/.config/mtui/config.toml), or disable \
+         of your mtui config, e.g. ~/.config/mtui/mtui.toml), or disable \
          verification there with 'ssl_verify = false'."
     )
 }

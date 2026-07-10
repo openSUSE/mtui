@@ -10,11 +10,17 @@
 //! ## Deviation from upstream (intentional)
 //!
 //! Upstream reads INI from `--config` → `$MTUI_CONF` → `/etc/mtui.cfg` +
-//! `~/.mtuirc`. mtui-rs uses **TOML** and an XDG-first order:
+//! `~/.mtuirc`. mtui-rs uses **TOML**; the config filename is always
+//! `mtui.toml`. Precedence, lowest → highest:
 //!
 //! ```text
-//! --config  →  $MTUI_CONF  →  $XDG_CONFIG_HOME/mtui/config.toml  →  /etc/mtui.toml
+//! /etc/mtui.toml  →  ~/.mtui.toml  →  $XDG_CONFIG_HOME/mtui/mtui.toml
 //! ```
+//!
+//! with `--config <file>` and `$MTUI_CONF` each short-circuiting the chain to a
+//! single file. The home dotfile `~/.mtui.toml` echoes upstream's `~/.mtuirc`
+//! for operators who prefer a dotfile over the XDG directory; when both exist
+//! the XDG file wins on shared keys (it is merged last).
 //!
 //! This module is pure and I/O-free: it only computes paths, it never reads
 //! files (that is [`crate::Config::load`]'s job).
@@ -29,8 +35,10 @@ const ETC_CONFIG: &str = "/etc/mtui.toml";
 /// Environment variable holding an explicit config-file override.
 const ENV_CONFIG: &str = "MTUI_CONF";
 
-/// Basename of the per-user config file inside the XDG config directory.
-const XDG_CONFIG_FILE: &str = "config.toml";
+/// Basename of the per-user config file, used both for the home dotfile
+/// (`~/.mtui.toml`, with a leading dot) and inside the XDG config directory
+/// (`$XDG_CONFIG_HOME/mtui/mtui.toml`).
+const CONFIG_FILE: &str = "mtui.toml";
 
 /// Expand a leading `~` (and `~/`) to the user's home directory.
 ///
@@ -64,10 +72,22 @@ fn home_dir() -> Option<PathBuf> {
 /// The per-user XDG config file path, if a home/config dir can be resolved.
 ///
 /// Uses `ProjectDirs::from("", "", "mtui")` so the directory is
-/// `$XDG_CONFIG_HOME/mtui` (falling back to `~/.config/mtui` per the XDG spec).
+/// `$XDG_CONFIG_HOME/mtui` (falling back to `~/.config/mtui` per the XDG spec),
+/// and the file is `mtui.toml` within it.
 #[must_use]
 pub fn xdg_config_file() -> Option<PathBuf> {
-    ProjectDirs::from("", "", "mtui").map(|p| p.config_dir().join(XDG_CONFIG_FILE))
+    ProjectDirs::from("", "", "mtui").map(|p| p.config_dir().join(CONFIG_FILE))
+}
+
+/// The home-directory dotfile config path `~/.mtui.toml`, if a home dir can be
+/// resolved.
+///
+/// The mtui-rs analogue of upstream's `~/.mtuirc`: a single dotfile in `$HOME`
+/// for operators who prefer it to the XDG config directory. Sits between `/etc`
+/// and the XDG file in precedence (see [`config_search_paths`]).
+#[must_use]
+pub fn home_config_file() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".mtui.toml"))
 }
 
 /// The user cache directory for mtui (`$XDG_CACHE_HOME/mtui`), if resolvable.
@@ -113,13 +133,14 @@ pub fn terms_path() -> Option<PathBuf> {
 ///   only candidate.
 /// * Else if `$MTUI_CONF` is set (and non-empty), that single file (with `~`
 ///   expanded) is the only candidate.
-/// * Otherwise the default pair is returned, **lowest precedence first**:
-///   `/etc/mtui.toml`, then the XDG per-user file. [`crate::Config::load`]
-///   merges them in order so the per-user file wins on shared keys.
+/// * Otherwise the default chain is returned, **lowest precedence first**:
+///   `/etc/mtui.toml`, then `~/.mtui.toml`, then the XDG per-user file
+///   (`$XDG_CONFIG_HOME/mtui/mtui.toml`). [`crate::Config::load`] merges them in
+///   order so a later file wins on shared keys.
 #[must_use]
 pub fn config_search_paths(explicit: Option<PathBuf>) -> Vec<PathBuf> {
     let env = std::env::var_os(ENV_CONFIG).map(PathBuf::from);
-    resolve_search_paths(explicit, env, xdg_config_file())
+    resolve_search_paths(explicit, env, home_config_file(), xdg_config_file())
 }
 
 /// Pure core of [`config_search_paths`], with the process environment injected
@@ -127,6 +148,7 @@ pub fn config_search_paths(explicit: Option<PathBuf>) -> Vec<PathBuf> {
 fn resolve_search_paths(
     explicit: Option<PathBuf>,
     env_config: Option<PathBuf>,
+    home: Option<PathBuf>,
     xdg: Option<PathBuf>,
 ) -> Vec<PathBuf> {
     if let Some(path) = explicit {
@@ -139,7 +161,11 @@ fn resolve_search_paths(
         return vec![expanduser(&env)];
     }
 
+    // Default chain, lowest precedence first: /etc → home dotfile → XDG.
     let mut paths = vec![PathBuf::from(ETC_CONFIG)];
+    if let Some(home) = home {
+        paths.push(home);
+    }
     if let Some(xdg) = xdg {
         paths.push(xdg);
     }
@@ -161,7 +187,8 @@ mod tests {
         let paths = resolve_search_paths(
             Some(PathBuf::from("/explicit.toml")),
             Some(PathBuf::from("/from/env.toml")),
-            Some(PathBuf::from("/xdg/config.toml")),
+            Some(PathBuf::from("/home/u/.mtui.toml")),
+            Some(PathBuf::from("/xdg/mtui.toml")),
         );
         assert_eq!(paths, vec![PathBuf::from("/explicit.toml")]);
     }
@@ -171,37 +198,47 @@ mod tests {
         let paths = resolve_search_paths(
             None,
             Some(PathBuf::from("/from/env.toml")),
-            Some(PathBuf::from("/xdg/config.toml")),
+            Some(PathBuf::from("/home/u/.mtui.toml")),
+            Some(PathBuf::from("/xdg/mtui.toml")),
         );
         assert_eq!(paths, vec![PathBuf::from("/from/env.toml")]);
     }
 
     #[test]
     fn empty_env_var_falls_through_to_defaults() {
-        let paths = resolve_search_paths(None, Some(PathBuf::new()), None);
+        let paths = resolve_search_paths(None, Some(PathBuf::new()), None, None);
         assert_eq!(paths, vec![PathBuf::from(ETC_CONFIG)]);
     }
 
     #[test]
-    fn defaults_are_etc_first_then_xdg() {
-        let xdg = PathBuf::from("/home/u/.config/mtui/config.toml");
-        let paths = resolve_search_paths(None, None, Some(xdg.clone()));
-        // /etc is always present and lowest precedence (first).
-        assert_eq!(paths.first(), Some(&PathBuf::from(ETC_CONFIG)));
-        // The XDG dir is appended after /etc (higher precedence).
-        assert_eq!(paths.last(), Some(&xdg));
-        assert_eq!(paths.len(), 2);
+    fn defaults_are_etc_then_home_then_xdg() {
+        let home = PathBuf::from("/home/u/.mtui.toml");
+        let xdg = PathBuf::from("/home/u/.config/mtui/mtui.toml");
+        let paths = resolve_search_paths(None, None, Some(home.clone()), Some(xdg.clone()));
+        // Lowest → highest precedence: /etc, then the home dotfile, then XDG.
+        assert_eq!(
+            paths,
+            vec![PathBuf::from(ETC_CONFIG), home, xdg],
+            "order must be etc → home → xdg"
+        );
     }
 
     #[test]
-    fn defaults_without_xdg_is_etc_only() {
-        let paths = resolve_search_paths(None, None, None);
+    fn defaults_home_only_when_no_xdg() {
+        let home = PathBuf::from("/home/u/.mtui.toml");
+        let paths = resolve_search_paths(None, None, Some(home.clone()), None);
+        assert_eq!(paths, vec![PathBuf::from(ETC_CONFIG), home]);
+    }
+
+    #[test]
+    fn defaults_without_home_or_xdg_is_etc_only() {
+        let paths = resolve_search_paths(None, None, None, None);
         assert_eq!(paths, vec![PathBuf::from(ETC_CONFIG)]);
     }
 
     #[test]
     fn env_var_path_expands_tilde() {
-        let paths = resolve_search_paths(None, Some(PathBuf::from("~/my.toml")), None);
+        let paths = resolve_search_paths(None, Some(PathBuf::from("~/my.toml")), None, None);
         // The `~` must have been expanded away (or, if no home dir, left as-is).
         if home_dir().is_some() {
             assert!(!paths[0].starts_with("~"));
@@ -215,6 +252,27 @@ mod tests {
         // exactly that, regardless of ambient env.
         let paths = config_search_paths(Some(PathBuf::from("/x.toml")));
         assert_eq!(paths, vec![PathBuf::from("/x.toml")]);
+    }
+
+    #[test]
+    fn home_config_file_is_dotfile_in_home() {
+        if let Some(home) = home_dir() {
+            let f = home_config_file().expect("home dir resolved, so should the dotfile");
+            assert_eq!(f, home.join(".mtui.toml"));
+        }
+    }
+
+    #[test]
+    fn xdg_and_home_files_share_the_mtui_toml_basename() {
+        // The config filename is always `mtui.toml` (XDG) / `.mtui.toml` (home);
+        // never `config.toml`.
+        if let Some(xdg) = xdg_config_file() {
+            assert!(xdg.ends_with("mtui.toml"), "XDG file should be mtui.toml");
+            assert!(!xdg.ends_with("config.toml"));
+        }
+        if let Some(home) = home_config_file() {
+            assert_eq!(home.file_name().unwrap(), ".mtui.toml");
+        }
     }
 
     #[test]

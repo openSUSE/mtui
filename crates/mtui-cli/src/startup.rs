@@ -101,6 +101,7 @@ mod tests {
             config: None,
             color: ColorArg::Never,
             gitea_token: None,
+            ssl_verify: None,
             auto_review_id: None,
             kernel_review_id: None,
         }
