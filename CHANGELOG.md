@@ -223,6 +223,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   two files with the same name in different subdirectories silently
   overwrote each other (only the last survived, while the per-file success
   log suggested both were transferred).
+- Removing a remote directory (e.g. via `FileDelete`/host cleanup) works
+  again, and a failed file removal is no longer reported as success. The
+  connection layer swallowed the SFTP error internally, so the target
+  layer's ENOENT tolerance and its directory `rmdir` fallback were dead
+  code; the error now propagates to the layer that handles it.
 - `openqa_jobs --failed` no longer lists still-running or scheduled jobs as
   failures. openQA reports an unfinished job's result as `none`, which the
   filter treated as "not passing" — during active testing an in-progress
