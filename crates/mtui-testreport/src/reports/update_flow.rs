@@ -536,9 +536,12 @@ async fn downgrade_body(
 /// short-circuits; otherwise it is **done** (info). Iterated in sorted hostname
 /// order to keep the log deterministic.
 async fn downgrade_verdict(targets: &mut HostsGroup) {
+    // Query every host's versions concurrently (serial hosts one at a time)
+    // via the shared fan-out, then run the pure verdict scan below.
+    targets.query_versions().await;
+
     let mut completed = true;
     'hosts: for target in targets.targets_mut() {
-        target.query_versions().await;
         for pkg in target.packages_mut() {
             let after = pkg.after().cloned();
             pkg.set_before_version(after);

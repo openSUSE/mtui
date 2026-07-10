@@ -83,6 +83,80 @@ where
     }
 }
 
+/// A boxed per-target future, borrowing the target for `'a`.
+///
+/// [`run_fanout`]'s `op` returns this so the "future borrows the `&mut Target`
+/// it was handed" relationship is expressible on stable Rust: a bare
+/// `Fn(&mut Target) -> impl Future` bound cannot tie the returned future's
+/// lifetime to the borrow (it would have to outlive it), and the `AsyncFn` /
+/// `CallRefFuture` machinery that could is still unstable. Boxing the future
+/// carries its own `'a` lifetime, so callers just wrap their async block in
+/// [`Box::pin`]. The per-call allocation is negligible next to the SSH round
+/// trip each op performs.
+pub type BoxTargetFut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>>;
+
+/// Drives a per-target async `op` across a group, honouring [`ExecutionMode`].
+///
+/// This is the single fan-out primitive every per-host I/O method on
+/// [`HostsGroup`](super::HostsGroup) routes through, so the parallel-batch +
+/// serial-barrier contract lives in exactly one place. Targets whose
+/// [`ExecutionMode`] is [`Parallel`](ExecutionMode::Parallel) are driven
+/// concurrently via [`run_parallel`]; targets marked
+/// [`Serial`](ExecutionMode::Serial) run *after* the parallel batch, one at a
+/// time in sorted hostname order.
+///
+/// When `interactive` is set and a serialised [`Prompter`] is supplied, the
+/// user is asked to press Enter before each serial host (upstream's serial
+/// barrier); headless callers pass `None` and serial hosts run back-to-back.
+/// `desc` labels the optional TTY spinner for the parallel batch (a no-op off a
+/// TTY). `op` is invoked once per (non-skipped) target with `&mut Target`; the
+/// disjoint mutable borrows make the parallel batch sound without a shared lock.
+///
+/// `should_run` lets a caller skip a target entirely (e.g. a
+/// [`Command::PerHost`] map that does not cover it); return `false` to omit it
+/// from both batches.
+pub async fn run_fanout<'t, S, F>(
+    targets: &'t mut BTreeMap<String, Target>,
+    interactive: bool,
+    prompter: Option<&Prompter>,
+    desc: Option<&str>,
+    mut should_run: S,
+    op: F,
+) where
+    S: FnMut(&Target) -> bool,
+    F: Fn(&'t mut Target) -> BoxTargetFut<'t>,
+{
+    let mut parallel: Vec<&'t mut Target> = Vec::new();
+    let mut serial: Vec<&'t mut Target> = Vec::new();
+    for target in targets.values_mut() {
+        if !should_run(target) {
+            continue;
+        }
+        if target.mode() == ExecutionMode::Serial {
+            serial.push(target);
+        } else {
+            parallel.push(target);
+        }
+    }
+
+    // Parallel batch: each future borrows a distinct target mutably, so the
+    // borrows are disjoint and need no shared lock.
+    let parallel_futs: Vec<_> = parallel.into_iter().map(&op).collect();
+    run_parallel(parallel_futs, if interactive { desc } else { None }).await;
+
+    // Serial barrier: one host at a time. Under an interactive session with a
+    // serialised prompter, ask the user to press Enter before each serial host
+    // (upstream `prompt_user("press Enter key to proceed with …")`); headless
+    // callers run them back-to-back. Any input (incl. empty) proceeds.
+    for t in serial {
+        if interactive && let Some(prompter) = prompter {
+            let text = format!("press Enter key to proceed with {} ", t.hostname());
+            let _ = prompter.ask(&text).await;
+        }
+        op(t).await;
+    }
+}
+
 /// A command to run across a group: one string for every host, or a per-host
 /// map keyed by hostname.
 ///
@@ -173,6 +247,11 @@ impl<'a> RunCommand<'a> {
 
     /// Executes the command: parallel hosts concurrently, then serial hosts
     /// sequentially.
+    ///
+    /// Delegates the parallel-batch + serial-barrier split to the shared
+    /// [`run_fanout`] primitive; the only command-specific logic here is
+    /// resolving the per-host command string and skipping hosts a
+    /// [`PerHost`](Command::PerHost) map does not cover.
     pub async fn run(self) {
         let Self {
             targets,
@@ -181,50 +260,24 @@ impl<'a> RunCommand<'a> {
             prompter,
         } = self;
 
-        // Split into parallel and serial, skipping hosts a PerHost map does not
-        // cover. `for_host` returning None means "skip" (upstream dict subset).
-        let mut parallel: Vec<&mut Target> = Vec::new();
-        let mut serial: Vec<&mut Target> = Vec::new();
-        for target in targets.values_mut() {
-            if command.for_host(target.hostname()).is_none() {
-                continue;
-            }
-            if target.mode() == ExecutionMode::Serial {
-                serial.push(target);
-            } else {
-                parallel.push(target);
-            }
-        }
-
-        // Parallel batch. Each future borrows a distinct target mutably, so the
-        // borrows are disjoint and need no shared lock.
-        let desc = if interactive { Some("run") } else { None };
-        let parallel_futs = parallel.into_iter().map(|t| {
-            // Resolve before the async move so `command` isn't borrowed across it.
-            let cmd = command
-                .for_host(t.hostname())
-                .expect("host was filtered to be covered")
-                .to_owned();
-            async move { t.run(&cmd).await }
-        });
-        run_parallel(parallel_futs, desc).await;
-
-        // Serial barrier: one host at a time. Under an interactive session with
-        // a serialised prompter, ask the user to press Enter before each serial
-        // host (upstream `prompt_user("press Enter key to proceed with …")`);
-        // headless callers (no prompter) run them back-to-back. The answer is
-        // discarded — any input (incl. empty) proceeds, matching upstream.
-        for t in serial {
-            let cmd = command
-                .for_host(t.hostname())
-                .expect("host was filtered to be covered")
-                .to_owned();
-            if interactive && let Some(prompter) = prompter.as_ref() {
-                let text = format!("press Enter key to proceed with {} ", t.hostname());
-                let _ = prompter.ask(&text).await;
-            }
-            t.run(&cmd).await;
-        }
+        run_fanout(
+            targets,
+            interactive,
+            prompter.as_ref(),
+            Some("run"),
+            // `for_host` returning None means "skip" (upstream dict subset).
+            |t: &Target| command.for_host(t.hostname()).is_some(),
+            |t: &mut Target| {
+                // Resolve before the async block so `command` isn't borrowed
+                // across it; the host was filtered to be covered above.
+                let cmd = command
+                    .for_host(t.hostname())
+                    .expect("host was filtered to be covered")
+                    .to_owned();
+                Box::pin(async move { t.run(&cmd).await }) as BoxTargetFut<'_>
+            },
+        )
+        .await;
     }
 }
 

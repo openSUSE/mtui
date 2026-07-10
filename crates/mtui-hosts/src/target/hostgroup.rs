@@ -364,17 +364,29 @@ impl HostsGroup {
     /// one contended host never aborts the fan-out. Other transport errors are
     /// logged, not propagated.
     pub async fn lock(&mut self, comment: &str) {
-        for target in self.data.values_mut() {
-            match target.lock(comment).await {
-                Ok(()) => {}
-                Err(HostError::TargetLocked(msg)) => {
-                    tracing::debug!(host = %target.hostname(), %msg, "lock: held by another owner, skipping");
-                }
-                Err(e) => {
-                    tracing::warn!(host = %target.hostname(), error = %e, "lock failed");
-                }
-            }
-        }
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("lock"),
+            |_t| true,
+            |t| {
+                let comment = comment.to_owned();
+                Box::pin(async move {
+                    match t.lock(&comment).await {
+                        Ok(()) => {}
+                        Err(HostError::TargetLocked(msg)) => {
+                            tracing::debug!(host = %t.hostname(), %msg, "lock: held by another owner, skipping");
+                        }
+                        Err(e) => {
+                            tracing::warn!(host = %t.hostname(), error = %e, "lock failed");
+                        }
+                    }
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
     }
 
     /// Releases every host's operation lock, best-effort.
@@ -383,9 +395,16 @@ impl HostsGroup {
     /// [`Target::unlock`] (which already suppresses [`HostError::TargetLocked`]
     /// for a foreign lock), so a contended host never aborts the fan-out.
     pub async fn unlock(&mut self) {
-        for target in self.data.values_mut() {
-            target.unlock(false).await;
-        }
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("unlock"),
+            |_t| true,
+            |t| Box::pin(async move { t.unlock(false).await }) as actions::BoxTargetFut<'_>,
+        )
+        .await;
     }
 
     /// Releases every host's pool claim, best-effort.
@@ -395,9 +414,16 @@ impl HostsGroup {
     /// a claim owned by another template), so one contended host never aborts
     /// the fan-out. `force` removes claims owned by other templates too.
     pub async fn pool_unlock(&mut self, force: bool) {
-        for target in self.data.values_mut() {
-            target.pool_unlock(force).await;
-        }
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("pool_unlock"),
+            |_t| true,
+            |t| Box::pin(async move { t.pool_unlock(force).await }) as actions::BoxTargetFut<'_>,
+        )
+        .await;
     }
 
     /// Disconnects every host, optionally rebooting or powering them off.
@@ -408,15 +434,26 @@ impl HostsGroup {
     /// (`Some("poweroff")` → shell `halt`), or simply closes (`None`). Used on
     /// session exit; unlike [`reboot`](Self::reboot) it never reconnects.
     ///
-    /// Upstream fans these out concurrently with a 45s wait; because
-    /// [`Target::close`] is per-host and order-independent, this drives them
-    /// sequentially (matching [`unlock`](Self::unlock)/[`pool_unlock`](Self::pool_unlock)
-    /// in this group) — the observable per-host effect is identical. The overall
-    /// wait budget is applied by the caller. A no-op when the group is empty.
+    /// Fans out concurrently across the group (parallel hosts together, serial
+    /// hosts one at a time) via [`run_fanout`](super::actions::run_fanout),
+    /// mirroring upstream's concurrent close. The overall wait budget is applied
+    /// by the caller. A no-op when the group is empty.
     pub async fn close(&mut self, action: Option<&str>) {
-        for target in self.data.values_mut() {
-            target.close(action).await;
-        }
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let action = action.map(str::to_owned);
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("close"),
+            |_t| true,
+            |t| {
+                let action = action.clone();
+                Box::pin(async move { t.close(action.as_deref()).await })
+                    as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
     }
 
     /// Reports the lock state of every host in the group to `sink`.
@@ -435,9 +472,37 @@ impl HostsGroup {
     where
         F: FnMut(&str, &System, &LockRow),
     {
-        for target in self.data.values_mut() {
-            let row = target.lock_status(pool).await;
-            target.reporter().locks(&row, &mut sink);
+        use std::sync::Mutex;
+
+        // Phase 1 (I/O): resolve every host's lock row concurrently (serial
+        // hosts one at a time) via the shared fan-out. Each host's
+        // `(system, row)` is collected keyed by hostname, so the drain below is
+        // deterministically sorted regardless of completion order.
+        let collected: Mutex<BTreeMap<String, (System, LockRow)>> = Mutex::new(BTreeMap::new());
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("report_locks"),
+            |_t| true,
+            |t| {
+                let collected = &collected;
+                Box::pin(async move {
+                    let row = t.lock_status(pool).await;
+                    collected
+                        .lock()
+                        .unwrap()
+                        .insert(t.hostname().to_owned(), (t.system().clone(), row));
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+
+        // Phase 2 (pure): forward each host to the sink in sorted hostname order
+        // (matching upstream's `sorted(self.data.keys())`).
+        for (hostname, (system, row)) in collected.into_inner().unwrap() {
+            sink(&hostname, &system, &row);
         }
     }
 
@@ -483,15 +548,27 @@ impl HostsGroup {
     /// `SlReport`/`ObsReport`/… `set_repo` impl in `mtui-testreport`), so the
     /// group never depends on the report crate.
     ///
-    /// Upstream fans these out with `run_parallel`; because [`SetRepo::set_repo`]
-    /// takes `&mut Target` and repo add/remove is order-independent, this drives
-    /// them sequentially — the observable per-host `zypper` effect is identical.
+    /// Fans out concurrently via [`run_fanout`](super::actions::run_fanout)
+    /// (upstream's `run_parallel`): parallel hosts run their repo change
+    /// together, serial hosts one at a time behind the Enter barrier — so a host
+    /// the operator marked [`Serial`](mtui_types::enums::ExecutionMode::Serial)
+    /// never has its `zypper` repo change run concurrently with another host's.
     /// The per-host `last*` state is left in place so a caller can inspect
     /// `lasterr()` after the fan-out (upstream's prepare abort-on-`lasterr`).
     pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
-        for target in self.data.values_mut() {
-            target.repo_manager().set(operation, report).await;
-        }
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("set_repo"),
+            |_t| true,
+            |t| {
+                Box::pin(async move { t.repo_manager().set(operation, report).await })
+                    as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
     }
 
     /// Queries every host's tracked package versions and logs update-sanity
@@ -522,15 +599,51 @@ impl HostsGroup {
     /// Ports upstream `HostsGroup.add_history`: fans [`Target::add_history`] out
     /// across the group (enabled hosts only, best-effort per host).
     pub async fn add_history(&mut self, fields: &[String]) {
-        for target in self.data.values_mut() {
-            target.add_history(fields).await;
-        }
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("add_history"),
+            |_t| true,
+            |t| {
+                let fields = fields.to_vec();
+                Box::pin(async move { t.add_history(&fields).await }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+    }
+
+    /// Queries every host's installed package versions concurrently.
+    ///
+    /// The I/O phase shared by [`package_check`](Self::package_check) and the
+    /// downgrade verdict: fans [`Target::query_versions`] out through the shared
+    /// [`run_fanout`](super::actions::run_fanout) primitive (parallel hosts
+    /// together, serial hosts one at a time behind the Enter barrier), so the
+    /// pure per-package bookkeeping that follows never blocks on serial I/O.
+    pub async fn query_versions(&mut self) {
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("query_versions"),
+            |_t| true,
+            |t| Box::pin(async move { t.query_versions().await }) as actions::BoxTargetFut<'_>,
+        )
+        .await;
     }
 
     pub async fn package_check(&mut self, post: bool) {
+        // Phase 1 (I/O): query every host's installed versions concurrently
+        // (serial hosts one at a time), through the shared fan-out primitive.
+        self.query_versions().await;
+
+        // Phase 2 (pure): fold each host's queried versions into its packages'
+        // before/after fields and emit the update-sanity warnings. No I/O, so
+        // this runs sequentially over the group (order-independent).
         for target in self.data.values_mut() {
             let hostname = target.hostname().to_owned();
-            target.query_versions().await;
 
             let mut not_installed: Vec<String> = Vec::new();
             for pkg in target.packages_mut() {
@@ -601,50 +714,65 @@ impl HostsGroup {
     /// Returns [`HostError::Update`] when one or more hosts were locked by
     /// another owner.
     pub async fn update_lock(&mut self) -> Result<()> {
-        let names: Vec<String> = self.data.keys().cloned().collect();
-        let mut skipped = false;
-        for hostname in &names {
-            let Some(target) = self.data.get_mut(hostname) else {
-                continue;
-            };
-            // Load the lock (is_locked) before reading ownership; is_mine
-            // requires a prior load and is order-sensitive.
-            let locked = target.is_locked().await.unwrap_or(false);
-            let foreign = locked
-                && target
-                    .lock_mut()
-                    .is_some_and(|l| !l.is_mine().unwrap_or(false));
-            if foreign {
-                skipped = true;
-                let lock = target.lock_mut().expect("foreign implies a built lock");
-                let time = lock.time().await.unwrap_or_default();
-                let by = lock.locked_by().await.unwrap_or_default();
-                let comment = lock.comment().await.unwrap_or_default();
-                tracing::warn!(
-                    host = %hostname, since = %time, by = %by,
-                    "host is locked; skipping"
-                );
-                if !comment.is_empty() {
-                    tracing::info!(host = %hostname, %by, %comment, "lock comment");
-                }
-            } else {
-                match target.lock("").await {
-                    Ok(()) => {}
-                    Err(HostError::TargetLocked(msg)) => {
-                        tracing::debug!(host = %hostname, %msg, "update_lock: held by another owner");
-                    }
-                    Err(e) => {
-                        tracing::warn!(host = %hostname, error = %e, "update_lock: lock failed");
-                    }
-                }
-            }
-        }
+        use std::sync::atomic::{AtomicBool, Ordering};
 
-        if skipped {
-            // Release the locks we did take, best-effort, then signal the abort.
-            for target in self.data.values_mut() {
-                target.unlock(false).await;
-            }
+        // Probe-and-acquire concurrently across the group (serial hosts one at a
+        // time) via the shared fan-out. Each host's probe+acquire is
+        // self-contained and order-independent; a foreign-locked host flips the
+        // shared `skipped` flag. The per-host lock wire semantics are unchanged
+        // — only the fan-out is now concurrent (Contract preserved).
+        let skipped = AtomicBool::new(false);
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("update_lock"),
+            |_t| true,
+            |target| {
+                let skipped = &skipped;
+                Box::pin(async move {
+                    // Load the lock (is_locked) before reading ownership;
+                    // is_mine requires a prior load and is order-sensitive.
+                    let locked = target.is_locked().await.unwrap_or(false);
+                    let foreign = locked
+                        && target
+                            .lock_mut()
+                            .is_some_and(|l| !l.is_mine().unwrap_or(false));
+                    if foreign {
+                        skipped.store(true, Ordering::SeqCst);
+                        let hostname = target.hostname().to_owned();
+                        let lock = target.lock_mut().expect("foreign implies a built lock");
+                        let time = lock.time().await.unwrap_or_default();
+                        let by = lock.locked_by().await.unwrap_or_default();
+                        let comment = lock.comment().await.unwrap_or_default();
+                        tracing::warn!(
+                            host = %hostname, since = %time, by = %by,
+                            "host is locked; skipping"
+                        );
+                        if !comment.is_empty() {
+                            tracing::info!(host = %hostname, %by, %comment, "lock comment");
+                        }
+                    } else {
+                        match target.lock("").await {
+                            Ok(()) => {}
+                            Err(HostError::TargetLocked(msg)) => {
+                                tracing::debug!(host = %target.hostname(), %msg, "update_lock: held by another owner");
+                            }
+                            Err(e) => {
+                                tracing::warn!(host = %target.hostname(), error = %e, "update_lock: lock failed");
+                            }
+                        }
+                    }
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+
+        if skipped.into_inner() {
+            // Release the locks we did take, best-effort (concurrently), then
+            // signal the abort.
+            self.unlock().await;
             return Err(HostError::Update("Hosts locked".to_owned()));
         }
         Ok(())
@@ -667,38 +795,88 @@ impl HostsGroup {
     /// Works for both transactional and non-transactional hosts. A no-op when
     /// the group is empty.
     pub async fn reboot(&mut self, command: &str, relock_comment: &str) {
+        use std::sync::Mutex;
+
         if self.data.is_empty() {
             tracing::info!("No hosts to reboot");
             return;
         }
         let names: Vec<String> = self.data.keys().cloned().collect();
         tracing::info!(hosts = %names.join(", "), "Rebooting");
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
 
-        // Record boot ids before rebooting so we can confirm a fresh boot after.
-        let mut old_boot_ids: BTreeMap<String, String> = BTreeMap::new();
-        for name in &names {
-            if let Some(t) = self.data.get_mut(name) {
-                old_boot_ids.insert(name.clone(), t.boot_id().await);
-            }
-        }
+        // Phase 1: record boot ids before rebooting (concurrently), so we can
+        // confirm a fresh boot afterwards.
+        let old_boot_ids: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("boot_id"),
+            |_t| true,
+            |t| {
+                let old_boot_ids = &old_boot_ids;
+                Box::pin(async move {
+                    let id = t.boot_id().await;
+                    old_boot_ids
+                        .lock()
+                        .unwrap()
+                        .insert(t.hostname().to_owned(), id);
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+        let old_boot_ids = old_boot_ids.into_inner().unwrap();
 
-        for t in self.data.values_mut() {
-            t.reboot(command).await;
-        }
-        for name in &names {
-            if let Some(t) = self.data.get_mut(name) {
-                if let Err(e) = t.reconnect().await {
-                    tracing::error!(host = %name, error = %e, "reconnect after reboot failed");
-                } else {
-                    tracing::info!(host = %name, "is back up");
-                }
-            }
-        }
+        // Phase 2: fire the reboot on every host (it drops the connection).
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("reboot"),
+            |_t| true,
+            |t| {
+                let command = command.to_owned();
+                Box::pin(async move { t.reboot(&command).await }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
 
-        for name in &names {
-            let old = old_boot_ids.get(name).cloned().unwrap_or_default();
-            self.verify_reboot(name, &old).await;
-        }
+        // Phase 3: reconnect every host (concurrently) with retry + backoff.
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("reconnect"),
+            |_t| true,
+            |t| {
+                Box::pin(async move {
+                    if let Err(e) = t.reconnect().await {
+                        tracing::error!(host = %t.hostname(), error = %e, "reconnect after reboot failed");
+                    } else {
+                        tracing::info!(host = %t.hostname(), "is back up");
+                    }
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+
+        // Phase 4: verify each host's boot id changed (concurrently).
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("verify_reboot"),
+            |_t| true,
+            |t| {
+                let old = old_boot_ids.get(t.hostname()).cloned().unwrap_or_default();
+                Box::pin(async move {
+                    let new_boot_id = t.boot_id().await;
+                    Self::verify_boot_id(t.hostname(), &old, &new_boot_id);
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
 
         if !relock_comment.is_empty() {
             tracing::info!("Re-applying lock after reboot");
@@ -724,36 +902,53 @@ impl HostsGroup {
             hosts = %names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
             "Rebooting transactional hosts"
         );
+        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+
         // Fire the reboot on every named host first (it drops the connection),
-        // then reconnect each once it is back up.
-        for (hostname, command) in reboot {
-            if let Some(t) = self.data.get_mut(hostname) {
-                t.reboot(command).await;
-            }
-        }
-        for hostname in names {
-            if let Some(t) = self.data.get_mut(hostname) {
-                if let Err(e) = t.reconnect().await {
-                    tracing::error!(host = %hostname, error = %e, "reconnect after reboot failed");
-                } else {
-                    tracing::info!(host = %hostname, "is back up");
-                }
-            }
-        }
+        // then reconnect each once it is back up — both phases fan out
+        // concurrently (serial hosts one at a time) via the shared primitive.
+        // `should_run` restricts the fan-out to the named (transactional) hosts.
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("reboot"),
+            |t| reboot.contains_key(t.hostname()),
+            |t| {
+                let command = reboot.get(t.hostname()).cloned().unwrap_or_default();
+                Box::pin(async move { t.reboot(&command).await }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
+        actions::run_fanout(
+            &mut self.data,
+            interactive,
+            prompter.as_ref(),
+            Some("reconnect"),
+            |t| reboot.contains_key(t.hostname()),
+            |t| {
+                Box::pin(async move {
+                    if let Err(e) = t.reconnect().await {
+                        tracing::error!(host = %t.hostname(), error = %e, "reconnect after reboot failed");
+                    } else {
+                        tracing::info!(host = %t.hostname(), "is back up");
+                    }
+                }) as actions::BoxTargetFut<'_>
+            },
+        )
+        .await;
     }
 
     /// Logs an error if `hostname`'s boot id did not change after a reboot.
     ///
-    /// Ports upstream `HostsGroup._verify_reboot`.
+    /// Ports upstream `HostsGroup._verify_reboot`, factored to a pure
+    /// (I/O-free) comparison so the boot-id read can fan out concurrently in
+    /// [`reboot`](Self::reboot) and this just decides on the two values.
     /// `/proc/sys/kernel/random/boot_id` is regenerated on every boot, so an
     /// unchanged value means the host did not actually reboot. A missing (empty)
     /// old or new id is a warning (could not confirm); an unchanged non-empty id
     /// is an error.
-    async fn verify_reboot(&mut self, hostname: &str, old_boot_id: &str) {
-        let new_boot_id = match self.data.get_mut(hostname) {
-            Some(t) => t.boot_id().await,
-            None => return,
-        };
+    fn verify_boot_id(hostname: &str, old_boot_id: &str, new_boot_id: &str) {
         if old_boot_id.is_empty() || new_boot_id.is_empty() {
             tracing::warn!(host = %hostname, "could not read boot id to confirm the reboot");
         } else if old_boot_id == new_boot_id {
@@ -1708,5 +1903,93 @@ mod tests {
 
         g.package_check(false).await;
         assert!(g.get("h1").unwrap().packages()[0].before().is_none());
+    }
+
+    // --- ExecutionMode::Serial is honoured by every fan-out op -------------
+
+    /// A recording [`Prompter`] appending every serial-barrier prompt text to a
+    /// shared vec (returns Enter). Reaching the barrier proves an op routed a
+    /// serial host through the shared [`run_fanout`] serial path.
+    fn recording_prompter(seen: Arc<std::sync::Mutex<Vec<String>>>) -> crate::Prompter {
+        crate::Prompter::new(Arc::new(move |text: String| {
+            let seen = Arc::clone(&seen);
+            Box::pin(async move {
+                seen.lock().unwrap().push(text);
+                Ok(String::new())
+            })
+                as std::pin::Pin<
+                    Box<dyn std::future::Future<Output = std::io::Result<String>> + Send>,
+                >
+        }))
+    }
+
+    /// Builds an interactive group with one parallel + one serial host, wiring a
+    /// recording prompter so the serial barrier is observable.
+    fn serial_barrier_group(seen: Arc<std::sync::Mutex<Vec<String>>>) -> HostsGroup {
+        let mut g = HostsGroup::new(
+            vec![
+                enabled("par"),
+                tgt("ser", TargetState::Enabled, ExecutionMode::Serial),
+            ],
+            true,
+        );
+        g.set_prompter(recording_prompter(seen));
+        g
+    }
+
+    #[tokio::test]
+    async fn fanout_set_repo_honours_serial_barrier() {
+        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut g = serial_barrier_group(Arc::clone(&seen));
+        let report = RecordingSetRepo::default();
+
+        g.fanout_set_repo(RepoOp::Add, &report).await;
+
+        // The serial host is prompted before its repo change; the parallel host
+        // is not. Both are still visited.
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["press Enter key to proceed with ser ".to_owned()]
+        );
+        let hosts: Vec<String> = report
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(h, _)| h.clone())
+            .collect();
+        assert!(hosts.contains(&"par".to_owned()));
+        assert!(hosts.contains(&"ser".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn lock_honours_serial_barrier() {
+        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut g = serial_barrier_group(Arc::clone(&seen));
+
+        g.lock("session").await;
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["press Enter key to proceed with ser ".to_owned()]
+        );
+        assert!(g.get_mut("par").unwrap().is_locked().await.unwrap());
+        assert!(g.get_mut("ser").unwrap().is_locked().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn close_honours_serial_barrier() {
+        let _serial = super::super::spinner::TEST_SERIAL.lock().await;
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut g = serial_barrier_group(Arc::clone(&seen));
+
+        g.close(None).await;
+
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["press Enter key to proceed with ser ".to_owned()]
+        );
     }
 }
