@@ -290,6 +290,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `update`/`downgrade`, which recorded fine. The callers now pass flat
   strings, and a failed history write logs a warning instead of hiding
   the error (the write stays best-effort and never breaks the operation).
+- Writing a testreport (and every other atomic file write, e.g. the
+  refhosts.yml cache) now always encodes UTF-8 on disk, matching the UTF-8
+  read path. The write previously used the process locale codec, so under a
+  non-UTF-8 locale a template containing non-ASCII content (bug summaries,
+  maintainer names) either failed with `UnicodeEncodeError` — losing the
+  edits — or silently wrote mojibake that the next load misread. The
+  refhosts.yml store now reads with explicit UTF-8 to match (it read with
+  the locale codec, which would have mis-decoded the now-UTF-8 cache).
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

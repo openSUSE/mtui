@@ -226,6 +226,54 @@ class TestRefhosts:
             refhost.Refhosts(broken)
         assert any("failed to parse refhosts.yml" in r.message for r in caplog.records)
 
+    def test_parse_refhosts_reads_utf8_regardless_of_locale(self, tmp_path):
+        """The cache is written UTF-8, so it must be read UTF-8 too.
+
+        atomic_write_file persists the HTTPS-downloaded refhosts.yml as
+        UTF-8; reading it back with the locale codec would mis-decode
+        non-ASCII content into mojibake (or die with UnicodeDecodeError)
+        under a non-UTF-8 locale. Reproduced in a subprocess because the
+        locale and UTF-8 mode are fixed at interpreter startup.
+        """
+        import os
+        import subprocess
+        import sys
+
+        yml = tmp_path / "refhosts.yml"
+        yml.write_bytes(
+            (
+                "default:\n"
+                "  - name: bjørn-host\n"
+                "    arch: x86_64\n"
+                "    product:\n"
+                "      name: sles\n"
+                "      version:\n"
+                "        major: 15\n"
+            ).encode()
+        )
+        # The assertion runs inside the subprocess (comparing in-memory
+        # strings; printing the non-ASCII name under LC_ALL=C would die
+        # on the stdout codec instead of testing the file read).
+        code = (
+            "from pathlib import Path\n"
+            "from mtui.hosts import refhost\n"
+            f"rh = refhost.Refhosts(Path({str(yml)!r}))\n"
+            "assert [h.name for h in rh.data] == ['bj\\u00f8rn-host']\n"
+            "print('OK')\n"
+        )
+        env = dict(os.environ)
+        env.update(LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,  # the assertion below reports stderr on failure
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == "OK"
+
     def test_parse_refhosts_drops_malformed_host_and_logs(self, tmp_path, caplog):
         """Rows missing required fields are logged at ERROR and dropped."""
         bad = tmp_path / "bad.yml"

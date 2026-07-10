@@ -77,7 +77,14 @@ def atomic_write_file(data: bytes | str, path: Path) -> None:
     fd, fname = mkstemp(dir=path.parent)
 
     try:
-        with os.fdopen(fd, "w") as f:
+        # Explicit UTF-8: without it fdopen uses the locale codec, while
+        # the readers of what we write here are UTF-8 (FileList.load and
+        # the refhosts.yml store open with encoding="utf-8"; downloaded
+        # openQA logs are kept byte-identical to the server payload).
+        # Under a non-UTF-8 locale a template with non-ASCII content
+        # (bug summaries, maintainer names) either died with
+        # UnicodeEncodeError -- losing the edits -- or wrote mojibake.
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(data)
         move(fname, path)
     except BaseException:

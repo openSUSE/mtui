@@ -87,6 +87,46 @@ def test_atomic_write(create_temp):
     atomic_write_file(data.encode(), Path(path) / "bytes")
 
 
+def test_atomic_write_non_ascii_is_utf8_on_disk(create_temp):
+    """The write encoding matches the UTF-8 read path, byte for byte."""
+    target = Path(create_temp) / "utf8.txt"
+    atomic_write_file("Bjørn — テスト", target)
+    assert target.read_bytes() == "Bjørn — テスト".encode()
+
+
+def test_atomic_write_non_ascii_survives_non_utf8_locale(create_temp):
+    """Writing non-ASCII must not depend on the process locale.
+
+    fdopen without an explicit encoding uses the locale codec, while the
+    read path (FileList.load, downloaded payloads) is UTF-8. Under a
+    non-UTF-8 locale (LC_ALL=C with PEP 538/540 coercion disabled) a
+    template containing 'Bjørn' died with UnicodeEncodeError, losing the
+    edits. Reproduced in a subprocess because the interpreter's locale
+    and UTF-8 mode are fixed at startup.
+    """
+    import subprocess
+    import sys
+
+    target = Path(create_temp) / "out.txt"
+    code = (
+        "from pathlib import Path\n"
+        "from mtui.support.fileops import atomic_write_file\n"
+        f"atomic_write_file('Bj\\u00f8rn', Path({str(target)!r}))\n"
+    )
+    env = dict(os.environ)
+    env.update(LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,  # the assertion below reports stderr on failure
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert target.read_bytes() == "Bjørn".encode()
+
+
 def test_atomic_write_creates_missing_parent(create_temp):
     """The destination directory is created if absent (e.g. ~/.cache/mtui)."""
     target = Path(create_temp) / "missing" / "nested" / "refhosts.yml"

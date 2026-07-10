@@ -46,7 +46,10 @@ class Refhosts:
         parse failures propagate.
         """
         try:
-            with hostmap.open() as f:
+            # Explicit UTF-8: the HTTPS-downloaded cache is written UTF-8
+            # (atomic_write_file), so reading with the locale codec would
+            # mis-decode non-ASCII content under a non-UTF-8 locale.
+            with hostmap.open(encoding="utf-8") as f:
                 raw = YAML(typ="safe").load(f)
         except Exception:
             logger.error("failed to parse refhosts.yml")
