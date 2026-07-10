@@ -315,6 +315,20 @@ pub(crate) mod testkit {
         )
     }
 
+    /// A session with hosts wired onto the active report but **no template
+    /// loaded** (the active report stays the `NullReport`, so
+    /// `session.metadata().is_loaded()` is `false`). Mirrors
+    /// [`session_with_hosts`] but skips `templates.add`, so commands can be
+    /// exercised in the no-metadata state a real REPL reaches before any
+    /// template is checked out.
+    #[must_use]
+    pub fn session_host_no_template(hosts: &[&str], stdout: &str) -> (Session, Buffer) {
+        let (mut session, buf) = empty_session();
+        let targets: Vec<Target> = hosts.iter().map(|h| scripted_target(h, stdout)).collect();
+        session.metadata_mut().base_mut().targets = HostsGroup::new(targets, false);
+        (session, buf)
+    }
+
     /// Parses `argv` into `ArgMatches` for `command`, mirroring the engine's
     /// per-command parser (base template flags + the command's own args).
     #[must_use]

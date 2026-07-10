@@ -26,13 +26,30 @@ use crate::session::Session;
 /// any host.
 pub struct ListPackages;
 
-/// Maps the current-vs-wanted comparison to the upstream colored state label.
-fn state_label(display: &crate::display::CommandPromptDisplay, ord: Option<Ordering>) -> String {
-    match ord {
-        None => display.blue("not installed"),
-        Some(Ordering::Less) => display.yellow("update needed"),
-        Some(Ordering::Equal) => display.green("updated"),
-        Some(Ordering::Greater) => display.red("too recent"),
+/// The rendered state of a package on a host.
+///
+/// Distinguishes three outcomes upstream keeps separate but which a bare
+/// `Option<Ordering>` cannot express:
+/// * [`PkgState::Blank`] — installed but nothing to compare against (no template
+///   loaded); upstream renders an empty state column.
+/// * [`PkgState::NotInstalled`] — absent, or present in `-p` but not in the
+///   report (upstream's `KeyError`/`None` branch).
+/// * [`PkgState::Cmp`] — installed and comparable to a required version.
+#[derive(Clone, Copy)]
+enum PkgState {
+    Blank,
+    NotInstalled,
+    Cmp(Ordering),
+}
+
+/// Maps a [`PkgState`] to the upstream colored state label.
+fn state_label(display: &crate::display::CommandPromptDisplay, state: PkgState) -> String {
+    match state {
+        PkgState::Blank => String::new(),
+        PkgState::NotInstalled => display.blue("not installed"),
+        PkgState::Cmp(Ordering::Less) => display.yellow("update needed"),
+        PkgState::Cmp(Ordering::Equal) => display.green("updated"),
+        PkgState::Cmp(Ordering::Greater) => display.red("too recent"),
     }
 }
 
@@ -92,6 +109,10 @@ impl Command for ListPackages {
             return Err(CommandError::Other("no packages to list".to_owned()));
         }
 
+        // Whether a template is loaded decides how state is labeled (upstream
+        // `if self.metadata:`). Read it before the mutable-targets borrow below.
+        let loaded = session.metadata().is_loaded();
+
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
@@ -101,15 +122,14 @@ impl Command for ListPackages {
 
         // Query per host, then render (querying borrows targets mutably, so the
         // display render is a separate pass over snapshotted rows).
-        let mut rendered: Vec<(String, String, Vec<(String, String, Option<Ordering>)>)> =
-            Vec::new();
+        let mut rendered: Vec<(String, String, Vec<(String, String, PkgState)>)> = Vec::new();
         for name in &hosts {
             let Some(t) = targets.get_mut(name) else {
                 continue;
             };
             let system = t.system().to_string();
             let versions = PackageQuerier::new(t).versions(&pkgs).await;
-            let mut lines: Vec<(String, String, Option<Ordering>)> = Vec::new();
+            let mut lines: Vec<(String, String, PkgState)> = Vec::new();
             for pkg in &pkgs {
                 let current = versions.get(pkg).cloned().flatten();
                 let wanted = t
@@ -117,13 +137,18 @@ impl Command for ListPackages {
                     .iter()
                     .find(|p| &p.name == pkg)
                     .and_then(|p| p.required().cloned());
-                let ord = match (&current, &wanted) {
-                    (None, _) => None,
-                    (Some(_), None) => Some(Ordering::Equal),
-                    (Some(c), Some(w)) => Some(c.cmp(w)),
+                // Mirror upstream's three branches:
+                // * no template: installed -> blank, absent -> not installed.
+                // * template + required present: compare current vs required.
+                // * template but package not in report: not installed.
+                let state = match (&current, &wanted) {
+                    (None, _) => PkgState::NotInstalled,
+                    (Some(_), _) if !loaded => PkgState::Blank,
+                    (Some(c), Some(w)) => PkgState::Cmp(c.cmp(w)),
+                    (Some(_), None) => PkgState::NotInstalled,
                 };
                 let version = current.map_or_else(String::new, |v| v.to_string());
-                lines.push((pkg.clone(), version, ord));
+                lines.push((pkg.clone(), version, state));
             }
             rendered.push((name.clone(), system, lines));
         }
@@ -132,8 +157,8 @@ impl Command for ListPackages {
             session
                 .display
                 .println(&format!("packages on {name} ({system}):"));
-            for (pkg, version, ord) in lines {
-                let state = state_label(&session.display, ord);
+            for (pkg, version, state) in lines {
+                let state = state_label(&session.display, state);
                 session
                     .display
                     .println(&format!("{pkg:30}: {version:20} {state}"));
@@ -171,7 +196,9 @@ impl ListPackages {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{
+        empty_session, matches, session_host_no_template, session_with_hosts,
+    };
 
     #[test]
     fn name_and_fanout_scope() {
@@ -180,16 +207,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lists_installed_version_and_state() {
+    async fn loaded_template_extra_not_in_report_is_not_installed() {
+        // Template loaded (FakeReport) but `-p bash` is not in the report, so it
+        // has no required version: upstream's KeyError branch → "not installed",
+        // NOT "updated" (case 3).
         let (mut session, buf) =
             session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "bash 5.1-1\n");
+        assert!(session.metadata().is_loaded());
         let args = matches(&ListPackages, &["-p", "bash", "-t", "h1"]);
         ListPackages.call(&mut session, &args).await.unwrap();
         let out = buf.contents();
         assert!(out.contains("packages on h1"), "{out}");
         assert!(out.contains("bash"), "{out}");
-        // No report requirement → "updated".
-        assert!(out.contains("updated"), "{out}");
+        assert!(out.contains("not installed"), "{out}");
+        assert!(!out.contains("updated"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn no_template_installed_is_blank_state() {
+        // No template loaded: an installed package has no required version to
+        // compare against, so the state column is blank — never "updated",
+        // never "not installed" (case 1).
+        let (mut session, buf) = session_host_no_template(&["h1"], "bash 5.1-1\n");
+        assert!(!session.metadata().is_loaded());
+        let args = matches(&ListPackages, &["-p", "bash", "-t", "h1"]);
+        ListPackages.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("bash"), "{out}");
+        assert!(out.contains("5.1-1"), "{out}");
+        assert!(!out.contains("updated"), "{out}");
+        assert!(!out.contains("not installed"), "{out}");
+        // Lock the exact no-template line: version, then a blank state column
+        // (trailing whitespace where the colored word would be).
+        assert!(
+            out.lines().any(|l| l.starts_with("bash")
+                && l.contains("5.1-1")
+                && l.trim_end() == format!("{:30}: {:20}", "bash", "5.1-1").trim_end()),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_template_absent_is_not_installed() {
+        // No template loaded + absent package → "not installed" (case 1, absent).
+        let (mut session, buf) =
+            session_host_no_template(&["h1"], "package ghostpkg is not installed\n");
+        let args = matches(&ListPackages, &["-p", "ghostpkg", "-t", "h1"]);
+        ListPackages.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("not installed"), "{out}");
+        assert!(!out.contains("updated"), "{out}");
     }
 
     #[tokio::test]
