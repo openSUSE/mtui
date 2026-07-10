@@ -19,26 +19,26 @@
 //!    `group.reboot(reboot)`,
 //! 4. **always** `group.unlock()` afterwards (upstream's `finally`).
 //!
-//! ## Scope: skeleton + trait (P2.9)
+//! ## Scope: template + seams
 //!
-//! This module ports the **template and its seams only**. The upstream template
+//! This module ports the **template and its seams**. The upstream template
 //! consumes machinery that is deliberately *not* owned by `mtui-hosts`:
 //!
 //! * the *doer*/*check* dispatch (`Target.doer(role)` / `Target.check(role)`)
-//!   is fed by the update-workflow registries that live in `mtui-testreport`
-//!   and are injected in **Phase 4**; taking a direct dependency on them here
-//!   would make `mtui-hosts` depend on `mtui-testreport` and **break the
-//!   acyclic crate graph**,
-//! * the `reboot` / reconnect lifecycle on [`HostsGroup`](super::HostsGroup) is
-//!   the sibling P2.9 reboot task.
+//!   is fed by the update-workflow registries that live in `mtui-testreport`;
+//!   taking a direct dependency on them here would make `mtui-hosts` depend on
+//!   `mtui-testreport` and **break the acyclic crate graph**,
+//! * the `reboot` / reconnect lifecycle on [`HostsGroup`](super::HostsGroup).
 //!
 //! So the template drives the four group operations and the two per-host hooks
 //! through the object-safe [`OperationGroup`] seam rather than calling
-//! `HostsGroup` directly. The `impl OperationGroup for HostsGroup` binding lands
-//! in **Phase 4** together with the real doer/check registries and the reboot
-//! wiring — see the `TODO` at the bottom of this file. This mirrors upstream's
-//! own `test_operation.py`, which drives the template against fully mocked
-//! targets and a mocked group, so the port is faithfully unit-testable offline.
+//! `HostsGroup` directly. The concrete `impl OperationGroup for HostsGroup`
+//! binding — resolving each target's [`Doer`] / [`Check`] via the injected
+//! [`PlanProvider`] and delegating the reboot/reconnect lifecycle to the
+//! inherent [`HostsGroup`](super::HostsGroup) methods — lives in
+//! [`hostgroup`](super::hostgroup). This mirrors upstream's own
+//! `test_operation.py`, which drives the template against fully mocked targets
+//! and a mocked group, so the port is faithfully unit-testable offline.
 
 use crate::error::HostError;
 
@@ -57,8 +57,9 @@ pub type HostCommandMap = Vec<(String, String)>;
 /// only variable the install/uninstall command templates interpolate is
 /// `$packages`; the reboot template takes none. [`Doer::command`] performs that
 /// single substitution and [`Doer::reboot`] returns the reboot command verbatim.
-/// Full `string.Template` parity (`$$`, `${name}`) is unnecessary here and is
-/// deferred to where real doers are constructed (Phase 4).
+/// Full `string.Template` parity (`$$`, `${name}`) is unnecessary here; the
+/// real doers are constructed by the [`PlanProvider`] implementation in
+/// `mtui-testreport`.
 #[derive(Debug, Clone)]
 pub struct Doer {
     /// The command template, with `$packages` as the sole interpolated variable.
@@ -179,9 +180,9 @@ pub struct HostPlan {
 /// This object-safe seam is what keeps `mtui-hosts` acyclic: the template calls
 /// `update_lock` / `run` / `reboot` / `unlock` and reads the per-host
 /// [`HostPlan`]s through this trait instead of touching `HostsGroup`,
-/// `Target::doer`, or the reboot lifecycle directly — all of which are wired in
-/// Phase 4 / the sibling P2.9 reboot task. Upstream's `test_operation.py` mocks
-/// exactly this surface.
+/// `Target::doer`, or the reboot lifecycle directly. The concrete binding lives
+/// in [`hostgroup`](super::hostgroup) (`impl OperationGroup for HostsGroup`).
+/// Upstream's `test_operation.py` mocks exactly this surface.
 #[async_trait::async_trait]
 pub trait OperationGroup: Send {
     /// Resolves the per-host plans for `role`.
@@ -357,7 +358,8 @@ impl Operation for InstallOperation {
 /// Mirrors upstream `UninstallOperation` (role `"uninstaller"`, missing sentinel
 /// [`HostError::MissingUninstaller`]). Note upstream's uninstaller deliberately
 /// consults the *install* checks; that role→check mapping lives in the doer/check
-/// registry (Phase 4), not here.
+/// registry injected via [`PlanProvider`] (implemented in `mtui-testreport`),
+/// not here.
 pub struct UninstallOperation {
     packages: Vec<String>,
 }
@@ -422,7 +424,7 @@ pub trait PlanProvider: Send + Sync {
 #[cfg(test)]
 mod plan_provider_tests {
     //! Tests for the reboot-map plumbing that exercises [`PlanProvider`] via a
-    //! test double; the full `impl OperationGroup for HostsGroup` binding is
+    //! test double; the `impl OperationGroup for HostsGroup` binding is
     //! integration-tested in `crates/mtui-hosts/tests/operation_group.rs`.
 
     use super::*;

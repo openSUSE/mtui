@@ -27,15 +27,15 @@
 //!   verification and optional relock, plus the transactional-only `_reboot`
 //!   path driven through the [`OperationGroup`] seam).
 //!
-//! The remaining upstream responsibilities are owned by later tasks and are
-//! **intentionally not stubbed here** (stubs calling not-yet-built `Target`
-//! methods would be dead code and could tempt a crate cycle):
-//!
-//! * the pool-claim lock (`pool_unlock`) — pool-claim wiring,
-//! * `query_versions` and system/product parsing — **P2.8**,
-//! * `perform_*` update workflow and `report_*` — **Phase 4** (needs the
-//!   doer/check registries in `mtui-testreport`; adding them here would make
-//!   `mtui-hosts` depend on `mtui-testreport` and break the acyclic graph).
+//! The upstream responsibilities that reach into higher crates are routed
+//! through object-safe seams so `mtui-hosts` never depends on `mtui-testreport`:
+//! the `perform_*` update workflow runs via the injected
+//! [`PlanProvider`] behind [`HostsGroup`]'s `impl OperationGroup`, and the repo
+//! change fan-out ([`fanout_set_repo`](HostsGroup::fanout_set_repo)) drives the
+//! object-safe [`SetRepo`] hook whose report impls live in `mtui-testreport`.
+//! The pool-claim lock ([`pool_unlock`](HostsGroup::pool_unlock)),
+//! `query_versions` / system-product parsing, and lock reporting
+//! ([`report_locks`](HostsGroup::report_locks)) are all bound here.
 //!
 //! The internal map is a [`BTreeMap`] so `names()` / iteration are
 //! deterministically ordered by hostname — upstream always iterates its dict via
@@ -59,7 +59,7 @@ use super::{LockRow, Target};
 ///
 /// All hosts in a group are expected to be enabled; the lifetime of the object
 /// should match the execution of a single user command (upstream note). See the
-/// module docs for the ported vs. deferred surface.
+/// module docs for the seam layout that keeps `mtui-hosts` acyclic.
 pub struct HostsGroup {
     data: BTreeMap<String, Target>,
     /// Whether the surrounding session is interactive. Threaded through to the
@@ -753,8 +753,8 @@ impl HostsGroup {
 /// Drives the install/uninstall [`Operation`](super::operation::Operation)
 /// template against this group.
 ///
-/// This is the composition-root binding deferred by the `TODO` in
-/// [`operation`](super::operation): it resolves each target's per-role
+/// This is the concrete binding of the object-safe [`OperationGroup`] seam
+/// declared in [`operation`](super::operation): it resolves each target's per-role
 /// [`Doer`](super::operation::Doer) / [`Check`](super::operation::Check) through
 /// the injected [`PlanProvider`], and delegates command/reboot fan-out to
 /// [`HostsGroup::run`] via a [`Command::PerHost`] map.

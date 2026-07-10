@@ -27,18 +27,18 @@
 //! upstream's per-access `Target.repo_manager` property — hands out a fresh
 //! binding over the live target each time.
 //!
-//! ## The [`SetRepo`] seam (Phase 4)
+//! ## The [`SetRepo`] seam
 //!
 //! Upstream's `set` forwards into `testreport.set_repo(...)`, but the concrete
 //! test-report types live in `mtui-testreport` — a *higher* crate. A direct
 //! dependency here would make `mtui-hosts` depend on `mtui-testreport` and
 //! **break the acyclic crate graph**. So `set` dispatches through the
-//! object-safe [`SetRepo`] trait defined here; the `impl SetRepo for SlReport`
-//! (and the other report types) lands in **Phase 4** together with the real
-//! `set_repo` logic — mirroring exactly how [`operation`](super::operation)
-//! injects its doer/check registries through the [`OperationGroup`] seam. The
-//! trait is deliberately minimal and provisional: if Phase 4's `set_repo`
-//! signature diverges, this seam is a one-line adjustment.
+//! object-safe [`SetRepo`] trait defined here; the concrete
+//! `impl SetRepo for SlReport` (and the other report types) live in
+//! `mtui-testreport` and are driven via
+//! [`HostsGroup::fanout_set_repo`](super::HostsGroup) — mirroring exactly how
+//! [`operation`](super::operation) injects its doer/check registries through the
+//! [`OperationGroup`](super::operation::OperationGroup) seam.
 
 use std::collections::BTreeMap;
 
@@ -73,16 +73,16 @@ impl RepoOp {
     }
 }
 
-/// The report-side hook a [`RepoManager::set`] forwards into — the Phase-4
-/// injection point for `testreport.set_repo(target, operation)`.
+/// The report-side hook a [`RepoManager::set`] forwards into — the injection
+/// point for `testreport.set_repo(target, operation)`.
 ///
 /// Object-safe (`&dyn SetRepo`) and `async` (the report's `set_repo` ultimately
 /// drives async `zypper` fan-out through [`RepoManager::run_zypper`]), matching
 /// the `#[async_trait]` convention used by
 /// [`OperationGroup`](super::operation::OperationGroup). The concrete
 /// implementations (`SlReport`, `ObsReport`, …) live in `mtui-testreport` and
-/// are wired in Phase 4; keeping the trait here preserves the acyclic crate
-/// graph.
+/// are dispatched through this seam; keeping the trait here preserves the
+/// acyclic crate graph.
 #[async_trait::async_trait]
 pub trait SetRepo: Send + Sync {
     /// Add or remove this report's repositories on `target`.
@@ -112,7 +112,8 @@ impl<'a> RepoManager<'a> {
     ///
     /// Ports `RepoManager.set` (upstream the one-line forward that used to live
     /// as `Target.set_repo`): logs at debug and forwards to
-    /// [`SetRepo::set_repo`], the Phase-4 report-side hook.
+    /// [`SetRepo::set_repo`], the report-side hook implemented in
+    /// `mtui-testreport`.
     pub async fn set(&mut self, operation: RepoOp, report: &dyn SetRepo) {
         debug!(host = %self.target.hostname(), op = operation.as_str(), "changing repos");
         report.set_repo(self.target, operation).await;
