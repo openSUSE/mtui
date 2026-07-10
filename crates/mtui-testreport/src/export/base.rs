@@ -119,7 +119,9 @@ impl ExportContext {
     ///
     /// Links are deduplicated against the template from just past a
     /// `HAS_UNTRACKED` marker (or from the whole template if the marker is
-    /// absent).
+    /// absent). An existing `Links for update logs:` header is reused rather
+    /// than a fresh one being inserted on every call, so manual/kernel
+    /// re-exports do not stack empty duplicate sections (upstream `c870fe58`).
     pub fn installlogs_lines(&mut self, filenames: &[String]) {
         // Index just past the HAS_UNTRACKED marker; links are deduped from there.
         let mut o = 0usize;
@@ -130,22 +132,47 @@ impl ExportContext {
             }
         }
 
-        let mut index = self.template.len();
-        if self
-            .template
-            .last()
-            .is_some_and(|l| l.contains("## export MTUI:"))
-        {
-            index -= 1;
-        }
-        self.template.insert(index, "\n".to_string());
-        self.template
-            .insert(index + 1, "Links for update logs:\n".to_string());
-        self.template.insert(index + 2, "\n".to_string());
-        index += 2;
+        let marker = "Links for update logs:\n";
+        let reports_url = self.config.reports_url.clone();
 
-        let reports_url = &self.config.reports_url;
-        let install_logs = self.config.install_logs.display();
+        let mut index = if let Some(header) = self.template.iter().position(|l| l == marker) {
+            // Reuse an existing section: manual/kernel exports run this on
+            // every export, and unconditionally inserting a fresh header
+            // stacked empty 'Links for update logs:' sections that grew with
+            // each re-export. New links are appended after the section's
+            // existing links.
+            let mut index = header + 1;
+            self.drop_empty_link_sections(marker, index);
+            if index >= self.template.len()
+                || (self.template[index] != "\n" && !self.template[index].contains(&reports_url))
+            {
+                // Hand-trimmed template: the header is followed directly by
+                // foreign content (e.g. the export footer). Restore the
+                // canonical blank so the links land inside the section, not
+                // after the footer.
+                self.template.insert(index, "\n".to_string());
+            }
+            while index + 1 < self.template.len() && self.template[index + 1].contains(&reports_url)
+            {
+                index += 1;
+            }
+            index
+        } else {
+            let mut index = self.template.len();
+            if self
+                .template
+                .last()
+                .is_some_and(|l| l.contains("## export MTUI:"))
+            {
+                index -= 1;
+            }
+            self.template.insert(index, "\n".to_string());
+            self.template.insert(index + 1, marker.to_string());
+            self.template.insert(index + 2, "\n".to_string());
+            index + 2
+        };
+
+        let install_logs = self.config.install_logs.display().to_string();
         let mut add_empty_line = false;
         for fn_name in filenames {
             let install_log = format!("{reports_url}/{}/{install_logs}/{fn_name}\n", self.rrid);
@@ -156,8 +183,51 @@ impl ExportContext {
             }
         }
 
-        if add_empty_line {
+        if add_empty_line && (index + 1 >= self.template.len() || self.template[index + 1] != "\n")
+        {
             self.template.insert(index + 1, "\n".to_string());
+        }
+    }
+
+    /// Removes empty duplicate `Links for update logs:` headers (upstream
+    /// `_drop_empty_link_sections`).
+    ///
+    /// Pre-fix exports stacked one fresh header per run while the links stayed
+    /// under the original section, so damaged templates carry trailing header
+    /// blocks with nothing but blanks under them. `dedup_lines` never collapses
+    /// blank-separated duplicates, so they would otherwise survive forever. A
+    /// duplicate section that does hold links is left alone — never delete
+    /// content.
+    fn drop_empty_link_sections(&mut self, marker: &str, search_from: usize) {
+        let reports_url = self.config.reports_url.clone();
+        let mut i = search_from;
+        loop {
+            let Some(j) = self
+                .template
+                .iter()
+                .skip(i)
+                .position(|l| l == marker)
+                .map(|p| p + i)
+            else {
+                return;
+            };
+            let mut k = j + 1;
+            while k < self.template.len() && self.template[k] == "\n" {
+                k += 1;
+            }
+            if k < self.template.len() && self.template[k].contains(&reports_url) {
+                i = k; // a section with real links: keep it
+                continue;
+            }
+            // Empty duplicate: drop the header, its trailing blanks, and the
+            // framing blank the old code inserted before it.
+            let start = if j > 0 && self.template[j - 1] == "\n" {
+                j - 1
+            } else {
+                j
+            };
+            self.template.drain(start..k);
+            i = start;
         }
     }
 
@@ -287,11 +357,31 @@ impl ExportContext {
         else {
             return;
         };
-        self.template.insert(
-            index + 3,
-            "All installation tests done in openQA please see installlogs section\n".to_string(),
-        );
-        self.template.insert(index + 4, "\n".to_string());
+        let line = "All installation tests done in openQA please see installlogs section\n";
+        // Idempotent: on a kernel re-export the previous run's notice is still
+        // there, separated from a fresh insert by the blank line, so
+        // dedup_lines() never collapsed them and the notice multiplied with
+        // every export. Copies stacked by pre-fix exports are dropped so a
+        // damaged template converges back to a single notice (upstream
+        // `c870fe58`).
+        while self.template.iter().filter(|l| l.as_str() == line).count() > 1 {
+            let extra = self.template.len()
+                - 1
+                - self
+                    .template
+                    .iter()
+                    .rev()
+                    .position(|l| l.as_str() == line)
+                    .expect("count > 1 guarantees a match");
+            self.template.remove(extra);
+            if extra < self.template.len() && self.template[extra] == "\n" {
+                self.template.remove(extra);
+            }
+        }
+        if !self.template.iter().any(|l| l.as_str() == line) {
+            self.template.insert(index + 3, line.to_string());
+            self.template.insert(index + 4, "\n".to_string());
+        }
     }
 
     /// The index of the `source code change review:` anchor, if present.

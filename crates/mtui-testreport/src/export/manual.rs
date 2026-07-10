@@ -38,9 +38,14 @@ pub struct ManualHost {
     pub hostlog: HostLog,
 }
 
-/// Matches a `reference host: <name>` line (upstream `reference host:\s (.*)$`).
-static REFERENCE_HOST_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"reference host:\s (.*)$").expect("valid reference-host regex"));
+/// Matches a `reference host: <name>` line and captures the hostname (upstream
+/// `reference host:\s+([^)\s]+)`). The pre-fix pattern (`reference host:\s (.*)$`
+/// with `group(0)`) required two spaces after the colon (the template emits one)
+/// and read the whole match, so it never matched a bare hostname and the
+/// stale-result cleanup was dead (upstream `c870fe58`).
+static REFERENCE_HOST_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"reference host:\s+([^)\s]+)").expect("valid reference-host regex")
+});
 
 /// Matches a per-host verdict result line (upstream
 /// `\s:\s(SUCCEEDED|(?<!PASSED/)FAILED|INTERNAL ERROR)`). Rust `regex` has no
@@ -134,14 +139,30 @@ impl ManualExport {
         let mut c_host: Option<String> = None;
         let mut tmp: Vec<String> = Vec::with_capacity(self.ctx.template.len());
         for line in &self.ctx.template {
-            if let Some(cap) = REFERENCE_HOST_RE.find(line) {
-                c_host = Some(cap.as_str().to_string());
+            // Track which host section we are in so only the *current session's*
+            // hosts get their stale result lines refreshed. The host header line
+            // itself is kept — it is the section header.
+            if let Some(cap) = REFERENCE_HOST_RE.captures(line) {
+                c_host = Some(cap[1].to_string());
+                tmp.push(line.clone());
                 continue;
             }
+
+            if c_host.is_some() && line.starts_with("comment:") {
+                // End of this host's block (same boundary convention as the
+                // verdict loop below). Without the reset the deletion window
+                // bled past the last host section and ate tester-authored lines
+                // like 'reproducer : FAILED before update' from the
+                // regression-tests notes.
+                tmp.push(line.clone());
+                c_host = None;
+                continue;
+            }
+
             // Keep the line unless it is a result line for a known host.
             let is_known_host = c_host
                 .as_deref()
-                .is_some_and(|h| hostnames.iter().any(|hn| h.contains(hn.as_str())));
+                .is_some_and(|h| hostnames.iter().any(|hn| hn.as_str() == h));
             if !is_result_line(line) || !is_known_host {
                 tmp.push(line.clone());
             }
