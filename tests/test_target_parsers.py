@@ -409,3 +409,58 @@ class TestParseSystem:
 
         addons = {(p.name, p.version) for p in system.get_addons()}
         assert ("sle-ha", "16.0") in addons
+
+
+class TestParseSystemAddonTolerance:
+    @patch("mtui.hosts.target.parsers.system.product")
+    def test_unreadable_addon_prod_is_skipped_not_fatal(
+        self, mock_product_module, caplog
+    ):
+        """A dangling/unreadable addon .prod must not abort the connect.
+
+        The base-product path already tolerates a dangling symlink; the
+        addon loop did not: sftp.open raised OSError, which propagated
+        out of parse_system into Target.connect and made the host
+        impossible to add at all.
+        """
+        conn, sftp = _mock_connection_with_sftp()
+        sftp.listdir.return_value = [
+            "SLES.prod",
+            "broken-addon.prod",
+            "sle-module-basesystem.prod",
+        ]
+        sftp.readlink.return_value = "SLES.prod"
+
+        base_file = MagicMock()
+        addon_file = MagicMock()
+
+        def _open(path, *args, **kwargs):
+            p = str(path)
+            if "transactional-update.conf" in p:
+                raise FileNotFoundError(p)
+            if "broken-addon" in p:
+                raise OSError("dangling symlink")
+            if "SLES.prod" in p:
+                return base_file
+            return addon_file
+
+        sftp.open.side_effect = _open
+        mock_product_module.parse_product.side_effect = [
+            ("SLES", "15-SP5", "x86_64"),
+            ("sle-module-basesystem", "15-SP5", "x86_64"),
+        ]
+
+        from mtui.hosts.target.parsers.system import parse_system
+
+        with caplog.at_level("WARNING", logger="mtui.targer.parsers.system"):
+            system, transactional = parse_system(conn)
+
+        assert system.get_base().name == "SLES"
+        assert transactional is False
+        # The readable addon survived; the broken one was skipped, warned.
+        addon_names = {a.name for a in system.get_addons()}
+        assert "sle-module-basesystem" in addon_names
+        assert any(
+            "skipping unreadable addon product file" in r.message
+            for r in caplog.records
+        )

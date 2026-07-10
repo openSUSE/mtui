@@ -91,10 +91,21 @@ def parse_system(connection: Connection) -> tuple[System, bool]:
 
         addons: set[Product] = set()
         for x in files:
-            with sftp.open(f"/etc/products.d/{x}") as f:
-                logger.debug("parsing - %s", x)
-                name, version, arch = product.parse_product(f)
-                addons.add(Product(name, version, arch))
+            # Mirror the base-product handling: a dangling symlink or
+            # otherwise unreadable addon .prod file must not abort the
+            # whole host connect -- warn and skip just that addon.
+            try:
+                with sftp.open(f"/etc/products.d/{x}") as f:
+                    logger.debug("parsing - %s", x)
+                    name, version, arch = product.parse_product(f)
+                    addons.add(Product(name, version, arch))
+            except OSError:
+                logger.warning(
+                    "%s: skipping unreadable addon product file "
+                    "/etc/products.d/%s (dangling symlink?)",
+                    connection.hostname,
+                    x,
+                )
         # SLE4SAP on sle12 contains also SLES repos :(
         if base.name == "SLES_SAP" and base.version.startswith("12"):
             addons.add(Product("SLES", base.version, base.arch))
