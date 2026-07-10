@@ -95,7 +95,13 @@ class ListPackages(Command):
                         # if package p is in target.packages it alwas has set required --> from metadata
                         wanted = target.packages[p].required
                     except KeyError:
-                        state = None
+                        # Queried package that is not part of the update:
+                        # there is no wanted version to compare against, so
+                        # mirror the no-metadata branch exactly -- blank when
+                        # installed, "not installed" when the querier found
+                        # nothing. `state = None` here rendered the literal
+                        # word "None".
+                        state = "" if v else self.state_map[None]
                     else:
                         state = self._vers2state(v, wanted)
                 else:
@@ -106,7 +112,9 @@ class ListPackages(Command):
                 if len(str(v)) > column_size[1]:
                     column_size[1] = len(str(v)) + 1
 
-                host_output.append([p, v, state])
+                # A not-installed package has no version; v is None and the
+                # {1!s} format printed the literal "None" in every branch.
+                host_output.append([p, v if v is not None else "", state])
 
             format_output = f"{{0:{column_size[0]}}}: {{1!s:{column_size[1]}}} {{2}}"
             for line in host_output:

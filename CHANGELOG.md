@@ -278,6 +278,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   hand-edited or rotated); a line whose first field is not a parseable
   timestamp used to raise out of the command, dropping every remaining
   host's history. Such lines are now skipped like the too-few-fields case.
+- `list_packages -p <pkg>` no longer prints the literal word `None` for a
+  queried package that is not part of the loaded update. The state column
+  now behaves exactly like the no-update case: blank when the package is
+  installed, `not installed` when it is not — and a not-installed package's
+  empty version no longer renders as a literal `None` either.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
