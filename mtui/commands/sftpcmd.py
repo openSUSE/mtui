@@ -38,15 +38,28 @@ class SFTPPut(Command):
             logger.error("File %s not found", self.args.filename[0])
             return
 
-        transversed_files = []
+        # (local path, path relative to the upload root) pairs: a walked
+        # directory keeps its tree on the remote side. Flattening to the
+        # basename made d/a/config and d/b/config both land on the same
+        # remote path, silently clobbering the first with the second.
+        transversed_files: list[tuple[Path, Path]] = []
         for file in files:
             if file.is_file():
-                transversed_files.append(file)
+                transversed_files.append((file, Path(file.name)))
             elif file.is_dir():
+                # Resolve before walking: a '..'-shaped argument (put ..)
+                # would otherwise survive relative_to() as a literal '..'
+                # part and build a remote path that escapes the run's
+                # working directory into the shared target_tempdir.
+                walk_root = file.resolve()
                 # Path.walk is from 3.12
-                for root, _, folder_files in os.walk(file):
+                for root, _, folder_files in os.walk(walk_root):
                     transversed_files.extend(
-                        Path(root) / folder_file for folder_file in folder_files
+                        (
+                            Path(root) / folder_file,
+                            (Path(root) / folder_file).relative_to(walk_root.parent),
+                        )
+                        for folder_file in folder_files
                     )
             else:
                 logger.warning("Filename %s isn't file", file)
@@ -54,8 +67,9 @@ class SFTPPut(Command):
 
         # work only on enabled hosts
         targets = self.targets.select(enabled=True)
-        for filename in transversed_files:
-            remote = self.metadata.target_wd(filename.name)
+        for filename, relative in transversed_files:
+            # sftp_put creates the intermediate remote directories.
+            remote = self.metadata.target_wd(*relative.parts)
 
             targets.sftp_put(filename, remote)
             logger.info("uploaded %s to %s", filename, remote)
