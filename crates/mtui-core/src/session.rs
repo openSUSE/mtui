@@ -14,7 +14,7 @@
 
 use mtui_config::Config;
 use mtui_datasources::http::VerifyPolicy;
-use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig};
+use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
 use mtui_hosts::{HostError, HostsGroup, Prompter, Target};
 use mtui_testreport::{TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
@@ -383,6 +383,13 @@ impl Session {
     /// `connect_targets`): a host already locked by another owner is left as-is
     /// ([`HostError::TargetLocked`] suppressed), and a failed autolock never
     /// drops an otherwise-good host.
+    ///
+    /// Each connected host is also checked for product drift against its
+    /// `refhosts.yml` row ([`verify_target_products`](Self::verify_target_products),
+    /// upstream `_verify_target_products`): mismatches are surfaced to the user,
+    /// recorded in the report's `product_warnings`, and WARN-logged, but never
+    /// drop the host. The refhosts inventory is built once for the batch; if it
+    /// is unavailable the check is silently skipped (upstream store `None`).
     async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) {
         let config = self.config.clone();
         // Snapshot the active report's PI-lock comment before the connect loop:
@@ -398,6 +405,16 @@ impl Session {
         // immediate abort (upstream `prompter=None`).
         let timeout_prompt = self.prompter.as_ref().map(Prompter::as_timeout_prompt);
         let prompter = self.prompter.clone();
+        // Build the refhosts inventory once for the batch (upstream's memoized
+        // `_get_refhosts_store`). `None` on any failure disables the drift check
+        // for every host — best-effort, never fatal. Built before the
+        // `targets_mut()` borrow so this await does not straddle it.
+        let store = Self::build_refhosts_store(&config).await;
+        // Drift results collected during the loop (a `base_mut()`/`self.display`
+        // borrow held across the connect `.await` would make the future
+        // non-`Send`): `Some(lines)` records drift, `None` clears any stale entry
+        // for a host that now matches / is absent. Applied after the loop.
+        let mut drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
         let targets = self.targets_mut();
         // Ensure the (possibly freshly-loaded) active group carries the prompter
         // so its serial-barrier Enter prompt fires; a group built by a later
@@ -421,9 +438,83 @@ impl Session {
             match target.connect().await {
                 Ok(()) => {
                     Self::autolock_target(&mut target, &lock_comment).await;
+                    drift.push((
+                        host.clone(),
+                        Self::verify_target_products(store.as_ref(), &target),
+                    ));
                     targets.add(target);
                 }
                 Err(e) => warn!(host = %host, "connect failed, skipping: {e}"),
+            }
+        }
+        // Surface + persist drift now that the `targets_mut()` borrow is released.
+        self.apply_product_warnings(drift);
+    }
+
+    /// Compares a freshly connected `target`'s detected products against its
+    /// `refhosts.yml` row, returning the per-host warning lines to record.
+    ///
+    /// Ports upstream `_verify_target_products`: looks the host up in `store`
+    /// ([`compare`] against its [`Host`](mtui_types::Product) row) and returns
+    /// `Some(lines)` when [`ProductDiff`](mtui_datasources::ProductDiff) reports
+    /// drift (base/arch/addon/dangling-symlink; the `qa` addon is always
+    /// ignored, handled inside `compare`). Returns `None` — meaning "no drift,
+    /// clear any stale entry" — when the store is unavailable, the host is absent
+    /// from `refhosts.yml`, or the products match. Best-effort: never fails a
+    /// connect; the host is kept regardless.
+    fn verify_target_products(store: Option<&Refhosts>, target: &Target) -> Option<Vec<String>> {
+        let store = store?;
+        let Some(meta) = store.host_by_name(target.hostname()) else {
+            tracing::debug!(
+                host = %target.hostname(),
+                "refhosts.yml has no entry; skipping product check"
+            );
+            return None;
+        };
+        let diff = compare(target.system(), meta);
+        if diff.ok() {
+            return None;
+        }
+        let lines = diff.warnings();
+        for line in &lines {
+            warn!(
+                host = %target.hostname(),
+                "products differ from refhosts.yml metadata: {line}"
+            );
+        }
+        Some(lines)
+    }
+
+    /// Applies collected product-drift results to the active report and surfaces
+    /// them to the user (upstream stores `product_warnings` and logs each line).
+    ///
+    /// `Some(lines)` records drift under the hostname and prints a yellow warning
+    /// block so the mismatch is visible while adding the host; `None` clears any
+    /// stale entry for a host that now matches or is absent from `refhosts.yml`.
+    fn apply_product_warnings(&mut self, drift: Vec<(String, Option<Vec<String>>)>) {
+        if drift.is_empty() {
+            return;
+        }
+        for (host, lines) in &drift {
+            if let Some(lines) = lines {
+                self.display.println(&self.display.yellow(&format!(
+                    "{host}: products differ from refhosts.yml metadata:"
+                )));
+                for line in lines {
+                    self.display
+                        .println(&self.display.yellow(&format!("  - {line}")));
+                }
+            }
+        }
+        let warnings = self.templates.active_mut().base_mut();
+        for (host, lines) in drift {
+            match lines {
+                Some(lines) => {
+                    warnings.product_warnings.insert(host, lines);
+                }
+                None => {
+                    warnings.product_warnings.remove(&host);
+                }
             }
         }
     }
@@ -518,6 +609,47 @@ impl Session {
         wanted
     }
 
+    /// Builds the refhosts inventory on demand from `config`, or `None` on any
+    /// resolver/resolve failure.
+    ///
+    /// The shared store-builder behind [`resolve_testplatform_hosts`] (host
+    /// selection) and [`verify_target_products`](Self::verify_target_products)
+    /// (post-connect product-drift check) — the same on-demand pattern
+    /// `list_refhosts`/`add_host` use, with no cached Session state. A `None`
+    /// result degrades both callers to a no-op (upstream `except
+    /// RefhostsResolveFailedError: return` / `_get_refhosts_store() is None`).
+    ///
+    /// Takes `&Config` (not `&Session`) so the caller's connect future stays
+    /// `Send` across this await.
+    async fn build_refhosts_store(config: &Config) -> Option<Refhosts> {
+        let factory = match RefhostsFactory::production(
+            config.refhosts_path.clone(),
+            VerifyPolicy::from_config(&config.ssl_verify),
+        ) {
+            Ok(f) => f,
+            Err(e) => {
+                warn!("refhosts resolver init failed: {e}");
+                return None;
+            }
+        };
+        match factory
+            .resolve(ResolveConfig {
+                refhosts_resolvers: &config.refhosts_resolvers,
+                refhosts_path: &config.refhosts_path,
+                refhosts_https_uri: &config.refhosts_https_uri,
+                refhosts_https_expiration: config.refhosts_https_expiration,
+                ssl_verify: &config.ssl_verify,
+            })
+            .await
+        {
+            Ok(s) => Some(s),
+            Err(e) => {
+                warn!("refhosts resolve failed: {e}");
+                None
+            }
+        }
+    }
+
     /// Resolves one candidate host per matching slot from the given
     /// testplatforms (the refhosts-from-testplatform half of autoconnect).
     ///
@@ -535,31 +667,8 @@ impl Session {
             return Vec::new();
         }
 
-        let factory = match RefhostsFactory::production(
-            config.refhosts_path.clone(),
-            VerifyPolicy::from_config(&config.ssl_verify),
-        ) {
-            Ok(f) => f,
-            Err(e) => {
-                warn!("autoconnect: refhosts resolver init failed: {e}");
-                return Vec::new();
-            }
-        };
-        let store = match factory
-            .resolve(ResolveConfig {
-                refhosts_resolvers: &config.refhosts_resolvers,
-                refhosts_path: &config.refhosts_path,
-                refhosts_https_uri: &config.refhosts_https_uri,
-                refhosts_https_expiration: config.refhosts_https_expiration,
-                ssl_verify: &config.ssl_verify,
-            })
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("autoconnect: refhosts resolve failed: {e}");
-                return Vec::new();
-            }
+        let Some(store) = Self::build_refhosts_store(config).await else {
+            return Vec::new();
         };
 
         let mut hosts: Vec<String> = Vec::new();
@@ -1001,5 +1110,141 @@ mod tests {
         );
         // Must not panic / propagate: the foreign lock is suppressed.
         Session::autolock_target(&mut t, "mtui pool SUSE:Maintenance:1:1 alice").await;
+    }
+
+    // --- product-drift verification (upstream `_verify_target_products`) -----
+
+    use mtui_types::system::{System, SystemProduct};
+    use mtui_types::{Host, Product};
+    use std::collections::BTreeSet;
+
+    /// A [`Target`] carrying a detected [`System`] (base product + addons).
+    fn mock_target_with_system(
+        host: &str,
+        base: SystemProduct,
+        addons: &[SystemProduct],
+    ) -> Target {
+        let mut t = mock_target(host);
+        let addons: BTreeSet<SystemProduct> = addons.iter().cloned().collect();
+        t.set_system(System::new(base, addons, false), false);
+        t
+    }
+
+    /// A single-row refhosts store: host `name`, sles `major.minor` on `arch`.
+    fn store_with_sles(name: &str, major: u64, minor: u64, arch: &str) -> Refhosts {
+        use mtui_types::version::{Version, VersionField};
+        Refhosts::from_hosts(vec![Host {
+            name: name.to_owned(),
+            arch: arch.to_owned(),
+            product: Product {
+                name: "sles".to_owned(),
+                version: Some(Version::new(major, Some(VersionField::Num(minor)))),
+            },
+            addons: Vec::new(),
+        }])
+    }
+
+    /// A host whose detected products match its `refhosts.yml` row yields no
+    /// warnings (`None` clears any stale entry).
+    #[test]
+    fn verify_target_products_none_on_match() {
+        let store = store_with_sles("host.example", 15, 5, "x86_64");
+        let t = mock_target_with_system(
+            "host.example",
+            SystemProduct::new("sles", "15.5", "x86_64"),
+            &[],
+        );
+        assert!(Session::verify_target_products(Some(&store), &t).is_none());
+    }
+
+    /// A host whose base product drifts from its row yields warning lines.
+    #[test]
+    fn verify_target_products_reports_base_drift() {
+        let store = store_with_sles("host.example", 15, 5, "x86_64");
+        let t = mock_target_with_system(
+            "host.example",
+            SystemProduct::new("sles", "15.4", "x86_64"),
+            &[],
+        );
+        let lines =
+            Session::verify_target_products(Some(&store), &t).expect("drift should be reported");
+        assert!(!lines.is_empty());
+        assert!(
+            lines.iter().any(|l| l.contains("base product mismatch")),
+            "expected a base-product mismatch line, got {lines:?}"
+        );
+    }
+
+    /// A host absent from `refhosts.yml` is skipped silently (`None`).
+    #[test]
+    fn verify_target_products_none_when_host_absent() {
+        let store = store_with_sles("other.example", 15, 5, "x86_64");
+        let t = mock_target_with_system(
+            "host.example",
+            SystemProduct::new("sles", "15.5", "x86_64"),
+            &[],
+        );
+        assert!(Session::verify_target_products(Some(&store), &t).is_none());
+    }
+
+    /// A `None` store (refhosts unavailable) disables the check entirely.
+    #[test]
+    fn verify_target_products_none_when_store_missing() {
+        let t = mock_target_with_system(
+            "host.example",
+            SystemProduct::new("sles", "15.4", "x86_64"),
+            &[],
+        );
+        assert!(Session::verify_target_products(None, &t).is_none());
+    }
+
+    /// The `qa` addon is always ignored: a host carrying only an extra `qa`
+    /// addon over its row is still a match (drift check inside `compare`).
+    #[test]
+    fn verify_target_products_ignores_qa_addon() {
+        let store = store_with_sles("host.example", 15, 5, "x86_64");
+        let t = mock_target_with_system(
+            "host.example",
+            SystemProduct::new("sles", "15.5", "x86_64"),
+            &[SystemProduct::new("qa", "15.5", "x86_64")],
+        );
+        assert!(
+            Session::verify_target_products(Some(&store), &t).is_none(),
+            "qa addon must not be treated as drift"
+        );
+    }
+
+    /// `apply_product_warnings` records drift under the hostname and clears a
+    /// stale entry for a host that now matches.
+    #[test]
+    fn apply_product_warnings_records_and_clears() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        // Pre-seed a stale entry that a later match should clear.
+        s.templates
+            .active_mut()
+            .base_mut()
+            .product_warnings
+            .insert("stale.example".to_owned(), vec!["old".to_owned()]);
+
+        s.apply_product_warnings(vec![
+            (
+                "drift.example".to_owned(),
+                Some(vec!["base product mismatch: x".to_owned()]),
+            ),
+            ("stale.example".to_owned(), None),
+        ]);
+
+        let base = s.templates.active().base();
+        assert_eq!(
+            base.product_warnings
+                .get("drift.example")
+                .map(Vec::as_slice),
+            Some(["base product mismatch: x".to_owned()].as_slice())
+        );
+        assert!(
+            !base.product_warnings.contains_key("stale.example"),
+            "a matching host must clear its stale product_warnings entry"
+        );
     }
 }
