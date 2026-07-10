@@ -15,7 +15,7 @@
 use mtui_config::Config;
 use mtui_datasources::http::VerifyPolicy;
 use mtui_datasources::refhost::{Attributes, RefhostsFactory, ResolveConfig};
-use mtui_hosts::{HostsGroup, Prompter, Target};
+use mtui_hosts::{HostError, HostsGroup, Prompter, Target};
 use mtui_testreport::{TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{ExecutionMode, TargetState, Workflow};
@@ -376,8 +376,21 @@ impl Session {
     /// unconnected, so [`Target::connect`] performs the live SSH connect; a
     /// caller that pre-builds connected targets (tests over a mock connection)
     /// sees `connect` short-circuit as a no-op.
+    ///
+    /// After a successful connect, a freshly added host is autolocked with the
+    /// active report's `lock_comment` when a PI assignment is in progress
+    /// (upstream `_autolock_new_target`, called from both `add_target` and
+    /// `connect_targets`): a host already locked by another owner is left as-is
+    /// ([`HostError::TargetLocked`] suppressed), and a failed autolock never
+    /// drops an otherwise-good host.
     async fn connect_and_add_hosts(&mut self, hosts: Vec<String>, rrid: &str) {
         let config = self.config.clone();
+        // Snapshot the active report's PI-lock comment before the connect loop:
+        // a `base()` borrow held across the connect `.await` would make this
+        // future non-`Send` (the `Command::call` bound), exactly the constraint
+        // the `config`/`timeout_prompt` snapshots below exist for. Empty when no
+        // PI assignment is active (upstream `lock_comment == ""`).
+        let lock_comment = self.templates.active().base().lock_comment.clone();
         // Snapshot the command-timeout prompt (a `Clone`-able closure) before the
         // connect loop: a `&Session`/`&Prompter` borrow held across the connect
         // `.await` would make this future non-`Send`, which `Command::call`
@@ -406,8 +419,34 @@ impl Session {
                 target.set_timeout_prompt(tp.clone());
             }
             match target.connect().await {
-                Ok(()) => targets.add(target),
+                Ok(()) => {
+                    Self::autolock_target(&mut target, &lock_comment).await;
+                    targets.add(target);
+                }
                 Err(e) => warn!(host = %host, "connect failed, skipping: {e}"),
+            }
+        }
+    }
+
+    /// Autolocks a freshly connected `target` with the PI `lock_comment`.
+    ///
+    /// Ports upstream `_autolock_new_target`: a no-op when `lock_comment` is empty
+    /// (no PI assignment active). A host already locked by another owner is left
+    /// as-is ([`HostError::TargetLocked`] suppressed, logged at debug, mirroring
+    /// `Target::unlock`); any other lock error is logged at `warn` but never
+    /// propagated, so a failed autolock never drops an otherwise-good host from
+    /// the batch (best-effort, matching upstream `suppress(TargetLockedError)`).
+    async fn autolock_target(target: &mut Target, lock_comment: &str) {
+        if lock_comment.is_empty() {
+            return;
+        }
+        match target.lock(lock_comment).await {
+            Ok(()) => {}
+            Err(HostError::TargetLocked(msg)) => {
+                tracing::debug!(host = %target.hostname(), %msg, "autolock: host locked by another owner, leaving as-is");
+            }
+            Err(e) => {
+                warn!(host = %target.hostname(), error = %e, "autolock failed, host still added");
             }
         }
     }
@@ -703,6 +742,7 @@ mod tests {
 
     // --- Sub-bead B: load_update + autoconnect host resolution -------------
 
+    use mtui_hosts::MockConnection;
     use mtui_testreport::{ObsReport, TestReport};
     use mtui_types::RequestReviewID;
 
@@ -904,5 +944,62 @@ mod tests {
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         s.add_testplatform_hosts().await;
         assert!(s.targets().is_empty());
+    }
+
+    /// Builds a mock-backed, already-connected [`Target`] — the test seam the
+    /// connect loop reaches once `Target::connect` short-circuits.
+    fn mock_target(host: &str) -> Target {
+        Target::with_connection(
+            host,
+            TargetState::Enabled,
+            ExecutionMode::Serial,
+            Box::new(MockConnection::new(host)),
+        )
+    }
+
+    /// `autolock_target` locks a freshly connected host with the PI comment when
+    /// a `lock_comment` is active (upstream `_autolock_new_target`).
+    #[tokio::test]
+    async fn autolock_target_locks_when_comment_set() {
+        let mut t = mock_target("refhost.example");
+        assert!(!t.is_locked().await.expect("is_locked before"));
+        Session::autolock_target(&mut t, "mtui pool SUSE:Maintenance:1:1 alice").await;
+        assert!(
+            t.is_locked().await.expect("is_locked after"),
+            "host should be locked after autolock with a non-empty comment"
+        );
+    }
+
+    /// With an empty `lock_comment` (no PI assignment active), `autolock_target`
+    /// is a no-op: the host is left unlocked.
+    #[tokio::test]
+    async fn autolock_target_noop_when_comment_empty() {
+        let mut t = mock_target("refhost.example");
+        Session::autolock_target(&mut t, "").await;
+        assert!(
+            !t.is_locked().await.expect("is_locked"),
+            "host must not be locked when no PI assignment is active"
+        );
+    }
+
+    /// A host already locked by another owner is left as-is: the foreign
+    /// [`HostError::TargetLocked`] is suppressed and `autolock_target` returns
+    /// without error (upstream `suppress(TargetLockedError)`).
+    #[tokio::test]
+    async fn autolock_target_suppresses_foreign_lock() {
+        // Pre-seed a fresh foreign lock file so the mock's lock read sees another
+        // owner (huge future pid, distinct user) and refuses to relock.
+        let conn = MockConnection::new("refhost.example").with_file(
+            "/var/lock/mtui.lock",
+            format!("{}:someone-else:2147483647", i64::MAX),
+        );
+        let mut t = Target::with_connection(
+            "refhost.example",
+            TargetState::Enabled,
+            ExecutionMode::Serial,
+            Box::new(conn),
+        );
+        // Must not panic / propagate: the foreign lock is suppressed.
+        Session::autolock_target(&mut t, "mtui pool SUSE:Maintenance:1:1 alice").await;
     }
 }
