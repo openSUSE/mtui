@@ -821,6 +821,22 @@ def test_add_history_writes_entry(mock_target):
     fh.close.assert_called_once()
 
 
+def test_add_history_writes_install_entry(mock_target):
+    """The exact shape perform_install sends must produce a written line.
+
+    The install/uninstall callers used to pass a NESTED list
+    (["install", ["nginx"]]); the ':'.join then raised TypeError, which
+    the old bare except swallowed -- so install/uninstall events were
+    silently never recorded, unlike update/downgrade.
+    """
+    mock_target.state = "enabled"
+    fh = MagicMock()
+    mock_target.connection.sftp_open.return_value = fh
+    mock_target.add_history(["install", "nginx curl"])
+    line = fh.write.call_args.args[0]
+    assert line.endswith(":install:nginx curl\n")
+
+
 def test_add_history_logs_when_open_fails(mock_target, caplog):
     mock_target.state = "enabled"
     mock_target.connection.sftp_open.side_effect = OSError("perm")
@@ -829,14 +845,20 @@ def test_add_history_logs_when_open_fails(mock_target, caplog):
     assert any("failed to open history file" in r.message for r in caplog.records)
 
 
-def test_add_history_swallows_write_failure(mock_target):
-    """Write/close failures are silently swallowed (current behaviour)."""
+def test_add_history_write_failure_warns_but_does_not_raise(mock_target, caplog):
+    """Write/close failures stay best-effort but are no longer silent.
+
+    The old bare ``except Exception: pass`` hid a real programming error
+    (nested comment list) for years; a warning keeps the operation alive
+    while making the next such bug visible.
+    """
     mock_target.state = "enabled"
     fh = MagicMock()
     fh.write.side_effect = OSError("write failed")
     mock_target.connection.sftp_open.return_value = fh
-    # Must not raise.
-    mock_target.add_history(["update", "msg"])
+    with caplog.at_level("WARNING", logger="mtui.target"):
+        mock_target.add_history(["update", "msg"])  # must not raise
+    assert any("failed to write history entry" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

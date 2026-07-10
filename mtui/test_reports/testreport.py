@@ -414,7 +414,10 @@ class TestReport(ABC):
             packages: The packages to install.
 
         """
-        targets.add_history(["install", packages])
+        # Flat strings only: add_history ":".joins the list, and a nested
+        # packages list made that join raise (swallowed), so install events
+        # were silently never recorded -- unlike update/downgrade.
+        targets.add_history(["install", " ".join(packages)])
 
         targets.perform_install(packages)
 
@@ -426,7 +429,7 @@ class TestReport(ABC):
             packages: The packages to uninstall.
 
         """
-        targets.add_history(["uninstall", packages])
+        targets.add_history(["uninstall", " ".join(packages)])
         targets.perform_uninstall(packages)
 
     def _autolock_new_target(self, target: Target) -> None:

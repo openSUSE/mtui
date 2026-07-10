@@ -283,6 +283,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   now behaves exactly like the no-update case: blank when the package is
   installed, `not installed` when it is not — and a not-installed package's
   empty version no longer renders as a literal `None` either.
+- `install` and `uninstall` events are recorded in the per-host history
+  again (`/var/log/mtui.log`, shown by `list_history`). The history writer
+  was handed a nested package list, the resulting `TypeError` was silently
+  swallowed, and no install/uninstall entry was ever written — unlike
+  `update`/`downgrade`, which recorded fine. The callers now pass flat
+  strings, and a failed history write logs a warning instead of hiding
+  the error (the write stays best-effort and never breaks the operation).
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

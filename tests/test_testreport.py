@@ -685,19 +685,25 @@ def test_perform_prepare_delegates_with_package_list(tmp_path: Path) -> None:
 
 
 def test_perform_install_records_history_and_delegates(tmp_path: Path) -> None:
+    """The history entry must be flat strings: Target.add_history ':'-joins
+    it, and a nested packages list made that join raise (swallowed), so
+    install events were silently never recorded."""
     r = _make(tmp_path)
     targets = MagicMock()
-    r.perform_install(targets, ["bash"])
-    targets.add_history.assert_called_once()
-    targets.perform_install.assert_called_once_with(["bash"])
+    r.perform_install(targets, ["bash", "curl"])
+    targets.add_history.assert_called_once_with(["install", "bash curl"])
+    # The joined line every Target would write parses/records cleanly.
+    assert ":".join(targets.add_history.call_args.args[0]) == "install:bash curl"
+    targets.perform_install.assert_called_once_with(["bash", "curl"])
 
 
 def test_perform_uninstall_records_history_and_delegates(tmp_path: Path) -> None:
     r = _make(tmp_path)
     targets = MagicMock()
-    r.perform_uninstall(targets, ["bash"])
-    targets.add_history.assert_called_once()
-    targets.perform_uninstall.assert_called_once_with(["bash"])
+    r.perform_uninstall(targets, ["bash", "curl"])
+    targets.add_history.assert_called_once_with(["uninstall", "bash curl"])
+    assert ":".join(targets.add_history.call_args.args[0]) == "uninstall:bash curl"
+    targets.perform_uninstall.assert_called_once_with(["bash", "curl"])
 
 
 def test_perform_downgrade_records_history_and_delegates(tmp_path: Path) -> None:
