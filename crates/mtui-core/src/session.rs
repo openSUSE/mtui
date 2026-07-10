@@ -568,9 +568,24 @@ impl Session {
     ///
     /// The `add_host`-with-`-t` path (upstream `add_target(hostname)` per host):
     /// each host is stamped with the active report's RRID and connected.
+    ///
+    /// A host already in the active group is warned about and skipped (upstream
+    /// `add_target`: `"already connected to <h>, skipping."` then early return),
+    /// matching the silent dedup the no-`-t` path already does in
+    /// [`add_testplatform_hosts`](Self::add_testplatform_hosts). The membership
+    /// snapshot is taken before any `.await` so the connect future stays `Send`.
     pub async fn add_named_hosts(&mut self, hosts: Vec<String>) {
+        let already = self.templates.active().base().targets.names();
+        let mut wanted = Vec::with_capacity(hosts.len());
+        for host in hosts {
+            if already.contains(&host) {
+                warn!(host = %host, "already connected to {host}, skipping");
+            } else {
+                wanted.push(host);
+            }
+        }
         let rrid = self.metadata().id();
-        self.connect_and_add_hosts(hosts, &rrid).await;
+        self.connect_and_add_hosts(wanted, &rrid).await;
     }
 
     /// Computes the deduplicated host list to autoconnect from plain inputs (the
@@ -1027,6 +1042,28 @@ mod tests {
         s.add_named_hosts(vec!["unreachable.invalid".to_owned()])
             .await;
         assert!(s.targets().is_empty());
+    }
+
+    /// A host already in the active group is skipped, not re-added: `add_named_hosts`
+    /// warns and drops it before the connect loop (upstream `add_target`'s
+    /// `"already connected … skipping"` early return). The group size is unchanged.
+    #[tokio::test]
+    async fn add_named_hosts_skips_already_connected() {
+        let mut s = Session::new(config_with_path_refhosts(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        // Pre-seed the active group with a connected mock target.
+        s.targets_mut().add(mock_target("refhost.example"));
+        assert_eq!(s.targets().len(), 1);
+        assert!(s.targets().contains("refhost.example"));
+
+        // Re-adding the same name must not connect a second target.
+        s.add_named_hosts(vec!["refhost.example".to_owned()]).await;
+
+        assert_eq!(
+            s.targets().len(),
+            1,
+            "already-connected host must not be re-added"
+        );
     }
 
     /// `add_testplatform_hosts` resolves the active report's testplatforms via
