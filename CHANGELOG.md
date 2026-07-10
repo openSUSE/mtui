@@ -318,6 +318,26 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   on hosts whose `/etc/os-release` single-quotes its values (permitted by the
   os-release spec). The parser's character classes matched a double quote or
   a literal pipe — `["|]` — instead of double-or-single quote.
+- Re-exporting a testreport no longer degrades the template. Manual and
+  kernel re-exports used to stack an empty duplicate `Links for update
+  logs:` header per run (the links were de-duplicated, the header was not) —
+  new links now go under the existing section, and empty duplicate headers
+  stacked by earlier exports are cleaned up so damaged templates converge.
+  The kernel re-export also duplicated the "All installation tests done in
+  openQA" notice on every run; it is now inserted only once and stacked
+  copies are reduced back to one.
+- An auto-workflow `export` on a template without a `Links for update logs:`
+  section no longer deletes everything from the install-tests section to the
+  end of the file (export footer and any appended notes included). The
+  fallback boundary looked for a line exactly equal to `## export MTUI:`,
+  which never matches the real footer; it now scans for the footer as a
+  substring.
+- Re-exporting a manual testreport now actually refreshes stale per-command
+  result lines (`… : SUCCEEDED`/`FAILED`/`INTERNAL ERROR`) for hosts in the
+  current session. The host-tracking pattern required two spaces after
+  `reference host:` (the template emits one) and compared the whole match
+  instead of the hostname, so the cleanup never removed anything; other
+  hosts' sections remain untouched.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

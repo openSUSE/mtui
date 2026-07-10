@@ -240,9 +240,26 @@ class ManualExport(BaseExport):
         c_host = None
         tmp_template = []
         for line in self.template:
-            match = re.search(r"reference host:\s (.*)$", line)
+            # Track which host section we are in so only the *current
+            # session's* hosts get their stale result lines refreshed. The
+            # old pattern required two spaces after the colon (the template
+            # emits one) and read group(0) (the whole match, never a bare
+            # hostname), so no stale line was ever removed. The host line
+            # itself is kept -- it is the section header.
+            match = re.search(r"reference host:\s+([^)\s]+)", line)
             if match:
-                c_host = match.group(0)
+                c_host = match.group(1)
+                tmp_template.append(line)
+                continue
+
+            if c_host is not None and line.startswith("comment:"):
+                # End of this host's block (same boundary convention as the
+                # verdict loop above). Without the reset the deletion window
+                # bled past the last host section and ate tester-authored
+                # lines like 'reproducer : FAILED before update' from the
+                # regression-tests notes.
+                tmp_template.append(line)
+                c_host = None
                 continue
 
             if (
