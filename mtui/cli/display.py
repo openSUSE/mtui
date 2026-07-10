@@ -85,14 +85,21 @@ class CommandPromptDisplay:
         self.println(f"history from {hostname} ({system}):")
         lines.reverse()
         for line in lines:
+            # Skip malformed lines instead of aborting the whole listing:
+            # /var/log/mtui.log is appended to over sftp by independent mtui
+            # sessions, so concurrent writes can tear a line (and the file
+            # may be hand-edited or rotated). Besides the too-few-fields
+            # IndexError, a torn line's leading field may not be a parseable
+            # timestamp -- float() then raises ValueError, and an absurd
+            # value can make fromtimestamp() raise OverflowError/OSError.
             try:
                 when = line.split(":")[0]
                 who = line.split(":")[1]
                 event = ":".join(line.split(":")[2:])
-            except IndexError:
+                time = datetime.fromtimestamp(float(when))
+            except (IndexError, ValueError, OverflowError, OSError):
                 continue
 
-            time = datetime.fromtimestamp(float(when))
             self.println(
                 "{}, {}: {}".format(time.strftime("%A, %d.%m.%Y %H:%M"), who, event)
             )

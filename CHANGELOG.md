@@ -272,6 +272,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   Gitea). A blank value is now treated exactly like an unset option: the
   verifying default applies and a warning explains how to disable
   verification explicitly (`ssl_verify = false`) if that was really meant.
+- `list_history` no longer aborts the whole listing when `/var/log/mtui.log`
+  contains a malformed line. The log is appended to over sftp by independent
+  mtui sessions, so concurrent writes can tear a line (and the file may be
+  hand-edited or rotated); a line whose first field is not a parseable
+  timestamp used to raise out of the command, dropping every remaining
+  host's history. Such lines are now skipped like the too-few-fields case.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer
