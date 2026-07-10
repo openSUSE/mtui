@@ -234,6 +234,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   keyword — including the keys of a `properties` map, which are parameter
   *names* — so such a parameter vanished from the schema while staying
   listed in `required`, making the tool impossible to call correctly.
+- Connecting reference hosts in several rounds (e.g. template autoconnect,
+  which resolves recorded hosts and testplatform hosts separately) no longer
+  drops the earlier rounds from the "Hosts" metadata line: the connected-
+  systems map is now merged across rounds instead of rebuilt from the latest
+  one, and pruned together with inactive hosts.
+- A host-setup failure right after a successful SSH connect (e.g. the
+  connection dropping while the remote lock file is written) no longer leaks
+  the open SSH session; the half-set-up connection is closed before the host
+  is reported as failed — on Ctrl-C too, and equally for `add_host -t`,
+  which had the same leak.
 - `openqa_jobs --failed` no longer lists still-running or scheduled jobs as
   failures. openQA reports an unfinished job's result as `none`, which the
   filter treated as "not passing" — during active testing an in-progress
