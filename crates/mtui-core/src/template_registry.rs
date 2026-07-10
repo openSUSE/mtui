@@ -22,6 +22,7 @@
 
 use indexmap::IndexMap;
 use mtui_config::Config;
+use mtui_hosts::get_arbiter;
 use mtui_testreport::{NullReport, TestReport};
 
 /// Holds the loaded templates and tracks the active one.
@@ -72,10 +73,21 @@ impl TemplateRegistry {
     /// replaces the stored report but leaves the active pointer alone. A report
     /// with an empty RRID is the failed-load sentinel ([`NullReport`]) and is
     /// silently ignored so it never becomes a phantom entry that breaks fan-out.
-    pub fn add(&mut self, report: Box<dyn TestReport + Send + Sync>) {
+    pub fn add(&mut self, mut report: Box<dyn TestReport + Send + Sync>) {
         let rrid = report.id();
         if rrid.is_empty() {
             return;
+        }
+        // Wire the process-global host arbiter and this report's `(registry_id,
+        // RRID)` owner key before it is stored, mirroring upstream
+        // `TemplateRegistry.add` (`report._arbiter = self.arbiter`, `_owner =
+        // (self.id, rrid)`). With both set, `refhosts_from_tp`/autoconnect take
+        // the pool-selection path (one host per slot) instead of connecting
+        // every candidate.
+        {
+            let base = report.base_mut();
+            base.arbiter = Some(get_arbiter());
+            base.owner = Some((self.id.clone(), rrid.clone()));
         }
         let is_new = !self.entries.contains_key(&rrid);
         self.entries.insert(rrid.clone(), report);

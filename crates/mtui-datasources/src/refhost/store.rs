@@ -11,12 +11,11 @@
 //! # Scope
 //! This is the *search* surface (`search`, `is_candidate_match`,
 //! `host_by_name`) plus the ad-hoc [`query`](Refhosts::query) filter and the
-//! [`slot_of`](Refhosts::slot_of) test-target key that `list_refhosts` (and the
-//! host-arbitration pool) consume. The resolver chain
+//! [`slot_of`](Refhosts::slot_of) test-target key plus the pool-claim helper
+//! [`search_pool_by_query`](Refhosts::search_pool_by_query) that `list_refhosts`
+//! and the host-arbitration pool consume. The resolver chain
 //! (`PathResolver`/`HttpsResolver`/`RefhostsFactory`) lives in
-//! [`super::resolvers`]. The remaining pool-claim helpers
-//! (`search_pool`/`search_pool_by_query`) from upstream `store.py` land with the
-//! pool arbiter in a later task.
+//! [`super::resolvers`].
 
 use std::path::Path;
 
@@ -252,6 +251,56 @@ impl Refhosts {
             host.arch.clone(),
             addons,
         )
+    }
+
+    /// Return the test-target [`Slot`] key derived from the **queried**
+    /// attributes (upstream `slot_for_query`).
+    ///
+    /// Unlike [`slot_of`](Self::slot_of) — which keys on every module a host
+    /// happens to have installed — this keys on what the testplatform actually
+    /// distinguishes: the base product + version it requests, the host's arch
+    /// (testplatforms fan out one query per arch), and only the addons the
+    /// testplatform explicitly asked for. Hosts that satisfy the same query are
+    /// interchangeable for that update and collapse to one slot, so the arbiter
+    /// draws a single host per `(product, version, arch, requested addons)`.
+    #[must_use]
+    pub fn slot_for_query(attribute: &Attributes, host: &Host) -> Slot {
+        let (name, ver_str) = match &attribute.product {
+            None => (String::new(), String::new()),
+            Some(product) => (
+                product.name.clone(),
+                version_display(product.version.as_ref()),
+            ),
+        };
+        let mut addons: Vec<String> = attribute.addons.iter().map(|a| a.name.clone()).collect();
+        addons.sort();
+        (name, ver_str, host.arch.clone(), addons)
+    }
+
+    /// Return pool candidates `(host, slot)` keyed on the query slot
+    /// (upstream `search_pool_by_query`).
+    ///
+    /// Each host matching any of `attributes` is returned once, tagged with the
+    /// [`slot_for_query`](Self::slot_for_query) of the **first** attribute it
+    /// matches — the testplatform's requested identity rather than the host's
+    /// full installed-module identity — so host-arbitration draws one host per
+    /// *requested* test-target slot.
+    #[must_use]
+    pub fn search_pool_by_query(&self, attributes: &[Attributes]) -> Vec<(Host, Slot)> {
+        let mut out: Vec<(Host, Slot)> = Vec::new();
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for host in &self.data {
+            if !seen.insert(host.name.as_str()) {
+                continue;
+            }
+            for attribute in attributes {
+                if Self::is_candidate_match(host, attribute) {
+                    out.push((host.clone(), Self::slot_for_query(attribute, host)));
+                    break;
+                }
+            }
+        }
+        out
     }
 
     /// A `base=<name>` query is satisfied when the host's base product matches
@@ -783,6 +832,91 @@ mod tests {
                 Vec::new(),
             )
         );
+    }
+
+    // --- slot_for_query / search_pool_by_query -----------------------------
+
+    #[test]
+    fn slot_for_query_keys_on_requested_not_installed_addons() {
+        // A host with an extra installed addon (sdk) queried by a testplatform
+        // that requests no addons: the query slot must ignore the sdk.
+        let h = host(
+            "h",
+            "x86_64",
+            sles(15, Some(VersionField::Num(5))),
+            vec![Addon {
+                name: "sdk".to_owned(),
+                version: None,
+            }],
+        );
+        let attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
+        assert_eq!(
+            Refhosts::slot_for_query(&attrs[0], &h),
+            (
+                "sles".to_owned(),
+                "15-5".to_owned(),
+                "x86_64".to_owned(),
+                Vec::new(),
+            )
+        );
+    }
+
+    #[test]
+    fn slot_for_query_uses_host_arch_and_requested_addons() {
+        let h = host("h", "aarch64", sles(15, Some(VersionField::Num(6))), vec![]);
+        let attrs = Attributes::from_testplatform(
+            "base=sles(major=15,minor=6);arch=[aarch64];addon=sdk(major=15,minor=6)",
+        );
+        let slot = Refhosts::slot_for_query(&attrs[0], &h);
+        assert_eq!(slot.2, "aarch64");
+        assert_eq!(slot.3, vec!["sdk".to_owned()]);
+    }
+
+    #[test]
+    fn search_pool_by_query_collapses_interchangeable_hosts_to_one_slot() {
+        // Both x86_64 SLES15-SP5 hosts (one with an sdk addon, one without)
+        // satisfy the same addon-less query and must share a single query slot,
+        // so the arbiter draws just one of them.
+        let attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
+        let pairs = pool().search_pool_by_query(&attrs);
+        let hosts: std::collections::BTreeSet<_> =
+            pairs.iter().map(|(h, _)| h.name.clone()).collect();
+        assert_eq!(
+            hosts,
+            ["host-default-x86", "host-nbg-x86"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        );
+        let slots: std::collections::BTreeSet<_> = pairs.iter().map(|(_, s)| s.clone()).collect();
+        assert_eq!(slots.len(), 1, "interchangeable hosts must share one slot");
+    }
+
+    #[test]
+    fn search_pool_by_query_distinct_arches_are_distinct_slots() {
+        // x86_64 and ppc64le SLES15-SP5 hosts land in different slots.
+        let attrs =
+            Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64,ppc64le]");
+        let pairs = pool().search_pool_by_query(&attrs);
+        let slots: std::collections::BTreeSet<_> = pairs.iter().map(|(_, s)| s.clone()).collect();
+        // x86_64 slot (2 interchangeable hosts) + ppc64le slot = 2 slots.
+        assert_eq!(slots.len(), 2);
+    }
+
+    #[test]
+    fn search_pool_by_query_dedups_host_across_attributes() {
+        // A host matching two overlapping attributes appears once (upstream's
+        // `seen` set), tagged with the first attribute it matches.
+        let mut attrs = Attributes::from_testplatform("base=sles(major=15,minor=5);arch=[x86_64]");
+        // A second, equivalent query the same hosts also satisfy.
+        attrs.extend(Attributes::from_testplatform(
+            "base=sles(major=15,minor=5);arch=[x86_64]",
+        ));
+        assert_eq!(attrs.len(), 2, "test needs two overlapping attributes");
+        let pairs = pool().search_pool_by_query(&attrs);
+        let names: Vec<_> = pairs.iter().map(|(h, _)| h.name.clone()).collect();
+        let unique: std::collections::HashSet<_> = names.iter().cloned().collect();
+        assert_eq!(names.len(), unique.len(), "no host appears twice");
     }
 
     // --- name_glob ---------------------------------------------------------

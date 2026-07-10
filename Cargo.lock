@@ -2111,6 +2111,7 @@ dependencies = [
  "mtui-testreport",
  "mtui-types",
  "owo-colors",
+ "rand",
  "regex",
  "serde_json",
  "shlex",

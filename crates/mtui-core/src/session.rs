@@ -15,7 +15,7 @@
 use mtui_config::Config;
 use mtui_datasources::http::VerifyPolicy;
 use mtui_datasources::refhost::{Attributes, Refhosts, RefhostsFactory, ResolveConfig, compare};
-use mtui_hosts::{HostError, HostsGroup, Prompter, Target};
+use mtui_hosts::{HostArbiter, HostError, HostsGroup, Owner, Prompter, Target};
 use mtui_testreport::{TestReport, UpdateKind, make_testreport};
 use mtui_types::UpdateID;
 use mtui_types::enums::{ExecutionMode, TargetState, Workflow};
@@ -78,6 +78,33 @@ pub struct Session {
     /// `None`, a command timeout aborts immediately and serial hosts run
     /// back-to-back.
     prompter: Option<Prompter>,
+    /// Per-slot candidate shuffle (upstream `random.shuffle`), so pool selection
+    /// spreads load across interchangeable refhosts instead of always taking the
+    /// first in `refhosts.yml` order. Defaults to a real random shuffle; tests
+    /// override it with the identity ([`set_shuffle`](Self::set_shuffle)) for
+    /// deterministic assertions.
+    shuffle: ShuffleFn,
+}
+
+/// A candidate-order shuffle seam (upstream `random.shuffle`). Mutates the slot's
+/// candidate list in place before the arbiter picks one.
+pub type ShuffleFn = fn(&mut [String]);
+
+/// The default [`ShuffleFn`]: a real random shuffle (upstream `random.shuffle`).
+fn random_shuffle(candidates: &mut [String]) {
+    use rand::seq::SliceRandom;
+    candidates.shuffle(&mut rand::rng());
+}
+
+/// Render a refhosts [`Slot`](mtui_datasources::refhost::Slot) tuple as a stable
+/// string key for [`TestReportBase::slot_candidates`]
+/// (`product|version|arch|addon,addon`).
+///
+/// The tuple already sorts its addons, so this is a deterministic 1:1 encoding
+/// used only as the map key that groups a slot's candidates for backup fallback.
+fn slot_key(slot: &mtui_datasources::refhost::Slot) -> String {
+    let (product, version, arch, addons) = slot;
+    format!("{product}|{version}|{arch}|{}", addons.join(","))
 }
 
 /// The log levels `set_log_level` accepts (upstream `info`/`warning`/`error`/
@@ -143,6 +170,7 @@ impl Session {
             log_level_sink: None,
             notify_sink: None,
             prompter: None,
+            shuffle: random_shuffle,
         }
     }
 
@@ -159,7 +187,14 @@ impl Session {
             log_level_sink: None,
             notify_sink: None,
             prompter: None,
+            shuffle: random_shuffle,
         }
+    }
+
+    /// Overrides the per-slot candidate shuffle (test seam). Passing
+    /// `|_| {}` (identity) makes pool selection deterministic.
+    pub fn set_shuffle(&mut self, shuffle: ShuffleFn) {
+        self.shuffle = shuffle;
     }
 
     /// The active report (upstream `prompt.metadata`). Never `None` — the
@@ -352,15 +387,30 @@ impl Session {
         // borrow held across the await would make this future non-`Send`, which
         // the `Command::call` trait requires).
         let config = self.config.clone();
-        let (ref_hosts, already, testplatforms) = {
+        let shuffle = self.shuffle;
+        let (mut ref_hosts, already, testplatforms, arbiter, owner) = {
             let base = self.templates.active().base();
             (
                 base.hostnames.iter().cloned().collect::<Vec<_>>(),
                 base.targets.names(),
                 base.testplatforms.clone(),
+                base.arbiter,
+                base.owner.clone(),
             )
         };
-        let wanted = Self::autoconnect_hosts(&config, ref_hosts, already, testplatforms).await;
+        // Deterministic ref-host order (`hostnames` is a HashSet).
+        ref_hosts.sort();
+        ref_hosts.dedup();
+
+        // Testplatform hosts go through pool selection (one host per requested
+        // slot) when the arbiter + owner are wired (upstream
+        // `_pool_selection_active`); this is the composition-root default.
+        let wanted = self
+            .resolve_and_record_pool(&config, ref_hosts, testplatforms, arbiter, owner, shuffle)
+            .await
+            .into_iter()
+            .filter(|h| !already.contains(h))
+            .collect();
 
         self.connect_and_add_hosts(wanted, rrid).await;
     }
@@ -429,57 +479,34 @@ impl Session {
         // handshake, not the sum of all of them. The futures share `&config` /
         // `&store` / `&package_meta` (all plain data), so no per-host clone of
         // those is needed; each produces its own owned `Target` + drift entry.
+        // Snapshot the pool claims so each host knows whether to take the remote
+        // pool lock (upstream `host in self._pool_claims`) vs. the normal
+        // autolock. Empty on the legacy `add_host --target` path.
+        let pool_claims = self.templates.active().base().pool_claims.clone();
         let store_ref = store.as_ref();
         let package_meta = &package_meta;
         let timeout_prompt = &timeout_prompt;
         let lock_comment = &lock_comment;
-        let config = &config;
-        let connect_futs = hosts.into_iter().map(|host| {
-            async move {
-                let mut target = Target::new(
-                    config,
-                    host.clone(),
-                    TargetState::Enabled,
-                    ExecutionMode::Parallel,
-                );
-                target.set_rrid(rrid.to_owned());
-                // Wire the interactive command-timeout prompt before connecting
-                // so `Target::connect` applies it to the transport (REPL only).
-                if let Some(tp) = timeout_prompt.as_ref() {
-                    target.set_timeout_prompt(tp.clone());
-                }
-                match target.connect().await {
-                    Ok(()) => {
-                        Self::autolock_target(&mut target, lock_comment).await;
-                        // Seed the host's tracked packages with their metadata
-                        // `required` versions (upstream `_parse_packages`),
-                        // keyed by the just-parsed base product version, then
-                        // query current versions so `list_packages` /
-                        // `package_check` / `downgrade` all see a populated
-                        // list. `connect()` already parsed the system, so
-                        // `get_base().version` is authoritative here.
-                        let base_version = target.system().get_base().version.clone();
-                        let seeded = mtui_testreport::testreport::packages_for_map(
-                            package_meta,
-                            &base_version,
-                        );
-                        if !seeded.is_empty() {
-                            target.set_packages(seeded);
-                            target.query_versions().await;
-                        }
-                        let drift = Self::verify_target_products(store_ref, &target);
-                        Some((target, (host, drift)))
-                    }
-                    Err(e) => {
-                        warn!(host = %host, "connect failed, skipping: {e}");
-                        None
-                    }
-                }
-            }
+        let config_ref = &config;
+        let pool_claims_ref = &pool_claims;
+        let connect_futs = hosts.iter().map(|host| {
+            Self::connect_one(
+                config_ref,
+                host.clone(),
+                rrid,
+                timeout_prompt,
+                lock_comment,
+                package_meta,
+                store_ref,
+                pool_claims_ref.contains(host),
+            )
         });
         let connected = futures::future::join_all(connect_futs).await;
 
         let mut drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
+        // Track which hosts connected so the pool-backup step (below) can tell
+        // which slots still need a live host.
+        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
         let targets = self.targets_mut();
         // Ensure the (possibly freshly-loaded) active group carries the prompter
         // so its serial-barrier Enter prompt fires; a group built by a later
@@ -490,11 +517,216 @@ impl Session {
         // Fold the successful connects into the group (sorted-keyed BTreeMap, so
         // the concurrent completion order is irrelevant) and collect drift.
         for (target, drift_entry) in connected.into_iter().flatten() {
+            live.insert(target.hostname().to_owned());
             targets.add(target);
             drift.push(drift_entry);
         }
+
+        // Backup-refhost fallback (upstream `_connect_pool_backups`): for any
+        // pool slot whose chosen host failed to connect, sequentially try the
+        // remaining free siblings until one connects or the slot is exhausted.
+        let backup_drift = self
+            .connect_pool_backups(&config, rrid, &hosts, &live, timeout_prompt.clone())
+            .await;
+        drift.extend(backup_drift);
+
         // Surface + persist drift now that the `targets_mut()` borrow is released.
         self.apply_product_warnings(drift);
+    }
+
+    /// Connects a single host, autolocks + package-seeds + drift-verifies it, and
+    /// returns the live [`Target`] plus its drift entry, or `None` on failure.
+    ///
+    /// Extracted from [`connect_and_add_hosts`](Self::connect_and_add_hosts) so
+    /// both the concurrent initial batch and the sequential backup-refhost
+    /// fallback ([`connect_pool_backups`](Self::connect_pool_backups)) share one
+    /// connect path. All inputs are borrowed/owned plain data so the returned
+    /// future stays `Send` (the `Command::call` bound).
+    #[allow(clippy::too_many_arguments)]
+    async fn connect_one(
+        config: &Config,
+        host: String,
+        rrid: &str,
+        timeout_prompt: &Option<mtui_hosts::TimeoutPrompt>,
+        lock_comment: &str,
+        package_meta: &std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+        store: Option<&Refhosts>,
+        is_pool_claim: bool,
+    ) -> Option<(Target, (String, Option<Vec<String>>))> {
+        let mut target = Target::new(
+            config,
+            host.clone(),
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+        );
+        target.set_rrid(rrid.to_owned());
+        // Wire the interactive command-timeout prompt before connecting
+        // so `Target::connect` applies it to the transport (REPL only).
+        if let Some(tp) = timeout_prompt.as_ref() {
+            target.set_timeout_prompt(tp.clone());
+        }
+        match target.connect().await {
+            Ok(()) => {
+                if is_pool_claim {
+                    // Take the remote pool lock (upstream `try_claim` in
+                    // `connect_target`): the `mtui pool <RRID> [<RRID>]` stamp.
+                    // Losing the remote race means another process holds this
+                    // host — drop it so a sibling in the slot can be tried (the
+                    // in-process claim is released by `connect_pool_backups`).
+                    let comment = format!("mtui pool {rrid} [{rrid}]");
+                    match target.pool_claim(&comment).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            warn!(host = %host, "claimed in-process but busy remotely; skipping");
+                            return None;
+                        }
+                        Err(e) => {
+                            warn!(host = %host, error = %e, "pool claim failed remotely; skipping");
+                            return None;
+                        }
+                    }
+                } else {
+                    Self::autolock_target(&mut target, lock_comment).await;
+                }
+                // Seed the host's tracked packages with their metadata
+                // `required` versions (upstream `_parse_packages`), keyed by the
+                // just-parsed base product version, then query current versions
+                // so `list_packages` / `package_check` / `downgrade` all see a
+                // populated list. `connect()` already parsed the system, so
+                // `get_base().version` is authoritative here.
+                let base_version = target.system().get_base().version.clone();
+                let seeded =
+                    mtui_testreport::testreport::packages_for_map(package_meta, &base_version);
+                if !seeded.is_empty() {
+                    target.set_packages(seeded);
+                    target.query_versions().await;
+                }
+                let drift = Self::verify_target_products(store, &target);
+                Some((target, (host, drift)))
+            }
+            Err(e) => {
+                warn!(host = %host, "connect failed, skipping: {e}");
+                None
+            }
+        }
+    }
+
+    /// Retries failed pool slots against their remaining free candidates
+    /// (upstream `_connect_pool_backups`, RFC §5.7 backup-refhost).
+    ///
+    /// For each slot in the active report's `slot_candidates` whose chosen host
+    /// is not among the just-connected `live` hosts: drop the dead claim(s),
+    /// then sequentially `acquire_any` the next free sibling and connect it,
+    /// until one succeeds or the slot's candidates are exhausted. Any host that
+    /// connects is added to the active group and its drift entry returned.
+    ///
+    /// A no-op when pool selection is inactive (`arbiter`/`owner` unset) or no
+    /// slots are recorded. Best-effort: connect failures release the in-process
+    /// claim and move to the next sibling.
+    async fn connect_pool_backups(
+        &mut self,
+        config: &Config,
+        rrid: &str,
+        attempted_initial: &[String],
+        live: &std::collections::HashSet<String>,
+        timeout_prompt: Option<mtui_hosts::TimeoutPrompt>,
+    ) -> Vec<(String, Option<Vec<String>>)> {
+        // Snapshot pool state + selection identity before any await.
+        let (arbiter, owner, slot_candidates, lock_comment, package_meta) = {
+            let base = self.templates.active().base();
+            (
+                base.arbiter,
+                base.owner.clone(),
+                base.slot_candidates.clone(),
+                base.lock_comment.clone(),
+                base.packages.clone(),
+            )
+        };
+        let (Some(arbiter), Some(owner)) = (arbiter, owner) else {
+            return Vec::new();
+        };
+        if slot_candidates.is_empty() {
+            return Vec::new();
+        }
+        let store = Self::build_refhosts_store(config).await;
+
+        let wait = i64::try_from(config.lock_wait).unwrap_or(i64::MAX);
+        let poll = i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX);
+
+        let mut attempted: std::collections::HashSet<String> =
+            attempted_initial.iter().cloned().collect();
+        let mut new_drift: Vec<(String, Option<Vec<String>>)> = Vec::new();
+
+        for (slot, candidates) in slot_candidates {
+            // Slot already has a live connection? Nothing to do.
+            if candidates.iter().any(|c| live.contains(c)) {
+                continue;
+            }
+            // Drop dead primary claim(s) so a sibling can be tried and the
+            // exhausted-pool wait reflects real availability.
+            {
+                let base = self.templates.active_mut().base_mut();
+                for c in &candidates {
+                    if base.pool_claims.contains(c) && !live.contains(c) {
+                        base.pool_claims.remove(c);
+                        arbiter.release(c, &owner);
+                    }
+                }
+            }
+
+            let mut remaining: Vec<String> = candidates
+                .iter()
+                .filter(|c| !attempted.contains(*c))
+                .cloned()
+                .collect();
+            let mut connected = false;
+            while !remaining.is_empty() {
+                let Some(chosen) = arbiter.acquire_any(&remaining, &owner, wait, poll).await else {
+                    break;
+                };
+                attempted.insert(chosen.clone());
+                remaining.retain(|c| c != &chosen);
+                self.templates
+                    .active_mut()
+                    .base_mut()
+                    .pool_claims
+                    .insert(chosen.clone());
+                info!(host = %chosen, slot = %slot, "trying backup refhost for slot");
+                match Self::connect_one(
+                    config,
+                    chosen.clone(),
+                    rrid,
+                    &timeout_prompt,
+                    &lock_comment,
+                    &package_meta,
+                    store.as_ref(),
+                    true, // backup hosts are always pool claims
+                )
+                .await
+                {
+                    Some((target, drift_entry)) => {
+                        self.targets_mut().add(target);
+                        new_drift.push(drift_entry);
+                        connected = true;
+                        break;
+                    }
+                    None => {
+                        // Release the claim so the next candidate is free to try.
+                        let base = self.templates.active_mut().base_mut();
+                        base.pool_claims.remove(&chosen);
+                        arbiter.release(&chosen, &owner);
+                    }
+                }
+            }
+            if !connected {
+                warn!(
+                    slot = %slot,
+                    candidates = candidates.len(),
+                    "no connectable pool host for slot (all candidates tried)"
+                );
+            }
+        }
+        new_drift
     }
 
     /// Compares a freshly connected `target`'s detected products against its
@@ -597,11 +829,23 @@ impl Session {
     /// deduplicated against the hosts already in the group, then connected.
     pub async fn add_testplatform_hosts(&mut self) {
         let config = self.config.clone();
-        let (already, testplatforms) = {
+        let shuffle = self.shuffle;
+        let (already, testplatforms, arbiter, owner) = {
             let base = self.templates.active().base();
-            (base.targets.names(), base.testplatforms.clone())
+            (
+                base.targets.names(),
+                base.testplatforms.clone(),
+                base.arbiter,
+                base.owner.clone(),
+            )
         };
-        let mut wanted = Self::resolve_testplatform_hosts(&config, &testplatforms).await;
+        // Same pool-selection path as autoconnect: one host per requested slot
+        // (arbiter chosen) when wired, else the legacy connect-every-candidate
+        // path. `ref_hosts` is empty here — `add_host` (no `-t`) draws purely
+        // from the testplatforms.
+        let mut wanted = self
+            .resolve_and_record_pool(&config, Vec::new(), testplatforms, arbiter, owner, shuffle)
+            .await;
         wanted.retain(|h| !already.contains(h));
         wanted.sort();
         wanted.dedup();
@@ -632,42 +876,6 @@ impl Session {
         }
         let rrid = self.metadata().id();
         self.connect_and_add_hosts(wanted, &rrid).await;
-    }
-
-    /// Computes the deduplicated host list to autoconnect from plain inputs (the
-    /// offline, unit-tested half of [`autoconnect_active`](Self::autoconnect_active)).
-    ///
-    /// Combines `ref_hosts` (the template's parsed `reference host:` names) with
-    /// one candidate per matching slot resolved from each testplatform
-    /// ([`resolve_testplatform_hosts`](Self::resolve_testplatform_hosts)), drops
-    /// hosts in `already` (connected in the active group), and dedups — the exact
-    /// set [`autoconnect_active`](Self::autoconnect_active) then connects.
-    ///
-    /// A **static** async fn (owned/borrowed plain data, no `&Session`) so the
-    /// caller's connect future stays `Send` — `Session` is not `Sync`, so a
-    /// borrow across the resolver await would violate the `Command::call` bound.
-    async fn autoconnect_hosts(
-        config: &Config,
-        ref_hosts: Vec<String>,
-        already: Vec<String>,
-        testplatforms: Vec<String>,
-    ) -> Vec<String> {
-        let mut wanted = ref_hosts;
-        // Deterministic order so the connect sequence (and tests) are stable;
-        // `hostnames` is a HashSet with no inherent order.
-        wanted.sort();
-        wanted.dedup();
-
-        for host in Self::resolve_testplatform_hosts(config, &testplatforms).await {
-            if !wanted.contains(&host) {
-                wanted.push(host);
-            }
-        }
-
-        // Skip hosts already in the active group (upstream connect is a no-op for
-        // already-connected targets).
-        wanted.retain(|h| !already.contains(h));
-        wanted
     }
 
     /// Builds the refhosts inventory on demand from `config`, or `None` on any
@@ -746,6 +954,144 @@ impl Session {
             }
         }
         hosts
+    }
+
+    /// Pick one distinct free host per test-target slot via the arbiter
+    /// (upstream `_pool_select_from_tp`, run per testplatform).
+    ///
+    /// For each testplatform: [`search_pool_by_query`](Refhosts::search_pool_by_query)
+    /// groups candidates by their *requested* slot (product+version+arch+requested
+    /// addons), so hosts interchangeable for the update collapse to one slot. Each
+    /// slot's candidates are shuffled (via the [`shuffle`](Self::set_shuffle)
+    /// seam, upstream `random.shuffle`) and recorded so a failed connect can fall
+    /// back to a sibling; a slot this owner already holds a host for (across
+    /// testplatforms) is skipped; otherwise one free host is claimed through the
+    /// arbiter (waiting up to `[lock] wait` seconds when all candidates are busy).
+    ///
+    /// Returns `(chosen_hosts, slot_candidates)`: the claimed hosts (this batch's
+    /// `pool_claims`) and the per-slot ordered candidate lists (keyed by the slot
+    /// rendered as a stable string, matching [`TestReportBase::slot_candidates`]).
+    /// The caller writes both onto the active report before connecting.
+    ///
+    /// Static (owned/borrowed plain data, `&'static` arbiter) so the caller's
+    /// connect future stays `Send`.
+    async fn pool_select(
+        store: &Refhosts,
+        testplatforms: &[String],
+        arbiter: &'static HostArbiter,
+        owner: &Owner,
+        wait: i64,
+        poll: i64,
+        shuffle: ShuffleFn,
+    ) -> (Vec<String>, std::collections::HashMap<String, Vec<String>>) {
+        use std::collections::HashMap;
+        let mut chosen: Vec<String> = Vec::new();
+        let mut slot_candidates: HashMap<String, Vec<String>> = HashMap::new();
+
+        for tp in testplatforms {
+            let attrs = Attributes::from_testplatform(tp);
+            let pairs = store.search_pool_by_query(&attrs);
+            if pairs.is_empty() {
+                info!("autoconnect: nothing found for testplatform {tp:?}");
+                continue;
+            }
+            // Group candidate host names by slot (preserving first-seen slot
+            // order for stable iteration).
+            let mut by_slot: Vec<(String, Vec<String>)> = Vec::new();
+            for (host, slot) in pairs {
+                let key = slot_key(&slot);
+                match by_slot.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, v)) => v.push(host.name),
+                    None => by_slot.push((key, vec![host.name])),
+                }
+            }
+
+            for (slot, mut candidates) in by_slot {
+                // Spread load across interchangeable hosts (upstream shuffle),
+                // then remember the order for backup-refhost fallback.
+                shuffle(&mut candidates);
+                slot_candidates.insert(slot.clone(), candidates.clone());
+
+                // Skip slots we already hold a host for (across testplatforms).
+                if candidates
+                    .iter()
+                    .any(|c| arbiter.owner_of(c).as_ref() == Some(owner))
+                {
+                    continue;
+                }
+                match arbiter.acquire_any(&candidates, owner, wait, poll).await {
+                    Some(host) => chosen.push(host),
+                    None => warn!(
+                        slot = %slot,
+                        candidates = candidates.len(),
+                        "no free pool host for slot (all candidates busy)"
+                    ),
+                }
+            }
+        }
+        (chosen, slot_candidates)
+    }
+
+    /// Combines `ref_hosts` with pool-selected testplatform hosts, records the
+    /// pool claims + slot candidates on the active report, and returns the
+    /// deduplicated host list to connect.
+    ///
+    /// The shared selection step behind [`autoconnect_active`](Self::autoconnect_active)
+    /// and [`add_testplatform_hosts`](Self::add_testplatform_hosts). When the
+    /// arbiter + owner are wired (`_pool_selection_active`), each testplatform
+    /// contributes one arbiter-chosen host per requested slot (via
+    /// [`pool_select`](Self::pool_select)) and the chosen hosts are recorded as
+    /// `pool_claims` so [`connect_and_add_hosts`](Self::connect_and_add_hosts)
+    /// connects only them (with sibling backup fallback). Without the arbiter it
+    /// degrades to the legacy `search()` path (connect every candidate).
+    async fn resolve_and_record_pool(
+        &mut self,
+        config: &Config,
+        ref_hosts: Vec<String>,
+        testplatforms: Vec<String>,
+        arbiter: Option<&'static HostArbiter>,
+        owner: Option<Owner>,
+        shuffle: ShuffleFn,
+    ) -> Vec<String> {
+        let mut wanted = ref_hosts;
+
+        let tp_hosts = match (arbiter, owner) {
+            // Pool-selection path (upstream `_pool_select_from_tp`).
+            (Some(arbiter), Some(owner)) if !testplatforms.is_empty() => {
+                if let Some(store) = Self::build_refhosts_store(config).await {
+                    let (chosen, slot_candidates) = Self::pool_select(
+                        &store,
+                        &testplatforms,
+                        arbiter,
+                        &owner,
+                        i64::try_from(config.lock_wait).unwrap_or(i64::MAX),
+                        i64::try_from(config.lock_wait_poll).unwrap_or(i64::MAX),
+                        shuffle,
+                    )
+                    .await;
+                    // Record claims + candidates on the active report so
+                    // connect_and_add_hosts connects only the claims (and can
+                    // fall back to siblings) and quit can release them.
+                    let base = self.templates.active_mut().base_mut();
+                    for host in &chosen {
+                        base.pool_claims.insert(host.clone());
+                    }
+                    base.slot_candidates.extend(slot_candidates);
+                    chosen
+                } else {
+                    Vec::new()
+                }
+            }
+            // Legacy path (no arbiter/owner): connect every search() match.
+            _ => Self::resolve_testplatform_hosts(config, &testplatforms).await,
+        };
+
+        for host in tp_hosts {
+            if !wanted.contains(&host) {
+                wanted.push(host);
+            }
+        }
+        wanted
     }
 
     /// Requests that the interactive REPL loop exit after the current dispatch.
@@ -948,9 +1294,10 @@ mod tests {
         session.templates.set_active(rrid);
     }
 
-    /// Snapshots the active report's autoconnect inputs and runs the static
-    /// [`Session::autoconnect_hosts`] resolver — mirrors what
-    /// [`Session::autoconnect_active`] does synchronously before connecting.
+    /// Reconstructs the legacy (non-pool) autoconnect host set from the active
+    /// report: reference hosts merged with the `search()`-resolved testplatform
+    /// hosts, minus the already-connected ones — the fallback path
+    /// [`Session::resolve_and_record_pool`] takes when the arbiter is unwired.
     async fn autoconnect_hosts_of(s: &Session) -> Vec<String> {
         let config = s.config.clone();
         let (ref_hosts, already, testplatforms) = {
@@ -961,7 +1308,16 @@ mod tests {
                 base.testplatforms.clone(),
             )
         };
-        Session::autoconnect_hosts(&config, ref_hosts, already, testplatforms).await
+        let mut wanted = ref_hosts;
+        wanted.sort();
+        wanted.dedup();
+        for host in Session::resolve_testplatform_hosts(&config, &testplatforms).await {
+            if !wanted.contains(&host) {
+                wanted.push(host);
+            }
+        }
+        wanted.retain(|h| !already.contains(h));
+        wanted
     }
 
     /// `autoconnect_hosts` combines the template's reference hosts with the
@@ -1328,6 +1684,132 @@ mod tests {
         assert!(
             !base.product_warnings.contains_key("stale.example"),
             "a matching host must clear its stale product_warnings entry"
+        );
+    }
+
+    // --- pool selection (host over-selection fix, mtui-rs-4eq) --------------
+
+    use mtui_types::version::{Version, VersionField};
+
+    /// A refhosts store with several `sles major.minor arch` hosts (no addons).
+    fn multi_host_store(rows: &[(&str, u64, u64, &str)]) -> Refhosts {
+        Refhosts::from_hosts(
+            rows.iter()
+                .map(|(name, major, minor, arch)| Host {
+                    name: (*name).to_owned(),
+                    arch: (*arch).to_owned(),
+                    product: Product {
+                        name: "sles".to_owned(),
+                        version: Some(Version::new(*major, Some(VersionField::Num(*minor)))),
+                    },
+                    addons: Vec::new(),
+                })
+                .collect(),
+        )
+    }
+
+    /// A leaked, empty process-local arbiter for tests (gives the `&'static`
+    /// the pool API expects without touching the shared global singleton).
+    fn test_arbiter() -> &'static HostArbiter {
+        Box::leak(Box::new(HostArbiter::new()))
+    }
+
+    /// Identity shuffle so pool selection is deterministic in tests.
+    fn no_shuffle(_c: &mut [String]) {}
+
+    /// `pool_select` collapses interchangeable hosts (same requested slot) to a
+    /// single arbiter-chosen host, and keeps distinct arches as distinct slots.
+    #[tokio::test]
+    async fn pool_select_one_host_per_requested_slot() {
+        // Two x86_64 SP5 hosts (interchangeable) + one ppc64le SP5 host.
+        let store = multi_host_store(&[
+            ("x86-a", 15, 5, "x86_64"),
+            ("x86-b", 15, 5, "x86_64"),
+            ("ppc-a", 15, 5, "ppc64le"),
+        ]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64,ppc64le]".to_owned()];
+
+        let (chosen, slot_candidates) =
+            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+
+        // One host per slot: the two x86 hosts collapse to one, ppc adds one.
+        assert_eq!(
+            chosen.len(),
+            2,
+            "expected one host per slot, got {chosen:?}"
+        );
+        assert_eq!(slot_candidates.len(), 2, "two distinct slots recorded");
+        // The x86 slot recorded both interchangeable candidates for backup.
+        let x86_slot = slot_candidates
+            .values()
+            .find(|c| c.contains(&"x86-a".to_owned()) || c.contains(&"x86-b".to_owned()))
+            .expect("x86 slot present");
+        assert_eq!(
+            x86_slot.len(),
+            2,
+            "both x86 hosts kept as backup candidates"
+        );
+        // Deterministic shuffle → first candidate chosen per slot.
+        assert!(chosen.contains(&"x86-a".to_owned()));
+        assert!(chosen.contains(&"ppc-a".to_owned()));
+    }
+
+    /// A slot already held by this owner (across testplatforms) is not
+    /// re-claimed — the arbiter hands out one host per owner per slot.
+    #[tokio::test]
+    async fn pool_select_skips_slot_owner_already_holds() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64"), ("x86-b", 15, 5, "x86_64")]);
+        let arbiter = test_arbiter();
+        let owner: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        // Pre-claim one candidate of the (only) slot for this owner.
+        assert!(arbiter.try_acquire("x86-a", &owner));
+        let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
+
+        let (chosen, _) =
+            Session::pool_select(&store, &tps, arbiter, &owner, 0, 0, no_shuffle).await;
+
+        // Slot already owned → nothing newly claimed.
+        assert!(
+            chosen.is_empty(),
+            "owner already holds the slot; no new claim expected, got {chosen:?}"
+        );
+    }
+
+    /// A slot whose every candidate is held by a *different* owner yields no
+    /// host (fail-fast with wait=0), and is warned about — not connected.
+    #[tokio::test]
+    async fn pool_select_no_free_host_when_all_busy() {
+        let store = multi_host_store(&[("x86-a", 15, 5, "x86_64"), ("x86-b", 15, 5, "x86_64")]);
+        let arbiter = test_arbiter();
+        let mine: Owner = ("reg".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let other: Owner = ("reg".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        // Another owner holds both candidates.
+        assert!(arbiter.try_acquire("x86-a", &other));
+        assert!(arbiter.try_acquire("x86-b", &other));
+        let tps = vec!["base=sles(major=15,minor=5);arch=[x86_64]".to_owned()];
+
+        let (chosen, slot_candidates) =
+            Session::pool_select(&store, &tps, arbiter, &mine, 0, 0, no_shuffle).await;
+
+        assert!(chosen.is_empty(), "all candidates busy → no claim");
+        // Candidates are still recorded (for backup once one frees up).
+        assert_eq!(slot_candidates.len(), 1);
+    }
+
+    /// The composition root wires the arbiter + owner onto every added report
+    /// (`_pool_selection_active`), so autoconnect takes the pool path.
+    #[test]
+    fn added_report_has_arbiter_and_owner_wired() {
+        let mut s = Session::new(config(), false);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        let base = s.templates.active().base();
+        assert!(base.arbiter.is_some(), "arbiter must be wired on add()");
+        let owner = base.owner.as_ref().expect("owner wired");
+        assert_eq!(
+            owner.1, "SUSE:Maintenance:1:1",
+            "owner RRID is the report id"
         );
     }
 }

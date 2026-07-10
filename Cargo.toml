@@ -81,6 +81,10 @@ notify-rust = "4"
 # stable insertion-ordered map (TemplateRegistry entries) + per-registry id
 indexmap = "2"
 uuid = { version = "1", features = ["v4"] }
+# random shuffle of per-slot pool candidates so load spreads across
+# interchangeable refhosts (upstream `random.shuffle`); test-seamed for
+# determinism.
+rand = "0.10"
 # dev / test
 insta = "1"
 wiremock = "0.6"

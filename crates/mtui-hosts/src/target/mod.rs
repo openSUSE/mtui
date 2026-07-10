@@ -460,6 +460,26 @@ impl Target {
         }
     }
 
+    /// Claims this target's remote pool lock with `comment` (the
+    /// `mtui pool <RRID> [<owner>]` stamp), returning whether the claim was won.
+    ///
+    /// Ports upstream `Target.try_claim`: delegates to [`PoolLock::try_claim`]
+    /// (RRID-based ownership). `true` when this session now holds the remote
+    /// claim (freshly won or already ours); `false` when another process holds
+    /// it — the caller then drops the host so a sibling can be tried. A
+    /// not-connected target (no pool lock built) returns `false`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any I/O error from writing/reading the remote lock file.
+    pub async fn pool_claim(&mut self, comment: &str) -> Result<bool> {
+        let Some(pool) = self.pool_lock.as_mut() else {
+            tracing::debug!(host = %self.hostname, "pool_claim: no pool lock (not connected)");
+            return Ok(false);
+        };
+        pool.try_claim(comment).await
+    }
+
     /// Acquires this target's operation lock with `comment`.
     ///
     /// Ports upstream `Target.lock`: delegates to
@@ -2152,6 +2172,44 @@ mod tests {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
         t.set_rrid("SUSE:Maintenance:1:2");
         assert_eq!(t.rrid(), "SUSE:Maintenance:1:2");
+    }
+
+    #[tokio::test]
+    async fn pool_claim_noop_false_when_not_connected() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        // No pool lock built yet (unconnected): claim returns false, no panic.
+        assert!(!t.pool_claim("mtui pool RRID [RRID]").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pool_claim_succeeds_on_free_host() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.set_rrid("SUSE:Maintenance:1:2");
+        assert!(
+            t.pool_claim("mtui pool SUSE:Maintenance:1:2 [SUSE:Maintenance:1:2]")
+                .await
+                .unwrap(),
+            "a free host must be claimable"
+        );
+        // The remote pool lock file was written.
+        assert!(handle.file_contents(crate::POOL_LOCK_PATH).is_some());
+    }
+
+    #[tokio::test]
+    async fn pool_claim_false_on_foreign_claim() {
+        let foreign = b"1700000000:otheruser:99:mtui pool SUSE:Maintenance:9:9 [bob]".to_vec();
+        let conn = MockConnection::new("h1").with_file(crate::POOL_LOCK_PATH, foreign);
+        let mut t = enabled_with(conn);
+        t.set_rrid("SUSE:Maintenance:1:2");
+        // Another process holds the remote claim → we lose the race.
+        assert!(
+            !t.pool_claim("mtui pool SUSE:Maintenance:1:2 [SUSE:Maintenance:1:2]")
+                .await
+                .unwrap(),
+            "a host claimed by another process must not be claimable"
+        );
     }
 
     // --- add_history -------------------------------------------------------

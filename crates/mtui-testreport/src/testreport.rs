@@ -83,9 +83,11 @@ pub struct TestReportBase {
     /// When non-empty, newly connected hosts are locked with this comment
     /// (set while a PI assignment is active).
     pub lock_comment: String,
-    /// Process-global host arbiter (RFC §5.7). `None` for directly-constructed
-    /// reports, which fall back to the legacy remote-lock-only connect path.
-    pub arbiter: Option<HostArbiter>,
+    /// Process-global host arbiter (RFC §5.7). A borrow of the singleton
+    /// ([`get_arbiter`](mtui_hosts::get_arbiter)); `None` for
+    /// directly-constructed reports, which fall back to the legacy
+    /// remote-lock-only connect path.
+    pub arbiter: Option<&'static HostArbiter>,
     /// Composite `(registry_id, RRID)` ownership key. `None` until wired by the
     /// template registry.
     pub owner: Option<Owner>,
@@ -1139,7 +1141,9 @@ mod tests {
     #[tokio::test]
     async fn release_pool_claims_drops_arbiter_ownership_and_clears_claims() {
         let owner: Owner = ("reg-1".to_owned(), "SUSE:Maintenance:1:1".to_owned());
-        let arbiter = HostArbiter::new();
+        // Leak a test-local arbiter to obtain the `&'static` the field expects
+        // without touching the shared process-global singleton.
+        let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
         // Claim two hosts through the arbiter for this owner.
         assert!(arbiter.try_acquire("h1", &owner));
         assert!(arbiter.try_acquire("h2", &owner));
