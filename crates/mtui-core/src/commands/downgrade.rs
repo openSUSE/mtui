@@ -18,8 +18,10 @@ use crate::session::Session;
 /// transactional), runs the check, and reboots transactional hosts.
 ///
 /// The post-downgrade version diffing upstream performs to emit its
-/// "done" / "downgrade not completed" summary is subsumed by the workflow's own
-/// `package_check`, which queries each host and warns per package.
+/// "done" / "downgrade not completed" summary (upstream `commands/downgrade.py`)
+/// is done by the workflow itself: `perform_downgrade` ends with a per-package
+/// `before = after; after = current` rotation and logs `done` or warns
+/// `downgrade not completed` when a version did not move.
 ///
 /// Warning: this command cannot work for new packages.
 pub struct Downgrade;
@@ -84,9 +86,21 @@ mod tests {
 
     #[tokio::test]
     async fn no_hosts_is_no_refhosts_defined() {
-        let (mut session, _buf) = empty_session();
+        // Loaded report but no hosts: passes the requires_update guard, then the
+        // empty selection yields NoRefhostsDefined.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         let args = matches(&Downgrade, &[]);
         let err = Downgrade.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::NoRefhostsDefined));
+    }
+
+    #[tokio::test]
+    async fn no_template_loaded_errors() {
+        // No report loaded → requires_update guard fires first, mirroring
+        // upstream @requires_update.
+        let (mut session, _buf) = empty_session();
+        let args = matches(&Downgrade, &[]);
+        let err = Downgrade.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
     }
 }

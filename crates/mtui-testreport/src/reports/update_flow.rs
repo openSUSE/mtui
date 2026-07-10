@@ -67,6 +67,27 @@ pub async fn perform_update_from_report<R>(
     .await;
 }
 
+/// Records a workflow op in every target's remote history file before fan-out.
+///
+/// Ports upstream `testreport.perform_*`'s `targets.add_history([...])` calls
+/// (`test_reports/testreport.py`). `id_field` carries the RRID for ops that log
+/// it (`update`/`downgrade`) and is `None` for `install`/`uninstall`, matching
+/// upstream's differing field lists. The op label and package list complete the
+/// colon-joined line written by [`HostsGroup::add_history`].
+pub async fn add_op_history(
+    targets: &mut HostsGroup,
+    op: &str,
+    id_field: Option<&str>,
+    packages: &[String],
+) {
+    let mut fields = vec![op.to_owned()];
+    if let Some(id) = id_field {
+        fields.push(id.to_owned());
+    }
+    fields.push(packages.join(" "));
+    targets.add_history(&fields).await;
+}
+
 /// The `$repa` maintenance-selector for an update, mirroring upstream
 /// `f":p={rrid.maintenance_id}:{rrid.review_id}"`.
 fn repa_for(maintenance_id: &str, review_id: &str) -> String {
@@ -443,6 +464,41 @@ async fn downgrade_body(
     }
 
     reboot_transactional(targets, reboot).await;
+
+    downgrade_verdict(targets).await;
+}
+
+/// Emits the post-downgrade "done" / "downgrade not completed" verdict.
+///
+/// Ports upstream `commands/downgrade.py:51-72`: re-query each host, then rotate
+/// `before = after; after = current` per package. If any package's rotated
+/// `before == after` (both known) the downgrade did not move that version, so the
+/// whole run is reported as **not completed** (a warning) and the scan
+/// short-circuits; otherwise it is **done** (info). Iterated in sorted hostname
+/// order to keep the log deterministic.
+async fn downgrade_verdict(targets: &mut HostsGroup) {
+    let mut completed = true;
+    'hosts: for target in targets.targets_mut() {
+        target.query_versions().await;
+        for pkg in target.packages_mut() {
+            let after = pkg.after().cloned();
+            pkg.set_before_version(after);
+            let current = pkg.current().cloned();
+            pkg.set_after_version(current);
+            if let (Some(before), Some(after)) = (pkg.before(), pkg.after())
+                && before == after
+            {
+                completed = false;
+                break 'hosts;
+            }
+        }
+    }
+
+    if completed {
+        tracing::info!("done");
+    } else {
+        warn!("downgrade not completed");
+    }
 }
 
 /// Parses the downgrader `list_command` output into a `name -> highest version`
@@ -862,6 +918,42 @@ mod tests {
                 .any(|c| c.contains("pkg-a") && c.contains("1.0-1")),
             "expected downgrade to the resolved version: {cmds:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn downgrade_verdict_warns_when_version_did_not_move() {
+        // The re-query returns pkg-a 1.0-1; seeding `after` to the same version
+        // means the rotated before == after ⇒ "downgrade not completed".
+        let (mut t, _h) = sles_target("h1", "pkg-a 1.0-1\n");
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_after(Some("1.0-1")).unwrap();
+        t.set_packages(vec![pkg]);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        downgrade_verdict(&mut group).await;
+
+        // After the rotation, `after` holds the re-queried `current`.
+        let p = &group.get("h1").unwrap().packages()[0];
+        assert_eq!(
+            p.before(),
+            p.after(),
+            "unchanged version leaves before == after"
+        );
+    }
+
+    #[tokio::test]
+    async fn downgrade_verdict_done_when_version_moved() {
+        // Re-query returns 0.9-1 but `after` was 1.0-1 ⇒ before != after ⇒ done.
+        let (mut t, _h) = sles_target("h1", "pkg-a 0.9-1\n");
+        let mut pkg = mtui_types::package::Package::new("pkg-a");
+        pkg.set_after(Some("1.0-1")).unwrap();
+        t.set_packages(vec![pkg]);
+        let mut group = HostsGroup::new(vec![t], false);
+
+        downgrade_verdict(&mut group).await;
+
+        let p = &group.get("h1").unwrap().packages()[0];
+        assert_ne!(p.before(), p.after(), "moved version ⇒ before != after");
     }
 
     /// Builds an enabled SL Micro (transactional) target on a mock returning

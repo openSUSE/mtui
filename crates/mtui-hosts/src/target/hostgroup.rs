@@ -170,6 +170,11 @@ impl HostsGroup {
         self.data.values()
     }
 
+    /// Mutably iterates the member targets in sorted hostname order.
+    pub fn targets_mut(&mut self) -> impl Iterator<Item = &mut Target> {
+        self.data.values_mut()
+    }
+
     /// Selects a subset of the group into a **new owned** group.
     ///
     /// Ported from upstream `HostsGroup.select`:
@@ -512,6 +517,16 @@ impl HostsGroup {
     ///
     /// The packages must already be [`seeded`](Target::set_packages) with their
     /// `required` versions.
+    /// Appends a history entry to every member target's remote history file.
+    ///
+    /// Ports upstream `HostsGroup.add_history`: fans [`Target::add_history`] out
+    /// across the group (enabled hosts only, best-effort per host).
+    pub async fn add_history(&mut self, fields: &[String]) {
+        for target in self.data.values_mut() {
+            target.add_history(fields).await;
+        }
+    }
+
     pub async fn package_check(&mut self, post: bool) {
         for target in self.data.values_mut() {
             let hostname = target.hostname().to_owned();

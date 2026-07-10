@@ -758,6 +758,46 @@ impl Target {
         }
     }
 
+    /// Appends a history entry to the remote `/var/log/mtui.log`.
+    ///
+    /// Ports upstream `Target.add_history`: on **enabled** hosts only, writes one
+    /// `timestamp:user:field1:field2…\n` line (Unix-epoch-seconds timestamp,
+    /// `config.session_user`, then the colon-joined `fields`). The upstream
+    /// wire-format contract is shared with the Python mtui and read back by
+    /// `list_history`, so it is preserved byte-for-byte.
+    ///
+    /// The [`Connection`] trait has no append primitive (upstream opens the file
+    /// `"a+"`), so this reads the current contents via
+    /// [`sftp_open`](Connection::sftp_open) and rewrites the concatenation via
+    /// [`sftp_write`](Connection::sftp_write) — a missing file reads as empty.
+    ///
+    /// Best-effort, matching upstream: a read/write failure (read-only or full
+    /// remote fs, unconnected host) is logged and swallowed so a bookkeeping
+    /// write never aborts the operation it records.
+    pub async fn add_history(&mut self, fields: &[String]) {
+        if self.state != TargetState::Enabled {
+            return;
+        }
+        let hostname = self.hostname.clone();
+        let user = self.config.session_user.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let line = format!("{now}:{user}:{}\n", fields.join(":"));
+
+        let Some(conn) = self.connection.as_mut() else {
+            tracing::error!(host = %hostname, "add_history on unconnected target");
+            return;
+        };
+        let path = std::path::Path::new("/var/log/mtui.log");
+        // Append = read existing (missing ⇒ empty), concatenate, write back.
+        let mut buf = conn.sftp_open(path).await.unwrap_or_default();
+        buf.extend_from_slice(line.as_bytes());
+        if let Err(e) = conn.sftp_write(path, &buf, false).await {
+            tracing::warn!(host = %hostname, error = %e, "failed to write history entry");
+        }
+    }
+
     /// Runs upstream's connect-time lock check + stale-reap on the operation
     /// lock.
     ///
@@ -2026,5 +2066,80 @@ mod tests {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
         t.set_rrid("SUSE:Maintenance:1:2");
         assert_eq!(t.rrid(), "SUSE:Maintenance:1:2");
+    }
+
+    // --- add_history -------------------------------------------------------
+
+    #[tokio::test]
+    async fn add_history_writes_timestamp_user_and_colon_joined_fields() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        t.add_history(&[
+            "downgrade".to_owned(),
+            "SUSE:Maintenance:1:2".to_owned(),
+            "pkg-a pkg-b".to_owned(),
+        ])
+        .await;
+
+        let written = String::from_utf8(
+            handle
+                .file_contents("/var/log/mtui.log")
+                .expect("history file written"),
+        )
+        .unwrap();
+        // Exactly one trailing-newline line.
+        assert!(written.ends_with('\n'));
+        let line = written.trim_end_matches('\n');
+        // `timestamp:user:downgrade:SUSE:Maintenance:1:2:pkg-a pkg-b`.
+        let mut it = line.splitn(3, ':');
+        let ts = it.next().unwrap();
+        assert!(
+            ts.parse::<u64>().is_ok(),
+            "leading field is a unix ts: {ts}"
+        );
+        let _user = it.next().unwrap();
+        let rest = it.next().unwrap();
+        assert_eq!(rest, "downgrade:SUSE:Maintenance:1:2:pkg-a pkg-b");
+    }
+
+    #[tokio::test]
+    async fn add_history_appends_to_existing_contents() {
+        let conn =
+            MockConnection::new("h1").with_file("/var/log/mtui.log", b"prior:line\n".to_vec());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        t.add_history(&["install".to_owned(), "pkg".to_owned()])
+            .await;
+
+        let written =
+            String::from_utf8(handle.file_contents("/var/log/mtui.log").unwrap()).unwrap();
+        assert!(
+            written.starts_with("prior:line\n"),
+            "append preserves existing content: {written:?}"
+        );
+        assert_eq!(written.lines().count(), 2, "one line appended: {written:?}");
+    }
+
+    #[tokio::test]
+    async fn add_history_skips_disabled_hosts() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = Target::with_connection(
+            "h1",
+            TargetState::Disabled,
+            ExecutionMode::Parallel,
+            Box::new(conn),
+        );
+
+        t.add_history(&["downgrade".to_owned(), "x".to_owned()])
+            .await;
+
+        assert!(
+            handle.file_contents("/var/log/mtui.log").is_none(),
+            "disabled hosts write no history"
+        );
     }
 }

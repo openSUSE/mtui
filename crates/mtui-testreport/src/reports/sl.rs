@@ -118,10 +118,12 @@ impl TestReport for SlReport {
     // `SetRepo` report delegates to the shared `update_flow` free functions
     // below (thin, identical across the three reports).
     async fn perform_install(&self, targets: &mut HostsGroup, packages: &[String]) {
+        update_flow::add_op_history(targets, "install", None, packages).await;
         InstallOperation::new(packages.to_vec()).run(targets).await;
     }
 
     async fn perform_uninstall(&self, targets: &mut HostsGroup, packages: &[String]) {
+        update_flow::add_op_history(targets, "uninstall", None, packages).await;
         UninstallOperation::new(packages.to_vec())
             .run(targets)
             .await;
@@ -139,10 +141,15 @@ impl TestReport for SlReport {
     }
 
     async fn perform_downgrade(&self, targets: &mut HostsGroup, packages: &[String]) {
+        let id = self.rrid().map(ToString::to_string);
+        update_flow::add_op_history(targets, "downgrade", id.as_deref(), packages).await;
         update_flow::perform_downgrade(targets, self, packages).await;
     }
 
     async fn perform_update(&self, targets: &mut HostsGroup, noprepare: bool, newpackage: bool) {
+        let id = self.rrid().map(ToString::to_string);
+        let packages = self.get_package_list();
+        update_flow::add_op_history(targets, "update", id.as_deref(), &packages).await;
         update_flow::perform_update_from_report(self, targets, noprepare, newpackage).await;
     }
 
