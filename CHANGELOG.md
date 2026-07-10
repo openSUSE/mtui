@@ -314,6 +314,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   unreadable. The base-product path already tolerated exactly this; the addon
   loop did not, so a single stale `.prod` entry made the whole host
   impossible to add. The offending addon is now skipped with a warning.
+- The testreport export/commit footer no longer loses the distro and version
+  on hosts whose `/etc/os-release` single-quotes its values (permitted by the
+  os-release spec). The parser's character classes matched a double quote or
+  a literal pipe — `["|]` — instead of double-or-single quote.
 - `mtui-mcp` no longer corrupts a `commit`/`lock` call that also carries a
   `template` argument, nor a backgrounded `run` that fans out across several
   loaded templates. A `-m`/`-c` message or a `run` command line no longer

@@ -14,8 +14,12 @@ def detect_system() -> tuple[str, str, str]:
         A tuple containing the distribution, version ID, and kernel version.
 
     """
-    _distro = re.compile(r'NAME=["|](.*)["|]')
-    _v_id = re.compile(r'VERSION_ID=["|](.*)["|]')
+    # A quote class, not alternation: inside [...] the | was a literal
+    # pipe, so single-quoted values (NAME='openSUSE', permitted by the
+    # os-release spec) never matched and the export footer lost its
+    # distro/version.
+    _distro = re.compile(r'NAME=["\'](.*)["\']')
+    _v_id = re.compile(r'VERSION_ID=["\'](.*)["\']')
     distro = ""
     verid = ""
     kernel = ""
