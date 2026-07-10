@@ -228,6 +228,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   connection layer swallowed the SFTP error internally, so the target
   layer's ENOENT tolerance and its directory `rmdir` fallback were dead
   code; the error now propagates to the layer that handles it.
+- The `mtui-mcp` tool-schema slimming no longer deletes a tool parameter
+  (or nested object property) literally named `title` or `description`.
+  The pydantic-boilerplate strip treated every dict key as a schema
+  keyword — including the keys of a `properties` map, which are parameter
+  *names* — so such a parameter vanished from the schema while staying
+  listed in `required`, making the tool impossible to call correctly.
 - `openqa_jobs --failed` no longer lists still-running or scheduled jobs as
   failures. openQA reports an unfinished job's result as `none`, which the
   filter treated as "not passing" — during active testing an in-progress
