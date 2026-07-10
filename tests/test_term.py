@@ -188,3 +188,25 @@ def test_page_non_interactive_writer_receives_each_line():
     captured: list[str] = []
     page(["alpha", "beta\n", "gamma\r\n"], interactive=False, writer=captured.append)
     assert captured == ["alpha", "beta", "gamma"]
+
+
+def test_termsize_fallback_matches_normal_path_order(monkeypatch):
+    """The ACCTEST fallback must return (width, height) like the ioctl path.
+
+    It returned (rows, cols) -- the transposed geometry -- so under the
+    acceptance harness page() wrapped lines at the row count and printed
+    a column-count of lines per page, and the SSH PTY got swapped
+    dimensions.
+    """
+    from mtui.cli import term as term_mod
+
+    def _no_tty(*_a, **_kw):
+        raise OSError("not a tty")
+
+    monkeypatch.setattr(term_mod.fcntl, "ioctl", _no_tty)
+    monkeypatch.setenv("ACCTEST_ROWS", "24")
+    monkeypatch.setenv("ACCTEST_COLS", "80")
+
+    width, height = term_mod.termsize()
+
+    assert (width, height) == (80, 24)

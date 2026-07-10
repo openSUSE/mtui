@@ -213,6 +213,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Under the acceptance-test harness (`ACCTEST_ROWS`/`ACCTEST_COLS`, no
+  controlling TTY) the terminal geometry is no longer transposed: the
+  fallback returned (rows, cols) while the normal path returns
+  (width, height), so the pager wrapped at the row count and printed a
+  column-count of lines per page.
 - `openqa_jobs --failed` no longer lists still-running or scheduled jobs as
   failures. openQA reports an unfinished job's result as `none`, which the
   filter treated as "not passing" — during active testing an in-progress
