@@ -37,7 +37,10 @@ def termsize() -> tuple[int, int]:
         if not (k_rows in env and k_cols in env):
             raise
 
-        return int(env[k_rows]), int(env[k_cols])
+        # Same ordering as the normal path below -- (width, height), i.e.
+        # (cols, rows). This used to return (rows, cols), transposing the
+        # terminal geometry for every caller under the acceptance harness.
+        return int(env[k_cols]), int(env[k_rows])
 
     return int(width), int(height)
 
