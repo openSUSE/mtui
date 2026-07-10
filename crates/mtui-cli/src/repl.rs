@@ -180,8 +180,20 @@ impl Repl {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     session.display.println("");
                 }
-                // Ctrl-D: graceful session exit (upstream EOF → quit).
-                Signal::CtrlD => break,
+                // Ctrl-D: graceful session exit (upstream `DEOF` → `Quit`).
+                // Dispatch the `EOF` command through the engine so the full quit
+                // teardown runs (pool-claim release + host close), then break —
+                // a bare `break` would skip that cleanup. reedline persists the
+                // `FileBackedHistory` when the editor is dropped after `run`
+                // returns, so no explicit history flush is needed here.
+                Signal::CtrlD => {
+                    let mut session = self
+                        .session
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let _ = step(&self.registry, &mut session, "EOF").await;
+                    break;
+                }
                 // `#[non_exhaustive]`: any future/host signal is ignored and we
                 // simply reprompt rather than crashing the session.
                 _ => {}
@@ -273,6 +285,9 @@ mod tests {
         fn name(&self) -> &'static str {
             "quit"
         }
+        fn aliases(&self) -> &'static [&'static str] {
+            &["exit", "EOF"]
+        }
         fn scope(&self) -> Scope {
             Scope::Single
         }
@@ -333,6 +348,17 @@ mod tests {
         let (r, _) = registry();
         let (mut s, _buf) = session_with_buffer();
         let flow = step(&r, &mut s, "quit").await;
+        assert_eq!(flow, ControlFlow::Break(()));
+        assert!(s.should_exit());
+    }
+
+    #[tokio::test]
+    async fn eof_dispatches_quit_and_breaks() {
+        // The Ctrl-D handler dispatches the `EOF` alias through the engine (so
+        // the full quit teardown runs), which must break the loop and set exit.
+        let (r, _) = registry();
+        let (mut s, _buf) = session_with_buffer();
+        let flow = step(&r, &mut s, "EOF").await;
         assert_eq!(flow, ControlFlow::Break(()));
         assert!(s.should_exit());
     }

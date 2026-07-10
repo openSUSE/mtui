@@ -395,6 +395,25 @@ impl HostsGroup {
         }
     }
 
+    /// Disconnects every host, optionally rebooting or powering them off.
+    ///
+    /// Ports upstream `quit`'s per-host `Target.close(action)` fan-out:
+    /// delegates to [`Target::close`], which best-effort unlocks the operation
+    /// and pool locks, then reboots (`Some("reboot")`), powers off
+    /// (`Some("poweroff")` → shell `halt`), or simply closes (`None`). Used on
+    /// session exit; unlike [`reboot`](Self::reboot) it never reconnects.
+    ///
+    /// Upstream fans these out concurrently with a 45s wait; because
+    /// [`Target::close`] is per-host and order-independent, this drives them
+    /// sequentially (matching [`unlock`](Self::unlock)/[`pool_unlock`](Self::pool_unlock)
+    /// in this group) — the observable per-host effect is identical. The overall
+    /// wait budget is applied by the caller. A no-op when the group is empty.
+    pub async fn close(&mut self, action: Option<&str>) {
+        for target in self.data.values_mut() {
+            target.close(action).await;
+        }
+    }
+
     /// Reports the lock state of every host in the group to `sink`.
     ///
     /// Ports upstream `HostsGroup.report_locks`: for each host in sorted name
@@ -1119,6 +1138,44 @@ mod tests {
 
         assert_eq!(h1.commands(), vec!["hostname".to_owned()]);
         assert_eq!(h2.commands(), vec!["hostname".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn close_fans_out_action_to_all_members() {
+        let (m1, m2) = (echo("h1"), echo("h2"));
+        let (h1, h2) = (m1.clone(), m2.clone());
+        let mut g = HostsGroup::new(
+            vec![
+                Target::with_connection(
+                    "h1",
+                    TargetState::Enabled,
+                    ExecutionMode::Parallel,
+                    Box::new(m1),
+                ),
+                Target::with_connection(
+                    "h2",
+                    TargetState::Enabled,
+                    ExecutionMode::Serial,
+                    Box::new(m2),
+                ),
+            ],
+            false,
+        );
+
+        g.close(Some("poweroff")).await;
+
+        // Both hosts received the mapped `halt` command and were closed.
+        assert_eq!(h1.fired_commands(), vec!["halt".to_owned()]);
+        assert_eq!(h2.fired_commands(), vec!["halt".to_owned()]);
+        assert!(h1.is_closed());
+        assert!(h2.is_closed());
+    }
+
+    #[tokio::test]
+    async fn close_empty_group_is_noop() {
+        let mut g = HostsGroup::new(vec![], false);
+        // Must not panic on an empty group.
+        g.close(Some("reboot")).await;
     }
 
     #[tokio::test]

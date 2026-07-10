@@ -313,6 +313,38 @@ pub trait TestReport {
         Ok(())
     }
 
+    /// Drops this report's arbiter ownership and removes its remote pool locks.
+    ///
+    /// Ports upstream `TestReport.release_pool_claims`: for every host this
+    /// report claimed through the arbiter, best-effort
+    /// [`Target::pool_unlock`](mtui_hosts::Target::pool_unlock) the remote
+    /// pool-claim lock (`force = false`, so a claim owned by another template is
+    /// left alone), then clear the in-process claim set and drop the arbiter
+    /// ownership via [`HostArbiter::release_owner`](mtui_hosts::HostArbiter::release_owner).
+    ///
+    /// Idempotent and safe when pool selection was never used
+    /// ([`arbiter`](TestReportBase::arbiter)/[`owner`](TestReportBase::owner) are
+    /// then `None`). Called from the exit path (upstream `quit` and
+    /// `TemplateRegistry.release_claims`); the remote lock-wire format is
+    /// untouched — release goes through the same `pool_unlock` primitive that
+    /// created the claim.
+    async fn release_pool_claims(&mut self) {
+        let base = self.base_mut();
+        // Snapshot claims so the borrow of `pool_claims` is released before the
+        // mutable per-target `pool_unlock` calls.
+        let claims: Vec<String> = base.pool_claims.iter().cloned().collect();
+        for host in claims {
+            if let Some(target) = base.targets.get_mut(&host) {
+                target.pool_unlock(false).await;
+            }
+        }
+        base.pool_claims.clear();
+        base.slot_candidates.clear();
+        if let (Some(arbiter), Some(owner)) = (base.arbiter.as_ref(), base.owner.as_ref()) {
+            arbiter.release_owner(owner);
+        }
+    }
+
     /// Emits the per-host update commands for `targets` (upstream
     /// `list_update_commands`). The null object is a no-op.
     fn list_update_commands(&self, targets: &HostsGroup);
@@ -904,5 +936,45 @@ mod tests {
             MetaReport { base }.set_reviewer("bob"),
             Err(ReviewerError::NoReviewerLine)
         ));
+    }
+
+    #[tokio::test]
+    async fn release_pool_claims_drops_arbiter_ownership_and_clears_claims() {
+        let owner: Owner = ("reg-1".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let arbiter = HostArbiter::new();
+        // Claim two hosts through the arbiter for this owner.
+        assert!(arbiter.try_acquire("h1", &owner));
+        assert!(arbiter.try_acquire("h2", &owner));
+
+        let mut base = TestReportBase::new(config());
+        base.arbiter = Some(arbiter);
+        base.owner = Some(owner.clone());
+        base.pool_claims.insert("h1".to_owned());
+        base.pool_claims.insert("h2".to_owned());
+        base.slot_candidates
+            .insert("slot0".to_owned(), vec!["h1".to_owned(), "h2".to_owned()]);
+        let mut r = MetaReport { base };
+
+        r.release_pool_claims().await;
+
+        // In-process claim set and slot candidates are cleared.
+        assert!(r.base().pool_claims.is_empty());
+        assert!(r.base().slot_candidates.is_empty());
+        // Arbiter ownership is dropped for every previously-held host.
+        let arbiter = r.base().arbiter.as_ref().unwrap();
+        assert!(arbiter.owner_of("h1").is_none());
+        assert!(arbiter.owner_of("h2").is_none());
+    }
+
+    #[tokio::test]
+    async fn release_pool_claims_is_a_noop_when_pooling_never_used() {
+        // No arbiter / owner / claims: must not panic and stays empty.
+        let mut r = MetaReport {
+            base: TestReportBase::new(config()),
+        };
+        r.release_pool_claims().await;
+        r.release_pool_claims().await; // idempotent second call
+        assert!(r.base().pool_claims.is_empty());
+        assert!(r.base().arbiter.is_none());
     }
 }

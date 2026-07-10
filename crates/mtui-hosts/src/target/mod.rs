@@ -610,6 +610,54 @@ impl Target {
         }
     }
 
+    /// Cleanly disconnects the target, optionally rebooting or powering it off.
+    ///
+    /// Ports upstream `Target.close(action)`. When a live connection exists it
+    /// is first quiesced — best-effort [`unlock`](Self::unlock) of the operation
+    /// lock and [`pool_unlock`](Self::pool_unlock) of the pool claim (both
+    /// `force = false`, so locks/claims owned by another owner are left intact) —
+    /// then `action` selects the disconnect behaviour:
+    ///
+    /// * `Some("reboot")` → dispatch `reboot` (fire-and-forget; the link drops),
+    /// * `Some("poweroff")` → dispatch `halt` (upstream maps `poweroff` to the
+    ///   shell `halt`; fire-and-forget),
+    /// * `None` (or any other value) → just close the connection.
+    ///
+    /// The local connection is closed last regardless. A no-op when the target
+    /// is not connected. Unlike [`HostsGroup::reboot`](crate::HostsGroup::reboot)
+    /// this never reconnects — it is the teardown used on session exit.
+    pub async fn close(&mut self, action: Option<&str>) {
+        let active = self.connection.as_ref().is_some_and(|c| c.is_active());
+        if active {
+            // Best-effort release of our own locks before disconnecting; a lock
+            // held by another owner is left untouched (force = false).
+            self.unlock(false).await;
+            self.pool_unlock(false).await;
+        } else {
+            tracing::debug!(host = %self.hostname, "close: not connected");
+        }
+
+        match action {
+            Some("reboot") => {
+                tracing::info!(host = %self.hostname, "rebooting");
+                self.reboot("reboot").await;
+            }
+            Some("poweroff") => {
+                tracing::info!(host = %self.hostname, "powering off");
+                self.reboot("halt").await;
+            }
+            _ => {
+                tracing::info!(host = %self.hostname, "closing connection");
+            }
+        }
+
+        if let Some(conn) = self.connection.as_mut()
+            && let Err(e) = conn.close().await
+        {
+            tracing::debug!(host = %self.hostname, error = %e, "close: connection shutdown failed (ignored)");
+        }
+    }
+
     /// Records the parsed host system and its transactional flag.
     ///
     /// Called with the pair returned by
@@ -1551,6 +1599,44 @@ mod tests {
         let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
         // Must not panic; nothing to assert beyond the no-op completing.
         t.reboot("systemctl reboot").await;
+    }
+
+    #[tokio::test]
+    async fn close_without_action_just_closes() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.close(None).await;
+        assert!(
+            handle.fired_commands().is_empty(),
+            "no reboot/halt dispatched"
+        );
+        assert!(handle.is_closed(), "connection is closed");
+    }
+
+    #[tokio::test]
+    async fn close_reboot_dispatches_reboot() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.close(Some("reboot")).await;
+        assert_eq!(handle.fired_commands(), vec!["reboot".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn close_poweroff_dispatches_halt() {
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+        t.close(Some("poweroff")).await;
+        assert_eq!(handle.fired_commands(), vec!["halt".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn close_on_unconnected_is_noop() {
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        // Must not panic; no live connection to close, no action dispatched.
+        t.close(Some("reboot")).await;
     }
 
     #[tokio::test]
