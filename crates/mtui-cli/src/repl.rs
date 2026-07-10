@@ -158,6 +158,23 @@ impl Repl {
                         }
                         continue;
                     }
+                    // `edit` spawns `$EDITOR` on the controlling TTY (the same
+                    // reason as `shell`): the shared engine has no terminal, so
+                    // its `edit` command is a headless-error stub. Intercept the
+                    // line here and spawn the (blocking, foregrounded) editor,
+                    // which owns the TTY for its lifetime; render any failure in
+                    // red. An edit line never exits.
+                    if let Some(argv) = crate::edit::is_edit_line(&line) {
+                        let mut session = self
+                            .session
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Err(e) = crate::edit::run_edit(&mut session, &argv) {
+                            let msg = session.display.red(&e.to_string());
+                            session.display.println(&msg);
+                        }
+                        continue;
+                    }
                     // Lock only for the dispatch; the completer's own lock during
                     // `read_line` was released before this returned. (Guard held
                     // across the await — justified on `run`'s doc comment.)

@@ -50,3 +50,7 @@ default = []
 # Desktop toast notifications on start/finish of long operations (upstream
 # `notify` extra). No-op when the process is headless (no TTY / no display).
 notify = ["dep:notify-rust"]
+
+[dev-dependencies]
+# Temp scripts standing in for `$EDITOR` in the offline `edit`-spawn tests.
+tempfile = "3"

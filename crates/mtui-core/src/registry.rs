@@ -125,15 +125,16 @@ impl Registry {
 /// tool). Kept here, beside [`register_all`], so the deny-list and the command
 /// surface it filters live in one place.
 ///
-/// Names not yet backed by a registered command (`edit`, `terms`) are reserved
-/// for their later waves; [`mcp_denylist_is_consistent`] tolerates them so adding
-/// the command later does not require touching this list.
+/// Names not yet backed by a registered command (`terms`) are reserved for their
+/// later waves; [`mcp_denylist_is_consistent`] tolerates them so adding the
+/// command later does not require touching this list.
 pub const MCP_DENYLIST: &[&str] = &[
     "quit", "exit", "EOF",    // session exit (Wave 2)
     "switch", // active-template pointer, REPL-only (Wave 2)
     "shell",  // interactive PTY attach, Phase 6 (Wave 2)
     "help",   // registry listing / per-command help, REPL-only (Phase 6)
-    "edit", "terms", // later waves; reserved
+    "edit",   // $EDITOR spawn on the controlling TTY, REPL-only (Phase 6)
+    "terms",  // later wave; reserved
 ];
 
 /// Builds the process-wide command registry — the single, explicit place every
@@ -213,6 +214,7 @@ pub fn register_all() -> Registry {
     registry.register(Arc::new(commands::LoadTemplate));
     // Phase 6 — REPL-only command-surface additions.
     registry.register(Arc::new(commands::Help));
+    registry.register(Arc::new(commands::Edit));
     registry
 }
 
@@ -358,9 +360,9 @@ mod tests {
     fn register_all_command_count() {
         // 10 Wave 1 + 14 Wave 2 + 17 Wave 3 + 11 Wave 4 + 4 P5 follow-ups
         // (export, list_refhosts, load_template, list_locks) + 2 openQA-holder
-        // follow-ups (reload_openqa, set_workflow: mtui-rs-zs4/plt) + 1 Phase 6
-        // (help: mtui-rs-lhz.9) = 59 canonical commands.
-        assert_eq!(register_all().len(), 59);
+        // follow-ups (reload_openqa, set_workflow: mtui-rs-zs4/plt) + 2 Phase 6
+        // (help: mtui-rs-lhz.9; edit: mtui-rs-lhz.10) = 60 canonical commands.
+        assert_eq!(register_all().len(), 60);
     }
 
     #[test]
@@ -404,8 +406,8 @@ mod tests {
             let _reserved_or_registered = r.contains(name);
         }
         // Sanity: the currently-registered deny-listed commands are the Wave 2
-        // REPL-only set (quit+aliases, switch, shell) plus `help` (Phase 6).
-        // Reserved names (edit/terms) are not yet registered.
+        // REPL-only set (quit+aliases, switch, shell) plus `help` and `edit`
+        // (Phase 6). The reserved name `terms` is not yet registered.
         let registered_denied: Vec<&str> = MCP_DENYLIST
             .iter()
             .copied()
@@ -413,7 +415,7 @@ mod tests {
             .collect();
         assert_eq!(
             registered_denied,
-            vec!["quit", "exit", "EOF", "switch", "shell", "help"]
+            vec!["quit", "exit", "EOF", "switch", "shell", "help", "edit"]
         );
     }
 

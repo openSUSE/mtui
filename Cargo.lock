@@ -2076,6 +2076,7 @@ dependencies = [
  "nu-ansi-term",
  "reedline",
  "shlex",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
