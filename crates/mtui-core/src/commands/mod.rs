@@ -78,6 +78,7 @@ mod load_template;
 // Phase 6 — REPL-only command-surface additions.
 mod edit;
 mod help;
+mod terms;
 
 pub use downgrade::Downgrade;
 pub use localrun::LocalRun;
@@ -136,6 +137,7 @@ pub use sftpget::SftpGet;
 pub use sftpput::SftpPut;
 pub use showdiff::{AnalyzeDiff, ShowDiff};
 pub use showlog::ShowLog;
+pub use terms::Terms;
 
 /// Shared test scaffolding for the Wave-1 command bodies.
 ///

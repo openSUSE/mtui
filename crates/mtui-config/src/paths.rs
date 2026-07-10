@@ -91,6 +91,20 @@ pub fn data_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "mtui").map(|p| p.data_dir().to_path_buf())
 }
 
+/// The directory holding the `term.*.sh` terminal-launcher scripts
+/// (`$XDG_DATA_HOME/mtui/terms`), if a data dir resolves.
+///
+/// Upstream equivalent: `mtui.support.paths.terms_path()`, which resolves the
+/// `terms/` directory shipped as package data inside the installed `mtui`
+/// package. Rust has no package-data concept, so mtui-rs keeps the scripts under
+/// the XDG data dir (consistent with [`data_dir`]); Phase 8 packaging installs
+/// `term.*.sh` there. The `terms` command derives the available term names by
+/// globbing this directory, mirroring upstream's dynamic `_list_terms`.
+#[must_use]
+pub fn terms_path() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("terms"))
+}
+
 /// Compute the ordered list of config files to load, lowest precedence first.
 ///
 /// Resolution rules (mirrors upstream's short-circuit for the explicit forms):
@@ -211,6 +225,22 @@ mod tests {
             assert!(
                 dir.ends_with("mtui"),
                 "data dir should end in `mtui`, got {dir:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn terms_path_lives_under_the_mtui_data_dir() {
+        // When a data dir resolves, the terms dir is `<data>/terms` and the data
+        // component still ends in `mtui` (parallel to `data_dir`).
+        if let Some(dir) = terms_path() {
+            assert!(
+                dir.ends_with("terms"),
+                "terms path should end in `terms`, got {dir:?}"
+            );
+            assert!(
+                dir.parent().is_some_and(|p| p.ends_with("mtui")),
+                "terms parent should be the mtui data dir, got {dir:?}"
             );
         }
     }

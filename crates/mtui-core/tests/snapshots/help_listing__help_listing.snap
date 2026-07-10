@@ -1,11 +1,10 @@
 ---
 source: crates/mtui-core/tests/help_listing.rs
-assertion_line: 40
 expression: out
 ---
 Documented commands (type help <topic>):
 ========================================
-edit                  help                  quit
+edit                  help                  quit                  terms
 
 Undocumented commands:
 ========================================
