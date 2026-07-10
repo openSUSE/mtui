@@ -20,22 +20,24 @@
 //!   ([`parse_system`](parsers::parse_system)) and package version query
 //!   ([`Target::query_versions`]).
 //!
-//! The remaining upstream responsibilities are owned by later tasks and are
-//! left as clearly-marked seams in [`Target::connect`]:
+//! The remaining upstream responsibilities that this module does *not* own are
+//! reached through object-safe seams, keeping `mtui-hosts` acyclic:
 //!
-//! * remote locks — the [`locks`] module (**P2.6**, landed) provides the
-//!   zypper op-lock ([`TargetLock`]) and the pool-claim lock ([`PoolLock`]);
-//!   wiring the lock *check* into `connect` needs session RRID plumbing from a
-//!   later phase, so the connect-time hook stays a seam for now,
-//! * reboot / reconnect lifecycle — **P2.9**; the install/uninstall
-//!   [`Operation`](operation::Operation) template (skeleton + trait) has landed
-//!   in [`operation`], driving its group via the object-safe
-//!   [`OperationGroup`](operation::OperationGroup) seam. The
-//!   `impl OperationGroup for HostsGroup` binding (which needs the Phase-4
-//!   doer/check registries and the reboot wiring) is deferred to the
-//!   composition root — see the `TODO` in [`operation`].
+//! * remote locks — the [`locks`] module provides the zypper op-lock
+//!   ([`TargetLock`]) and the pool-claim lock ([`PoolLock`]);
+//!   [`Target::connect`] builds both objects over the live connection and runs
+//!   upstream's connect-time op-lock check + stale-reap
+//!   ([`check_stale_lock`](Target::check_stale_lock)),
+//! * reboot / reconnect lifecycle and the install/uninstall
+//!   [`Operation`] template drive their group through the object-safe
+//!   [`OperationGroup`] seam; the concrete `impl OperationGroup for HostsGroup`
+//!   binding lives in [`hostgroup`] (resolving each target's doer/check via the
+//!   injected [`PlanProvider`]),
+//! * repo management — [`RepoManager`] forwards `set`/`unset` through the
+//!   object-safe [`SetRepo`] seam, whose concrete report impls live in
+//!   `mtui-testreport`.
 //!
-//! Keeping the seams out of P2.4 preserves the acyclic crate graph
+//! Routing this machinery through seams preserves the acyclic crate graph
 //! (`mtui-hosts` must not depend on `mtui-testreport`) and lets the whole
 //! state machine be unit-tested offline against a `MockConnection`.
 
@@ -756,24 +758,65 @@ impl Target {
         }
     }
 
+    /// Runs upstream's connect-time lock check + stale-reap on the operation
+    /// lock.
+    ///
+    /// Ports `Target.connect`'s `if self.is_locked() and not
+    /// self._lock.reap_if_stale(): logger.warning(self._lock.locked_by_msg())`
+    /// (`target.py:187-188`): if the host is locked by a prior session, reap it
+    /// when it is old enough ([`TargetLock::reap_if_stale`]), otherwise warn who
+    /// holds it. Operates on the operation lock only, so it is independent of the
+    /// session RRID (that is the pool lock's concern).
+    ///
+    /// Best-effort like upstream's surrounding degradation: a transport error
+    /// while reading the remote lock is logged and swallowed rather than failing
+    /// the connect — an unreadable lock must not block the host.
+    async fn check_stale_lock(&mut self) {
+        let Some(lock) = self.lock.as_mut() else {
+            return;
+        };
+        match lock.is_locked().await {
+            Ok(false) => {}
+            Ok(true) => match lock.reap_if_stale().await {
+                Ok(true) => {} // reaped; `reap_if_stale` already warned.
+                Ok(false) => match lock.locked_by_msg().await {
+                    Ok(msg) => tracing::warn!("{msg}"),
+                    Err(e) => tracing::warn!(
+                        host = %self.hostname, error = %e,
+                        "connect: reading lock owner failed"
+                    ),
+                },
+                Err(e) => tracing::warn!(
+                    host = %self.hostname, error = %e,
+                    "connect: stale-lock reap failed"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                host = %self.hostname, error = %e,
+                "connect: lock check failed"
+            ),
+        }
+    }
+
     /// Establishes the SSH transport for this target and parses its system.
     ///
     /// Ports upstream `Target.connect`: builds an [`SshConnection`] from the
     /// host/port/timeout/policy resolved at construction, builds the two
-    /// remote locks over it, then — mirroring upstream's post-dial ordering —
-    /// parses the system/product ([`parse_system`](parsers::parse_system)) and
-    /// queries installed package versions ([`Target::query_versions`]). If a
-    /// connection is already attached (e.g. a test-injected
+    /// remote locks over it, runs the connect-time lock check + stale-reap
+    /// ([`check_stale_lock`](Target::check_stale_lock)), then — mirroring
+    /// upstream's post-dial ordering — parses the system/product
+    /// ([`parse_system`](parsers::parse_system)) and queries installed package
+    /// versions ([`Target::query_versions`]). If a connection is already
+    /// attached (e.g. a test-injected
     /// [`MockConnection`](crate::MockConnection)), the dial + lock-building
-    /// step is skipped, but the parse/query step still runs — this is what
+    /// step is skipped, but the check/parse/query steps still run — this is what
     /// lets the whole flow be unit-tested against a scripted `MockConnection`
     /// without a live socket.
     ///
     /// A parse failure is best-effort: logged and left at the `unknown`
     /// sentinel, matching [`reload_system`](Target::reload_system)'s
-    /// degradation. The remote lock *check* (as opposed to the lock objects
-    /// built here) and the reboot/reconnect/operation lifecycle remain later
-    /// seams — see the module docs.
+    /// degradation. The reboot/reconnect/operation lifecycle is bound at the
+    /// composition root — see the module docs.
     ///
     /// # Errors
     ///
@@ -813,6 +856,12 @@ impl Target {
         } else {
             tracing::debug!(host = %self.hostname, "already connected; skipping re-dial");
         }
+
+        // Mirror upstream `connect()` line 187-188: check the operation lock and
+        // reap it if stale, otherwise warn who holds it. Runs whether the
+        // connection was just dialed or already attached, matching the
+        // parse/query steps below.
+        self.check_stale_lock().await;
 
         // Mirror upstream `connect()`'s post-dial ordering: `self.system,
         // self.transactional = parse_system(self.connection)` then
@@ -1551,6 +1600,82 @@ mod tests {
         t.connect().await.expect("connect");
 
         assert!(t.packages()[0].current().is_some());
+    }
+
+    // --- connect-time lock check + stale-reap (target.py:187-188) -----------
+
+    #[tokio::test]
+    async fn connect_reaps_stale_foreign_lock() {
+        // A foreign lock with a years-old timestamp is well past the default
+        // 86400s stale age, so `connect()` force-removes it (upstream
+        // `reap_if_stale`), and the host reads unlocked afterwards.
+        let conn = MockConnection::new("h1")
+            .with_file(TARGET_LOCK_PATH, b"1700000000:alice:4242:busy".to_vec());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        t.connect().await.expect("connect");
+
+        assert!(
+            handle
+                .sftp_ops()
+                .contains(&MockSftpOp::Remove(PathBuf::from(TARGET_LOCK_PATH))),
+            "stale lock should have been force-removed"
+        );
+        assert!(
+            !t.is_locked().await.expect("is_locked ok"),
+            "host should read unlocked after reap"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_keeps_fresh_foreign_lock() {
+        // A foreign lock younger than the stale age is *not* reaped — upstream
+        // only warns. Timestamp is computed from the same clock the lock uses so
+        // the "fresh" property holds regardless of wall-clock at test time.
+        let recent = SystemClock.now_unix().saturating_sub(100);
+        let line = format!("{recent}:alice:4242:busy");
+        let conn = MockConnection::new("h1").with_file(TARGET_LOCK_PATH, line.into_bytes());
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        t.connect().await.expect("connect");
+
+        assert!(
+            !handle
+                .sftp_ops()
+                .contains(&MockSftpOp::Remove(PathBuf::from(TARGET_LOCK_PATH))),
+            "a fresh lock must not be removed"
+        );
+        assert!(
+            t.is_locked().await.expect("is_locked ok"),
+            "fresh foreign lock should still be held"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_on_free_host_touches_no_lock() {
+        // No lock file present: the check is a no-op (no reap), connect succeeds.
+        let conn = MockConnection::new("h1");
+        let handle = conn.clone();
+        let mut t = enabled_with(conn);
+
+        t.connect().await.expect("connect");
+
+        assert!(
+            !handle
+                .sftp_ops()
+                .iter()
+                .any(|op| matches!(op, MockSftpOp::Remove(p) if p == Path::new(TARGET_LOCK_PATH))),
+            "free host must not trigger a lock removal"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_stale_lock_is_noop_when_unconnected() {
+        // No connection ⇒ no lock object built ⇒ the check returns early.
+        let mut t = Target::new(&cfg(), "h1", TargetState::Enabled, ExecutionMode::Parallel);
+        t.check_stale_lock().await;
     }
 
     // --- reboot / reconnect / boot_id lifecycle (P2.9) ----------------------
