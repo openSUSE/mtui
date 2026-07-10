@@ -853,15 +853,22 @@ impl Target {
     /// lets the whole flow be unit-tested against a scripted `MockConnection`
     /// without a live socket.
     ///
-    /// A parse failure is best-effort: logged and left at the `unknown`
-    /// sentinel, matching [`reload_system`](Target::reload_system)'s
-    /// degradation. The reboot/reconnect/operation lifecycle is bound at the
-    /// composition root — see the module docs.
+    /// System parsing is retried a few times on a transient SFTP failure (a
+    /// connect-time timeout that would otherwise strand the host at the
+    /// `unknown` sentinel); if it still fails after the retry budget, `connect()`
+    /// returns the error so the caller drops the host — mirroring upstream, which
+    /// does not swallow a `parse_system` failure. (This differs from
+    /// [`reload_system`](Target::reload_system), which degrades to the sentinel
+    /// because the host is already a live group member there.) The
+    /// reboot/reconnect/operation lifecycle is bound at the composition root —
+    /// see the module docs.
     ///
     /// # Errors
     ///
     /// Propagates [`HostError::Connect`] / [`HostError::Auth`] from
-    /// [`SshConnection::connect`] when the host is unreachable or auth fails.
+    /// [`SshConnection::connect`] when the host is unreachable or auth fails, and
+    /// the last [`parse_system`](parsers::parse_system) error when the system
+    /// cannot be parsed after the retry budget is exhausted.
     pub async fn connect(&mut self) -> Result<()> {
         if self.connection.is_none() {
             tracing::info!(host = %self.hostname, "connecting");
@@ -908,11 +915,45 @@ impl Target {
         // `self.query_versions()`. Runs whether the connection was just dialed
         // or already attached, so a short-circuited re-`connect()` still picks
         // up the real system instead of leaving the `unknown` sentinel.
+        //
+        // `parse_system` already resolves the non-SUSE branch internally
+        // (`SftpNotFound` on `/etc/products.d` → `/etc/os-release` fallback), so
+        // a propagated `Err` here is an *unexpected* failure — in practice a
+        // transient SFTP timeout on a freshly-dialed session. A single such
+        // timeout used to leave the host permanently `unknown--` for the rest of
+        // the session (never seeded, `list_packages` shows blanks, refhosts
+        // drift spuriously warns), even though SSH itself is fine. Retry a few
+        // times with a short backoff so a transient stall self-heals.
+        //
+        // Upstream `connect()` does NOT wrap `parse_system` in try/except: a
+        // parse failure propagates out of `connect()` and the caller drops the
+        // host. Mirror that — a host we cannot parse (after retries) is unusable
+        // (no system ⇒ no seed, no doer/repo resolution), so surface the error
+        // rather than keep an `unknown--` zombie in the group.
         if let Some(conn) = self.connection.as_mut() {
-            match parsers::parse_system(conn.as_mut()).await {
-                Ok((system, transactional)) => self.set_system(system, transactional),
-                Err(e) => {
-                    tracing::warn!(host = %self.hostname, error = %e, "connect: system parse failed");
+            const PARSE_RETRIES: u32 = 3;
+            let mut attempt = 0;
+            loop {
+                match parsers::parse_system(conn.as_mut()).await {
+                    Ok((system, transactional)) => {
+                        self.set_system(system, transactional);
+                        break;
+                    }
+                    Err(e) if attempt < PARSE_RETRIES => {
+                        attempt += 1;
+                        tracing::warn!(
+                            host = %self.hostname, error = %e, attempt,
+                            "connect: system parse failed; retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            host = %self.hostname, error = %e, attempts = attempt + 1,
+                            "connect: system parse failed after retries; dropping host"
+                        );
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -1607,10 +1648,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn connect_parse_failure_leaves_sentinel() {
-        // A SUSE host whose base product file is present but has malformed
-        // XML: `parse_system` surfaces the XML error, `connect()` logs it and
-        // leaves the `unknown` sentinel (best-effort, matches `reload_system`).
+    async fn connect_errors_on_unrecoverable_parse_failure() {
+        // A SUSE host whose base product file is present but has malformed XML:
+        // `parse_system` surfaces the XML error on every attempt, so `connect()`
+        // exhausts its retry budget and propagates the error — the caller drops
+        // the host rather than keep an unusable `unknown--` zombie (mirrors
+        // upstream, which never swallows a parse_system failure).
         let conn = MockConnection::new("h1")
             .with_listing("/etc/products.d", ["SLES.prod"])
             .with_link("/etc/products.d/baseproduct", "SLES.prod")
@@ -1620,9 +1663,52 @@ mod tests {
             );
         let mut t = enabled_with(conn);
 
-        t.connect().await.expect("connect degrades, does not fail");
+        assert!(
+            t.connect().await.is_err(),
+            "an unparseable system must fail connect so the host is dropped"
+        );
+    }
 
+    #[tokio::test]
+    async fn connect_retries_transient_system_parse_failure() {
+        // A flaky SFTP session: the first two `/etc/products.d` listdirs time
+        // out, the third succeeds. `connect()`'s bounded retry must recover the
+        // real system instead of leaving the host permanently `unknown--` (the
+        // whale-31 field bug — a single connect-time SFTP timeout stranded the
+        // host with no system, so it was never seeded and list_packages showed
+        // blanks / spurious refhosts drift).
+        let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>6</patchlevel><arch>x86_64</arch></product>"#;
+        let conn = MockConnection::new("h1")
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file("/etc/products.d/SLES.prod", prod.to_vec())
+            .with_transient_listdir_failures("/etc/products.d", 2);
+        let mut t = enabled_with(conn);
         assert_eq!(t.system().get_base().name, "unknown");
+
+        t.connect().await.expect("connect");
+
+        assert_eq!(t.system().get_base().name, "SLES");
+        assert_eq!(t.system().get_base().version, "15-SP6");
+    }
+
+    #[tokio::test]
+    async fn connect_errors_when_transient_failure_exceeds_budget() {
+        // If the SFTP session keeps timing out past the retry budget (3),
+        // `connect()` gives up and propagates the error so the caller drops the
+        // host — it never returns a half-connected `unknown--` member.
+        let prod = br#"<product><name>SLES</name><baseversion>15</baseversion><patchlevel>6</patchlevel><arch>x86_64</arch></product>"#;
+        let conn = MockConnection::new("h1")
+            .with_listing("/etc/products.d", ["SLES.prod"])
+            .with_link("/etc/products.d/baseproduct", "SLES.prod")
+            .with_file("/etc/products.d/SLES.prod", prod.to_vec())
+            .with_transient_listdir_failures("/etc/products.d", 99);
+        let mut t = enabled_with(conn);
+
+        assert!(
+            t.connect().await.is_err(),
+            "exhausting the parse retry budget must fail connect"
+        );
     }
 
     #[tokio::test]

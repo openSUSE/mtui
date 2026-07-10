@@ -125,6 +125,11 @@ pub struct MockConnection {
     /// not-found) from `sftp_open`, mirroring a dangling symlink whose target
     /// product file open raises `OSError` rather than `FileNotFoundError`.
     sftp_open_errors: HashSet<PathBuf>,
+    /// Directory paths scripted to raise a *transient* [`HostError::Sftp`] on
+    /// the first N `sftp_listdir` calls, then succeed — models a flaky SFTP
+    /// session (e.g. a connect-time timeout) that a bounded retry recovers from.
+    /// The count is shared+mutable so it decrements across `Clone`d handles.
+    listdir_transient_failures: Arc<Mutex<HashMap<PathBuf, u32>>>,
     /// Canned bytes served by [`ShellChannel::read`] on a spawned shell, drained
     /// one chunk per `read` then `0` (EOF). Lets the Phase-6 TTY bridge be
     /// tested offline.
@@ -165,6 +170,7 @@ impl MockConnection {
             sftp_remove_fails: false,
             missing_dirs: HashSet::new(),
             sftp_open_errors: HashSet::new(),
+            listdir_transient_failures: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "shell")]
             shell_output: Vec::new(),
             #[cfg(feature = "shell")]
@@ -181,6 +187,19 @@ impl MockConnection {
     #[must_use]
     pub fn failing_sftp_remove(mut self) -> Self {
         self.sftp_remove_fails = true;
+        self
+    }
+
+    /// Scripts `path`'s first `count` [`sftp_listdir`](Connection::sftp_listdir)
+    /// calls to raise a transient [`HostError::Sftp`] before succeeding, so a
+    /// caller's bounded retry (e.g. `Target::connect`'s system-parse retry) can
+    /// be exercised against a flaky session.
+    #[must_use]
+    pub fn with_transient_listdir_failures(self, path: impl Into<PathBuf>, count: u32) -> Self {
+        self.listdir_transient_failures
+            .lock()
+            .expect("mock transient-failures lock")
+            .insert(path.into(), count);
         self
     }
 
@@ -517,6 +536,23 @@ impl Connection for MockConnection {
 
     async fn sftp_listdir(&mut self, path: &Path) -> Result<Vec<String>> {
         self.record_sftp(MockSftpOp::Listdir(path.to_path_buf()));
+        // Transient-failure script: fail the first N calls for this path, then
+        // fall through to the normal listing so a retry recovers.
+        {
+            let mut pending = self
+                .listdir_transient_failures
+                .lock()
+                .expect("mock transient-failures lock");
+            if let Some(remaining) = pending.get_mut(path)
+                && *remaining > 0
+            {
+                *remaining -= 1;
+                return Err(HostError::Sftp {
+                    host: self.hostname.clone(),
+                    reason: "Timeout".to_owned(),
+                });
+            }
+        }
         if self.missing_dirs.contains(path) {
             return Err(HostError::SftpNotFound {
                 host: self.hostname.clone(),
@@ -584,12 +620,17 @@ impl Connection for MockConnection {
 
     async fn sftp_readlink(&mut self, path: &Path) -> Result<String> {
         self.record_sftp(MockSftpOp::Readlink(path.to_path_buf()));
+        // An unscripted path models a missing symlink on a real host, which the
+        // SFTP layer reports as `SftpNotFound` (not a generic error) — matching
+        // `sftp_open`'s missing-file semantics. `parse_system` relies on this to
+        // degrade a missing `baseproduct` to a dangling base rather than a hard
+        // parse failure.
         self.links
             .get(path)
             .cloned()
-            .ok_or_else(|| HostError::Sftp {
+            .ok_or_else(|| HostError::SftpNotFound {
                 host: self.hostname.clone(),
-                reason: format!("not a link: {}", path.display()),
+                path: path.display().to_string(),
             })
     }
 

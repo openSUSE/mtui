@@ -30,10 +30,13 @@ pub struct ListPackages;
 ///
 /// Distinguishes three outcomes upstream keeps separate but which a bare
 /// `Option<Ordering>` cannot express:
-/// * [`PkgState::Blank`] — installed but nothing to compare against (no template
-///   loaded); upstream renders an empty state column.
-/// * [`PkgState::NotInstalled`] — absent, or present in `-p` but not in the
-///   report (upstream's `KeyError`/`None` branch).
+/// * [`PkgState::Blank`] — installed but with no required version to compare
+///   against (no template loaded, the host was never seeded with this package —
+///   e.g. a `-p` extra or a host whose system failed to parse — or a seeded
+///   package with an empty required). Upstream renders an empty state column
+///   (`"" if v`), the `KeyError`/no-metadata branch.
+/// * [`PkgState::NotInstalled`] — the querier found the package absent
+///   (upstream's `state_map[None]`, printed only when `v` is falsy).
 /// * [`PkgState::Cmp`] — installed and comparable to a required version.
 #[derive(Clone, Copy)]
 enum PkgState {
@@ -113,10 +116,6 @@ impl Command for ListPackages {
             return Err(CommandError::MissingPackages);
         }
 
-        // Whether a template is loaded decides how state is labeled (upstream
-        // `if self.metadata:`). Read it before the mutable-targets borrow below.
-        let loaded = session.metadata().is_loaded();
-
         let targets = session.targets_mut();
         let hosts =
             select_names(targets, args, true).map_err(|e| CommandError::Other(e.to_string()))?;
@@ -147,15 +146,19 @@ impl Command for ListPackages {
                             .iter()
                             .find(|p| &p.name == pkg)
                             .and_then(|p| p.required().cloned());
-                        // Mirror upstream's three branches:
-                        // * no template: installed -> blank, absent -> not installed.
-                        // * template + required present: compare current vs required.
-                        // * template but package not in report: not installed.
+                        // Mirror upstream exactly (`listpackages.py`): a package
+                        // absent from the querier is "not installed"; an
+                        // installed package with no required version to compare
+                        // against renders BLANK — never "not installed". The
+                        // "no required version" case covers all three upstream
+                        // paths that lack one: no template loaded, the host's
+                        // seed does not carry this package (e.g. a `-p` extra, or
+                        // a host whose system failed to parse so it was never
+                        // seeded), and a seeded package with an empty required.
                         let state = match (&current, &wanted) {
                             (None, _) => PkgState::NotInstalled,
-                            (Some(_), _) if !loaded => PkgState::Blank,
                             (Some(c), Some(w)) => PkgState::Cmp(c.cmp(w)),
-                            (Some(_), None) => PkgState::NotInstalled,
+                            (Some(_), None) => PkgState::Blank,
                         };
                         let version = current.map_or_else(String::new, |v| v.to_string());
                         lines.push((pkg.clone(), version, state));
@@ -225,10 +228,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loaded_template_extra_not_in_report_is_not_installed() {
-        // Template loaded (FakeReport) but `-p bash` is not in the report, so it
-        // has no required version: upstream's KeyError branch → "not installed",
-        // NOT "updated" (case 3).
+    async fn loaded_template_extra_installed_but_unseeded_is_blank() {
+        // Template loaded (FakeReport) but `-p bash` is not seeded on the host
+        // (not part of the update), so it has no required version to compare
+        // against. Upstream's KeyError branch renders `"" if v` — BLANK for an
+        // installed package, NOT "not installed" and NOT "updated". This is the
+        // same path a host with an unparsed system (never seeded) takes.
         let (mut session, buf) =
             session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "bash 5.1-1\n");
         assert!(session.metadata().is_loaded());
@@ -237,8 +242,16 @@ mod tests {
         let out = buf.contents();
         assert!(out.contains("packages on h1"), "{out}");
         assert!(out.contains("bash"), "{out}");
-        assert!(out.contains("not installed"), "{out}");
+        assert!(out.contains("5.1-1"), "{out}");
+        assert!(!out.contains("not installed"), "{out}");
         assert!(!out.contains("updated"), "{out}");
+        // Installed + no required version ⇒ blank state column.
+        assert!(
+            out.lines().any(|l| l.starts_with("bash")
+                && l.contains("5.1-1")
+                && l.trim_end() == format!("{:30}: {:20}", "bash", "5.1-1").trim_end()),
+            "{out}"
+        );
     }
 
     #[tokio::test]
