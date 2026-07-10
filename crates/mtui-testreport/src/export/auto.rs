@@ -9,7 +9,7 @@
 //! tests), mirroring how the downloader is tested.
 
 use mtui_datasources::OpenQAOverviewResult;
-use mtui_datasources::openqa::standard::AutoOpenQA;
+use mtui_datasources::qem_dashboard::DashboardAutoOpenQA;
 use mtui_types::URLs;
 
 use super::base::{ExportContext, OverwritePrompt};
@@ -19,8 +19,8 @@ use super::downloader::BytesFetcher;
 pub struct AutoExport {
     /// Shared export state and helpers.
     pub ctx: ExportContext,
-    /// The "auto" openQA connector results, `None` when unpopulated.
-    pub auto: Option<AutoOpenQA>,
+    /// The QEM-dashboard "auto" openQA connector, `None` when unpopulated.
+    pub auto: Option<DashboardAutoOpenQA>,
     /// The openqa_overview payload, if the overview command ran.
     pub overview: Option<OpenQAOverviewResult>,
 }
@@ -30,7 +30,7 @@ impl AutoExport {
     #[must_use]
     pub fn new(
         ctx: ExportContext,
-        auto: Option<AutoOpenQA>,
+        auto: Option<DashboardAutoOpenQA>,
         overview: Option<OpenQAOverviewResult>,
     ) -> Self {
         Self {
@@ -68,7 +68,7 @@ impl AutoExport {
     /// `PASSED` when every result is `passed`/`softfailed`; else `FAILED`.
     #[must_use]
     fn install_status(&self) -> &'static str {
-        let results = self.auto.as_ref().and_then(AutoOpenQA::results);
+        let results = self.auto.as_ref().and_then(|a| a.results.as_deref());
         match results {
             None => "UNKNOWN",
             Some([]) => "UNKNOWN",
@@ -94,7 +94,7 @@ impl AutoExport {
         let result_lines: Vec<String> = self
             .auto
             .as_ref()
-            .and_then(AutoOpenQA::results)
+            .and_then(|a| a.results.as_deref())
             .unwrap_or(&[])
             .iter()
             .map(Self::install_job_line)
@@ -174,7 +174,7 @@ impl AutoExport {
         let Some(auto) = &self.auto else {
             return Vec::new();
         };
-        let Some(results) = auto.results() else {
+        let Some(results) = auto.results.as_deref() else {
             return Vec::new();
         };
 
@@ -233,11 +233,7 @@ impl AutoExport {
             && !self.ctx.force;
 
         self.install_results();
-        let pp: Vec<String> = self
-            .auto
-            .as_ref()
-            .map(|a| a.pp().to_vec())
-            .unwrap_or_default();
+        let pp: Vec<String> = self.auto.as_ref().map(|a| a.pp.clone()).unwrap_or_default();
         self.ctx.inject_openqa(&pp);
         if let Some(overview) = self.overview.clone() {
             self.ctx.inject_overview(&overview);
@@ -292,6 +288,27 @@ mod tests {
         ExportContext::new(cfg, &[], false, rrid)
     }
 
+    /// Builds a `DashboardAutoOpenQA` with seeded `results`/`pp`, without any
+    /// network I/O: `new()` only stores config, then we set the public output
+    /// fields directly (as `run()` would).
+    fn seeded_auto(results: Option<Vec<URLs>>, pp: Vec<String>) -> DashboardAutoOpenQA {
+        use mtui_datasources::{QemDashboardClient, QemIncident, VerifyPolicy};
+        let rrid: mtui_types::RequestReviewID = "SUSE:Maintenance:1:2".parse().unwrap();
+        let client =
+            QemDashboardClient::new("http://dashboard.invalid/api", VerifyPolicy::Default(false))
+                .expect("client builds");
+        let incident = QemIncident {
+            rrid: rrid.clone(),
+            incident_number: "1".to_string(),
+            client,
+            data: None,
+        };
+        let mut auto = DashboardAutoOpenQA::new("http://oqa.invalid", &incident, rrid);
+        auto.results = results;
+        auto.pp = pp;
+        auto
+    }
+
     #[test]
     fn install_job_line_truncates_at_file_and_uppercases() {
         let line = AutoExport::install_job_line(&urls("passed"));
@@ -308,6 +325,20 @@ mod tests {
     fn install_status_unknown_when_no_auto() {
         let ex = AutoExport::new(ctx(), None, None);
         assert_eq!(ex.install_status(), "UNKNOWN");
+    }
+
+    #[test]
+    fn install_status_passed_with_seeded_auto() {
+        let auto = seeded_auto(Some(vec![urls("passed"), urls("softfailed")]), vec![]);
+        let ex = AutoExport::new(ctx(), Some(auto), None);
+        assert_eq!(ex.install_status(), "PASSED");
+    }
+
+    #[test]
+    fn install_status_failed_with_a_failing_job() {
+        let auto = seeded_auto(Some(vec![urls("passed"), urls("failed")]), vec![]);
+        let ex = AutoExport::new(ctx(), Some(auto), None);
+        assert_eq!(ex.install_status(), "FAILED");
     }
 
     #[test]
@@ -353,6 +384,77 @@ mod tests {
             )
             .await;
         assert!(out.is_empty());
+    }
+
+    /// Builds a `ctx` whose `install_logs` writes land in `dir` (isolated).
+    fn ctx_in(dir: &std::path::Path, template: &[&str]) -> ExportContext {
+        let mut cfg = Config::default();
+        cfg.template_dir = dir.to_path_buf();
+        let rrid = "SUSE:Maintenance:1:2".parse().unwrap();
+        let lines: Vec<String> = template.iter().map(|s| (*s).to_string()).collect();
+        ExportContext::new(cfg, &lines, false, rrid)
+    }
+
+    #[tokio::test]
+    async fn get_logs_downloads_and_writes_seeded_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let auto = seeded_auto(Some(vec![urls("passed")]), vec![]);
+        let ex = AutoExport::new(ctx_in(dir.path(), &[]), Some(auto), None);
+
+        let out = ex
+            .get_logs(
+                &OkFetcher(b"zypper install log\n".to_vec()),
+                &super::super::base::DenyOverwrite,
+            )
+            .await;
+
+        // Filename is `{distri.lower()}_{version}_{arch}.log`.
+        assert_eq!(out, vec!["sles_15-SP5_x86_64.log".to_string()]);
+        let written = std::fs::read_to_string(ex.ctx.install_logs_dir().join(&out[0])).unwrap();
+        assert_eq!(written, "zypper install log\n");
+    }
+
+    #[tokio::test]
+    async fn run_with_seeded_auto_injects_status_pp_and_writes_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let auto = seeded_auto(
+            Some(vec![urls("passed")]),
+            vec!["Results from openQA jobs\n".to_string()],
+        );
+        // A realistic template: the `source code change review:` anchor is not
+        // the first line (upstream templates always have a header above it), so
+        // the `inject_openqa` insertion point (anchor - 1) is in range.
+        let ctx = ctx_in(
+            dir.path(),
+            &[
+                "Test results by product-arch:\n",
+                "\n",
+                "source code change review:\n",
+            ],
+        );
+        let mut ex = AutoExport::new(ctx, Some(auto), None);
+
+        let out = ex
+            .run(
+                &OkFetcher(b"install log body\n".to_vec()),
+                &super::super::base::DenyOverwrite,
+            )
+            .await;
+
+        let body = out.concat();
+        // Status computed from the seeded (passing) result, not UNKNOWN.
+        assert!(
+            body.contains("Installation tests done in openQA with following results: PASSED"),
+            "status line missing: {body}"
+        );
+        // The connector's pretty-print block was injected.
+        assert!(
+            body.contains("Results from openQA jobs"),
+            "pp missing: {body}"
+        );
+        // The per-job install log was downloaded and written to disk.
+        let logfile = ex.ctx.install_logs_dir().join("sles_15-SP5_x86_64.log");
+        assert!(logfile.exists(), "install log not written: {logfile:?}");
     }
 
     #[tokio::test]

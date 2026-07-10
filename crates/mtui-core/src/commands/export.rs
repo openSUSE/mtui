@@ -113,13 +113,17 @@ impl Command for Export {
         let template: Vec<String> = match workflow {
             Workflow::Auto => {
                 let http = build_http(session)?;
-                AutoExport::new(ctx, None, None)
+                let auto = session.metadata().openqa().auto.clone();
+                let overview = session.metadata().openqa().overview.clone();
+                AutoExport::new(ctx, auto, overview)
                     .run(&http, &DenyOverwrite)
                     .await
             }
             Workflow::Kernel => {
                 let http = build_http(session)?;
-                KernelExport::new(ctx, Vec::new(), None).run(&http).await
+                let kernel = session.metadata().openqa().kernel.clone();
+                let overview = session.metadata().openqa().overview.clone();
+                KernelExport::new(ctx, kernel, overview).run(&http).await
             }
             Workflow::Manual => {
                 let (hosts, results) = manual_results.expect("computed for Manual workflow");
@@ -201,6 +205,86 @@ mod tests {
         assert!(written.contains("## export MTUI:"));
     }
 
+    /// Builds a `DashboardAutoOpenQA` with seeded `results`/`pp` (no network in
+    /// `new`; the output fields are set directly as `run()` would). The install
+    /// log `url` points at `log_url` so the exporter's real HTTP client can
+    /// download it from a mock server.
+    fn seeded_auto(log_url: &str) -> mtui_datasources::DashboardAutoOpenQA {
+        use mtui_datasources::{
+            DashboardAutoOpenQA, QemDashboardClient, QemIncident, VerifyPolicy,
+        };
+        let rrid: mtui_types::RequestReviewID = "SUSE:Maintenance:1:1".parse().unwrap();
+        let client =
+            QemDashboardClient::new("http://dashboard.invalid/api", VerifyPolicy::Default(false))
+                .expect("client builds");
+        let incident = QemIncident {
+            rrid: rrid.clone(),
+            incident_number: "1".to_string(),
+            client,
+            data: None,
+        };
+        let mut auto = DashboardAutoOpenQA::new("http://oqa.invalid", &incident, rrid);
+        auto.results = Some(vec![mtui_types::URLs::new(
+            "SLES", "x86_64", "15-SP5", log_url, "passed",
+        )]);
+        auto.pp = vec!["Results from openQA jobs\n".to_string()];
+        auto
+    }
+
+    /// The Auto branch must read the report's openQA holder end-to-end: the
+    /// install status, the `pp` block, and the per-job install log must all land
+    /// in the template / on disk. Regression guard for the `None, None` stub.
+    #[tokio::test]
+    async fn auto_reads_holder_status_pp_and_downloads_log() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Serve the install log the seeded result points at.
+        let oqa = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/install.log"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("zypper install body\n"))
+            .mount(&oqa)
+            .await;
+        let log_url = format!("{}/install.log", oqa.uri());
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.templates.active_mut().base_mut().workflow = Workflow::Auto;
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        // Realistic template: a header above the `source code change review:`
+        // anchor so `inject_openqa`'s insertion point is in range.
+        let path_out = dir.path().join("template.txt");
+        std::fs::write(
+            &path_out,
+            "Test results by product-arch:\n\nsource code change review:\n",
+        )
+        .unwrap();
+
+        // Pre-seed the holder (as `reload_openqa` would).
+        session.metadata_mut().openqa_mut().auto = Some(seeded_auto(&log_url));
+
+        let args = matches(&Export, &["-f", path_out.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let written = std::fs::read_to_string(&path_out).unwrap();
+        assert!(
+            written.contains("Installation tests done in openQA with following results: PASSED"),
+            "status line missing:\n{written}"
+        );
+        assert!(
+            written.contains("Results from openQA jobs"),
+            "pp block missing:\n{written}"
+        );
+        // The per-job install log was downloaded from the mock and written.
+        let logfile = dir
+            .path()
+            .join("SUSE:Maintenance:1:1")
+            .join(&session.config.install_logs)
+            .join("sles_15-SP5_x86_64.log");
+        assert!(logfile.exists(), "install log not written: {logfile:?}");
+    }
+
     #[tokio::test]
     async fn kernel_writes_template_to_explicit_filename() {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
@@ -214,6 +298,78 @@ mod tests {
 
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("## export MTUI:"));
+    }
+
+    /// The Kernel branch must read the report's `openqa.kernel` list and render
+    /// its result matrix — not export against an empty `Vec::new()`. Seeds one
+    /// real `KernelOpenQA` (populated from a mock openQA `/api/v1/jobs`) into the
+    /// holder and asserts its `pp` matrix lands under `regression tests:`.
+    /// Regression guard for the `Vec::new(), None` stub.
+    #[tokio::test]
+    async fn kernel_reads_holder_and_renders_matrix() {
+        use mtui_datasources::VerifyPolicy;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // A mock openQA returning one passing kernel LTP job → a matrix line.
+        let oqa = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/jobs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jobs": [{
+                    "id": 42,
+                    "test": "ltp_syscalls",
+                    "result": "passed",
+                    "settings": { "FLAVOR": "Server-DVD-Incidents-Kernel", "ARCH": "x86_64" },
+                    "modules": []
+                }]
+            })))
+            .mount(&oqa)
+            .await;
+
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        session.templates.active_mut().base_mut().workflow = Workflow::Kernel;
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let path_out = dir.path().join("template.txt");
+        std::fs::write(&path_out, "regression tests:\n\nbuild log review:\n").unwrap();
+
+        // Build a real, populated kernel connector against the mock and seed it.
+        let rrid = session.metadata().rrid().unwrap().clone();
+        let incident = build_incident(
+            rrid.clone(),
+            format!("{}/api", oqa.uri()),
+            VerifyPolicy::Default(false),
+        )
+        .await
+        .unwrap();
+        let kernel = crate::commands::support::build_kernel_openqa(
+            &incident,
+            &oqa.uri(),
+            VerifyPolicy::Default(false),
+        )
+        .unwrap()
+        .run()
+        .await;
+        assert!(
+            kernel.results().is_some_and(|r| !r.is_empty()),
+            "mock kernel connector should populate"
+        );
+        session.metadata_mut().openqa_mut().kernel.push(kernel);
+
+        let args = matches(&Export, &["-f", path_out.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let written = std::fs::read_to_string(&path_out).unwrap();
+        // The connector's matrix header + row prove the holder was read.
+        assert!(
+            written.contains("Results from openQA:"),
+            "kernel results header missing:\n{written}"
+        );
+        assert!(
+            written.contains("openQA instance:") && written.contains("ltp_syscalls"),
+            "kernel matrix rows missing:\n{written}"
+        );
     }
 
     /// Mounts the three QEM-dashboard endpoints the manual enrichment touches.
