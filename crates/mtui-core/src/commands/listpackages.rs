@@ -124,38 +124,52 @@ impl Command for ListPackages {
             return Err(CommandError::NoRefhostsDefined);
         }
 
-        // Query per host, then render (querying borrows targets mutably, so the
-        // display render is a separate pass over snapshotted rows).
-        let mut rendered: Vec<(String, String, Vec<(String, String, PkgState)>)> = Vec::new();
-        for name in &hosts {
-            let Some(t) = targets.get_mut(name) else {
-                continue;
-            };
-            let system = t.system().to_string();
-            let versions = PackageQuerier::new(t).versions(&pkgs).await;
-            let mut lines: Vec<(String, String, PkgState)> = Vec::new();
-            for pkg in &pkgs {
-                let current = versions.get(pkg).cloned().flatten();
-                let wanted = t
-                    .packages()
-                    .iter()
-                    .find(|p| &p.name == pkg)
-                    .and_then(|p| p.required().cloned());
-                // Mirror upstream's three branches:
-                // * no template: installed -> blank, absent -> not installed.
-                // * template + required present: compare current vs required.
-                // * template but package not in report: not installed.
-                let state = match (&current, &wanted) {
-                    (None, _) => PkgState::NotInstalled,
-                    (Some(_), _) if !loaded => PkgState::Blank,
-                    (Some(c), Some(w)) => PkgState::Cmp(c.cmp(w)),
-                    (Some(_), None) => PkgState::NotInstalled,
-                };
-                let version = current.map_or_else(String::new, |v| v.to_string());
-                lines.push((pkg.clone(), version, state));
-            }
-            rendered.push((name.clone(), system, lines));
-        }
+        // Query every selected host concurrently (upstream fans this out; a
+        // serial `.await` per host turned an 11-host group into 11 sequential
+        // SSH round-trips). `values_mut()` hands back disjoint `&mut Target`, so
+        // each host's `rpm -q` is an independent future driven together by
+        // `join_all`; the per-host render then reads the snapshotted result.
+        let selected: std::collections::HashSet<&str> = hosts.iter().map(String::as_str).collect();
+        let queries = targets
+            .targets_mut()
+            .filter(|t| selected.contains(t.hostname()))
+            .map(|t| {
+                let name = t.hostname().to_owned();
+                let system = t.system().to_string();
+                let pkgs = &pkgs;
+                async move {
+                    let versions = PackageQuerier::new(t).versions(pkgs).await;
+                    let mut lines: Vec<(String, String, PkgState)> = Vec::new();
+                    for pkg in pkgs {
+                        let current = versions.get(pkg).cloned().flatten();
+                        let wanted = t
+                            .packages()
+                            .iter()
+                            .find(|p| &p.name == pkg)
+                            .and_then(|p| p.required().cloned());
+                        // Mirror upstream's three branches:
+                        // * no template: installed -> blank, absent -> not installed.
+                        // * template + required present: compare current vs required.
+                        // * template but package not in report: not installed.
+                        let state = match (&current, &wanted) {
+                            (None, _) => PkgState::NotInstalled,
+                            (Some(_), _) if !loaded => PkgState::Blank,
+                            (Some(c), Some(w)) => PkgState::Cmp(c.cmp(w)),
+                            (Some(_), None) => PkgState::NotInstalled,
+                        };
+                        let version = current.map_or_else(String::new, |v| v.to_string());
+                        lines.push((pkg.clone(), version, state));
+                    }
+                    (name, system, lines)
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut rendered: Vec<(String, String, Vec<(String, String, PkgState)>)> =
+            futures::future::join_all(queries).await;
+        // `values_mut()` yields sorted-by-hostname order; restore the caller's
+        // requested host order so `-t a,b` renders in the order given.
+        rendered
+            .sort_by_key(|(name, _, _)| hosts.iter().position(|h| h == name).unwrap_or(usize::MAX));
 
         for (name, system, lines) in rendered {
             session
@@ -388,5 +402,23 @@ mod tests {
         assert!(out.contains("Packages for version SLES-15.5:"), "{out}");
         assert!(out.contains("bash"), "{out}");
         assert!(out.contains("5.1-1"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn multi_host_output_follows_requested_order_not_sorted() {
+        // The parallel query iterates `values_mut()` (hostname-sorted); the
+        // render must restore the caller's `-t` order. Request z8 before a1 and
+        // assert z8's block prints first.
+        let (mut session, buf) =
+            session_with_hosts("SUSE:Maintenance:1:1", &["a1", "z8"], "bash 5.1-1\n");
+        let args = matches(&ListPackages, &["-p", "bash", "-t", "z8", "-t", "a1"]);
+        ListPackages.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        let z_pos = out.find("packages on z8").expect("z8 block present");
+        let a_pos = out.find("packages on a1").expect("a1 block present");
+        assert!(
+            z_pos < a_pos,
+            "requested order z8 before a1 must be kept:\n{out}"
+        );
     }
 }
