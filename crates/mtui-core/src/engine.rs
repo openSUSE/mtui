@@ -124,7 +124,9 @@ const HELP_COLUMNS_PER_ROW: usize = 4;
 /// With no argument, prints the command listing split into documented
 /// ([`Command::about`] is `Some`) and undocumented buckets in fixed-width
 /// columns. With a command name, prints that command's `--help` (the same text
-/// `<cmd> --help` produces), or an error if the name is unknown.
+/// `<cmd> --help` produces) — its [`Command::about`] one-liner is fed in as the
+/// parser description so it heads the output (upstream: docstring → argparse
+/// `description`) — or an error if the name is unknown.
 fn render_help(
     registry: &Registry,
     session: &mut Session,
@@ -143,7 +145,11 @@ fn render_help(
         message: format!("No help available: '{topic}' is not a known command"),
         help_or_version: false,
     })?;
-    let mut parser = command.configure(base_subcommand(command.name()));
+    let mut base = base_subcommand(command.name());
+    if let Some(about) = command.about() {
+        base = base.about(about);
+    }
+    let mut parser = command.configure(base);
     session
         .display
         .println(parser.render_long_help().to_string().trim_end());
@@ -459,6 +465,10 @@ mod tests {
         assert!(out.contains("Usage:"));
         assert!(out.contains("doc"));
         assert!(out.contains("--all-templates"));
+        // The command's `about` is fed into the parser, so `help <cmd>` shows
+        // the one-line description at the top (upstream: docstring → argparse
+        // `description`).
+        assert!(out.contains("a documented command"));
     }
 
     #[tokio::test]
