@@ -98,11 +98,95 @@ pub async fn dispatch_argv(
     name: &str,
     argv: &[String],
 ) -> Result<(), EngineError> {
+    // `help` is intercepted here (before command lookup) because listing
+    // commands and rendering a target's `--help` both need the `Registry`, which
+    // the `Command` trait does not hand to `call()`. This is the engine-layer
+    // analogue of the REPL intercepting `shell`; the registered `Help` command
+    // still exists for listing/completion/deny-list purposes.
+    if name == "help" {
+        return render_help(registry, session, argv);
+    }
+
     let command = registry
         .get(name)
         .ok_or_else(|| EngineError::UnknownCommand(name.to_owned()))?;
     let matches = parse_command(command.as_ref(), argv)?;
     command.run(session, &matches).await.map_err(Into::into)
+}
+
+/// Column layout for the no-arg `help` listing (mirrors upstream
+/// `help.py:_COLUMN_WIDTH`/`_COLUMNS_PER_ROW`).
+const HELP_COLUMN_WIDTH: usize = 22;
+const HELP_COLUMNS_PER_ROW: usize = 4;
+
+/// Implements the `help` command against the live [`Registry`].
+///
+/// With no argument, prints the command listing split into documented
+/// ([`Command::about`] is `Some`) and undocumented buckets in fixed-width
+/// columns. With a command name, prints that command's `--help` (the same text
+/// `<cmd> --help` produces), or an error if the name is unknown.
+fn render_help(
+    registry: &Registry,
+    session: &mut Session,
+    argv: &[String],
+) -> Result<(), EngineError> {
+    // `help` takes at most one positional (the topic); reject extra args the way
+    // a clap parser would, but tolerate a lone `-h/--help` on `help` itself.
+    let topic = argv.iter().find(|a| !a.starts_with('-'));
+
+    let Some(topic) = topic else {
+        render_help_listing(registry, session);
+        return Ok(());
+    };
+
+    let command = registry.get(topic).ok_or_else(|| EngineError::Parse {
+        message: format!("No help available: '{topic}' is not a known command"),
+        help_or_version: false,
+    })?;
+    let mut parser = command.configure(base_subcommand(command.name()));
+    session
+        .display
+        .println(parser.render_long_help().to_string().trim_end());
+    Ok(())
+}
+
+/// Prints the documented/undocumented command listing.
+fn render_help_listing(registry: &Registry, session: &mut Session) {
+    let mut documented: Vec<&str> = Vec::new();
+    let mut undocumented: Vec<&str> = Vec::new();
+    let mut names: Vec<&str> = registry.names().collect();
+    names.sort_unstable();
+    for name in names {
+        match registry.get(name).and_then(|c| c.about()) {
+            Some(_) => documented.push(name),
+            None => undocumented.push(name),
+        }
+    }
+
+    session
+        .display
+        .println("Documented commands (type help <topic>):");
+    session.display.println(&"=".repeat(40));
+    print_help_columns(session, &documented);
+
+    if !undocumented.is_empty() {
+        session.display.println("");
+        session.display.println("Undocumented commands:");
+        session.display.println(&"=".repeat(40));
+        print_help_columns(session, &undocumented);
+    }
+}
+
+/// Prints `names` in a fixed-width column grid, trailing spaces stripped
+/// (mirrors upstream `help.py:_print_columns`).
+fn print_help_columns(session: &mut Session, names: &[&str]) {
+    for row in names.chunks(HELP_COLUMNS_PER_ROW) {
+        let line: String = row
+            .iter()
+            .map(|n| format!("{n:<HELP_COLUMN_WIDTH$}"))
+            .collect();
+        session.display.println(line.trim_end());
+    }
 }
 
 /// Builds `command`'s clap parser and parses `argv` into [`ArgMatches`] without
@@ -306,5 +390,87 @@ mod tests {
             err,
             EngineError::Command(CommandError::TemplateNotLoaded(rrid)) if rrid == "SUSE:Maintenance:1:1"
         ));
+    }
+
+    /// A documented stub command (returns `Some` from `about`).
+    struct DocCmd;
+
+    #[async_trait]
+    impl Command for DocCmd {
+        fn name(&self) -> &'static str {
+            "doc"
+        }
+        fn about(&self) -> Option<&'static str> {
+            Some("a documented command")
+        }
+        async fn call(&self, _s: &mut Session, _a: &ArgMatches) -> CommandResult {
+            Ok(())
+        }
+    }
+
+    /// A registry with the `Help` command plus one documented and one
+    /// undocumented stub, and a session whose display is captured.
+    fn help_registry_and_session() -> (Registry, Session, crate::commands::testkit::Buffer) {
+        let mut r = Registry::new();
+        r.register(Arc::new(crate::commands::Help));
+        r.register(Arc::new(DocCmd));
+        r.register(Arc::new(EchoCmd::default()));
+        let (s, buf) = crate::commands::testkit::empty_session();
+        (r, s, buf)
+    }
+
+    #[tokio::test]
+    async fn help_no_arg_lists_documented_and_undocumented() {
+        let (r, mut s, buf) = help_registry_and_session();
+        dispatch_line(&r, &mut s, "help").await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Documented commands (type help <topic>):"));
+        assert!(out.contains("Undocumented commands:"));
+        // `doc` returns Some(about) → documented; `echo` returns None →
+        // undocumented; both must appear.
+        assert!(out.contains("doc"));
+        assert!(out.contains("echo"));
+        // Documented section precedes the undocumented one.
+        let doc_hdr = out.find("Documented commands").unwrap();
+        let undoc_hdr = out.find("Undocumented commands").unwrap();
+        assert!(doc_hdr < undoc_hdr);
+    }
+
+    #[tokio::test]
+    async fn help_no_arg_omits_undocumented_header_when_all_documented() {
+        let mut r = Registry::new();
+        r.register(Arc::new(crate::commands::Help)); // documented
+        r.register(Arc::new(DocCmd)); // documented
+        let (mut s, buf) = crate::commands::testkit::empty_session();
+        dispatch_line(&r, &mut s, "help").await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("Documented commands"));
+        assert!(!out.contains("Undocumented commands"));
+    }
+
+    #[tokio::test]
+    async fn help_topic_renders_that_commands_help() {
+        let (r, mut s, buf) = help_registry_and_session();
+        dispatch_line(&r, &mut s, "help doc").await.unwrap();
+        let out = buf.contents();
+        // Same surface as `doc --help`: usage line + the shared template flags
+        // (`render_long_help` reflects the clap parser, i.e. what `<cmd> --help`
+        // prints — not `Command::about`, which drives the listing split only).
+        assert!(out.contains("Usage:"));
+        assert!(out.contains("doc"));
+        assert!(out.contains("--all-templates"));
+    }
+
+    #[tokio::test]
+    async fn help_unknown_topic_is_a_parse_error_not_a_listing() {
+        let (r, mut s, buf) = help_registry_and_session();
+        let err = dispatch_line(&r, &mut s, "help nosuch").await.unwrap_err();
+        assert!(matches!(
+            err,
+            EngineError::Parse { help_or_version: false, ref message }
+                if message.contains("No help available") && message.contains("nosuch")
+        ));
+        // Nothing was rendered as a listing.
+        assert!(buf.contents().is_empty());
     }
 }

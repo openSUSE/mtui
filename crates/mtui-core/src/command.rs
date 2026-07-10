@@ -60,6 +60,17 @@ pub trait Command: Send + Sync {
         &[]
     }
 
+    /// A one-line description of the command, or `None` if undocumented.
+    ///
+    /// The Rust replacement for upstream's docstring convention: `help` groups
+    /// commands returning `Some(..)` under "Documented commands" and those
+    /// returning `None` under "Undocumented commands". Defaults to `None`;
+    /// commands opt in by overriding it. (It also feeds MCP tool descriptions in
+    /// Phase 7.)
+    fn about(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The fan-out scope policy. [`Scope::Active`] by default.
     fn scope(&self) -> Scope {
         Scope::Active

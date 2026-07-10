@@ -75,6 +75,9 @@ mod export;
 mod list_refhosts;
 mod load_template;
 
+// Phase 6 — REPL-only command-surface additions.
+mod help;
+
 pub use downgrade::Downgrade;
 pub use localrun::LocalRun;
 pub use prepare::Prepare;
@@ -113,6 +116,7 @@ pub use updates::Updates;
 pub use checkout::Checkout;
 pub use commit::Commit;
 pub use export::Export;
+pub use help::Help;
 pub use list_refhosts::ListRefhosts;
 pub use listbugs::ListBugs;
 pub use listhistory::ListHistory;
