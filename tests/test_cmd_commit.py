@@ -88,7 +88,12 @@ def test_commit_default_message_reuses_export_footer(mock_config, tmp_path):
 
 
 def test_commit_explicit_message_passed_through(mock_config, tmp_path):
-    """An explicit -m message is still used verbatim."""
+    """An explicit -m message reaches svn verbatim -- no added quotes.
+
+    The argv list is executed without a shell, so the old manual '"'
+    wrapping stored literal double quotes in the SVN log message
+    ('"my message"' instead of 'my message').
+    """
     prompt = _prompt(tmp_path)
     mock_config.install_logs = "install_logs"
     args = Namespace(msg=[["my", "message"]])
@@ -99,7 +104,7 @@ def test_commit_explicit_message_passed_through(mock_config, tmp_path):
     ):
         Commit(args, mock_config, MagicMock(), prompt)()
 
-    assert _svn_ci_message(cc) == '"my message"'
+    assert _svn_ci_message(cc) == "my message"
 
 
 def test_commit_without_metadata_raises(mock_config):
