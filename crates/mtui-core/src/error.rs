@@ -7,6 +7,7 @@
 //! * [`CommandError::NoRefhostsDefined`] ← `NoRefhostsDefinedError`
 //! * [`CommandError::HostNotConnected`] ← `HostIsNotConnectedError`
 //! * [`CommandError::TemplateNotLoaded`] ← `TemplateNotLoadedError`
+//! * [`CommandError::MissingPackages`] ← `MissingPackagesError`
 //! * [`CommandError::FanOut`] ← `FanOutError`
 //!
 //! Upstream distinguishes `UserError` (usage mistakes) from `ErrorMessage`
@@ -35,6 +36,11 @@ pub enum CommandError {
     /// `HostIsNotConnectedError`). The `!r` repr renders as single quotes.
     #[error("Host '{0}' is not connected")]
     HostNotConnected(String),
+
+    /// `list_packages` had nothing to list — no template is loaded and no
+    /// `-p/--package` was given (upstream `MissingPackagesError`).
+    #[error("Missing packages: TestReport not loaded and no -p given.")]
+    MissingPackages,
 
     /// Aggregate raised after a fan-out command failed on one or more templates
     /// (upstream `FanOutError`). Every template still got its turn; the
@@ -73,6 +79,14 @@ mod tests {
     fn host_not_connected_uses_single_quotes() {
         let e = CommandError::HostNotConnected("host1".into());
         assert_eq!(e.to_string(), "Host 'host1' is not connected");
+    }
+
+    #[test]
+    fn missing_packages_matches_upstream() {
+        assert_eq!(
+            CommandError::MissingPackages.to_string(),
+            "Missing packages: TestReport not loaded and no -p given."
+        );
     }
 
     #[test]

@@ -106,7 +106,7 @@ impl Command for ListPackages {
         let mut pkgs = session.metadata().get_package_list();
         pkgs.extend(extra);
         if pkgs.is_empty() {
-            return Err(CommandError::Other("no packages to list".to_owned()));
+            return Err(CommandError::MissingPackages);
         }
 
         // Whether a template is loaded decides how state is labeled (upstream
@@ -280,7 +280,11 @@ mod tests {
         let (mut session, _buf) = empty_session();
         let args = matches(&ListPackages, &[]);
         let err = ListPackages.call(&mut session, &args).await.unwrap_err();
-        assert!(matches!(err, CommandError::Other(_)));
+        assert!(matches!(err, CommandError::MissingPackages));
+        assert_eq!(
+            err.to_string(),
+            "Missing packages: TestReport not loaded and no -p given."
+        );
     }
 
     #[tokio::test]
