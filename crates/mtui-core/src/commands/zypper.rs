@@ -110,7 +110,9 @@ impl Command for Uninstall {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{empty_session, matches, session_with_hosts};
+    use crate::commands::testkit::{
+        empty_session, matches, session_host_no_template, session_with_hosts,
+    };
     use crate::error::CommandError;
 
     #[test]
@@ -175,10 +177,33 @@ mod tests {
 
     #[tokio::test]
     async fn install_with_no_hosts_is_no_refhosts_defined() {
-        let (mut session, _buf) = empty_session();
+        // Loaded report but no hosts: passes the requires_update guard, then the
+        // empty selection yields NoRefhostsDefined.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         let args = matches(&Install, &["pkg"]);
         let err = Install.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::NoRefhostsDefined));
+    }
+
+    #[tokio::test]
+    async fn install_no_template_loaded_errors() {
+        // No report loaded → requires_update guard fires first (upstream
+        // @requires_update / TestReportNotLoadedError).
+        let (mut session, _buf) = empty_session();
+        let args = matches(&Install, &["pkg"]);
+        let err = Install.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    #[tokio::test]
+    async fn install_hosts_present_no_template_refuses() {
+        // Regression: hosts present but no report loaded must NOT silently
+        // succeed via the null report's no-op perform_install. Upstream refuses
+        // with TestReportNotLoadedError; the guard maps to CommandError::Other.
+        let (mut session, _buf) = session_host_no_template(&["h1"], "ok");
+        let args = matches(&Install, &["pkg"]);
+        let err = Install.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
     }
 
     #[tokio::test]

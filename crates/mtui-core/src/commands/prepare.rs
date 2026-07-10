@@ -129,9 +129,21 @@ mod tests {
 
     #[tokio::test]
     async fn no_hosts_is_no_refhosts_defined() {
-        let (mut session, _buf) = empty_session();
+        // Loaded report but no hosts: passes the requires_update guard, then the
+        // empty selection yields NoRefhostsDefined.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "ok");
         let args = matches(&Prepare, &[]);
         let err = Prepare.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::NoRefhostsDefined));
+    }
+
+    #[tokio::test]
+    async fn no_template_loaded_errors() {
+        // No report loaded (even with the empty session) → requires_update guard
+        // fires first, mirroring upstream @requires_update.
+        let (mut session, _buf) = empty_session();
+        let args = matches(&Prepare, &[]);
+        let err = Prepare.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
     }
 }

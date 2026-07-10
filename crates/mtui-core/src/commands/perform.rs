@@ -51,6 +51,9 @@ pub(super) enum PerformOp {
 ///
 /// # Errors
 ///
+/// * [`CommandError::Other`] when no report is loaded (upstream
+///   `@requires_update` → `TestReportNotLoadedError`), checked before host
+///   selection so a no-op `NullReport` flow never silently "succeeds".
 /// * [`CommandError::NoRefhostsDefined`] when the selection is empty.
 /// * [`CommandError::Other`] when a named `-t` host is not connected.
 pub(super) async fn drive(
@@ -58,6 +61,12 @@ pub(super) async fn drive(
     args: &ArgMatches,
     op: PerformOp,
 ) -> CommandResult {
+    // Upstream decorates each of these commands with `@requires_update`, which
+    // raises `TestReportNotLoadedError` before touching hosts. Enforce the same
+    // guard first so `install`/`uninstall`/`prepare`/`downgrade`/`update` refuse
+    // when no report is loaded instead of driving the null report's no-op flow.
+    super::support::require_update(session)?;
+
     let hosts = super::support::hosts_arg(args);
     let names = match &hosts {
         Some(names) if !names.is_empty() && !names.iter().any(|h| h == "all") => {
