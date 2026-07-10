@@ -45,6 +45,32 @@ def test_list_history():
     assert "test command" in output_str
 
 
+def test_list_history_skips_malformed_lines():
+    """A torn/hand-edited log line is skipped, not fatal.
+
+    /var/log/mtui.log is appended to over sftp by independent mtui
+    sessions; interleaved writes can tear a line so its first field is
+    not a parseable timestamp. One bad line used to raise ValueError out
+    of list_history, aborting the whole command and dropping every
+    remaining host's history.
+    """
+    output = StringIO()
+    d = display.CommandPromptDisplay(output)
+    system = MockSystem("test_system")
+    lines = [
+        "1678886400:user:good before",
+        "update:foo: 1720166400:jdoe:install nginx",  # torn: non-numeric field
+        "no-colons-at-all",  # too few fields
+        "99999999999999999999:user:absurd timestamp",  # fromtimestamp overflow
+        "1678886401:user:good after",
+    ]
+    d.list_history("test_host", system, lines)
+    output_str = output.getvalue()
+    assert "good before" in output_str
+    assert "good after" in output_str
+    assert "install nginx" not in output_str
+
+
 def test_list_host():
     """Test list_host."""
     output = StringIO()
