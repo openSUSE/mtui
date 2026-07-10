@@ -296,6 +296,10 @@ impl ExportContext {
     /// `source code change review:` anchor; if absent this is a no-op (the
     /// upstream `.index(...)` would raise, but a missing anchor means the file
     /// is not mtui-shaped, matching how the injector guards on its header).
+    ///
+    /// The block is inserted just before the anchor (upstream's Python
+    /// `insert(-1)`). When the anchor is the very first line, the position is
+    /// clamped to 0 rather than underflowing the `usize` index.
     pub fn inject_openqa(&mut self, pp: &[String]) {
         if pp.is_empty() {
             return;
@@ -318,7 +322,10 @@ impl ExportContext {
                 end + 1
             } else {
                 match self.anchor_index() {
-                    Some(anchor) => anchor - 1,
+                    // `anchor - 1` mirrors upstream's Python `insert(-1)`
+                    // position; clamp to 0 when the anchor is the first line so
+                    // the `usize` subtraction cannot underflow/panic.
+                    Some(anchor) => anchor.saturating_sub(1),
                     None => return,
                 }
             };
@@ -329,7 +336,10 @@ impl ExportContext {
         let Some(anchor) = self.anchor_index() else {
             return;
         };
-        let mut index = anchor - 1;
+        // `anchor - 1` mirrors upstream's Python `insert(-1)`; clamp to 0 so the
+        // degenerate "anchor is the first line" case inserts before it instead
+        // of panicking on `usize` underflow.
+        let mut index = anchor.saturating_sub(1);
         for line in pp.iter().rev() {
             self.template.insert(index, line.clone());
         }
@@ -337,7 +347,7 @@ impl ExportContext {
         let Some(anchor) = self.anchor_index() else {
             return;
         };
-        index = anchor - 1;
+        index = anchor.saturating_sub(1);
         self.template.insert(index, "\n".to_string());
         self.template
             .insert(index + 1, "End of openQA Incidents results\n".to_string());
@@ -527,5 +537,36 @@ mod tests {
         let job = body.find("job1 => PASSED").unwrap();
         let anchor = body.find("source code change review:").unwrap();
         assert!(job < anchor);
+    }
+
+    #[test]
+    fn inject_openqa_anchor_at_index_zero_does_not_panic() {
+        // Degenerate template: the `source code change review:` anchor is the
+        // very first line, so the upstream `anchor - 1` position is Python's
+        // `insert(-1)`. In Rust `0 - 1` on usize would panic; the port must
+        // clamp to 0 (insert before the anchor) instead of overflowing.
+        let mut c = ctx_with(&["source code change review:\n"]);
+        c.inject_openqa(&["job1 => PASSED\n".to_string()]);
+        let body = c.template.concat();
+        assert!(
+            body.contains("job1 => PASSED"),
+            "block not injected:\n{body}"
+        );
+        assert!(body.contains("End of openQA Incidents results\n"));
+        // The block is inserted before the anchor line.
+        let job = body.find("job1 => PASSED").unwrap();
+        let anchor = body.find("source code change review:").unwrap();
+        assert!(job < anchor, "block should precede the anchor:\n{body}");
+    }
+
+    #[test]
+    fn inject_openqa_replaces_prior_block_with_anchor_at_index_zero() {
+        // The removal path also hits `anchor - 1` (as the block-end fallback);
+        // a re-inject on an anchor-at-0 template must not panic either.
+        let mut c = ctx_with(&["source code change review:\n"]);
+        c.inject_openqa(&["job1 => PASSED\n".to_string()]);
+        c.inject_openqa(&["job2 => FAILED\n".to_string()]);
+        let body = c.template.concat();
+        assert!(body.contains("job2 => FAILED"), "re-inject failed:\n{body}");
     }
 }
