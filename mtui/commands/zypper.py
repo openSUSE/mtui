@@ -66,7 +66,7 @@ class Uninstall(Command):
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""
-        parser.add_argument("package", nargs="+", type=str, help="package to install")
+        parser.add_argument("package", nargs="+", type=str, help="package to uninstall")
         cls._add_hosts_arg(parser)
         cls._add_template_arg(parser)
 

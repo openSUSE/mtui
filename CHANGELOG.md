@@ -279,6 +279,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   spaces (e.g. `NAME=Fedora` or `VERSION_ID=15.6`). Such values
   previously never matched, so the export footer and the `commit` line
   silently reported an empty distro/version on those systems.
+- Corrected user-facing typos: `uninstall --help` described its positional as
+  "package to install" (copy-paste from `install`) and now says "package to
+  uninstall"; `terms` printed "available terminals scripts:" / logged "Aviable
+  term scripts" and now says "available terminal scripts:" / "Available term
+  scripts"; a failed openQA connection logged "Cannont connect to openQA" and
+  now logs "Cannot connect to openQA".
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a
