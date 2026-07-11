@@ -10,7 +10,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from mtui.commands.export import Export
-from mtui.support.messages import TestReportNotLoadedError
+from mtui.hosts.target.hostgroup import HostsGroup
+from mtui.support.messages import NoRefhostsDefinedError, TestReportNotLoadedError
 from mtui.types import Workflow
 
 
@@ -100,3 +101,85 @@ def test_export_without_metadata_raises(mock_config):
             MagicMock(),
             prompt,
         )()
+
+
+# --- fan-out: host-less templates gated by _requires_hosts ---
+
+
+class _FakeReport:
+    """Minimal TestReport stand-in carrying id, workflow and empty targets."""
+
+    def __init__(self, rrid: str, workflow: Workflow):
+        self.id = rrid
+        self.workflow = workflow
+        self.targets = HostsGroup([])
+
+
+class _FakeRegistry:
+    """Minimal TemplateRegistry stand-in for fan-out resolution."""
+
+    def __init__(self, reports):
+        self._reports = {str(r.id): r for r in reports}
+
+    def all(self):
+        return list(self._reports.values())
+
+    def get(self, rrid):
+        return self._reports[rrid]
+
+    def __len__(self):
+        return len(self._reports)
+
+    @property
+    def active(self):
+        return next(iter(self._reports.values()))
+
+
+def _fanout_cmd(mock_config, reports):
+    """Build an Export whose __call__ only records the RRID it ran against."""
+    args = Namespace(
+        filename=None, hosts=None, force=False, template=None, all_templates=False
+    )
+    prompt = MagicMock()
+    prompt.templates = _FakeRegistry(reports)
+    prompt.metadata = prompt.templates.active
+    prompt.targets = prompt.templates.active.targets
+    prompt.display = MagicMock()
+    prompt.interactive = False  # exercise the multi-template fan-out branch
+    cmd = Export(args, mock_config, MagicMock(), prompt)
+    return cmd
+
+
+@pytest.mark.parametrize("workflow", [Workflow.AUTO, Workflow.KERNEL])
+def test_requires_hosts_false_for_auto_and_kernel(mock_config, workflow):
+    cmd = _fanout_cmd(mock_config, [_FakeReport("A", workflow)])
+    assert cmd._requires_hosts(_FakeReport("A", workflow)) is False
+
+
+def test_requires_hosts_true_for_manual(mock_config):
+    cmd = _fanout_cmd(mock_config, [_FakeReport("A", Workflow.MANUAL)])
+    assert cmd._requires_hosts(_FakeReport("A", Workflow.MANUAL)) is True
+
+
+@pytest.mark.parametrize("workflow", [Workflow.AUTO, Workflow.KERNEL])
+def test_fanout_hostless_auto_kernel_runs_without_error(mock_config, workflow):
+    """AUTO/KERNEL export over all-host-less templates runs, never skips."""
+    reports = [_FakeReport("A", workflow), _FakeReport("B", workflow)]
+    cmd = _fanout_cmd(mock_config, reports)
+    ran: list[str] = []
+    with patch.object(
+        Export, "__call__", lambda self: ran.append(str(self.metadata.id))
+    ):
+        cmd.run()  # must not raise NoRefhostsDefinedError
+    assert ran == ["A", "B"]
+
+
+def test_fanout_hostless_manual_still_raises(mock_config):
+    """MANUAL export over all-host-less templates keeps the host-phase error."""
+    reports = [_FakeReport("A", Workflow.MANUAL), _FakeReport("B", Workflow.MANUAL)]
+    cmd = _fanout_cmd(mock_config, reports)
+    with (
+        patch.object(Export, "__call__", lambda self: None),
+        pytest.raises(NoRefhostsDefinedError),
+    ):
+        cmd.run()
