@@ -274,6 +274,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   every compound LTSS flavor (e.g. `SLES-LTSS-ERICSSON`) is normalized to its
   own product name with a clean version, instead of leaving any flavor
   suffix dangling.
+- The local system detection now parses `/etc/os-release` files with
+  unquoted values, which the os-release spec allows for values without
+  spaces (e.g. `NAME=Fedora` or `VERSION_ID=15.6`). Such values
+  previously never matched, so the export footer and the `commit` line
+  silently reported an empty distro/version on those systems.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a
