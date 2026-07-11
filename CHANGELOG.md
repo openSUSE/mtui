@@ -264,6 +264,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   the affected host. The exit status is still unaffected, but quitting
   already blocked until every disconnect finished before this fix and
   still does — only the visibility of the outcome changed, not the wait.
+- SLE 15 LTSS-ERICSSON products are now normalized to a dedicated
+  `SLES-LTSS-ERICSSON` product with the whole `-LTSS-ERICSSON` suffix
+  stripped from the version. Previously the generic LTSS check ran first, so
+  a version such as `15-SP4-LTSS-ERICSSON` was misfiled as `SLES-LTSS` with
+  `-ERICSSON` left dangling in the version string, breaking product matching
+  for those updates. A compound `LTSS-ERICSSON` branch now runs before the
+  generic ERICSSON and LTSS checks, matching the SLE 12 convention where
+  every compound LTSS flavor (e.g. `SLES-LTSS-ERICSSON`) is normalized to its
+  own product name with a clean version, instead of leaving any flavor
+  suffix dangling.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a
