@@ -72,9 +72,18 @@ where
     // so this stays silent in tests / MCP. Dropping it (or the explicit `stop`)
     // erases the frame.
     let mut spinner = desc.map(|d| {
-        tracing::debug!(action = d, count = futs.len(), "running in parallel");
         let mut s = super::spinner::TtySpinner::new(d);
         s.start();
+        // Report the resolved paint state so `mtui -d` reveals *why* a spinner is
+        // (in)visible: `enabled=false` means stderr was not detected as a TTY
+        // (piped / tmux-detached / IDE terminal), the usual cause of a missing
+        // spinner even on an interactive-looking session.
+        tracing::debug!(
+            action = d,
+            count = futs.len(),
+            enabled = s.is_enabled(),
+            "running in parallel (fan-out spinner)"
+        );
         s
     });
     join_all(futs).await;
@@ -117,7 +126,7 @@ pub type BoxTargetFut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = (
 /// from both batches.
 pub async fn run_fanout<'t, S, F>(
     targets: &'t mut BTreeMap<String, Target>,
-    interactive: bool,
+    is_repl: bool,
     prompter: Option<&Prompter>,
     desc: Option<&str>,
     mut should_run: S,
@@ -139,17 +148,28 @@ pub async fn run_fanout<'t, S, F>(
         }
     }
 
+    // Diagnostic (`mtui -d`): report the resolved fan-out shape so a missing
+    // spinner is explainable. `is_repl=false` or `parallel=0` both suppress the
+    // fan-out spinner even on a TTY / with `MTUI_FORCE_SPINNER`.
+    tracing::debug!(
+        is_repl,
+        desc = desc.unwrap_or("<none>"),
+        parallel = parallel.len(),
+        serial = serial.len(),
+        "fan-out dispatch"
+    );
+
     // Parallel batch: each future borrows a distinct target mutably, so the
     // borrows are disjoint and need no shared lock.
     let parallel_futs: Vec<_> = parallel.into_iter().map(&op).collect();
-    run_parallel(parallel_futs, if interactive { desc } else { None }).await;
+    run_parallel(parallel_futs, if is_repl { desc } else { None }).await;
 
     // Serial barrier: one host at a time. Under an interactive session with a
     // serialised prompter, ask the user to press Enter before each serial host
     // (upstream `prompt_user("press Enter key to proceed with …")`); headless
     // callers run them back-to-back. Any input (incl. empty) proceeds.
     for t in serial {
-        if interactive && let Some(prompter) = prompter {
+        if is_repl && let Some(prompter) = prompter {
             let text = format!("press Enter key to proceed with {} ", t.hostname());
             let _ = prompter.ask(&text).await;
         }
@@ -220,7 +240,7 @@ impl From<BTreeMap<String, String>> for Command {
 pub struct RunCommand<'a> {
     targets: &'a mut BTreeMap<String, Target>,
     command: Command,
-    interactive: bool,
+    is_repl: bool,
     prompter: Option<Prompter>,
 }
 
@@ -234,13 +254,13 @@ impl<'a> RunCommand<'a> {
     pub fn new(
         targets: &'a mut BTreeMap<String, Target>,
         command: impl Into<Command>,
-        interactive: bool,
+        is_repl: bool,
         prompter: Option<Prompter>,
     ) -> Self {
         Self {
             targets,
             command: command.into(),
-            interactive,
+            is_repl,
             prompter,
         }
     }
@@ -256,13 +276,13 @@ impl<'a> RunCommand<'a> {
         let Self {
             targets,
             command,
-            interactive,
+            is_repl,
             prompter,
         } = self;
 
         run_fanout(
             targets,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("run"),
             // `for_host` returning None means "skip" (upstream dict subset).
@@ -289,13 +309,9 @@ pub async fn sftp_put_all(
     targets: &mut BTreeMap<String, Target>,
     local: &Path,
     remote: &Path,
-    interactive: bool,
+    is_repl: bool,
 ) {
-    let desc = if interactive {
-        Some("FileUpload")
-    } else {
-        None
-    };
+    let desc = if is_repl { Some("FileUpload") } else { None };
     let local = local.to_path_buf();
     let remote = remote.to_path_buf();
     let futs = targets.values_mut().map(|t| {
@@ -314,13 +330,9 @@ pub async fn sftp_get_all(
     targets: &mut BTreeMap<String, Target>,
     remote: &str,
     local: &Path,
-    interactive: bool,
+    is_repl: bool,
 ) {
-    let desc = if interactive {
-        Some("FileDownload")
-    } else {
-        None
-    };
+    let desc = if is_repl { Some("FileDownload") } else { None };
     let remote = remote.to_owned();
     let local: PathBuf = local.to_path_buf();
     let futs = targets.values_mut().map(|t| {
@@ -334,16 +346,8 @@ pub async fn sftp_get_all(
 ///
 /// Async equivalent of upstream `FileDelete`. Errors are swallowed and logged by
 /// [`Target::sftp_remove`]; this helper never fails.
-pub async fn sftp_remove_all(
-    targets: &mut BTreeMap<String, Target>,
-    path: &Path,
-    interactive: bool,
-) {
-    let desc = if interactive {
-        Some("FileDelete")
-    } else {
-        None
-    };
+pub async fn sftp_remove_all(targets: &mut BTreeMap<String, Target>, path: &Path, is_repl: bool) {
+    let desc = if is_repl { Some("FileDelete") } else { None };
     let path = path.to_path_buf();
     let futs = targets.values_mut().map(|t| {
         let path = path.clone();

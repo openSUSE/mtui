@@ -43,7 +43,7 @@ impl Command for ListTemplates {
         // The active pointer is meaningful only in the interactive REPL; under
         // MCP it is hidden state the client cannot address, so no marker.
         let active = session.templates.active_rrid().map(str::to_owned);
-        let interactive = session.interactive;
+        let is_repl = session.is_repl;
 
         // Snapshot the rows first so the report borrow does not overlap the
         // display's mutable borrow.
@@ -61,7 +61,7 @@ impl Command for ListTemplates {
             .collect();
 
         for (rrid, hosts, mode) in rows {
-            let marker = if interactive && active.as_deref() == Some(rrid.as_str()) {
+            let marker = if is_repl && active.as_deref() == Some(rrid.as_str()) {
                 "*"
             } else {
                 " "
@@ -111,7 +111,7 @@ mod tests {
     #[tokio::test]
     async fn interactive_marks_active_template() {
         let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
-        session.interactive = true;
+        session.is_repl = true;
         session
             .templates
             .add(fake_report("SUSE:Maintenance:2:2", &["h2"], "ok"));

@@ -10,3 +10,6 @@ python-mtui/
 
 # Local planning artifacts (work aids, not part of the repo)
 plans/
+
+# Local RRID template checkouts (svn working dirs created at runtime)
+SUSE:*/

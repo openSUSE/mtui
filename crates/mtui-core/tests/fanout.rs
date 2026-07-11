@@ -93,8 +93,8 @@ fn matches(argv: &[&str]) -> ArgMatches {
         .expect("parse mock argv")
 }
 
-fn session(interactive: bool, reports: &[(&str, &[&str])]) -> Session {
-    let mut s = Session::new(mtui_config::Config::default(), interactive);
+fn session(is_repl: bool, reports: &[(&str, &[&str])]) -> Session {
+    let mut s = Session::new(mtui_config::Config::default(), is_repl);
     for (rrid, hosts) in reports {
         s.templates.add(FakeReport::with_hosts(rrid, hosts).boxed());
     }

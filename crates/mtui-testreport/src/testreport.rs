@@ -148,7 +148,12 @@ pub struct TestReportBase {
 impl TestReportBase {
     /// Builds the shared state with upstream `TestReport.__init__` defaults.
     ///
-    /// `directory` mirrors upstream by defaulting to `config.template_dir`.
+    /// `directory` mirrors upstream by defaulting to `config.template_dir`. The
+    /// targets [`HostsGroup`] starts headless (`is_repl = false`); the load site
+    /// ([`make_testreport`](crate::make_testreport)) reconciles it to the
+    /// session mode once, via [`set_is_repl`](Self::set_is_repl), before the
+    /// report is handed to the session — the session is the single source of
+    /// truth and the flag is never mutated afterwards.
     #[must_use]
     pub fn new(config: Config) -> Self {
         let directory = config.template_dir.clone();

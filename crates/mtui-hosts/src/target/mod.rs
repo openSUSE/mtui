@@ -67,7 +67,10 @@ pub use package_querier::PackageQuerier;
 pub use parsers::{parse_os_release, parse_product, parse_system};
 pub use repo_manager::{RepoManager, RepoOp, SetRepo};
 pub use reporter::Reporter;
-pub use spinner::{Suspend, SuspendAsync, TtySpinner, suspend, suspend_async};
+pub use spinner::{
+    Sink, SpinnerGuard, Suspend, SuspendAsync, TtySpinner, set_test_sink, spinner, suspend,
+    suspend_async,
+};
 
 use std::path::{Path, PathBuf};
 

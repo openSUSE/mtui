@@ -101,7 +101,7 @@ impl Command for Approve {
             if let check @ (HashCheck::Mismatch { .. }
             | HashCheck::MissingToken
             | HashCheck::Failed(_)) = session.metadata().check_hash().await
-                && !session.interactive
+                && !session.is_repl
             {
                 let (expected, actual) = match check {
                     HashCheck::Mismatch { expected, actual } => (expected, actual),

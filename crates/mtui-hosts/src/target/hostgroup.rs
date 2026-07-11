@@ -65,7 +65,7 @@ pub struct HostsGroup {
     /// Whether the surrounding session is interactive. Threaded through to the
     /// fan-out helpers as the (Phase 6) spinner/prompt seam; see
     /// [`actions`](super::actions).
-    interactive: bool,
+    is_repl: bool,
     /// The injected update-workflow doer/check resolver, or `None` before the
     /// composition root wires one in.
     ///
@@ -94,14 +94,14 @@ impl HostsGroup {
     /// `interactive` mirrors upstream: `true` for the REPL (spinner/prompt seam
     /// on), `false` for headless callers such as `mtui-mcp`.
     #[must_use]
-    pub fn new(hosts: Vec<Target>, interactive: bool) -> Self {
+    pub fn new(hosts: Vec<Target>, is_repl: bool) -> Self {
         let data = hosts
             .into_iter()
             .map(|h| (h.hostname().to_owned(), h))
             .collect();
         Self {
             data,
-            interactive,
+            is_repl,
             plan_provider: None,
             prompter: None,
         }
@@ -124,10 +124,22 @@ impl HostsGroup {
         self.plan_provider = Some(provider);
     }
 
-    /// Whether the surrounding session is interactive.
+    /// Whether the surrounding session is the interactive REPL (spinner / prompt
+    /// seam on), as opposed to a headless caller (`mtui-mcp`).
     #[must_use]
-    pub const fn is_interactive(&self) -> bool {
-        self.interactive
+    pub const fn is_repl(&self) -> bool {
+        self.is_repl
+    }
+
+    /// Reconciles the group's session mode to `is_repl` at **load time**.
+    ///
+    /// The report's targets group is default-built headless
+    /// ([`TestReportBase`](mtui_testreport docs)); the load site applies the real
+    /// session mode once, before any host is added or fan-out runs, so the
+    /// spinner/prompt seam matches the session. The session is the single source
+    /// of truth; this is not a runtime toggle.
+    pub fn set_is_repl(&mut self, is_repl: bool) {
+        self.is_repl = is_repl;
     }
 
     /// The number of hosts in the group.
@@ -192,7 +204,7 @@ impl HostsGroup {
     /// is the honest Rust deviation from upstream, which shares `Target`
     /// references across the parent and child dicts.
     pub fn select(self, hosts: Option<&[String]>, enabled: bool) -> Result<HostsGroup> {
-        let interactive = self.interactive;
+        let is_repl = self.is_repl;
         let provider = self.plan_provider.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
@@ -216,7 +228,7 @@ impl HostsGroup {
             }
         };
 
-        let mut group = HostsGroup::new(selected, interactive);
+        let mut group = HostsGroup::new(selected, is_repl);
         group.plan_provider = provider;
         Ok(group)
     }
@@ -254,7 +266,7 @@ impl HostsGroup {
         hosts: Option<&[String]>,
         enabled: bool,
     ) -> Result<(HostsGroup, HostsGroup)> {
-        let interactive = self.interactive;
+        let is_repl = self.is_repl;
         let provider = self.plan_provider.clone();
         let is_enabled = |t: &Target| t.state() != mtui_types::enums::TargetState::Disabled;
 
@@ -277,9 +289,9 @@ impl HostsGroup {
             }
         }
 
-        let mut selected = HostsGroup::new(selected, interactive);
+        let mut selected = HostsGroup::new(selected, is_repl);
         selected.plan_provider = provider.clone();
-        let mut remainder = HostsGroup::new(remainder, interactive);
+        let mut remainder = HostsGroup::new(remainder, is_repl);
         remainder.plan_provider = provider;
         Ok((selected, remainder))
     }
@@ -335,25 +347,25 @@ impl HostsGroup {
     /// [`Command::PerHost`] map (hosts absent from the map are skipped). See
     /// [`RunCommand`].
     pub async fn run(&mut self, cmd: impl Into<Command>) {
-        RunCommand::new(&mut self.data, cmd, self.interactive, self.prompter.clone())
+        RunCommand::new(&mut self.data, cmd, self.is_repl, self.prompter.clone())
             .run()
             .await;
     }
 
     /// Uploads `local` to `remote` on every host in parallel.
     pub async fn sftp_put(&mut self, local: &Path, remote: &Path) {
-        actions::sftp_put_all(&mut self.data, local, remote, self.interactive).await;
+        actions::sftp_put_all(&mut self.data, local, remote, self.is_repl).await;
     }
 
     /// Downloads `remote` (per-host suffixed) into `local` from every host in
     /// parallel.
     pub async fn sftp_get(&mut self, remote: &str, local: &Path) {
-        actions::sftp_get_all(&mut self.data, remote, local, self.interactive).await;
+        actions::sftp_get_all(&mut self.data, remote, local, self.is_repl).await;
     }
 
     /// Deletes `path` on every host in parallel.
     pub async fn sftp_remove(&mut self, path: &Path) {
-        actions::sftp_remove_all(&mut self.data, path, self.interactive).await;
+        actions::sftp_remove_all(&mut self.data, path, self.is_repl).await;
     }
 
     /// Locks every host in the group for `comment`, best-effort.
@@ -364,10 +376,10 @@ impl HostsGroup {
     /// one contended host never aborts the fan-out. Other transport errors are
     /// logged, not propagated.
     pub async fn lock(&mut self, comment: &str) {
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("lock"),
             |_t| true,
@@ -395,10 +407,10 @@ impl HostsGroup {
     /// [`Target::unlock`] (which already suppresses [`HostError::TargetLocked`]
     /// for a foreign lock), so a contended host never aborts the fan-out.
     pub async fn unlock(&mut self) {
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("unlock"),
             |_t| true,
@@ -414,10 +426,10 @@ impl HostsGroup {
     /// a claim owned by another template), so one contended host never aborts
     /// the fan-out. `force` removes claims owned by other templates too.
     pub async fn pool_unlock(&mut self, force: bool) {
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("pool_unlock"),
             |_t| true,
@@ -439,11 +451,11 @@ impl HostsGroup {
     /// mirroring upstream's concurrent close. The overall wait budget is applied
     /// by the caller. A no-op when the group is empty.
     pub async fn close(&mut self, action: Option<&str>) {
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         let action = action.map(str::to_owned);
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("close"),
             |_t| true,
@@ -479,10 +491,10 @@ impl HostsGroup {
         // `(system, row)` is collected keyed by hostname, so the drain below is
         // deterministically sorted regardless of completion order.
         let collected: Mutex<BTreeMap<String, (System, LockRow)>> = Mutex::new(BTreeMap::new());
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("report_locks"),
             |_t| true,
@@ -556,10 +568,10 @@ impl HostsGroup {
     /// The per-host `last*` state is left in place so a caller can inspect
     /// `lasterr()` after the fan-out (upstream's prepare abort-on-`lasterr`).
     pub async fn fanout_set_repo(&mut self, operation: RepoOp, report: &dyn SetRepo) {
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("set_repo"),
             |_t| true,
@@ -599,10 +611,10 @@ impl HostsGroup {
     /// Ports upstream `HostsGroup.add_history`: fans [`Target::add_history`] out
     /// across the group (enabled hosts only, best-effort per host).
     pub async fn add_history(&mut self, fields: &[String]) {
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("add_history"),
             |_t| true,
@@ -622,10 +634,10 @@ impl HostsGroup {
     /// together, serial hosts one at a time behind the Enter barrier), so the
     /// pure per-package bookkeeping that follows never blocks on serial I/O.
     pub async fn query_versions(&mut self) {
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("query_versions"),
             |_t| true,
@@ -722,10 +734,10 @@ impl HostsGroup {
         // shared `skipped` flag. The per-host lock wire semantics are unchanged
         // — only the fan-out is now concurrent (Contract preserved).
         let skipped = AtomicBool::new(false);
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("update_lock"),
             |_t| true,
@@ -803,14 +815,14 @@ impl HostsGroup {
         }
         let names: Vec<String> = self.data.keys().cloned().collect();
         tracing::info!(hosts = %names.join(", "), "Rebooting");
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
 
         // Phase 1: record boot ids before rebooting (concurrently), so we can
         // confirm a fresh boot afterwards.
         let old_boot_ids: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("boot_id"),
             |_t| true,
@@ -831,7 +843,7 @@ impl HostsGroup {
         // Phase 2: fire the reboot on every host (it drops the connection).
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("reboot"),
             |_t| true,
@@ -845,7 +857,7 @@ impl HostsGroup {
         // Phase 3: reconnect every host (concurrently) with retry + backoff.
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("reconnect"),
             |_t| true,
@@ -864,7 +876,7 @@ impl HostsGroup {
         // Phase 4: verify each host's boot id changed (concurrently).
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("verify_reboot"),
             |_t| true,
@@ -902,7 +914,7 @@ impl HostsGroup {
             hosts = %names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
             "Rebooting transactional hosts"
         );
-        let (interactive, prompter) = (self.interactive, self.prompter.clone());
+        let (is_repl, prompter) = (self.is_repl, self.prompter.clone());
 
         // Fire the reboot on every named host first (it drops the connection),
         // then reconnect each once it is back up — both phases fan out
@@ -910,7 +922,7 @@ impl HostsGroup {
         // `should_run` restricts the fan-out to the named (transactional) hosts.
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("reboot"),
             |t| reboot.contains_key(t.hostname()),
@@ -922,7 +934,7 @@ impl HostsGroup {
         .await;
         actions::run_fanout(
             &mut self.data,
-            interactive,
+            is_repl,
             prompter.as_ref(),
             Some("reconnect"),
             |t| reboot.contains_key(t.hostname()),
@@ -1085,7 +1097,7 @@ mod tests {
         let g = HostsGroup::new(vec![enabled("h2"), enabled("h1")], true);
         assert_eq!(g.len(), 2);
         assert!(!g.is_empty());
-        assert!(g.is_interactive());
+        assert!(g.is_repl());
         // BTreeMap orders names deterministically.
         assert_eq!(g.names(), vec!["h1".to_owned(), "h2".to_owned()]);
         assert!(g.contains("h1"));
@@ -1099,7 +1111,7 @@ mod tests {
         let g = HostsGroup::new(vec![], false);
         assert!(g.is_empty());
         assert_eq!(g.len(), 0);
-        assert!(!g.is_interactive());
+        assert!(!g.is_repl());
         assert!(g.names().is_empty());
     }
 
@@ -1194,7 +1206,7 @@ mod tests {
         let g = HostsGroup::new(vec![enabled("h1"), enabled("h2")], true);
         let sel = g.select(None, false).unwrap();
         assert_eq!(sel.names(), vec!["h1".to_owned(), "h2".to_owned()]);
-        assert!(sel.is_interactive());
+        assert!(sel.is_repl());
     }
 
     #[test]
@@ -1257,8 +1269,8 @@ mod tests {
         assert_eq!(sel.names(), vec!["h1".to_owned()]);
         assert_eq!(rem.names(), vec!["h2".to_owned(), "h3".to_owned()]);
         // Both halves inherit `interactive`.
-        assert!(sel.is_interactive());
-        assert!(rem.is_interactive());
+        assert!(sel.is_repl());
+        assert!(rem.is_repl());
     }
 
     #[test]

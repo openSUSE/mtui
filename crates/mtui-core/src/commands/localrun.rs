@@ -59,7 +59,7 @@ impl Command for LocalRun {
         let cmd = shlex::try_join(tokens.iter().map(String::as_str))
             .map_err(|e| CommandError::Other(format!("invalid command: {e}")))?;
 
-        if session.interactive {
+        if session.is_repl {
             let status = tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(&cmd)
@@ -121,7 +121,7 @@ mod tests {
     async fn captures_stdout_when_headless() {
         // A non-interactive session captures and re-emits child output.
         let (mut session, buf) = empty_session();
-        assert!(!session.interactive);
+        assert!(!session.is_repl);
         let args = matches(&LocalRun, &["printf", "hello"]);
         LocalRun.call(&mut session, &args).await.unwrap();
         assert!(buf.contents().contains("hello"), "{}", buf.contents());

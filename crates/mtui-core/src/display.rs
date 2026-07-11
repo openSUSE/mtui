@@ -158,12 +158,22 @@ impl CommandPromptDisplay {
     /// Mirrors upstream `println(msg, eol="\n")`. Write errors are swallowed to
     /// match the Python surface, which never surfaces stdout write failures from
     /// display helpers.
+    ///
+    /// The write holds a [`mtui_hosts::suspend`] guard so a live TTY spinner
+    /// erases its current frame first and the output lands on a clean line
+    /// (upstream's `SpinnerAwareStreamHandler`). A strict no-op beyond taking the
+    /// paint lock when no spinner is active (off a TTY, tests), so buffered /
+    /// snapshot output is unaffected.
     pub fn println(&mut self, msg: &str) {
+        let _quiet = mtui_hosts::suspend();
         let _ = writeln!(self.output, "{msg}");
     }
 
     /// Writes `msg` followed by an explicit end-of-line string.
+    ///
+    /// Suspends any live spinner for the write, like [`println`](Self::println).
     pub fn print_eol(&mut self, msg: &str, eol: &str) {
+        let _quiet = mtui_hosts::suspend();
         let _ = write!(self.output, "{msg}{eol}");
     }
 

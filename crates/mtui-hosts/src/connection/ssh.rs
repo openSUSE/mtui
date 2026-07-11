@@ -96,10 +96,10 @@ enum TimeoutDecision {
 async fn on_command_timeout(
     hostname: &str,
     command: &str,
-    interactive: bool,
+    is_repl: bool,
     prompt: Option<&TimeoutPrompt>,
 ) -> TimeoutDecision {
-    if interactive && let Some(prompt) = prompt {
+    if is_repl && let Some(prompt) = prompt {
         let text = format!("command '{command}' timed out on {hostname}; keep waiting? [Y/n] ");
         let answer = prompt(text).await.unwrap_or_default();
         if answer.trim().eq_ignore_ascii_case("n") {
@@ -189,7 +189,7 @@ pub struct SshConnection {
     /// Whether a TTY-backed user can answer the command-timeout prompt. `false`
     /// (the default, and always under `mtui-mcp`) makes a no-output timeout
     /// abort instead of asking. Mirrors upstream `Connection.interactive`.
-    interactive: bool,
+    is_repl: bool,
     /// Optional serialised prompt for the command-timeout branch. Wired from the
     /// composition root; `None` keeps the timeout an immediate abort.
     timeout_prompt: Option<TimeoutPrompt>,
@@ -231,7 +231,7 @@ impl SshConnection {
             policy,
             timeout,
             handle: Some(handle),
-            interactive: false,
+            is_repl: false,
             timeout_prompt: None,
         })
     }
@@ -245,7 +245,7 @@ impl SshConnection {
     /// `connect` without widening the object-safe [`Connection`] trait.
     #[must_use]
     pub fn with_timeout_prompt(mut self, prompt: TimeoutPrompt) -> Self {
-        self.interactive = true;
+        self.is_repl = true;
         self.timeout_prompt = Some(prompt);
         self
     }
@@ -498,7 +498,7 @@ impl Connection for SshConnection {
             policy: self.policy,
             timeout: self.timeout,
             handle: None,
-            interactive: self.interactive,
+            is_repl: self.is_repl,
             timeout_prompt: self.timeout_prompt.clone(),
         })
     }
@@ -553,7 +553,7 @@ impl Connection for SshConnection {
                     let decision = on_command_timeout(
                         &self.hostname,
                         command,
-                        self.interactive,
+                        self.is_repl,
                         self.timeout_prompt.as_ref(),
                     )
                     .await;
@@ -1083,7 +1083,7 @@ mod tests {
             policy: HostKeyPolicy::AutoAdd,
             timeout: CommandTimeout::default(),
             handle: None,
-            interactive: false,
+            is_repl: false,
             timeout_prompt: None,
         };
         let s = format!("{conn:?}");

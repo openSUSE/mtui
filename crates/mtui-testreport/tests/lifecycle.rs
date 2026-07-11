@@ -359,6 +359,42 @@ async fn make_testreport_auto_respects_explicit_no_autoconnect() {
     assert!(!report.base().autoconnect_pending);
 }
 
+/// Regression (spinner invisible during `update`): `make_testreport` reconciles
+/// the loaded report's targets group to the session mode at **load time**, so a
+/// REPL load (`is_repl = true`) yields an interactive group — the fan-out
+/// spinner / serial-barrier prompt seam — while a headless load stays quiet.
+/// The report group is default-built headless; this is the single set-once site.
+#[tokio::test]
+async fn make_testreport_sets_targets_is_repl_from_session_mode() {
+    let update = UpdateID::parse(RRID).unwrap();
+
+    // REPL load → interactive targets group.
+    let tmp_repl = tempfile::tempdir().unwrap();
+    make_checkout(tmp_repl.path(), false);
+    let server = MockServer::start().await;
+    mount_dashboard_no_results(&server, "24993").await;
+    let mut cfg_repl = cfg(tmp_repl.path().to_path_buf());
+    point_dashboard(&mut cfg_repl, &server);
+    let repl = make_testreport(&update, cfg_repl, UpdateKind::Auto, false, true, None).await;
+    assert!(
+        repl.base().targets.is_repl(),
+        "REPL load must yield an is_repl targets group"
+    );
+
+    // Headless load (MCP) → non-interactive targets group.
+    let tmp_head = tempfile::tempdir().unwrap();
+    make_checkout(tmp_head.path(), false);
+    let server2 = MockServer::start().await;
+    mount_dashboard_no_results(&server2, "24993").await;
+    let mut cfg_head = cfg(tmp_head.path().to_path_buf());
+    point_dashboard(&mut cfg_head, &server2);
+    let head = make_testreport(&update, cfg_head, UpdateKind::Auto, false, false, None).await;
+    assert!(
+        !head.base().targets.is_repl(),
+        "headless load must keep a non-interactive targets group"
+    );
+}
+
 /// When neither the template is on disk nor a checkout can succeed, the factory
 /// falls back to a `NullReport` (upstream returns `NullTestReport`) — never an
 /// error. `svn_path` is pointed at a bare local `file://` path so `svn co` fails

@@ -255,7 +255,7 @@ fn resolve_templates(
     // the active pointer is hidden, unaddressable state — default an unscoped
     // call to fan-out instead of silently picking one. The REPL keeps its
     // active-template behaviour.
-    if !session.interactive && session.templates.len() > 1 {
+    if !session.is_repl && session.templates.len() > 1 {
         return Ok(session.templates.rrids());
     }
 

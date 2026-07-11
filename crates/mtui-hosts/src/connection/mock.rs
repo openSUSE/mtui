@@ -86,6 +86,10 @@ pub struct MockConnection {
     responses: HashMap<String, Outcome>,
     /// Fallback outcome when a command has no scripted response.
     default: Outcome,
+    /// Artificial per-`run` delay so a test can model a long-running command
+    /// (e.g. a multi-second `zypper` update) and observe the fan-out TTY spinner
+    /// paint across the await. Zero (the default) is an instant response.
+    run_delay: std::time::Duration,
     /// Whether the transport reports as active.
     active: bool,
     /// Commands issued, in order (shared so `Clone`d handles observe the same
@@ -157,6 +161,7 @@ impl MockConnection {
             hostname: hostname.into(),
             responses: HashMap::new(),
             default: Outcome::Ok(CommandLog::new("", "", "", 0, 0)),
+            run_delay: std::time::Duration::ZERO,
             active: true,
             issued: Arc::new(Mutex::new(Vec::new())),
             closed: Arc::new(Mutex::new(false)),
@@ -222,6 +227,15 @@ impl MockConnection {
     #[must_use]
     pub fn with_default(mut self, log: CommandLog) -> Self {
         self.default = Outcome::Ok(log);
+        self
+    }
+
+    /// Adds an artificial delay to every [`run`](Connection::run) so a test can
+    /// model a long-running command and observe the fan-out TTY spinner painting
+    /// across the await.
+    #[must_use]
+    pub fn with_run_delay(mut self, delay: std::time::Duration) -> Self {
+        self.run_delay = delay;
         self
     }
 
@@ -468,6 +482,10 @@ impl Connection for MockConnection {
             .lock()
             .expect("mock issued lock")
             .push(command.to_owned());
+
+        if !self.run_delay.is_zero() {
+            tokio::time::sleep(self.run_delay).await;
+        }
 
         let outcome = self.responses.get(command).unwrap_or(&self.default);
         match outcome {

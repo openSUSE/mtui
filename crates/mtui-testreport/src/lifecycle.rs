@@ -119,7 +119,7 @@ pub async fn make_testreport(
     config: Config,
     kind: UpdateKind,
     autoconnect: bool,
-    interactive: bool,
+    is_repl: bool,
     prompter: Option<&Prompter>,
 ) -> Box<dyn TestReport + Send + Sync> {
     let template_dir = config.template_dir.clone();
@@ -203,7 +203,7 @@ pub async fn make_testreport(
                 &svn_path,
                 &rrid_dir,
                 &trpath,
-                interactive,
+                is_repl,
                 prompter,
             )
             .await
@@ -274,6 +274,13 @@ pub async fn make_testreport(
         }
     }
 
+    // Reconcile the report's targets group to the session mode once, at load
+    // time (the group was default-built headless). The session is the single
+    // source of truth for REPL-vs-headless; this is the only place it is set, and
+    // it is never toggled afterwards. Empty group here, so this only sets the flag
+    // that every later `add` / fan-out (spinner + serial-barrier prompt) reads.
+    report.base_mut().targets.set_is_repl(is_repl);
+
     report
 }
 
@@ -298,7 +305,7 @@ async fn handle_stale_hash(
     svn_path: &str,
     rrid_dir: &std::path::Path,
     trpath: &std::path::Path,
-    interactive: bool,
+    is_repl: bool,
     prompter: Option<&Prompter>,
 ) -> Option<Option<Box<dyn TestReport + Send + Sync>>> {
     let rrid = update.id.clone();
@@ -306,7 +313,7 @@ async fn handle_stale_hash(
     warn!("TestReport hash differs from the Gitea PR; the template is stale");
 
     // "Regenerate the template now via TeReGen? [y/N]" (default no).
-    let regenerate = match (interactive, prompter) {
+    let regenerate = match (is_repl, prompter) {
         (true, Some(p)) => {
             p.confirm("Regenerate the template now via TeReGen? [y/N]: ", false)
                 .await
@@ -329,7 +336,7 @@ async fn handle_stale_hash(
     }
 
     // Manual fallback: "Force continue loading template ? [y/N]" (default no).
-    let force_continue = match (interactive, prompter) {
+    let force_continue = match (is_repl, prompter) {
         (true, Some(p)) => {
             p.confirm("Force continue loading template ? [y/N]: ", false)
                 .await
@@ -344,7 +351,7 @@ async fn handle_stale_hash(
 
     // Declined: optionally delete the stale checkout, then abandon the load.
     // "Delete checked out template <dir>? [Y/n]" (default yes).
-    let delete = match (interactive, prompter) {
+    let delete = match (is_repl, prompter) {
         (true, Some(p)) if rrid_dir.exists() => {
             p.confirm(
                 &format!(

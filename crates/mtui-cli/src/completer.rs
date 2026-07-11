@@ -185,7 +185,7 @@ mod tests {
             Scope::Single
         }
         fn complete(&self, session: &Session, text: &str, _line: &str) -> Vec<String> {
-            let candidate = if session.interactive {
+            let candidate = if session.is_repl {
                 "interactive"
             } else {
                 "headless"

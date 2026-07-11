@@ -77,9 +77,9 @@ impl Command for ShowLog {
             CommandPromptDisplay::show_log(name, entries, &mut sink);
         }
 
-        let interactive = session.interactive;
+        let is_repl = session.is_repl;
         let mut writer = |line: &str| session.display.println(line);
-        page(&output, interactive, Some(&mut writer));
+        page(&output, is_repl, Some(&mut writer));
         Ok(())
     }
 }

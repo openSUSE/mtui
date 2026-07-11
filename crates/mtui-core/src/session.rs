@@ -37,7 +37,7 @@ pub struct Session {
     /// Drives the fan-out default: with several templates loaded and no
     /// interactive `switch` to pick an active one, an otherwise-unscoped command
     /// fans out across every template instead of silently picking one.
-    pub interactive: bool,
+    pub is_repl: bool,
     /// Set by the `quit` command to ask the interactive REPL loop to exit after
     /// the current dispatch returns.
     ///
@@ -159,13 +159,13 @@ impl Session {
     ///
     /// `interactive` mirrors upstream: `true` for the REPL, `false` for MCP.
     #[must_use]
-    pub fn new(config: Config, interactive: bool) -> Self {
+    pub fn new(config: Config, is_repl: bool) -> Self {
         let templates = TemplateRegistry::new(config.clone());
         Self {
             config,
             templates,
             display: CommandPromptDisplay::stdout(),
-            interactive,
+            is_repl,
             should_exit: false,
             log_level_sink: None,
             notify_sink: None,
@@ -176,13 +176,13 @@ impl Session {
 
     /// Builds a session with an explicit display sink (test/embedding seam).
     #[must_use]
-    pub fn with_display(config: Config, interactive: bool, display: CommandPromptDisplay) -> Self {
+    pub fn with_display(config: Config, is_repl: bool, display: CommandPromptDisplay) -> Self {
         let templates = TemplateRegistry::new(config.clone());
         Self {
             config,
             templates,
             display,
-            interactive,
+            is_repl,
             should_exit: false,
             log_level_sink: None,
             notify_sink: None,
@@ -256,10 +256,10 @@ impl Session {
     /// as two views of the same active report.
     #[must_use]
     pub fn take_targets(&mut self) -> HostsGroup {
-        let interactive = self.interactive;
+        let is_repl = self.is_repl;
         std::mem::replace(
             &mut self.templates.active_mut().base_mut().targets,
-            HostsGroup::new(Vec::new(), interactive),
+            HostsGroup::new(Vec::new(), is_repl),
         )
     }
 
@@ -347,7 +347,7 @@ impl Session {
             self.config.clone(),
             kind,
             autoconnect,
-            self.interactive,
+            self.is_repl,
             self.prompter.as_ref(),
         )
         .await;
@@ -1196,9 +1196,9 @@ mod tests {
     }
 
     #[test]
-    fn interactive_flag_is_honored() {
-        assert!(Session::new(config(), true).interactive);
-        assert!(!Session::new(config(), false).interactive);
+    fn is_repl_flag_is_honored() {
+        assert!(Session::new(config(), true).is_repl);
+        assert!(!Session::new(config(), false).is_repl);
     }
 
     #[test]
@@ -1253,7 +1253,7 @@ mod tests {
         let display = CommandPromptDisplay::with_sink(Box::new(Vec::new()), ColorMode::Always);
         let s = Session::with_display(config(), false, display);
         assert_eq!(s.display.color(), ColorMode::Always);
-        assert!(!s.interactive);
+        assert!(!s.is_repl);
     }
 
     #[test]
@@ -1511,6 +1511,33 @@ mod tests {
         seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
         s.add_testplatform_hosts().await;
         assert!(s.targets().is_empty());
+    }
+
+    /// Regression (spinner invisible during `update`): `take_targets` /
+    /// `split_targets` must propagate the session's `is_repl` mode to the taken
+    /// group and both split halves, so the fan-out spinner/prompt seam is not
+    /// silently suppressed on the perform_* path. The session is the single
+    /// source of truth; the empty replacement group it leaves behind also carries
+    /// the flag (a later `load_update` re-sets it at load time).
+    #[tokio::test]
+    async fn take_and_split_targets_propagate_session_is_repl() {
+        let mut s = Session::new(config_with_path_refhosts(), true);
+        seed_active_report(&mut s, "SUSE:Maintenance:1:1", &[], &[]);
+        // Simulate the load-time reconcile that `make_testreport` performs, then
+        // add a connected host into the (now interactive) report group.
+        s.targets_mut().set_is_repl(true);
+        s.targets_mut().add(mock_target("refhost.example"));
+
+        let taken = s.take_targets();
+        assert!(
+            taken.is_repl(),
+            "take_targets must hand back an is_repl=true group"
+        );
+        s.restore_targets(taken);
+
+        let (selected, remainder) = s.split_targets(None).expect("split");
+        assert!(selected.is_repl(), "split selected half must be is_repl");
+        assert!(remainder.is_repl(), "split remainder half must be is_repl");
     }
 
     /// Builds a mock-backed, already-connected [`Target`] — the test seam the

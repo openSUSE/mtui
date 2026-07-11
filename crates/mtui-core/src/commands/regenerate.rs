@@ -95,10 +95,23 @@ impl Command for Regenerate {
             return Ok(());
         }
 
-        // No interactive spinner yet (Phase 6); never stop early.
+        // Drive a TTY spinner for the (long-polling) wait — upstream's
+        // `with spinner(f"Regenerating {rrid}")`. REPL-only (gated on
+        // `interactive`, like the fan-out spinner); a no-op off a TTY / over
+        // MCP. The guard's `is_stopped` predicate feeds `regenerate_and_wait`'s
+        // cooperative-cancel hook so Ctrl-C during the wait bails out promptly
+        // instead of blocking to the next poll.
+        let spin = session
+            .is_repl
+            .then(|| mtui_hosts::spinner(format!("Regenerating {rrid_str}")));
+        let should_stop = || {
+            spin.as_ref()
+                .is_some_and(mtui_hosts::SpinnerGuard::is_stopped)
+        };
         let outcome = teregen
-            .regenerate_and_wait(&rrid_str, force, ignore_inconsistent, || false)
+            .regenerate_and_wait(&rrid_str, force, ignore_inconsistent, should_stop)
             .await;
+        drop(spin);
 
         if outcome.unreachable {
             session.display.println(&format!(

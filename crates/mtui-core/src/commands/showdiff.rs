@@ -188,9 +188,9 @@ impl Command for ShowDiff {
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let text = read_source_diff(session)?;
         let lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-        let interactive = session.interactive;
+        let is_repl = session.is_repl;
         let mut writer = |line: &str| session.display.println(line);
-        page(&lines, interactive, Some(&mut writer));
+        page(&lines, is_repl, Some(&mut writer));
         Ok(())
     }
 }
