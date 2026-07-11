@@ -1256,6 +1256,25 @@ mod tests {
         assert!(!s.interactive);
     }
 
+    #[test]
+    fn new_display_defaults_never_but_set_color_applies() {
+        // Mirrors the production `mtui-cli::main` seam: `Session::new` builds a
+        // stdout display defaulting to `Never`, then `--color` is applied via
+        // `set_color`. Regression guard for Gap 0 (colors never appeared because
+        // the resolved mode was never handed to the display).
+        use crate::display::ColorMode;
+        let mut s = Session::new(config(), true);
+        assert_eq!(s.display.color(), ColorMode::Never);
+        assert!(!s.display.color().resolve());
+
+        s.display.set_color(ColorMode::Always);
+        assert_eq!(s.display.color(), ColorMode::Always);
+        assert!(s.display.color().resolve());
+
+        s.display.set_color(ColorMode::Never);
+        assert!(!s.display.color().resolve());
+    }
+
     // --- Sub-bead B: load_update + autoconnect host resolution -------------
 
     use mtui_hosts::MockConnection;

@@ -131,8 +131,9 @@ impl CommandPromptDisplay {
 
     /// Builds a display writing to stdout.
     ///
-    /// Color defaults to [`ColorMode::Never`]; the REPL flips it to
-    /// [`ColorMode::Auto`]/[`ColorMode::Always`] per the `--color` flag (Phase 6).
+    /// Color defaults to [`ColorMode::Never`]; the REPL flips it to the resolved
+    /// [`ColorMode`] per the `--color` flag via [`set_color`](Self::set_color)
+    /// right after building the session (`mtui-cli::main`).
     #[must_use]
     pub fn stdout() -> Self {
         Self {

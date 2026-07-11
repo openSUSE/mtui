@@ -46,6 +46,13 @@ fn main() -> anyhow::Result<()> {
     let registry = Arc::new(register_all());
     let mut session = Session::new(args.resolve_config(), true);
 
+    // Apply the resolved `--color` to the display. `Session::new` defaults the
+    // display to `ColorMode::Never`; without this the message-content color
+    // helpers (`display.green/red/yellow/blue`) never emit ANSI in the live REPL.
+    // `Auto` (the default) then re-checks TTY / `NO_COLOR` / `COLOR` at each call,
+    // matching upstream `colors_enabled`.
+    session.display.set_color(color);
+
     // Composition root: wire the REPL-only desktop-notification sink to the
     // headless-safe `notification::notify_user`. `mtui-mcp` never installs it, so
     // toasts stay a REPL courtesy (upstream `prompt.notify_user`). The backend is

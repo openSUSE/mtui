@@ -353,6 +353,10 @@ fn title_case(s: &str) -> String {
 }
 
 /// Prints one PASSED/FAILED/RUNNING/MISSING row (upstream `_print_version_row`).
+///
+/// Mirrors upstream: the `version -> url` (or bare `version`) line, then the
+/// status label colored by state — `FAILED (n jobs)` red, `RUNNING/SCHEDULED
+/// (n jobs)` yellow, `PASSED` green — then the optional note in yellow.
 fn print_version_row(session: &mut Session, row: &oqa::VersionResult) {
     if row.status == "missing" {
         let msg = session
@@ -362,13 +366,37 @@ fn print_version_row(session: &mut Session, row: &oqa::VersionResult) {
         return;
     }
     if row.url.is_empty() {
-        session
-            .display
-            .println(&format!("{} -> {}", row.version, row.note));
+        session.display.println(&row.version);
     } else {
         session
             .display
             .println(&format!("{} -> {}", row.version, row.url));
+    }
+
+    let label = match row.status.as_str() {
+        "failed" => {
+            let text = if row.failed_count != 0 {
+                format!("FAILED ({} jobs)", row.failed_count)
+            } else {
+                "FAILED".to_owned()
+            };
+            session.display.red(&text)
+        }
+        "running" => {
+            let text = if row.running_count != 0 {
+                format!("RUNNING/SCHEDULED ({} jobs)", row.running_count)
+            } else {
+                "RUNNING/SCHEDULED".to_owned()
+            };
+            session.display.yellow(&text)
+        }
+        _ => session.display.green("PASSED"),
+    };
+    session.display.println(&label);
+
+    if !row.note.is_empty() {
+        let note = session.display.yellow(&row.note);
+        session.display.println(&note);
     }
 }
 
@@ -410,6 +438,95 @@ mod tests {
         assert_eq!(title_case("core"), "Core");
         assert_eq!(title_case("yast security"), "Yast Security");
         assert_eq!(title_case(""), "");
+    }
+
+    fn version_row(
+        status: &str,
+        url: &str,
+        failed: usize,
+        running: usize,
+        note: &str,
+    ) -> oqa::VersionResult {
+        oqa::VersionResult {
+            version: "15-SP5".to_owned(),
+            url: url.to_owned(),
+            status: status.to_owned(),
+            failed_count: failed,
+            running_count: running,
+            note: note.to_owned(),
+        }
+    }
+
+    #[test]
+    fn version_row_failed_prints_red_label_and_note() {
+        let (mut session, buf) = empty_session();
+        print_version_row(
+            &mut session,
+            &version_row("failed", "http://oqa/x", 3, 0, "flaky"),
+        );
+        let out = buf.contents();
+        assert!(out.contains("15-SP5 -> http://oqa/x"));
+        assert!(out.contains("FAILED (3 jobs)"));
+        assert!(out.contains("flaky"));
+    }
+
+    #[test]
+    fn version_row_failed_without_count_omits_parenthetical() {
+        let (mut session, buf) = empty_session();
+        print_version_row(&mut session, &version_row("failed", "", 0, 0, ""));
+        let out = buf.contents();
+        // No url -> bare version line (upstream parity, not "version -> note").
+        assert!(out.contains("15-SP5\n"));
+        assert!(out.contains("FAILED\n"));
+        assert!(!out.contains("FAILED ("));
+    }
+
+    #[test]
+    fn version_row_running_prints_yellow_label() {
+        let (mut session, buf) = empty_session();
+        print_version_row(&mut session, &version_row("running", "", 0, 2, ""));
+        let out = buf.contents();
+        assert!(out.contains("RUNNING/SCHEDULED (2 jobs)"));
+    }
+
+    #[test]
+    fn version_row_passed_prints_passed() {
+        let (mut session, buf) = empty_session();
+        print_version_row(
+            &mut session,
+            &version_row("passed", "http://oqa/ok", 0, 0, ""),
+        );
+        let out = buf.contents();
+        assert!(out.contains("PASSED"));
+        assert!(!out.contains("FAILED"));
+    }
+
+    #[test]
+    fn version_row_missing_is_unchanged() {
+        let (mut session, buf) = empty_session();
+        print_version_row(&mut session, &version_row("missing", "", 0, 0, "no build"));
+        let out = buf.contents();
+        assert!(out.contains("15-SP5 -> no build"));
+        // Missing rows never emit a status label.
+        assert!(!out.contains("PASSED"));
+        assert!(!out.contains("FAILED"));
+    }
+
+    #[test]
+    fn version_row_labels_are_colored_under_always() {
+        use crate::commands::testkit::Buffer;
+        use crate::display::{ColorMode, CommandPromptDisplay};
+
+        let buf = Buffer::new();
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), ColorMode::Always);
+        let mut session =
+            crate::Session::with_display(mtui_config::Config::default(), false, display);
+
+        print_version_row(&mut session, &version_row("failed", "", 1, 0, ""));
+        let out = buf.contents();
+        // Red ANSI escape wraps the FAILED label.
+        assert!(out.contains('\u{1b}'), "expected ANSI escape, got: {out:?}");
+        assert!(out.contains("FAILED (1 jobs)"));
     }
 
     #[test]
