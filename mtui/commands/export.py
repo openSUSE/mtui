@@ -29,6 +29,17 @@ class Export(Command):
     command = "export"
     scope = "fanout"
 
+    def _requires_hosts(self, report) -> bool:
+        """Export needs a connected host only in the MANUAL workflow.
+
+        AUTO and KERNEL exports build the template from openQA/dashboard data
+        and never touch a connected host, so a host-less template must not be
+        skipped (nor make an all-host-less fan-out raise
+        :class:`NoRefhostsDefinedError`). MANUAL export reports per-host results
+        and keeps the host-phase behaviour.
+        """
+        return report.workflow not in (Workflow.AUTO, Workflow.KERNEL)
+
     @classmethod
     def _add_arguments(cls, parser: ArgumentParser) -> None:
         """Adds arguments to the command's argument parser."""

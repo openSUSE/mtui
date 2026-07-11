@@ -252,6 +252,26 @@ class Command(ABC):
             help="Act on every loaded template (the default for this command)",
         )
 
+    def _requires_hosts(self, report) -> bool:
+        """Whether this command needs a connected host on ``report`` to act.
+
+        Gates the fan-out host-less skip in :meth:`run`: a template with no
+        connected host is skipped (and, when every template is skipped,
+        :class:`NoRefhostsDefinedError` is raised) only for commands that
+        actually operate over hosts. Host-independent commands override this to
+        return ``False`` so they still run on a host-less template instead of
+        being skipped. The default is ``True`` (host-phase behaviour).
+
+        Args:
+            report: The :class:`TestReport` about to be acted on. Subclasses
+                may inspect it (e.g. its ``workflow``) to decide per-report.
+
+        Returns:
+            ``True`` if a connected host is required, ``False`` otherwise.
+
+        """
+        return True
+
     def _resolve_templates(self):
         """Return the ordered list of reports this invocation should act on.
 
@@ -307,7 +327,10 @@ class Command(ABC):
         front (warning, never collected) when the invocation named no ``-t``
         hosts; if every template got skipped that way the command ran nowhere
         and :class:`NoRefhostsDefinedError` is raised instead of reporting
-        success.
+        success. The host-less skip is additionally gated by
+        :meth:`_requires_hosts`, so host-independent commands (e.g. ``export``
+        in the AUTO/KERNEL workflow, which build the template from openQA data)
+        are never skipped for lack of a connected host.
         """
         resolved = self._resolve_templates()
 
@@ -332,7 +355,7 @@ class Command(ABC):
         skipped: list[str] = []
         for report in resolved:
             rrid = str(report.id)
-            if skippable and not report.targets:
+            if skippable and not report.targets and self._requires_hosts(report):
                 logger.warning(
                     "%s skipped on %s: no connected hosts", self.command, rrid
                 )

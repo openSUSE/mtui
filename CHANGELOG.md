@@ -213,6 +213,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- `export` in the AUTO and KERNEL workflows no longer fails with
+  "No refhosts defined" when no reference hosts are connected. These
+  workflows build the template from openQA/dashboard data and never touch a
+  connected host, so fanning `export` out across loaded templates now runs
+  each one instead of skipping host-less templates and erroring when every
+  template was skipped. MANUAL export, which reports per-host results, keeps
+  requiring a connected host.
 - Under the acceptance-test harness (`ACCTEST_ROWS`/`ACCTEST_COLS`, no
   controlling TTY) the terminal geometry is no longer transposed: the
   fallback returned (rows, cols) while the normal path returns
