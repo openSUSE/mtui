@@ -76,6 +76,19 @@ pub trait Command: Send + Sync {
         Scope::Active
     }
 
+    /// Whether the fan-out driver may skip a resolved template that has no
+    /// connected hosts (when the invocation named no `-t` host).
+    ///
+    /// `true` by default: a host-action command (`run`, `reboot`, …) has nothing
+    /// to do on a host-less template, so the driver skips it up front rather than
+    /// letting the body no-op or fail. A command whose work does not strictly
+    /// require connected hosts — notably `export`, which for the `Auto`/`Kernel`
+    /// workflows sources its data from openQA — overrides this to `false` so it
+    /// is dispatched even at zero hosts and can apply its own per-template rule.
+    fn skip_hostless_templates(&self) -> bool {
+        true
+    }
+
     /// Contributes this command's arguments to its `clap` subcommand.
     ///
     /// Default is the identity: a command with no arguments. The real
@@ -141,7 +154,7 @@ pub trait Command: Send + Sync {
         let hosts = args.try_get_many::<String>("hosts");
         let declares_hosts = hosts.is_ok();
         let named_hosts = hosts.ok().flatten().is_some_and(|mut v| v.next().is_some());
-        let skippable = declares_hosts && !named_hosts;
+        let skippable = declares_hosts && !named_hosts && self.skip_hostless_templates();
 
         let restore = session.templates.active_rrid().map(str::to_owned);
         let mut failures: Vec<(String, CommandError)> = Vec::new();

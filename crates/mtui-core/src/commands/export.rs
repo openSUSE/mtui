@@ -11,8 +11,8 @@ use mtui_testreport::{
 use mtui_types::Workflow;
 
 use super::support::{
-    add_hosts_arg, build_auto_openqa, build_incident, config_verify_policy, require_update,
-    select_names, template_completion,
+    add_hosts_arg, build_auto_openqa, build_incident, config_verify_policy, named_hosts,
+    require_update, select_names, template_completion,
 };
 use crate::command::{Command, Scope};
 use crate::error::{CommandError, CommandResult};
@@ -48,6 +48,15 @@ impl Command for Export {
         Scope::Fanout
     }
 
+    /// `export` opts out of the driver's host-less skip: for the `Auto`/`Kernel`
+    /// workflows it sources its data from openQA and needs no connected hosts, so
+    /// `export --all-templates` must still write those templates at zero hosts.
+    /// The per-template `Manual`-workflow rule (which *does* need hosts) is
+    /// applied inside [`call`](Self::call).
+    fn skip_hostless_templates(&self) -> bool {
+        false
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         add_hosts_arg(cmd)
             .arg(
@@ -71,6 +80,20 @@ impl Command for Export {
         let rrid = require_update(session)?;
         let workflow = session.metadata().workflow();
         let force = args.get_flag("force");
+
+        // The Manual workflow folds per-host update logs into the template, so a
+        // host-less template has nothing to fold. When no `-t` was named, report
+        // and skip it rather than writing an empty export; a typo'd `-t` still
+        // fails loudly below via `select_names`. Auto/Kernel source from openQA
+        // and proceed regardless of connected-host count.
+        if workflow == Workflow::Manual && !named_hosts(args) && session.targets().is_empty() {
+            tracing::warn!(
+                command = self.name(),
+                rrid = %rrid,
+                "skipped: manual export needs a connected host",
+            );
+            return Ok(());
+        }
 
         // Output path: explicit `filename`, else the loaded report's own path.
         let filename: PathBuf = match args.get_one::<String>("filename") {
@@ -450,6 +473,78 @@ mod tests {
         let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
         session.templates.active_mut().base_mut().workflow = Workflow::Auto;
         let args = matches(&Export, &["-f", "/nonexistent/dir/nope.txt"]);
+        let err = Export.call(&mut session, &args).await.unwrap_err();
+        assert!(matches!(err, CommandError::Other(_)));
+    }
+
+    #[test]
+    fn opts_out_of_hostless_skip() {
+        // Unlike host-action commands, export must reach `call()` on a host-less
+        // template so its per-workflow rule can run (Auto/Kernel at zero hosts).
+        assert!(!Export.skip_hostless_templates());
+    }
+
+    #[tokio::test]
+    async fn auto_exports_with_zero_hosts() {
+        // The reported bug: `export` on an Auto template with no connected hosts
+        // must still write the template (data comes from openQA), not error.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
+        session.templates.active_mut().base_mut().workflow = Workflow::Auto;
+        assert!(session.targets().is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("## export MTUI:"));
+    }
+
+    #[tokio::test]
+    async fn manual_with_zero_hosts_is_skipped_not_errored() {
+        // A Manual template folds per-host logs; with no hosts (and no `-t`) there
+        // is nothing to fold, so export reports and skips it — without touching
+        // the dashboard/openQA (config points nowhere; a real export attempt
+        // would surface an error, proving the early return fired).
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
+        session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        assert!(session.targets().is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap()]);
+        Export.call(&mut session, &args).await.unwrap();
+
+        // The template file is left untouched (no export written).
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !written.contains("## export MTUI:"),
+            "should not export:\n{written}"
+        );
+        // No openQA "auto" was lazily built — the body returned before that.
+        assert!(session.metadata().openqa().auto.is_none());
+    }
+
+    #[tokio::test]
+    async fn manual_with_named_missing_host_still_fails_loudly() {
+        // The host-less skip only applies when no `-t` is named. A typo'd `-t`
+        // on a Manual template must still fail (upstream HostIsNotConnectedError),
+        // not be silently skipped.
+        let (mut session, _buf) = session_with_hosts("SUSE:Maintenance:1:1", &[], "");
+        session.templates.active_mut().base_mut().workflow = Workflow::Manual;
+        let dir = tempfile::tempdir().unwrap();
+        session.config.template_dir = dir.path().to_path_buf();
+        let path = dir.path().join("template.txt");
+        std::fs::write(&path, "source code change review:\n").unwrap();
+
+        let server = dashboard_server("1").await;
+        session.config.qem_dashboard_api = format!("{}/api", server.uri());
+        session.config.openqa_instance = server.uri();
+
+        let args = matches(&Export, &["-f", path.to_str().unwrap(), "-t", "bogus"]);
         let err = Export.call(&mut session, &args).await.unwrap_err();
         assert!(matches!(err, CommandError::Other(_)));
     }

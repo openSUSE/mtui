@@ -16,6 +16,7 @@ use support::FakeReport;
 struct MockCommand {
     scope: Scope,
     fail_on: HashSet<String>,
+    skip_hostless: bool,
     ran: Mutex<Vec<String>>,
 }
 
@@ -24,6 +25,7 @@ impl MockCommand {
         Self {
             scope,
             fail_on: HashSet::new(),
+            skip_hostless: true,
             ran: Mutex::new(Vec::new()),
         }
     }
@@ -31,6 +33,16 @@ impl MockCommand {
         Self {
             scope,
             fail_on: fail_on.iter().map(|s| (*s).to_owned()).collect(),
+            skip_hostless: true,
+            ran: Mutex::new(Vec::new()),
+        }
+    }
+    /// A command that opts out of the driver's host-less skip (like `export`).
+    fn no_hostless_skip(scope: Scope) -> Self {
+        Self {
+            scope,
+            fail_on: HashSet::new(),
+            skip_hostless: false,
             ran: Mutex::new(Vec::new()),
         }
     }
@@ -46,6 +58,9 @@ impl Command for MockCommand {
     }
     fn scope(&self) -> Scope {
         self.scope
+    }
+    fn skip_hostless_templates(&self) -> bool {
+        self.skip_hostless
     }
     async fn call(&self, session: &mut Session, _args: &ArgMatches) -> CommandResult {
         let rrid = session.metadata().id();
@@ -218,6 +233,8 @@ async fn default_trait_methods_are_sensible() {
     assert_eq!(cmd.name(), "default");
     assert_eq!(cmd.aliases(), &[] as &[&str]);
     assert_eq!(cmd.scope(), Scope::Active);
+    // Host-less templates are skippable by default (host-action commands).
+    assert!(cmd.skip_hostless_templates());
     // configure is the identity (command unchanged).
     let base = clap::Command::new("default");
     assert_eq!(cmd.configure(base).get_name(), "default");
@@ -236,5 +253,26 @@ async fn named_hosts_disable_skip() {
     let mut s = session(true, &[("a", &["h1"]), ("b", &[])]);
     let cmd = MockCommand::new(Scope::Fanout);
     cmd.run(&mut s, &matches(&["-t", "h1"])).await.unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
+}
+
+#[tokio::test]
+async fn opt_out_of_hostless_skip_dispatches_every_template() {
+    // A command overriding `skip_hostless_templates()` to `false` (like `export`
+    // for Auto/Kernel workflows) is dispatched into host-less templates instead
+    // of being skipped up front, even with no `-t` named.
+    let mut s = session(true, &[("a", &["h1"]), ("b", &[])]);
+    let cmd = MockCommand::no_hostless_skip(Scope::Fanout);
+    cmd.run(&mut s, &matches(&[])).await.unwrap();
+    assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
+}
+
+#[tokio::test]
+async fn opt_out_of_hostless_skip_runs_all_hostless() {
+    // With every template host-less and the skip disabled, the command still
+    // runs on each (rather than the all-skipped -> NoRefhostsDefined path).
+    let mut s = session(true, &[("a", &[]), ("b", &[])]);
+    let cmd = MockCommand::no_hostless_skip(Scope::Fanout);
+    cmd.run(&mut s, &matches(&[])).await.unwrap();
     assert_eq!(cmd.ran(), vec!["a".to_owned(), "b".to_owned()]);
 }
