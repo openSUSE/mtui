@@ -2,11 +2,21 @@
 
 import concurrent.futures
 from contextlib import suppress
+from logging import getLogger
 
 from ..cli.argparse import ArgumentParser
 from ..cli.completion import complete_choices
 from ..support.concurrency import ContextExecutor
 from . import Command
+
+logger = getLogger("mtui.command.quit")
+
+#: How long (in seconds) ``quit`` waits for the parallel host teardown
+#: before reporting the remaining hosts as still disconnecting. This does
+#: not bound how long ``quit`` itself can block: the executor is still
+#: joined on exit, so a straggler past this timeout is merely reported
+#: early, not abandoned. Module-level so tests can patch it.
+CLOSE_TIMEOUT: float = 45
 
 
 class Quit(Command):
@@ -51,13 +61,46 @@ class Quit(Command):
                 report.release_pool_claims()
 
         # Close every loaded template's host group, not just the active one.
+        # Leaving the ``with`` block below still joins every worker thread
+        # (``Executor.__exit__`` is ``shutdown(wait=True)``) -- that join is
+        # pre-existing behaviour and is left untouched here, so quit keeps
+        # blocking until every close has actually finished, however long
+        # that takes. Only the *visibility* of the outcome changes: a
+        # straggler still running at the timeout gets a "still
+        # disconnecting" warning (not a final verdict, since it may yet
+        # succeed while the ``with`` block joins it), and is re-checked
+        # once the join has completed so an exception raised after the
+        # timeout is not silently dropped.
         with ContextExecutor() as executor:
-            futures = [
-                executor.submit(self._close_target, report.targets, target, args_)
+            futures = {
+                executor.submit(
+                    self._close_target, report.targets, target, args_
+                ): target
                 for report in self.templates.all()
                 for target in set(report.targets)
-            ]
-            concurrent.futures.wait(futures, timeout=45)
+            }
+            done, not_done = concurrent.futures.wait(futures, timeout=CLOSE_TIMEOUT)
+            for future in done:
+                if (exc := future.exception()) is not None:
+                    logger.warning(
+                        "failed to disconnect from %s: %s", futures[future], exc
+                    )
+            for future in not_done:
+                logger.warning(
+                    "still disconnecting from %s after %s seconds",
+                    futures[future],
+                    CLOSE_TIMEOUT,
+                )
+        # The ``with`` block above has just joined every straggler from
+        # ``not_done`` (the executor's own ``shutdown(wait=True)`` on
+        # exit), so every one of those futures is now guaranteed done.
+        # Re-check them: one that went on to raise had its failure reason
+        # dropped before this fix (only the timeout warning fired even
+        # though quit blocked for the close to finish anyway); one that
+        # went on to succeed needs no further warning.
+        for future in not_done:
+            if (exc := future.exception()) is not None:
+                logger.warning("failed to disconnect from %s: %s", futures[future], exc)
 
         # FileHistory writes synchronously on each ``append_string``, so the
         # on-disk file is already current. ``flush()`` is the canonical

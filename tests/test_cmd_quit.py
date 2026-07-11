@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from argparse import Namespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from mtui.cli import _history, repl
+from mtui.commands import quit as quit_module
 from mtui.commands.quit import Quit
 from mtui.hosts.target.hostgroup import HostsGroup
 
@@ -84,6 +87,202 @@ def test_quit_history_flush_failure_does_not_abort_exit(mock_config):
     Quit(args, mock_config, sys_mock, prompt)()
 
     sys_mock.exit.assert_called_once_with(0)
+
+
+def test_quit_close_failure_logs_warning_with_hostname(mock_config, caplog):
+    """A crashing ``close()`` must not abort ``quit``, but must be visible.
+
+    Teardown is best-effort, so the exit still happens with status 0;
+    the failure has to surface as a warning naming the affected host.
+    """
+    t = _make_target("h1")
+    t.close.side_effect = KeyError("boom")
+    prompt = _prompt(HostsGroup([t]))
+    sys_mock = MagicMock()
+    args = Namespace(bootarg=None)
+
+    with caplog.at_level(logging.WARNING, logger="mtui.command.quit"):
+        Quit(args, mock_config, sys_mock, prompt)()
+
+    sys_mock.exit.assert_called_once_with(0)
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "mtui.command.quit" and r.levelno == logging.WARNING
+    ]
+    assert any("h1" in m and "failed to disconnect" in m for m in warnings)
+
+
+def test_quit_close_failure_names_the_failing_host_among_several(mock_config, caplog):
+    """The warning must name the host whose ``close()`` actually failed.
+
+    A single-host test cannot tell ``futures[future]`` (the correct
+    per-future lookup) apart from a broken mapping that reports an
+    arbitrary submitted host instead -- with only one host in the dict,
+    any lookup trivially returns that same host. Load two hosts where
+    only the second's ``close()`` raises and assert the failure warning
+    names exactly that host, never the one that closed cleanly.
+    """
+    t1 = _make_target("h1")
+    t2 = _make_target("h2")
+    t2.close.side_effect = KeyError("boom")
+    prompt = _prompt(HostsGroup([t1]), HostsGroup([t2]))
+    sys_mock = MagicMock()
+    args = Namespace(bootarg=None)
+
+    with caplog.at_level(logging.WARNING, logger="mtui.command.quit"):
+        Quit(args, mock_config, sys_mock, prompt)()
+
+    sys_mock.exit.assert_called_once_with(0)
+    t1.close.assert_called_once_with()
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "mtui.command.quit" and r.levelno == logging.WARNING
+    ]
+    failures = [m for m in warnings if "failed to disconnect" in m]
+    assert len(failures) == 1
+    assert "h2" in failures[0]
+    assert "h1" not in failures[0]
+
+
+def test_quit_clean_teardown_emits_no_warnings(mock_config, caplog):
+    """A fully successful teardown must not emit any warning at all.
+
+    Guards the fidelity of the teardown-visibility warnings: a
+    regression that logs unconditionally (e.g. iterating ``futures``
+    instead of ``not_done``) would train users to ignore every quit,
+    but the clean-path tests never inspected ``caplog`` before this.
+    """
+    t1 = _make_target("h1")
+    t2 = _make_target("h2")
+    prompt = _prompt(HostsGroup([t1]), HostsGroup([t2]))
+    sys_mock = MagicMock()
+    args = Namespace(bootarg=None)
+
+    with caplog.at_level(logging.WARNING, logger="mtui.command.quit"):
+        Quit(args, mock_config, sys_mock, prompt)()
+
+    sys_mock.exit.assert_called_once_with(0)
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "mtui.command.quit" and r.levelno == logging.WARNING
+    ]
+    assert warnings == []
+
+
+def test_quit_close_timeout_logs_warning_with_hostname(
+    mock_config, caplog, monkeypatch
+):
+    """A ``close()`` that hangs past the teardown timeout is reported.
+
+    The 45 s production timeout is patched down so the test stays fast;
+    a log handler releases the hung worker the moment the timeout
+    warning is emitted, so no arbitrary sleep is needed.
+    """
+    # ``raising=False``: the attribute only exists with the fix applied,
+    # and revert-verification must fail on the assertion, not on setattr.
+    monkeypatch.setattr(quit_module, "CLOSE_TIMEOUT", 0.05, raising=False)
+
+    hang = threading.Event()
+    t = _make_target("h1")
+    t.close.side_effect = lambda *args: hang.wait()
+    prompt = _prompt(HostsGroup([t]))
+    sys_mock = MagicMock()
+    args = Namespace(bootarg=None)
+
+    class _ReleaseOnWarning(logging.Handler):
+        """Unblocks the hung close as soon as the timeout warning fires."""
+
+        def emit(self, record: logging.LogRecord) -> None:
+            hang.set()
+
+    release = _ReleaseOnWarning(level=logging.WARNING)
+    quit_logger = logging.getLogger("mtui.command.quit")
+    quit_logger.addHandler(release)
+    # Backstop so a regression (warning never emitted) cannot hang the
+    # test run forever on the executor-shutdown join.
+    backstop = threading.Timer(5.0, hang.set)
+    backstop.start()
+    try:
+        with caplog.at_level(logging.WARNING, logger="mtui.command.quit"):
+            Quit(args, mock_config, sys_mock, prompt)()
+    finally:
+        quit_logger.removeHandler(release)
+        hang.set()
+        backstop.cancel()
+
+    sys_mock.exit.assert_called_once_with(0)
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "mtui.command.quit" and r.levelno == logging.WARNING
+    ]
+    assert any("h1" in m and "still disconnecting" in m for m in warnings)
+    # No final-verdict "failed to disconnect" warning: the straggler went
+    # on to succeed once released, so it must not also be reported as a
+    # failure.
+    assert not any("h1" in m and "failed to disconnect" in m for m in warnings)
+
+
+def test_quit_straggler_that_later_raises_logs_failure_warning(
+    mock_config, caplog, monkeypatch
+):
+    """A close still running at the timeout that later raises is not lost.
+
+    Before this fix, only the "still disconnecting" timeout warning
+    fired for a straggler; exiting the executor's ``with`` block still
+    joins that worker (``Executor.__exit__`` is ``shutdown(wait=True)``),
+    so quit blocks until the close actually finishes regardless -- but
+    the exception it eventually raised was silently dropped. The
+    straggler's failure reason must surface once the join completes.
+    """
+    monkeypatch.setattr(quit_module, "CLOSE_TIMEOUT", 0.05, raising=False)
+
+    hang = threading.Event()
+
+    def _close(*args):
+        hang.wait()
+        raise RuntimeError("late boom")
+
+    t = _make_target("h1")
+    t.close.side_effect = _close
+    prompt = _prompt(HostsGroup([t]))
+    sys_mock = MagicMock()
+    args = Namespace(bootarg=None)
+
+    class _ReleaseOnWarning(logging.Handler):
+        """Unblocks the hung close as soon as the timeout warning fires."""
+
+        def emit(self, record: logging.LogRecord) -> None:
+            hang.set()
+
+    release = _ReleaseOnWarning(level=logging.WARNING)
+    quit_logger = logging.getLogger("mtui.command.quit")
+    quit_logger.addHandler(release)
+    # Backstop so a regression (warning never emitted) cannot hang the
+    # test run forever on the executor-shutdown join.
+    backstop = threading.Timer(5.0, hang.set)
+    backstop.start()
+    try:
+        with caplog.at_level(logging.WARNING, logger="mtui.command.quit"):
+            Quit(args, mock_config, sys_mock, prompt)()
+    finally:
+        quit_logger.removeHandler(release)
+        hang.set()
+        backstop.cancel()
+
+    sys_mock.exit.assert_called_once_with(0)
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "mtui.command.quit" and r.levelno == logging.WARNING
+    ]
+    assert any("h1" in m and "still disconnecting" in m for m in warnings)
+    assert any(
+        "h1" in m and "failed to disconnect" in m and "late boom" in m for m in warnings
+    )
 
 
 @pytest.fixture
