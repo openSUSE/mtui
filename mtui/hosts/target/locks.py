@@ -3,7 +3,7 @@
 import errno
 import os
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from logging import getLogger
 from pathlib import Path
 from traceback import format_exc
@@ -376,7 +376,11 @@ class TargetLock:
         return self._lock.comment
 
     def time(self) -> str:
-        """Returns the time the lock was created.
+        """Returns the time the lock was created, rendered in UTC.
+
+        The epoch timestamp is shared between testers in different
+        timezones, so it is converted timezone-aware to match the
+        literal "UTC" label in the output.
 
         Returns:
             The time the lock was created, or ``"unknown"`` when the stored
@@ -388,7 +392,7 @@ class TargetLock:
         """
         self.load()
         try:
-            ts = datetime.fromtimestamp(float(self._lock.timestamp))
+            ts = datetime.fromtimestamp(float(self._lock.timestamp), tz=UTC)
         except (ValueError, OverflowError, OSError):
             logger.debug(
                 "%s: malformed lock timestamp %r",

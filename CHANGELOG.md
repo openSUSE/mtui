@@ -242,6 +242,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   written because the template is malformed (a state header as the very last
   line), the export now logs a warning naming the host and package instead of
   silently skipping the line.
+- The lock time shown in "locked by" messages (e.g. by `list_locks` and
+  `update`) is now actually UTC, as its label has always claimed. The shared
+  lock timestamp was converted to the tester's local timezone before being
+  formatted with the "UTC" suffix, so anyone outside UTC saw a time wrong by
+  their UTC offset.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a
