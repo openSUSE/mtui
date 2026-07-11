@@ -51,7 +51,11 @@ def complete_choices(
         hostnames: A list of hostnames to include in the completion choices.
 
     Returns:
-        A list of possible completion strings.
+        A list of possible completion strings. A candidate that equals
+        ``text`` exactly is included alongside any longer candidate
+        that shares the same prefix (e.g. typing ``Doc`` fully still
+        offers a sibling ``Documents``) rather than short-circuiting
+        to just the exact match.
 
     """
     if not hostnames:
@@ -73,14 +77,14 @@ def complete_choices(
             if line in s:
                 choices = choices - set(s)
 
-    endchoices: list[str] = []
-    for c in choices:
-        if text == c:
-            return [c]
-        if text == c[0 : len(text)]:
-            endchoices.append(c)
-
-    return endchoices
+    # Every candidate sharing ``text`` as a prefix is a match — this
+    # already includes an exact match, since ``c[0:len(text)] == text``
+    # trivially holds when ``c == text``. Do not special-case (and
+    # short-circuit on) an exact match: iterating a set has no defined
+    # order, so returning early the moment one is found would silently
+    # drop other, longer candidates depending on iteration order (e.g.
+    # a directory named "Doc" sitting next to "Documents").
+    return [c for c in choices if text == c[0 : len(text)]]
 
 
 def complete_choices_filelist(
@@ -100,22 +104,30 @@ def complete_choices_filelist(
 
     Returns:
         A list of possible completion strings, including file and
-        directory names.
+        directory names. A leading ``~``/``~user`` in ``text`` is
+        expanded first (:func:`os.path.expanduser` semantics), so the
+        file candidates for a tilde path come back as absolute paths.
+        Directory candidates are suffixed with ``/`` (shell
+        convention) so a following TAB descends into their contents.
+        A tilde path that already names an existing directory (a bare
+        ``~``/``~user``, or ``~/some/existing/dir`` typed with no
+        trailing slash) behaves as if the trailing slash had already
+        been typed -- descending straight into it -- *unless* a
+        sibling entry shares the same prefix (e.g. a directory ``Doc``
+        next to ``Documents``), in which case forcing the descent
+        would silently hide that sibling, so the parent's entries are
+        listed instead.
 
     """
-    dirname = ""
-    filename = ""
+    is_tilde = text.startswith("~")
+    if is_tilde:
+        text = os.path.expanduser(text)
 
-    if text.startswith("~"):
-        text = text.replace("~", os.path.expanduser("~"), 1)
-        text += "/"
-
-    if "/" in text:
-        dirname = "/".join(text.split("/")[:-1])
-        dirname += "/"
-
-    if not dirname:
-        dirname = "./"
+    # List the directory portion of the typed path (everything up to and
+    # including the last ``/``; the current directory when there is none).
+    # The typed basename prefix is matched by complete_choices() against
+    # the rebuilt ``dirname + entry`` candidates.
+    dirname = text[: text.rindex("/") + 1] if "/" in text else "./"
 
     # Tab-completion fires on every keystroke, including transient
     # typos like ``,/`` (missed shift on ``./``). A missing directory,
@@ -126,6 +138,26 @@ def complete_choices_filelist(
     except (FileNotFoundError, NotADirectoryError, PermissionError):
         entries = []
 
-    synonyms += [(dirname + i,) for i in entries if i.startswith(filename)]
+    if is_tilde and not text.endswith("/") and os.path.isdir(text):
+        # The tilde-expanded text itself names an existing directory
+        # (bare "~"/"~user", or e.g. "~/Documents" typed in full). Its
+        # "parent" (the directory `dirname` currently points at, e.g.
+        # the home directory's own parent for a bare "~") is never
+        # what the user means to browse. Force the descent only when
+        # unambiguous: no sibling of the parent shares this basename
+        # as a prefix (that sibling would otherwise vanish once we
+        # switch to listing the directory itself).
+        basename = text[len(dirname) :]
+        if sum(1 for e in entries if e.startswith(basename)) <= 1:
+            text += "/"
+            dirname = text
+            try:
+                entries = os.listdir(dirname)
+            except (FileNotFoundError, NotADirectoryError, PermissionError):
+                entries = []
+
+    synonyms += [
+        (dirname + i + ("/" if os.path.isdir(dirname + i) else ""),) for i in entries
+    ]
 
     return complete_choices(synonyms, line, text, hostnames)

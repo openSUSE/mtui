@@ -221,6 +221,140 @@ def test_adapter_matches_complete_choices_for_run():
 
 
 # --------------------------------------------------------------------------- #
+# Tilde (home directory) expansion in file-path completion                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_filelist_tilde_partial_path_completes(tmp_path, monkeypatch):
+    """``~/Doc`` offers the home entries matching the partial basename.
+
+    Regression: the helper used to append ``/`` to the tilde-expanded
+    text, so ``~/Doc`` was treated as the (non-existent) directory
+    ``$HOME/Doc/`` — ``os.listdir`` of it yielded nothing and no
+    completions were ever offered for a partial path under ``~``.
+    ``os.path.expanduser`` resolves ``~`` from ``$HOME`` on POSIX, so
+    pointing ``HOME`` at ``tmp_path`` keeps the test hermetic without
+    changing the CWD. The single match is a directory, so it carries a
+    trailing ``/`` (shell convention, lets a following TAB descend).
+    """
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "Downloads").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert complete_choices_filelist([], "put ~/Doc", "~/Doc") == [
+        f"{tmp_path}/Documents/"
+    ]
+
+
+def test_filelist_tilde_exact_directory_lists_contents(tmp_path, monkeypatch):
+    """``~/`` (an exact existing directory) offers every entry in it.
+
+    Also locks in the candidate shape: single ``/`` separators (the old
+    unconditional ``text += '/'`` produced ``$HOME//<entry>``), each
+    suffixed with its own trailing ``/`` since both entries are
+    directories.
+    """
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "Downloads").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert set(complete_choices_filelist([], "put ~/", "~/")) == {
+        f"{tmp_path}/Documents/",
+        f"{tmp_path}/Downloads/",
+    }
+
+
+def test_filelist_bare_tilde_lists_home_contents(tmp_path, monkeypatch):
+    """A bare ``~`` (no trailing slash, no further path) lists $HOME itself.
+
+    Regression: ``os.path.expanduser("~")`` yields ``$HOME`` with *no*
+    trailing slash, so naively taking "everything up to the last '/'"
+    as the directory to list resolves to $HOME's own *parent* —
+    listing sibling home directories instead of $HOME's contents, and
+    (via ``complete_choices``'s prefix match) offering only $HOME
+    itself as a single dead-end candidate. $HOME must be listed
+    directly, exactly like the old (pre-tilde-completion-fix) code did.
+    """
+    (tmp_path / "Documents").mkdir()
+    (tmp_path / "Downloads").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert set(complete_choices_filelist([], "put ~", "~")) == {
+        f"{tmp_path}/Documents/",
+        f"{tmp_path}/Downloads/",
+    }
+
+
+def test_filelist_tilde_exact_directory_no_trailing_slash_descends(
+    tmp_path, monkeypatch
+):
+    """``~/Documents`` (full name, no trailing slash) lists its contents.
+
+    Regression: typing the exact, unambiguous directory name used to
+    dead-end on re-offering ``$HOME/Documents`` itself (an exact match
+    against its own listing in its parent) instead of descending into
+    it, unlike the old code which forced a trailing slash onto any
+    tilde path and so always listed the named directory's contents.
+    """
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    (docs / "alpha.txt").write_text("")
+    (docs / "beta.txt").write_text("")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert set(complete_choices_filelist([], "put ~/Documents", "~/Documents")) == {
+        f"{docs}/alpha.txt",
+        f"{docs}/beta.txt",
+    }
+
+
+def test_filelist_tilde_subdirectory_partial_filters_by_basename(tmp_path, monkeypatch):
+    """``~/Documents/al`` lists ``~/Documents`` and narrows by basename."""
+    docs = tmp_path / "Documents"
+    docs.mkdir()
+    (docs / "alpha.txt").write_text("")
+    (docs / "beta.txt").write_text("")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert complete_choices_filelist([], "put ~/Documents/al", "~/Documents/al") == [
+        f"{docs}/alpha.txt"
+    ]
+
+
+def test_filelist_tilde_directory_sibling_is_not_hidden(tmp_path, monkeypatch):
+    """A directory whose name is a prefix of a sibling directory's name.
+
+    Regression: forcing the descent whenever the typed (expanded) text
+    names an existing directory would, for ``~/Doc`` here, silently
+    swallow the sibling ``Documents`` — the parent's entries must be
+    listed instead whenever another entry shares the same prefix.
+    """
+    (tmp_path / "Doc").mkdir()
+    (tmp_path / "Documents").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert set(complete_choices_filelist([], "put ~/Doc", "~/Doc")) == {
+        f"{tmp_path}/Doc/",
+        f"{tmp_path}/Documents/",
+    }
+
+
+def test_filelist_tilde_file_does_not_hide_prefixed_directory_sibling(
+    tmp_path, monkeypatch
+):
+    """A *file* whose name exactly matches the typed text must not hide
+    a directory sharing that prefix.
+
+    Regression: ``complete_choices`` used to short-circuit the moment
+    it found a candidate equal to ``text``, discarding any other
+    prefix match already collected (or not yet visited) depending on
+    set-iteration order — here that would drop ``Documents`` because
+    the file ``Doc`` matches ``text`` exactly.
+    """
+    (tmp_path / "Doc").write_text("")
+    (tmp_path / "Documents").mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert set(complete_choices_filelist([], "put ~/Doc", "~/Doc")) == {
+        f"{tmp_path}/Doc",
+        f"{tmp_path}/Documents/",
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Error robustness                                                            #
 # --------------------------------------------------------------------------- #
 

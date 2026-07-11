@@ -247,6 +247,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   lock timestamp was converted to the tester's local timezone before being
   formatted with the "UTC" suffix, so anyone outside UTC saw a time wrong by
   their UTC offset.
+- Tab completion of file paths now works for partial paths under `~`: typing
+  e.g. `put ~/Doc<TAB>` offers `~`-expanded matches such as
+  `/home/user/Documents/`. Previously the completer appended a `/` to the
+  expanded text unconditionally, so a partial basename like `~/Doc` was
+  treated as the non-existent directory `$HOME/Doc/` and no completions were
+  offered at all; typing the exact directory name (`~/Documents`, no
+  trailing slash) already worked, but input that already ended in `/` (bare
+  `~/`, or `~/Documents/`) got a second slash appended on top of the one
+  already typed, e.g. `$HOME//Documents`. Directory candidates (including
+  bare `~`'s home-directory entries) are now suffixed with `/`, matching
+  shell convention, so a following `TAB` descends into them.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a
