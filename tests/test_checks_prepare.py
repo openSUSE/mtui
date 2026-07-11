@@ -41,10 +41,30 @@ def test_zypper_zypp_lock_logging_is_well_formed(monkeypatch) -> None:
         zypper("h", "out", "in pkg", "A ZYpp transaction is already in progress.", 0)
 
 
-def test_zypper_system_management_locked_raises() -> None:
-    """A "System management is locked" stderr raises ``UpdateError``."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "in pkg", "System management is locked", 0)
+def test_zypper_failure_log_labels_stdout_as_stdout(caplog) -> None:
+    """The failure log labels the stdout payload "stdout:", not "stdin:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.prepare"),
+        pytest.raises(UpdateError),
+    ):
+        zypper(
+            "h",
+            "OUT-PAYLOAD",
+            "in pkg",
+            "A ZYpp transaction is already in progress.",
+            0,
+        )
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
+
+
+def test_zypper_system_management_locked_raises(caplog) -> None:
+    """A "System management is locked" stderr raises and labels payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.prepare"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "in pkg", "System management is locked", 0)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_zypper_unresolved_dep_raises() -> None:
@@ -53,10 +73,14 @@ def test_zypper_unresolved_dep_raises() -> None:
         zypper("h", "(c): c", "in pkg", "", 0)
 
 
-def test_zypper_rpm_error_raises() -> None:
-    """``Error:`` in stderr raises ``UpdateError``."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "in pkg", "Error: foo", 0)
+def test_zypper_rpm_error_raises(caplog) -> None:
+    """``Error:`` in stderr raises ``UpdateError`` labeling the payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.prepare"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "in pkg", "Error: foo", 0)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_prepare_checks_dispatch() -> None:

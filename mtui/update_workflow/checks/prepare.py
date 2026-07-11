@@ -24,7 +24,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
     """
     if "A ZYpp transaction is already in progress." in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -33,7 +33,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("update stack locked", hostname)
     if "System management is locked" in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -49,7 +49,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("Dependency Error", hostname)
     if "Error:" in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,

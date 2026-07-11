@@ -25,13 +25,13 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
     """
     if "zypper" in stdin and exitcode == 104:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
             stderr,
         )
-        raise UpdateError("update stack locked", hostname)
+        raise UpdateError("package not found", hostname)
     if "zypper" in stdin and exitcode == 106:
         logger.warning("%s: zypper returns exitcode 106:\n%s", hostname, stderr)
     if "Additional rpm output" in stdout:
@@ -42,7 +42,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         print(stdout[start:end].replace("warning", yellow("warning")))  # noqa: T201
     if "A ZYpp transaction is already in progress." in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -51,7 +51,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("update stack locked", hostname)
     if "System management is locked" in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -67,7 +67,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("Dependency Error", hostname)
     if "Error:" in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,

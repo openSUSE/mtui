@@ -222,6 +222,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   own globals rather than `inspect.getmodule`, which returned "unknown"
   under import hooks that report a different file path than the code object
   records.
+- A zypper exit code 104 during `update` is now reported as "package not
+  found" instead of the misleading "update stack locked". Zypper's 104 is
+  `ZYPPER_EXIT_INF_CAP_NOT_FOUND` (the requested package/capability does not
+  exist), not a ZYpp-lock condition, so the old message sent testers chasing
+  a lock that was never there; the `update` check now matches the `install`
+  check's mapping. Additionally, the failure logs of the update, install,
+  prepare and downgrade checks now label the captured command output
+  correctly as "stdout:" (it was mislabeled "stdin:"), and an "errocode"
+  typo in the downgrade check's exit-106 warning is fixed.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a

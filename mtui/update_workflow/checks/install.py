@@ -26,7 +26,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         return
     if exitcode in (104, 4, 5, 8):
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -38,7 +38,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         or "System management is locked" in stderr
     ):
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -47,7 +47,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("update stack locked", hostname)
     if "Error:" in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -62,7 +62,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         )
         raise UpdateError("Dependency Error", hostname)
     logger.critical(
-        '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+        '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
         hostname,
         stdin,
         stdout,

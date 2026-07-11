@@ -24,7 +24,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
     """
     if "A ZYpp transaction is already in progress." in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -33,7 +33,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         raise UpdateError("update stack locked", hostname)
     if "System management is locked" in stderr:
         logger.critical(
-            '%s: command "%s" failed:\nstdin:\n%s\nstderr:\n%s',
+            '%s: command "%s" failed:\nstdout:\n%s\nstderr:\n%s',
             hostname,
             stdin,
             stdout,
@@ -51,7 +51,7 @@ def zypper(hostname: str, stdout: str, stdin: str, stderr: str, exitcode: int) -
         logger.critical("%s: zypper returned with errorcode 104:\n%s", hostname, stderr)
         raise UpdateError("Unspecified Error", hostname)
     if exitcode == 106:
-        logger.warning("%s: zypper returned with errocode 106:\n%s", hostname, stderr)
+        logger.warning("%s: zypper returned with errorcode 106:\n%s", hostname, stderr)
 
 
 #: A dictionary that maps system configurations to downgrade check functions.

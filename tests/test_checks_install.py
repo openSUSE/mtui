@@ -28,22 +28,50 @@ def test_zypper_exitcode_104_raises_package_not_found() -> None:
         zypper("h", "", "in pkg", "", 104)
 
 
-def test_zypper_zypp_transaction_lock_raises() -> None:
-    """A ZYpp transaction-in-progress stderr raises ``UpdateError``."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "in pkg", "A ZYpp transaction is already in progress.", 1)
+def test_zypper_failure_log_labels_stdout_as_stdout(caplog) -> None:
+    """The failure log labels the stdout payload "stdout:", not "stdin:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.install"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "in pkg", "ERR-PAYLOAD", 104)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
-def test_zypper_system_management_lock_raises() -> None:
-    """A "System management is locked" stderr raises ``UpdateError``."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "in pkg", "System management is locked", 1)
+def test_zypper_zypp_transaction_lock_raises(caplog) -> None:
+    """A ZYpp transaction-in-progress stderr raises and labels payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.install"),
+        pytest.raises(UpdateError),
+    ):
+        zypper(
+            "h",
+            "OUT-PAYLOAD",
+            "in pkg",
+            "A ZYpp transaction is already in progress.",
+            1,
+        )
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
-def test_zypper_rpm_error_raises() -> None:
-    """``Error:`` in stderr raises ``UpdateError("RPM Error", host)``."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "in pkg", "Error: something bad", 1)
+def test_zypper_system_management_lock_raises(caplog) -> None:
+    """A "System management is locked" stderr raises and labels payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.install"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "in pkg", "System management is locked", 1)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
+
+
+def test_zypper_rpm_error_raises(caplog) -> None:
+    """``Error:`` in stderr raises ``UpdateError("RPM Error", host)`` labeling "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.install"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "in pkg", "Error: something bad", 1)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_zypper_unresolved_dep_raises() -> None:
@@ -52,10 +80,14 @@ def test_zypper_unresolved_dep_raises() -> None:
         zypper("h", "(c): c", "in pkg", "", 1)
 
 
-def test_zypper_unknown_error_raises_with_unknown_label() -> None:
-    """An exitcode with no special markers raises ``Unknown Error``."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "in pkg", "", 99)
+def test_zypper_unknown_error_raises_with_unknown_label(caplog) -> None:
+    """An exitcode with no special markers raises "Unknown Error", labeling "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.install"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "in pkg", "", 99)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_install_checks_dispatch() -> None:
