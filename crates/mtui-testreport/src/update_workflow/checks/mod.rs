@@ -10,10 +10,13 @@
 //! [`UpdateError`] reason strings, which are a stable contract callers match on.
 //!
 //! Upstream's checks additionally `logger.critical(...)` / `logger.warning(...)`
-//! before raising, and one branch prints colorized diagnostic text (via
-//! `cli.colors.yellow`). Logging is reproduced with `tracing`; the colorized
-//! terminal print is a display concern owned by `mtui-cli` (Phase 6), so it is
-//! emitted here as a plain `tracing::warn!` breadcrumb instead.
+//! before raising. Those breadcrumbs are reproduced with `tracing`. Upstream's
+//! `checks/update.py` additionally *prints* two recognised-but-non-fatal
+//! diagnostic sections to stdout (one with `cli.colors.yellow` highlighting on
+//! the word `warning`). To reproduce that stdout parity without a crate cycle,
+//! a check returns those sections as [`Diagnostic`]s on the `Ok` path; the
+//! command layer (`mtui-core::commands::perform`) drains and renders them
+//! through `session.display`, where the color mode lives.
 
 pub mod downgrade;
 pub mod install;
@@ -21,6 +24,45 @@ pub mod prepare;
 pub mod update;
 
 use crate::update_workflow::UpdateError;
+
+/// A recognised-but-non-fatal diagnostic section a check wants surfaced to the
+/// operator's terminal (upstream `checks/update.py`'s two `print(...)` blocks).
+///
+/// Carried out of the check on the `Ok` path and rendered by the command layer
+/// through `session.display`, so the check itself stays free of any display or
+/// color dependency. `highlight_warning` mirrors upstream: the "Additional rpm
+/// output" section is printed with the word `warning` recolored yellow
+/// (`replace("warning", yellow("warning"))`), while the "not supported by its
+/// vendor" section is printed plain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    /// The section text to print (verbatim, as upstream slices it from stdout).
+    pub text: String,
+    /// When `true`, the renderer recolors occurrences of `warning` yellow.
+    pub highlight_warning: bool,
+}
+
+impl Diagnostic {
+    /// A diagnostic whose `warning` occurrences are recolored yellow (upstream
+    /// "Additional rpm output" section).
+    #[must_use]
+    pub fn highlighted(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            highlight_warning: true,
+        }
+    }
+
+    /// A diagnostic printed verbatim, no recoloring (upstream "not supported by
+    /// its vendor" section).
+    #[must_use]
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            highlight_warning: false,
+        }
+    }
+}
 
 /// The positional arguments passed to a check, mirroring upstream's
 /// `(hostname, stdout, stdin, stderr, exitcode)`.
@@ -41,9 +83,10 @@ pub struct CheckArgs<'a> {
 /// A boxed post-run check.
 ///
 /// The Rust analogue of upstream's `Callable[[str, str, str, str, int], None]`
-/// dict value. Returns `Ok(())` when no failure is recognised, or
-/// `Err(UpdateError)` with the upstream-matching reason string otherwise.
-pub type CheckFn = Box<dyn Fn(CheckArgs<'_>) -> Result<(), UpdateError> + Send + Sync>;
+/// dict value. Returns the recognised-but-non-fatal [`Diagnostic`] sections
+/// (empty for most checks) when no failure is recognised, or `Err(UpdateError)`
+/// with the upstream-matching reason string otherwise.
+pub type CheckFn = Box<dyn Fn(CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> + Send + Sync>;
 
 /// Shared diagnostic-log helper mirroring upstream's `logger.critical(...)`
 /// "command failed" line emitted before each raised `UpdateError`.

@@ -5,7 +5,7 @@
 //! `UpdateError("Unknown Error")` (upstream's final fall-through raise).
 
 use crate::update_workflow::UpdateError;
-use crate::update_workflow::checks::{CheckArgs, CheckFn, log_failed};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
 /// The zypper install check (upstream `checks.install.zypper`).
 ///
@@ -13,10 +13,11 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, log_failed};
 ///
 /// Returns [`UpdateError`] with a reason of "package not found", "update stack
 /// locked", "RPM Error", "Dependency Error", or "Unknown Error" per upstream's
-/// branch logic. Exit codes `0, 100, 101, 102, 103, 106` are success.
-pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
+/// branch logic. Exit codes `0, 100, 101, 102, 103, 106` are success. This
+/// check surfaces no [`Diagnostic`]s (only `update` does).
+pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if matches!(args.exitcode, 0 | 100 | 101 | 102 | 103 | 106) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     if matches!(args.exitcode, 104 | 4 | 5 | 8) {
         log_failed(args);

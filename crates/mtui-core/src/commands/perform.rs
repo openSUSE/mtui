@@ -16,9 +16,29 @@
 
 use clap::ArgMatches;
 use mtui_hosts::HostsGroup;
+use mtui_testreport::Diagnostic;
 
 use crate::error::{CommandError, CommandResult};
 use crate::session::Session;
+
+/// Renders update-check [`Diagnostic`] sections through the session display,
+/// mirroring upstream `checks/update.py`'s two `print(...)` blocks: the
+/// "Additional rpm output" section is printed with the word `warning` recolored
+/// yellow (`replace("warning", yellow("warning"))`), while the "not supported by
+/// its vendor" section is printed plain.
+fn render_diagnostics(session: &mut Session, diagnostics: &[Diagnostic]) {
+    for diag in diagnostics {
+        let line = if diag.highlight_warning {
+            // Recolor every "warning" occurrence yellow, matching upstream's
+            // `str.replace`. `yellow` is a no-op under `ColorMode::Never`.
+            let yellow_warning = session.display.yellow("warning");
+            diag.text.replace("warning", &yellow_warning)
+        } else {
+            diag.text.clone()
+        };
+        session.display.println(&line);
+    }
+}
 
 /// One of the report's `perform_*` workflow flows plus its parsed parameters.
 pub(super) enum PerformOp {
@@ -107,14 +127,96 @@ pub(super) async fn drive(
             // missing-updater failure. Restore the split group *before*
             // returning so a failed update still merges the unselected hosts
             // back, then map the update error onto CommandError.
+            //
+            // The update check also surfaces recognised-but-non-fatal
+            // diagnostic sections (upstream `checks/update.py`'s two
+            // `print(...)` blocks). Collect them into a sink here — the one
+            // place the session's display is in scope — and render them after
+            // the fan-out, on both the success and failure paths.
+            let mut diagnostics = Vec::new();
             let update_result = report
-                .perform_update(&mut selected, *noprepare, *newpackage)
+                .perform_update(&mut selected, *noprepare, *newpackage, &mut diagnostics)
                 .await;
             session.restore_split_targets(selected, remainder);
+            render_diagnostics(session, &diagnostics);
             return update_result.map_err(|e| CommandError::Other(e.to_string()));
         }
     }
 
     session.restore_split_targets(selected, remainder);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::testkit::Buffer;
+    use crate::display::{ColorMode, CommandPromptDisplay};
+    use crate::session::Session;
+    use mtui_config::Config;
+
+    fn session_with_color(color: ColorMode) -> (Session, Buffer) {
+        let buf = Buffer::new();
+        let display = CommandPromptDisplay::with_sink(Box::new(buf.clone()), color);
+        (
+            Session::with_display(Config::default(), false, display),
+            buf,
+        )
+    }
+
+    #[test]
+    fn highlighted_diagnostic_recolors_warning_under_color() {
+        let (mut session, buf) = session_with_color(ColorMode::Always);
+        render_diagnostics(
+            &mut session,
+            &[Diagnostic::highlighted("\nwarning: extra rpm output\n")],
+        );
+        let out = buf.contents();
+        // The section text is present and the word `warning` carries an ANSI
+        // escape (yellow), matching upstream's `replace("warning", yellow(...))`.
+        assert!(out.contains("extra rpm output"), "got: {out:?}");
+        assert!(
+            out.contains("\u{1b}["),
+            "expected ANSI escape, got: {out:?}"
+        );
+        assert!(
+            !out.contains("\u{1b}[") || out.contains("warning"),
+            "warning token should survive: {out:?}"
+        );
+    }
+
+    #[test]
+    fn highlighted_diagnostic_is_plain_without_color() {
+        let (mut session, buf) = session_with_color(ColorMode::Never);
+        render_diagnostics(
+            &mut session,
+            &[Diagnostic::highlighted("\nwarning: extra rpm output\n")],
+        );
+        let out = buf.contents();
+        assert!(out.contains("warning: extra rpm output"), "got: {out:?}");
+        assert!(!out.contains("\u{1b}["), "expected no ANSI, got: {out:?}");
+    }
+
+    #[test]
+    fn plain_diagnostic_never_recolors_even_under_color() {
+        let (mut session, buf) = session_with_color(ColorMode::Always);
+        render_diagnostics(
+            &mut session,
+            &[Diagnostic::plain(
+                "The following package is not supported by its vendor:\nwarning foo",
+            )],
+        );
+        let out = buf.contents();
+        // Upstream prints the vendor section plain (no recoloring), even though
+        // it may contain the word "warning".
+        assert!(out.contains("not supported by its vendor"), "got: {out:?}");
+        assert!(!out.contains("\u{1b}["), "expected no ANSI, got: {out:?}");
+    }
+
+    #[test]
+    fn empty_diagnostics_render_nothing() {
+        let (mut session, buf) = session_with_color(ColorMode::Always);
+        render_diagnostics(&mut session, &[]);
+        assert!(buf.contents().is_empty());
+    }
 }

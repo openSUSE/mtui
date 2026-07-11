@@ -1,7 +1,7 @@
 //! Post-downgrade check (upstream `checks/downgrade.py`).
 
 use crate::update_workflow::UpdateError;
-use crate::update_workflow::checks::{CheckArgs, CheckFn, log_failed};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
 /// The zypper downgrade check (upstream `checks.downgrade.zypper`).
 ///
@@ -10,8 +10,8 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, log_failed};
 /// Returns [`UpdateError`] with a reason of "update stack locked",
 /// "Dependency Error", or "Unspecified Error" per upstream's branch logic.
 /// Exit code `106` is a warning (not an error); any other unrecognised result
-/// passes.
-pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
+/// passes. This check surfaces no [`Diagnostic`]s (only `update` does).
+pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if args
         .stderr
         .contains("A ZYpp transaction is already in progress.")
@@ -46,7 +46,7 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
             "zypper returned with errorcode 106"
         );
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// The downgrade check for `(release, transactional)`, or `None` for an unknown

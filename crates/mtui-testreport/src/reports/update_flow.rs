@@ -29,7 +29,7 @@ use mtui_hosts::{Command, HostsGroup, OperationGroup, RepoOp, SetRepo};
 use tracing::{debug, error, info, warn};
 
 use crate::update_workflow::actions::ActionCommands;
-use crate::update_workflow::checks::{CheckArgs, CheckFn};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic};
 use crate::update_workflow::{CheckProvider, DoerProvider, Role, UpdateError, WorkflowRegistry};
 
 /// A per-host command map paired with the transactional-host reboot map, as
@@ -67,6 +67,7 @@ pub async fn perform_update_from_report<R>(
     targets: &mut HostsGroup,
     noprepare: bool,
     newpackage: bool,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateFailure>
 where
     R: crate::testreport::TestReport + SetRepo,
@@ -86,6 +87,7 @@ where
         &review_id,
         noprepare,
         newpackage,
+        diagnostics,
     )
     .await
 }
@@ -103,11 +105,12 @@ pub async fn perform_update_with_rollback<R>(
     targets: &mut HostsGroup,
     noprepare: bool,
     newpackage: bool,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError>
 where
     R: crate::testreport::TestReport + SetRepo,
 {
-    match perform_update_from_report(report, targets, noprepare, newpackage).await {
+    match perform_update_from_report(report, targets, noprepare, newpackage, diagnostics).await {
         Ok(()) => Ok(()),
         Err(UpdateFailure::MissingUpdater(e)) => {
             // Hard fail, but nothing was installed → no rollback.
@@ -211,10 +214,17 @@ fn build_reboot_map(
 }
 
 /// Runs `role`'s post-run check on every host, returning the recognised
-/// [`UpdateError`]s (upstream iterates `t.check(role)(...)`).
+/// [`UpdateError`]s (upstream iterates `t.check(role)(...)`) and appending any
+/// recognised-but-non-fatal [`Diagnostic`] sections to `diagnostics`.
 ///
-/// The check reads each host's `last*` snapshot after the command ran.
-fn run_checks(targets: &HostsGroup, registry: &WorkflowRegistry, role: Role) -> Vec<UpdateError> {
+/// The check reads each host's `last*` snapshot after the command ran. Only the
+/// `update` check currently emits diagnostics; the other roles append nothing.
+fn run_checks(
+    targets: &HostsGroup,
+    registry: &WorkflowRegistry,
+    role: Role,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<UpdateError> {
     let mut failures = Vec::new();
     for target in targets.targets() {
         let Some((release, transactional)) = host_key(target) else {
@@ -230,11 +240,14 @@ fn run_checks(targets: &HostsGroup, registry: &WorkflowRegistry, role: Role) -> 
             stderr: target.lasterr(),
             exitcode: target.lastexit().map_or(0, i32::from),
         });
-        if let Err(mut e) = res {
-            if e.host.is_none() {
-                e.host = Some(target.hostname().to_owned());
+        match res {
+            Ok(diags) => diagnostics.extend(diags),
+            Err(mut e) => {
+                if e.host.is_none() {
+                    e.host = Some(target.hostname().to_owned());
+                }
+                failures.push(e);
             }
-            failures.push(e);
         }
     }
     failures
@@ -340,7 +353,8 @@ async fn prepare_body(
         targets.run(Command::PerHost(cmd)).await;
     }
 
-    for e in run_checks(targets, registry, Role::Prepare) {
+    // The prepare check emits no diagnostics; discard the sink.
+    for e in run_checks(targets, registry, Role::Prepare, &mut Vec::new()) {
         error!(error = %e, "prepare check failed");
     }
     reboot_transactional(targets, reboot).await;
@@ -477,7 +491,7 @@ async fn downgrade_body(
         }
         if !cmd.is_empty() {
             targets.run(Command::PerHost(cmd)).await;
-            for e in run_checks(targets, registry, Role::Downgrade) {
+            for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
                 if !transactional_hosts.contains(e.host.as_deref().unwrap_or("")) {
                     error!(error = %e, "downgrade check failed");
                 }
@@ -515,7 +529,7 @@ async fn downgrade_body(
     }
     if !combined.is_empty() {
         targets.run(Command::PerHost(combined)).await;
-        for e in run_checks(targets, registry, Role::Downgrade) {
+        for e in run_checks(targets, registry, Role::Downgrade, &mut Vec::new()) {
             if transactional_hosts.contains(e.host.as_deref().unwrap_or("")) {
                 error!(error = %e, "downgrade check failed");
             }
@@ -602,7 +616,12 @@ fn parse_downgrade_versions(output: &str) -> HashMap<String, String> {
 /// the `$repa` selector. `noprepare` skips the initial prepare; `newpackage`
 /// runs a testing prepare after the update. `prepare` is the closure the caller
 /// uses to run [`perform_prepare`] (the report drives it so this module does not
-/// need to know the report type).
+/// need to know the report type). `diagnostics` collects the update check's
+/// recognised-but-non-fatal output sections for the command layer to render.
+// Ports upstream's positional `perform_update` signature plus the diagnostic
+// sink threaded from the display-owning command layer; grouping into a struct
+// would obscure the 1:1 upstream mapping for no real gain.
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_update(
     targets: &mut HostsGroup,
     report: &dyn SetRepo,
@@ -611,6 +630,7 @@ pub async fn perform_update(
     review_id: &str,
     noprepare: bool,
     newpackage: bool,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateFailure> {
     let registry = WorkflowRegistry::default();
 
@@ -646,7 +666,7 @@ pub async fn perform_update(
 
     // Two-phase: run + check + reboot under the lock (unlock always), then the
     // repo cleanup only on success.
-    let update_result = update_run_phase(targets, &registry, commands, reboot).await;
+    let update_result = update_run_phase(targets, &registry, commands, reboot, diagnostics).await;
 
     if let Err(e) = update_result {
         // KEEP the test update repositories in place for retry/diagnosis.
@@ -685,10 +705,11 @@ async fn update_run_phase(
     registry: &WorkflowRegistry,
     commands: BTreeMap<String, String>,
     reboot: BTreeMap<String, String>,
+    diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<(), UpdateError> {
     targets.run(Command::PerHost(commands)).await;
 
-    let mut failures = run_checks(targets, registry, Role::Update);
+    let mut failures = run_checks(targets, registry, Role::Update, diagnostics);
     let failed_hosts: std::collections::HashSet<String> =
         failures.iter().filter_map(|e| e.host.clone()).collect();
     let ok_hosts: Vec<String> = targets
@@ -927,7 +948,17 @@ mod tests {
         // noprepare=true keeps the flow to update + checks; the report drives the
         // repo fan-out through its own (real) set_repo, which no-ops with an
         // empty update_repos map.
-        let res = perform_update(&mut group, &report, &packages, "42", "7", true, false).await;
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         // The updater command interpolates the `$repa` selector `:p=42:7`.
@@ -972,6 +1003,7 @@ mod tests {
             "7",
             true,
             false,
+            &mut Vec::new(),
         )
         .await;
         let err = match res {
@@ -1083,7 +1115,17 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        let res = perform_update(&mut group, &report, &packages, "42", "7", true, false).await;
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         // The slmicro updater is transactional, so a reboot command is fired on
@@ -1110,7 +1152,17 @@ mod tests {
 
         // Drive perform_update with the recording repo as the SetRepo hook by
         // calling the module fn directly (SlReport delegates to it).
-        let res = perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(
             matches!(res, Err(UpdateFailure::Check(_))),
             "a check failure returns Err(Check): {res:?}"
@@ -1137,7 +1189,17 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        let res = perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         let err = match res {
             Err(UpdateFailure::Check(e)) => e,
             other => panic!("multi-host failure returns Err(Check): {other:?}"),
@@ -1167,7 +1229,9 @@ mod tests {
         let mut report = crate::reports::SlReport::new(Config::default());
         seed_rrid_and_package(&mut report);
 
-        let res = report.perform_update(&mut group, true, false).await;
+        let res = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await;
         assert!(res.is_err(), "check failure surfaces as Err: {res:?}");
 
         // The downgrade list_command / downgrade command ran as part of rollback.
@@ -1187,7 +1251,17 @@ mod tests {
         let report = report_with_rrid();
         let packages = report.get_package_list();
 
-        let res = perform_update(&mut group, &repo, &packages, "42", "7", true, false).await;
+        let res = perform_update(
+            &mut group,
+            &repo,
+            &packages,
+            "42",
+            "7",
+            true,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         let ops = repo.ops.lock().unwrap().clone();
@@ -1207,7 +1281,17 @@ mod tests {
 
         // noprepare=false ⇒ the initial prepare runs (a preparer install) before
         // the updater command.
-        let res = perform_update(&mut group, &report, &packages, "42", "7", false, false).await;
+        let res = perform_update(
+            &mut group,
+            &report,
+            &packages,
+            "42",
+            "7",
+            false,
+            false,
+            &mut Vec::new(),
+        )
+        .await;
         assert!(res.is_ok(), "successful update returns Ok: {res:?}");
 
         let cmds = handle.commands();
@@ -1304,7 +1388,9 @@ mod tests {
 
         // Drive the report's own trait method (not the free fn) to prove PI
         // inherits the flow.
-        let res = report.perform_update(&mut group, true, false).await;
+        let res = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await;
         assert!(res.is_ok(), "PI update succeeds: {res:?}");
 
         assert!(
@@ -1322,7 +1408,9 @@ mod tests {
         let mut report = ObsReport::new(Config::default());
         seed_rrid_and_package(&mut report);
 
-        let res = report.perform_update(&mut group, true, false).await;
+        let res = report
+            .perform_update(&mut group, true, false, &mut Vec::new())
+            .await;
         assert!(res.is_ok(), "OBS update succeeds: {res:?}");
 
         assert!(

@@ -136,11 +136,13 @@ impl TestReport for PiReport {
         targets: &mut HostsGroup,
         noprepare: bool,
         newpackage: bool,
+        diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         let id = self.rrid().map(ToString::to_string);
         let packages = self.get_package_list();
         update_flow::add_op_history(targets, "update", id.as_deref(), &packages).await;
-        update_flow::perform_update_with_rollback(self, targets, noprepare, newpackage).await
+        update_flow::perform_update_with_rollback(self, targets, noprepare, newpackage, diagnostics)
+            .await
     }
 
     fn as_set_repo(&self) -> Option<&dyn mtui_hosts::SetRepo> {

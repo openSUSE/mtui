@@ -37,6 +37,6 @@ pub use testreport::{
     HashCheck, ReadError, ReportOpenQA, ReviewerError, TestReport, TestReportBase,
 };
 pub use update_workflow::{
-    CheckProvider, DoerProvider, Role, TemplateError, UpdateError, WorkflowKey, WorkflowRegistry,
-    safe_substitute, substitute,
+    CheckProvider, Diagnostic, DoerProvider, Role, TemplateError, UpdateError, WorkflowKey,
+    WorkflowRegistry, safe_substitute, substitute,
 };

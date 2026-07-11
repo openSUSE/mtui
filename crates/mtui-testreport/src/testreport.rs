@@ -624,11 +624,16 @@ pub trait TestReport {
     /// Returns `Err` when the update did not apply: a per-host `updater` check
     /// failure (after a best-effort downgrade rollback) or a hard
     /// missing-updater failure. The null object's default is a no-op `Ok(())`.
+    ///
+    /// Recognised-but-non-fatal diagnostic sections from the update check
+    /// (upstream `checks/update.py`'s two `print(...)` blocks) are appended to
+    /// `diagnostics` for the command layer to render through the display.
     async fn perform_update(
         &self,
         _targets: &mut HostsGroup,
         _noprepare: bool,
         _newpackage: bool,
+        _diagnostics: &mut Vec<crate::update_workflow::Diagnostic>,
     ) -> Result<(), crate::update_workflow::UpdateError> {
         Ok(())
     }

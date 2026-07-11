@@ -185,7 +185,16 @@ pub(crate) mod testkit {
             _targets: &mut HostsGroup,
             _noprepare: bool,
             _newpackage: bool,
+            diagnostics: &mut Vec<mtui_testreport::Diagnostic>,
         ) -> Result<(), mtui_testreport::UpdateError> {
+            // Emit both diagnostic shapes so the perform-layer render path is
+            // exercised end-to-end (a highlighted section + a plain section).
+            diagnostics.push(mtui_testreport::Diagnostic::highlighted(
+                "\nwarning: extra rpm output\n",
+            ));
+            diagnostics.push(mtui_testreport::Diagnostic::plain(
+                "The following package is not supported by its vendor:\nfoo",
+            ));
             if self.fail_update {
                 Err(mtui_testreport::UpdateError::new(
                     "update stack locked",

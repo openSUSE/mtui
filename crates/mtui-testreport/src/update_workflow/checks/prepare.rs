@@ -1,15 +1,16 @@
 //! Post-prepare check (upstream `checks/prepare.py`).
 
 use crate::update_workflow::UpdateError;
-use crate::update_workflow::checks::{CheckArgs, CheckFn, log_failed};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
 /// The zypper prepare check (upstream `checks.prepare.zypper`).
 ///
 /// # Errors
 ///
 /// Returns [`UpdateError`] with a reason of "update stack locked",
-/// "Dependency Error", or "RPM Error" per upstream's branch logic.
-pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
+/// "Dependency Error", or "RPM Error" per upstream's branch logic. This check
+/// surfaces no [`Diagnostic`]s (only `update` does).
+pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
     if args
         .stderr
         .contains("A ZYpp transaction is already in progress.")
@@ -33,7 +34,7 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
         log_failed(args);
         return Err(UpdateError::new("RPM Error", args.hostname));
     }
-    Ok(())
+    Ok(Vec::new())
 }
 
 /// The prepare check for `(release, transactional)`, or `None` for an unknown

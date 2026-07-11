@@ -1,13 +1,16 @@
 //! Post-update check (upstream `checks/update.py`).
 //!
-//! The most elaborate check: it emits diagnostic warnings for "additional rpm
-//! output" and "not supported by its vendor" sections (upstream prints these to
-//! the terminal, one with `cli.colors.yellow` highlighting — a display concern
-//! deferred to Phase 6, so reproduced here as `tracing::warn!` breadcrumbs) and
-//! raises [`UpdateError`] for lock / dependency / RPM failures.
+//! The most elaborate check: it surfaces diagnostic sections for "additional rpm
+//! output" and "not supported by its vendor" (upstream prints these to the
+//! terminal, one with `cli.colors.yellow` highlighting on the word `warning`).
+//! To reproduce that stdout parity without a crate cycle, the sections are
+//! returned as [`Diagnostic`]s on the `Ok` path and rendered by the command
+//! layer through `session.display`; the `logger.warning`/`logger.critical`
+//! breadcrumbs upstream emits alongside are reproduced with `tracing`. Lock /
+//! dependency / RPM failures still raise [`UpdateError`].
 
 use crate::update_workflow::UpdateError;
-use crate::update_workflow::checks::{CheckArgs, CheckFn, log_failed};
+use crate::update_workflow::checks::{CheckArgs, CheckFn, Diagnostic, log_failed};
 
 /// The zypper update check (upstream `checks.update.zypper`).
 ///
@@ -15,9 +18,11 @@ use crate::update_workflow::checks::{CheckArgs, CheckFn, log_failed};
 ///
 /// Returns [`UpdateError`] with a reason of "update stack locked",
 /// "Dependency Error", or "RPM Error" per upstream's branch logic. Warnings
-/// (exit `106`, "Additional rpm output", "not supported by its vendor") are
-/// logged and do not fail the check.
-pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
+/// (exit `106`, "Additional rpm output", "not supported by its vendor") do not
+/// fail the check; the two output sections are returned as [`Diagnostic`]s for
+/// the caller to render.
+pub fn zypper(args: CheckArgs<'_>) -> Result<Vec<Diagnostic>, UpdateError> {
+    let mut diagnostics = Vec::new();
     if args.stdin.contains("zypper") && args.exitcode == 104 {
         log_failed(args);
         return Err(UpdateError::new("update stack locked", args.hostname));
@@ -30,12 +35,10 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
         );
     }
     if let Some(section) = extract_between(args.stdout, "Additional rpm output:", "Retrieving") {
-        // Upstream prints this section with "warning" highlighted yellow.
-        tracing::warn!(
-            host = args.hostname,
-            output = section.trim(),
-            "additional rpm output"
-        );
+        // Upstream: logs a breadcrumb, then prints the section with "warning"
+        // highlighted yellow (`replace("warning", yellow("warning"))`).
+        tracing::warn!(host = args.hostname, "There was additional rpm output");
+        diagnostics.push(Diagnostic::highlighted(section));
     }
     if args
         .stderr
@@ -65,13 +68,15 @@ pub fn zypper(args: CheckArgs<'_>) -> Result<(), UpdateError> {
         "The following package is not supported by its vendor:\n",
         "\n\n",
     ) {
-        tracing::warn!(
-            host = args.hostname,
-            packages = section.trim(),
-            "package support is uncertain"
-        );
+        // Upstream: logs `package support is uncertain`, then prints the section
+        // plain (no recoloring). Reconstruct the marker line upstream keeps in
+        // its `stdout[start:end]` slice (its `start` sits *at* the marker).
+        tracing::warn!(host = args.hostname, "package support is uncertain");
+        diagnostics.push(Diagnostic::plain(format!(
+            "The following package is not supported by its vendor:\n{section}"
+        )));
     }
-    Ok(())
+    Ok(diagnostics)
 }
 
 /// Returns the substring of `s` starting just after `marker` up to the next
@@ -170,6 +175,37 @@ mod tests {
         let stdout = "before Additional rpm output:\nwarning: stuff\nRetrieving repo\nafter";
         // exit 106 warn + additional rpm output warn, still Ok.
         assert!(zypper(args("zypper", stdout, "", 106)).is_ok());
+    }
+
+    #[test]
+    fn additional_rpm_output_returned_as_highlighted_diagnostic() {
+        let stdout = "before Additional rpm output:\nwarning: stuff\nRetrieving repo\nafter";
+        let diags = zypper(args("zypper", stdout, "", 106)).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].highlight_warning);
+        assert_eq!(diags[0].text, "\nwarning: stuff\n");
+    }
+
+    #[test]
+    fn vendor_section_returned_as_plain_diagnostic_with_marker() {
+        let stdout =
+            "x\nThe following package is not supported by its vendor:\nfoo bar\n\ntrailing";
+        let diags = zypper(args("zypper", stdout, "", 0)).unwrap();
+        assert_eq!(diags.len(), 1);
+        assert!(!diags[0].highlight_warning);
+        assert_eq!(
+            diags[0].text,
+            "The following package is not supported by its vendor:\nfoo bar"
+        );
+    }
+
+    #[test]
+    fn clean_output_returns_no_diagnostics() {
+        assert!(
+            zypper(args("zypper", "all good", "", 0))
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

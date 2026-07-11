@@ -32,6 +32,7 @@ pub mod template;
 use mtui_hosts::HostError;
 use thiserror::Error;
 
+pub use checks::Diagnostic;
 pub use template::{TemplateError, safe_substitute, substitute};
 
 /// The lookup key shared by every action and check table.
