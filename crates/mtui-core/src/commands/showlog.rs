@@ -32,6 +32,16 @@ impl Command for ShowLog {
         Scope::Fanout
     }
 
+    /// `show_log` opts out of the driver's host-less skip: it reports each host's
+    /// *in-memory* command protocol (`Target::out`), doing no SSH, so it has
+    /// meaningful (or harmlessly empty) work even at zero connected hosts. Like
+    /// `export`, dumping the protocol across `--all-templates` must not be
+    /// silently skipped when a template is host-less. A host-action command keeps
+    /// the default `true`; only these local-read commands override it.
+    fn skip_hostless_templates(&self) -> bool {
+        false
+    }
+
     fn configure(&self, cmd: clap::Command) -> clap::Command {
         add_hosts_arg(cmd)
     }
@@ -87,12 +97,43 @@ impl Command for ShowLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::testkit::{matches, session_scripting};
+    use crate::commands::listversions::ListVersions;
+    use crate::commands::testkit::{empty_session, fake_report, matches, session_scripting};
 
     #[test]
     fn name_and_fanout_scope() {
         assert_eq!(ShowLog.name(), "show_log");
         assert_eq!(ShowLog.scope(), Scope::Fanout);
+    }
+
+    #[test]
+    fn opts_out_of_hostless_skip() {
+        // show_log reads the in-memory protocol; it must dispatch at zero hosts.
+        assert!(!ShowLog.skip_hostless_templates());
+    }
+
+    #[test]
+    fn ssh_dependent_fanout_command_keeps_default_skip() {
+        // Negative control: the audit deliberately left SSH-driven Fanout
+        // commands skippable. If this flips, re-run the host-less audit.
+        assert!(ListVersions.skip_hostless_templates());
+    }
+
+    #[tokio::test]
+    async fn runs_across_all_hostless_templates_without_error() {
+        // Every loaded template is host-less and no `-t` is named: the driver
+        // would skip a default host-action command (→ NoRefhostsDefined), but
+        // show_log opts out and must run on each, returning Ok. A headless
+        // session with >1 loaded template fans out without an explicit flag.
+        let (mut session, _buf) = empty_session();
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:1:1", &[], ""));
+        session
+            .templates
+            .add(fake_report("SUSE:Maintenance:2:2", &[], ""));
+        let args = matches(&ShowLog, &[]);
+        ShowLog.run(&mut session, &args).await.unwrap();
     }
 
     #[tokio::test]
