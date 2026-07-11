@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "mtui_mcp"
+path = "src/lib.rs"
+
 [[bin]]
 name = "mtui-mcp"
 path = "src/main.rs"
@@ -13,8 +17,20 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+# Gates the rmcp server so the default build and the `mtui` REPL never drag in
+# the MCP SDK. The stdio runner + tool synthesiser live behind this.
+mcp = ["dep:rmcp", "dep:serde_json", "dep:tracing"]
+
 [dependencies]
 mtui-core.workspace = true
+mtui-config.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
+rmcp = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }

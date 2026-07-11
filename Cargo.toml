@@ -64,8 +64,16 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 russh = "0.62"
 russh-sftp = "2"
 async-trait = "0.1"
-# mcp (Phase 7)
-rmcp = "2"
+# mcp (Phase 7). `server` for the ServerHandler surface + model types;
+# `transport-io` for the stdio runner (P7.7); `transport-async-rw` for the
+# in-memory duplex round-trip test. No `macros` — tools are synthesised from the
+# runtime command registry, so we hand-build schemas/handlers, not `#[tool]`.
+rmcp = { version = "2", default-features = false, features = [
+    "server",
+    "client",
+    "transport-io",
+    "transport-async-rw",
+] }
 # observability + errors
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

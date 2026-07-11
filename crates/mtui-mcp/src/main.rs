@@ -1,7 +1,8 @@
 //! `mtui-mcp` — MCP server that synthesises tools from the command registry.
 //!
 //! Phase 0 stub: parses `--help`/`--version` via clap and exits 0. The rmcp
-//! stdio server lands in Phase 7.
+//! stdio server lands in Phase 7; the P7.1 spike modules live in the crate's
+//! library target ([`mtui_mcp::server`]), gated behind the `mcp` feature.
 
 use clap::Parser;
 
