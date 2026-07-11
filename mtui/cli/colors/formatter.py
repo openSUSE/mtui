@@ -2,6 +2,7 @@
 
 import inspect
 import logging
+from types import FrameType
 
 from ...support.spinner import spinner_suspended
 from .mode import colors_enabled
@@ -56,7 +57,7 @@ class ColorFormatter(logging.Formatter):
                 module, function = "unknown", "unknown"
             else:
                 frame, function = frame_info
-                module = mo.__name__ if (mo := inspect.getmodule(frame)) else "unknown"
+                module = frame.f_globals.get("__name__", "unknown")
             suffix = f" [{module!s}:{function!s}]"
             if not colors_enabled():
                 return levelname.lower() + suffix
@@ -72,7 +73,7 @@ class ColorFormatter(logging.Formatter):
         return COLOR_SEQ.format(30 + COLORS[levelname]) + levelname.lower() + RESET_SEQ
 
     @staticmethod
-    def _find_caller_frame() -> tuple[object, str] | None:
+    def _find_caller_frame() -> tuple[FrameType, str] | None:
         """Walks the stack until the first frame outside the logging machinery.
 
         Returns:
@@ -81,10 +82,22 @@ class ColorFormatter(logging.Formatter):
             ``contextlib``, or `None` if no such frame exists.
 
         """
-        skip_modules = {"logging", "mtui.cli.colors.formatter", "contextlib"}
+        # mutmut's mutation trampoline interposes a wrapper frame between
+        # every function and its caller; treat it as logging machinery so
+        # caller attribution stays on the real call site during mutation
+        # runs. Inert in production -- the module is never loaded there.
+        # Module names come from ``f_globals`` rather than
+        # ``inspect.getmodule``: the latter maps filenames back to modules
+        # and returns None when an import hook reports a different path
+        # than the code object records (pytest's rewriter under mutmut).
+        skip_modules = {
+            "logging",
+            "mtui.cli.colors.formatter",
+            "contextlib",
+            "mutmut.mutation.trampoline",
+        }
         for frame_info in inspect.getouterframes(inspect.currentframe()):
-            module = inspect.getmodule(frame_info.frame)
-            module_name = module.__name__ if module else ""
+            module_name = frame_info.frame.f_globals.get("__name__", "")
             top_level = module_name.partition(".")[0]
             if module_name in skip_modules or top_level == "logging":
                 continue
@@ -103,7 +116,17 @@ class ColorFormatter(logging.Formatter):
         """
         record.message = record.getMessage()
         if self._fmt and self._fmt.find("%(levelname)") >= 0:
-            record.levelname = self.formatColor(record.levelname)
+            # Substitute the colorized levelname only for the duration of
+            # this handler's formatting: the record object is shared with
+            # every other handler in the chain (a file handler, pytest's
+            # caplog, ...), and leaking the ANSI-wrapped name corrupts
+            # their view of the record.
+            original_levelname = record.levelname
+            record.levelname = self.formatColor(original_levelname)
+            try:
+                return logging.Formatter.format(self, record)
+            finally:
+                record.levelname = original_levelname
 
         return logging.Formatter.format(self, record)
 

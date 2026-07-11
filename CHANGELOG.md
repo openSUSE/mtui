@@ -213,6 +213,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Fixed
 
+- Colorized log formatting no longer corrupts the record for other handlers
+  on the same logger: the formatter used to overwrite each record's
+  `levelname` in place, so any second handler (a file handler, a test log
+  capture) saw the ANSI-wrapped name instead of `WARNING`/`ERROR`. The
+  substitution is now scoped to the colorized handler's own formatting.
+  Debug-level caller attribution is also resolved from the calling frame's
+  own globals rather than `inspect.getmodule`, which returned "unknown"
+  under import hooks that report a different file path than the code object
+  records.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a

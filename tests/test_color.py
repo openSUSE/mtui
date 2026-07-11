@@ -108,6 +108,11 @@ def test_color_formatter_full_record_no_color():
     rendered = fmt.format(record)
     assert "\033[" not in rendered
     assert rendered == "warning: watch out"
+    # format() must restore the original levelname even when colours are
+    # disabled: formatColor() still rewrites record.levelname (to its
+    # lowercased plain form) on this branch, so the downstream-handler
+    # corruption this formatter guards against applies here too.
+    assert record.levelname == "WARNING"
 
 
 def test_set_mode_round_trip():
