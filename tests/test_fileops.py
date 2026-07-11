@@ -59,6 +59,9 @@ class TestEnsureDirExists:
             os.chmod(subdir, 0o755)
 
     def test_on_create(self, create_temp):
+        # Class-level state survives repeated in-process pytest runs
+        # (mutmut re-enters pytest.main in one interpreter); start clean.
+        type(self)._callback_paths.clear()
         d = self.mkpath(create_temp, "c")
         ensure_dir_exists(d, on_create=self._callback)
         assert self._callback_paths == [d]

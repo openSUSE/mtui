@@ -4,8 +4,27 @@ import logging
 from argparse import Namespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from mtui.cli.argparse import ArgsParseFailureError
 from mtui.main import main, run_mtui
+
+
+@pytest.fixture(autouse=True)
+def _restore_mtui_logger():
+    """Undo main()'s wiring of the process-global 'mtui' logger.
+
+    ``main()`` attaches a real stream handler (bound to the current,
+    soon-to-be-closed capture stream) and sets the level; left in place
+    it corrupts every later test that logs under ``mtui.*`` — including
+    repeated in-process pytest runs under mutmut.
+    """
+    logger = logging.getLogger("mtui")
+    saved_handlers = logger.handlers[:]
+    saved_level = logger.level
+    yield
+    logger.handlers[:] = saved_handlers
+    logger.setLevel(saved_level)
 
 
 def test_main_args_parse_failure(monkeypatch):

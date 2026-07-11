@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
@@ -122,7 +123,11 @@ from mtui.types import Product
     ],
 )
 def test_normalize_first_element(fn, before, expected_first) -> None:
-    out = fn(before)
+    # The normalize functions mutate their argument in place, and the
+    # parametrize table above is built once per module import. Feed each
+    # call a copy so the table survives repeated in-process pytest runs
+    # (mutmut re-enters pytest.main in one interpreter).
+    out = fn(deepcopy(before))
     assert out[0][0] == expected_first
 
 

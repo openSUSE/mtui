@@ -31,6 +31,24 @@ import pytest
 
 from mtui.mcp import main as mcp_main
 
+
+@pytest.fixture(autouse=True)
+def _restore_mtui_mcp_logger():
+    """Undo main()'s wiring of the process-global 'mtui-mcp' logger.
+
+    ``main()`` attaches a real stream handler (bound to the current,
+    soon-to-be-closed capture stream) and sets the level; left in place
+    it leaks into later tests and into repeated in-process pytest runs
+    under mutmut.
+    """
+    logger = logging.getLogger("mtui-mcp")
+    saved_handlers = logger.handlers[:]
+    saved_level = logger.level
+    yield
+    logger.handlers[:] = saved_handlers
+    logger.setLevel(saved_level)
+
+
 # --------------------------------------------------------------------------- #
 # Helpers                                                                     #
 # --------------------------------------------------------------------------- #

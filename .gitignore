@@ -175,3 +175,6 @@ tags
 
 # Claude Code session artefacts
 .claude/
+
+# mutmut mutation-testing working tree
+mutants/
