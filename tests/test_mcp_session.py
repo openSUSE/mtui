@@ -31,6 +31,21 @@ from mtui.mcp.session import McpCommandError, McpSession
 from mtui.support.concurrency import ContextExecutor
 
 
+@pytest.fixture(autouse=True)
+def _unbind_test_commands():
+    """Drop command registrations a test makes in its own body.
+
+    ``Command.__init_subclass__`` binds names process-globally at class
+    creation; a test-local class would collide with itself when pytest
+    re-runs in the same interpreter (mutmut re-enters pytest.main), so
+    remove whatever a test added once it finishes.
+    """
+    before = set(Command.registry)
+    yield
+    for name in set(Command.registry) - before:
+        del Command.registry[name]
+
+
 def _config(tmp_path: Path) -> MagicMock:
     """Build a MagicMock Config with just the attributes NullTestReport reads."""
     cfg = MagicMock()

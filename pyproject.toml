@@ -65,6 +65,18 @@ markers = [
   "network: tests that perform real network I/O",
 ]
 
+[tool.mutmut]
+# Mutation-testing config. Run with:
+#   uv run --with 'mutmut>=3.6' mutmut run
+# ``source_paths`` must be the whole package: mutmut copies it into a
+# ``mutants/`` tree that has to ``import mtui``, and a single-file scope
+# breaks that import. ``do_not_mutate_patterns`` drops the log-message
+# mutants that otherwise dominate the survivor list -- every ``logger``
+# call spawns several string/level mutants that no test should pin -- so
+# the surviving mutants reflect real logic gaps rather than logging noise.
+source_paths = ["mtui/"]
+do_not_mutate_patterns = ['(logger|self\.log)\.(debug|info|warning|error|exception|critical)']
+
 [tool.ruff]
 target-version = "py313"
 

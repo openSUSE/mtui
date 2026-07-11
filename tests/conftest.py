@@ -1,3 +1,4 @@
+import os
 from json import loads
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -9,6 +10,23 @@ from mtui.types.rpmver import RPMVersion
 from mtui.types.systems import System
 
 __root__: Path = Path(__file__).parent / "fixtures"
+
+# mutmut's stats run re-resolves the relative [tool.mutmut] source_paths
+# against the *current* working directory on every trampoline hit, so any
+# test that chdir()s away from the package root crashes stats collection
+# with FileNotFoundError. Pin the resolution to absolute paths once, while
+# the CWD is still the mutants root. Inert outside `mutmut run`.
+if os.environ.get("MUTANT_UNDER_TEST") == "stats":
+    # mutmut is never a project dependency; `uv run --with mutmut` supplies
+    # it for mutation runs only, so ty resolves against a venv without it.
+    from mutmut.configuration import (  # ty: ignore[unresolved-import]
+        Config as _MutmutConfig,
+    )
+
+    _mutmut_config = _MutmutConfig.get()
+    _mutmut_config.source_paths = [
+        p.resolve(strict=True) for p in _mutmut_config.source_paths
+    ]
 
 
 @pytest.fixture
