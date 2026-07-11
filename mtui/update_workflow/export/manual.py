@@ -1,5 +1,6 @@
 """An exporter for the manual workflow."""
 
+import contextlib
 import re
 from itertools import zip_longest
 from logging import getLogger
@@ -144,14 +145,43 @@ class ManualExport(BaseExport):
                 continue
             for state in ["before", "after"]:
                 versions[state] = {}
-                try:
-                    index = self.template.index("      {state}:\n", index) + 1
-                except ValueError:
-                    try:
-                        index = self.template.index(f"{state}:\n", index) + 1
-                    except ValueError:
-                        logger.error("%s packages section not found", state)
-                        continue
+
+                # Bound the header search to this host's own block, so it can
+                # never overshoot into a later host's section (nor, for that
+                # matter, undershoot into an earlier one). The block ends at
+                # the next "reference host:" line, or the end of the
+                # template. Recomputed on every iteration (rather than once
+                # per host) because inserting the "before" version lines
+                # shifts the position of everything after them, including
+                # the next host's header.
+                block_end = len(self.template)
+                for j in range(index + 1, len(self.template)):
+                    if "reference host:" in self.template[j]:
+                        block_end = j
+                        break
+
+                indented_index = None
+                unindented_index = None
+                with contextlib.suppress(ValueError):
+                    indented_index = self.template.index(
+                        f"      {state}:\n", index, block_end
+                    )
+                with contextlib.suppress(ValueError):
+                    unindented_index = self.template.index(
+                        f"{state}:\n", index, block_end
+                    )
+
+                if indented_index is None and unindented_index is None:
+                    logger.error("%s packages section not found", state)
+                    continue
+                # prefer whichever header form is nearest, rather than
+                # always favouring the indented one
+                if indented_index is None:
+                    index = unindented_index + 1
+                elif unindented_index is None:
+                    index = indented_index + 1
+                else:
+                    index = min(indented_index, unindented_index) + 1
 
                 for package in host.packages.values():
                     name = package.name
@@ -176,17 +206,32 @@ class ManualExport(BaseExport):
                                 index, f"\tpackage {name} is not installed\n"
                             )
                         index += 1
-                    except Exception:
-                        pass
+                    except IndexError:
+                        # the state header was the last template line, so there
+                        # is no line at ``index`` to inspect/overwrite. The
+                        # template is malformed; skip the line but say so
+                        # instead of silently dropping it from the report.
+                        logger.warning(
+                            "malformed template: cannot write %s version of "
+                            "package %s for host %s",
+                            state,
+                            name,
+                            hostname,
+                        )
             # if the package versions were not updated, set the result to
             # FAILED, otherwise to PASSED
             failed = False
             for package in versions["before"]:
-                # check if the packages have a higher version after the update
+                # check if the packages have a higher version after the update.
+                # ``after`` may be missing this package entirely if its section
+                # could not be located (e.g. a malformed template) -- skip the
+                # comparison for it rather than raising a KeyError and aborting
+                # the whole export.
+                after_version = versions["after"].get(package)
                 if (
-                    versions["after"][package] is not None
+                    after_version is not None
                     and versions["before"][package] is not None
-                    and not versions["before"][package] < versions["after"][package]
+                    and not versions["before"][package] < after_version
                 ):
                     failed = True
             if failed:
