@@ -15,13 +15,17 @@ def normalize_sle15(x):
         x[0][0] = "SLES-LTSS-TERADATA"
         x[0][1] = x[0][1].replace("-LTSS-TERADATA", "")
         return x
-    if x[0][0] == "SLE-Product-SLES" and "LTSS" in x[0][1]:
-        x[0][0] = "SLES-LTSS"
-        x[0][1] = x[0][1].replace("-LTSS", "")
+    if x[0][0] == "SLE-Product-SLES" and "LTSS-ERICSSON" in x[0][1]:
+        x[0][0] = "SLES-LTSS-ERICSSON"
+        x[0][1] = x[0][1].replace("-LTSS-ERICSSON", "")
         return x
     if x[0][0] == "SLE-Product-SLES" and "ERICSSON" in x[0][1]:
         x[0][0] = "ERICSSON"
         x[0][1] = x[0][1].replace("-ERICSSON", "")
+        return x
+    if x[0][0] == "SLE-Product-SLES" and "LTSS" in x[0][1]:
+        x[0][0] = "SLES-LTSS"
+        x[0][1] = x[0][1].replace("-LTSS", "")
         return x
     if x[0][0] == "SLE-Product-SLES" and "TERADATA" in x[0][1]:
         x[0][0] = "SLES_TERADATA"

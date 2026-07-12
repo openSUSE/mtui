@@ -77,6 +77,11 @@ from mtui.types import Product
         ),
         (
             normalize_sle15,
+            [["SLE-Product-SLES", "15-SP4-LTSS-ERICSSON", "x86_64"]],
+            "SLES-LTSS-ERICSSON",
+        ),
+        (
+            normalize_sle15,
             [["SLE-Product-SLES", "15-LTSS", "x86_64"]],
             "SLES-LTSS",
         ),
@@ -129,6 +134,16 @@ def test_normalize_first_element(fn, before, expected_first) -> None:
     # (mutmut re-enters pytest.main in one interpreter).
     out = fn(deepcopy(before))
     assert out[0][0] == expected_first
+
+
+def test_normalize_sle15_ltss_ericsson_strips_ericsson_from_version() -> None:
+    # A dedicated "LTSS-ERICSSON" compound branch must win over both the
+    # generic ERICSSON and generic LTSS branches, mirroring SLE12's
+    # "SLES-LTSS-ERICSSON" compound branch, and must strip the *whole*
+    # "-LTSS-ERICSSON" suffix so no dangling token is left in the version.
+    out = normalize_sle15([["SLE-Product-SLES", "15-SP4-LTSS-ERICSSON", "x86_64"]])
+    assert out[0][0] == "SLES-LTSS-ERICSSON"
+    assert out[0][1] == "15-SP4"
 
 
 # ---------------------------------------------------------------------------
