@@ -32,3 +32,6 @@ reap_stale = false                # boolean value
 stale_age = 3600                  # integer value
 wait = 30
 # wait_poll omitted on purpose: it must keep its upstream default (15)
+
+[mcp]
+max_output_bytes = 65536          # integer value

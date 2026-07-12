@@ -128,6 +128,18 @@ mod tests {
     }
 
     #[test]
+    fn mcp_max_output_bytes_defaults_to_100k() {
+        assert_eq!(Config::default().mcp_max_output_bytes, 100_000);
+    }
+
+    #[test]
+    fn load_reads_mcp_max_output_bytes() {
+        let path = write_tmp("mcp.toml", "[mcp]\nmax_output_bytes = 4096\n");
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.mcp_max_output_bytes, 4096);
+    }
+
+    #[test]
     fn load_malformed_file_logs_and_falls_back_to_defaults() {
         // Invalid TOML must not panic; defaults apply.
         let path = write_tmp("broken.toml", "connection_timeout = = 42\n");

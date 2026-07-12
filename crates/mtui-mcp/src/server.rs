@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use mtui_core::{Registry, dispatch_argv};
+use mtui_core::Registry;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
@@ -35,7 +35,7 @@ const SPIKE_TOOL: &str = "whoami";
 ///
 /// Holds the command [`Registry`] plus the [`McpSession`] the tool dispatches
 /// against. `McpSession` guards the underlying `Session` behind a mutex (because
-/// [`dispatch_argv`] needs `&mut Session` while `ServerHandler`'s methods take
+/// [`mtui_core::dispatch_argv`] needs `&mut Session` while `ServerHandler`'s methods take
 /// `&self`) and owns the shared-buffer sink that captures the command's display
 /// output (see [`crate::session`] / [`crate::capture`]).
 #[derive(Clone)]
@@ -105,20 +105,14 @@ impl ServerHandler for SpikeServer {
         // the real kwargs→argv reconstruction (REMAINDER, subparsers) is P7.5.
         let argv: Vec<String> = Vec::new();
 
-        // Drain any stale output, run under the session lock, then read back
-        // what the command printed to the captured display sink.
-        let output = self.session.output();
-        let _ = output.take();
-        let result = {
-            let mut session = self.session.session().lock().await;
-            dispatch_argv(&self.registry, &mut session, name, &argv).await
-        };
-        let text = output.take();
-
-        match result {
-            Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),
+        // Dispatch through the session's central primitive (drain → lock →
+        // dispatch → capture → output-cap; P7.3). On failure the error already
+        // carries the (capped) stdout produced before the failure.
+        match self.session.run_command(&self.registry, name, &argv).await {
+            Ok(text) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),
             Err(err) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "{text}{err}"
+                "{}{err}",
+                err.stdout
             ))])),
         }
     }

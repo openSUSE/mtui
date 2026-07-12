@@ -190,6 +190,9 @@ pub(crate) fn default_lock_wait() -> u64 {
 pub(crate) fn default_lock_wait_poll() -> u64 {
     15
 }
+pub(crate) fn default_mcp_max_output_bytes() -> usize {
+    100_000
+}
 
 // -- Serde section structs (mirror the TOML tables) --------------------------
 
@@ -295,6 +298,17 @@ pub(crate) struct LockSection {
     pub wait_poll: Option<u64>,
 }
 
+/// `[mcp]` table — `mtui-mcp` server behaviour.
+///
+/// Mirrors upstream `mtui/support/config.py`'s `mcp_*` options (which live under
+/// the `[mcp]` INI section). Only `max_output_bytes` is wired so far (Phase 7.3);
+/// the per-client session cap / idle timeout land with the http registry.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct McpSection {
+    pub max_output_bytes: Option<usize>,
+}
+
 /// Raw, deserialised view of a single TOML document.
 ///
 /// Every field is optional so a partial file leaves absent options untouched
@@ -313,6 +327,7 @@ pub(crate) struct RawConfig {
     pub target: TargetSection,
     pub gitea: GiteaSection,
     pub lock: LockSection,
+    pub mcp: McpSection,
 }
 
 impl RawConfig {
@@ -354,6 +369,7 @@ impl RawConfig {
         take!(lock, pi_autolock);
         take!(lock, wait);
         take!(lock, wait_poll);
+        take!(mcp, max_output_bytes);
     }
 }
 
@@ -449,6 +465,13 @@ pub struct Config {
     pub lock_wait: u64,
     /// Poll interval (seconds) while waiting for a busy pool lock to free.
     pub lock_wait_poll: u64,
+
+    // [mcp]
+    /// Upper bound (bytes) on a single `mtui-mcp` tool result. Output beyond
+    /// this is truncated at the tail with a notice so one large command result
+    /// (e.g. a fan-out `run`) cannot dwarf the client's context. `0` disables
+    /// the cap. Upstream default is 100_000.
+    pub mcp_max_output_bytes: usize,
 }
 
 impl Default for Config {
@@ -483,6 +506,7 @@ impl Default for Config {
             lock_pi_autolock: default_lock_pi_autolock(),
             lock_wait: default_lock_wait(),
             lock_wait_poll: default_lock_wait_poll(),
+            mcp_max_output_bytes: default_mcp_max_output_bytes(),
         }
     }
 }
@@ -546,6 +570,7 @@ impl Config {
             lock_pi_autolock: raw.lock.pi_autolock.unwrap_or(d.lock_pi_autolock),
             lock_wait: raw.lock.wait.unwrap_or(d.lock_wait),
             lock_wait_poll: raw.lock.wait_poll.unwrap_or(d.lock_wait_poll),
+            mcp_max_output_bytes: raw.mcp.max_output_bytes.unwrap_or(d.mcp_max_output_bytes),
         }
     }
 }

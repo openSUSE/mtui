@@ -14,8 +14,10 @@ pub mod provider;
 pub mod server;
 #[cfg(feature = "mcp")]
 pub mod session;
+#[cfg(feature = "mcp")]
+pub mod slim;
 
 #[cfg(feature = "mcp")]
 pub use provider::{SessionProvider, StdioProvider};
 #[cfg(feature = "mcp")]
-pub use session::McpSession;
+pub use session::{McpCommandError, McpSession};

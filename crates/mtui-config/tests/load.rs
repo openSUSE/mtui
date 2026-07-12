@@ -60,6 +60,9 @@ fn config_toml_fixture_parses_all_sections() {
     assert_eq!(cfg.lock_wait, 30);
     assert_eq!(cfg.lock_wait_poll, 15); // omitted -> upstream default
 
+    // [mcp] section: explicit override lands.
+    assert_eq!(cfg.mcp_max_output_bytes, 65536);
+
     // An option absent from the fixture keeps its upstream default.
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");
 }
