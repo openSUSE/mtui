@@ -50,10 +50,14 @@ def test_zypper_lock_branches_logging_is_well_formed(monkeypatch) -> None:
         zypper("h", "out", "in pkg", "System management is locked", 0)
 
 
-def test_zypper_system_management_locked_raises() -> None:
-    """A "System management is locked" stderr raises ``UpdateError``."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "in pkg", "System management is locked", 0)
+def test_zypper_system_management_locked_raises(caplog) -> None:
+    """A "System management is locked" stderr raises and labels payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.downgrade"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "in pkg", "System management is locked", 0)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_zypper_dep_conflict_raises() -> None:
@@ -73,7 +77,23 @@ def test_zypper_exitcode_106_warns_but_no_raise(caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="mtui.checks.downgrade"):
         result = zypper("h", "", "in pkg", "", 106)
     assert result is None
-    assert any("errocode 106" in r.message for r in caplog.records)
+    assert any("errorcode 106" in r.message for r in caplog.records)
+
+
+def test_zypper_failure_log_labels_stdout_as_stdout(caplog) -> None:
+    """The failure log labels the stdout payload "stdout:", not "stdin:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.downgrade"),
+        pytest.raises(UpdateError),
+    ):
+        zypper(
+            "h",
+            "OUT-PAYLOAD",
+            "in pkg",
+            "A ZYpp transaction is already in progress.",
+            0,
+        )
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_downgrade_checks_dispatch_keys() -> None:

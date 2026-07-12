@@ -21,10 +21,26 @@ def test_zypper_clean_run_returns_none() -> None:
     assert zypper("h", "", "echo hi", "", 0) is None
 
 
-def test_zypper_zypper_in_stdin_exitcode_104_raises() -> None:
-    """``zypper`` in stdin + exitcode 104 raises ``UpdateError``."""
-    with pytest.raises(UpdateError):
+def test_zypper_zypper_in_stdin_exitcode_104_raises_package_not_found() -> None:
+    """Exitcode 104 (ZYPPER_EXIT_INF_CAP_NOT_FOUND) means "package not found".
+
+    Zypper's ZYpp-lock exit code is 7; 104 is capability/package not found,
+    so the raised reason must match the ``install`` check's mapping.
+    """
+    with pytest.raises(UpdateError) as ei:
         zypper("h", "", "zypper in pkg", "", 104)
+    assert ei.value.reason == "package not found"
+    assert ei.value.host == "h"
+
+
+def test_zypper_failure_log_labels_stdout_as_stdout(caplog) -> None:
+    """The failure log labels the stdout payload "stdout:", not "stdin:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.update"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "zypper in pkg", "ERR-PAYLOAD", 104)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_zypper_zypper_in_stdin_exitcode_106_warns(caplog) -> None:
@@ -45,16 +61,26 @@ def test_zypper_additional_rpm_output_printed(capsys) -> None:
     assert "warning" in captured.out
 
 
-def test_zypper_zypp_transaction_lock_raises() -> None:
-    """ZYpp transaction lock raises."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "echo", "A ZYpp transaction is already in progress.", 0)
+def test_zypper_zypp_transaction_lock_raises(caplog) -> None:
+    """ZYpp transaction lock raises and labels the payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.update"),
+        pytest.raises(UpdateError),
+    ):
+        zypper(
+            "h", "OUT-PAYLOAD", "echo", "A ZYpp transaction is already in progress.", 0
+        )
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
-def test_zypper_system_management_locked_raises() -> None:
-    """System management lock raises."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "echo", "System management is locked", 0)
+def test_zypper_system_management_locked_raises(caplog) -> None:
+    """System management lock raises and labels the payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.update"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "echo", "System management is locked", 0)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_zypper_unresolved_dep_raises() -> None:
@@ -63,10 +89,14 @@ def test_zypper_unresolved_dep_raises() -> None:
         zypper("h", "(c): c", "echo", "", 0)
 
 
-def test_zypper_rpm_error_raises() -> None:
-    """``Error:`` in stderr raises."""
-    with pytest.raises(UpdateError):
-        zypper("h", "", "echo", "Error: bad", 0)
+def test_zypper_rpm_error_raises(caplog) -> None:
+    """``Error:`` in stderr raises and labels the payload "stdout:"."""
+    with (
+        caplog.at_level(logging.CRITICAL, logger="mtui.checks.update"),
+        pytest.raises(UpdateError),
+    ):
+        zypper("h", "OUT-PAYLOAD", "echo", "Error: bad", 0)
+    assert any("stdout:\nOUT-PAYLOAD" in r.message for r in caplog.records)
 
 
 def test_zypper_unsupported_package_printed_no_raise(capsys) -> None:
