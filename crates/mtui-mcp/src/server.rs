@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use mtui_core::{Registry, Session, dispatch_argv};
+use mtui_core::{Registry, dispatch_argv};
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, ListToolsResult, PaginatedRequestParams,
@@ -25,40 +25,31 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer};
 use serde_json::{Map, Value};
-use tokio::sync::Mutex;
+
+use crate::session::McpSession;
 
 /// The single command this spike synthesises a tool for.
 const SPIKE_TOOL: &str = "whoami";
 
 /// A minimal MCP server backing exactly one auto-generated tool.
 ///
-/// Holds the command [`Registry`] plus the [`Session`] the tool dispatches
-/// against. The session is behind a [`Mutex`] because [`dispatch_argv`] needs
-/// `&mut Session` while `ServerHandler`'s methods take `&self`. Capturing the
-/// display output is done via a session built with a shared-buffer sink (see
-/// [`crate::capture`]).
+/// Holds the command [`Registry`] plus the [`McpSession`] the tool dispatches
+/// against. `McpSession` guards the underlying `Session` behind a mutex (because
+/// [`dispatch_argv`] needs `&mut Session` while `ServerHandler`'s methods take
+/// `&self`) and owns the shared-buffer sink that captures the command's display
+/// output (see [`crate::session`] / [`crate::capture`]).
 #[derive(Clone)]
 pub struct SpikeServer {
     registry: Arc<Registry>,
-    session: Arc<Mutex<Session>>,
-    /// The shared sink the session writes to; drained per `call_tool`.
-    output: crate::capture::SharedBuf,
+    session: Arc<McpSession>,
 }
 
 impl SpikeServer {
-    /// Builds the spike server from a registry, session, and the session's
-    /// capture buffer (the three come paired from [`crate::capture::session`]).
+    /// Builds the spike server from a registry and the client's session (as
+    /// resolved through a [`crate::provider::SessionProvider`]).
     #[must_use]
-    pub fn new(
-        registry: Arc<Registry>,
-        session: Session,
-        output: crate::capture::SharedBuf,
-    ) -> Self {
-        Self {
-            registry,
-            session: Arc::new(Mutex::new(session)),
-            output,
-        }
+    pub fn new(registry: Arc<Registry>, session: Arc<McpSession>) -> Self {
+        Self { registry, session }
     }
 
     /// The runtime-built input schema for the spike tool: an object with no
@@ -116,12 +107,13 @@ impl ServerHandler for SpikeServer {
 
         // Drain any stale output, run under the session lock, then read back
         // what the command printed to the captured display sink.
-        let _ = self.output.take();
+        let output = self.session.output();
+        let _ = output.take();
         let result = {
-            let mut session = self.session.lock().await;
+            let mut session = self.session.session().lock().await;
             dispatch_argv(&self.registry, &mut session, name, &argv).await
         };
-        let text = self.output.take();
+        let text = output.take();
 
         match result {
             Ok(()) => Ok(CallToolResult::success(vec![ContentBlock::text(text)])),

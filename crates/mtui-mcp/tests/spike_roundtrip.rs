@@ -20,18 +20,20 @@ use std::sync::Arc;
 
 use mtui_config::Config;
 use mtui_core::register_all;
-use mtui_mcp::capture;
+use mtui_mcp::provider::{SessionProvider, StdioProvider};
 use mtui_mcp::server::SpikeServer;
 use rmcp::ServiceExt;
 use rmcp::model::CallToolRequestParams;
 
-/// Builds a spike server over a session whose user is a known fixed value.
-fn build_server() -> SpikeServer {
+/// Builds a spike server over a session whose user is a known fixed value,
+/// resolved through the stdio provider (the transport-agnostic seam).
+async fn build_server() -> SpikeServer {
     let mut config = Config::default();
     config.session_user = "testuser".to_owned();
     let registry = Arc::new(register_all());
-    let (session, output) = capture::session(config);
-    SpikeServer::new(registry, session, output)
+    let provider = StdioProvider::new(config);
+    let session = provider.get_or_create("<default>").await;
+    SpikeServer::new(registry, session)
 }
 
 #[tokio::test]
@@ -40,7 +42,7 @@ async fn roundtrip_lists_and_calls_whoami() {
     // AsyncWrite); a single duplex gives two ends that talk to each other.
     let (server_io, client_io) = tokio::io::duplex(4096);
 
-    let server = build_server();
+    let server = build_server().await;
     let server_task = tokio::spawn(async move {
         // `serve` runs the initialize handshake, then the request loop until the
         // peer disconnects.
