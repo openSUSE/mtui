@@ -164,39 +164,18 @@ fn render_scalar(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::ArgAction;
-    use mtui_core::{Registry, register_all};
+    use mtui_core::{Registry, command_parser, register_all};
     use serde_json::json;
 
-    /// The base template flags every command inherits from the engine's shared
-    /// parser. Re-declared here (they live behind a private `base_subcommand` in
-    /// `mtui-core`) so tail-ordering against `-T`/`--all-templates` is exercised
-    /// exactly as the real dispatch sees it.
-    fn base_parser(name: &'static str) -> clap::Command {
-        clap::Command::new(name)
-            .no_binary_name(true)
-            .arg(
-                clap::Arg::new("template")
-                    .short('T')
-                    .long("template")
-                    .value_name("RRID"),
-            )
-            .arg(
-                clap::Arg::new("all_templates")
-                    .long("all-templates")
-                    .action(ArgAction::SetTrue)
-                    .conflicts_with("template"),
-            )
-    }
-
-    /// Build a command's full parser (base template flags + its own `configure`),
-    /// the same shape `dispatch_argv` re-parses.
+    /// Build a command's full parser (base template flags + its own `configure`)
+    /// through the same `mtui-core` builder `dispatch_argv` re-parses, so this
+    /// test exercises exactly the parser real dispatch sees.
     fn parser_for(command: &str) -> clap::Command {
         let registry: Registry = register_all();
         let cmd = registry
             .get(command)
             .unwrap_or_else(|| panic!("command not registered: {command}"));
-        cmd.configure(base_parser(cmd.name()))
+        command_parser(cmd.as_ref())
     }
 
     fn argv(command: &str, kwargs: Value) -> Vec<String> {
@@ -227,7 +206,7 @@ mod tests {
     #[test]
     fn store_false_off_side_emits_flag() {
         // No mtui command uses SetFalse; pin the branch on a bespoke parser.
-        let parser = base_parser("probe").arg(
+        let parser = clap::Command::new("probe").no_binary_name(true).arg(
             clap::Arg::new("color")
                 .long("no-color")
                 .action(ArgAction::SetFalse),

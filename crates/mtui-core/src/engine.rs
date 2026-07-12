@@ -195,12 +195,26 @@ fn print_help_columns(session: &mut Session, names: &[&str]) {
     }
 }
 
+/// Builds `command`'s full clap parser: the shared base parser (template flags,
+/// `no_binary_name`) plus the command's own [`configure`](Command::configure)
+/// arguments.
+///
+/// This is the exact parser [`dispatch_argv`] re-parses argv through, exposed so
+/// out-of-crate consumers that must introspect a command's arg surface build the
+/// *same* parser rather than reconstructing it. The MCP tool synthesiser (P7.6)
+/// uses it to derive a tool's JSON input schema and to reconstruct argv from a
+/// tool call, keeping schema/argv fidelity locked to real dispatch.
+#[must_use]
+pub fn command_parser(command: &dyn Command) -> clap::Command {
+    command.configure(base_subcommand(command.name()))
+}
+
 /// Builds `command`'s clap parser and parses `argv` into [`ArgMatches`] without
 /// ever exiting the process.
 fn parse_command(command: &dyn Command, argv: &[String]) -> Result<ArgMatches, EngineError> {
     use clap::error::ErrorKind;
 
-    let parser = command.configure(base_subcommand(command.name()));
+    let parser = command_parser(command);
     parser.try_get_matches_from(argv).map_err(|e| {
         let help_or_version =
             matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion);

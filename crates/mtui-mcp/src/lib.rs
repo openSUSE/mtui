@@ -11,6 +11,8 @@ pub mod argv;
 #[cfg(feature = "mcp")]
 pub mod capture;
 #[cfg(feature = "mcp")]
+pub mod deny;
+#[cfg(feature = "mcp")]
 pub mod provider;
 #[cfg(feature = "mcp")]
 pub mod schema;
@@ -20,8 +22,15 @@ pub mod server;
 pub mod session;
 #[cfg(feature = "mcp")]
 pub mod slim;
+#[cfg(feature = "mcp")]
+pub mod tools;
 
 #[cfg(feature = "mcp")]
 pub use provider::{SessionProvider, StdioProvider};
 #[cfg(feature = "mcp")]
 pub use session::{McpCommandError, McpSession};
+#[cfg(feature = "mcp")]
+pub use tools::{
+    ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_tool_descriptors,
+    tool_routes,
+};

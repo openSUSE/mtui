@@ -34,3 +34,6 @@ tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
+insta.workspace = true
+serde_json.workspace = true
+mtui-config.workspace = true
