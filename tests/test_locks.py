@@ -288,6 +288,41 @@ class TestTargetLock:
         result = lock.time()
         assert "UTC" in result
 
+    def test_time_converts_epoch_to_utc(self, lock):
+        """time() renders the epoch timestamp in UTC, as its label claims.
+
+        The exact string is asserted: a timezone-aware UTC conversion yields
+        the same result on any host, whereas a naive (local-time) conversion
+        would only match on hosts whose local timezone happens to be UTC.
+        """
+        mock_file = MagicMock()
+        mock_file.readline.return_value = "0:testuser:12345"
+        lock.connection.sftp_open.return_value = mock_file
+
+        assert lock.time() == "Thursday, 01.01.1970 00:00 UTC"
+
+    def test_time_is_utc_regardless_of_local_timezone(self, lock, monkeypatch):
+        """time() must not shift with the tester's local timezone.
+
+        Locks are shared between testers in different timezones, so the
+        displayed time must be canonical UTC. With TZ=America/New_York a
+        naive local-time conversion of 1720000000 would render 05:46 (EDT,
+        UTC-4) under the hardcoded "UTC" label instead of the true 09:46.
+        """
+        mock_file = MagicMock()
+        mock_file.readline.return_value = "1720000000:testuser:12345"
+        lock.connection.sftp_open.return_value = mock_file
+
+        monkeypatch.setenv("TZ", "America/New_York")
+        time.tzset()
+        try:
+            assert lock.time() == "Wednesday, 03.07.2024 09:46 UTC"
+        finally:
+            # monkeypatch restores TZ only at teardown; re-apply the process
+            # timezone here so no stale zone leaks into later tests.
+            monkeypatch.undo()
+            time.tzset()
+
     def test_time_malformed_timestamp_returns_unknown(self, lock):
         """A non-numeric timestamp must not raise (mirrors age_seconds).
 
