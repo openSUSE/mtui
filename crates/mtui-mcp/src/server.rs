@@ -40,6 +40,7 @@ use rmcp::{ErrorData as McpError, RoleServer};
 use serde_json::{Map, Value};
 
 use crate::session::McpSession;
+use crate::testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 use crate::tools::{
     ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_tool_descriptors,
     tool_routes,
@@ -62,6 +63,8 @@ pub struct McpServer {
     routes: Arc<BTreeMap<String, ToolRoute>>,
     /// The set of job-control tool names (`job_list`/…), for dispatch routing.
     job_tools: Arc<HashSet<String>>,
+    /// The set of hand-written testreport tool names (`testreport_read`/…).
+    testreport_tools: Arc<HashSet<String>>,
 }
 
 impl McpServer {
@@ -75,13 +78,19 @@ impl McpServer {
     pub fn new(registry: Arc<Registry>, session: Arc<McpSession>) -> Self {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
+        let testreport_descriptors = testreport_tool_descriptors();
         let routes = tool_routes(&registry);
 
         let job_tools: HashSet<String> = job_descriptors.iter().map(|d| d.name.clone()).collect();
+        let testreport_tools: HashSet<String> = testreport_descriptors
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
 
         let tools: Vec<Tool> = command_descriptors
             .iter()
             .chain(job_descriptors.iter())
+            .chain(testreport_descriptors.iter())
             .map(descriptor_to_tool)
             .collect();
 
@@ -91,6 +100,7 @@ impl McpServer {
             tools: Arc::new(tools),
             routes: Arc::new(routes),
             job_tools: Arc::new(job_tools),
+            testreport_tools: Arc::new(testreport_tools),
         }
     }
 }
@@ -135,6 +145,16 @@ impl ServerHandler for McpServer {
         // A job-control tool (stubbed until mtui-rs-76e.12).
         if self.job_tools.contains(&name) {
             return Ok(render(dispatch_job_tool(&name, &kwargs).await));
+        }
+
+        // A hand-written testreport tool: acts directly on the loaded checkout.
+        if self.testreport_tools.contains(&name) {
+            let result = dispatch_testreport_tool(&self.session, &name, &kwargs)
+                .await
+                // Serialise the JSON object result to a single text block, matching
+                // the command tools' single-content-block wire shape.
+                .map(|v| v.to_string());
+            return Ok(render(result));
         }
 
         // A synthesised command tool: dispatch through the shared engine.

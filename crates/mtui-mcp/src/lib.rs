@@ -25,6 +25,8 @@ pub mod session;
 #[cfg(feature = "mcp")]
 pub mod slim;
 #[cfg(feature = "mcp")]
+pub mod testreport_tools;
+#[cfg(feature = "mcp")]
 pub mod tools;
 
 #[cfg(feature = "mcp")]
@@ -35,6 +37,8 @@ pub use provider::{SessionProvider, SessionRegistry, StdioProvider};
 pub use server::{McpServer, SpikeServer};
 #[cfg(feature = "mcp")]
 pub use session::{McpCommandError, McpSession};
+#[cfg(feature = "mcp")]
+pub use testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 #[cfg(feature = "mcp")]
 pub use tools::{
     ToolDescriptor, ToolRoute, build_tools, dispatch_job_tool, dispatch_tool, job_tool_descriptors,

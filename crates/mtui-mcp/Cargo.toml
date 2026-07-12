@@ -26,11 +26,13 @@ mcp = [
     "dep:tracing",
     "dep:tracing-subscriber",
     "dep:axum",
+    "dep:mtui-testreport",
 ]
 
 [dependencies]
 mtui-core.workspace = true
 mtui-config.workspace = true
+mtui-testreport = { workspace = true, optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
@@ -45,3 +47,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] 
 insta.workspace = true
 serde_json.workspace = true
 mtui-config.workspace = true
+mtui-testreport.workspace = true
+mtui-types.workspace = true
+tempfile = "3"

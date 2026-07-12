@@ -123,6 +123,16 @@ impl McpSession {
         &self.output
     }
 
+    /// The per-result output-size budget in bytes (`0` disables the cap).
+    ///
+    /// Exposed for the hand-written testreport tools ([`crate::testreport_tools`]),
+    /// which cap their file-content payloads with the same
+    /// [`cap_output`](crate::slim::cap_output) budget `run_command` applies.
+    #[must_use]
+    pub fn max_output_bytes(&self) -> usize {
+        self.max_output_bytes
+    }
+
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
     /// The central MCP dispatch primitive (the Rust analogue of upstream

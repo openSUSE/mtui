@@ -5,7 +5,8 @@
 //! (no subprocess, no socket) and proves the runtime-synthesis wiring end to end:
 //!
 //! 1. `tools/list` reflects the full synthesised surface (command tools + job
-//!    tools) and **omits** every deny-listed REPL-only command.
+//!    tools + the hand-written testreport tools) and **omits** every deny-listed
+//!    REPL-only command.
 //! 2. `call_tool("whoami")` routes through the *same* engine the REPL uses and
 //!    returns the `User: <user>, app pid: …` banner the command prints.
 //! 3. A deny-listed tool call is rejected (`method_not_found`) — no route exists.
@@ -13,9 +14,6 @@
 //! This is the Phase-7 gating contract test: it demonstrates the hand-written
 //! `ServerHandler` with a runtime-built tool set + schemas works against rmcp 2.x
 //! over a transport.
-//!
-//! P7.8 will extend (1) to also assert `testreport_read`/`testreport_patch`/
-//! `testreport_write` once those tools land (see the marker below).
 
 #![cfg(feature = "mcp")]
 
@@ -95,8 +93,19 @@ async fn tools_list_reflects_synthesised_surface_and_denylist() {
             );
         }
 
-        // P7.8: assert testreport_read / testreport_patch / testreport_write here
-        // once the testreport tools land (bead mtui-rs-76e.8).
+        // The hand-written testreport tools (bead mtui-rs-76e.8).
+        for expected in [
+            "testreport_read",
+            "testreport_logs",
+            "testreport_patch",
+            "testreport_write",
+            "testreport_fill",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "expected testreport tool `{expected}` in tools/list, got: {names:?}"
+            );
+        }
 
         // whoami carries the read-only annotation.
         let whoami = tools

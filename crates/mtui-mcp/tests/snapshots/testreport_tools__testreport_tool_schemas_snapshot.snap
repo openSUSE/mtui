@@ -1,0 +1,145 @@
+---
+source: crates/mtui-mcp/tests/testreport_tools.rs
+expression: pretty
+---
+[
+  {
+    "description": "Bulk-set the repetitive per-bug placeholder tokens an exported testreport ships with, in one atomic write. `reproducer` (YES/NO) sets every unfilled `REPRODUCER_PRESENT:` line; `status` (one of FIXED, NOT_FIXED, HYPOTHETICAL, NOT_REPRODUCIBLE, NO_ENVIRONMENT, TOO_COMPLEX, SKIPPED, OTHER) sets every unfilled templated `STATUS:` line; `summary` (PASSED/FAILED) sets the top `SUMMARY:` line. Only exact template placeholders are touched, so it is idempotent and never overwrites a value you already set by hand. Returns a `filled` count per token. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
+    "input_schema": {
+      "properties": {
+        "reproducer": {
+          "description": "Set every unfilled REPRODUCER_PRESENT: line.",
+          "enum": [
+            "YES",
+            "NO"
+          ],
+          "type": "string"
+        },
+        "status": {
+          "description": "Set every unfilled templated STATUS: line.",
+          "enum": [
+            "FIXED",
+            "NOT_FIXED",
+            "HYPOTHETICAL",
+            "NOT_REPRODUCIBLE",
+            "NO_ENVIRONMENT",
+            "TOO_COMPLEX",
+            "SKIPPED",
+            "OTHER"
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "description": "Set the top SUMMARY: line.",
+          "enum": [
+            "PASSED",
+            "FAILED"
+          ],
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "testreport_fill",
+    "read_only": false
+  },
+  {
+    "description": "List the auxiliary log files in the loaded testreport's checkout: the per-package/arch build-check logs (build_checks/) and the per-refhost install logs (install_logs/). Returns each file's name and size; fetch one with testreport_read (pass relpath). Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
+    "input_schema": {
+      "properties": {
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "testreport_logs",
+    "read_only": true
+  },
+  {
+    "description": "Splice an inclusive 1-indexed line range in the currently loaded testreport file. `end_line == start_line - 1` inserts before `start_line` without replacing anything. The write is atomic. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
+    "input_schema": {
+      "properties": {
+        "end_line": {
+          "description": "Last line of the inclusive range; start_line-1 to insert.",
+          "type": "integer"
+        },
+        "replacement": {
+          "description": "Replacement text; empty deletes the range.",
+          "type": "string"
+        },
+        "start_line": {
+          "description": "First line of the inclusive range (1-based).",
+          "type": "integer"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start_line",
+        "end_line",
+        "replacement"
+      ],
+      "type": "object"
+    },
+    "name": "testreport_patch",
+    "read_only": false
+  },
+  {
+    "description": "Read a file from the loaded testreport's checkout. Returns the path, total line count, and content (utf-8, errors replaced). By default (no `relpath`) reads the report's `log` file; pass `relpath` to read another checkout file instead, e.g. 'build_checks/<pkg>.<arch>.log', 'install_logs/<host>.log', 'source.diff' or 'patchinfo.xml' — the path may not escape the checkout directory. Pass `offset` (1-based first line) and/or `limit` (max lines) to read a line window instead of the whole file. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
+    "input_schema": {
+      "properties": {
+        "limit": {
+          "description": "Max lines to return (default: to end of file).",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 1,
+          "description": "1-based first line to return.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "relpath": {
+          "description": "Checkout-relative file to read; defaults to the `log` file.",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "testreport_read",
+    "read_only": true
+  },
+  {
+    "description": "Overwrite the currently loaded testreport file with the given content. Atomic. Use this as the fallback when patching would require tracking line-number drift across many edits. Always call `testreport_read` immediately before `testreport_patch` to get current line numbers; line numbers shift after every patch. Pass `template=<rrid>` to target a specific loaded template; required when more than one template is loaded.",
+    "input_schema": {
+      "properties": {
+        "content": {
+          "description": "The full new file content.",
+          "type": "string"
+        },
+        "template": {
+          "description": "RRID of a loaded template to target (required when >1 loaded).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "type": "object"
+    },
+    "name": "testreport_write",
+    "read_only": false
+  }
+]
