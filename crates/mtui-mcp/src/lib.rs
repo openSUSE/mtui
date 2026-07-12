@@ -13,6 +13,8 @@ pub mod argv;
 #[cfg(feature = "mcp")]
 pub mod capture;
 #[cfg(feature = "mcp")]
+pub mod concurrency;
+#[cfg(feature = "mcp")]
 pub mod deny;
 #[cfg(feature = "mcp")]
 pub mod provider;

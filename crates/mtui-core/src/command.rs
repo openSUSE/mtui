@@ -262,6 +262,38 @@ fn resolve_templates(
     Ok(active())
 }
 
+/// Resolves the ordered *real* RRIDs a `command`/`argv` invocation would act on,
+/// for out-of-crate callers that must know the target templates *before*
+/// dispatch (the MCP per-template lock gate, `mtui-rs-76e.11`).
+///
+/// The public port of upstream `McpSession._resolve_job_rrids`: it builds the
+/// command's clap parser, parses `argv`, and runs the identical
+/// [`resolve_templates`] fan-out logic `run` uses, then drops the empty-RRID
+/// null-report sentinel so the caller sees only genuinely-loaded templates.
+///
+/// Returns:
+/// * `Some(rrids)` — one or more loaded templates this call targets;
+/// * `None` — the argv does not parse here, or it resolves only to the null
+///   report (nothing loaded / active is null). The caller treats `None` (and the
+///   multi-RRID case) as "take the registry gate exclusively", exactly as
+///   upstream falls back when resolution is not a single real template.
+///
+/// This never errors: a `-T <unloaded-rrid>` (which [`resolve_templates`] would
+/// reject) yields `None` so the caller serialises conservatively rather than
+/// surfacing a lock-layer parse error; the real error surfaces later at dispatch.
+#[must_use]
+pub fn resolve_command_rrids(
+    command: &dyn Command,
+    session: &Session,
+    argv: &[String],
+) -> Option<Vec<String>> {
+    let parser = crate::engine::command_parser(command);
+    let matches = parser.try_get_matches_from(argv).ok()?;
+    let resolved = resolve_templates(command.scope(), session, &matches).ok()?;
+    let real: Vec<String> = resolved.into_iter().filter(|r| !r.is_empty()).collect();
+    if real.is_empty() { None } else { Some(real) }
+}
+
 /// Reads an optional string argument, tolerating a subcommand that never
 /// declared it.
 fn arg_str(args: &ArgMatches, id: &str) -> Option<String> {

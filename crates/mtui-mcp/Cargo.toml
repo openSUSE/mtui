@@ -46,6 +46,8 @@ tracing-subscriber = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
 insta.workspace = true
 serde_json.workspace = true
+async-trait.workspace = true
+clap.workspace = true
 mtui-config.workspace = true
 mtui-testreport.workspace = true
 mtui-types.workspace = true

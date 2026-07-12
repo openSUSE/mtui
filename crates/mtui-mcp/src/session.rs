@@ -19,23 +19,39 @@
 //! The non-interactive contract (`interactive = false`, unset prompter) is
 //! already provided by [`capture::session`] passing `is_repl = false`.
 //!
-//! **Deliberately deferred** to their own follow-up beads (this type grows in
-//! place — do not replace it):
-//!   - per-template concurrency — a per-RRID serialiser over a shared/exclusive
-//!     registry gate (upstream `_RWLock` + `_rrid_locks`). Today every call
-//!     serialises behind the single session `Mutex`; see bead `mtui-rs-76e.11`;
+//! P7.3a (`mtui-rs-76e.11`) landed the per-template **lock discipline**: a
+//! shared/exclusive registry gate ([`crate::concurrency::RwGate`], upstream
+//! `_RWLock`) plus a lazily-created per-RRID lock map (upstream `_rrid_locks`).
+//! [`command_lock`](McpSession::command_lock) takes the gate *shared* + one
+//! per-RRID lock for a single-template call (so same-RRID calls serialise and
+//! different-RRID calls take distinct locks) and the gate *exclusive* for
+//! fan-out / registry mutators; [`scoped_lock`](McpSession::scoped_lock) is the
+//! same hold for the hand-written testreport tools.
+//!
+//! **Not yet landed** — genuine wall-clock concurrency between *different-RRID*
+//! calls (and per-call output isolation) additionally needs the `mtui-core`
+//! change that stops dispatch taking `&mut Session` for the whole monolithic
+//! session; until then different-RRID calls hold distinct per-RRID locks but
+//! still serialise on the inner session `Mutex`. Tracked as `mtui-rs-f36r`
+//! (the two `#[ignore]`d parity tests in `tests/session_concurrency.rs`).
+//!
+//! **Deferred** to their own follow-up beads (this type grows in place — do not
+//! replace it):
 //!   - the background-job table (`_jobs`) + job tools — `mtui-rs-76e.12`;
 //!   - `close()` host teardown (disconnect every loaded template's hosts,
 //!     release pool claims), owned by the http idle sweep — `mtui-rs-76e.13`;
 //!   - `notifications/progress` heartbeats for long calls — `mtui-rs-76e.14`.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use mtui_config::Config;
-use mtui_core::{EngineError, Registry, Session, dispatch_argv};
+use mtui_core::{EngineError, Registry, Session, dispatch_argv, resolve_command_rrids};
 use tokio::sync::Mutex;
+use tokio::sync::OwnedMutexGuard;
 
 use crate::capture::{self, SharedBuf};
+use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
 use crate::slim::cap_output;
 
 /// A command dispatch that failed under the MCP transport.
@@ -91,6 +107,40 @@ pub struct McpSession {
     /// `0` disables the cap. Retained here so [`run_command`](Self::run_command)
     /// need not hold the whole [`Config`].
     max_output_bytes: usize,
+    /// The registry shared/exclusive gate (upstream `_RWLock` `_registry`).
+    ///
+    /// A command scoped to exactly one template enters this in *shared* mode
+    /// (so it cannot overlap a registry mutation); registry mutators
+    /// (`load_template`/`unload`) and unscoped fan-out enter it *exclusive*,
+    /// draining in-flight per-RRID work. See [`command_lock`](Self::command_lock).
+    gate: RwGate,
+    /// Lazily-created per-RRID locks (upstream `_rrid_locks` + `_locks_guard`).
+    ///
+    /// Same-RRID calls share one `Arc<Mutex<()>>` and serialise; different-RRID
+    /// calls take different locks. The outer [`StdMutex`] guards the map's own
+    /// lazy population (held only for the get-or-insert, never across an await).
+    rrid_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+/// An acquired hold on the concurrency gate for one command/tool invocation.
+///
+/// Returned by [`McpSession::command_lock`] / [`McpSession::scoped_lock`] and
+/// kept alive for the duration of the critical section; dropping it releases the
+/// gate (and any per-RRID lock) in the right order. The fields are never read —
+/// they exist to own the guards — hence the leading underscores.
+#[must_use = "dropping the CommandLock immediately releases the gate"]
+pub enum CommandLock {
+    /// A single-template hold: the registry gate shared **plus** one per-RRID
+    /// lock. The `_rrid` guard drops first (declaration order), then `_shared`,
+    /// matching the acquire order (gate-shared → rrid lock) in reverse.
+    Scoped {
+        /// The per-RRID lock (dropped first).
+        _rrid: OwnedMutexGuard<()>,
+        /// The registry gate held in shared mode (dropped second).
+        _shared: SharedGuard,
+    },
+    /// A registry-wide exclusive hold (mutators / unscoped fan-out).
+    Exclusive(#[allow(dead_code)] ExclusiveGuard),
 }
 
 impl McpSession {
@@ -108,6 +158,8 @@ impl McpSession {
             session: Arc::new(Mutex::new(session)),
             output,
             max_output_bytes,
+            gate: RwGate::new(),
+            rrid_locks: StdMutex::new(HashMap::new()),
         })
     }
 
@@ -133,6 +185,97 @@ impl McpSession {
         self.max_output_bytes
     }
 
+    /// Returns (creating on first use) the per-template lock for `rrid`.
+    ///
+    /// Lazily populates [`rrid_locks`](Self::rrid_locks) under its guard so two
+    /// tasks racing to lock the same fresh RRID share one lock object. The Rust
+    /// analogue of upstream `_lock_for`.
+    fn lock_for(&self, rrid: &str) -> Arc<Mutex<()>> {
+        let mut map = self.rrid_locks.lock().expect("rrid lock map poisoned");
+        Arc::clone(
+            map.entry(rrid.to_owned())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
+    /// Acquires the right lock(s) for a `name`/`argv` invocation and returns a
+    /// guard holding them for the caller's critical section.
+    ///
+    /// The Rust analogue of upstream `_command_lock`, resolving exactly as the
+    /// foreground dispatch does (via [`resolve_command_rrids`]):
+    ///
+    /// * resolves to **exactly one** loaded template → the registry gate in
+    ///   *shared* mode **plus** that template's per-RRID lock, so different-RRID
+    ///   commands run concurrently while same-RRID commands serialise and no
+    ///   command overlaps a registry mutation;
+    /// * fan-out / unscoped-multi commands, registry mutators
+    ///   (`load_template`/`unload`), or anything that resolves to no real
+    ///   template → the registry gate in *exclusive* mode, which drains in-flight
+    ///   per-RRID commands and blocks new ones for the duration.
+    ///
+    /// A single call never holds two per-RRID locks and the exclusive path holds
+    /// only the gate, so the lock order (gate-shared → one rrid lock) is total
+    /// and cannot deadlock. Resolution needs the [`Session`] (loaded set + active
+    /// pointer), so it briefly locks the session — released before the returned
+    /// guard is handed back, so the caller may re-lock the session for dispatch.
+    async fn command_lock(&self, registry: &Registry, name: &str, argv: &[String]) -> CommandLock {
+        let rrids = match registry.get(name) {
+            Some(command) => {
+                let session = self.session.lock().await;
+                resolve_command_rrids(command.as_ref(), &session, argv)
+            }
+            // Unknown command: no meaningful scope, serialise conservatively.
+            None => None,
+        };
+
+        match rrids {
+            Some(rrids) if rrids.len() == 1 => {
+                let shared = self.gate.shared().await;
+                let lock = self.lock_for(&rrids[0]);
+                let rrid = lock.lock_owned().await;
+                CommandLock::Scoped {
+                    _shared: shared,
+                    _rrid: rrid,
+                }
+            }
+            _ => CommandLock::Exclusive(self.gate.exclusive().await),
+        }
+    }
+
+    /// Holds the registry-shared gate plus one template's per-RRID lock.
+    ///
+    /// For the hand-written testreport tools (which act on a single template's
+    /// files): entering the gate *shared* keeps the loaded set stable for the
+    /// body (no concurrent `load_template`/`unload`) while still letting tools on
+    /// *other* templates run in parallel, and the per-RRID lock serialises
+    /// against foreground dispatch for the *same* template (e.g. a concurrent
+    /// `commit`). The Rust analogue of upstream `scoped_lock`.
+    ///
+    /// `rrid` is the resolved target template id, or `None` to fall back to the
+    /// active template (single-/zero-loaded case). Callers should resolve and
+    /// validate the target report *inside* the body, where the shared gate
+    /// guarantees the registry cannot change underfoot.
+    pub async fn scoped_lock(&self, rrid: Option<&str>) -> CommandLock {
+        let shared = self.gate.shared().await;
+        let key = match rrid {
+            Some(r) => r.to_owned(),
+            None => self
+                .session
+                .lock()
+                .await
+                .templates
+                .active_rrid()
+                .unwrap_or("")
+                .to_owned(),
+        };
+        let lock = self.lock_for(&key);
+        let rrid = lock.lock_owned().await;
+        CommandLock::Scoped {
+            _shared: shared,
+            _rrid: rrid,
+        }
+    }
+
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
     /// The central MCP dispatch primitive (the Rust analogue of upstream
@@ -142,8 +285,12 @@ impl McpSession {
     /// wrote to the captured display — passed through [`cap_output`] so one large
     /// result cannot dwarf the client's context.
     ///
-    /// The whole call holds the single session lock, so concurrent tool calls
-    /// serialise (whole-session, not per-template — see the module `TODO`). A
+    /// Before dispatch the call takes its [`command_lock`](Self::command_lock):
+    /// a single-template call holds the registry gate *shared* plus its per-RRID
+    /// lock (so same-RRID calls serialise, different-RRID calls take distinct
+    /// locks), while fan-out / mutators take the gate *exclusive*. The dispatch
+    /// itself still holds the single session `Mutex` (the `mtui-core` change that
+    /// lets different-RRID dispatch run truly in parallel is `mtui-rs-f36r`). A
     /// `--help`/`--version` request is a *success* (its text is returned),
     /// matching argparse's exit-0 semantics.
     ///
@@ -159,6 +306,12 @@ impl McpSession {
         name: &str,
         argv: &[String],
     ) -> Result<String, McpCommandError> {
+        // Acquire the per-template / registry-gate hold for this invocation
+        // *before* touching the session, so same-RRID and unscoped calls
+        // serialise and mutators drain in-flight per-RRID work. Held for the
+        // whole dispatch, released when `_lock` drops at end of scope.
+        let _lock = self.command_lock(registry, name, argv).await;
+
         // Isolate this call's output: drop anything a prior call left behind.
         let _ = self.output.take();
 
@@ -337,5 +490,51 @@ mod tests {
             exit_code: 1,
         };
         assert_eq!(no_stderr.to_string(), "command failed (exit_code=1)");
+    }
+
+    /// `lock_for` returns the *same* lock object for a repeated RRID (so
+    /// same-RRID calls contend) and a *different* one for a distinct RRID.
+    #[test]
+    fn lock_for_shares_per_rrid() {
+        let sess = session(Config::default());
+        let a1 = sess.lock_for("SUSE:Maintenance:1:1");
+        let a2 = sess.lock_for("SUSE:Maintenance:1:1");
+        let b = sess.lock_for("SUSE:Maintenance:2:1");
+        assert!(Arc::ptr_eq(&a1, &a2), "same RRID shares one lock");
+        assert!(!Arc::ptr_eq(&a1, &b), "distinct RRIDs get distinct locks");
+    }
+
+    /// An unknown command resolves to no RRID → `command_lock` takes the gate
+    /// exclusively (upstream unscoped fallback).
+    #[tokio::test]
+    async fn command_lock_unknown_is_exclusive() {
+        let sess = session(Config::default());
+        let registry = register_all();
+        let lock = sess.command_lock(&registry, "no_such_command", &[]).await;
+        assert!(
+            matches!(lock, CommandLock::Exclusive(_)),
+            "unknown command serialises exclusively"
+        );
+    }
+
+    /// A self-scoped single-shot command with nothing loaded resolves to the
+    /// null report only → exclusive gate (unscoped fallback).
+    #[tokio::test]
+    async fn command_lock_unscoped_is_exclusive() {
+        let sess = session(Config::default());
+        let registry = register_all();
+        // `whoami` is `Scope::Active`; with nothing loaded it resolves to the
+        // empty null RRID, which `resolve_command_rrids` drops → None → exclusive.
+        let lock = sess.command_lock(&registry, "whoami", &[]).await;
+        assert!(matches!(lock, CommandLock::Exclusive(_)));
+    }
+
+    /// `scoped_lock(None)` with nothing loaded falls back to the active (empty)
+    /// RRID and yields a scoped hold without deadlocking.
+    #[tokio::test]
+    async fn scoped_lock_falls_back_to_active() {
+        let sess = session(Config::default());
+        let lock = sess.scoped_lock(None).await;
+        assert!(matches!(lock, CommandLock::Scoped { .. }));
     }
 }

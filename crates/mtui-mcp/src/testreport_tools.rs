@@ -15,14 +15,15 @@
 //! * [`testreport_fill`] — bulk-set the repetitive per-bug placeholder tokens an
 //!   exported testreport ships with, idempotently.
 //!
-//! ## Locking (interim)
+//! ## Locking
 //!
-//! Upstream acquires the *per-RRID* `scoped_lock(template)` so a tool serialises
-//! only against same-template dispatch. The Rust [`McpSession`] has no
-//! `scoped_lock` yet (per-RRID locking is bead `mtui-rs-76e.11`), so every file
-//! op here takes the single session-wide `Mutex<Session>` via
-//! [`McpSession::session`]. This is coarser (it serialises against *all* command
-//! dispatch, not just same-template work) but correct; P7.11 refines it.
+//! Each tool takes the per-RRID [`McpSession::scoped_lock`] for its `template`
+//! (the Rust analogue of upstream `scoped_lock(template)`): entering the registry
+//! gate in *shared* mode keeps the loaded set stable for the call (no concurrent
+//! `load_template`/`unload`) while tools on *other* templates run in parallel,
+//! and the per-RRID lock serialises the file op against same-template foreground
+//! dispatch (e.g. a concurrent `commit`). The inner `Mutex<Session>` is still
+//! taken briefly for the actual state read/write.
 //!
 //! ## Multi-template resolution
 //!
@@ -222,6 +223,9 @@ pub async fn testreport_read(
         return Err(refuse(format!("offset must be >= 1 (got {offset})")));
     }
 
+    // Serialise against same-template dispatch and keep the loaded set stable
+    // for this call (gate-shared) while tools on other templates run in parallel.
+    let _scope = session.scoped_lock(template).await;
     let (path, content) = {
         let guard = session.session().lock().await;
         let path = if let Some(rel) = relpath {
@@ -278,6 +282,7 @@ pub async fn testreport_logs(
     session: &McpSession,
     template: Option<&str>,
 ) -> Result<Value, McpCommandError> {
+    let _scope = session.scoped_lock(template).await;
     let guard = session.session().lock().await;
     let base = resolve_dir(&guard, template)?;
 
@@ -323,6 +328,7 @@ pub async fn testreport_patch(
     replacement: &str,
     template: Option<&str>,
 ) -> Result<Value, McpCommandError> {
+    let _scope = session.scoped_lock(template).await;
     let (path, new_text) = {
         let guard = session.session().lock().await;
         let path = resolve_path(&guard, template)?;
@@ -379,6 +385,7 @@ pub async fn testreport_write(
     content: &str,
     template: Option<&str>,
 ) -> Result<Value, McpCommandError> {
+    let _scope = session.scoped_lock(template).await;
     let (path, bytes_written) = {
         let guard = session.session().lock().await;
         let path = resolve_path(&guard, template)?;
@@ -436,6 +443,7 @@ pub async fn testreport_fill(
         ));
     }
 
+    let _scope = session.scoped_lock(template).await;
     let (path, new_text, counts) = {
         let guard = session.session().lock().await;
         let path = resolve_path(&guard, template)?;
