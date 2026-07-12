@@ -231,6 +231,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   prepare and downgrade checks now label the captured command output
   correctly as "stdout:" (it was mislabeled "stdin:"), and an "errocode"
   typo in the downgrade check's exit-106 warning is fixed.
+- MANUAL `export` now writes the per-host package-version lines into templates
+  that use the indented `      before:` / `      after:` state headers, and
+  bounds that lookup to the current host's own block so it can no longer
+  wander into a neighbouring host's section. The indented-header lookup could
+  never match (a formatting bug hidden by an unindented fallback), so on such
+  templates the version lines were omitted (with only a misleading
+  "before/after packages section not found" error) and the PASSED/FAILED
+  verdict was never filled in. Additionally, when a version line cannot be
+  written because the template is malformed (a state header as the very last
+  line), the export now logs a warning naming the host and package instead of
+  silently skipping the line.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a
