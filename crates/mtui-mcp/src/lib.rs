@@ -11,6 +11,8 @@ pub mod capture;
 #[cfg(feature = "mcp")]
 pub mod provider;
 #[cfg(feature = "mcp")]
+pub mod schema;
+#[cfg(feature = "mcp")]
 pub mod server;
 #[cfg(feature = "mcp")]
 pub mod session;
