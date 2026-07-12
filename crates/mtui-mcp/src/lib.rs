@@ -7,6 +7,8 @@
 //! on this crate's server) does not pull in the rmcp SDK.
 
 #[cfg(feature = "mcp")]
+pub mod argv;
+#[cfg(feature = "mcp")]
 pub mod capture;
 #[cfg(feature = "mcp")]
 pub mod provider;
