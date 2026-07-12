@@ -258,6 +258,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   already typed, e.g. `$HOME//Documents`. Directory candidates (including
   bare `~`'s home-directory entries) are now suffixed with `/`, matching
   shell convention, so a following `TAB` descends into them.
+- `quit` (and `exit`/Ctrl-D) no longer hides host-teardown problems: a
+  disconnect that crashes, including one that only crashes after running
+  past the 45-second teardown window, is now reported as a warning naming
+  the affected host. The exit status is still unaffected, but quitting
+  already blocked until every disconnect finished before this fix and
+  still does — only the visibility of the outcome changed, not the wait.
 - `export` in the AUTO and KERNEL workflows no longer fails with
   "No refhosts defined" when no reference hosts are connected. These
   workflows build the template from openQA/dashboard data and never touch a
