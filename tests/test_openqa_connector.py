@@ -111,7 +111,7 @@ class TestGetJobsErrorHandling:
         )
         with caplog.at_level("ERROR", logger="mtui.connector.openqa"):
             assert auto_oqa._get_jobs() is None
-        assert any("openQA" in r.message for r in caplog.records)
+        assert any("Cannot connect to openQA" in r.message for r in caplog.records)
 
     def test_requests_exception_logs_and_returns_none(self, auto_oqa, caplog):
         """A requests failure openqa_client does not wrap is caught too.

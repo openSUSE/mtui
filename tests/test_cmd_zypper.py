@@ -1,12 +1,13 @@
-"""Tests for the `install` (zypper) command."""
+"""Tests for the `install` and `uninstall` (zypper) commands."""
 
 from __future__ import annotations
 
 import logging
+import sys
 from argparse import Namespace
 from unittest.mock import MagicMock
 
-from mtui.commands.zypper import Install
+from mtui.commands.zypper import Install, Uninstall
 from mtui.hosts.target.hostgroup import HostsGroup
 
 
@@ -49,3 +50,18 @@ def test_install_swallows_exception(mock_config, caplog):
     Install(args, mock_config, MagicMock(), prompt)()
 
     assert any("failed to install" in r.message for r in caplog.records)
+
+
+def test_uninstall_help_describes_package_to_uninstall():
+    """``uninstall --help`` must not carry Install's copy-pasted help text.
+
+    Asserted directly on the parser action's ``help`` attribute rather than
+    the rendered help text: argparse's ``HelpFormatter`` wraps to the
+    terminal width (honoring a ``COLUMNS`` env var ahead of the (80, 24)
+    fallback), so a narrow width could otherwise wrap "package to uninstall"
+    across lines and make a substring check fail on correct code.
+    """
+    parser = Uninstall.argparser(sys)
+    package_action = next(a for a in parser._actions if a.dest == "package")
+
+    assert package_action.help == "package to uninstall"

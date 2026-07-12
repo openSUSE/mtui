@@ -43,9 +43,11 @@ class Terms(Command):
                     logger.exception("running %s failed", filename)
             else:
                 logger.error("Term script not found")
-                logger.info("Aviable term scripts: %s", " ".join(self.config.termnames))
+                logger.info(
+                    "Available term scripts: %s", " ".join(self.config.termnames)
+                )
         else:
-            self.println("available terminals scripts:")
+            self.println("available terminal scripts:")
             self.println(" ".join(self.config.termnames))
 
     @staticmethod
