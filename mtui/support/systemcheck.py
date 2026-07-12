@@ -14,12 +14,20 @@ def detect_system() -> tuple[str, str, str]:
         A tuple containing the distribution, version ID, and kernel version.
 
     """
-    # A quote class, not alternation: inside [...] the | was a literal
-    # pipe, so single-quoted values (NAME='openSUSE', permitted by the
-    # os-release spec) never matched and the export footer lost its
-    # distro/version.
-    _distro = re.compile(r'NAME=["\'](.*)["\']')
-    _v_id = re.compile(r'VERSION_ID=["\'](.*)["\']')
+    # os-release values may be double-quoted, single-quoted or bare
+    # (NAME=Fedora and VERSION_ID=15.6 are spec-legal). The quoted
+    # alternatives use a greedy ``.*`` with no trailing anchor -- same as
+    # the old mandatory-quote regex -- so quoted parsing (including
+    # spec-legal backslash-escaped quotes embedded in the value) stays
+    # byte-identical to before. Only the bare alternative is anchored
+    # with ``\s*$``: unlike a quote character, there is nothing in the
+    # bare value itself to mark where it ends, so without the anchor a
+    # multi-word or otherwise invalid unquoted value (e.g. a stray
+    # ``NAME=SUSE Linux``, which the spec forbids) would silently
+    # truncate at the first space instead of failing to match.
+    _value = r"""(?:"(.*)"|'(.*)'|([^\s"']*)\s*$)"""
+    _distro = re.compile("NAME=" + _value)
+    _v_id = re.compile("VERSION_ID=" + _value)
     distro = ""
     verid = ""
     kernel = ""
@@ -28,10 +36,10 @@ def detect_system() -> tuple[str, str, str]:
         with open("/etc/os-release", encoding="utf-8") as f:
             for line in f:
                 if d := _distro.match(line):
-                    distro = d.group(1)
+                    distro = d.group(1) or d.group(2) or d.group(3) or ""
                     continue
                 if v := _v_id.match(line):
-                    verid = v.group(1)
+                    verid = v.group(1) or v.group(2) or v.group(3) or ""
                     continue
     except Exception:
         verid = "None"
