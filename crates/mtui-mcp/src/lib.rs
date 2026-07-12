@@ -30,7 +30,7 @@ pub mod tools;
 #[cfg(feature = "mcp")]
 pub use args::{McpArgs, Transport};
 #[cfg(feature = "mcp")]
-pub use provider::{SessionProvider, StdioProvider};
+pub use provider::{SessionProvider, SessionRegistry, StdioProvider};
 #[cfg(feature = "mcp")]
 pub use server::{McpServer, SpikeServer};
 #[cfg(feature = "mcp")]

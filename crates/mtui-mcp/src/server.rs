@@ -19,10 +19,12 @@
 //! filters them — so a `call_tool` for e.g. `shell`/`quit` resolves to no route
 //! and returns `method_not_found`.
 //!
-//! Scope: this handler serves one [`McpSession`] (the stdio single-session
-//! model). The http per-client session registry is bead `mtui-rs-76e.10`; the
-//! testreport tools are `mtui-rs-76e.8`; the job tools are surfaced but their
-//! handlers are stubbed until `mtui-rs-76e.12`.
+//! Scope: this handler serves **one** [`McpSession`]. Under stdio a single
+//! server instance serves the process's one client; under http the
+//! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server
+//! (hence a fresh isolated session) per MCP session. The testreport tools are
+//! bead `mtui-rs-76e.8`; the job tools are surfaced but their handlers are
+//! stubbed until `mtui-rs-76e.12`.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;

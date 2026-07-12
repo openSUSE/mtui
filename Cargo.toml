@@ -73,7 +73,15 @@ rmcp = { version = "2", default-features = false, features = [
     "client",
     "transport-io",
     "transport-async-rw",
+    # `--transport http` (P7.10): the runtime-keyed streamable-HTTP server whose
+    # per-session `service_factory` is our per-client `McpSession` isolation hook.
+    "transport-streamable-http-server",
 ] }
+# HTTP host for the mtui-mcp `--transport http` server: mounts rmcp's
+# `StreamableHttpService` (a `tower::Service`) via `Router::fallback_service`
+# and binds it with `axum::serve`. Feature-gated behind `mcp`, so the default
+# `mtui` build never pulls in a web framework.
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 # observability + errors
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }

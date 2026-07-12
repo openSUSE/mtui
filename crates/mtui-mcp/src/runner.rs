@@ -1,33 +1,38 @@
-//! The `mtui-mcp` boot sequence: parse args → resolve config → serve on stdio.
+//! The `mtui-mcp` boot sequence: parse args → resolve config → serve.
 //!
-//! The Rust analogue of upstream `mtui/mcp/main.py`, scoped to the **stdio**
-//! transport (one process == one client). It parses [`McpArgs`], initialises a
-//! stderr-only `tracing` subscriber (stdout is the JSON-RPC transport), resolves
-//! the [`Config`] the way the REPL does, builds a single [`McpSession`] via the
-//! [`StdioProvider`], and serves the runtime-synthesised [`McpServer`] over
-//! `(stdin, stdout)` until the client disconnects.
+//! The Rust analogue of upstream `mtui/mcp/main.py`. It parses [`McpArgs`],
+//! initialises a stderr `tracing` subscriber (under stdio, stdout is the
+//! JSON-RPC transport), resolves the [`Config`] the way the REPL does, and
+//! serves the runtime-synthesised tool surface on the chosen transport:
 //!
-//! The `http` transport (per-client session registry) is bead `mtui-rs-76e.10`;
-//! here it is rejected with a clear not-yet-implemented error.
+//! * **stdio** (default) — one process == one client: a single [`McpSession`]
+//!   built via [`StdioProvider`] serves the [`McpServer`] over `(stdin, stdout)`
+//!   until the client disconnects.
+//! * **http** — one process serves many clients: a [`SessionRegistry`] mints a
+//!   fresh isolated [`McpServer`] per MCP session (rmcp's streamable-HTTP
+//!   transport invokes the factory once per session and owns `Mcp-Session-Id`
+//!   keying), mounted on an `axum` router bound to `--host`/`--port`.
 
 use std::sync::Arc;
 
 use clap::Parser;
 use mtui_core::{ColorMode, register_all};
 use rmcp::ServiceExt;
+use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 use tracing_subscriber::EnvFilter;
 
 use crate::args::{McpArgs, Transport};
-use crate::provider::{SessionProvider, StdioProvider};
+use crate::provider::{SessionProvider, SessionRegistry, StdioProvider};
 use crate::server::McpServer;
 
 /// Run the `mtui-mcp` server: the binary's entire body.
 ///
 /// # Errors
 ///
-/// Returns an error if the `http` transport is requested (not yet implemented),
-/// or if serving over stdio fails for a reason other than a clean client
-/// disconnect / Ctrl-C (which are treated as a clean exit).
+/// Returns an error if serving fails for a reason other than a clean client
+/// disconnect / Ctrl-C (treated as a clean exit), or — under `--transport http` —
+/// if the listener cannot bind `--host`/`--port`.
 pub async fn run() -> anyhow::Result<()> {
     let args = McpArgs::parse();
 
@@ -35,9 +40,17 @@ pub async fn run() -> anyhow::Result<()> {
     init_tracing(args.debug, color);
     tracing::debug!(debug = args.debug, "mtui-mcp starting");
 
-    ensure_transport_supported(args.transport)?;
+    match args.transport {
+        Transport::Stdio => serve_stdio(&args).await,
+        Transport::Http => serve_http(&args).await,
+    }
+}
 
-    let server = build_stdio_server(&args).await;
+/// Serve the tool surface over stdio (one process == one client).
+///
+/// stdout is the JSON-RPC transport — logging goes to stderr only.
+async fn serve_stdio(args: &McpArgs) -> anyhow::Result<()> {
+    let server = build_stdio_server(args).await;
 
     tracing::info!("mtui-mcp: serving on stdio");
 
@@ -50,6 +63,53 @@ pub async fn run() -> anyhow::Result<()> {
     // Block until the peer disconnects (or Ctrl-C ends the loop); a clean
     // disconnect is a normal exit.
     running.waiting().await?;
+    tracing::info!("mtui-mcp: shutting down");
+    Ok(())
+}
+
+/// Serve the tool surface over streamable HTTP (one process, many clients).
+///
+/// rmcp's [`StreamableHttpService`] keys clients by `Mcp-Session-Id` and calls
+/// the [`SessionRegistry`] factory once per new session, so each client gets a
+/// **fully isolated** [`McpServer`] (own `targets` / `metadata`). The service is
+/// a `tower::Service`, mounted as an `axum` fallback and bound to
+/// `--host`/`--port`. rmcp defaults `allowed_hosts` to loopback (DNS-rebinding
+/// guard); a non-loopback `--host` is out of scope for this bead.
+///
+/// # Errors
+///
+/// Returns an error if the TCP listener cannot bind `--host:--port`, or if the
+/// server loop fails for a reason other than Ctrl-C.
+async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
+    let config = args.resolve_config();
+    tracing::info!(
+        cap = config.mcp_session_cap,
+        idle_timeout_s = config.mcp_session_idle_timeout,
+        "mtui-mcp: http transport — per-client session isolation \
+         (cap/idle-TTL not yet enforced: mtui-rs-odq8)"
+    );
+
+    let registry = Arc::new(register_all());
+    let sessions = SessionRegistry::new(registry, config);
+
+    // The factory rmcp invokes once per new MCP session: each call yields a
+    // fresh isolated server. Infallible for us, so we always `Ok`.
+    let service = StreamableHttpService::new(
+        move || Ok(sessions.make_server()),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+
+    let app = axum::Router::new().fallback_service(service);
+    let addr = format!("{}:{}", args.host, args.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!(%addr, "mtui-mcp: serving on http");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
     tracing::info!("mtui-mcp: shutting down");
     Ok(())
 }
@@ -69,25 +129,6 @@ fn init_tracing(debug: bool, color: ColorMode) {
         .with_writer(std::io::stderr)
         .with_ansi(color.resolve())
         .try_init();
-}
-
-/// Reject transports this build does not serve.
-///
-/// Only `stdio` is implemented; `http` (per-client session isolation) is bead
-/// `mtui-rs-76e.10`. Refusing here — rather than silently downgrading `http` to a
-/// shared session — keeps the isolation contract honest.
-///
-/// # Errors
-///
-/// Returns an error naming the follow-up bead when `transport` is [`Transport::Http`].
-fn ensure_transport_supported(transport: Transport) -> anyhow::Result<()> {
-    if transport == Transport::Http {
-        anyhow::bail!(
-            "--transport http is not yet implemented (mtui-rs-76e.10); use the default \
-             stdio transport"
-        );
-    }
-    Ok(())
 }
 
 /// Build the runtime-synthesised stdio server from resolved args.
@@ -115,20 +156,6 @@ mod tests {
         let mut full = vec!["mtui-mcp"];
         full.extend_from_slice(argv);
         McpArgs::try_parse_from(full).expect("args parse")
-    }
-
-    #[test]
-    fn stdio_transport_is_supported() {
-        assert!(ensure_transport_supported(Transport::Stdio).is_ok());
-    }
-
-    #[test]
-    fn http_transport_is_rejected_with_bead_reference() {
-        let err = ensure_transport_supported(Transport::Http).expect_err("http must be rejected");
-        assert!(
-            err.to_string().contains("mtui-rs-76e.10"),
-            "error should name the follow-up bead: {err}"
-        );
     }
 
     #[tokio::test]

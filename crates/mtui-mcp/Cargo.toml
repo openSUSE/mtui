@@ -20,7 +20,13 @@ workspace = true
 [features]
 # Gates the rmcp server so the default build and the `mtui` REPL never drag in
 # the MCP SDK. The stdio runner + tool synthesiser live behind this.
-mcp = ["dep:rmcp", "dep:serde_json", "dep:tracing", "dep:tracing-subscriber"]
+mcp = [
+    "dep:rmcp",
+    "dep:serde_json",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:axum",
+]
 
 [dependencies]
 mtui-core.workspace = true
@@ -29,6 +35,7 @@ clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 rmcp = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }

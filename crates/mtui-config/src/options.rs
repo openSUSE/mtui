@@ -193,6 +193,12 @@ pub(crate) fn default_lock_wait_poll() -> u64 {
 pub(crate) fn default_mcp_max_output_bytes() -> usize {
     100_000
 }
+pub(crate) fn default_mcp_session_cap() -> usize {
+    32
+}
+pub(crate) fn default_mcp_session_idle_timeout() -> u64 {
+    1800
+}
 
 // -- Serde section structs (mirror the TOML tables) --------------------------
 
@@ -301,12 +307,15 @@ pub(crate) struct LockSection {
 /// `[mcp]` table — `mtui-mcp` server behaviour.
 ///
 /// Mirrors upstream `mtui/support/config.py`'s `mcp_*` options (which live under
-/// the `[mcp]` INI section). Only `max_output_bytes` is wired so far (Phase 7.3);
-/// the per-client session cap / idle timeout land with the http registry.
+/// the `[mcp]` INI section). `session_cap` / `session_idle_timeout` configure the
+/// http transport's per-client session budget (enforcement is a follow-up —
+/// mtui-rs-odq8).
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct McpSection {
     pub max_output_bytes: Option<usize>,
+    pub session_cap: Option<usize>,
+    pub session_idle_timeout: Option<u64>,
 }
 
 /// Raw, deserialised view of a single TOML document.
@@ -370,6 +379,8 @@ impl RawConfig {
         take!(lock, wait);
         take!(lock, wait_poll);
         take!(mcp, max_output_bytes);
+        take!(mcp, session_cap);
+        take!(mcp, session_idle_timeout);
     }
 }
 
@@ -472,6 +483,14 @@ pub struct Config {
     /// (e.g. a fan-out `run`) cannot dwarf the client's context. `0` disables
     /// the cap. Upstream default is 100_000.
     pub mcp_max_output_bytes: usize,
+    /// Ceiling on concurrent per-client sessions under `--transport http` (DoS
+    /// guard). Upstream default is 32. Enforcement is a follow-up
+    /// (mtui-rs-odq8); this value is parsed and surfaced now.
+    pub mcp_session_cap: usize,
+    /// Seconds of inactivity after which an idle http session is swept. `0`
+    /// disables the sweeper. Upstream default is 1800. Enforcement is a
+    /// follow-up (mtui-rs-odq8).
+    pub mcp_session_idle_timeout: u64,
 }
 
 impl Default for Config {
@@ -507,6 +526,8 @@ impl Default for Config {
             lock_wait: default_lock_wait(),
             lock_wait_poll: default_lock_wait_poll(),
             mcp_max_output_bytes: default_mcp_max_output_bytes(),
+            mcp_session_cap: default_mcp_session_cap(),
+            mcp_session_idle_timeout: default_mcp_session_idle_timeout(),
         }
     }
 }
@@ -571,6 +592,11 @@ impl Config {
             lock_wait: raw.lock.wait.unwrap_or(d.lock_wait),
             lock_wait_poll: raw.lock.wait_poll.unwrap_or(d.lock_wait_poll),
             mcp_max_output_bytes: raw.mcp.max_output_bytes.unwrap_or(d.mcp_max_output_bytes),
+            mcp_session_cap: raw.mcp.session_cap.unwrap_or(d.mcp_session_cap),
+            mcp_session_idle_timeout: raw
+                .mcp
+                .session_idle_timeout
+                .unwrap_or(d.mcp_session_idle_timeout),
         }
     }
 }

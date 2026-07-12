@@ -140,6 +140,24 @@ mod tests {
     }
 
     #[test]
+    fn mcp_session_bounds_default_to_upstream() {
+        let d = Config::default();
+        assert_eq!(d.mcp_session_cap, 32);
+        assert_eq!(d.mcp_session_idle_timeout, 1800);
+    }
+
+    #[test]
+    fn load_reads_mcp_session_bounds() {
+        let path = write_tmp(
+            "mcp-session.toml",
+            "[mcp]\nsession_cap = 8\nsession_idle_timeout = 120\n",
+        );
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.mcp_session_cap, 8);
+        assert_eq!(cfg.mcp_session_idle_timeout, 120);
+    }
+
+    #[test]
     fn load_malformed_file_logs_and_falls_back_to_defaults() {
         // Invalid TOML must not panic; defaults apply.
         let path = write_tmp("broken.toml", "connection_timeout = = 42\n");

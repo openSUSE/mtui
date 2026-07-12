@@ -8,18 +8,23 @@
 //! - **stdio** — one process serves one client, so a single session is reused
 //!   for every call (the `key` is accepted and ignored). That is
 //!   [`StdioProvider`], built here.
-//! - **http** — one process serves many clients, so a `SessionRegistry` mints a
-//!   fresh isolated session per client key (lazy, with an idle-TTL sweeper and a
-//!   `max_sessions` cap). That is **P7.10**, the second implementer; it is out
-//!   of scope here.
+//! - **http** — one process serves many clients, so each client gets a fresh
+//!   isolated session. Under rmcp's streamable-HTTP transport this isolation is
+//!   bound by the [`SessionRegistry`] *factory* (`make_server`), which the
+//!   transport calls once per new MCP session; rmcp's session manager owns the
+//!   `Mcp-Session-Id` keying and teardown, so — unlike upstream's
+//!   application-owned registry — we do not reimplement a dict/sweeper here.
 //!
-//! Both hand back an `Arc<McpSession>` from the same `get_or_create(key)`
-//! signature, which is why the trait — not a concrete session — is the seam.
+//! Both stdio and http hand back an `Arc<McpSession>` from the same
+//! `get_or_create(key)` signature, which is why the trait — not a concrete
+//! session — is the seam.
 
 use std::sync::Arc;
 
 use mtui_config::Config;
+use mtui_core::Registry;
 
+use crate::server::McpServer;
 use crate::session::McpSession;
 
 /// The minimal surface the tool layer resolves a session through.
@@ -74,6 +79,60 @@ impl SessionProvider for StdioProvider {
         // Single-entry: the key is intentionally ignored — one process, one
         // session. (Per-client keying is the http registry's job, P7.10.)
         Arc::clone(&self.session)
+    }
+}
+
+/// The http per-client session factory.
+///
+/// Under `--transport http` one `mtui-mcp` process serves many concurrent MCP
+/// clients, and each must see **only its own** loaded template + SSH `targets`;
+/// sharing one session would let one client's `load_template` clobber another's.
+/// This registry mints a **fresh, fully isolated** [`McpServer`] (with its own
+/// [`McpSession`]) per new MCP session via [`make_server`](Self::make_server) —
+/// the closure rmcp's `StreamableHttpService` invokes once per session.
+///
+/// This is the Rust analogue of upstream `mtui.mcp.registry.SessionRegistry`,
+/// but far thinner: rmcp's `LocalSessionManager` already keys sessions by
+/// `Mcp-Session-Id` and drives their lifecycle, so this type owns **no** session
+/// map, lock, or idle sweeper. The `[mcp] session_cap` / `session_idle_timeout`
+/// bounds are parsed but not yet enforced here — that is follow-up `mtui-rs-odq8`.
+#[derive(Clone)]
+pub struct SessionRegistry {
+    /// The shared command registry every minted server dispatches against.
+    registry: Arc<Registry>,
+    /// The base config each session is cloned from (per-session isolation of any
+    /// scalar a command rebinds on `config` — mirrors upstream `build_session`'s
+    /// shallow copy).
+    config: Config,
+}
+
+impl SessionRegistry {
+    /// Builds the factory from the shared command `registry` and a base `config`.
+    #[must_use]
+    pub fn new(registry: Arc<Registry>, config: Config) -> Self {
+        Self { registry, config }
+    }
+
+    /// Mint a fresh, isolated [`McpSession`] from the base config.
+    ///
+    /// Clones the base [`Config`] so the new session's mutable scalar state is
+    /// independent (own `metadata` / `targets` / capture sink). This is the
+    /// isolation boundary; [`make_server`](Self::make_server) wraps it for the
+    /// transport, and tests use it directly to assert per-session isolation.
+    #[must_use]
+    pub fn make_session(&self) -> Arc<McpSession> {
+        McpSession::new(self.config.clone())
+    }
+
+    /// Mint a fresh, isolated [`McpServer`] for one MCP session.
+    ///
+    /// Builds a fresh [`McpSession`] via [`make_session`](Self::make_session) and
+    /// wires it into an [`McpServer`] sharing the (read-only) command registry.
+    /// Called once per new session by the streamable-HTTP transport's
+    /// `service_factory`.
+    #[must_use]
+    pub fn make_server(&self) -> McpServer {
+        McpServer::new(Arc::clone(&self.registry), self.make_session())
     }
 }
 

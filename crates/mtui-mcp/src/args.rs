@@ -8,10 +8,10 @@
 //! the MCP server loads templates and hosts *per session* at runtime via the
 //! `load_template` / `add_host` tools, so it takes no boot-time update/SUT flags.
 //!
-//! Three MCP-server flags are added: `--transport`, `--host`, `--port`. Only
-//! `stdio` is served in this bead; `--transport http` (per-client session
-//! isolation) is bead `mtui-rs-76e.10` and is currently rejected with a clear
-//! not-yet-implemented error (see [`crate::main`]).
+//! Three MCP-server flags are added: `--transport`, `--host`, `--port`. Both
+//! transports are served: `stdio` (default, one process == one client) and
+//! `http` (streamable HTTP with per-client session isolation). `--host`/`--port`
+//! bind the http listener; they are ignored under stdio.
 
 use std::path::PathBuf;
 
@@ -64,13 +64,14 @@ pub struct McpArgs {
     #[arg(long = "ssl-verify", value_name = "BOOL|PATH")]
     pub ssl_verify: Option<String>,
 
-    /// MCP transport to serve on. Only `stdio` is implemented; `http` (per-client
-    /// session isolation) is bead mtui-rs-76e.10.
+    /// MCP transport to serve on: `stdio` (default, one client) or `http`
+    /// (streamable HTTP, per-client session isolation).
     #[arg(long = "transport", value_enum, default_value_t = Transport::Stdio)]
     pub transport: Transport,
 
     /// Bind address for `--transport http` (default: 127.0.0.1). Ignored under
-    /// stdio.
+    /// stdio. Loopback only — rmcp's DNS-rebinding guard rejects non-loopback
+    /// hosts.
     #[arg(long = "host", value_name = "ADDR", default_value = "127.0.0.1")]
     pub host: String,
 
@@ -108,15 +109,15 @@ impl McpArgs {
 
 /// The `--transport` choice.
 ///
-/// `stdio` (one process == one client) is the only transport served in this
-/// bead; `http` is reserved for the per-client session registry (mtui-rs-76e.10).
+/// `stdio` (one process == one client) is the default; `http` serves many
+/// clients over streamable HTTP with per-client session isolation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum Transport {
     /// Serve over stdin/stdout (default). One process serves one client.
     #[default]
     Stdio,
-    /// Serve over streamable HTTP (not yet implemented — mtui-rs-76e.10).
+    /// Serve over streamable HTTP. One process serves many isolated clients.
     Http,
 }
 

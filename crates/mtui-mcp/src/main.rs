@@ -1,14 +1,15 @@
 //! `mtui-mcp` — MCP server that synthesises tools from the command registry.
 //!
 //! Parses [`McpArgs`](mtui_mcp::args::McpArgs), builds the same [`Config`] the
-//! REPL does, and serves the synthesised tool surface over **stdio** (one
-//! process == one client). The server modules live in the crate's library target
-//! behind the `mcp` feature; a build without that feature links a tiny stub so
-//! the `[[bin]]` always exists (feature-matrix gate).
+//! REPL does, and serves the synthesised tool surface over the chosen transport
+//! — **stdio** (default, one process == one client) or **http** (many isolated
+//! clients). The server modules live in the crate's library target behind the
+//! `mcp` feature; a build without that feature links a tiny stub so the `[[bin]]`
+//! always exists (feature-matrix gate).
 //!
-//! **stdout is the JSON-RPC transport** — all logging goes to **stderr**. The
-//! `http` transport (per-client session isolation) is bead `mtui-rs-76e.10` and
-//! is rejected here with a clear not-yet-implemented error.
+//! Under stdio, **stdout is the JSON-RPC transport** — all logging goes to
+//! **stderr**. The `http` transport serves many clients with per-client session
+//! isolation (see [`mtui_mcp::run`]).
 
 #[cfg(feature = "mcp")]
 #[tokio::main]
