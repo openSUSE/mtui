@@ -30,7 +30,10 @@ fn main() -> anyhow::Result<()> {
     // `tracing` subscriber, so a single color decision drives them all
     // (upstream's single `ColorFormatter`).
     let color = ColorMode::from(args.color);
-    init_tracing(args.debug, color);
+    // `init_tracing` installs the subscriber behind a reload layer and hands back
+    // the sink that flips the level at runtime; it is wired onto the session below
+    // so `set_log_level` actually changes the live filter (upstream `log.setLevel`).
+    let log_level_sink = init_tracing(args.debug, color);
     tracing::debug!(debug = args.debug, "mtui starting");
 
     // Bridge the synchronous reedline editor to the async engine on one runtime.
@@ -61,6 +64,12 @@ fn main() -> anyhow::Result<()> {
     session.set_notify_sink(Box::new(|msg: &str, error: bool| {
         mtui_cli::notify_user(msg, error);
     }));
+
+    // Composition root: install the REPL-only log-level sink (upstream
+    // `log.setLevel`). `set_log_level` calls this to reload the `tracing`
+    // subscriber's `EnvFilter` to the chosen level at runtime. `mtui-mcp` never
+    // installs one, so there the command stays a log-only no-op.
+    session.set_log_level_sink(log_level_sink);
 
     // Composition root: install the REPL-only serialised interactive prompter
     // (upstream `main.py`'s `prompter = Prompter()`). It backs the SSH

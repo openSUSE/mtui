@@ -29,9 +29,11 @@ pub use startup::seed_session;
 
 use std::io::Write;
 
-use mtui_core::ColorMode;
+use mtui_core::{ColorMode, LogLevel, LogLevelSink};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 /// A spinner-aware stderr writer for the `tracing` subscriber.
 ///
@@ -93,16 +95,33 @@ impl<'a> MakeWriter<'a> for SpinnerAwareStderr {
 /// The user-facing *command error* is rendered by the session display, not this
 /// subscriber (see `repl::render_error`), so a failing command never prints
 /// twice.
-pub fn init_tracing(debug: bool, color: ColorMode) {
+///
+/// **Runtime reload.** The `EnvFilter` is installed behind a
+/// [`tracing_subscriber::reload`] layer, and the returned [`LogLevelSink`]
+/// closure flips it at runtime — this is what backs the `set_log_level` command
+/// (upstream `log.setLevel`). Install it on the session with
+/// [`set_log_level_sink`](mtui_core::Session::set_log_level_sink). The closure
+/// keeps the reload [`Handle`](tracing_subscriber::reload::Handle) inside
+/// `mtui-cli`, so the `tracing_subscriber` types never leak into the lower
+/// crates. A runtime `set_log_level` **replaces the whole filter** with the new
+/// level (matching upstream's global `setLevel`), discarding any per-target
+/// `RUST_LOG` directives the process started with. It changes the *level filter
+/// only*, not the event format — a runtime switch to `debug` does not
+/// retroactively add the verbose timestamp/target layout selected by `-d` at
+/// startup (deliberate, consistent with [`logfmt`]).
+#[must_use]
+pub fn init_tracing(debug: bool, color: ColorMode) -> LogLevelSink {
     let default = if debug { "debug" } else { "info" };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+    // Wrap the filter in a reload layer so `set_log_level` can flip it live.
+    let (filter, handle) = tracing_subscriber::reload::Layer::new(filter);
+    let registry = tracing_subscriber::registry().with(filter);
     if debug {
         // Verbose diagnostics: keep timestamp + level + target (stock format).
         // The writer stays spinner-aware so a mid-fan-out DEBUG line still
         // erases the live frame before printing (upstream SpinnerAwareStreamHandler).
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_writer(SpinnerAwareStderr)
+        registry
+            .with(tracing_subscriber::fmt::layer().with_writer(SpinnerAwareStderr))
             .init();
     } else {
         // Compact operator output: lowercased colored level, `level: message`,
@@ -111,11 +130,110 @@ pub fn init_tracing(debug: bool, color: ColorMode) {
         // decision is shared with the display via `ColorMode::resolve`. The
         // spinner-aware writer erases any live frame before each record so
         // worker-thread log lines emitted mid-spin render flush-left.
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .with_ansi(false)
-            .event_format(logfmt::CompactLevelFormat::new(color.resolve()))
-            .with_writer(SpinnerAwareStderr)
+        registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .event_format(logfmt::CompactLevelFormat::new(color.resolve()))
+                    .with_writer(SpinnerAwareStderr),
+            )
             .init();
+    }
+
+    // The sink `set_log_level` drives: reload the whole `EnvFilter` to the new
+    // level. Best-effort — if the subscriber was already dropped, upstream
+    // likewise just logs and moves on.
+    Box::new(move |level: LogLevel| {
+        let _ = handle.reload(EnvFilter::new(level_directive(level)));
+    })
+}
+
+/// The `EnvFilter` directive string for a [`LogLevel`] (the lowercased
+/// [`tracing::Level`] name, e.g. `"debug"`), used to rebuild the filter on a
+/// runtime `set_log_level`.
+fn level_directive(level: LogLevel) -> String {
+    level.as_tracing().as_str().to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use tracing::subscriber::with_default;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    use super::*;
+
+    #[test]
+    fn level_directive_is_lowercased_tracing_name() {
+        assert_eq!(level_directive(LogLevel::Error), "error");
+        assert_eq!(level_directive(LogLevel::Warning), "warn");
+        assert_eq!(level_directive(LogLevel::Info), "info");
+        assert_eq!(level_directive(LogLevel::Debug), "debug");
+    }
+
+    /// A `MakeWriter` over a shared buffer so a scoped subscriber's output can be
+    /// inspected without touching the process-global default subscriber.
+    #[derive(Clone)]
+    struct BufMaker(Arc<Mutex<Vec<u8>>>);
+    struct BufWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for BufWriter {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for BufMaker {
+        type Writer = BufWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            BufWriter(Arc::clone(&self.0))
+        }
+    }
+
+    /// Reloading the filter through the handle changes which events pass, exactly
+    /// as the sink `init_tracing` installs does. Mirrors the reload wiring
+    /// (`reload::Layer` around an `EnvFilter`, `handle.reload(...)`) on a scoped
+    /// subscriber so it does not touch the process-global default.
+    #[test]
+    fn reload_handle_changes_active_level_at_runtime() {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        // Start at `info`: a `debug!` must be filtered out.
+        let (filter, handle) =
+            tracing_subscriber::reload::Layer::new(EnvFilter::new(level_directive(LogLevel::Info)));
+        let subscriber = tracing_subscriber::registry().with(filter).with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(BufMaker(Arc::clone(&buf))),
+        );
+
+        // The closure is the same shape as the one `init_tracing` returns.
+        let mut sink: LogLevelSink = Box::new(move |level: LogLevel| {
+            let _ = handle.reload(EnvFilter::new(level_directive(level)));
+        });
+
+        with_default(subscriber, || {
+            tracing::debug!("hidden at info");
+            tracing::info!("visible at info");
+            // Flip to debug at runtime.
+            sink(LogLevel::Debug);
+            tracing::debug!("visible at debug");
+            // Flip to error: info now suppressed.
+            sink(LogLevel::Error);
+            tracing::info!("hidden at error");
+            tracing::error!("visible at error");
+        });
+
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+        assert!(!out.contains("hidden at info"), "got: {out:?}");
+        assert!(out.contains("visible at info"), "got: {out:?}");
+        assert!(out.contains("visible at debug"), "got: {out:?}");
+        assert!(!out.contains("hidden at error"), "got: {out:?}");
+        assert!(out.contains("visible at error"), "got: {out:?}");
     }
 }
