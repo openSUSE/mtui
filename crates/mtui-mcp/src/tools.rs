@@ -20,18 +20,20 @@
 //! `rmcp::model::Tool` and wires [`dispatch_tool`] into the `ServerHandler`.
 //!
 //! The background-job path ([`dispatch_tool`] with `background = true`, and the
-//! four job tools from [`job_tool_descriptors`]) is **surfaced but stubbed**: it
-//! returns a clear "not yet implemented" error until the `_jobs` table lands in
-//! bead `mtui-rs-76e.12`.
+//! four job tools from [`job_tool_descriptors`]) drives the session's `_jobs`
+//! table (bead `mtui-rs-76e.12`): a `background=true` slow call fans out one job
+//! per resolved template and returns their ids immediately, and the four job
+//! tools poll/control that table.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use mtui_core::{Registry, command_parser};
 use serde_json::{Map, Value, json};
 
 use crate::deny::is_denied;
 use crate::schema::command_input_schema;
-use crate::session::{McpCommandError, McpSession};
+use crate::session::{JobView, McpCommandError, McpSession};
 
 /// Commands that touch reference hosts and can run for minutes. These gain a
 /// `background` boolean parameter (see [`dispatch_tool`]). Pinned here, matching
@@ -58,12 +60,6 @@ const READ_ONLY_PREFIXES: &[&str] = &["list_", "show_"];
 /// Exact names that escape the prefix rule but are still side-effect-free.
 /// (`reload_products` is intentionally absent — it re-reads from the hosts.)
 const READ_ONLY_EXACT: &[&str] = &["whoami", "openqa_overview", "openqa_jobs"];
-
-/// The error text every stubbed background/job path returns until `mtui-rs-76e.12`
-/// lands the `_jobs` table. Kept as one constant so the snapshot pins it and the
-/// follow-up bead must consciously replace it.
-const JOBS_NOT_IMPLEMENTED: &str = "background jobs are not yet implemented (mtui-rs-76e.12); call the command \
-     synchronously (background=false / omit it).";
 
 /// A synthesised MCP tool as plain data (transport-free).
 ///
@@ -239,19 +235,19 @@ pub fn tool_routes(registry: &Registry) -> BTreeMap<String, ToolRoute> {
 
 /// Dispatch a synthesised command tool call back through the engine.
 ///
-/// Pops the `background` flag for slow commands; when `true` the call is a
-/// (currently stubbed) background job. Otherwise reconstructs argv from `kwargs`
-/// (honouring the route's `argv_prefix`) and runs it through
-/// [`McpSession::run_command`].
+/// Pops the `background` flag for slow commands; when `true` the call fans out
+/// background jobs via [`McpSession::start_jobs`] (one per resolved template) and
+/// returns a "started job(s)" reply naming the ids to poll. Otherwise
+/// reconstructs argv from `kwargs` (honouring the route's `argv_prefix`) and runs
+/// it synchronously through [`McpSession::run_command`].
 ///
 /// # Errors
 ///
-/// Returns [`McpCommandError`] when a stubbed background job is requested, or
-/// when the underlying command parse/run fails (propagated from
-/// [`McpSession::run_command`]).
+/// Returns [`McpCommandError`] when the command is not registered, or when the
+/// synchronous parse/run fails (propagated from [`McpSession::run_command`]).
 pub async fn dispatch_tool(
-    registry: &Registry,
-    session: &McpSession,
+    registry: &Arc<Registry>,
+    session: &Arc<McpSession>,
     route: &ToolRoute,
     kwargs: &Map<String, Value>,
 ) -> Result<String, McpCommandError> {
@@ -261,9 +257,6 @@ pub async fn dispatch_tool(
     } else {
         false
     };
-    if background {
-        return Err(stub_error());
-    }
 
     let command = registry.get(route.command).ok_or_else(|| McpCommandError {
         stdout: String::new(),
@@ -272,7 +265,39 @@ pub async fn dispatch_tool(
     })?;
     let parser = command_parser(command.as_ref());
     let argv = crate::argv::kwargs_to_argv(&parser, &kwargs, &route.argv_prefix);
+
+    if background {
+        let job_ids = session
+            .start_jobs(Arc::clone(registry), route.command, argv)
+            .await;
+        return Ok(started_jobs_reply(route.command, &job_ids));
+    }
+
     session.run_command(registry, route.command, &argv).await
+}
+
+/// The client-facing reply after starting one or more background jobs.
+///
+/// Matches upstream `tools.py` verbatim: a single job points at
+/// `job_status`/`job_result` for that id; a fan-out lists every id and tells the
+/// client to poll per job.
+fn started_jobs_reply(command: &str, job_ids: &[String]) -> String {
+    if let [job_id] = job_ids {
+        return format!(
+            "started job '{job_id}' (`{command}`); poll job_status('{job_id}'), \
+             then job_result('{job_id}')."
+        );
+    }
+    let joined = job_ids
+        .iter()
+        .map(|j| format!("'{j}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "started {} jobs (`{command}`, one per template): {joined}. \
+         Poll job_status/job_result per job.",
+        job_ids.len()
+    )
 }
 
 /// The four background-job control tools (stubbed until `mtui-rs-76e.12`).
@@ -336,25 +361,73 @@ pub fn job_tool_descriptors() -> Vec<ToolDescriptor> {
     ]
 }
 
-/// Dispatch a job-control tool call. Stubbed until the `_jobs` table lands in
-/// `mtui-rs-76e.12`.
+/// Dispatch a job-control tool call against the session's `_jobs` table.
+///
+/// Routes `job_list` / `job_status` / `job_result` / `job_cancel` to the
+/// matching [`McpSession`] method and renders its result into the one-line text
+/// the client sees (upstream `tools.py` job tools).
 ///
 /// # Errors
 ///
-/// Always returns the [`JOBS_NOT_IMPLEMENTED`] stub error.
+/// Returns [`McpCommandError`] when a `job_id` is missing/unknown, when
+/// `job_result` is polled on a still-running / failed / cancelled job, or when
+/// the tool name is unrecognised.
 pub async fn dispatch_job_tool(
-    _name: &str,
-    _kwargs: &Map<String, Value>,
+    session: &McpSession,
+    name: &str,
+    kwargs: &Map<String, Value>,
 ) -> Result<String, McpCommandError> {
-    Err(stub_error())
+    match name {
+        "job_list" => {
+            let jobs = session.job_list();
+            if jobs.is_empty() {
+                return Ok("no background jobs".to_owned());
+            }
+            Ok(jobs
+                .iter()
+                .map(|j| format!("- {}", format_job_view(j)))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+        "job_status" => {
+            let job_id = job_id_arg(kwargs)?;
+            Ok(format_job_view(&session.job_status(&job_id)?))
+        }
+        "job_result" => {
+            let job_id = job_id_arg(kwargs)?;
+            session.job_result(&job_id)
+        }
+        "job_cancel" => {
+            let job_id = job_id_arg(kwargs)?;
+            session.job_cancel(&job_id).await
+        }
+        other => Err(McpCommandError {
+            stdout: String::new(),
+            stderr: format!("unknown job tool: {other}"),
+            exit_code: 1,
+        }),
+    }
 }
 
-/// The shared "background jobs not yet implemented" failure envelope.
-fn stub_error() -> McpCommandError {
-    McpCommandError {
-        stdout: String::new(),
-        stderr: JOBS_NOT_IMPLEMENTED.to_owned(),
-        exit_code: 1,
+/// Render a [`JobView`] as the one-line status text (`job_status` form).
+///
+/// `job_list` prepends `"- "` to each of these.
+fn format_job_view(job: &JobView) -> String {
+    format!(
+        "{}: {} ({}s) [{}]",
+        job.id, job.state, job.elapsed_s, job.command
+    )
+}
+
+/// Extract the required `job_id` string argument, or a parse-style error.
+fn job_id_arg(kwargs: &Map<String, Value>) -> Result<String, McpCommandError> {
+    match kwargs.get("job_id").and_then(Value::as_str) {
+        Some(id) => Ok(id.to_owned()),
+        None => Err(McpCommandError {
+            stdout: String::new(),
+            stderr: "job_id is required".to_owned(),
+            exit_code: 2,
+        }),
     }
 }
 
@@ -475,6 +548,7 @@ mod tests {
         assert_eq!(route.command, "config");
         assert_eq!(route.argv_prefix, vec!["show".to_owned()]);
 
+        let registry = Arc::new(registry);
         let kwargs = json!({ "attributes": ["session_user"] });
         let out = dispatch_tool(&registry, &session, route, kwargs.as_object().unwrap())
             .await
@@ -483,21 +557,28 @@ mod tests {
         assert!(out.contains("alice"), "got: {out:?}");
     }
 
+    /// A `background=true` slow call with nothing loaded mints one job and
+    /// returns the single-job "started job" reply naming the id to poll.
     #[tokio::test]
-    async fn dispatch_background_true_is_stubbed() {
+    async fn dispatch_background_true_starts_a_job() {
         let session = McpSession::new(Config::default());
-        let registry = register_all();
+        let registry = Arc::new(register_all());
         let routes = tool_routes(&registry);
-        let route = routes.get("run").expect("run route");
+        let route = routes.get("run").expect("run route").clone();
         assert!(route.slow, "run must be slow");
 
-        let kwargs = json!({ "background": true });
-        let err = dispatch_tool(&registry, &session, route, kwargs.as_object().unwrap())
+        // `run` needs a command to execute; supply one so argv reconstructs.
+        let kwargs = json!({ "background": true, "command": ["true"] });
+        let reply = dispatch_tool(&registry, &session, &route, kwargs.as_object().unwrap())
             .await
-            .expect_err("background job is stubbed");
+            .expect("background start returns a reply, not an error");
         assert!(
-            err.stderr.contains("mtui-rs-76e.12"),
-            "stub names the follow-up bead: {err:?}"
+            reply.starts_with("started job 'run-1' (`run`);"),
+            "single-job reply names the id: {reply:?}"
+        );
+        assert!(
+            reply.contains("job_status('run-1')") && reply.contains("job_result('run-1')"),
+            "reply points at the poll tools: {reply:?}"
         );
     }
 
@@ -517,11 +598,77 @@ mod tests {
         );
     }
 
+    /// `job_list` on a fresh session reports no jobs.
     #[tokio::test]
-    async fn dispatch_job_tool_is_stubbed() {
-        let err = dispatch_job_tool("job_list", &Map::new())
+    async fn dispatch_job_list_empty() {
+        let session = McpSession::new(Config::default());
+        let out = dispatch_job_tool(&session, "job_list", &Map::new())
             .await
-            .expect_err("job tools stubbed");
-        assert!(err.stderr.contains("mtui-rs-76e.12"), "got: {err:?}");
+            .expect("job_list succeeds");
+        assert_eq!(out, "no background jobs");
+    }
+
+    /// `job_status` requires a `job_id` (parse-style error when absent).
+    #[tokio::test]
+    async fn dispatch_job_status_requires_job_id() {
+        let session = McpSession::new(Config::default());
+        let err = dispatch_job_tool(&session, "job_status", &Map::new())
+            .await
+            .expect_err("missing job_id fails");
+        assert_eq!(err.exit_code, 2, "missing arg is a parse error");
+        assert!(err.stderr.contains("job_id"), "names the arg: {err:?}");
+    }
+
+    /// `job_status` on an unknown id surfaces the "no such job" envelope.
+    #[tokio::test]
+    async fn dispatch_job_status_unknown_id() {
+        let session = McpSession::new(Config::default());
+        let kwargs = json!({ "job_id": "nope-1" });
+        let err = dispatch_job_tool(&session, "job_status", kwargs.as_object().unwrap())
+            .await
+            .expect_err("unknown id fails");
+        assert!(err.stderr.contains("no such job: nope-1"), "got: {err:?}");
+    }
+
+    /// A started job renders through `job_list` / `job_status` in the pinned
+    /// text shapes (`- id: state (…s) [cmd]` vs `id: state (…s) [cmd]`).
+    #[tokio::test]
+    async fn dispatch_job_list_and_status_render_started_job() {
+        let mut config = Config::default();
+        config.session_user = "bob".to_owned();
+        let session = McpSession::new(config);
+        let registry = Arc::new(register_all());
+
+        let job_id = session.start_job(Arc::clone(&registry), "whoami", Vec::new());
+
+        let listed = dispatch_job_tool(&session, "job_list", &Map::new())
+            .await
+            .expect("job_list succeeds");
+        assert!(
+            listed.starts_with(&format!("- {job_id}: ")),
+            "job_list line prefixed with '- ': {listed:?}"
+        );
+        assert!(listed.contains("[whoami]"), "names the command: {listed:?}");
+
+        let kwargs = json!({ "job_id": job_id });
+        let status = dispatch_job_tool(&session, "job_status", kwargs.as_object().unwrap())
+            .await
+            .expect("job_status succeeds");
+        assert!(
+            !status.starts_with("- "),
+            "job_status has no '- ' prefix: {status:?}"
+        );
+        assert!(status.contains("[whoami]"), "names the command: {status:?}");
+    }
+
+    /// An unrecognised job-tool name is a clean error (defensive; the server
+    /// only routes the four known names here).
+    #[tokio::test]
+    async fn dispatch_job_tool_unknown_name() {
+        let session = McpSession::new(Config::default());
+        let err = dispatch_job_tool(&session, "job_bogus", &Map::new())
+            .await
+            .expect_err("unknown job tool fails");
+        assert!(err.stderr.contains("unknown job tool"), "got: {err:?}");
     }
 }

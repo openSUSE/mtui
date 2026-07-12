@@ -38,7 +38,7 @@ pub use provider::{SessionProvider, SessionRegistry, StdioProvider};
 #[cfg(feature = "mcp")]
 pub use server::{McpServer, SpikeServer};
 #[cfg(feature = "mcp")]
-pub use session::{McpCommandError, McpSession};
+pub use session::{JobState, JobView, McpCommandError, McpSession};
 #[cfg(feature = "mcp")]
 pub use testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 #[cfg(feature = "mcp")]

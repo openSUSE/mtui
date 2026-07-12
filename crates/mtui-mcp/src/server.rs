@@ -23,8 +23,8 @@
 //! server instance serves the process's one client; under http the
 //! [`SessionRegistry`](crate::provider::SessionRegistry) mints a fresh server
 //! (hence a fresh isolated session) per MCP session. The testreport tools are
-//! bead `mtui-rs-76e.8`; the job tools are surfaced but their handlers are
-//! stubbed until `mtui-rs-76e.12`.
+//! bead `mtui-rs-76e.8`; the job tools drive the session's background-job table
+//! (bead `mtui-rs-76e.12`).
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
@@ -142,9 +142,11 @@ impl ServerHandler for McpServer {
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
 
-        // A job-control tool (stubbed until mtui-rs-76e.12).
+        // A job-control tool: poll/control the session's background-job table.
         if self.job_tools.contains(&name) {
-            return Ok(render(dispatch_job_tool(&name, &kwargs).await));
+            return Ok(render(
+                dispatch_job_tool(&self.session, &name, &kwargs).await,
+            ));
         }
 
         // A hand-written testreport tool: acts directly on the loaded checkout.

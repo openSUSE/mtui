@@ -35,20 +35,33 @@
 //! still serialise on the inner session `Mutex`. Tracked as `mtui-rs-f36r`
 //! (the two `#[ignore]`d parity tests in `tests/session_concurrency.rs`).
 //!
+//! P7.3b (`mtui-rs-76e.12`) landed the **background-job table** (`_jobs`): a slow
+//! `run`/`update`/`downgrade` can be started with
+//! [`start_jobs`](McpSession::start_jobs) (one job per resolved template, each
+//! `-T <rrid>`-scoped) and returns a handle immediately instead of holding the
+//! request open; the outcome is polled via
+//! [`job_status`](McpSession::job_status) / [`job_result`](McpSession::job_result)
+//! and controlled via [`job_list`](McpSession::job_list) /
+//! [`job_cancel`](McpSession::job_cancel). Each job worker runs through the same
+//! [`run_command`](McpSession::run_command) primitive (so it takes the same
+//! per-RRID / registry gate and output cap as a foreground call).
+//!
 //! **Deferred** to their own follow-up beads (this type grows in place — do not
 //! replace it):
-//!   - the background-job table (`_jobs`) + job tools — `mtui-rs-76e.12`;
 //!   - `close()` host teardown (disconnect every loaded template's hosts,
 //!     release pool claims), owned by the http idle sweep — `mtui-rs-76e.13`;
 //!   - `notifications/progress` heartbeats for long calls — `mtui-rs-76e.14`.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Instant;
 
 use mtui_config::Config;
 use mtui_core::{EngineError, Registry, Session, dispatch_argv, resolve_command_rrids};
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
+use tokio::task::JoinHandle;
 
 use crate::capture::{self, SharedBuf};
 use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
@@ -91,6 +104,79 @@ impl std::fmt::Display for McpCommandError {
 
 impl std::error::Error for McpCommandError {}
 
+/// The lifecycle state of a background job.
+///
+/// The Rust analogue of upstream's `job["state"]` string
+/// (`running`/`done`/`failed`/`cancelled`); [`Display`](std::fmt::Display)
+/// renders the same lowercase token the job tools print.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobState {
+    /// The worker task is still executing (or queued behind its lock).
+    Running,
+    /// The command finished successfully; its stdout is in [`Job::result`].
+    Done,
+    /// The command failed; [`Job::error`]/[`Job::exit_code`] carry the envelope.
+    Failed,
+    /// The job was cancelled via [`McpSession::job_cancel`].
+    Cancelled,
+}
+
+impl std::fmt::Display for JobState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            JobState::Running => "running",
+            JobState::Done => "done",
+            JobState::Failed => "failed",
+            JobState::Cancelled => "cancelled",
+        };
+        f.write_str(s)
+    }
+}
+
+/// One background-job record (upstream `_jobs[job_id]` dict).
+///
+/// Shared between the spawned worker (which writes the terminal state/result)
+/// and the poll methods (which read it), so it lives behind an
+/// `Arc<StdMutex<Job>>` in [`McpSession::jobs`]. The `StdMutex` is only ever
+/// held for a field read/write, never across an `.await`.
+#[derive(Debug)]
+struct Job {
+    /// The session-unique job id (`"<command>-<n>"` or `"<command>-<rrid>-<n>"`).
+    id: String,
+    /// The command name (upstream `cmd_cls.command`).
+    command: String,
+    /// The current lifecycle state.
+    state: JobState,
+    /// When the job was minted (for `elapsed_s`).
+    started: Instant,
+    /// When the job reached a terminal state (frozen `elapsed_s` afterwards).
+    finished: Option<Instant>,
+    /// The captured stdout on success, or the pre-failure stdout on failure.
+    result: Option<String>,
+    /// The failure summary (`McpCommandError` stderr) when `state == Failed`.
+    error: Option<String>,
+    /// The failure exit code when `state == Failed`.
+    exit_code: Option<i32>,
+    /// The worker task handle, aborted by [`McpSession::job_cancel`].
+    handle: Option<JoinHandle<()>>,
+}
+
+/// A public, poll-facing snapshot of a [`Job`] (no task handle).
+///
+/// The Rust analogue of upstream `_job_view`; the job tools render it into the
+/// one-line status text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JobView {
+    /// The job id.
+    pub id: String,
+    /// The command name.
+    pub command: String,
+    /// The lifecycle state.
+    pub state: JobState,
+    /// Elapsed wall-clock seconds, rounded to 0.1s (frozen once terminal).
+    pub elapsed_s: f64,
+}
+
 /// A headless mtui session backing one MCP client.
 ///
 /// Holds the [`Session`] behind a [`Mutex`] because command dispatch
@@ -120,6 +206,19 @@ pub struct McpSession {
     /// calls take different locks. The outer [`StdMutex`] guards the map's own
     /// lazy population (held only for the get-or-insert, never across an await).
     rrid_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// The background-job table (upstream `_jobs`), keyed by job id.
+    ///
+    /// A backgrounded slow command runs in a spawned worker that records its
+    /// outcome on its `Arc<StdMutex<Job>>`; the poll methods
+    /// ([`job_status`](Self::job_status) / [`job_result`](Self::job_result))
+    /// read it without locking the session. Records persist for the session's
+    /// lifetime (finished jobs are never evicted); under http the registry's
+    /// idle sweep drops the whole session and its table with it. The outer
+    /// [`StdMutex`] guards insert/lookup only (never held across an await).
+    jobs: StdMutex<HashMap<String, Arc<StdMutex<Job>>>>,
+    /// Monotonic job-id counter (upstream `_job_counter`), pre-incremented per
+    /// minted job so ids are session-unique.
+    job_counter: AtomicU64,
 }
 
 /// An acquired hold on the concurrency gate for one command/tool invocation.
@@ -160,6 +259,8 @@ impl McpSession {
             max_output_bytes,
             gate: RwGate::new(),
             rrid_locks: StdMutex::new(HashMap::new()),
+            jobs: StdMutex::new(HashMap::new()),
+            job_counter: AtomicU64::new(0),
         })
     }
 
@@ -344,6 +445,261 @@ impl McpSession {
                 })
             }
         }
+    }
+
+    /// Resolve the target RRIDs for a backgrounded fan-out, or `None` to keep
+    /// the single-job path.
+    ///
+    /// The Rust analogue of upstream `_resolve_job_rrids`: it resolves `argv`
+    /// exactly as the foreground dispatch does (via [`resolve_command_rrids`],
+    /// which parses the command's own clap parser and applies its
+    /// [`Scope`](mtui_core::Scope) against the loaded set), so the background
+    /// fan-out matches the foreground one. Returns `None` when resolution is not
+    /// meaningful (unparseable argv, or only the Null report resolves) — the
+    /// caller then mints a single job whose body re-parses and runs as before.
+    async fn resolve_job_rrids(
+        &self,
+        registry: &Registry,
+        name: &str,
+        argv: &[String],
+    ) -> Option<Vec<String>> {
+        let command = registry.get(name)?;
+        let session = self.session.lock().await;
+        resolve_command_rrids(command.as_ref(), &session, argv)
+    }
+
+    /// Create, register and start one worker for `argv`, returning its id.
+    ///
+    /// The Rust analogue of upstream `_mint_job`. The worker runs through
+    /// [`run_command`](Self::run_command) (so it takes the same per-RRID /
+    /// registry gate and output cap as a foreground call) and records the
+    /// terminal state/result on the job's `Arc<StdMutex<Job>>`. `self` is an
+    /// `Arc` because the spawned task must own the session for its `'static`
+    /// lifetime.
+    fn mint_job(
+        self: &Arc<Self>,
+        registry: Arc<Registry>,
+        name: &str,
+        argv: Vec<String>,
+        job_id: String,
+    ) -> String {
+        let job = Arc::new(StdMutex::new(Job {
+            id: job_id.clone(),
+            command: name.to_owned(),
+            state: JobState::Running,
+            started: Instant::now(),
+            finished: None,
+            result: None,
+            error: None,
+            exit_code: None,
+            handle: None,
+        }));
+        self.jobs
+            .lock()
+            .expect("jobs table poisoned")
+            .insert(job_id.clone(), Arc::clone(&job));
+
+        let session = Arc::clone(self);
+        let name = name.to_owned();
+        let worker_job = Arc::clone(&job);
+        let handle = tokio::spawn(async move {
+            let outcome = session.run_command(&registry, &name, &argv).await;
+            let mut j = worker_job.lock().expect("job record poisoned");
+            // A cancel may have already marked the record terminal; if so, do not
+            // overwrite it with the (aborted) worker's outcome.
+            if j.state == JobState::Running {
+                match outcome {
+                    Ok(out) => {
+                        j.result = Some(out);
+                        j.state = JobState::Done;
+                    }
+                    Err(err) => {
+                        j.state = JobState::Failed;
+                        j.result = Some(err.stdout);
+                        j.error = Some(err.stderr);
+                        j.exit_code = Some(err.exit_code);
+                    }
+                }
+                j.finished = Some(Instant::now());
+            }
+        });
+        job.lock().expect("job record poisoned").handle = Some(handle);
+        job_id
+    }
+
+    /// Start `name`/`argv` in the background and return its job id.
+    ///
+    /// The Rust analogue of upstream `start_job`: mints exactly **one** job
+    /// (id `"<command>-<n>"`) and returns immediately with a handle, so the
+    /// client is not held for the minutes a `run`/`update`/`downgrade` can take.
+    /// The tool layer calls [`start_jobs`](Self::start_jobs) instead so a
+    /// fanned-out slow command yields one job per template; this stays the
+    /// single-job primitive for tests and non-fan-out callers.
+    pub fn start_job(
+        self: &Arc<Self>,
+        registry: Arc<Registry>,
+        name: &str,
+        argv: Vec<String>,
+    ) -> String {
+        let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        let job_id = format!("{name}-{n}");
+        self.mint_job(registry, name, argv, job_id)
+    }
+
+    /// Start `name`/`argv` in the background, fanning out one job per template.
+    ///
+    /// The Rust analogue of upstream `start_jobs`: resolves the target templates
+    /// exactly as the foreground path does (via
+    /// [`resolve_job_rrids`](Self::resolve_job_rrids)). When more than one
+    /// template resolves, mints **one job per template** — each running `argv`
+    /// scoped to that template with `-T <rrid>` **prepended** (a positional
+    /// `REMAINDER` command like `run` would otherwise swallow a trailing
+    /// `-T <rrid>` into its own value) — so a backgrounded fanned-out slow
+    /// command is independently observable and cancellable per template. When a
+    /// single template (or none) resolves, this is exactly one job with the
+    /// unchanged `<command>-<n>` id.
+    pub async fn start_jobs(
+        self: &Arc<Self>,
+        registry: Arc<Registry>,
+        name: &str,
+        argv: Vec<String>,
+    ) -> Vec<String> {
+        let rrids = self.resolve_job_rrids(&registry, name, &argv).await;
+        match rrids {
+            Some(rrids) if rrids.len() > 1 => rrids
+                .into_iter()
+                .map(|rrid| {
+                    let n = self.job_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    let token = rrid.replace(':', "_");
+                    let job_id = format!("{name}-{token}-{n}");
+                    let mut scoped_argv = vec!["-T".to_owned(), rrid];
+                    scoped_argv.extend(argv.iter().cloned());
+                    self.mint_job(Arc::clone(&registry), name, scoped_argv, job_id)
+                })
+                .collect(),
+            // Single template, none, or a client-supplied `-T` already narrowing
+            // to one: keep the single-job path (and its stable id shape).
+            _ => vec![self.start_job(registry, name, argv)],
+        }
+    }
+
+    /// A poll-facing snapshot of one job record (upstream `_job_view`).
+    ///
+    /// `elapsed_s` is frozen at `finished` once terminal, else measured to now,
+    /// rounded to 0.1s.
+    fn view(job: &Job) -> JobView {
+        let end = job.finished.unwrap_or_else(Instant::now);
+        let elapsed = (end.duration_since(job.started).as_secs_f64() * 10.0).round() / 10.0;
+        JobView {
+            id: job.id.clone(),
+            command: job.command.clone(),
+            state: job.state,
+            elapsed_s: elapsed,
+        }
+    }
+
+    /// Return a view of every job started in this session (upstream `job_list`).
+    #[must_use]
+    pub fn job_list(&self) -> Vec<JobView> {
+        self.jobs
+            .lock()
+            .expect("jobs table poisoned")
+            .values()
+            .map(|j| Self::view(&j.lock().expect("job record poisoned")))
+            .collect()
+    }
+
+    /// Return `job_id`'s state view, or an error if unknown (upstream
+    /// `job_status`).
+    ///
+    /// # Errors
+    ///
+    /// [`McpCommandError`] (exit 1) with `"no such job: <id>"` when `job_id` is
+    /// not in the table.
+    pub fn job_status(&self, job_id: &str) -> Result<JobView, McpCommandError> {
+        let job = self.job(job_id)?;
+        Ok(Self::view(&job.lock().expect("job record poisoned")))
+    }
+
+    /// Return a finished job's stdout, or the right failure envelope (upstream
+    /// `job_result`).
+    ///
+    /// # Errors
+    ///
+    /// [`McpCommandError`] when: the id is unknown; the job is still running
+    /// (telling the caller to poll `job_status`); the job failed (carrying its
+    /// captured stdout / error / exit code); or the job was cancelled.
+    pub fn job_result(&self, job_id: &str) -> Result<String, McpCommandError> {
+        let job = self.job(job_id)?;
+        let job = job.lock().expect("job record poisoned");
+        match job.state {
+            JobState::Running => {
+                let elapsed = (Instant::now().duration_since(job.started).as_secs_f64() * 10.0)
+                    .round()
+                    / 10.0;
+                Err(McpCommandError {
+                    stdout: String::new(),
+                    stderr: format!("job {job_id} still running ({elapsed}s); poll job_status"),
+                    exit_code: 1,
+                })
+            }
+            JobState::Failed => Err(McpCommandError {
+                stdout: job.result.clone().unwrap_or_default(),
+                stderr: job.error.clone().unwrap_or_else(|| "job failed".to_owned()),
+                exit_code: job.exit_code.unwrap_or(1),
+            }),
+            JobState::Cancelled => Err(McpCommandError {
+                stdout: String::new(),
+                stderr: format!("job {job_id} was cancelled"),
+                exit_code: 1,
+            }),
+            JobState::Done => Ok(job.result.clone().unwrap_or_default()),
+        }
+    }
+
+    /// Cancel a running job; error if the id is unknown (upstream `job_cancel`).
+    ///
+    /// Aborts the worker task and marks the record `Cancelled`. NOTE: if the job
+    /// is mid host-op (an SSH/subprocess body), aborting detaches the awaiter but
+    /// the underlying host operation may keep running to completion — the same
+    /// caveat as interrupting a foreground `run`. A finished job is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// [`McpCommandError`] (exit 1) with `"no such job: <id>"` when unknown.
+    pub async fn job_cancel(&self, job_id: &str) -> Result<String, McpCommandError> {
+        let job = self.job(job_id)?;
+        let handle = {
+            let mut j = job.lock().expect("job record poisoned");
+            if j.state == JobState::Running {
+                j.state = JobState::Cancelled;
+                j.finished = Some(Instant::now());
+                j.handle.take()
+            } else {
+                None
+            }
+        };
+        if let Some(handle) = handle {
+            handle.abort();
+            // Await the aborted task so cancellation has fully unwound before we
+            // return; a `JoinError::Cancelled` is expected and ignored.
+            let _ = handle.await;
+        }
+        Ok(format!("cancelled job {job_id}"))
+    }
+
+    /// Look up a job record by id, or the `"no such job"` envelope.
+    fn job(&self, job_id: &str) -> Result<Arc<StdMutex<Job>>, McpCommandError> {
+        self.jobs
+            .lock()
+            .expect("jobs table poisoned")
+            .get(job_id)
+            .cloned()
+            .ok_or_else(|| McpCommandError {
+                stdout: String::new(),
+                stderr: format!("no such job: {job_id}"),
+                exit_code: 1,
+            })
     }
 }
 
@@ -536,5 +892,55 @@ mod tests {
         let sess = session(Config::default());
         let lock = sess.scoped_lock(None).await;
         assert!(matches!(lock, CommandLock::Scoped { .. }));
+    }
+
+    /// Cancelling a *finished* job is a no-op that still reports success (the
+    /// non-running branch of `job_cancel`), and does not rewrite its state.
+    #[tokio::test]
+    async fn job_cancel_finished_job_is_noop() {
+        let mut config = Config::default();
+        config.session_user = "testuser".to_owned();
+        let sess = session(config);
+        let registry = Arc::new(register_all());
+
+        let job_id = sess.start_job(Arc::clone(&registry), "whoami", Vec::new());
+        // Drive it to completion.
+        for _ in 0..500 {
+            if sess.job_status(&job_id).unwrap().state != JobState::Running {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Done);
+
+        let msg = sess.job_cancel(&job_id).await.expect("cancel is a no-op");
+        assert_eq!(msg, format!("cancelled job {job_id}"));
+        // State is unchanged: a finished job is not rewritten to Cancelled.
+        assert_eq!(sess.job_status(&job_id).unwrap().state, JobState::Done);
+    }
+
+    /// `job_result` on a cancelled job surfaces the "was cancelled" envelope.
+    #[tokio::test]
+    async fn job_result_cancelled_job_raises() {
+        let sess = session(Config::default());
+        // Seed a cancelled record directly (no worker needed for this read path).
+        let job = Arc::new(StdMutex::new(Job {
+            id: "whoami-1".to_owned(),
+            command: "whoami".to_owned(),
+            state: JobState::Cancelled,
+            started: Instant::now(),
+            finished: Some(Instant::now()),
+            result: None,
+            error: None,
+            exit_code: None,
+            handle: None,
+        }));
+        sess.jobs.lock().unwrap().insert("whoami-1".to_owned(), job);
+
+        let err = sess
+            .job_result("whoami-1")
+            .expect_err("cancelled job raises on job_result");
+        assert!(err.stderr.contains("was cancelled"), "got: {err:?}");
+        assert_eq!(err.exit_code, 1);
     }
 }
