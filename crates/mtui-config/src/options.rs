@@ -104,6 +104,76 @@ impl<'de> Deserialize<'de> for SslVerify {
     }
 }
 
+// -- Parse-time validators (mirror upstream `config.py` `_parse_*`). ----------
+//
+// Upstream validates a handful of options at parse time and, on failure, logs at
+// ERROR and falls back to the option's default (per-option, never hard-failing).
+// mtui-rs applies the same per-field fallback in `Config::from_raw`. Rust's typed
+// `u64`/`usize` fields already reject non-numeric and negative literals at TOML
+// deserialise time, so the positive-int guard reduces to rejecting `0`.
+
+/// Validate an `http(s)` endpoint URL, mirroring upstream `_parse_base_url`.
+///
+/// Requires an `http` or `https` scheme, a non-empty host, and — when a port is
+/// present — a numeric one. This is deliberately lenient (matching Python's
+/// `urlsplit`, not full RFC 3986): a bad value like `https://openqa.suse.de:44e3`
+/// is rejected, but exotic-yet-usable forms are accepted.
+pub(crate) fn validate_base_url(raw: &str) -> bool {
+    let token = raw.trim();
+    let Some((scheme, rest)) = token.split_once("://") else {
+        return false;
+    };
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return false;
+    }
+    // Authority is everything up to the first `/`, `?`, or `#`.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // Strip optional `user[:pass]@` userinfo.
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
+    if host_port.is_empty() {
+        return false;
+    }
+    // IPv6 literal: `[..]` optionally followed by `:port`.
+    if let Some(after_bracket) = host_port.strip_prefix('[') {
+        let Some((host, tail)) = after_bracket.split_once(']') else {
+            return false; // unclosed IPv6 bracket
+        };
+        if host.is_empty() {
+            return false;
+        }
+        return match tail.strip_prefix(':') {
+            None if tail.is_empty() => true,
+            None => false, // junk after `]` that is not a `:port`
+            Some(port) => is_numeric_port(port),
+        };
+    }
+    // Regular host: split off a trailing `:port`, if any.
+    match host_port.rsplit_once(':') {
+        Some((host, port)) => !host.is_empty() && is_numeric_port(port),
+        None => true,
+    }
+}
+
+/// A port is valid when non-empty, all ASCII digits, and parses as `u16`.
+fn is_numeric_port(port: &str) -> bool {
+    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u16>().is_ok()
+}
+
+/// Validate `[mtui] install_logs` as a single relative directory name, mirroring
+/// upstream `_parse_install_logs`.
+///
+/// The value is joined per update as `template_dir / <rrid> / install_logs`;
+/// an empty, absolute, separator-containing, or `.`/`..` value would crash or
+/// silently escape the base path, so it is rejected here.
+pub(crate) fn is_relative_dir_name(raw: &str) -> bool {
+    let token = raw.trim();
+    !token.is_empty()
+        && !token.contains('/')
+        && !std::path::Path::new(token).is_absolute()
+        && token != "."
+        && token != ".."
+}
+
 // -- Upstream default helpers (used both by serde and by `Config::default`). --
 
 pub(crate) fn default_connection_timeout() -> u64 {
@@ -565,6 +635,43 @@ impl Config {
     /// defaults for absent options and expanding `~` in path options.
     pub(crate) fn from_raw(raw: RawConfig) -> Self {
         let d = Config::default();
+
+        // Per-field parse-time validation with fallback to the default (logged
+        // at ERROR), mirroring upstream `config.py`. A present-but-invalid value
+        // never invalidates the rest of the file.
+        macro_rules! validated_url {
+            ($opt:expr, $field:literal, $default:expr) => {
+                match $opt {
+                    Some(v) if validate_base_url(&v) => v,
+                    Some(v) => {
+                        tracing::error!(
+                            option = $field,
+                            value = %v,
+                            "invalid endpoint URL (need http(s):// with a host and, if given, a numeric port); using default"
+                        );
+                        $default
+                    }
+                    None => $default,
+                }
+            };
+        }
+        macro_rules! validated_positive {
+            ($opt:expr, $field:literal, $default:expr) => {
+                match $opt {
+                    Some(0) => {
+                        tracing::error!(
+                            option = $field,
+                            value = 0,
+                            "expected a positive integer greater than 0; using default"
+                        );
+                        $default
+                    }
+                    Some(v) => v,
+                    None => $default,
+                }
+            };
+        }
+
         Self {
             template_dir: raw
                 .mtui
@@ -572,30 +679,44 @@ impl Config {
                 .map_or(d.template_dir, |p| expanduser(&p)),
             local_tempdir: raw.mtui.tempdir.map_or(d.local_tempdir, |p| expanduser(&p)),
             session_user: raw.mtui.user.unwrap_or(d.session_user),
-            install_logs: raw
-                .mtui
-                .install_logs
-                .map_or(d.install_logs, |p| expanduser(&p)),
+            install_logs: match raw.mtui.install_logs {
+                Some(p) if is_relative_dir_name(&p.to_string_lossy()) => p,
+                Some(p) => {
+                    tracing::error!(
+                        option = "install_logs",
+                        value = %p.display(),
+                        "expected a single relative directory name without a path separator (e.g. install_logs); using default"
+                    );
+                    d.install_logs
+                }
+                None => d.install_logs,
+            },
             chdir_to_template_dir: raw
                 .mtui
                 .chdir_to_template_dir
                 .unwrap_or(d.chdir_to_template_dir),
             use_keyring: raw.mtui.use_keyring.unwrap_or(d.use_keyring),
             ssl_verify: raw.mtui.ssl_verify.unwrap_or(d.ssl_verify),
-            connection_timeout: raw
-                .connection
-                .connection_timeout
-                .unwrap_or(d.connection_timeout),
+            connection_timeout: validated_positive!(
+                raw.connection.connection_timeout,
+                "connection_timeout",
+                d.connection_timeout
+            ),
             ssh_strict_host_key_checking: raw
                 .connection
                 .ssh_strict_host_key_checking
                 .unwrap_or(d.ssh_strict_host_key_checking),
             refhosts_resolvers: raw.refhosts.resolvers.unwrap_or(d.refhosts_resolvers),
-            refhosts_https_uri: raw.refhosts.https_uri.unwrap_or(d.refhosts_https_uri),
-            refhosts_https_expiration: raw
-                .refhosts
-                .https_expiration
-                .unwrap_or(d.refhosts_https_expiration),
+            refhosts_https_uri: validated_url!(
+                raw.refhosts.https_uri,
+                "refhosts_https_uri",
+                d.refhosts_https_uri
+            ),
+            refhosts_https_expiration: validated_positive!(
+                raw.refhosts.https_expiration,
+                "refhosts_https_expiration",
+                d.refhosts_https_expiration
+            ),
             refhosts_path: raw
                 .refhosts
                 .path
@@ -603,10 +724,22 @@ impl Config {
             bugzilla_url: raw.url.bugzilla.unwrap_or(d.bugzilla_url),
             reports_url: raw.url.testreports.unwrap_or(d.reports_url),
             fancy_reports_url: raw.url.fancy_reports.unwrap_or(d.fancy_reports_url),
-            qem_dashboard_api: raw.qem_dashboard.api.unwrap_or(d.qem_dashboard_api),
-            teregen_api: raw.teregen.api.unwrap_or(d.teregen_api),
-            openqa_instance: raw.openqa.openqa.unwrap_or(d.openqa_instance),
-            openqa_instance_baremetal: raw.openqa.baremetal.unwrap_or(d.openqa_instance_baremetal),
+            qem_dashboard_api: validated_url!(
+                raw.qem_dashboard.api,
+                "qem_dashboard_api",
+                d.qem_dashboard_api
+            ),
+            teregen_api: validated_url!(raw.teregen.api, "teregen_api", d.teregen_api),
+            openqa_instance: validated_url!(
+                raw.openqa.openqa,
+                "openqa_instance",
+                d.openqa_instance
+            ),
+            openqa_instance_baremetal: validated_url!(
+                raw.openqa.baremetal,
+                "openqa_instance_baremetal",
+                d.openqa_instance_baremetal
+            ),
             openqa_install_distri: raw.openqa.distri.unwrap_or(d.openqa_install_distri),
             svn_path: raw.svn.path.unwrap_or(d.svn_path),
             gitea_token: raw.gitea.token.unwrap_or(d.gitea_token),
@@ -618,13 +751,22 @@ impl Config {
             lock_stale_age: raw.lock.stale_age.unwrap_or(d.lock_stale_age),
             lock_pi_autolock: raw.lock.pi_autolock.unwrap_or(d.lock_pi_autolock),
             lock_wait: raw.lock.wait.unwrap_or(d.lock_wait),
-            lock_wait_poll: raw.lock.wait_poll.unwrap_or(d.lock_wait_poll),
+            lock_wait_poll: validated_positive!(
+                raw.lock.wait_poll,
+                "lock_wait_poll",
+                d.lock_wait_poll
+            ),
             mcp_max_output_bytes: raw.mcp.max_output_bytes.unwrap_or(d.mcp_max_output_bytes),
-            mcp_session_cap: raw.mcp.session_cap.unwrap_or(d.mcp_session_cap),
-            mcp_session_idle_timeout: raw
-                .mcp
-                .session_idle_timeout
-                .unwrap_or(d.mcp_session_idle_timeout),
+            mcp_session_cap: validated_positive!(
+                raw.mcp.session_cap,
+                "mcp_session_cap",
+                d.mcp_session_cap
+            ),
+            mcp_session_idle_timeout: validated_positive!(
+                raw.mcp.session_idle_timeout,
+                "mcp_session_idle_timeout",
+                d.mcp_session_idle_timeout
+            ),
             mcp_profile: raw.mcp.profile.unwrap_or(d.mcp_profile),
             mcp_tools_allow: raw.mcp.tools_allow.unwrap_or(d.mcp_tools_allow),
             mcp_tools_deny: raw.mcp.tools_deny.unwrap_or(d.mcp_tools_deny),
@@ -806,6 +948,148 @@ mod tests {
         assert_eq!(base.connection.connection_timeout, Some(999));
         // A key not set in `over` is preserved from base.
         assert_eq!(base.url.bugzilla.as_deref(), Some("base"));
+    }
+
+    #[test]
+    fn validate_base_url_accepts_usable_forms() {
+        for ok in [
+            "https://openqa.suse.de",
+            "http://dashboard.qam.suse.de/api",
+            "https://qam.suse.de/refhosts/refhosts.yml",
+            "https://openqa.suse.de:8080",
+            "http://user:pass@host.example:443/path",
+            "http://[::1]:9000/x",
+            "https://[2001:db8::1]",
+            " https://openqa.suse.de ", // trimmed
+        ] {
+            assert!(validate_base_url(ok), "expected valid: {ok:?}");
+        }
+    }
+
+    #[test]
+    fn validate_base_url_rejects_bad_forms() {
+        for bad in [
+            "https://openqa.suse.de:44e3", // non-numeric port (the upstream typo)
+            "ftp://host.example",          // wrong scheme
+            "openqa.suse.de",              // no scheme
+            "https://",                    // no host
+            "https:///path",               // empty authority
+            "http://:8080",                // empty host with port
+            "http://[::1",                 // unclosed IPv6 bracket
+            "https://host:99999",          // port out of u16 range
+            "",
+        ] {
+            assert!(!validate_base_url(bad), "expected invalid: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn is_relative_dir_name_matches_upstream() {
+        assert!(is_relative_dir_name("install_logs"));
+        assert!(is_relative_dir_name("logs"));
+        for bad in ["", "a/b", "/abs", ".", "..", "sub/dir/"] {
+            assert!(!is_relative_dir_name(bad), "expected invalid: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn invalid_url_falls_back_to_default_and_keeps_rest_of_file() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [openqa]
+            openqa = "https://openqa.suse.de:44e3"
+            distri = "sle-micro"
+            "#,
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        // Bad URL falls back to the default...
+        assert_eq!(c.openqa_instance, "https://openqa.suse.de");
+        // ...while a sibling valid option in the same file still applies.
+        assert_eq!(c.openqa_install_distri, "sle-micro");
+    }
+
+    #[test]
+    fn all_url_options_validate() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [refhosts]
+            https_uri = "nope"
+            [qem_dashboard]
+            api = "ftp://x"
+            [teregen]
+            api = "://x"
+            [openqa]
+            openqa = "http://:1"
+            baremetal = "http://host:x"
+            "#,
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        let d = Config::default();
+        assert_eq!(c.refhosts_https_uri, d.refhosts_https_uri);
+        assert_eq!(c.qem_dashboard_api, d.qem_dashboard_api);
+        assert_eq!(c.teregen_api, d.teregen_api);
+        assert_eq!(c.openqa_instance, d.openqa_instance);
+        assert_eq!(c.openqa_instance_baremetal, d.openqa_instance_baremetal);
+    }
+
+    #[test]
+    fn zero_positive_int_falls_back_to_default() {
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [connection]
+            connection_timeout = 0
+            [refhosts]
+            https_expiration = 0
+            [lock]
+            wait_poll = 0
+            [mcp]
+            session_cap = 0
+            session_idle_timeout = 0
+            "#,
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        let d = Config::default();
+        assert_eq!(c.connection_timeout, d.connection_timeout);
+        assert_eq!(c.refhosts_https_expiration, d.refhosts_https_expiration);
+        assert_eq!(c.lock_wait_poll, d.lock_wait_poll);
+        assert_eq!(c.mcp_session_cap, d.mcp_session_cap);
+        assert_eq!(c.mcp_session_idle_timeout, d.mcp_session_idle_timeout);
+    }
+
+    #[test]
+    fn zero_legal_int_options_accept_zero() {
+        // These upstream options use plain `int`; 0 is meaningful and must NOT
+        // be rejected: lock_stale_age (disables reaping), lock_wait (fail fast),
+        // mcp_max_output_bytes (disables the cap).
+        let raw: RawConfig = toml::from_str(
+            r#"
+            [lock]
+            stale_age = 0
+            wait = 0
+            [mcp]
+            max_output_bytes = 0
+            "#,
+        )
+        .unwrap();
+        let c = Config::from_raw(raw);
+        assert_eq!(c.lock_stale_age, 0);
+        assert_eq!(c.lock_wait, 0);
+        assert_eq!(c.mcp_max_output_bytes, 0);
+    }
+
+    #[test]
+    fn bad_install_logs_falls_back_and_valid_name_accepted() {
+        let bad: RawConfig = toml::from_str("[mtui]\ninstall_logs = \"a/b\"\n").unwrap();
+        assert_eq!(
+            Config::from_raw(bad).install_logs,
+            Config::default().install_logs
+        );
+
+        let ok: RawConfig = toml::from_str("[mtui]\ninstall_logs = \"my_logs\"\n").unwrap();
+        assert_eq!(Config::from_raw(ok).install_logs, PathBuf::from("my_logs"));
     }
 
     #[test]
