@@ -26,7 +26,6 @@ class UnknownHelpTopicError(UserError):
     """Raised when ``help <name>`` is asked for an unregistered command."""
 
     def __init__(self, name: str) -> None:
-        self.name = name
         self.message = f"No help available: {name!r} is not a known command"
 
 

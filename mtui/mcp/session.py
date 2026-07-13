@@ -369,7 +369,6 @@ class McpSession:
         self.prompter = None
 
         self.templates = TemplateRegistry(
-            config,
             null_factory=lambda: NullTestReport(config, prompter=self.prompter),
         )
         # Mirror ``self.interactive`` onto the HostsGroup so long-running
