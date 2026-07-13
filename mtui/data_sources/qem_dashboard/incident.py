@@ -23,7 +23,6 @@ class QEMIncident:
                 Defaults to ``True``.
 
         """
-        self.rrid = rrid
         self.incident_number = self._incident_number(rrid)
         self.client = QEMDashboardClient(apiurl, verify)
         self.data: dict[str, Any] | None = self.client.incident(self.incident_number)
