@@ -1,12 +1,28 @@
-"""A wrapper for interacting with the `osc qam` command-line tool."""
+"""OSC review backend: native direct-OBS-API by default, legacy plugin fallback.
 
+The ``OSC(config, rrid)`` seam keeps its 5 bool / never-raising methods. It
+dispatches on ``[obs] backend``: ``native`` (default) calls the OBS API
+directly via :mod:`mtui.data_sources.obs`, reading credentials from the
+user's ``~/.oscrc``; ``plugin`` keeps the historical shell-out to the
+external ``osc qam`` CLI as a transitional fallback.
+"""
+
+import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from logging import getLogger
 from shlex import join as shlex_join
 from subprocess import DEVNULL, CalledProcessError, TimeoutExpired, run
 
+import paramiko
+import requests
+
 from ..support.config import Config
+from ..support.exceptions import ObsError
 from ..types.enums import RequestKind
 from ..types.rrid import RequestReviewID
+from .obs import qam as obs_qam
+from .obs.client import ObsClient
+from .obs.oscrc import read_credentials
 
 logger = getLogger("mtui.connector.oscqam")
 
@@ -175,64 +191,66 @@ class OSC:
             logger.info("'%s' succeeded: %s", operation, out)
         return True
 
-    def approve(self, group: list[str]) -> bool:
-        """Approves a review request for one or more groups.
+    def _native(self, op: Callable[[ObsClient, str], None]) -> bool:
+        """Run a native OBS operation, converting any failure into ``False``.
 
-        Args:
-            group: A list of group names to approve the request for.
-
-        Returns:
-            ``True`` if osc approved cleanly, ``False`` otherwise.
-
+        Everything — reading oscrc, loading the key, building the session,
+        the first authenticated call, XML parsing — happens here inside one
+        try/except, because callers (apicall.py / approve.py) invoke the
+        seam methods bare with no guard of their own.
         """
+        try:
+            credentials = read_credentials(
+                self.config.obs_api_url, self.config.obs_conffile
+            )
+            client = ObsClient(self.config, credentials)
+            op(client, credentials.user)
+        except (
+            ObsError,
+            requests.RequestException,
+            paramiko.SSHException,
+            ET.ParseError,
+        ) as e:
+            logger.error("native OBS operation on %s failed: %s", self.rrid, e)
+            return False
+        return True
+
+    def approve(self, group: list[str]) -> bool:
+        """Approves a review request. Returns ``True`` on success."""
+        if self.config.obs_backend == "native":
+            return self._native(
+                lambda c, u: obs_qam.approve(c, self.config, self.rrid, u, group or [])
+            )
         return self.__operation("approve", group)
 
     def assign(self, group: list[str]) -> bool:
-        """Assigns a review request to one or more groups.
-
-        Args:
-            group: A list of group names to assign the request to.
-
-        Returns:
-            ``True`` if osc assigned cleanly, ``False`` otherwise.
-
-        """
+        """Assigns a review request. Returns ``True`` on success."""
+        if self.config.obs_backend == "native":
+            return self._native(
+                lambda c, u: obs_qam.assign(c, self.config, self.rrid, u, group or [])
+            )
         return self.__operation("assign", group)
 
     def unassign(self, group: list[str]) -> bool:
-        """Unassigns a review request from one or more groups.
-
-        Args:
-            group: A list of group names to unassign the request from.
-
-        Returns:
-            ``True`` if osc unassigned cleanly, ``False`` otherwise.
-
-        """
+        """Unassigns a review request. Returns ``True`` on success."""
+        if self.config.obs_backend == "native":
+            return self._native(
+                lambda c, u: obs_qam.unassign(c, self.config, self.rrid, u, group or [])
+            )
         return self.__operation("unassign", group)
 
     def comment(self, comment: str) -> bool:
-        """Adds a comment to a review request.
-
-        Args:
-            comment: The comment to add.
-
-        Returns:
-            ``True`` if osc recorded the comment cleanly, ``False`` otherwise.
-
-        """
+        """Adds a comment to a review request. Returns ``True`` on success."""
+        if self.config.obs_backend == "native":
+            return self._native(lambda c, _u: obs_qam.comment(c, self.rrid, comment))
         return self.__operation("comment", [], comment=comment)
 
     def reject(self, group: list[str], reason: str, message: str) -> bool:
-        """Rejects a review request.
-
-        Args:
-            group: A list of group names to reject the request for.
-            reason: The reason for the rejection.
-            message: The rejection message.
-
-        Returns:
-            ``True`` if osc rejected cleanly, ``False`` otherwise.
-
-        """
+        """Rejects a review request. Returns ``True`` on success."""
+        if self.config.obs_backend == "native":
+            return self._native(
+                lambda c, u: obs_qam.reject(
+                    c, self.config, self.rrid, u, group or [], reason, message
+                )
+            )
         return self.__operation("reject", group, reason=reason, message=message)

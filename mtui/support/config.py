@@ -703,10 +703,10 @@ class Config:
             # = ~/.oscrc); ``request_timeout`` is a COARSE wall-clock budget
             # checked BETWEEN a native operation's HTTP calls (each call is
             # itself bounded by support/http HTTP_TIMEOUT) — it is NOT a
-            # mid-call hard kill; ``backend`` selects ``plugin`` (the external
-            # ``osc qam`` CLI, default during the transition) or ``native``
-            # (the in-tree direct-API backend). No OBS credentials live here —
-            # oscrc remains the sole credential source.
+            # mid-call hard kill; ``backend`` selects ``native`` (default, the
+            # in-tree direct-OBS-API backend) or ``plugin`` (the external
+            # ``osc qam`` CLI, kept as a transitional fallback). No OBS
+            # credentials live here — oscrc remains the sole credential source.
             ConfigOption(
                 "obs_api_url",
                 ("obs", "api_url"),
@@ -731,7 +731,7 @@ class Config:
             ConfigOption(
                 "obs_backend",
                 ("obs", "backend"),
-                "plugin",
+                "native",
                 _parse_obs_backend,
                 get,
             ),

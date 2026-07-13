@@ -72,9 +72,7 @@ def _parse_review(elem: ET.Element) -> Review:
     )
 
 
-def parse_request(xml: str) -> Request:
-    """Parse a ``request?withfullhistory=1`` document."""
-    root = ET.fromstring(xml)
+def _parse_request_element(root: ET.Element) -> Request:
     state_el = root.find("state")
     source_el = root.find("action/source")
     return Request(
@@ -83,6 +81,17 @@ def parse_request(xml: str) -> Request:
         src_project=source_el.get("project") if source_el is not None else None,
         reviews=tuple(_parse_review(r) for r in root.findall("review")),
     )
+
+
+def parse_request(xml: str) -> Request:
+    """Parse a ``request?withfullhistory=1`` document."""
+    return _parse_request_element(ET.fromstring(xml))
+
+
+def parse_request_collection(xml: str) -> list[Request]:
+    """Parse a ``<collection>`` of requests (the previous-reject search)."""
+    root = ET.fromstring(xml)
+    return [_parse_request_element(r) for r in root.findall("request")]
 
 
 def parse_group_directory(xml: str) -> list[str]:

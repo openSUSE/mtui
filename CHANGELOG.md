@@ -9,14 +9,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
-- Groundwork for a native OBS/IBS QAM review backend that calls the OBS API
-  directly (no `osc` library, no `osc qam` subprocess), reading credentials
-  from the user's existing `~/.oscrc`. A new `[obs]` config section
-  (`api_url`, `conffile`, `request_timeout`, `backend`) is introduced; the
-  backend defaults to `plugin`, so behaviour is unchanged for now. When the
-  `native` backend is enabled in a later release, OBS TLS is governed by
-  `[mtui] ssl_verify` rather than oscrc's own TLS knobs, and `request_timeout`
-  is a coarse between-call budget layered over the per-call HTTP timeout.
+- The QAM review actions (approve/assign/unassign/reject/comment) now call the
+  OBS/IBS API directly instead of shelling out to the external `osc qam`
+  plugin — no `osc` library and no subprocess. Credentials are read from the
+  user's existing `~/.oscrc` (SSH-signature auth, reproduced in-process with
+  paramiko). This is the default; set `[obs] backend = plugin` to restore the
+  legacy `osc qam` behaviour for one transition release. Two behaviour notes:
+  OBS TLS is now governed by `[mtui] ssl_verify` rather than oscrc's own TLS
+  knobs (`sslcertck`/`cafile`/`capath`/`no_verify`); and `[obs] request_timeout`
+  (default 180s) is a coarse between-call budget layered over the per-call HTTP
+  timeout, not a hard mid-call kill. Requires an Ed25519 key on disk;
+  ssh-agent, encrypted, and RSA/ECDSA keys are not yet supported by the native
+  backend (use `backend = plugin` meanwhile). A new `[obs]` config section
+  (`api_url`, `conffile`, `request_timeout`, `backend`) is introduced.
 
 - `mtui-mcp` is now much more token-efficient. Tool schemas are automatically
   slimmed of redundant pydantic boilerplate (the per-field `title` keys and the

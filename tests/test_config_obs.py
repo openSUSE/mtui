@@ -18,8 +18,8 @@ def test_obs_defaults(tmpdir):
     assert cfg.obs_conffile == ""
     # Parity with the legacy ``osc qam`` subprocess 180s cap, not 120.
     assert cfg.obs_request_timeout == 180
-    # Default stays on the external plugin until the native flip.
-    assert cfg.obs_backend == "plugin"
+    # Native is the default backend.
+    assert cfg.obs_backend == "native"
 
 
 def test_obs_explicit_values(tmpdir):
@@ -44,10 +44,10 @@ def test_obs_backend_case_insensitive(tmpdir):
     assert cfg.obs_backend == "native"
 
 
-def test_obs_backend_invalid_falls_back_to_plugin(tmpdir):
+def test_obs_backend_invalid_falls_back_to_native(tmpdir):
     """An unknown backend is a user error and falls back to the default."""
     cfg = _cfg(tmpdir, "[obs]\nbackend = frobnicate\n")
-    assert cfg.obs_backend == "plugin"
+    assert cfg.obs_backend == "native"
 
 
 def test_obs_request_timeout_non_positive_falls_back(tmpdir):
