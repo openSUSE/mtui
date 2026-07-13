@@ -97,6 +97,12 @@ pub struct MockConnection {
     issued: Arc<Mutex<Vec<String>>>,
     /// Set once [`close`](Connection::close) has been called.
     closed: Arc<Mutex<bool>>,
+    /// When set, [`close`](Connection::close) blocks until the [`Notify`] is
+    /// fired before completing — models a wedged paramiko teardown (a dead peer
+    /// with no RST) so a caller's bounded close budget can be exercised. Shared
+    /// across `Clone`d handles so the test fires the same notify. Never set by
+    /// default (an instant close).
+    block_close: Option<Arc<tokio::sync::Notify>>,
     /// Number of times [`reconnect`](Connection::reconnect) has been called.
     reconnects: Arc<Mutex<usize>>,
     /// When `true`, [`reconnect`](Connection::reconnect) fails.
@@ -165,6 +171,7 @@ impl MockConnection {
             active: true,
             issued: Arc::new(Mutex::new(Vec::new())),
             closed: Arc::new(Mutex::new(false)),
+            block_close: None,
             reconnects: Arc::new(Mutex::new(0)),
             reconnect_fails: false,
             fired: Arc::new(Mutex::new(Vec::new())),
@@ -243,6 +250,16 @@ impl MockConnection {
     #[must_use]
     pub fn inactive(mut self) -> Self {
         self.active = false;
+        self
+    }
+
+    /// Makes [`close`](Connection::close) block until `gate` is notified, modelling
+    /// a wedged host teardown (a dead peer whose close never returns). A caller's
+    /// bounded close budget (e.g. `McpSession::close`) can then be shown to still
+    /// return; the test fires `gate` afterwards so the abandoned close unwinds.
+    #[must_use]
+    pub fn with_blocking_close(mut self, gate: Arc<tokio::sync::Notify>) -> Self {
+        self.block_close = Some(gate);
         self
     }
 
@@ -501,6 +518,12 @@ impl Connection for MockConnection {
     }
 
     async fn close(&mut self) -> Result<()> {
+        // Model a wedged teardown: block until the test releases the gate. A
+        // caller with a bounded close budget abandons the await before this
+        // returns; `closed` is only set once (if) the gate fires.
+        if let Some(gate) = self.block_close.clone() {
+            gate.notified().await;
+        }
         *self.closed.lock().expect("mock closed lock") = true;
         self.active = false;
         Ok(())

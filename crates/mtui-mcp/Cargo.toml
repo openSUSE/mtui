@@ -50,5 +50,6 @@ async-trait.workspace = true
 clap.workspace = true
 mtui-config.workspace = true
 mtui-testreport.workspace = true
+mtui-hosts.workspace = true
 mtui-types.workspace = true
 tempfile = "3"

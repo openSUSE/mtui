@@ -46,16 +46,25 @@
 //! [`run_command`](McpSession::run_command) primitive (so it takes the same
 //! per-RRID / registry gate and output cap as a foreground call).
 //!
-//! **Deferred** to their own follow-up beads (this type grows in place — do not
+//! P7.3c (`mtui-rs-76e.13`) landed [`close`](McpSession::close): the session
+//! teardown the http `SessionRegistry` (P7.10 / `mtui-rs-odq8`) calls on
+//! eviction. For **every** loaded template it releases the report's pool claims
+//! then disconnects its host group, best-effort + idempotent, under a bounded
+//! [`DISCONNECT_TIMEOUT`] so a wedged host close cannot block the idle-sweep.
+//! Unlike upstream it does not empty each `HostsGroup` (a closed `Target` is left
+//! in the group with a dead connection, dropped whole with the report) and it
+//! bounds the wait with [`tokio::time::timeout`] rather than a thread-pool
+//! `shutdown(wait=False)` — the Python machinery existed only to defeat
+//! `Executor.__exit__`'s blocking join, which Rust has no equivalent of.
+//!
+//! **Deferred** to its own follow-up bead (this type grows in place — do not
 //! replace it):
-//!   - `close()` host teardown (disconnect every loaded template's hosts,
-//!     release pool claims), owned by the http idle sweep — `mtui-rs-76e.13`;
 //!   - `notifications/progress` heartbeats for long calls — `mtui-rs-76e.14`.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mtui_config::Config;
 use mtui_core::{EngineError, Registry, Session, dispatch_argv, resolve_command_rrids};
@@ -66,6 +75,14 @@ use tokio::task::JoinHandle;
 use crate::capture::{self, SharedBuf};
 use crate::concurrency::{ExclusiveGuard, RwGate, SharedGuard};
 use crate::slim::cap_output;
+
+/// Wall-clock budget for the whole [`close`](McpSession::close) host-disconnect
+/// fan-out (upstream `DISCONNECT_TIMEOUT_SECONDS = 45.0`).
+///
+/// A wedged host teardown (a dead peer with no RST whose close never returns)
+/// must not block the http registry's idle-sweep behind it; a close that
+/// overruns this bound is logged and abandoned so `close()` always returns.
+const DISCONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// A command dispatch that failed under the MCP transport.
 ///
@@ -411,6 +428,70 @@ impl McpSession {
         }
     }
 
+    /// Releases pool claims and disconnects every loaded template's hosts.
+    ///
+    /// The Rust analogue of upstream `McpSession.close` /
+    /// `McpSession._disconnect_targets`. Owned by the http
+    /// `SessionRegistry` (P7.10 / `mtui-rs-odq8`), which calls it when it evicts
+    /// a session (idle-TTL sweep or explicit eviction). Mirrors the REPL `quit`
+    /// disconnect path — [`HostsGroup::close`](mtui_hosts::HostsGroup::close) per
+    /// template, its per-host `Target::close` fanning out concurrently — but
+    /// **without** the exit-flag / history-flush tail, since the process keeps
+    /// serving other clients.
+    ///
+    /// **Every** loaded template's hosts are disconnected, not just the active
+    /// one's: a session may hold several templates at once (each owning its own
+    /// host group), and evicting the session must reap all of them — matching the
+    /// REPL `quit` command.
+    ///
+    /// The whole teardown is best-effort and idempotent: for each template it
+    /// releases the report's host-arbitration pool claims (in-process ownership +
+    /// remote pool locks; a no-op when pool selection was never used) then closes
+    /// its host group. A second call re-runs both over already-released claims and
+    /// already-closed targets, both no-ops. The fan-out is bounded by
+    /// [`DISCONNECT_TIMEOUT`]: a wedged host close is logged and abandoned so
+    /// `close()` — and the registry idle-sweep awaiting it — always returns.
+    ///
+    /// ## Rust deviation
+    ///
+    /// Upstream clears `report.targets` after closing; the Rust `HostsGroup::close`
+    /// (like the REPL `quit`) closes each `Target` but leaves it in the group with
+    /// its now-dead connection — the report and its host group are dropped whole
+    /// when the session is evicted. So this does not empty the groups; a closed
+    /// target simply reports its connection inactive/closed.
+    pub async fn close(&self) {
+        self.close_with_timeout(DISCONNECT_TIMEOUT).await;
+    }
+
+    /// [`close`](Self::close) with an explicit fan-out budget.
+    ///
+    /// The timeout seam upstream exposes as `_disconnect_targets(timeout=...)`,
+    /// kept `pub(crate)` so the wedged-close unit test can bound the wait to a
+    /// fraction of a second instead of 45s.
+    pub(crate) async fn close_with_timeout(&self, timeout: Duration) {
+        let mut session = self.session.lock().await;
+        // Snapshot the RRIDs first so the mutable per-report borrow below does
+        // not conflict with the registry borrow (as the REPL `quit` does).
+        let rrids = session.templates.rrids();
+        let teardown = async {
+            for rrid in rrids {
+                if let Some(report) = session.templates.get_mut(&rrid) {
+                    // Release arbiter ownership + remote pool locks before
+                    // disconnecting (best-effort; a no-op without pooling).
+                    report.release_pool_claims().await;
+                    // Close the group: plain disconnect (no reboot/poweroff on an
+                    // MCP session eviction, unlike the REPL `quit` bootarg).
+                    report.base_mut().targets.close(None).await;
+                }
+            }
+        };
+        // Never let a wedged host teardown block the eviction (and the http
+        // idle-sweep behind it): abandon the fan-out past the budget.
+        if tokio::time::timeout(timeout, teardown).await.is_err() {
+            tracing::warn!("host disconnect timed out after {timeout:?}; abandoning teardown");
+        }
+    }
+
     /// Runs a registered command and returns its captured, output-capped stdout.
     ///
     /// The central MCP dispatch primitive (the Rust analogue of upstream
@@ -744,6 +825,66 @@ mod tests {
 
     fn session(config: Config) -> Arc<McpSession> {
         McpSession::new(config)
+    }
+
+    /// A host whose `close()` never returns must not block `close_with_timeout`.
+    ///
+    /// The Rust analogue of upstream
+    /// `test_disconnect_targets_bounded_wait_survives_a_wedged_close`: with a
+    /// small budget, teardown returns despite the stuck close, the healthy host
+    /// is still closed, and the abandoned close is later released so its task
+    /// unwinds. Bounding via [`tokio::time::timeout`] (not a thread-pool
+    /// `shutdown(wait=False)`) is the whole point — see the module docs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_with_timeout_survives_a_wedged_close() {
+        use mtui_hosts::{HostsGroup, MockConnection, Target};
+        use mtui_testreport::{ObsReport, TestReport};
+        use mtui_types::RequestReviewID;
+        use mtui_types::enums::{ExecutionMode, TargetState};
+
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let wedged = MockConnection::new("wedged-host").with_blocking_close(Arc::clone(&gate));
+        let good = MockConnection::new("good-host");
+        let wedged_target = Target::with_connection(
+            "wedged-host",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(wedged),
+        );
+        let good_target = Target::with_connection(
+            "good-host",
+            TargetState::Enabled,
+            ExecutionMode::Parallel,
+            Box::new(good.clone()),
+        );
+
+        let sess = McpSession::new(Config::default());
+        {
+            let mut guard = sess.session().lock().await;
+            let mut report = ObsReport::new(guard.config.clone());
+            report.base_mut().rrid = Some(RequestReviewID::parse("SUSE:Maintenance:1:1").unwrap());
+            report.base_mut().targets = HostsGroup::new(vec![wedged_target, good_target], false);
+            guard.templates.add(Box::new(report));
+            guard.templates.set_active("SUSE:Maintenance:1:1");
+        }
+
+        // A generous outer guard: the fix returns in ~0.2s; a regression that
+        // waited on the wedged close would hit this and fail loudly.
+        let bounded = tokio::time::timeout(
+            Duration::from_secs(15),
+            sess.close_with_timeout(Duration::from_millis(200)),
+        )
+        .await;
+        assert!(bounded.is_ok(), "close_with_timeout did not return in time");
+
+        // The healthy host was closed even though a sibling close hung.
+        assert!(
+            good.is_closed(),
+            "healthy host closed despite wedged sibling"
+        );
+
+        // Release the abandoned close so its task unwinds and does not linger.
+        gate.notify_waiters();
     }
 
     /// A fresh session honours the non-interactive contract: no prompter is
