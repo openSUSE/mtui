@@ -10,7 +10,6 @@ from .enums import RequestKind
 def apply_parser(f, x, cnt):
     from ..support.exceptions import (
         ComponentParseError,
-        InternalParseError,
         MissingComponentError,
     )
 
@@ -25,13 +24,9 @@ def apply_parser(f, x, cnt):
         The parsed value.
 
     Raises:
-        InternalParseError: If the parser or count is not valid.
         MissingComponentError: If the value is missing.
         ComponentParseError: If the value cannot be parsed.
     """
-    if not f or not cnt:
-        raise InternalParseError(f, cnt)
-
     if not x:
         raise MissingComponentError(cnt, f)
 
