@@ -23,7 +23,6 @@ from uuid import uuid4
 from .hosts.host_arbiter import get_arbiter
 
 if TYPE_CHECKING:
-    from .support.config import Config
     from .test_reports.testreport import TestReport
 
 
@@ -38,21 +37,17 @@ class TemplateRegistry:
 
     def __init__(
         self,
-        config: Config,
         *,
         null_factory: Callable[[], TestReport],
     ) -> None:
         """Initialise an empty registry.
 
         Args:
-            config: The application configuration (kept for parity with the
-                rest of the runtime and for future arbiter wiring).
             null_factory: Zero-argument callable returning a fresh
                 :class:`NullTestReport`; used as the active-pointer fallback
                 when no template is loaded.
 
         """
-        self.config = config
         #: Stable per-registry identity; the owner-key seed for host
         #: arbitration (RFC §5.7). One registry per REPL process, one per MCP
         #: session.

@@ -27,7 +27,7 @@ def _null():
 
 
 def _registry(*reports):
-    reg = TemplateRegistry(MagicMock(), null_factory=_null)
+    reg = TemplateRegistry(null_factory=_null)
     for r in reports:
         reg.add(r)
     return reg

@@ -36,7 +36,7 @@ def _null():
 
 
 def _registry(*rrids):
-    reg = TemplateRegistry(MagicMock(), null_factory=_null)
+    reg = TemplateRegistry(null_factory=_null)
     for rrid in rrids:
         reg.add(_report(rrid))
     return reg

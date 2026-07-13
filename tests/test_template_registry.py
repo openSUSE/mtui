@@ -39,7 +39,7 @@ def null_report():
 
 @pytest.fixture
 def registry(null_report):
-    return TemplateRegistry(MagicMock(), null_factory=lambda: null_report)
+    return TemplateRegistry(null_factory=lambda: null_report)
 
 
 def test_empty_registry_is_falsey_and_active_is_null(registry, null_report):

@@ -119,7 +119,6 @@ class CommandPrompt:
         self.interactive: bool = True
         self.display = display_factory(self.sys.stdout)
         self.templates = TemplateRegistry(
-            config,
             null_factory=lambda: NullTestReport(config, prompter=prompter),
         )
 
