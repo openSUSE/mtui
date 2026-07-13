@@ -121,3 +121,9 @@ unsafe_code = "warn"
 [profile.release]
 lto = "thin"
 strip = true
+# One codegen unit trades slower release builds for a smaller/faster binary.
+codegen-units = 1
+# Abort on panic: no unwinding tables, smaller binary. Release-only — the `test`
+# profile keeps unwinding (Cargo forbids `panic = "abort"` there and the suite
+# relies on it).
+panic = "abort"

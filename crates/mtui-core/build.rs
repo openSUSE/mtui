@@ -10,9 +10,12 @@
 //! `MTUI_LONG_VERSION` env var, which `args.rs` feeds to clap's `long_version`.
 //!
 //! clap renders `mtui <long_version>`, so the captured value omits the leading
-//! `mtui ` and the final line reads `mtui <ver> (<sha>[-dirty], <profile>,
-//! <target>)`. When built outside a git checkout the sha field is omitted; the
-//! profile and target are always present. The script never fails the build.
+//! `mtui ` and the final line reads `mtui <ver> (<ref>[-dirty], <profile>,
+//! <target>)`, where `<ref>` is `git describe --tags --always --dirty --long`
+//! output — a tag-relative name once releases are tagged (`v1.2.0-3-gabcdef`),
+//! or a bare short SHA until then. When built outside a git checkout the ref
+//! field is omitted; the profile and target are always present. The script never
+//! fails the build.
 
 use std::process::Command;
 
@@ -29,18 +32,43 @@ fn main() {
 
     // clap renders `<bin-name> <long_version>`, so this value must NOT repeat
     // the "mtui " prefix — it is just the version plus the provenance block.
-    let long_version = match git_sha() {
-        Some(sha) => format!("{version} ({sha}, {profile}, {target})"),
+    let long_version = match git_ref() {
+        Some(git_ref) => format!("{version} ({git_ref}, {profile}, {target})"),
         None => format!("{version} ({profile}, {target})"),
     };
 
     println!("cargo:rustc-env=MTUI_LONG_VERSION={long_version}");
 }
 
+/// Returns a human-readable git ref for the build: `git describe` output when a
+/// tag is reachable (e.g. `v1.2.0-3-gabcdef-dirty`), otherwise a bare short SHA
+/// (e.g. `abcdef012345-dirty`). Returns `None` when git is unavailable or this is
+/// not a checkout (e.g. a release tarball).
+///
+/// `git describe --tags --always --dirty --long` already degrades to the short
+/// SHA when no tag is reachable, so today (no tags) it prints the same short-SHA
+/// form as the previous `rev-parse` scheme; once releases are tagged it upgrades
+/// to the tag-relative form automatically. `git_short_sha` is kept as an explicit
+/// fallback for the case where `describe` fails but `rev-parse` still works.
+fn git_ref() -> Option<String> {
+    let out = Command::new("git")
+        .args(["describe", "--tags", "--always", "--dirty", "--long"])
+        .output()
+        .ok()?;
+    if out.status.success()
+        && let Ok(desc) = String::from_utf8(out.stdout)
+    {
+        let desc = desc.trim();
+        if !desc.is_empty() {
+            return Some(desc.to_owned());
+        }
+    }
+    git_short_sha()
+}
+
 /// Returns the short commit SHA, suffixed `-dirty` when the working tree has
-/// uncommitted changes, or `None` when git is unavailable or this is not a
-/// checkout (e.g. a release tarball).
-fn git_sha() -> Option<String> {
+/// uncommitted changes, or `None` when git is unavailable.
+fn git_short_sha() -> Option<String> {
     let out = Command::new("git")
         .args(["rev-parse", "--short=12", "HEAD"])
         .output()
