@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use std::future::Future;
 use std::pin::Pin;
@@ -43,6 +44,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, Peer, RoleServer};
 use serde_json::{Map, Value};
 
+use crate::provider::SessionGuard;
 use crate::session::{McpSession, ProgressSink};
 use crate::testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 use crate::tools::{
@@ -69,6 +71,16 @@ pub struct McpServer {
     job_tools: Arc<HashSet<String>>,
     /// The set of hand-written testreport tool names (`testreport_read`/…).
     testreport_tools: Arc<HashSet<String>>,
+    /// Last-touch timestamp (monotonic millis), bumped on every tool call and
+    /// `list_tools`, read by the http registry's idle sweeper. Under stdio /
+    /// tests it is a private throwaway atomic no sweeper observes.
+    last_touch: Arc<AtomicU64>,
+    /// RAII registry membership for an http-minted server: dropping it (when rmcp
+    /// drops the server on session close, or the sweeper evicts it) frees a
+    /// `session_cap` slot. `None` under stdio / tests (no registry). Held behind
+    /// an `Arc` so `McpServer` stays `Clone` — the slot is freed when the last
+    /// clone drops.
+    _guard: Option<Arc<SessionGuard>>,
 }
 
 impl McpServer {
@@ -80,6 +92,34 @@ impl McpServer {
     /// plus the route map used by [`call_tool`](ServerHandler::call_tool).
     #[must_use]
     pub fn new(registry: Arc<Registry>, session: Arc<McpSession>) -> Self {
+        // Untracked: stdio (one process, one client) and unit tests. No registry
+        // membership, and a private last-touch atomic no sweeper reads.
+        Self::build(registry, session, None, Arc::new(AtomicU64::new(0)))
+    }
+
+    /// Builds a server tracked by the http [`SessionRegistry`](crate::provider::SessionRegistry).
+    ///
+    /// Same synthesis as [`new`](Self::new), but the server carries the
+    /// registry's per-session [`SessionGuard`] (dropping it frees a
+    /// `session_cap` slot) and the shared `last_touch` timestamp the handler
+    /// bumps on every tool call so the idle sweeper only reaps quiet sessions.
+    #[must_use]
+    pub(crate) fn new_tracked(
+        registry: Arc<Registry>,
+        session: Arc<McpSession>,
+        guard: SessionGuard,
+        last_touch: Arc<AtomicU64>,
+    ) -> Self {
+        Self::build(registry, session, Some(Arc::new(guard)), last_touch)
+    }
+
+    /// Shared synthesis body for [`new`](Self::new) / [`new_tracked`](Self::new_tracked).
+    fn build(
+        registry: Arc<Registry>,
+        session: Arc<McpSession>,
+        guard: Option<Arc<SessionGuard>>,
+        last_touch: Arc<AtomicU64>,
+    ) -> Self {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
         let testreport_descriptors = testreport_tool_descriptors();
@@ -130,7 +170,19 @@ impl McpServer {
             routes: Arc::new(routes),
             job_tools: Arc::new(job_tools),
             testreport_tools: Arc::new(testreport_tools),
+            last_touch,
+            _guard: guard,
         }
+    }
+
+    /// Record activity on this session (monotonic millis), for the idle sweeper.
+    ///
+    /// Called at the top of the request handlers our server actually sees
+    /// (`call_tool` / `list_tools`). Under stdio / tests the atomic is private
+    /// and unobserved, so the bump is a cheap no-op consequence.
+    fn touch(&self) {
+        self.last_touch
+            .store(crate::provider::now_millis(), Ordering::Relaxed);
     }
 }
 
@@ -190,6 +242,7 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        self.touch();
         Ok(ListToolsResult::with_all_items((*self.tools).clone()))
     }
 
@@ -198,6 +251,7 @@ impl ServerHandler for McpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        self.touch();
         let name = request.name.as_ref().to_owned();
         let kwargs = call_arguments(&request);
 

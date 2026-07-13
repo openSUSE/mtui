@@ -20,6 +20,7 @@ use mtui_core::{ColorMode, register_all};
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use crate::args::{McpArgs, Transport};
@@ -86,16 +87,23 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
         cap = config.mcp_session_cap,
         idle_timeout_s = config.mcp_session_idle_timeout,
         "mtui-mcp: http transport — per-client session isolation \
-         (cap/idle-TTL not yet enforced: mtui-rs-odq8)"
+         (session cap + idle-TTL enforced)"
     );
 
     let registry = Arc::new(register_all());
     let sessions = SessionRegistry::new(registry, config);
 
+    // Start the idle-TTL sweeper (no-op when session_idle_timeout == 0); a
+    // cancellation token lets graceful shutdown stop it cleanly.
+    let sweeper_cancel = CancellationToken::new();
+    let sweeper = sessions.spawn_sweeper(sweeper_cancel.clone());
+
     // The factory rmcp invokes once per new MCP session: each call yields a
-    // fresh isolated server. Infallible for us, so we always `Ok`.
+    // fresh isolated server, or an `Err` (surfaced by rmcp as an internal-error
+    // response) once the session cap is reached — a bounded DoS refusal.
+    let factory_sessions = sessions.clone();
     let service = StreamableHttpService::new(
-        move || Ok(sessions.make_server()),
+        move || factory_sessions.try_make_server(),
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default(),
     );
@@ -110,6 +118,12 @@ async fn serve_http(args: &McpArgs) -> anyhow::Result<()> {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+
+    // Stop the sweeper and wait for it to unwind before returning.
+    sweeper_cancel.cancel();
+    if let Some(handle) = sweeper {
+        let _ = handle.await;
+    }
     tracing::info!("mtui-mcp: shutting down");
     Ok(())
 }
