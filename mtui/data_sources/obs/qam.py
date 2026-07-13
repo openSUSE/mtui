@@ -136,7 +136,9 @@ def assign(
 ) -> None:
     """Assign the review to ``user`` for the resolved group(s)."""
     request = _get_request(client, rrid)
-    if request.state != "review":
+    # Mirror the plugin's Request.OPEN_STATES = ("new", "review"); OBS reports
+    # "new" while a request still has an open review it has not moved on from.
+    if request.state not in ("new", "review"):
         raise ObsError(
             f"request {request.reqid} is not open for review "
             f"(state={request.state!r}); refusing to assign"

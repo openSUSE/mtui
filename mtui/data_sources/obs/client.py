@@ -38,6 +38,10 @@ logger = getLogger("mtui.data_sources.obs.client")
 
 def _error_summary(text: str) -> str:
     """Extract ``<status><summary>`` from an OBS error body (best effort)."""
+    if "<!DOCTYPE" in text or "<!ENTITY" in text:
+        # OBS never sends a DTD; skip parsing so an entity-expansion body
+        # cannot turn error handling into a DoS.
+        return ""
     try:
         root = ET.fromstring(text)
     except ET.ParseError:
@@ -61,7 +65,11 @@ class ObsClient:
         self._api_url = config.obs_api_url.rstrip("/")
         verify = resolve_verify(True, config.ssl_verify)
         self._session = build_session(verify)
-        self._auth = ObsSignatureAuth(credentials.user, credentials.sshkey_path)
+        self._auth = ObsSignatureAuth(
+            credentials.user,
+            sshkey_path=credentials.sshkey_path,
+            sshkey_fingerprint=credentials.sshkey_fingerprint,
+        )
         # Coarse between-calls budget: a whole operation makes a few calls;
         # the deadline is checked before each one.
         self._deadline = time.monotonic() + float(config.obs_request_timeout)

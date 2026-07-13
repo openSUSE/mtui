@@ -114,11 +114,14 @@ System-package requirements
 mtui invokes a small number of external CLI tools as subprocesses; these
 must be installed separately from the Python dependencies.
 
-``osc``
-    The OBS / IBS command-line client. mtui shells out to ``osc`` for
-    every action against ``SUSE:Maintenance`` requests; the connector
-    does not import ``osc`` as a library. On openSUSE this is the ``osc``
-    package; on other distributions install it from the
+``osc`` (optional)
+    The OBS / IBS command-line client. mtui no longer invokes ``osc`` — it
+    talks to the OBS API natively for every ``SUSE:Maintenance`` review
+    action — but it still reads the credentials (user and ``sshkey``) from
+    the ``~/.oscrc`` that ``osc`` creates, so ``osc`` remains the convenient
+    way to bootstrap that file (``osc -A https://api.suse.de whoami``). On
+    openSUSE this is the ``osc`` package; on other distributions install it
+    from the
     `openSUSE:Tools <https://build.opensuse.org/project/show/openSUSE:Tools>`_
     project or via ``pipx install osc``.
 

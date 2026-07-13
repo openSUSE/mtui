@@ -39,7 +39,8 @@ Project layout
         refhost/           #   reference-host schema (models, resolvers, store)
       data_sources/        # external HTTP services
         gitea.py           #   Gitea API client
-        oscqam.py          #   osc-qam wrapper
+        oscqam.py          #   native OBS/IBS QAM review backend
+        obs/               #   native OBS API client (auth, models, ops)
         openqa/            #   openQA clients (standard, kernel)
         qem_dashboard/     #   QEM dashboard client (split)
         oqa_search/        #   openQA build/version search (split)

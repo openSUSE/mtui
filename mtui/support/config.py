@@ -259,7 +259,7 @@ class Config:
     lock_wait: int
     lock_wait_poll: int
 
-    # -- OBS/IBS native QAM review backend (mtui/data_sources/osc/) --
+    # -- OBS/IBS native QAM review backend (mtui/data_sources/obs/) --
     obs_api_url: str
     obs_conffile: str
     obs_request_timeout: int

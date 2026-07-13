@@ -68,6 +68,15 @@ def _body(index=-1):
     return body.decode() if isinstance(body, bytes) else str(body)
 
 
+def _query_of(method, path):
+    """Parsed query of the (first) recorded call matching method + URL path."""
+    for call in responses.calls:
+        parsed = urlparse(str(call.request.url))
+        if call.request.method == method and parsed.path == path:
+            return parse_qs(parsed.query)
+    raise AssertionError(f"no {method} call to {path} was recorded")
+
+
 # --------------------------------------------------------------------------- #
 # comment                                                                      #
 # --------------------------------------------------------------------------- #
@@ -146,6 +155,17 @@ def test_assign_refused_when_not_open():
 
 
 @responses.activate
+def test_assign_accepts_state_new():
+    """state='new' is an open state (parity with the plugin's OPEN_STATES)."""
+    responses.add(responses.GET, f"{API}/request/56789", body=_request_xml(state="new"))
+    responses.add(responses.GET, LOG_URL, body="SUMMARY: PASSED\n")
+    responses.add(responses.GET, f"{API}/request", body="<collection/>")
+    responses.add(responses.POST, f"{API}/request/56789", body="<ok/>")
+    qam.assign(_client(), _config(), RRID, USER, ["qam-sle"])  # no raise
+    assert _last_query()["by_group"] == ["qam-sle"]
+
+
+@responses.activate
 def test_assign_refused_when_no_testreport():
     responses.add(responses.GET, f"{API}/request/56789", body=_request_xml())
     responses.add(responses.GET, LOG_URL, status=404)
@@ -196,6 +216,47 @@ def test_assign_previous_reject_proceeds_when_none_declined():
 
 
 @responses.activate
+def test_assign_pins_get_queries():
+    """The request GET carries withfullhistory=1 and the group GET login=user.
+
+    Both are load-bearing against real OBS (the nested review history feeds the
+    inference machine; login= scopes the group directory to the acting user).
+    """
+    reviews = "<review state='new' by_group='qam-sle'/>"
+    responses.add(
+        responses.GET, f"{API}/request/56789", body=_request_xml(reviews=reviews)
+    )
+    responses.add(responses.GET, LOG_URL, body="SUMMARY: PASSED\n")
+    responses.add(
+        responses.GET,
+        f"{API}/group",
+        body='<directory><entry name="qam-sle"/></directory>',
+    )
+    responses.add(responses.GET, f"{API}/request", body="<collection/>")
+    responses.add(responses.POST, f"{API}/request/56789", body="<ok/>")
+    qam.assign(_client(), _config(), RRID, USER, [])  # auto-infer -> hits group GET
+    assert _query_of("GET", "/request/56789")["withfullhistory"] == ["1"]
+    assert _query_of("GET", "/group")["login"] == [USER]
+
+
+@responses.activate
+def test_assign_previous_reject_ignores_non_qam_declined():
+    """A declined request with no qam-group review is excluded by the prefilter."""
+    responses.add(responses.GET, f"{API}/request/56789", body=_request_xml())
+    responses.add(responses.GET, LOG_URL, body="SUMMARY: PASSED\n")
+    # Declined, but its only review is a non-qam group -> prefilter drops it,
+    # so assign must still proceed (not blocked by an unrelated decline).
+    non_qam = (
+        "<collection><request id='9'><state name='declined'/>"
+        "<review state='declined' by_group='maintenance-team'/></request></collection>"
+    )
+    responses.add(responses.GET, f"{API}/request", body=non_qam)
+    responses.add(responses.POST, f"{API}/request/56789", body="<ok/>")
+    qam.assign(_client(), _config(), RRID, USER, ["qam-sle"])  # no raise
+    assert _last_query()["by_group"] == ["qam-sle"]
+
+
+@responses.activate
 def test_assign_skips_preconditions_for_pi():
     responses.add(responses.GET, f"{API}/request/70000", body=_request_xml())
     responses.add(responses.POST, f"{API}/request/70000", body="<ok/>")
@@ -220,6 +281,24 @@ def test_unassign_reverts_inferred_group():
     q = _last_query()
     assert q["revert"] == ["1"]
     assert q["by_group"] == ["qam-sle"]
+
+
+@responses.activate
+def test_unassign_reverts_explicit_group_over_inferred():
+    """With -G given, the revert targets the explicit group, not the inferred."""
+    # The user holds an assignment on qam-sle (the inferred group) ...
+    reviews = _group_review(
+        "qam-sle", "accepted", (USER, "2020-01-01T00:00:00", ACCEPT)
+    )
+    responses.add(
+        responses.GET, f"{API}/request/56789", body=_request_xml(reviews=reviews)
+    )
+    responses.add(responses.POST, f"{API}/request/56789", body="<ok/>")
+    # ... but the caller explicitly asks to revert a different group.
+    qam.unassign(_client(), _config(), RRID, USER, ["qam-cloud"])
+    q = _last_query()
+    assert q["revert"] == ["1"]
+    assert q["by_group"] == ["qam-cloud"]
 
 
 @responses.activate
@@ -302,6 +381,34 @@ def test_reject_writes_reason_and_declines():
 
 
 @responses.activate
+def test_reject_appends_to_existing_reject_reason():
+    """The MAINT:RejectReason RMW preserves other incidents' recorded reasons."""
+    responses.add(responses.GET, f"{API}/request/56789", body=_request_xml())
+    responses.add(responses.GET, LOG_URL, body="SUMMARY: FAILED\ncomment: broken\n")
+    attr = f"{API}/source/SUSE:Maintenance:1/_attribute/MAINT:RejectReason"
+    # A pre-existing reason for a different incident must survive the write.
+    responses.add(
+        responses.GET,
+        attr,
+        body=(
+            '<attributes><attribute name="RejectReason" namespace="MAINT">'
+            "<value>100:regression</value></attribute></attributes>"
+        ),
+    )
+    responses.add(responses.POST, attr, body="<ok/>")
+    responses.add(responses.POST, f"{API}/request/56789", body="<ok/>")
+    qam.reject(_client(), _config(), RRID, USER, [], "not_fixed", "msg")
+    attr_post = next(
+        c
+        for c in responses.calls
+        if c.request.url == attr and c.request.method == "POST"
+    )
+    posted = str(attr_post.request.body)
+    assert "100:regression" in posted  # pre-existing value preserved
+    assert "56789:not_fixed" in posted  # new value appended
+
+
+@responses.activate
 def test_reject_refused_when_not_failed():
     responses.add(responses.GET, f"{API}/request/56789", body=_request_xml())
     responses.add(responses.GET, LOG_URL, body="SUMMARY: PASSED\n")
@@ -338,6 +445,32 @@ def test_reject_ignores_group_with_log(caplog):
 # --------------------------------------------------------------------------- #
 # preconditions error paths                                                    #
 # --------------------------------------------------------------------------- #
+def test_summary_captures_whole_value_not_first_token():
+    """A trailing qualifier yields the whole value (-> UNKNOWN), matching the plugin.
+
+    Pins the `(.+?)` regex: under the old `(\\S+)` this would read 'PASSED' and
+    wrongly allow approve.
+    """
+    from mtui.data_sources.obs import preconditions
+
+    assert preconditions.summary("SUMMARY: PASSED\n") == "PASSED"
+    assert preconditions.summary("SUMMARY: PASSED with notes\n") == "PASSED WITH NOTES"
+
+
+@responses.activate
+def test_approve_refused_when_summary_has_trailing_qualifier():
+    """'SUMMARY: PASSED with notes' is not exactly PASSED -> approve refused."""
+    reviews = _group_review(
+        "qam-sle", "accepted", (USER, "2020-01-01T00:00:00", ACCEPT)
+    )
+    responses.add(
+        responses.GET, f"{API}/request/56789", body=_request_xml(reviews=reviews)
+    )
+    responses.add(responses.GET, LOG_URL, body="SUMMARY: PASSED with notes\n")
+    with pytest.raises(ObsError, match="not PASSED"):
+        qam.approve(_client(), _config(), RRID, USER, [])
+
+
 @responses.activate
 def test_fetch_testreport_log_none_on_server_error():
     from mtui.data_sources.obs import preconditions
