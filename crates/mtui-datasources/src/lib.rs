@@ -9,6 +9,7 @@
 pub mod error;
 pub mod gitea;
 pub mod http;
+pub mod obs;
 pub mod openqa;
 pub mod oqa_search;
 pub mod oscqam;
@@ -25,6 +26,7 @@ pub use http::{
     HTTP_TIMEOUT, HttpClient, VerifyPolicy, default_pool_size, disable_insecure_warnings,
     is_ssl_verification_error, resolve_verify, ssl_verification_hint, system_ca_bundle,
 };
+pub use obs::{NoAuth, ObsAuth, ObsClient, ObsError, error_summary};
 pub use openqa::{
     ApiCredentials, AutoOpenQA, ClientConf, IncidentName, Job, KernelOpenQA, OpenQABase,
     OpenQAClient, install_logfile_for,

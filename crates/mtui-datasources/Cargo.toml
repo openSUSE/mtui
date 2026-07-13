@@ -21,6 +21,7 @@ tracing.workspace = true
 thiserror.workspace = true
 regex.workspace = true
 scraper.workspace = true
+quick-xml.workspace = true
 chrono.workspace = true
 async-trait.workspace = true
 hmac.workspace = true

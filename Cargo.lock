@@ -2199,6 +2199,7 @@ dependencies = [
  "insta",
  "mtui-config",
  "mtui-types",
+ "quick-xml",
  "regex",
  "reqwest",
  "scraper",
