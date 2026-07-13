@@ -114,7 +114,6 @@ class ColorFormatter(logging.Formatter):
             The formatted log record as a string.
 
         """
-        record.message = record.getMessage()
         if self._fmt and self._fmt.find("%(levelname)") >= 0:
             # Substitute the colorized levelname only for the duration of
             # this handler's formatting: the record object is shared with
