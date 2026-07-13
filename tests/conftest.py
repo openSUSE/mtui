@@ -75,6 +75,11 @@ def mock_config():
     config.openqa_install_logs = "install-logs.tar"
     config.install_logs = "install_logs"
     config.reports_url = "https://reports.example.com"
+    # Native OBS backend defaults (mtui/data_sources/osc/); see [obs].
+    config.obs_api_url = "https://api.suse.de"
+    config.obs_conffile = ""
+    config.obs_request_timeout = 180
+    config.obs_backend = "plugin"
     return config
 
 

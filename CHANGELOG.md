@@ -9,6 +9,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Groundwork for a native OBS/IBS QAM review backend that calls the OBS API
+  directly (no `osc` library, no `osc qam` subprocess), reading credentials
+  from the user's existing `~/.oscrc`. A new `[obs]` config section
+  (`api_url`, `conffile`, `request_timeout`, `backend`) is introduced; the
+  backend defaults to `plugin`, so behaviour is unchanged for now. When the
+  `native` backend is enabled in a later release, OBS TLS is governed by
+  `[mtui] ssl_verify` rather than oscrc's own TLS knobs, and `request_timeout`
+  is a coarse between-call budget layered over the per-call HTTP timeout.
+
 - `mtui-mcp` is now much more token-efficient. Tool schemas are automatically
   slimmed of redundant pydantic boilerplate (the per-field `title` keys and the
   `anyOf: [T, null]` optional-field unions), shrinking the tool-list payload

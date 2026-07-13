@@ -167,3 +167,26 @@ class GiteaAssignInvalidError(GiteaError):
         if self.assign_status == assignment.ASSIGNED_USER:
             return f"Gitea PR has already assigned user: {self.user}"
         return f"User {self.user} isnt assigned to Gitea PR"
+
+
+class ObsError(Exception):
+    """Base exception for the native OBS/IBS review backend.
+
+    Lives alongside :class:`GiteaError` so the OBS backend follows mtui's
+    central-exceptions convention. The backend calls the OBS API directly
+    over HTTP (no ``osc`` library); concrete transport/inference subtypes
+    are internal to :mod:`mtui.data_sources.obs`, and only the caller-facing
+    configuration error is surfaced here.
+    """
+
+
+class ObsConfigError(ObsError):
+    """Raised when the native OBS backend cannot obtain usable credentials.
+
+    Covers a missing/unreadable ``~/.oscrc``, a missing apiurl section, a
+    missing ``user``/``sshkey``, an unsupported credentials manager
+    (keyring/transient), an ssh-agent-fingerprint key (deferred), or a
+    missing key file. The message names the real failing oscrc file/section;
+    it never prompts, so a headless ``mtui-mcp`` run fails closed rather than
+    hanging.
+    """

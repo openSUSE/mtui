@@ -173,6 +173,28 @@ def _parse_positive_int(raw: Any) -> int:
     return val
 
 
+_OBS_BACKENDS = ("plugin", "native")
+
+
+def _parse_obs_backend(raw: str) -> str:
+    """Validate the ``[obs] backend`` selector.
+
+    Accepts only ``plugin`` (shell out to the external ``osc qam`` CLI
+    plugin, the default during the native-backend transition) or
+    ``native`` (the in-tree direct-OBS-API backend). Any other value is a
+    user error; the ``ConfigOption`` machinery then falls back to the
+    default.
+
+    Raises:
+        ValueError: If the value is not one of the accepted backends.
+
+    """
+    value = raw.strip().lower()
+    if value not in _OBS_BACKENDS:
+        raise ValueError(f"expected one of {_OBS_BACKENDS}, got {raw!r}")
+    return value
+
+
 def _parse_install_logs(raw: str) -> Path:
     """Validate ``[mtui] install_logs`` as a single relative directory name.
 
@@ -258,6 +280,12 @@ class Config:
     lock_pi_autolock: bool
     lock_wait: int
     lock_wait_poll: int
+
+    # -- OBS/IBS native QAM review backend (mtui/data_sources/osc/) --
+    obs_api_url: str
+    obs_conffile: str
+    obs_request_timeout: int
+    obs_backend: str
 
     # -- mtui-mcp server (http transport) per-client session registry --
     mcp_session_cap: int
@@ -667,6 +695,45 @@ class Config:
                 100_000,
                 int,
                 getint,
+            ),
+            # OBS/IBS native QAM review backend (direct OBS API over
+            # ``requests``, no ``osc`` library). ``api_url`` is the OBS API
+            # mtui acts against and must equal a section header in the user's
+            # oscrc; ``conffile`` optionally overrides the oscrc path (empty
+            # = ~/.oscrc); ``request_timeout`` is a COARSE wall-clock budget
+            # checked BETWEEN a native operation's HTTP calls (each call is
+            # itself bounded by support/http HTTP_TIMEOUT) — it is NOT a
+            # mid-call hard kill; ``backend`` selects ``plugin`` (the external
+            # ``osc qam`` CLI, default during the transition) or ``native``
+            # (the in-tree direct-API backend). No OBS credentials live here —
+            # oscrc remains the sole credential source.
+            ConfigOption(
+                "obs_api_url",
+                ("obs", "api_url"),
+                "https://api.suse.de",
+                _parse_base_url,
+                get,
+            ),
+            ConfigOption(
+                "obs_conffile",
+                ("obs", "conffile"),
+                "",
+                str,
+                get,
+            ),
+            ConfigOption(
+                "obs_request_timeout",
+                ("obs", "request_timeout"),
+                180,
+                _parse_positive_int,
+                getint,
+            ),
+            ConfigOption(
+                "obs_backend",
+                ("obs", "backend"),
+                "plugin",
+                _parse_obs_backend,
+                get,
             ),
         ]
 
