@@ -19,9 +19,8 @@ CREDS = ObsCredentials(
 )
 
 
-def _config(backend="native"):
+def _config():
     return SimpleNamespace(
-        obs_backend=backend,
         obs_api_url="https://api.suse.de",
         obs_conffile="",
         obs_request_timeout=180,
@@ -98,18 +97,3 @@ def test_native_credential_error_returns_false(monkeypatch):
 
     monkeypatch.setattr(oscqam, "read_credentials", boom)
     assert OSC(_config(), RRID).assign(["g"]) is False
-
-
-def test_plugin_backend_does_not_use_native(monkeypatch):
-    """With backend=plugin the native path is not taken."""
-    called = {"native": False}
-    monkeypatch.setattr(
-        oscqam,
-        "read_credentials",
-        lambda *a, **k: called.__setitem__("native", True),
-    )
-    monkeypatch.setattr(
-        oscqam, "run", lambda *a, **k: SimpleNamespace(stdout="", stderr="")
-    )
-    OSC(_config(backend="plugin"), RRID).comment("x")
-    assert called["native"] is False

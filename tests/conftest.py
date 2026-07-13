@@ -79,7 +79,6 @@ def mock_config():
     config.obs_api_url = "https://api.suse.de"
     config.obs_conffile = ""
     config.obs_request_timeout = 180
-    config.obs_backend = "plugin"
     return config
 
 
