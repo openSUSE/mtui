@@ -259,6 +259,11 @@ class Config:
     lock_wait: int
     lock_wait_poll: int
 
+    # -- OBS/IBS native QAM review backend (mtui/data_sources/osc/) --
+    obs_api_url: str
+    obs_conffile: str
+    obs_request_timeout: int
+
     # -- mtui-mcp server (http transport) per-client session registry --
     mcp_session_cap: int
     mcp_session_idle_timeout: int
@@ -666,6 +671,36 @@ class Config:
                 ("mcp", "max_output_bytes"),
                 100_000,
                 int,
+                getint,
+            ),
+            # OBS/IBS native QAM review backend (direct OBS API over
+            # ``requests``, no ``osc`` library). ``api_url`` is the OBS API
+            # mtui acts against and must equal a section header in the user's
+            # oscrc; ``conffile`` optionally overrides the oscrc path (empty
+            # = ~/.oscrc); ``request_timeout`` is a COARSE wall-clock budget
+            # checked BETWEEN a native operation's HTTP calls (each call is
+            # itself bounded by support/http HTTP_TIMEOUT) — it is NOT a
+            # mid-call hard kill. No OBS credentials live here — oscrc
+            # remains the sole credential source.
+            ConfigOption(
+                "obs_api_url",
+                ("obs", "api_url"),
+                "https://api.suse.de",
+                _parse_base_url,
+                get,
+            ),
+            ConfigOption(
+                "obs_conffile",
+                ("obs", "conffile"),
+                "",
+                str,
+                get,
+            ),
+            ConfigOption(
+                "obs_request_timeout",
+                ("obs", "request_timeout"),
+                180,
+                _parse_positive_int,
                 getint,
             ),
         ]
