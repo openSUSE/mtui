@@ -426,6 +426,41 @@ pub trait TestReport {
         }
     }
 
+    /// Releases one host's in-process arbiter claim and prunes it from the
+    /// slot-candidate map.
+    ///
+    /// Ports upstream `TestReport.release_pool_claim`: the per-host analogue of
+    /// [`release_pool_claims`](Self::release_pool_claims), called from
+    /// `remove_host` so a disconnected refhost does not stay claimed in the
+    /// process-global [`HostArbiter`](mtui_hosts::HostArbiter) for the rest of
+    /// the server's lifetime (there is no `unload` over MCP, so the template
+    /// stays loaded). [`Target::close`](mtui_hosts::Target::close) already drops
+    /// the remote operation/pool-lock files; this clears the in-process
+    /// ownership those locks and the `--free` probe never see.
+    ///
+    /// Only `host` is dropped from each slot's candidate list — siblings stay
+    /// available as backup-refhost fallbacks (RFC §5.7); a slot is pruned only
+    /// once it has no candidates left. (Contrast
+    /// [`release_pool_claims`](Self::release_pool_claims), which clears the whole
+    /// map because it tears the entire report down.)
+    ///
+    /// Idempotent and safe when pool selection was never used
+    /// ([`arbiter`](TestReportBase::arbiter)/[`owner`](TestReportBase::owner) are
+    /// then `None`).
+    fn release_pool_claim(&mut self, host: &str) {
+        let base = self.base_mut();
+        base.pool_claims.remove(host);
+        // Drop only this host from each slot; keep siblings as backups, and
+        // prune a slot only once it is empty.
+        base.slot_candidates.retain(|_slot, candidates| {
+            candidates.retain(|c| c != host);
+            !candidates.is_empty()
+        });
+        if let (Some(arbiter), Some(owner)) = (base.arbiter.as_ref(), base.owner.as_ref()) {
+            arbiter.release(host, owner);
+        }
+    }
+
     /// Emits the per-host update commands for `targets` (upstream
     /// `list_update_commands`). The null object is a no-op.
     fn list_update_commands(&self, targets: &HostsGroup);
@@ -1186,6 +1221,82 @@ mod tests {
         };
         r.release_pool_claims().await;
         r.release_pool_claims().await; // idempotent second call
+        assert!(r.base().pool_claims.is_empty());
+        assert!(r.base().arbiter.is_none());
+    }
+
+    #[tokio::test]
+    async fn release_pool_claim_frees_host_and_keeps_siblings() {
+        let owner: Owner = ("reg-1".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
+        assert!(arbiter.try_acquire("h1", &owner));
+        assert!(arbiter.try_acquire("h2", &owner));
+
+        let mut base = TestReportBase::new(config());
+        base.arbiter = Some(arbiter);
+        base.owner = Some(owner.clone());
+        base.pool_claims.insert("h1".to_owned());
+        base.pool_claims.insert("h2".to_owned());
+        // One slot holds both as candidates (h1 primary, h2 backup sibling).
+        base.slot_candidates
+            .insert("slot0".to_owned(), vec!["h1".to_owned(), "h2".to_owned()]);
+        let mut r = MetaReport { base };
+
+        r.release_pool_claim("h1");
+
+        // h1's in-process claim is dropped; h2 stays claimed.
+        assert!(!r.base().pool_claims.contains("h1"));
+        assert!(r.base().pool_claims.contains("h2"));
+        // The freed host is re-acquirable by another owner.
+        let arbiter = r.base().arbiter.as_ref().unwrap();
+        let other: Owner = ("reg-2".to_owned(), "SUSE:Maintenance:2:2".to_owned());
+        assert!(arbiter.try_acquire("h1", &other));
+        // h2 is still owned by us (its sibling stays as backup).
+        assert_eq!(arbiter.owner_of("h2"), Some(owner.clone()));
+        // The slot survives (h2 still a candidate), with h1 pruned out.
+        assert_eq!(
+            r.base().slot_candidates.get("slot0"),
+            Some(&vec!["h2".to_owned()])
+        );
+    }
+
+    #[tokio::test]
+    async fn release_pool_claim_prunes_empty_slot() {
+        let owner: Owner = ("reg-1".to_owned(), "SUSE:Maintenance:1:1".to_owned());
+        let arbiter: &'static HostArbiter = Box::leak(Box::new(HostArbiter::new()));
+        assert!(arbiter.try_acquire("only", &owner));
+
+        let mut base = TestReportBase::new(config());
+        base.arbiter = Some(arbiter);
+        base.owner = Some(owner.clone());
+        base.pool_claims.insert("only".to_owned());
+        base.slot_candidates
+            .insert("slot0".to_owned(), vec!["only".to_owned()]);
+        let mut r = MetaReport { base };
+
+        r.release_pool_claim("only");
+
+        // The slot had no siblings left, so it is pruned entirely.
+        assert!(r.base().slot_candidates.is_empty());
+        assert!(r.base().pool_claims.is_empty());
+        assert!(
+            r.base()
+                .arbiter
+                .as_ref()
+                .unwrap()
+                .owner_of("only")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn release_pool_claim_is_a_noop_when_pooling_never_used() {
+        let mut r = MetaReport {
+            base: TestReportBase::new(config()),
+        };
+        // No arbiter/owner/claims: must not panic, idempotent.
+        r.release_pool_claim("ghost");
+        r.release_pool_claim("ghost");
         assert!(r.base().pool_claims.is_empty());
         assert!(r.base().arbiter.is_none());
     }

@@ -332,10 +332,13 @@ impl HostsGroup {
 
     /// Removes and returns the target named `hostname`, if present.
     ///
-    /// Ports the container half of upstream `remove_host`/`HostsGroup.__delitem__`
-    /// (upstream disconnects the target and purges its log before dropping the
-    /// dict entry; here dropping the returned [`Target`] closes its owned
-    /// connection). `None` when no such host is in the group.
+    /// Ports the container half of upstream `remove_host`/`HostsGroup.__delitem__`.
+    /// This only detaches the [`Target`] from the group; it does **not**
+    /// disconnect it — dropping a `Target` closes its transport but never runs
+    /// [`Target::close`], so it does not release the remote operation/pool
+    /// locks. The caller (`remove_host`) is responsible for
+    /// [`close`](Target::close)ing the returned target to drop those locks.
+    /// `None` when no such host is in the group.
     pub fn remove(&mut self, hostname: &str) -> Option<Target> {
         self.data.remove(hostname)
     }
