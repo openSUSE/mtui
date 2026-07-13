@@ -39,11 +39,10 @@ class QEMDashboardClient:
         # so every request honors the global ssl_verify config.
         self._session = build_session(verify)
 
-    def _get(self, path: str, **params) -> Any | None:
+    def _get(self, path: str) -> Any | None:
         try:
             response = self._session.get(
                 f"{self.apiurl}/{path.lstrip('/')}",
-                params=params or None,
                 headers={"Accept": "application/json"},
                 timeout=HTTP_TIMEOUT,
             )
