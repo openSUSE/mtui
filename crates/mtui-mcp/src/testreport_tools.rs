@@ -126,18 +126,59 @@ fn resolve_dir(session: &Session, template: Option<&str>) -> Result<PathBuf, Mcp
 ///
 /// Guards against `..` traversal and absolute paths. Mirrors upstream
 /// `_safe_template_file`: the target must be `base` itself or a descendant of it.
+///
+/// Two-stage containment: a cheap lexical `.`/`..` collapse first (so a
+/// not-yet-existing file still resolves — `canonicalize` would fail on a missing
+/// path), then a symlink-aware re-check that canonicalizes the target's longest
+/// *existing* ancestor. The second stage catches a symlink placed *inside* the
+/// checkout that points outside the tree, which the lexical pass alone would
+/// follow (bead `mtui-rs-ir0d`).
 fn safe_template_file(base: &Path, relpath: &str) -> Result<PathBuf, McpCommandError> {
     let base_resolved = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
     let joined = base_resolved.join(relpath);
-    // Normalise `.`/`..` lexically so a not-yet-existing file still resolves
-    // (canonicalize would fail on a missing path).
+    // Normalise `.`/`..` lexically so a not-yet-existing file still resolves.
     let target = normalize(&joined);
+    let escape = || refuse(format!("path {relpath:?} escapes the testreport directory"));
     if target != base_resolved && !target.starts_with(&base_resolved) {
-        return Err(refuse(format!(
-            "path {relpath:?} escapes the testreport directory"
-        )));
+        return Err(escape());
+    }
+    // Symlink-aware re-check: canonicalize the longest existing ancestor of the
+    // (possibly not-yet-existing) target and re-verify containment. This defeats
+    // an in-tree symlink whose canonical destination lies outside `base`.
+    // Compare against the *canonicalized* base ancestor so a base that does not
+    // itself exist on disk (its symlink-free lexical form) is not spuriously
+    // rejected against a canonicalized target prefix (e.g. `/tmp`→`/private/tmp`).
+    let resolved = resolve_existing_ancestor(&target);
+    let base_canon = resolve_existing_ancestor(&base_resolved);
+    if resolved != base_canon && !resolved.starts_with(&base_canon) {
+        return Err(escape());
     }
     Ok(target)
+}
+
+/// Canonicalize `path`'s longest existing ancestor, re-appending the trailing
+/// not-yet-existing components lexically. Symlinks in the existing prefix are
+/// followed; the missing tail is left as-is (nothing to resolve). Falls back to
+/// the lexical `path` when even the root cannot be canonicalized.
+fn resolve_existing_ancestor(path: &Path) -> PathBuf {
+    let mut ancestor = path;
+    let mut tail: Vec<&std::ffi::OsStr> = Vec::new();
+    loop {
+        if let Ok(canon) = ancestor.canonicalize() {
+            let mut out = canon;
+            for comp in tail.iter().rev() {
+                out.push(comp);
+            }
+            return out;
+        }
+        match (ancestor.file_name(), ancestor.parent()) {
+            (Some(name), Some(parent)) => {
+                tail.push(name);
+                ancestor = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// Lexically normalise a path, collapsing `.` and `..` without touching disk.
@@ -1244,5 +1285,67 @@ mod tests {
         assert!(safe_template_file(base, "build_checks/x.log").is_ok());
         assert!(safe_template_file(base, "../escape").is_err());
         assert!(safe_template_file(base, "/etc/passwd").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_template_file_blocks_in_tree_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        // A checkout containing a symlink that points *outside* the tree must be
+        // refused even though the relpath is lexically inside `base`.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("checkout");
+        std::fs::create_dir_all(&base).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), "top secret\n").unwrap();
+
+        // symlink: <base>/escape -> <tmp>/outside
+        symlink(&outside, base.join("escape")).unwrap();
+
+        let err = safe_template_file(&base, "escape/secret")
+            .expect_err("in-tree symlink escaping the checkout must refuse");
+        assert!(err.stderr.contains("escapes"), "{err:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_template_file_allows_in_tree_symlink() {
+        use std::os::unix::fs::symlink;
+
+        // A symlink pointing to a file *inside* the checkout is allowed.
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("checkout");
+        std::fs::create_dir_all(base.join("real")).unwrap();
+        std::fs::write(base.join("real/file"), "ok\n").unwrap();
+
+        // symlink: <base>/link -> <base>/real
+        symlink(base.join("real"), base.join("link")).unwrap();
+
+        let resolved = safe_template_file(&base, "link/file").expect("in-tree symlink is allowed");
+        assert!(resolved.ends_with("file"), "{resolved:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_refuses_in_tree_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let (session, tmp) = session_with_tmp();
+        let path = log_path(&tmp);
+        load_report(&session, RRID, &path, "log\n").await;
+        let checkout = path.parent().unwrap();
+
+        // Plant a secret outside the checkout and a symlink to it inside.
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), "top secret\n").unwrap();
+        symlink(&outside, checkout.join("escape")).unwrap();
+
+        let err = testreport_read(&session, Some("escape/secret"), 1, None, None)
+            .await
+            .expect_err("symlink escape refused");
+        assert!(err.stderr.contains("escapes"), "{err:?}");
     }
 }
