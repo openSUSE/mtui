@@ -192,11 +192,13 @@ pub async fn incident_jobs(
             .get("id")
             .and_then(serde_json::Value::as_i64)
             .unwrap_or(0);
+        let state = job.get("state").and_then(|s| s.as_str()).unwrap_or("");
         rows.push(JobResult {
             job_id: id,
             test,
             arch,
             result: result.to_string(),
+            state: state.to_string(),
             group: job
                 .get("group")
                 .and_then(|g| g.as_str())

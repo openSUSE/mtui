@@ -17,12 +17,23 @@ use crate::session::Session;
 const PASSING: &[&str] = &["passed", "softfailed"];
 /// openQA results that are neutral (neither pass nor fail; upstream `_NEUTRAL`).
 const NEUTRAL: &[&str] = &["obsoleted", "skipped"];
+/// openQA job states that mean the job has finished; any other state
+/// (`scheduled`, `assigned`, `setup`, `running`, `uploading`, ...) is pending
+/// and its `result` is not yet meaningful.
+const TERMINAL_STATES: &[&str] = &["done", "cancelled"];
+
+/// Whether an openQA job has not finished yet. Pending jobs must not be counted
+/// as failures by `--failed`, and are surfaced separately as "N still pending".
+fn is_pending(job: &oqa::JobResult) -> bool {
+    !TERMINAL_STATES.contains(&job.state.as_str())
+}
 
 /// Lists the individual openQA jobs for the loaded update's incident build.
 ///
 /// Ports upstream `mtui.commands.openqa_jobs.OpenQAJobs`. By default `obsoleted`
-/// jobs are dropped; `--all` keeps them, `--failed` shows only non-passing jobs,
-/// and `--arch` filters by architecture. Requires a loaded update.
+/// jobs are dropped; `--all` keeps them, `--failed` shows only genuinely failed
+/// jobs (pending/unfinished jobs are excluded and reported as "N still
+/// pending"), and `--arch` filters by architecture. Requires a loaded update.
 pub struct OpenQAJobs;
 
 #[async_trait]
@@ -50,7 +61,7 @@ impl Command for OpenQAJobs {
             Arg::new("failed")
                 .long("failed")
                 .action(ArgAction::SetTrue)
-                .help("show only non-passing jobs (failed / parallel_failed / incomplete)"),
+                .help("show only genuinely failed jobs (pending/unfinished excluded)"),
         )
         .arg(
             Arg::new("arch")
@@ -147,9 +158,14 @@ impl Command for OpenQAJobs {
         if let Some(arch) = &arch_filter {
             jobs.retain(|j| &j.arch == arch);
         }
+        // Count unfinished jobs before any --failed filtering so the "still
+        // pending" message reflects reality regardless of the active filter.
+        let pending_count = jobs.iter().filter(|j| is_pending(j)).count();
         if only_failed {
             jobs.retain(|j| {
-                !PASSING.contains(&j.result.as_str()) && !NEUTRAL.contains(&j.result.as_str())
+                !is_pending(j)
+                    && !PASSING.contains(&j.result.as_str())
+                    && !NEUTRAL.contains(&j.result.as_str())
             });
         }
 
@@ -158,6 +174,12 @@ impl Command for OpenQAJobs {
                 .display
                 .yellow(&format!("No openQA jobs for build {build:?}"));
             session.display.println(&msg);
+            if pending_count > 0 {
+                let pending = session
+                    .display
+                    .yellow(&format!("{pending_count} still pending"));
+                session.display.println(&pending);
+            }
             return Ok(());
         }
 
@@ -174,9 +196,17 @@ impl Command for OpenQAJobs {
             "openQA jobs for build {build} ({}): {summary}",
             jobs.len()
         ));
+        if pending_count > 0 {
+            let pending = session
+                .display
+                .yellow(&format!("{pending_count} still pending"));
+            session.display.println(&pending);
+        }
         session.display.println("");
         for j in &jobs {
-            let result = if PASSING.contains(&j.result.as_str()) {
+            let result = if is_pending(j) {
+                session.display.yellow(&format!("{:<15}", j.result))
+            } else if PASSING.contains(&j.result.as_str()) {
                 session.display.green(&format!("{:<15}", j.result))
             } else if NEUTRAL.contains(&j.result.as_str()) {
                 session.display.yellow(&format!("{:<15}", j.result))
@@ -242,8 +272,8 @@ mod tests {
     async fn lists_jobs_with_summary() {
         let server = server_with_jobs(serde_json::json!({
             "jobs": [
-                {"id": 1, "test": "install", "arch": "x86_64", "result": "passed", "clone_id": null},
-                {"id": 2, "test": "boot", "arch": "x86_64", "result": "failed", "clone_id": null},
+                {"id": 1, "test": "install", "arch": "x86_64", "result": "passed", "state": "done", "clone_id": null},
+                {"id": 2, "test": "boot", "arch": "x86_64", "result": "failed", "state": "done", "clone_id": null},
             ]
         }))
         .await;
@@ -264,14 +294,15 @@ mod tests {
         assert!(out.contains("failed=1"), "{out}");
         assert!(out.contains("passed=1"), "{out}");
         assert!(out.contains("install"), "{out}");
+        assert!(!out.contains("still pending"), "{out}");
     }
 
     #[tokio::test]
     async fn failed_filter_drops_passing_jobs() {
         let server = server_with_jobs(serde_json::json!({
             "jobs": [
-                {"id": 1, "test": "install", "arch": "x86_64", "result": "passed", "clone_id": null},
-                {"id": 2, "test": "boot", "arch": "aarch64", "result": "failed", "clone_id": null},
+                {"id": 1, "test": "install", "arch": "x86_64", "result": "passed", "state": "done", "clone_id": null},
+                {"id": 2, "test": "boot", "arch": "aarch64", "result": "failed", "state": "done", "clone_id": null},
             ]
         }))
         .await;
@@ -295,5 +326,71 @@ mod tests {
             "passing job should be filtered: {out}"
         );
         assert!(!out.contains("install"), "{out}");
+    }
+
+    /// `--failed` must not list unfinished jobs (openQA `result:none`,
+    /// non-terminal `state`) as failures, and must report them as pending.
+    #[tokio::test]
+    async fn failed_filter_excludes_pending_and_reports_count() {
+        let server = server_with_jobs(serde_json::json!({
+            "jobs": [
+                {"id": 1, "test": "install", "arch": "x86_64", "result": "passed", "state": "done", "clone_id": null},
+                {"id": 2, "test": "boot", "arch": "x86_64", "result": "failed", "state": "done", "clone_id": null},
+                {"id": 3, "test": "kdump", "arch": "x86_64", "result": "none", "state": "scheduled", "clone_id": null},
+            ]
+        }))
+        .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(
+            &OpenQAJobs,
+            &[
+                "--failed",
+                "--url-dashboard-qam",
+                &server.uri(),
+                "--url-openqa",
+                &server.uri(),
+            ],
+        );
+        OpenQAJobs.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        // Only the genuinely failed job survives the filter.
+        assert!(out.contains("boot"), "{out}");
+        assert!(out.contains("failed=1"), "{out}");
+        // The pending job is neither counted as failed nor listed.
+        assert!(
+            !out.contains("kdump"),
+            "pending job must not be listed as failed: {out}"
+        );
+        // ... but it is reported as pending.
+        assert!(out.contains("1 still pending"), "{out}");
+    }
+
+    /// In the default listing a pending job (`result:none`) is still shown and
+    /// the pending count is surfaced. Color is stripped under `ColorMode::Never`,
+    /// so the yellow-vs-red branch is exercised for coverage but not asserted on.
+    #[tokio::test]
+    async fn pending_job_listed_and_counted_in_default_listing() {
+        let server = server_with_jobs(serde_json::json!({
+            "jobs": [
+                {"id": 1, "test": "kdump", "arch": "x86_64", "result": "none", "state": "running", "clone_id": null},
+            ]
+        }))
+        .await;
+
+        let (mut session, buf) = session_with_hosts("SUSE:Maintenance:1:1", &["h1"], "ok");
+        let args = matches(
+            &OpenQAJobs,
+            &[
+                "--url-dashboard-qam",
+                &server.uri(),
+                "--url-openqa",
+                &server.uri(),
+            ],
+        );
+        OpenQAJobs.call(&mut session, &args).await.unwrap();
+        let out = buf.contents();
+        assert!(out.contains("kdump"), "{out}");
+        assert!(out.contains("1 still pending"), "{out}");
     }
 }

@@ -836,7 +836,7 @@ expression: pretty
         },
         "failed": {
           "default": false,
-          "description": "show only non-passing jobs (failed / parallel_failed / incomplete)",
+          "description": "show only genuinely failed jobs (pending/unfinished excluded)",
           "type": "boolean"
         },
         "template": {

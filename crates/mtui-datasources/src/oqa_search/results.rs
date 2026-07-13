@@ -61,6 +61,10 @@ pub struct JobResult {
     pub arch: String,
     /// The openQA job result.
     pub result: String,
+    /// The openQA job state. `done` and `cancelled` are terminal; any other
+    /// value (`scheduled`, `assigned`, `setup`, `running`, `uploading`, ...)
+    /// means the job has not finished and its `result` is not yet meaningful.
+    pub state: String,
     /// The job group name (may be empty).
     pub group: String,
     /// The browser-facing job URL (`.../t<id>`).
