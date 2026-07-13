@@ -158,6 +158,29 @@ mod tests {
     }
 
     #[test]
+    fn mcp_profile_defaults_to_full_with_empty_overrides() {
+        let d = Config::default();
+        assert_eq!(d.mcp_profile, "full");
+        assert!(d.mcp_tools_allow.is_empty());
+        assert!(d.mcp_tools_deny.is_empty());
+    }
+
+    #[test]
+    fn load_reads_mcp_profile_and_tool_overrides() {
+        let path = write_tmp(
+            "mcp-profile.toml",
+            "[mcp]\nprofile = \"core\"\ntools_allow = [\"whoami\"]\ntools_deny = [\"run\", \"update\"]\n",
+        );
+        let cfg = Config::load(Some(path));
+        assert_eq!(cfg.mcp_profile, "core");
+        assert_eq!(cfg.mcp_tools_allow, vec!["whoami".to_owned()]);
+        assert_eq!(
+            cfg.mcp_tools_deny,
+            vec!["run".to_owned(), "update".to_owned()]
+        );
+    }
+
+    #[test]
     fn load_malformed_file_logs_and_falls_back_to_defaults() {
         // Invalid TOML must not panic; defaults apply.
         let path = write_tmp("broken.toml", "connection_timeout = = 42\n");

@@ -35,3 +35,6 @@ wait = 30
 
 [mcp]
 max_output_bytes = 65536          # integer value
+profile = "core"                  # tool-surface profile
+tools_allow = ["whoami"]          # extra tools kept on top of the profile
+tools_deny = ["run"]              # tools removed regardless of profile/allow

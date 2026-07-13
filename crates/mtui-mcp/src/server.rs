@@ -79,20 +79,45 @@ impl McpServer {
         let command_descriptors = build_tools(&registry);
         let job_descriptors = job_tool_descriptors();
         let testreport_descriptors = testreport_tool_descriptors();
-        let routes = tool_routes(&registry);
+        let mut routes = tool_routes(&registry);
 
-        let job_tools: HashSet<String> = job_descriptors.iter().map(|d| d.name.clone()).collect();
-        let testreport_tools: HashSet<String> = testreport_descriptors
+        // The whole synthesised surface: command tools + the four job tools +
+        // the hand-written testreport tools.
+        let mut descriptors: Vec<ToolDescriptor> = command_descriptors
+            .into_iter()
+            .chain(job_descriptors)
+            .chain(testreport_descriptors)
+            .collect();
+
+        // Token-budget passes, in upstream's order (main.py): slim every tool's
+        // JSON schema of redundant boilerplate, then narrow the surface to the
+        // configured profile. `full` with no allow/deny override is a no-op.
+        for descriptor in &mut descriptors {
+            descriptor.input_schema = crate::slim::slim_input_schema(&descriptor.input_schema);
+        }
+        let kept = crate::profiles::apply_profile(
+            &mut descriptors,
+            session.profile(),
+            session.tools_allow(),
+            session.tools_deny(),
+        );
+        let kept: HashSet<String> = kept.into_iter().collect();
+
+        // Keep the dispatch views in lockstep with the (possibly filtered) tool
+        // list so a profiled-out tool cannot still be called.
+        routes.retain(|name, _| kept.contains(name));
+        let job_tools: HashSet<String> = job_tool_descriptors()
             .iter()
             .map(|d| d.name.clone())
+            .filter(|n| kept.contains(n))
+            .collect();
+        let testreport_tools: HashSet<String> = testreport_tool_descriptors()
+            .iter()
+            .map(|d| d.name.clone())
+            .filter(|n| kept.contains(n))
             .collect();
 
-        let tools: Vec<Tool> = command_descriptors
-            .iter()
-            .chain(job_descriptors.iter())
-            .chain(testreport_descriptors.iter())
-            .map(descriptor_to_tool)
-            .collect();
+        let tools: Vec<Tool> = descriptors.iter().map(descriptor_to_tool).collect();
 
         Self {
             registry,
@@ -192,3 +217,92 @@ fn render(result: Result<String, crate::session::McpCommandError>) -> CallToolRe
 /// production handler is [`McpServer`]. Kept as a thin alias so the existing test
 /// keeps compiling while callers migrate.
 pub type SpikeServer = McpServer;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mtui_config::Config;
+    use mtui_core::register_all;
+
+    fn server_with(config: Config) -> McpServer {
+        let registry = Arc::new(register_all());
+        let session = McpSession::new(config);
+        McpServer::new(registry, session)
+    }
+
+    fn tool_names(server: &McpServer) -> Vec<String> {
+        server.tools.iter().map(|t| t.name.to_string()).collect()
+    }
+
+    #[test]
+    fn full_profile_keeps_the_whole_surface() {
+        // Default config == full profile, no overrides: every synthesised tool
+        // plus job + testreport tools is present, and routes/tracking sets match.
+        let server = server_with(Config::default());
+        let names = tool_names(&server);
+        assert!(names.iter().any(|n| n == "run"));
+        assert!(names.iter().any(|n| n == "set_log_level"));
+        assert!(names.iter().any(|n| n == "job_list"));
+        assert!(names.iter().any(|n| n == "testreport_read"));
+        assert!(server.routes.contains_key("run"));
+        assert!(server.job_tools.contains("job_list"));
+        assert!(server.testreport_tools.contains("testreport_read"));
+    }
+
+    #[test]
+    fn core_profile_filters_tools_and_dispatch_views() {
+        let mut config = Config::default();
+        config.mcp_profile = "core".to_owned();
+        let server = server_with(config);
+        let names = tool_names(&server);
+
+        // A core command stays; a non-core one is gone from the list *and* its route.
+        assert!(names.iter().any(|n| n == "run"), "core tool kept");
+        assert!(
+            !names.iter().any(|n| n == "set_log_level"),
+            "non-core tool removed from list"
+        );
+        assert!(server.routes.contains_key("run"), "core route kept");
+        assert!(
+            !server.routes.contains_key("set_log_level"),
+            "non-core route pruned"
+        );
+        // Job + testreport tools are always core.
+        assert!(server.job_tools.contains("job_list"));
+        assert!(server.testreport_tools.contains("testreport_read"));
+    }
+
+    #[test]
+    fn allow_and_deny_overrides_apply_at_construction() {
+        let mut config = Config::default();
+        config.mcp_profile = "core".to_owned();
+        config.mcp_tools_allow = vec!["whoami".to_owned()]; // not in core
+        config.mcp_tools_deny = vec!["run".to_owned()]; // in core
+        let server = server_with(config);
+        let names = tool_names(&server);
+
+        assert!(names.iter().any(|n| n == "whoami"), "allow adds back");
+        assert!(!names.iter().any(|n| n == "run"), "deny wins");
+        assert!(!server.routes.contains_key("run"), "denied route pruned");
+    }
+
+    #[test]
+    fn schemas_are_slimmed_on_the_wire() {
+        // No tool schema carries a `title` keyword or a bare null arm after
+        // construction — the slimming pass ran over the live surface.
+        let server = server_with(Config::default());
+        for tool in server.tools.iter() {
+            let blob = serde_json::to_string(&*tool.input_schema).unwrap();
+            assert!(
+                !blob.contains("\"title\""),
+                "{} kept a title keyword",
+                tool.name
+            );
+            assert!(
+                !blob.contains("{\"type\":\"null\"}"),
+                "{} kept a null arm",
+                tool.name
+            );
+        }
+    }
+}

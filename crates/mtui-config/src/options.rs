@@ -199,6 +199,9 @@ pub(crate) fn default_mcp_session_cap() -> usize {
 pub(crate) fn default_mcp_session_idle_timeout() -> u64 {
     1800
 }
+pub(crate) fn default_mcp_profile() -> String {
+    "full".to_owned()
+}
 
 // -- Serde section structs (mirror the TOML tables) --------------------------
 
@@ -309,13 +312,22 @@ pub(crate) struct LockSection {
 /// Mirrors upstream `mtui/support/config.py`'s `mcp_*` options (which live under
 /// the `[mcp]` INI section). `session_cap` / `session_idle_timeout` configure the
 /// http transport's per-client session budget (enforcement is a follow-up —
-/// mtui-rs-odq8).
+/// mtui-rs-odq8). `profile` / `tools_allow` / `tools_deny` select the exposed
+/// tool surface (see `mtui_mcp::profiles`).
+///
+/// Note: upstream names the profile key `tool_profile`; here it is `profile`
+/// under the already tool-scoped `[mcp]` table (an intentional TOML-idiomatic
+/// deviation). The list keys keep their upstream names, but are native TOML
+/// arrays of strings rather than upstream's comma-separated INI strings.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct McpSection {
     pub max_output_bytes: Option<usize>,
     pub session_cap: Option<usize>,
     pub session_idle_timeout: Option<u64>,
+    pub profile: Option<String>,
+    pub tools_allow: Option<Vec<String>>,
+    pub tools_deny: Option<Vec<String>>,
 }
 
 /// Raw, deserialised view of a single TOML document.
@@ -381,6 +393,9 @@ impl RawConfig {
         take!(mcp, max_output_bytes);
         take!(mcp, session_cap);
         take!(mcp, session_idle_timeout);
+        take!(mcp, profile);
+        take!(mcp, tools_allow);
+        take!(mcp, tools_deny);
     }
 }
 
@@ -491,6 +506,16 @@ pub struct Config {
     /// disables the sweeper. Upstream default is 1800. Enforcement is a
     /// follow-up (mtui-rs-odq8).
     pub mcp_session_idle_timeout: u64,
+    /// Tool-surface profile the `mtui-mcp` server exposes: `"full"` (default,
+    /// every synthesised tool) or `"core"` (the curated everyday subset — see
+    /// `mtui_mcp::profiles`). An unknown name falls back to `full` with a
+    /// warning. Upstream key is `[mcp] tool_profile`; here it is `[mcp] profile`.
+    pub mcp_profile: String,
+    /// Extra tool names to keep on top of the profile (only those actually
+    /// registered are added). Layered before `mcp_tools_deny`.
+    pub mcp_tools_allow: Vec<String>,
+    /// Tool names to remove regardless of profile/allow (deny wins last).
+    pub mcp_tools_deny: Vec<String>,
 }
 
 impl Default for Config {
@@ -528,6 +553,9 @@ impl Default for Config {
             mcp_max_output_bytes: default_mcp_max_output_bytes(),
             mcp_session_cap: default_mcp_session_cap(),
             mcp_session_idle_timeout: default_mcp_session_idle_timeout(),
+            mcp_profile: default_mcp_profile(),
+            mcp_tools_allow: Vec::new(),
+            mcp_tools_deny: Vec::new(),
         }
     }
 }
@@ -597,6 +625,9 @@ impl Config {
                 .mcp
                 .session_idle_timeout
                 .unwrap_or(d.mcp_session_idle_timeout),
+            mcp_profile: raw.mcp.profile.unwrap_or(d.mcp_profile),
+            mcp_tools_allow: raw.mcp.tools_allow.unwrap_or(d.mcp_tools_allow),
+            mcp_tools_deny: raw.mcp.tools_deny.unwrap_or(d.mcp_tools_deny),
         }
     }
 }

@@ -193,6 +193,15 @@ pub struct McpSession {
     /// `0` disables the cap. Retained here so [`run_command`](Self::run_command)
     /// need not hold the whole [`Config`].
     max_output_bytes: usize,
+    /// Tool-surface profile (`config.mcp_profile`), consumed by
+    /// [`McpServer::new`](crate::server::McpServer::new) to narrow the exposed
+    /// tools. Retained here (with the two override lists below) for the same
+    /// reason as `max_output_bytes`: the server holds the session, not the config.
+    profile: String,
+    /// Extra tools to keep on top of the profile (`config.mcp_tools_allow`).
+    tools_allow: Vec<String>,
+    /// Tools to remove regardless of profile/allow (`config.mcp_tools_deny`).
+    tools_deny: Vec<String>,
     /// The registry shared/exclusive gate (upstream `_RWLock` `_registry`).
     ///
     /// A command scoped to exactly one template enters this in *shared* mode
@@ -252,11 +261,17 @@ impl McpSession {
     #[must_use]
     pub fn new(config: Config) -> Arc<Self> {
         let max_output_bytes = config.mcp_max_output_bytes;
+        let profile = config.mcp_profile.clone();
+        let tools_allow = config.mcp_tools_allow.clone();
+        let tools_deny = config.mcp_tools_deny.clone();
         let (session, output) = capture::session(config);
         Arc::new(Self {
             session: Arc::new(Mutex::new(session)),
             output,
             max_output_bytes,
+            profile,
+            tools_allow,
+            tools_deny,
             gate: RwGate::new(),
             rrid_locks: StdMutex::new(HashMap::new()),
             jobs: StdMutex::new(HashMap::new()),
@@ -284,6 +299,25 @@ impl McpSession {
     #[must_use]
     pub fn max_output_bytes(&self) -> usize {
         self.max_output_bytes
+    }
+
+    /// The configured tool-surface profile (`full` / `core`), consumed by
+    /// [`McpServer::new`](crate::server::McpServer::new).
+    #[must_use]
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    /// Extra tool names to keep on top of the profile.
+    #[must_use]
+    pub fn tools_allow(&self) -> &[String] {
+        &self.tools_allow
+    }
+
+    /// Tool names to remove regardless of profile/allow.
+    #[must_use]
+    pub fn tools_deny(&self) -> &[String] {
+        &self.tools_deny
     }
 
     /// Returns (creating on first use) the per-template lock for `rrid`.

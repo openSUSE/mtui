@@ -62,6 +62,9 @@ fn config_toml_fixture_parses_all_sections() {
 
     // [mcp] section: explicit override lands.
     assert_eq!(cfg.mcp_max_output_bytes, 65536);
+    assert_eq!(cfg.mcp_profile, "core");
+    assert_eq!(cfg.mcp_tools_allow, vec!["whoami".to_owned()]);
+    assert_eq!(cfg.mcp_tools_deny, vec!["run".to_owned()]);
 
     // An option absent from the fixture keeps its upstream default.
     assert_eq!(cfg.fancy_reports_url, "https://qam.suse.de/reports");

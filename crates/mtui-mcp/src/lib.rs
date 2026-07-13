@@ -17,6 +17,8 @@ pub mod concurrency;
 #[cfg(feature = "mcp")]
 pub mod deny;
 #[cfg(feature = "mcp")]
+pub mod profiles;
+#[cfg(feature = "mcp")]
 pub mod provider;
 #[cfg(feature = "mcp")]
 pub mod schema;
@@ -34,11 +36,15 @@ pub mod tools;
 #[cfg(feature = "mcp")]
 pub use args::{McpArgs, Transport};
 #[cfg(feature = "mcp")]
+pub use profiles::{CORE, apply_profile, resolve_keep_set};
+#[cfg(feature = "mcp")]
 pub use provider::{SessionProvider, SessionRegistry, StdioProvider};
 #[cfg(feature = "mcp")]
 pub use server::{McpServer, SpikeServer};
 #[cfg(feature = "mcp")]
 pub use session::{JobState, JobView, McpCommandError, McpSession};
+#[cfg(feature = "mcp")]
+pub use slim::{cap_output, slim_input_schema, slim_tool_schema};
 #[cfg(feature = "mcp")]
 pub use testreport_tools::{dispatch_testreport_tool, testreport_tool_descriptors};
 #[cfg(feature = "mcp")]
